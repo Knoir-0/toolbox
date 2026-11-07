@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Dark variant so the window/launch background follows the system dark theme setting. -->
+    <style name="Theme.Toolbox" parent="android:Theme.Material.NoActionBar" />
+</resources>

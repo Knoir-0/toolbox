@@ -1,0 +1,71 @@
+package com.example.toolbox.ui.main
+
+import com.example.toolbox.data.DataRepository
+import junit.framework.TestCase.assertEquals
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.test.runTest
+import org.junit.Test
+
+class MainScreenViewModelTest {
+  @Test
+  fun uiState_initiallyLoading() = runTest {
+    val viewModel = MainScreenViewModel(FakeMyModelRepository())
+    assertEquals(viewModel.uiState.first(), MainScreenUiState.Loading)
+  }
+
+  @Test
+  fun uiState_onItemSaved_isDisplayed() = runTest {
+    val viewModel = MainScreenViewModel(FakeMyModelRepository())
+    assertEquals(viewModel.uiState.first(), MainScreenUiState.Loading)
+  }
+
+  @Test
+  fun coerceToolsPerRow_enforcesRangeFromThreeToSix() {
+    assertEquals(3, DEFAULT_TOOLS_PER_ROW)
+    assertEquals(3, MIN_TOOLS_PER_ROW)
+    assertEquals(6, MAX_TOOLS_PER_ROW)
+    assertEquals(3, coerceToolsPerRow(1))
+    assertEquals(3, coerceToolsPerRow(2))
+    assertEquals(3, coerceToolsPerRow(3))
+    assertEquals(4, coerceToolsPerRow(4))
+    assertEquals(5, coerceToolsPerRow(5))
+    assertEquals(6, coerceToolsPerRow(6))
+    assertEquals(6, coerceToolsPerRow(8))
+  }
+
+  @Test
+  fun reorderTools_movesToolToTargetIndex() {
+    val initial = Tool.entries.toList()
+    val reorderedForward = reorderTools(initial, fromIndex = 0, toIndex = 2)
+    assertEquals(
+      listOf(
+        Tool.UNIT_CONVERTER,
+        Tool.GUITAR_TUNER,
+        Tool.DICE_ROLLER,
+        Tool.METRONOME,
+        Tool.COLOR_PICKER,
+        Tool.RULER,
+      ),
+      reorderedForward,
+    )
+
+    val reorderedBackward = reorderTools(reorderedForward, fromIndex = 5, toIndex = 1)
+    assertEquals(
+      listOf(
+        Tool.UNIT_CONVERTER,
+        Tool.RULER,
+        Tool.GUITAR_TUNER,
+        Tool.DICE_ROLLER,
+        Tool.METRONOME,
+        Tool.COLOR_PICKER,
+      ),
+      reorderedBackward,
+    )
+  }
+}
+
+private class FakeMyModelRepository : DataRepository {
+  override val data: Flow<List<String>> = flow { emit(listOf("Sample")) }
+}
