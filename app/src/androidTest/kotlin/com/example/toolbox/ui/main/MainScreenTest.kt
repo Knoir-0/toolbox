@@ -29,6 +29,13 @@ class MainScreenTest {
   }
 
   @Test
+  fun collapsedPanel_firstRowToolLabelsAreDisplayed() {
+    composeTestRule.onNodeWithText("Dice Roller").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Unit Converter").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Guitar Tuner").assertIsDisplayed()
+  }
+
+  @Test
   fun pullUpPanel_switchesSelectedTool() {
     composeTestRule.onNodeWithText("Roll 1d20").assertExists()
 

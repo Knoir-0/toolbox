@@ -15,9 +15,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -162,8 +165,9 @@ fun ToolboxScaffold(
   val scaffoldState = rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
   val coroutineScope = rememberCoroutineScope()
 
-  // Native NavigationBar height (80.dp) + compact pull-up handle (28.dp) + bottom clearance
-  val sheetPeekHeight = 114.dp
+  // Native NavigationBar height (80.dp) + compact pull-up handle (28.dp) + bottom clearance + navigation bar insets
+  val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+  val sheetPeekHeight = 114.dp + navBarBottom
   val isExpanded = sheetState.currentValue == SheetValue.Expanded ||
     sheetState.targetValue == SheetValue.Expanded
 
@@ -536,6 +540,7 @@ fun ReorderableToolsGrid(
 ) {
   val effectiveColumns = coerceToolsPerRow(toolsPerRow)
   val rowCount = (tools.size + effectiveColumns - 1) / effectiveColumns
+  val visibleRowCount = if (isExpanded) rowCount else 1
 
   val currentTools by rememberUpdatedState(tools)
   val currentOnReorderTools by rememberUpdatedState(onReorderTools)
@@ -611,9 +616,9 @@ fun ReorderableToolsGrid(
           },
         )
       },
-    verticalArrangement = Arrangement.spacedBy(if (isExpanded) 8.dp else 28.dp),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    for (rowIndex in 0 until rowCount) {
+    for (rowIndex in 0 until visibleRowCount) {
       val rowStartIndex = rowIndex * effectiveColumns
       val rowEndIndex = minOf(rowStartIndex + effectiveColumns, tools.size)
       val isRowContainingDragged = draggedIndex in rowStartIndex until rowEndIndex
