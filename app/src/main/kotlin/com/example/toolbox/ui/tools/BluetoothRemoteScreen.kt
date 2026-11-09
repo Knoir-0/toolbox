@@ -64,8 +64,6 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Devices
-import androidx.compose.material.icons.filled.FastForward
-import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
@@ -889,7 +887,7 @@ private fun signalLabel(rssi: Int): String = when {
 private enum class PointerMode { TOUCHPAD, GYRO }
 
 @Composable
-private fun RemoteControlContent(
+internal fun RemoteControlContent(
   deviceName: String,
   actions: RemoteInputActions,
   onDisconnect: () -> Unit,
@@ -1005,52 +1003,8 @@ private fun RemoteControlContent(
       ConsumerButton(ConsumerKey.MENU, Icons.Default.Menu, "Menu", actions, size = 64.dp)
     }
 
-    // ---- Volume / media / channel ----
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Rocker(
-        label = "VOL",
-        upIcon = Icons.AutoMirrored.Filled.VolumeUp,
-        downIcon = Icons.AutoMirrored.Filled.VolumeDown,
-        upKey = ConsumerKey.VOLUME_UP,
-        downKey = ConsumerKey.VOLUME_DOWN,
-        actions = actions,
-      )
-      Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-      ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          ConsumerButton(ConsumerKey.REWIND, Icons.Default.FastRewind, "Rewind", actions, size = 48.dp)
-          PressableButton(
-            onPress = { actions.consumerDown(ConsumerKey.PLAY_PAUSE) },
-            onRelease = { actions.consumerUp() },
-            contentDescription = "Play/Pause",
-            size = 56.dp,
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-          ) {
-            Row {
-              Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-              Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(20.dp))
-            }
-          }
-          ConsumerButton(ConsumerKey.FAST_FORWARD, Icons.Default.FastForward, "Fast forward", actions, size = 48.dp)
-        }
-        ConsumerButton(ConsumerKey.MUTE, Icons.AutoMirrored.Filled.VolumeOff, "Mute", actions, size = 48.dp)
-      }
-      Rocker(
-        label = "CH",
-        upIcon = Icons.Default.KeyboardArrowUp,
-        downIcon = Icons.Default.KeyboardArrowDown,
-        upKey = ConsumerKey.CHANNEL_UP,
-        downKey = ConsumerKey.CHANNEL_DOWN,
-        actions = actions,
-      )
-    }
+    // ---- Volume bar (volume down, mute, volume up) ----
+    VolumeBar(actions = actions)
     Spacer(Modifier.height(8.dp))
   }
 }
@@ -1109,40 +1063,56 @@ private fun BoxScope.DPadArrow(
   }
 }
 
-// ---- Volume / channel rocker ----
+// ---- Volume bar ----
 
 @Composable
-private fun Rocker(
-  label: String,
-  upIcon: ImageVector,
-  downIcon: ImageVector,
-  upKey: ConsumerKey,
-  downKey: ConsumerKey,
+private fun VolumeBar(
   actions: RemoteInputActions,
+  modifier: Modifier = Modifier,
 ) {
   Surface(
     shape = RoundedCornerShape(32.dp),
     color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    modifier = Modifier.width(64.dp),
+    modifier = modifier.testTag("bt_volume_bar"),
   ) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Row(
+      modifier = Modifier.padding(horizontal = 4.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
       PressableButton(
-        onPress = { actions.consumerDown(upKey) },
+        onPress = { actions.consumerDown(ConsumerKey.VOLUME_DOWN) },
         onRelease = { actions.consumerUp() },
-        contentDescription = "$label up",
+        contentDescription = "Volume down",
         size = 64.dp,
         containerColor = Color.Transparent,
         contentColor = MaterialTheme.colorScheme.onSurface,
-      ) { Icon(upIcon, contentDescription = null) }
-      Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        modifier = Modifier.testTag("bt_volume_down"),
+      ) {
+        Icon(Icons.AutoMirrored.Filled.VolumeDown, contentDescription = null)
+      }
       PressableButton(
-        onPress = { actions.consumerDown(downKey) },
+        onPress = { actions.consumerDown(ConsumerKey.MUTE) },
         onRelease = { actions.consumerUp() },
-        contentDescription = "$label down",
+        contentDescription = "Mute",
         size = 64.dp,
         containerColor = Color.Transparent,
         contentColor = MaterialTheme.colorScheme.onSurface,
-      ) { Icon(downIcon, contentDescription = null) }
+        modifier = Modifier.testTag("bt_volume_mute"),
+      ) {
+        Icon(Icons.AutoMirrored.Filled.VolumeOff, contentDescription = null)
+      }
+      PressableButton(
+        onPress = { actions.consumerDown(ConsumerKey.VOLUME_UP) },
+        onRelease = { actions.consumerUp() },
+        contentDescription = "Volume up",
+        size = 64.dp,
+        containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.testTag("bt_volume_up"),
+      ) {
+        Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null)
+      }
     }
   }
 }

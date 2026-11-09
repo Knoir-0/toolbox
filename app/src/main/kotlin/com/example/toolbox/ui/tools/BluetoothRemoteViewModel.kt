@@ -52,6 +52,7 @@ data class BluetoothRemoteUiState(
   val devices: List<BtDeviceInfo> = emptyList(),
   val connection: RemoteConnection = RemoteConnection.Disconnected,
   val message: String? = null,
+  val messageDeviceAddress: String? = null,
 )
 
 /**
@@ -239,11 +240,15 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
   }
 
   fun dismissMessage() {
-    _uiState.update { it.copy(message = null) }
+    _uiState.update { it.copy(message = null, messageDeviceAddress = null) }
   }
 
-  private fun postMessage(message: String) {
-    _uiState.update { it.copy(message = message) }
+  private fun postMessage(message: String, deviceAddress: String? = null) {
+    val targetAddress = deviceAddress
+      ?: pendingConnect?.address
+      ?: (_uiState.value.connection as? RemoteConnection.Connecting)?.device?.address
+      ?: connectedDevice?.address
+    _uiState.update { it.copy(message = message, messageDeviceAddress = targetAddress) }
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -258,7 +263,7 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
     stopScan()
 
     val needsPairing = device.bondState != BluetoothDevice.BOND_BONDED
-    _uiState.update { it.copy(connection = RemoteConnection.Connecting(info, pairing = needsPairing), message = null) }
+    _uiState.update { it.copy(connection = RemoteConnection.Connecting(info, pairing = needsPairing), message = null, messageDeviceAddress = null) }
     startConnectTimeout()
 
     if (needsPairing) {
@@ -360,7 +365,7 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
         } else {
           "Disconnected from ${device.safeName()}."
         }
-        _uiState.update { it.copy(connection = RemoteConnection.Disconnected, message = msg) }
+        _uiState.update { it.copy(connection = RemoteConnection.Disconnected, message = msg, messageDeviceAddress = device.address) }
       }
     }
   }
@@ -369,8 +374,12 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
     connectTimeoutJob?.cancel()
     connectTimeoutJob = viewModelScope.launch {
       delay(CONNECT_TIMEOUT_MS)
-      if (_uiState.value.connection is RemoteConnection.Connecting) {
-        postMessage("Timed out connecting. Make sure the TV is on and nearby, or add this phone from the TV's Remotes & Accessories settings.")
+      val currentConnecting = _uiState.value.connection as? RemoteConnection.Connecting
+      if (currentConnecting != null) {
+        postMessage(
+          "Timed out connecting. Make sure the TV is on and nearby, or add this phone from the TV's Remotes & Accessories settings.",
+          currentConnecting.device.address,
+        )
         cancelConnecting()
       }
     }
