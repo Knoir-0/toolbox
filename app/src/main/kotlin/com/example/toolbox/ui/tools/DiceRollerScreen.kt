@@ -17,6 +17,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -95,6 +97,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -189,15 +192,33 @@ data class DiceRollResult(
     get() = dieType == DieType.D20 && keptRolls.size == 1 && keptRolls.first() == 1
 }
 
-@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DiceRollerScreen(modifier: Modifier = Modifier) {
+  DiceRollerScreen(
+    modifier = modifier,
+    initialSheetValue = SheetValue.PartiallyExpanded,
+    initialHistory = emptyList(),
+  )
+}
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+internal fun DiceRollerScreen(
+  modifier: Modifier = Modifier,
+  initialSheetValue: SheetValue,
+  initialHistory: List<DiceRollResult> = emptyList(),
+) {
   var selectedDie by rememberSaveable { mutableStateOf(DieType.D20) }
   var diceCount by rememberSaveable { mutableIntStateOf(1) }
   var modifierValue by rememberSaveable { mutableIntStateOf(0) }
   var rollMode by rememberSaveable { mutableStateOf(RollMode.NORMAL) }
   var rollCounter by rememberSaveable { mutableIntStateOf(0) }
-  val history = remember { mutableStateListOf<DiceRollResult>() }
+  val history = remember {
+    mutableStateListOf<DiceRollResult>().apply {
+      addAll(initialHistory)
+    }
+  }
 
   val effectiveRollMode = if (selectedDie == DieType.D20 && diceCount == 1) rollMode else RollMode.NORMAL
 
@@ -253,13 +274,15 @@ fun DiceRollerScreen(modifier: Modifier = Modifier) {
   }
 
   val sheetState = rememberStandardBottomSheetState(
-    initialValue = SheetValue.PartiallyExpanded,
+    initialValue = initialSheetValue,
     skipHiddenState = true,
   )
   val scaffoldState = rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
   val coroutineScope = rememberCoroutineScope()
 
   val sheetPeekHeight = 68.dp
+  val isSheetExpanded = sheetState.currentValue == SheetValue.Expanded ||
+    sheetState.targetValue == SheetValue.Expanded
 
   BottomSheetScaffold(
     modifier = modifier.fillMaxSize(),
@@ -273,7 +296,7 @@ fun DiceRollerScreen(modifier: Modifier = Modifier) {
     sheetContent = {
       RollHistorySheetContent(
         history = history,
-        isExpanded = sheetState.currentValue == SheetValue.Expanded,
+        isExpanded = isSheetExpanded,
         onToggleSheet = {
           coroutineScope.launch {
             if (sheetState.currentValue == SheetValue.Expanded) {
@@ -287,119 +310,144 @@ fun DiceRollerScreen(modifier: Modifier = Modifier) {
       )
     },
   ) {
-    Column(
-      modifier = Modifier
-        .fillMaxSize()
-        .padding(bottom = sheetPeekHeight),
-      verticalArrangement = Arrangement.SpaceBetween,
-    ) {
-      // Upper Area: Central Result Display
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .weight(1f)
-          .padding(horizontal = 16.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center,
+    Box(modifier = Modifier.fillMaxSize()) {
+      Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.SpaceBetween,
       ) {
-        val latestRoll = history.firstOrNull()
-        RollResultHero(
-          latestRoll = latestRoll,
-          selectedDie = selectedDie,
-          diceCount = diceCount,
-          modifierValue = modifierValue,
-          currentNotation = currentNotation,
-          onTapToRoll = ::performRoll,
-          modifier = Modifier.fillMaxWidth(),
-        )
-      }
-
-      // Bottom Fixed Controls: Roll Mode, Die Selector, Dice Count, Modifier, and Roll Button right above the History Panel
-      Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        tonalElevation = 2.dp,
-        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-      ) {
-        Column(
+        // Upper Area: Central Result Display
+        Box(
           modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-          horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.spacedBy(12.dp),
+            .weight(1f)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+          contentAlignment = Alignment.Center,
         ) {
-          AnimatedVisibility(visible = selectedDie == DieType.D20 && diceCount == 1) {
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-              RollMode.entries.forEachIndexed { index, mode ->
-                SegmentedButton(
-                  selected = rollMode == mode,
-                  onClick = { rollMode = mode },
-                  shape = SegmentedButtonDefaults.itemShape(
-                    index = index,
-                    count = RollMode.entries.size,
-                  ),
-                ) {
-                  Text(mode.label)
+          val latestRoll = history.firstOrNull()
+          RollResultHero(
+            latestRoll = latestRoll,
+            selectedDie = selectedDie,
+            diceCount = diceCount,
+            modifierValue = modifierValue,
+            currentNotation = currentNotation,
+            onTapToRoll = ::performRoll,
+            modifier = Modifier.fillMaxWidth(),
+          )
+        }
+
+        // Bottom Fixed Controls: Roll Mode, Die Selector, Dice Count, Modifier, and Roll Button right above the History Panel
+        Surface(
+          modifier = Modifier.fillMaxWidth(),
+          color = MaterialTheme.colorScheme.surfaceContainerLow,
+          tonalElevation = 2.dp,
+          shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        ) {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(
+                start = 16.dp,
+                end = 16.dp,
+                top = 14.dp,
+                bottom = 14.dp + sheetPeekHeight,
+              ),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            AnimatedVisibility(visible = selectedDie == DieType.D20 && diceCount == 1) {
+              SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                RollMode.entries.forEachIndexed { index, mode ->
+                  SegmentedButton(
+                    selected = rollMode == mode,
+                    onClick = { rollMode = mode },
+                    shape = SegmentedButtonDefaults.itemShape(
+                      index = index,
+                      count = RollMode.entries.size,
+                    ),
+                  ) {
+                    Text(mode.label)
+                  }
                 }
               }
             }
-          }
 
-          FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            DieType.entries.forEach { die ->
-              DieSelectionButton(
-                die = die,
-                isSelected = die == selectedDie,
-                onClick = { selectedDie = die },
+            FlowRow(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              DieType.entries.forEach { die ->
+                DieSelectionButton(
+                  die = die,
+                  isSelected = die == selectedDie,
+                  onClick = { selectedDie = die },
+                )
+              }
+            }
+
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+              StepperCard(
+                label = "Dice Count",
+                valueText = "${diceCount}${selectedDie.label}",
+                onDecrement = { if (diceCount > 1) diceCount-- },
+                onIncrement = { if (diceCount < 20) diceCount++ },
+                modifier = Modifier.weight(1f),
+              )
+              StepperCard(
+                label = "Modifier",
+                valueText = if (modifierValue >= 0) "+$modifierValue" else "$modifierValue",
+                onDecrement = { if (modifierValue > -20) modifierValue-- },
+                onIncrement = { if (modifierValue < 20) modifierValue++ },
+                modifier = Modifier.weight(1f),
+              )
+            }
+
+            Button(
+              onClick = ::performRoll,
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+              shape = RoundedCornerShape(16.dp),
+              elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp),
+            ) {
+              PolyhedralDieIcon(
+                dieType = selectedDie,
+                color = LocalContentColor.current,
+                modifier = Modifier
+                  .padding(end = 10.dp)
+                  .size(24.dp),
+              )
+              Text(
+                text = "Roll $currentNotation",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
               )
             }
           }
-
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-          ) {
-            StepperCard(
-              label = "Dice Count",
-              valueText = "${diceCount}${selectedDie.label}",
-              onDecrement = { if (diceCount > 1) diceCount-- },
-              onIncrement = { if (diceCount < 20) diceCount++ },
-              modifier = Modifier.weight(1f),
-            )
-            StepperCard(
-              label = "Modifier",
-              valueText = if (modifierValue >= 0) "+$modifierValue" else "$modifierValue",
-              onDecrement = { if (modifierValue > -20) modifierValue-- },
-              onIncrement = { if (modifierValue < 20) modifierValue++ },
-              modifier = Modifier.weight(1f),
-            )
-          }
-
-          Button(
-            onClick = ::performRoll,
-            modifier = Modifier
-              .fillMaxWidth()
-              .height(56.dp),
-            shape = RoundedCornerShape(16.dp),
-            elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp),
-          ) {
-            PolyhedralDieIcon(
-              dieType = selectedDie,
-              color = LocalContentColor.current,
-              modifier = Modifier
-                .padding(end = 10.dp)
-                .size(24.dp),
-            )
-            Text(
-              text = "Roll $currentNotation",
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold,
-            )
-          }
         }
+      }
+
+      // Scrim overlay behind history sheet when expanded
+      AnimatedVisibility(
+        visible = isSheetExpanded,
+        enter = fadeIn(tween(250)),
+        exit = fadeOut(tween(200)),
+      ) {
+        Box(
+          modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.5f))
+            .pointerInput(Unit) {
+              detectTapGestures {
+                coroutineScope.launch {
+                  sheetState.partialExpand()
+                }
+              }
+            },
+        )
       }
     }
   }
@@ -659,25 +707,8 @@ internal fun RollResultHero(
           }
         }
 
-        // Breakdown Section: Mini Dice Tokens + Modifier OR Ready Prompt
+        // Breakdown Section: Mini Dice Tokens + Modifier OR Ready Range Indicator
         if (latestRoll == null) {
-          Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-          ) {
-            Text(
-              text = "Ready to roll $currentNotation",
-              style = MaterialTheme.typography.titleSmall,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-              text = "Tap the die or press Roll below",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-
           val minPossible = diceCount * 1 + modifierValue
           val maxPossible = diceCount * selectedDie.sides + modifierValue
           val avgPossible = diceCount * (selectedDie.sides + 1) / 2.0 + modifierValue
@@ -1074,7 +1105,7 @@ private fun RollRangeIndicator(
     }
     "$pct% · $tier"
   } else {
-    "AVG $avgFormatted"
+    null
   }
 
   val trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
@@ -1093,37 +1124,40 @@ private fun RollRangeIndicator(
         .padding(horizontal = 12.dp, vertical = 8.dp),
       verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-      Row(
+      Box(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
       ) {
         Text(
           text = "Min $minTotal",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.align(Alignment.CenterStart),
         )
         Text(
-          text = if (currentTotal != null) "Avg $avgFormatted" else "Possible Range",
+          text = "Avg $avgFormatted",
           style = MaterialTheme.typography.labelSmall,
           fontWeight = FontWeight.Medium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.align(Alignment.Center),
         )
         Row(
+          modifier = Modifier.align(Alignment.CenterEnd),
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-          Surface(
-            shape = RoundedCornerShape(50),
-            color = accentColor.copy(alpha = 0.15f),
-          ) {
-            Text(
-              text = percentileText,
-              style = MaterialTheme.typography.labelSmall,
-              fontWeight = FontWeight.Bold,
-              color = accentColor,
-              modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
-            )
+          if (percentileText != null) {
+            Surface(
+              shape = RoundedCornerShape(50),
+              color = accentColor.copy(alpha = 0.15f),
+            ) {
+              Text(
+                text = percentileText,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = accentColor,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+              )
+            }
           }
           Text(
             text = "Max $maxTotal",
@@ -1243,7 +1277,7 @@ private fun RollHistorySheetContent(
   Column(
     modifier = Modifier
       .fillMaxWidth()
-      .heightIn(min = 68.dp, max = 460.dp),
+      .fillMaxHeight(0.72f),
   ) {
     // Peek Header Bar (Drag or Tap to Pull Up Over the Roller)
     Column(
@@ -1300,15 +1334,9 @@ private fun RollHistorySheetContent(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-          if (history.isNotEmpty()) {
+          if (!isExpanded && history.isNotEmpty()) {
             Text(
-              text = if (isExpanded) "Pull down" else "Last: ${history.first().total}",
-              style = MaterialTheme.typography.labelMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          } else {
-            Text(
-              text = if (isExpanded) "Close" else "Pull up",
+              text = "Last: ${history.first().total}",
               style = MaterialTheme.typography.labelMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1330,7 +1358,7 @@ private fun RollHistorySheetContent(
       Box(
         modifier = Modifier
           .fillMaxWidth()
-          .height(180.dp)
+          .weight(1f)
           .padding(24.dp),
         contentAlignment = Alignment.Center,
       ) {
@@ -1486,7 +1514,7 @@ private fun RollHistorySheetContent(
         Box(
           modifier = Modifier
             .fillMaxWidth()
-            .height(140.dp)
+            .weight(1f)
             .padding(24.dp),
           contentAlignment = Alignment.Center,
         ) {
@@ -1808,11 +1836,55 @@ private fun PolyhedralDieIcon(
   }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Preview(showBackground = true)
 @Composable
 fun DiceRollerScreenPreview() {
   ToolboxTheme {
     DiceRollerScreen()
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Preview(showBackground = true, name = "Dice Roller - History Sheet Expanded")
+@Composable
+fun DiceRollerScreenExpandedPreview() {
+  ToolboxTheme {
+    DiceRollerScreen(
+      initialSheetValue = SheetValue.Expanded,
+      initialHistory = listOf(
+        DiceRollResult(
+          id = 3L,
+          dieType = DieType.D20,
+          diceCount = 1,
+          modifier = 3,
+          rollMode = RollMode.NORMAL,
+          keptRolls = listOf(17),
+          droppedRolls = emptyList(),
+          total = 20,
+        ),
+        DiceRollResult(
+          id = 2L,
+          dieType = DieType.D6,
+          diceCount = 2,
+          modifier = 0,
+          rollMode = RollMode.NORMAL,
+          keptRolls = listOf(4, 5),
+          droppedRolls = emptyList(),
+          total = 9,
+        ),
+        DiceRollResult(
+          id = 1L,
+          dieType = DieType.D20,
+          diceCount = 1,
+          modifier = 0,
+          rollMode = RollMode.ADVANTAGE,
+          keptRolls = listOf(20),
+          droppedRolls = listOf(7),
+          total = 20,
+        ),
+      ),
+    )
   }
 }
 

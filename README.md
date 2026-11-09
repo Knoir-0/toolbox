@@ -16,6 +16,10 @@ Toolbox consolidates essential daily tools—from musical utilities to measureme
 | **📏 Ruler & Calipers** | Precision on-screen measurement tool | Metric (mm, cm) and Imperial (inches with fractional notation like 5/16" or 2 3/8"), dual-thumb caliper span, hardware DPI auto-detection, manual calibration, and real-world reference comparisons. |
 | **📐 Unit Converter** | Fast, flexible unit conversion utility | Comprehensive conversion engine across length, temperature, and standard unit dimensions with instant two-way calculations. |
 | **⏱️ Metronome** | Low-latency audio-visual tempo keeper | AudioTrack pulse synthesis, adjustable BPM with tap tempo, customizable time signatures, accent beats, and synchronized visual flash. |
+| **📺 TV Remote** | Bluetooth HID remote for Android TV and media devices | Bluetooth device discovery and pairing, standard Android TV D-Pad & media controls, live on-screen keyboard text sync, and air-mouse cursor via phone gyroscope or touchpad. |
+| **🔢 Calculator** | High-precision scientific & standard calculator | Live result evaluation, smart auto-matching parentheses `( )`, trigonometry (DEG/RAD), powers, roots, logarithms, percentages, factorials, calculation history tape, memory registers (MC/MR/M+/M-), and clipboard integration. |
+| **🖼️ Image Editor** | Photo editing, filters, adjustments, and cropping | Comprehensive filters, crop & rotate tools, color balance, brightness/contrast adjustments, and local export. |
+| **⚙️ Settings** | Application preferences, theme, colors, and tool visibility | Theme mode (System, Light, Dark), dynamic Material You colors (fallback to #8E66A6 on older Android versions), custom hex colors, and tool visibility toggles. Always positioned as the final tool. |
 
 ---
 

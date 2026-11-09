@@ -37,7 +37,15 @@ class MainScreenViewModelTest {
 
   @Test
   fun reorderTools_movesToolToTargetIndex() {
-    val initial = Tool.entries.toList()
+    // Use a fixed list so adding new tools to the enum doesn't break this test.
+    val initial = listOf(
+      Tool.DICE_ROLLER,
+      Tool.UNIT_CONVERTER,
+      Tool.GUITAR_TUNER,
+      Tool.METRONOME,
+      Tool.COLOR_PICKER,
+      Tool.RULER,
+    )
     val reorderedForward = reorderTools(initial, fromIndex = 0, toIndex = 2)
     assertEquals(
       listOf(

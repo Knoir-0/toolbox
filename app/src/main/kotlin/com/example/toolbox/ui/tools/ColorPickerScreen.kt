@@ -1,5 +1,6 @@
 package com.example.toolbox.ui.tools
 
+import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -89,7 +90,6 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -157,7 +157,7 @@ data class NamedColorSwatch(
 )
 
 object ColorMath {
-  val presetSwatches = listOf(
+  private val presetSwatches = listOf(
     NamedColorSwatch("Ocean Blue", "#23759B", 35, 117, 155),
     NamedColorSwatch("Crimson", "#DC143C", 220, 20, 60),
     NamedColorSwatch("Coral", "#FF6B57", 255, 107, 87),
@@ -379,6 +379,7 @@ object ColorMath {
  * light and dark mode. Older versions have no user-selectable accent, so the app theme's primary
  * color is used instead.
  */
+@SuppressLint("LocalContextGetResourceValueCall")
 @Composable
 private fun rememberSystemAccentColor(): Color {
   val context = LocalContext.current
@@ -579,9 +580,9 @@ fun ColorPickerScreen(modifier: Modifier = Modifier) {
       )
     }
 
-    // 6. Saved Palette & Preset Swatches Card
+    // 6. Saved Palette Card
     item {
-      SavedAndPresetPaletteCard(
+      SavedPaletteCard(
         savedPalette = savedPalette,
         activeHex = hexCode,
         onSelectHex = { selectedHex ->
@@ -1492,7 +1493,7 @@ private fun ColorHarmoniesCard(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SavedAndPresetPaletteCard(
+private fun SavedPaletteCard(
   savedPalette: List<String>,
   activeHex: String,
   onSelectHex: (String) -> Unit,
@@ -1606,63 +1607,6 @@ private fun SavedAndPresetPaletteCard(
                   fontWeight = FontWeight.Bold,
                 )
               }
-            }
-          }
-        }
-      }
-
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-      Text(
-        text = "Curated Preset Swatches",
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.tertiary,
-      )
-
-      FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        ColorMath.presetSwatches.forEach { preset ->
-          val isSelected = preset.hex.equals(activeHex, ignoreCase = true)
-          val presetColor = Color(preset.r, preset.g, preset.b)
-
-          Surface(
-            onClick = { onSelectHex(preset.hex) },
-            shape = RoundedCornerShape(14.dp),
-            color = if (isSelected) {
-              MaterialTheme.colorScheme.tertiaryContainer
-            } else {
-              MaterialTheme.colorScheme.surfaceContainerHigh
-            },
-            border = BorderStroke(
-              width = if (isSelected) 1.5.dp else 1.dp,
-              color = if (isSelected) {
-                MaterialTheme.colorScheme.tertiary
-              } else {
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
-              },
-            ),
-          ) {
-            Row(
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-              Box(
-                modifier = Modifier
-                  .size(16.dp)
-                  .background(presetColor, CircleShape)
-                  .border(1.dp, Color.Black.copy(alpha = 0.2f), CircleShape),
-              )
-              Text(
-                text = preset.name,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                textAlign = TextAlign.Center,
-              )
             }
           }
         }

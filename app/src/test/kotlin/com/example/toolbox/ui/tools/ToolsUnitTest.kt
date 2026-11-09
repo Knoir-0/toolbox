@@ -124,4 +124,118 @@ class ToolsUnitTest {
     assertEquals(100.0f, measurements.screenWidthMm, 1e-2f)
     assertEquals(200.0f, measurements.screenHeightMm, 1e-2f)
   }
+
+  @Test
+  fun rulerMath_resolveCaliperTarget_selectsClosestBarAndDisambiguatesOverlappingBars() {
+    // 1. Clearly separated bars (A = 20mm, B = 70mm)
+    // Touch at 22mm should select Bar A (0)
+    val targetNearA = RulerMath.resolveCaliperTarget(
+      touchCoordMm = 22f,
+      startMm = 20f,
+      endMm = 70f,
+    )
+    assertEquals(0, targetNearA)
+
+    // Touch at 68mm should select Bar B (1)
+    val targetNearB = RulerMath.resolveCaliperTarget(
+      touchCoordMm = 68f,
+      startMm = 20f,
+      endMm = 70f,
+    )
+    assertEquals(1, targetNearB)
+
+    // 2. Overlapping bars at the same position (A = 40mm, B = 40mm)
+    // Touching on or before the minimum pulls the start jaw (Bar A = 0)
+    val targetBeforeOverlap = RulerMath.resolveCaliperTarget(
+      touchCoordMm = 35f,
+      startMm = 40f,
+      endMm = 40f,
+    )
+    assertEquals(0, targetBeforeOverlap)
+
+    val targetAtOverlap = RulerMath.resolveCaliperTarget(
+      touchCoordMm = 40f,
+      startMm = 40f,
+      endMm = 40f,
+    )
+    assertEquals(0, targetAtOverlap)
+
+    // Touching to the right / after overlapping bars pulls Bar B (1)
+    val targetAfterOverlap = RulerMath.resolveCaliperTarget(
+      touchCoordMm = 45f,
+      startMm = 40f,
+      endMm = 40f,
+    )
+    assertEquals(1, targetAfterOverlap)
+
+    // 3. Inverted order bars (A = 60mm, B = 20mm)
+    // Touch at 22mm is closer to B (1)
+    val targetNearBInverted = RulerMath.resolveCaliperTarget(
+      touchCoordMm = 22f,
+      startMm = 60f,
+      endMm = 20f,
+    )
+    assertEquals(1, targetNearBInverted)
+
+    // Touch at 58mm is closer to A (0)
+    val targetNearAInverted = RulerMath.resolveCaliperTarget(
+      touchCoordMm = 58f,
+      startMm = 60f,
+      endMm = 20f,
+    )
+    assertEquals(0, targetNearAInverted)
+  }
+
+  @Test
+  fun beatSubdivision_labelsDoNotContainMultiplierText() {
+    val expectedLabels = mapOf(
+      BeatSubdivision.QUARTER to ("Quarter" to 1),
+      BeatSubdivision.EIGHTH to ("Eighth" to 2),
+      BeatSubdivision.TRIPLET to ("Triplet" to 3),
+      BeatSubdivision.SIXTEENTH to ("Sixteenth" to 4),
+    )
+
+    for ((subdivision, expected) in expectedLabels) {
+      val (label, ticks) = expected
+      assertEquals(label, subdivision.label)
+      assertEquals(ticks, subdivision.ticksPerBeat)
+      assertTrue(!subdivision.label.contains(Regex("""\(\d+x\)""")))
+    }
+  }
+
+  @Test
+  fun timeSignature_defaultSignaturesDoNotExceedFiveEight() {
+    val defaultLabels = TimeSignature.defaultSignatures.map { it.label }
+    val expectedDefaults = listOf("4/4", "3/4", "2/4", "5/4", "6/8", "5/8")
+    assertEquals(expectedDefaults, defaultLabels)
+
+    // Ensure none of the extended meters above 5/8 are in defaults
+    val aboveFiveEight = listOf("7/8", "7/4", "9/8", "10/8", "11/8", "12/8", "14/8", "23/16")
+    for (meter in aboveFiveEight) {
+      assertTrue("Default signatures should not contain $meter", !defaultLabels.contains(meter))
+    }
+  }
+
+  @Test
+  fun timeSignature_customSignaturesCanBeCreatedAndParsed() {
+    // Custom Ganon themes (23/16, 7/4, 14/8) and Hyrule Castle (6/4, 10/8)
+    val customGanon = TimeSignature.fromBeatsAndNote(23, 16, isCustom = true)
+    assertEquals("23/16", customGanon.label)
+    assertEquals(23, customGanon.beatsPerMeasure)
+    assertEquals(16, customGanon.noteValue)
+    assertTrue(customGanon.isCustom)
+
+    val parsedGanon = TimeSignature.parse("23/16", isCustom = true)
+    assertEquals(customGanon, parsedGanon)
+
+    val customHyruleCastle = TimeSignature.fromBeatsAndNote(6, 4, isCustom = true)
+    assertEquals("6/4", customHyruleCastle.label)
+    assertEquals(6, customHyruleCastle.beatsPerMeasure)
+    assertEquals(4, customHyruleCastle.noteValue)
+    assertTrue(customHyruleCastle.isCustom)
+
+    // Saver roundtrip
+    val restored = TimeSignatureSaver.restore("23/16:true")
+    assertEquals(customGanon, restored)
+  }
 }

@@ -8,6 +8,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,13 +24,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -41,11 +45,14 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -56,6 +63,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -66,11 +74,17 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.toolbox.ui.theme.ToolboxTheme
 import kotlin.math.PI
 import kotlin.math.cos
@@ -83,22 +97,66 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class TimeSignature(val label: String, val beatsPerMeasure: Int, val noteValue: Int) {
-  FOUR_FOUR("4/4", 4, 4),
-  THREE_FOUR("3/4", 3, 4),
-  TWO_FOUR("2/4", 2, 4),
-  SIX_EIGHT("6/8", 6, 8),
-  FIVE_FOUR("5/4", 5, 4),
-  SEVEN_EIGHT("7/8", 7, 8),
+data class TimeSignature(
+  val label: String,
+  val beatsPerMeasure: Int,
+  val noteValue: Int,
+  val isCustom: Boolean = false,
+) {
+  companion object {
+    val FOUR_FOUR = TimeSignature("4/4", 4, 4)
+    val THREE_FOUR = TimeSignature("3/4", 3, 4)
+    val TWO_FOUR = TimeSignature("2/4", 2, 4)
+    val FIVE_FOUR = TimeSignature("5/4", 5, 4)
+    val SIX_EIGHT = TimeSignature("6/8", 6, 8)
+    val FIVE_EIGHT = TimeSignature("5/8", 5, 8)
+
+    val defaultSignatures = listOf(
+      FOUR_FOUR,
+      THREE_FOUR,
+      TWO_FOUR,
+      FIVE_FOUR,
+      SIX_EIGHT,
+      FIVE_EIGHT,
+    )
+
+    fun fromBeatsAndNote(beats: Int, noteValue: Int, isCustom: Boolean = false): TimeSignature {
+      return TimeSignature(
+        label = "$beats/$noteValue",
+        beatsPerMeasure = beats,
+        noteValue = noteValue,
+        isCustom = isCustom,
+      )
+    }
+
+    fun parse(label: String, isCustom: Boolean = false): TimeSignature? {
+      val parts = label.split("/")
+      if (parts.size != 2) return null
+      val beats = parts[0].toIntOrNull() ?: return null
+      val note = parts[1].toIntOrNull() ?: return null
+      if (beats <= 0 || note <= 0) return null
+      return fromBeatsAndNote(beats, note, isCustom)
+    }
+  }
 }
+
+val TimeSignatureSaver = Saver<TimeSignature, String>(
+  save = { "${it.beatsPerMeasure}/${it.noteValue}:${it.isCustom}" },
+  restore = { saved ->
+    val parts = saved.split(":")
+    val label = parts.getOrNull(0) ?: "4/4"
+    val isCustom = parts.getOrNull(1)?.toBooleanStrictOrNull() ?: false
+    TimeSignature.parse(label, isCustom) ?: TimeSignature.FOUR_FOUR
+  },
+)
 
 private val CompactPillHeight = 28.dp
 
 enum class BeatSubdivision(val label: String, val ticksPerBeat: Int) {
-  QUARTER("♩ Quarter (1x)", 1),
-  EIGHTH("♫ Eighth (2x)", 2),
-  TRIPLET("3 Triplet (3x)", 3),
-  SIXTEENTH("♬ Sixteenth (4x)", 4),
+  QUARTER("Quarter", 1),
+  EIGHTH("Eighth", 2),
+  TRIPLET("Triplet", 3),
+  SIXTEENTH("Sixteenth", 4),
 }
 
 /**
@@ -157,13 +215,19 @@ private object MetronomeClickSynthesizer {
 fun MetronomeScreen(modifier: Modifier = Modifier) {
   var bpm by rememberSaveable { mutableIntStateOf(120) }
   var isMetronomePlaying by rememberSaveable { mutableStateOf(false) }
-  var timeSignature by rememberSaveable { mutableStateOf(TimeSignature.FOUR_FOUR) }
+  var timeSignature by rememberSaveable(stateSaver = TimeSignatureSaver) { mutableStateOf(TimeSignature.FOUR_FOUR) }
+  val customTimeSignatures = rememberSaveable { mutableStateListOf<String>() }
   var subdivision by rememberSaveable { mutableStateOf(BeatSubdivision.QUARTER) }
   var accentFirstBeat by rememberSaveable { mutableStateOf(true) }
   var currentBeat by remember { mutableIntStateOf(0) }
   var currentSubTick by remember { mutableIntStateOf(0) }
   var beatPulseCounter by remember { mutableLongStateOf(0L) }
   val tapTimestamps = remember { mutableStateListOf<Long>() }
+
+  val allTimeSignatures = remember(customTimeSignatures.toList()) {
+    val customs = customTimeSignatures.mapNotNull { TimeSignature.parse(it, isCustom = true) }
+    TimeSignature.defaultSignatures + customs
+  }
 
   LaunchedEffect(isMetronomePlaying, bpm, timeSignature, subdivision, accentFirstBeat) {
     if (!isMetronomePlaying) {
@@ -215,9 +279,24 @@ fun MetronomeScreen(modifier: Modifier = Modifier) {
       isPlaying = isMetronomePlaying,
       onTogglePlay = { isMetronomePlaying = !isMetronomePlaying },
       timeSignature = timeSignature,
+      allTimeSignatures = allTimeSignatures,
       onSelectTimeSignature = {
         timeSignature = it
         currentBeat = 0
+      },
+      onAddCustomTimeSignature = { newSig ->
+        if (!customTimeSignatures.contains(newSig.label) && TimeSignature.defaultSignatures.none { it.label == newSig.label }) {
+          customTimeSignatures.add(newSig.label)
+        }
+        timeSignature = newSig
+        currentBeat = 0
+      },
+      onRemoveCustomTimeSignature = { remSig ->
+        customTimeSignatures.remove(remSig.label)
+        if (timeSignature.label == remSig.label) {
+          timeSignature = TimeSignature.FOUR_FOUR
+          currentBeat = 0
+        }
       },
       subdivision = subdivision,
       onSelectSubdivision = { subdivision = it },
@@ -254,7 +333,10 @@ private fun MetronomeContent(
   isPlaying: Boolean,
   onTogglePlay: () -> Unit,
   timeSignature: TimeSignature,
+  allTimeSignatures: List<TimeSignature>,
   onSelectTimeSignature: (TimeSignature) -> Unit,
+  onAddCustomTimeSignature: (TimeSignature) -> Unit,
+  onRemoveCustomTimeSignature: (TimeSignature) -> Unit,
   subdivision: BeatSubdivision,
   onSelectSubdivision: (BeatSubdivision) -> Unit,
   accentFirstBeat: Boolean,
@@ -263,6 +345,8 @@ private fun MetronomeContent(
   beatPulseCounter: Long,
   onTapTempo: () -> Unit,
 ) {
+  var showAddCustomDialog by remember { mutableStateOf(false) }
+
   val tempoMarking = remember(bpm) {
     when {
       bpm < 45 -> "Grave"
@@ -349,15 +433,32 @@ private fun MetronomeContent(
           }
 
           // Visual Beat Dots Row
-          Row(
+          FlowRow(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(
+              if (timeSignature.beatsPerMeasure > 8) 6.dp else 10.dp,
+              Alignment.CenterHorizontally,
+            ),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
           ) {
-            for (beatIndex in 0 until timeSignature.beatsPerMeasure) {
+            val totalBeats = timeSignature.beatsPerMeasure
+            val isCompact = totalBeats > 12
+            val isMedium = totalBeats in 7..12
+            val normalSize = when {
+              isCompact -> 22.dp
+              isMedium -> 26.dp
+              else -> 30.dp
+            }
+            val activeSize = when {
+              isCompact -> 26.dp
+              isMedium -> 32.dp
+              else -> 38.dp
+            }
+
+            for (beatIndex in 0 until totalBeats) {
               val isCurrent = isPlaying && currentBeat == beatIndex
               val isDownbeat = beatIndex == 0 && accentFirstBeat
-              val circleSize = if (isCurrent) 38.dp else 30.dp
+              val circleSize = if (isCurrent) activeSize else normalSize
               val bgColor = when {
                 isCurrent && isDownbeat -> MaterialTheme.colorScheme.tertiary
                 isCurrent -> MaterialTheme.colorScheme.primary
@@ -379,7 +480,13 @@ private fun MetronomeContent(
               ) {
                 Text(
                   text = "${beatIndex + 1}",
-                  style = MaterialTheme.typography.labelLarge,
+                  style = if (isCompact) {
+                    MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp)
+                  } else if (isMedium) {
+                    MaterialTheme.typography.labelMedium
+                  } else {
+                    MaterialTheme.typography.labelLarge
+                  },
                   fontWeight = FontWeight.Black,
                   color = textColor,
                 )
@@ -561,8 +668,8 @@ private fun MetronomeContent(
               horizontalArrangement = Arrangement.spacedBy(8.dp),
               verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-              TimeSignature.entries.forEach { sig ->
-                val selected = sig == timeSignature
+              allTimeSignatures.forEach { sig ->
+                val selected = sig.label == timeSignature.label
                 FilterChip(
                   selected = selected,
                   onClick = { onSelectTimeSignature(sig) },
@@ -572,10 +679,43 @@ private fun MetronomeContent(
                       fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                     )
                   },
+                  trailingIcon = if (sig.isCustom) {
+                    {
+                      Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Remove ${sig.label}",
+                        modifier = Modifier
+                          .size(14.dp)
+                          .clickable { onRemoveCustomTimeSignature(sig) },
+                      )
+                    }
+                  } else {
+                    null
+                  },
                   modifier = Modifier.height(CompactPillHeight),
                   shape = RoundedCornerShape(50),
                 )
               }
+
+              FilterChip(
+                selected = false,
+                onClick = { showAddCustomDialog = true },
+                leadingIcon = {
+                  Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                  )
+                },
+                label = {
+                  Text(
+                    text = "Custom",
+                    fontWeight = FontWeight.SemiBold,
+                  )
+                },
+                modifier = Modifier.height(CompactPillHeight),
+                shape = RoundedCornerShape(50),
+              )
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
@@ -596,6 +736,12 @@ private fun MetronomeContent(
                 FilterChip(
                   selected = selected,
                   onClick = { onSelectSubdivision(sub) },
+                  leadingIcon = {
+                    SubdivisionIcon(
+                      subdivision = sub,
+                      modifier = Modifier.size(16.dp),
+                    )
+                  },
                   label = {
                     Text(
                       text = sub.label,
@@ -610,6 +756,176 @@ private fun MetronomeContent(
           }
         }
       }
+    }
+  }
+
+  if (showAddCustomDialog) {
+    AddCustomTimeSignatureDialog(
+      onDismiss = { showAddCustomDialog = false },
+      onAdd = { newSig ->
+        onAddCustomTimeSignature(newSig)
+        showAddCustomDialog = false
+      },
+    )
+  }
+}
+
+@Composable
+private fun AddCustomTimeSignatureDialog(
+  onDismiss: () -> Unit,
+  onAdd: (TimeSignature) -> Unit,
+) {
+  var beatsInput by remember { mutableStateOf("7") }
+  var selectedNoteValue by remember { mutableIntStateOf(4) }
+  var errorMessage by remember { mutableStateOf<String?>(null) }
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    text = {
+      CustomTimeSignatureDialogContent(
+        beatsInput = beatsInput,
+        onBeatsInputChange = {
+          beatsInput = it
+          errorMessage = null
+        },
+        selectedNoteValue = selectedNoteValue,
+        onSelectNoteValue = { selectedNoteValue = it },
+        errorMessage = errorMessage,
+      )
+    },
+    confirmButton = {
+      Button(
+        onClick = {
+          val beats = beatsInput.toIntOrNull()
+          if (beats == null || beats !in 1..64) {
+            errorMessage = "Enter a valid number of beats (1–64)"
+          } else {
+            onAdd(TimeSignature.fromBeatsAndNote(beats, selectedNoteValue, isCustom = true))
+          }
+        },
+      ) {
+        Text("Add")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) {
+        Text("Cancel")
+      }
+    },
+  )
+}
+
+@Composable
+private fun CustomTimeSignatureDialogContent(
+  beatsInput: String,
+  onBeatsInputChange: (String) -> Unit,
+  selectedNoteValue: Int,
+  onSelectNoteValue: (Int) -> Unit,
+  errorMessage: String?,
+  modifier: Modifier = Modifier,
+) {
+  val beatsInt = beatsInput.toIntOrNull() ?: 0
+  val previewLabel = if (beatsInt in 1..64) "$beatsInt/$selectedNoteValue" else "?/$selectedNoteValue"
+
+  Column(
+    modifier = modifier.fillMaxWidth(),
+    verticalArrangement = Arrangement.spacedBy(16.dp),
+  ) {
+    Box(
+      modifier = Modifier
+        .fillMaxWidth()
+        .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(16.dp))
+        .padding(vertical = 12.dp),
+      contentAlignment = Alignment.Center,
+    ) {
+      Text(
+        text = previewLabel,
+        style = MaterialTheme.typography.headlineMedium,
+        fontWeight = FontWeight.Black,
+        color = MaterialTheme.colorScheme.primary,
+      )
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Text(
+        text = "Beats per measure (1–64)",
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+      )
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        FilledTonalIconButton(
+          onClick = {
+            val current = beatsInput.toIntOrNull() ?: 4
+            if (current > 1) onBeatsInputChange((current - 1).toString())
+          },
+        ) {
+          Icon(Icons.Default.Remove, contentDescription = "Decrease beats")
+        }
+
+        OutlinedTextField(
+          value = beatsInput,
+          onValueChange = { input ->
+            val filtered = input.filter { it.isDigit() }.take(2)
+            onBeatsInputChange(filtered)
+          },
+          modifier = Modifier.weight(1f),
+          shape = RoundedCornerShape(16.dp),
+          singleLine = true,
+          textStyle = MaterialTheme.typography.titleMedium.copy(textAlign = TextAlign.Center),
+          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        )
+
+        FilledTonalIconButton(
+          onClick = {
+            val current = beatsInput.toIntOrNull() ?: 4
+            if (current < 64) onBeatsInputChange((current + 1).toString())
+          },
+        ) {
+          Icon(Icons.Default.Add, contentDescription = "Increase beats")
+        }
+      }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Text(
+        text = "Beat unit (note value)",
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+      )
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        listOf(2, 4, 8, 16).forEach { noteVal ->
+          val isSelected = selectedNoteValue == noteVal
+          FilterChip(
+            selected = isSelected,
+            onClick = { onSelectNoteValue(noteVal) },
+            label = {
+              Text(
+                text = "/$noteVal",
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+              )
+            },
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(50),
+          )
+        }
+      }
+    }
+
+    if (errorMessage != null) {
+      Text(
+        text = errorMessage,
+        color = MaterialTheme.colorScheme.error,
+        style = MaterialTheme.typography.bodySmall,
+      )
     }
   }
 }
@@ -680,10 +996,296 @@ private fun MetronomePendulumCanvas(
   }
 }
 
+@Composable
+fun SubdivisionIcon(
+  subdivision: BeatSubdivision,
+  modifier: Modifier = Modifier,
+  tint: Color = LocalContentColor.current,
+) {
+  val textMeasurer = rememberTextMeasurer()
+  Canvas(modifier = modifier) {
+    val w = size.width
+    val h = size.height
+
+    when (subdivision) {
+      BeatSubdivision.QUARTER -> {
+        val headWidth = w * 0.44f
+        val headHeight = h * 0.32f
+        val headCenterX = w * 0.40f
+        val headCenterY = h * 0.74f
+
+        rotate(degrees = -25f, pivot = Offset(headCenterX, headCenterY)) {
+          drawOval(
+            color = tint,
+            topLeft = Offset(headCenterX - headWidth / 2f, headCenterY - headHeight / 2f),
+            size = Size(headWidth, headHeight),
+          )
+        }
+
+        val stemX = headCenterX + headWidth * 0.36f
+        val stemTopY = h * 0.12f
+        val stemBottomY = headCenterY
+        val stemWidth = 1.6.dp.toPx()
+
+        drawLine(
+          color = tint,
+          start = Offset(stemX, stemBottomY),
+          end = Offset(stemX, stemTopY),
+          strokeWidth = stemWidth,
+          cap = StrokeCap.Round,
+        )
+      }
+
+      BeatSubdivision.EIGHTH -> {
+        val headWidth = w * 0.34f
+        val headHeight = h * 0.24f
+        val head1CenterX = w * 0.22f
+        val head1CenterY = h * 0.77f
+        val head2CenterX = w * 0.68f
+        val head2CenterY = h * 0.77f
+
+        rotate(degrees = -25f, pivot = Offset(head1CenterX, head1CenterY)) {
+          drawOval(
+            color = tint,
+            topLeft = Offset(head1CenterX - headWidth / 2f, head1CenterY - headHeight / 2f),
+            size = Size(headWidth, headHeight),
+          )
+        }
+        rotate(degrees = -25f, pivot = Offset(head2CenterX, head2CenterY)) {
+          drawOval(
+            color = tint,
+            topLeft = Offset(head2CenterX - headWidth / 2f, head2CenterY - headHeight / 2f),
+            size = Size(headWidth, headHeight),
+          )
+        }
+
+        val stem1X = head1CenterX + headWidth * 0.36f
+        val stem2X = head2CenterX + headWidth * 0.36f
+        val stemTopY = h * 0.16f
+        val stemBottomY = head1CenterY
+        val stemWidth = 1.5.dp.toPx()
+
+        drawLine(
+          color = tint,
+          start = Offset(stem1X, stemBottomY),
+          end = Offset(stem1X, stemTopY),
+          strokeWidth = stemWidth,
+          cap = StrokeCap.Square,
+        )
+        drawLine(
+          color = tint,
+          start = Offset(stem2X, stemBottomY),
+          end = Offset(stem2X, stemTopY),
+          strokeWidth = stemWidth,
+          cap = StrokeCap.Square,
+        )
+
+        val beamThickness = 2.2.dp.toPx()
+        val beamCenterY = stemTopY + beamThickness / 2f
+        drawLine(
+          color = tint,
+          start = Offset(stem1X - stemWidth / 2f, beamCenterY),
+          end = Offset(stem2X + stemWidth / 2f, beamCenterY),
+          strokeWidth = beamThickness,
+          cap = StrokeCap.Square,
+        )
+      }
+
+      BeatSubdivision.TRIPLET -> {
+        val textResult = textMeasurer.measure(
+          text = "3",
+          style = TextStyle(
+            fontSize = 7.5.sp,
+            fontWeight = FontWeight.Black,
+            color = tint,
+          ),
+        )
+
+        val headWidth = w * 0.28f
+        val headHeight = h * 0.20f
+        val head1CenterX = w * 0.14f
+        val head1CenterY = h * 0.80f
+        val head2CenterX = w * 0.48f
+        val head2CenterY = h * 0.80f
+        val head3CenterX = w * 0.82f
+        val head3CenterY = h * 0.80f
+
+        rotate(degrees = -25f, pivot = Offset(head1CenterX, head1CenterY)) {
+          drawOval(
+            color = tint,
+            topLeft = Offset(head1CenterX - headWidth / 2f, head1CenterY - headHeight / 2f),
+            size = Size(headWidth, headHeight),
+          )
+        }
+        rotate(degrees = -25f, pivot = Offset(head2CenterX, head2CenterY)) {
+          drawOval(
+            color = tint,
+            topLeft = Offset(head2CenterX - headWidth / 2f, head2CenterY - headHeight / 2f),
+            size = Size(headWidth, headHeight),
+          )
+        }
+        rotate(degrees = -25f, pivot = Offset(head3CenterX, head3CenterY)) {
+          drawOval(
+            color = tint,
+            topLeft = Offset(head3CenterX - headWidth / 2f, head3CenterY - headHeight / 2f),
+            size = Size(headWidth, headHeight),
+          )
+        }
+
+        val stem1X = head1CenterX + headWidth * 0.36f
+        val stem2X = head2CenterX + headWidth * 0.36f
+        val stem3X = head3CenterX + headWidth * 0.36f
+        val stemTopY = h * 0.36f
+        val stemBottomY = head1CenterY
+        val stemWidth = 1.3.dp.toPx()
+
+        drawLine(
+          color = tint,
+          start = Offset(stem1X, stemBottomY),
+          end = Offset(stem1X, stemTopY),
+          strokeWidth = stemWidth,
+          cap = StrokeCap.Square,
+        )
+        drawLine(
+          color = tint,
+          start = Offset(stem2X, stemBottomY),
+          end = Offset(stem2X, stemTopY),
+          strokeWidth = stemWidth,
+          cap = StrokeCap.Square,
+        )
+        drawLine(
+          color = tint,
+          start = Offset(stem3X, stemBottomY),
+          end = Offset(stem3X, stemTopY),
+          strokeWidth = stemWidth,
+          cap = StrokeCap.Square,
+        )
+
+        val beamThickness = 1.8.dp.toPx()
+        val beamCenterY = stemTopY + beamThickness / 2f
+        drawLine(
+          color = tint,
+          start = Offset(stem1X - stemWidth / 2f, beamCenterY),
+          end = Offset(stem3X + stemWidth / 2f, beamCenterY),
+          strokeWidth = beamThickness,
+          cap = StrokeCap.Square,
+        )
+
+        val beamCenterX = (stem1X + stem3X) / 2f
+        drawText(
+          textLayoutResult = textResult,
+          topLeft = Offset(
+            x = beamCenterX - textResult.size.width / 2f,
+            y = (stemTopY - textResult.size.height) / 2f,
+          ),
+        )
+      }
+
+      BeatSubdivision.SIXTEENTH -> {
+        val headWidth = w * 0.34f
+        val headHeight = h * 0.24f
+        val head1CenterX = w * 0.22f
+        val head1CenterY = h * 0.77f
+        val head2CenterX = w * 0.68f
+        val head2CenterY = h * 0.77f
+
+        rotate(degrees = -25f, pivot = Offset(head1CenterX, head1CenterY)) {
+          drawOval(
+            color = tint,
+            topLeft = Offset(head1CenterX - headWidth / 2f, head1CenterY - headHeight / 2f),
+            size = Size(headWidth, headHeight),
+          )
+        }
+        rotate(degrees = -25f, pivot = Offset(head2CenterX, head2CenterY)) {
+          drawOval(
+            color = tint,
+            topLeft = Offset(head2CenterX - headWidth / 2f, head2CenterY - headHeight / 2f),
+            size = Size(headWidth, headHeight),
+          )
+        }
+
+        val stem1X = head1CenterX + headWidth * 0.36f
+        val stem2X = head2CenterX + headWidth * 0.36f
+        val stemTopY = h * 0.14f
+        val stemBottomY = head1CenterY
+        val stemWidth = 1.5.dp.toPx()
+
+        drawLine(
+          color = tint,
+          start = Offset(stem1X, stemBottomY),
+          end = Offset(stem1X, stemTopY),
+          strokeWidth = stemWidth,
+          cap = StrokeCap.Square,
+        )
+        drawLine(
+          color = tint,
+          start = Offset(stem2X, stemBottomY),
+          end = Offset(stem2X, stemTopY),
+          strokeWidth = stemWidth,
+          cap = StrokeCap.Square,
+        )
+
+        val beamThickness = 1.8.dp.toPx()
+        val beam1Y = stemTopY + beamThickness / 2f
+        drawLine(
+          color = tint,
+          start = Offset(stem1X - stemWidth / 2f, beam1Y),
+          end = Offset(stem2X + stemWidth / 2f, beam1Y),
+          strokeWidth = beamThickness,
+          cap = StrokeCap.Square,
+        )
+
+        val beamGap = 1.5.dp.toPx()
+        val beam2Y = beam1Y + beamThickness / 2f + beamGap + beamThickness / 2f
+        drawLine(
+          color = tint,
+          start = Offset(stem1X - stemWidth / 2f, beam2Y),
+          end = Offset(stem2X + stemWidth / 2f, beam2Y),
+          strokeWidth = beamThickness,
+          cap = StrokeCap.Square,
+        )
+      }
+    }
+  }
+}
+
 @Preview(showBackground = true)
 @Composable
 private fun MetronomeScreenPreview() {
   ToolboxTheme {
     MetronomeScreen()
+  }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun CustomTimeSignatureDialogPreview() {
+  ToolboxTheme {
+    androidx.compose.material3.Surface(
+      shape = RoundedCornerShape(28.dp),
+      color = MaterialTheme.colorScheme.surfaceContainerHigh,
+      modifier = Modifier.padding(16.dp),
+    ) {
+      Column(
+        modifier = Modifier.padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+      ) {
+        CustomTimeSignatureDialogContent(
+          beatsInput = "7",
+          onBeatsInputChange = {},
+          selectedNoteValue = 4,
+          onSelectNoteValue = {},
+          errorMessage = null,
+        )
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.End,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          TextButton(onClick = {}) { Text("Cancel") }
+          Button(onClick = {}) { Text("Add") }
+        }
+      }
+    }
   }
 }

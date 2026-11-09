@@ -1,9 +1,13 @@
 package com.example.toolbox.ui.main
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Casino
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material.icons.filled.SquareFoot
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Timer
@@ -39,5 +43,21 @@ enum class Tool(
   RULER(
     title = "Ruler",
     icon = Icons.Default.SquareFoot,
+  ),
+  BLUETOOTH_REMOTE(
+    title = "TV Remote",
+    icon = Icons.Default.SettingsRemote,
+  ),
+  CALCULATOR(
+    title = "Calculator",
+    icon = Icons.Default.Calculate,
+  ),
+  IMAGE_EDITOR(
+    title = "Image Editor",
+    icon = Icons.Default.Image,
+  ),
+  SETTINGS(
+    title = "Settings",
+    icon = Icons.Default.Settings,
   ),
 }

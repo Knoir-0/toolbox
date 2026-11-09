@@ -14,7 +14,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,16 +21,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
-import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.SquareFoot
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +42,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -68,6 +64,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -216,6 +213,38 @@ object RulerMath {
   fun closestReferenceObject(mm: Float): ReferenceObjectSpec {
     return referenceObjects.minByOrNull { abs(it.lengthMm - mm) } ?: referenceObjects.first()
   }
+
+  /**
+   * Resolves whether touch/drag interaction targets Caliper Bar A (0) or Bar B (1).
+   *
+   * When both bars are separated along the active measurement axis, the closer bar is chosen.
+   * When bars are overlapping or touch is equidistant, directional touch disambiguates pulling
+   * the jaws apart: touch on or before the minimum selects the start jaw, and touch after selects
+   * the end jaw.
+   */
+  fun resolveCaliperTarget(
+    touchCoordMm: Float,
+    startMm: Float,
+    endMm: Float,
+  ): Int {
+    val distStart = abs(touchCoordMm - startMm)
+    val distEnd = abs(touchCoordMm - endMm)
+
+    if (distStart < distEnd) {
+      return 0
+    } else if (distEnd < distStart) {
+      return 1
+    }
+
+    // Directional fallback when equidistant or overlapping:
+    // Touch on or before the minimum pulls the start jaw; touch after pulls the end jaw.
+    val minMm = min(startMm, endMm)
+    return if (touchCoordMm <= minMm) {
+      if (startMm <= endMm) 0 else 1
+    } else {
+      if (startMm <= endMm) 1 else 0
+    }
+  }
 }
 
 @Composable
@@ -259,10 +288,6 @@ fun RulerScreen(modifier: Modifier = Modifier) {
   val measuredInches = remember(measuredMm) { RulerMath.mmToInches(measuredMm.toDouble()) }
   val fractionInches = remember(measuredInches) { RulerMath.formatImperialFraction(measuredInches) }
 
-  fun adjustActiveLength(deltaMm: Float) {
-    cursorEndMm = (cursorEndMm + deltaMm).coerceIn(0f, 200f)
-  }
-
   // Full-bleed Box so scales render directly flush against all 4 edges of the screen
   Box(
     modifier = modifier
@@ -278,7 +303,6 @@ fun RulerScreen(modifier: Modifier = Modifier) {
       cursorStartMm = cursorStartMm,
       cursorEndMm = cursorEndMm,
       measuredMm = measuredMm,
-      fractionInches = fractionInches,
       onUpdateStartMm = { cursorStartMm = it },
       onUpdateEndMm = { cursorEndMm = it },
       onSelectAxis = { activeAxis = it },
@@ -340,22 +364,12 @@ fun RulerScreen(modifier: Modifier = Modifier) {
           fractionInches = fractionInches,
           showCalibration = showCalibrationPanel,
           onToggleCalibration = { showCalibrationPanel = !showCalibrationPanel },
-          onStepMinus = { adjustActiveLength(-0.5f) },
-          onStepPlus = { adjustActiveLength(0.5f) },
         )
 
         AnimatedVisibility(visible = showCalibrationPanel) {
           CalibrationPanelCard(
             calibrationScale = calibrationScale,
             onCalibrationChange = { calibrationScale = it.coerceIn(0.80f, 1.20f) },
-            onSnapCreditCardWidth = {
-              rulerMode = RulerMode.SINGLE
-              cursorEndMm = 53.98f
-            },
-            onSnapCreditCardLength = {
-              rulerMode = RulerMode.SINGLE
-              cursorEndMm = 85.60f
-            },
             onResetCalibration = { calibrationScale = 1.0f },
           )
         }
@@ -426,8 +440,6 @@ private fun RulerHeroCard(
   fractionInches: String,
   showCalibration: Boolean,
   onToggleCalibration: () -> Unit,
-  onStepMinus: () -> Unit,
-  onStepPlus: () -> Unit,
 ) {
   Card(
     shape = RoundedCornerShape(24.dp),
@@ -537,74 +549,48 @@ private fun RulerHeroCard(
           }
         }
 
-        // Main Digital Readout + Fine Steppers
-        Row(
+        // Main Digital Readout
+        Column(
           modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
+          horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-          Column(modifier = Modifier.weight(1f)) {
-            val headlineText = if (primaryUnit == RulerUnitSystem.METRIC) {
-              String.format("%.2f cm", measuredCm)
-            } else {
-              String.format("%.2f in", measuredInches)
-            }
-            val subText = if (primaryUnit == RulerUnitSystem.METRIC) {
-              String.format("%.1f mm  ·  %.2f in (%s)", measuredMm, measuredInches, fractionInches)
-            } else {
-              String.format("%s  ·  %.1f mm (%.2f cm)", fractionInches, measuredMm, measuredCm)
-            }
+          val headlineText = if (primaryUnit == RulerUnitSystem.METRIC) {
+            String.format("%.2f cm", measuredCm)
+          } else {
+            String.format("%.2f in", measuredInches)
+          }
+          val subText = if (primaryUnit == RulerUnitSystem.METRIC) {
+            String.format("%.1f mm  ·  %.2f in (%s)", measuredMm, measuredInches, fractionInches)
+          } else {
+            String.format("%s  ·  %.1f mm (%.2f cm)", fractionInches, measuredMm, measuredCm)
+          }
 
-            AnimatedContent(
-              targetState = headlineText,
-              transitionSpec = { fadeIn() togetherWith fadeOut() },
-              label = "RulerPrimaryReadout",
-            ) { valueStr ->
-              Text(
-                text = valueStr,
-                style = MaterialTheme.typography.headlineMedium,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Black,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
+          AnimatedContent(
+            targetState = headlineText,
+            transitionSpec = { fadeIn() togetherWith fadeOut() },
+            contentAlignment = Alignment.Center,
+            label = "RulerPrimaryReadout",
+          ) { valueStr ->
             Text(
-              text = subText,
-              style = MaterialTheme.typography.labelSmall,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.primary,
+              text = valueStr,
+              style = MaterialTheme.typography.headlineMedium,
+              fontFamily = FontFamily.Monospace,
+              fontWeight = FontWeight.Black,
+              color = MaterialTheme.colorScheme.onSurface,
+              textAlign = TextAlign.Center,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
             )
           }
-
-          Row(
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            FilledTonalIconButton(
-              onClick = onStepMinus,
-              modifier = Modifier.size(34.dp),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Remove,
-                contentDescription = "Decrease 0.5 mm",
-                modifier = Modifier.size(16.dp),
-              )
-            }
-            FilledTonalIconButton(
-              onClick = onStepPlus,
-              modifier = Modifier.size(34.dp),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Add,
-                contentDescription = "Increase 0.5 mm",
-                modifier = Modifier.size(16.dp),
-              )
-            }
-          }
+          Text(
+            text = subText,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
         }
 
         // Mode Segmented Row
@@ -636,8 +622,6 @@ private fun RulerHeroCard(
 private fun CalibrationPanelCard(
   calibrationScale: Float,
   onCalibrationChange: (Float) -> Unit,
-  onSnapCreditCardWidth: () -> Unit,
-  onSnapCreditCardLength: () -> Unit,
   onResetCalibration: () -> Unit,
 ) {
   Card(
@@ -679,38 +663,6 @@ private fun CalibrationPanelCard(
         valueRange = 0.80f..1.20f,
         modifier = Modifier.fillMaxWidth(),
       )
-
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        FilledTonalButton(
-          onClick = onSnapCreditCardWidth,
-          modifier = Modifier.weight(1f),
-          shape = RoundedCornerShape(10.dp),
-          contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-        ) {
-          Text(
-            text = "Card Width (53.98 mm)",
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-          )
-        }
-        FilledTonalButton(
-          onClick = onSnapCreditCardLength,
-          modifier = Modifier.weight(1f),
-          shape = RoundedCornerShape(10.dp),
-          contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-        ) {
-          Text(
-            text = "Card Length (85.60 mm)",
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-          )
-        }
-      }
     }
   }
 }
@@ -730,7 +682,6 @@ private fun ScreenEdgeRulerCanvas(
   cursorStartMm: Float,
   cursorEndMm: Float,
   measuredMm: Float,
-  fractionInches: String,
   onUpdateStartMm: (Float) -> Unit,
   onUpdateEndMm: (Float) -> Unit,
   onSelectAxis: (RulerAxis) -> Unit,
@@ -749,69 +700,87 @@ private fun ScreenEdgeRulerCanvas(
 
   var activeDragTarget by remember { mutableIntStateOf(1) } // 0 = Start (A), 1 = End (B)
 
+  val currentStartMm by rememberUpdatedState(cursorStartMm)
+  val currentEndMm by rememberUpdatedState(cursorEndMm)
+  val currentRulerMode by rememberUpdatedState(rulerMode)
+  val currentActiveAxis by rememberUpdatedState(activeAxis)
+  val currentPxPerMmX by rememberUpdatedState(pxPerMmX)
+  val currentPxPerMmY by rememberUpdatedState(pxPerMmY)
+  val currentActivePxPerMm by rememberUpdatedState(activePxPerMm)
+  val currentOnUpdateStartMm by rememberUpdatedState(onUpdateStartMm)
+  val currentOnUpdateEndMm by rememberUpdatedState(onUpdateEndMm)
+  val currentOnSelectAxis by rememberUpdatedState(onSelectAxis)
+
   Canvas(
     modifier = modifier
-      .pointerInput(rulerMode, activeAxis, pxPerMmX, pxPerMmY) {
+      .pointerInput(Unit) {
         detectTapGestures { offset ->
           val edgeStripPx = 42.dp.toPx()
           // Automatically switch active axis if the user taps directly on a Top/Bottom or Left/Right edge scale
           val targetAxis = when {
             offset.y <= edgeStripPx || offset.y >= size.height - edgeStripPx -> RulerAxis.HORIZONTAL
             offset.x <= edgeStripPx || offset.x >= size.width - edgeStripPx -> RulerAxis.VERTICAL
-            else -> activeAxis
+            else -> currentActiveAxis
           }
-          if (targetAxis != activeAxis) {
-            onSelectAxis(targetAxis)
+          if (targetAxis != currentActiveAxis) {
+            currentOnSelectAxis(targetAxis)
           }
-          val axisPxPerMm = if (targetAxis == RulerAxis.VERTICAL) pxPerMmY else pxPerMmX
+          val axisPxPerMm = if (targetAxis == RulerAxis.VERTICAL) currentPxPerMmY else currentPxPerMmX
           val maxAxisPx = if (targetAxis == RulerAxis.VERTICAL) size.height else size.width
           val rawCoordPx = if (targetAxis == RulerAxis.VERTICAL) offset.y else offset.x
           val maxMm = (maxAxisPx / axisPxPerMm).coerceAtLeast(10f)
           val tappedMm = (rawCoordPx / axisPxPerMm).coerceIn(0f, maxMm)
 
-          if (rulerMode == RulerMode.SINGLE) {
-            onUpdateEndMm(tappedMm)
+          if (currentRulerMode == RulerMode.SINGLE) {
+            currentOnUpdateEndMm(tappedMm)
           } else {
-            val distStart = abs(tappedMm - cursorStartMm)
-            val distEnd = abs(tappedMm - cursorEndMm)
-            if (distStart < distEnd) {
-              onUpdateStartMm(tappedMm)
+            val target = RulerMath.resolveCaliperTarget(
+              touchCoordMm = tappedMm,
+              startMm = currentStartMm,
+              endMm = currentEndMm,
+            )
+            if (target == 0) {
+              currentOnUpdateStartMm(tappedMm)
             } else {
-              onUpdateEndMm(tappedMm)
+              currentOnUpdateEndMm(tappedMm)
             }
           }
         }
       }
-      .pointerInput(rulerMode, activeAxis, activePxPerMm) {
+      .pointerInput(Unit) {
         detectDragGestures(
           onDragStart = { startOffset ->
-            val maxAxisPx = if (activeAxis == RulerAxis.VERTICAL) size.height else size.width
-            val rawCoordPx = if (activeAxis == RulerAxis.VERTICAL) startOffset.y else startOffset.x
-            val maxMm = (maxAxisPx / activePxPerMm).coerceAtLeast(10f)
-            val touchedMm = (rawCoordPx / activePxPerMm).coerceIn(0f, maxMm)
-            activeDragTarget = if (rulerMode == RulerMode.CALIPER &&
-              abs(touchedMm - cursorStartMm) < abs(touchedMm - cursorEndMm)
-            ) {
-              0
+            val maxAxisPx = if (currentActiveAxis == RulerAxis.VERTICAL) size.height else size.width
+            val rawCoordPx = if (currentActiveAxis == RulerAxis.VERTICAL) startOffset.y else startOffset.x
+            val maxMm = (maxAxisPx / currentActivePxPerMm).coerceAtLeast(10f)
+            val touchedMm = (rawCoordPx / currentActivePxPerMm).coerceIn(0f, maxMm)
+
+            activeDragTarget = if (currentRulerMode == RulerMode.CALIPER) {
+              RulerMath.resolveCaliperTarget(
+                touchCoordMm = touchedMm,
+                startMm = currentStartMm,
+                endMm = currentEndMm,
+              )
             } else {
               1
             }
+
             if (activeDragTarget == 0) {
-              onUpdateStartMm(touchedMm)
+              currentOnUpdateStartMm(touchedMm)
             } else {
-              onUpdateEndMm(touchedMm)
+              currentOnUpdateEndMm(touchedMm)
             }
           },
           onDrag = { change, _ ->
             change.consume()
-            val maxAxisPx = if (activeAxis == RulerAxis.VERTICAL) size.height else size.width
-            val rawCoordPx = if (activeAxis == RulerAxis.VERTICAL) change.position.y else change.position.x
-            val maxMm = (maxAxisPx / activePxPerMm).coerceAtLeast(10f)
-            val currentMm = (rawCoordPx / activePxPerMm).coerceIn(0f, maxMm)
-            if (rulerMode == RulerMode.CALIPER && activeDragTarget == 0) {
-              onUpdateStartMm(currentMm)
+            val maxAxisPx = if (currentActiveAxis == RulerAxis.VERTICAL) size.height else size.width
+            val rawCoordPx = if (currentActiveAxis == RulerAxis.VERTICAL) change.position.y else change.position.x
+            val maxMm = (maxAxisPx / currentActivePxPerMm).coerceAtLeast(10f)
+            val currentMm = (rawCoordPx / currentActivePxPerMm).coerceIn(0f, maxMm)
+            if (currentRulerMode == RulerMode.CALIPER && activeDragTarget == 0) {
+              currentOnUpdateStartMm(currentMm)
             } else {
-              onUpdateEndMm(currentMm)
+              currentOnUpdateEndMm(currentMm)
             }
           },
         )
@@ -943,17 +912,15 @@ private fun ScreenEdgeRulerCanvas(
     }
     val endBadgeLabel = if (isMetric) {
       String.format(
-        "%s%.1f mm (%.2f cm)",
+        "%s%.1f mm",
         if (rulerMode == RulerMode.CALIPER) "B · Δ " else "",
         measuredMm,
-        measuredMm / 10f,
       )
     } else {
       String.format(
-        "%s%.2f in (%s)",
+        "%s%.2f in",
         if (rulerMode == RulerMode.CALIPER) "B · Δ " else "",
         measuredMm / 25.4f,
-        fractionInches,
       )
     }
 
@@ -992,7 +959,7 @@ private fun ScreenEdgeRulerCanvas(
       )
       if (rulerMode == RulerMode.CALIPER) {
         drawCursorHandleBadge(
-          center = Offset(width * 0.30f, yStart),
+          center = Offset(width * 0.5f, yStart),
           label = startBadgeLabel,
           badgeColor = tertiaryColor,
         )
@@ -1044,7 +1011,7 @@ private fun ScreenEdgeRulerCanvas(
       )
       if (rulerMode == RulerMode.CALIPER) {
         drawCursorHandleBadge(
-          center = Offset(xStart, height * 0.22f),
+          center = Offset(xStart, height * 0.5f),
           label = startBadgeLabel,
           badgeColor = tertiaryColor,
         )
@@ -1057,7 +1024,7 @@ private fun ScreenEdgeRulerCanvas(
         strokeWidth = 2.8.dp.toPx(),
       )
       drawCursorHandleBadge(
-        center = Offset(xEnd, height * 0.14f),
+        center = Offset(xEnd, height * 0.5f),
         label = endBadgeLabel,
         badgeColor = primaryColor,
       )

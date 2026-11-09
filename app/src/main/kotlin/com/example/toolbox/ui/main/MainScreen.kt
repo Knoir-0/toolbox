@@ -26,6 +26,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -48,6 +50,7 @@ import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.material3.rememberStandardBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -79,15 +82,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.navigation3.runtime.NavKey
 import com.example.toolbox.ui.theme.ToolboxTheme
+import com.example.toolbox.ui.tools.BluetoothRemoteScreen
+import com.example.toolbox.ui.tools.CalculatorScreen
 import com.example.toolbox.ui.tools.ColorPickerScreen
 import com.example.toolbox.ui.tools.DiceRollerScreen
 import com.example.toolbox.ui.tools.GuitarTunerScreen
+import com.example.toolbox.ui.tools.ImageEditorScreen
 import com.example.toolbox.ui.tools.MetronomeScreen
 import com.example.toolbox.ui.tools.RulerScreen
+import com.example.toolbox.ui.tools.SettingsScreen
 import com.example.toolbox.ui.tools.UnitConverterScreen
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
@@ -95,6 +103,8 @@ import kotlinx.coroutines.launch
 const val MIN_TOOLS_PER_ROW = 3
 const val MAX_TOOLS_PER_ROW = 6
 const val DEFAULT_TOOLS_PER_ROW = 3
+const val ROWS_PER_PAGE_EXPANDED = 2
+const val ROWS_PER_PAGE_COLLAPSED = 1
 
 /**
  * Ensures the tools-per-row count is within [MIN_TOOLS_PER_ROW]..[MAX_TOOLS_PER_ROW].
@@ -102,7 +112,24 @@ const val DEFAULT_TOOLS_PER_ROW = 3
 fun coerceToolsPerRow(count: Int): Int = count.coerceIn(MIN_TOOLS_PER_ROW, MAX_TOOLS_PER_ROW)
 
 /**
+ * Calculates total rows required for [toolCount] items given [toolsPerRow].
+ */
+fun calculateRowCount(toolCount: Int, toolsPerRow: Int): Int {
+  val columns = coerceToolsPerRow(toolsPerRow)
+  return maxOf(1, (toolCount + columns - 1) / columns)
+}
+
+/**
+ * Calculates total pages required when the navigation panel is opened,
+ * paginating after [ROWS_PER_PAGE_EXPANDED] (3) rows.
+ */
+fun calculateExpandedPageCount(rowCount: Int): Int {
+  return maxOf(1, (rowCount + ROWS_PER_PAGE_EXPANDED - 1) / ROWS_PER_PAGE_EXPANDED)
+}
+
+/**
  * Returns a new list with the tool at [fromIndex] moved to [toIndex].
+ * [Tool.SETTINGS] cannot be re-arranged and is always maintained at the end.
  */
 fun reorderTools(
   tools: List<Tool>,
@@ -112,10 +139,38 @@ fun reorderTools(
   if (fromIndex !in tools.indices || toIndex !in tools.indices || fromIndex == toIndex) {
     return tools
   }
+  // Settings cannot be moved, and nothing can be moved onto Settings
+  if (tools[fromIndex] == Tool.SETTINGS || tools[toIndex] == Tool.SETTINGS) {
+    return tools
+  }
   val mutable = tools.toMutableList()
   val moved = mutable.removeAt(fromIndex)
   mutable.add(toIndex, moved)
+  // Ensure Settings remains the last tool if present
+  if (mutable.contains(Tool.SETTINGS)) {
+    mutable.remove(Tool.SETTINGS)
+    mutable.add(Tool.SETTINGS)
+  }
   return mutable.toList()
+}
+
+/**
+ * Merges a reordered subset of visible tools back into the full tool list,
+ * preserving hidden tools in their positions, and guaranteeing [Tool.SETTINGS] is last.
+ */
+fun mergeReorderedVisible(
+  allTools: List<Tool>,
+  reorderedVisible: List<Tool>,
+): List<Tool> {
+  var visibleIndex = 0
+  val merged = allTools.map { tool ->
+    if (tool in reorderedVisible) {
+      reorderedVisible[visibleIndex++]
+    } else {
+      tool
+    }
+  }
+  return merged.filter { it != Tool.SETTINGS } + Tool.SETTINGS
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -123,13 +178,27 @@ fun reorderTools(
 fun MainScreen(
   onItemClick: (NavKey) -> Unit = {},
   modifier: Modifier = Modifier,
+  preferencesRepository: NavigationPreferencesRepository = rememberNavigationPreferencesRepository(),
 ) {
-  var selectedTool by rememberSaveable { mutableStateOf(Tool.entries.first()) }
+  val themeMode by preferencesRepository.themeModeFlow.collectAsState()
+  val themeColor by preferencesRepository.themeColorFlow.collectAsState()
+  val toolOrder by preferencesRepository.toolOrderFlow.collectAsState()
+  val hiddenTools by preferencesRepository.hiddenToolsFlow.collectAsState()
 
-  ToolboxTheme {
+  val firstVisible = remember(toolOrder, hiddenTools) {
+    toolOrder.firstOrNull { it !in hiddenTools } ?: Tool.SETTINGS
+  }
+
+  var selectedTool by rememberSaveable { mutableStateOf(firstVisible) }
+
+  ToolboxTheme(
+    themeMode = themeMode,
+    themeColor = themeColor,
+  ) {
     ToolboxScaffold(
       selectedTool = selectedTool,
       onSelectTool = { selectedTool = it },
+      preferencesRepository = preferencesRepository,
       modifier = modifier,
     )
   }
@@ -141,21 +210,35 @@ fun ToolboxScaffold(
   selectedTool: Tool,
   onSelectTool: (Tool) -> Unit,
   modifier: Modifier = Modifier,
-  initialTools: List<Tool> = Tool.entries,
-  initialToolsPerRow: Int = DEFAULT_TOOLS_PER_ROW,
+  initialTools: List<Tool>? = null,
+  initialToolsPerRow: Int? = null,
   initialSheetValue: SheetValue = SheetValue.PartiallyExpanded,
+  preferencesRepository: NavigationPreferencesRepository? = rememberNavigationPreferencesRepository(),
 ) {
-  var toolOrderNames by rememberSaveable(initialTools) {
-    mutableStateOf(initialTools.map { it.name })
-  }
-  val orderedTools = remember(toolOrderNames) {
-    toolOrderNames.map { Tool.valueOf(it) }
+  val persistedToolOrder by preferencesRepository?.toolOrderFlow?.collectAsState()
+    ?: remember { mutableStateOf(initialTools ?: Tool.entries) }
+  val hiddenTools by preferencesRepository?.hiddenToolsFlow?.collectAsState()
+    ?: remember { mutableStateOf(emptySet()) }
+  val persistedToolsPerRow by preferencesRepository?.toolsPerRowFlow?.collectAsState()
+    ?: remember { mutableIntStateOf(initialToolsPerRow ?: DEFAULT_TOOLS_PER_ROW) }
+
+  val allOrderedTools = remember(initialTools, persistedToolOrder) {
+    val base = initialTools ?: persistedToolOrder
+    base.filter { it != Tool.SETTINGS } + Tool.SETTINGS
   }
 
-  var toolsPerRow by rememberSaveable(initialToolsPerRow) {
-    mutableIntStateOf(coerceToolsPerRow(initialToolsPerRow))
+  val visibleTools = remember(allOrderedTools, hiddenTools) {
+    allOrderedTools.filter { it !in hiddenTools || it == Tool.SETTINGS }
   }
 
+  // Auto-switch selectedTool if it becomes hidden
+  LaunchedEffect(selectedTool, visibleTools) {
+    if (selectedTool in hiddenTools && selectedTool != Tool.SETTINGS) {
+      onSelectTool(visibleTools.firstOrNull() ?: Tool.SETTINGS)
+    }
+  }
+
+  val toolsPerRow = coerceToolsPerRow(persistedToolsPerRow)
   var isDraggingTool by remember { mutableStateOf(false) }
 
   val sheetState = rememberStandardBottomSheetState(
@@ -167,7 +250,7 @@ fun ToolboxScaffold(
 
   // Native NavigationBar height (80.dp) + compact pull-up handle (28.dp) + bottom clearance + navigation bar insets
   val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-  val sheetPeekHeight = 114.dp + navBarBottom
+  val sheetPeekHeight = 118.dp + navBarBottom
   val isExpanded = sheetState.currentValue == SheetValue.Expanded ||
     sheetState.targetValue == SheetValue.Expanded
 
@@ -183,7 +266,7 @@ fun ToolboxScaffold(
     sheetDragHandle = null,
     sheetContent = {
       ToolsPullUpPanelContent(
-        tools = orderedTools,
+        tools = visibleTools,
         selectedTool = selectedTool,
         toolsPerRow = toolsPerRow,
         isExpanded = isExpanded,
@@ -198,10 +281,13 @@ fun ToolboxScaffold(
         },
         onSelectTool = onSelectTool,
         onToolsPerRowChange = { newCount ->
-          toolsPerRow = coerceToolsPerRow(newCount)
+          val coerced = coerceToolsPerRow(newCount)
+          preferencesRepository?.setToolsPerRow(coerced)
         },
         onReorderTools = { fromIndex, toIndex ->
-          toolOrderNames = reorderTools(orderedTools, fromIndex, toIndex).map { it.name }
+          val reordered = reorderTools(visibleTools, fromIndex, toIndex)
+          val merged = mergeReorderedVisible(allOrderedTools, reordered)
+          preferencesRepository?.setToolOrder(merged)
         },
         onDraggingChanged = { dragging ->
           isDraggingTool = dragging
@@ -212,11 +298,14 @@ fun ToolboxScaffold(
     Box(
       modifier = Modifier
         .fillMaxSize()
-        .statusBarsPadding()
-        .padding(innerPadding),
+        .statusBarsPadding(),
       contentAlignment = Alignment.Center,
     ) {
-      ToolContentView(tool = selectedTool)
+      ToolContentView(
+        tool = selectedTool,
+        bottomPadding = innerPadding.calculateBottomPadding(),
+        preferencesRepository = preferencesRepository,
+      )
     }
   }
 }
@@ -429,51 +518,6 @@ fun ToolsPerRowControl(
             inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
           ),
         )
-
-        // Dot number labels (3 - 6), also clickable for quick selection
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 4.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          stops.forEach { stop ->
-            val isCurrent = stop == coercedValue
-            Row(
-              modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .clickable { onToolsPerRowChange(stop) }
-                .padding(horizontal = 6.dp, vertical = 2.dp)
-                .testTag("tools_per_row_dot_$stop"),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-              Box(
-                modifier = Modifier
-                  .size(if (isCurrent) 6.dp else 4.dp)
-                  .clip(CircleShape)
-                  .background(
-                    if (isCurrent) {
-                      MaterialTheme.colorScheme.primary
-                    } else {
-                      MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    },
-                  ),
-              )
-              Text(
-                text = stop.toString(),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                color = if (isCurrent) {
-                  MaterialTheme.colorScheme.primary
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant
-                },
-              )
-            }
-          }
-        }
       }
 
       // Little ? button on the right side of the slider
@@ -539,16 +583,26 @@ fun ReorderableToolsGrid(
   modifier: Modifier = Modifier,
 ) {
   val effectiveColumns = coerceToolsPerRow(toolsPerRow)
-  val rowCount = (tools.size + effectiveColumns - 1) / effectiveColumns
-  val visibleRowCount = if (isExpanded) rowCount else 1
+  val rowCount = calculateRowCount(tools.size, effectiveColumns)
+  val expandedPageCount = calculateExpandedPageCount(rowCount)
 
   val currentTools by rememberUpdatedState(tools)
   val currentOnReorderTools by rememberUpdatedState(onReorderTools)
   val currentOnDraggingChanged by rememberUpdatedState(onDraggingChanged)
   val hapticFeedback = LocalHapticFeedback.current
+  val coroutineScope = rememberCoroutineScope()
+
+  val expandedPagerState = rememberPagerState(
+    initialPage = 0,
+    pageCount = { expandedPageCount },
+  )
+  val collapsedPagerState = rememberPagerState(
+    initialPage = 0,
+    pageCount = { rowCount },
+  )
 
   var gridCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-  val slotBounds = remember(effectiveColumns, tools.size) { mutableStateMapOf<Int, Rect>() }
+  val slotBounds = remember(effectiveColumns, tools.size, isExpanded) { mutableStateMapOf<Int, Rect>() }
 
   var draggedTool by remember { mutableStateOf<Tool?>(null) }
   var dragPointerOffset by remember { mutableStateOf(Offset.Zero) }
@@ -556,13 +610,51 @@ fun ReorderableToolsGrid(
 
   val draggedIndex = draggedTool?.let { currentTools.indexOf(it) } ?: -1
 
+  // Synchronize pagers between collapsed and expanded states
+  LaunchedEffect(isExpanded) {
+    if (isExpanded) {
+      val targetExpandedPage = (collapsedPagerState.currentPage / ROWS_PER_PAGE_EXPANDED)
+        .coerceIn(0, maxOf(0, expandedPageCount - 1))
+      expandedPagerState.scrollToPage(targetExpandedPage)
+    } else {
+      val selectedIndex = tools.indexOf(selectedTool)
+      val selectedRow = if (selectedIndex >= 0) selectedIndex / effectiveColumns else 0
+      val expandedPageStartRow = expandedPagerState.currentPage * ROWS_PER_PAGE_EXPANDED
+      val expandedPageEndRow = minOf(expandedPageStartRow + ROWS_PER_PAGE_EXPANDED, rowCount)
+      val targetRow = if (selectedRow in expandedPageStartRow until expandedPageEndRow) {
+        selectedRow
+      } else {
+        expandedPageStartRow.coerceIn(0, maxOf(0, rowCount - 1))
+      }
+      collapsedPagerState.scrollToPage(targetRow)
+    }
+  }
+
+  // When selectedTool changes while collapsed, jump to the row of the selected tool
+  LaunchedEffect(selectedTool, isExpanded) {
+    if (!isExpanded) {
+      val selectedIndex = tools.indexOf(selectedTool)
+      if (selectedIndex >= 0) {
+        val targetRow = (selectedIndex / effectiveColumns).coerceIn(0, maxOf(0, rowCount - 1))
+        if (targetRow != collapsedPagerState.currentPage) {
+          collapsedPagerState.scrollToPage(targetRow)
+        }
+      }
+    }
+  }
+
+  // Clear slotBounds when page changes so stale coordinates from other pages are not retained
+  LaunchedEffect(expandedPagerState.currentPage, collapsedPagerState.currentPage, isExpanded) {
+    slotBounds.clear()
+  }
+
   Column(
     modifier = modifier
       .testTag("tools_grid")
       .onGloballyPositioned { coords ->
         gridCoordinates = coords
       }
-      .pointerInput(effectiveColumns) {
+      .pointerInput(effectiveColumns, isExpanded) {
         detectDragGesturesAfterLongPress(
           onDragStart = { startOffset ->
             val hitSlotIndex = findTargetSlotIndex(
@@ -572,20 +664,25 @@ fun ReorderableToolsGrid(
               requireContains = false,
             )
             if (hitSlotIndex != null && hitSlotIndex in currentTools.indices) {
-              val slotRect = slotBounds[hitSlotIndex]
-              draggedTool = currentTools[hitSlotIndex]
-              dragPointerOffset = startOffset
-              grabOffsetFromCenter = if (slotRect != null) {
-                startOffset - slotRect.center
-              } else {
-                Offset.Zero
+              val toolToDrag = currentTools[hitSlotIndex]
+              // Settings cannot be re-arranged
+              if (toolToDrag != Tool.SETTINGS) {
+                val slotRect = slotBounds[hitSlotIndex]
+                draggedTool = toolToDrag
+                dragPointerOffset = startOffset
+                grabOffsetFromCenter = if (slotRect != null) {
+                  startOffset - slotRect.center
+                } else {
+                  Offset.Zero
+                }
+                currentOnDraggingChanged(true)
+                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
               }
-              currentOnDraggingChanged(true)
-              hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
             }
           },
           onDrag = { change, dragAmount ->
             val activeTool = draggedTool ?: return@detectDragGesturesAfterLongPress
+            if (activeTool == Tool.SETTINGS) return@detectDragGesturesAfterLongPress
             change.consume()
             dragPointerOffset += dragAmount
             val desiredCenter = dragPointerOffset - grabOffsetFromCenter
@@ -597,9 +694,15 @@ fun ReorderableToolsGrid(
               requireContains = false,
             )
             val fromIndex = currentTools.indexOf(activeTool)
-            if (targetIndex != null && fromIndex != -1 && targetIndex != fromIndex) {
-              currentOnReorderTools(fromIndex, targetIndex)
-              hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            val settingsIndex = currentTools.indexOf(Tool.SETTINGS)
+            val maxAllowedTargetIndex = if (settingsIndex >= 0) settingsIndex - 1 else currentTools.lastIndex
+
+            if (targetIndex != null && fromIndex != -1) {
+              val clampedTarget = targetIndex.coerceIn(0, maxAllowedTargetIndex)
+              if (clampedTarget != fromIndex) {
+                currentOnReorderTools(fromIndex, clampedTarget)
+                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              }
             }
           },
           onDragEnd = {
@@ -616,9 +719,104 @@ fun ReorderableToolsGrid(
           },
         )
       },
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    if (isExpanded) {
+      HorizontalPager(
+        state = expandedPagerState,
+        userScrollEnabled = draggedTool == null,
+        modifier = Modifier.fillMaxWidth(),
+      ) { pageIndex ->
+        val pageStartRow = pageIndex * ROWS_PER_PAGE_EXPANDED
+        val pageEndRow = minOf(pageStartRow + ROWS_PER_PAGE_EXPANDED, rowCount)
+        val rowsOnPage = pageStartRow until pageEndRow
+
+        ToolsPageRows(
+          rows = rowsOnPage,
+          effectiveColumns = effectiveColumns,
+          tools = currentTools,
+          draggedIndex = draggedIndex,
+          draggedTool = draggedTool,
+          dragPointerOffset = dragPointerOffset,
+          grabOffsetFromCenter = grabOffsetFromCenter,
+          slotBounds = slotBounds,
+          gridCoordinates = gridCoordinates,
+          selectedTool = selectedTool,
+          onSelectTool = onSelectTool,
+        )
+      }
+
+      if (expandedPageCount > 1) {
+        PanelPageIndicator(
+          pageCount = expandedPageCount,
+          currentPage = expandedPagerState.currentPage,
+          onPageSelected = { page ->
+            coroutineScope.launch {
+              expandedPagerState.animateScrollToPage(page)
+            }
+          },
+          testTag = "tools_panel_page_indicator",
+          modifier = Modifier.padding(top = 4.dp),
+        )
+      }
+    } else {
+      HorizontalPager(
+        state = collapsedPagerState,
+        userScrollEnabled = draggedTool == null,
+        modifier = Modifier.fillMaxWidth(),
+      ) { rowIndex ->
+        ToolsPageRows(
+          rows = rowIndex..rowIndex,
+          effectiveColumns = effectiveColumns,
+          tools = currentTools,
+          draggedIndex = draggedIndex,
+          draggedTool = draggedTool,
+          dragPointerOffset = dragPointerOffset,
+          grabOffsetFromCenter = grabOffsetFromCenter,
+          slotBounds = slotBounds,
+          gridCoordinates = gridCoordinates,
+          selectedTool = selectedTool,
+          onSelectTool = onSelectTool,
+        )
+      }
+
+      if (rowCount > 1) {
+        PanelPageIndicator(
+          pageCount = rowCount,
+          currentPage = collapsedPagerState.currentPage,
+          onPageSelected = { row ->
+            coroutineScope.launch {
+              collapsedPagerState.animateScrollToPage(row)
+            }
+          },
+          testTag = "tools_panel_row_indicator",
+          modifier = Modifier.padding(top = 2.dp),
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun ToolsPageRows(
+  rows: IntRange,
+  effectiveColumns: Int,
+  tools: List<Tool>,
+  draggedIndex: Int,
+  draggedTool: Tool?,
+  dragPointerOffset: Offset,
+  grabOffsetFromCenter: Offset,
+  slotBounds: MutableMap<Int, Rect>,
+  gridCoordinates: LayoutCoordinates?,
+  selectedTool: Tool,
+  onSelectTool: (Tool) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Column(
+    modifier = modifier.fillMaxWidth(),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    for (rowIndex in 0 until visibleRowCount) {
+    for (rowIndex in rows) {
       val rowStartIndex = rowIndex * effectiveColumns
       val rowEndIndex = minOf(rowStartIndex + effectiveColumns, tools.size)
       val isRowContainingDragged = draggedIndex in rowStartIndex until rowEndIndex
@@ -673,6 +871,43 @@ fun ReorderableToolsGrid(
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+fun PanelPageIndicator(
+  pageCount: Int,
+  currentPage: Int,
+  onPageSelected: (Int) -> Unit,
+  modifier: Modifier = Modifier,
+  testTag: String = "tools_panel_page_indicator",
+) {
+  if (pageCount <= 1) return
+  Row(
+    modifier = modifier
+      .fillMaxWidth()
+      .testTag(testTag),
+    horizontalArrangement = Arrangement.Center,
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    for (i in 0 until pageCount) {
+      val isSelected = i == currentPage
+      Box(
+        modifier = Modifier
+          .padding(horizontal = 4.dp, vertical = 2.dp)
+          .size(if (isSelected) 7.dp else 5.dp)
+          .clip(CircleShape)
+          .background(
+            if (isSelected) {
+              MaterialTheme.colorScheme.primary
+            } else {
+              MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+            },
+          )
+          .clickable { onPageSelected(i) }
+          .testTag("${testTag}_dot_$i"),
+      )
     }
   }
 }
@@ -784,18 +1019,28 @@ private fun ToolGridItem(
   }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ToolContentView(
   tool: Tool,
+  bottomPadding: Dp = 0.dp,
   modifier: Modifier = Modifier,
+  preferencesRepository: NavigationPreferencesRepository? = null,
 ) {
   when (tool) {
-    Tool.DICE_ROLLER -> DiceRollerScreen(modifier = modifier)
-    Tool.UNIT_CONVERTER -> UnitConverterScreen(modifier = modifier)
-    Tool.GUITAR_TUNER -> GuitarTunerScreen(modifier = modifier)
-    Tool.METRONOME -> MetronomeScreen(modifier = modifier)
-    Tool.COLOR_PICKER -> ColorPickerScreen(modifier = modifier)
-    Tool.RULER -> RulerScreen(modifier = modifier)
+    Tool.DICE_ROLLER -> DiceRollerScreen(modifier = modifier.padding(bottom = bottomPadding))
+    Tool.UNIT_CONVERTER -> UnitConverterScreen(modifier = modifier.padding(bottom = bottomPadding))
+    Tool.GUITAR_TUNER -> GuitarTunerScreen(modifier = modifier.padding(bottom = bottomPadding))
+    Tool.METRONOME -> MetronomeScreen(modifier = modifier.padding(bottom = bottomPadding))
+    Tool.COLOR_PICKER -> ColorPickerScreen(modifier = modifier.padding(bottom = bottomPadding))
+    Tool.RULER -> RulerScreen(modifier = modifier.padding(bottom = bottomPadding))
+    Tool.BLUETOOTH_REMOTE -> BluetoothRemoteScreen(modifier = modifier.padding(bottom = bottomPadding))
+    Tool.CALCULATOR -> CalculatorScreen(bottomPadding = bottomPadding, modifier = modifier)
+    Tool.IMAGE_EDITOR -> ImageEditorScreen(modifier = modifier.padding(bottom = bottomPadding))
+    Tool.SETTINGS -> SettingsScreen(
+      preferencesRepository = preferencesRepository ?: rememberNavigationPreferencesRepository(),
+      modifier = modifier.padding(bottom = bottomPadding),
+    )
   }
 }
 
@@ -808,6 +1053,19 @@ fun MainScreenPreview() {
       selectedTool = Tool.DICE_ROLLER,
       onSelectTool = {},
       initialSheetValue = SheetValue.Expanded,
+    )
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Preview(showBackground = true, showSystemUi = true, name = "Main Screen - Navigation Collapsed")
+@Composable
+fun MainScreenCollapsedPreview() {
+  ToolboxTheme {
+    ToolboxScaffold(
+      selectedTool = Tool.DICE_ROLLER,
+      onSelectTool = {},
+      initialSheetValue = SheetValue.PartiallyExpanded,
     )
   }
 }
