@@ -2,7 +2,9 @@ package com.example.toolbox.ui.tools
 
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Surface
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -11,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import com.example.toolbox.ui.theme.ToolboxTheme
 import org.junit.Rule
 import org.junit.Test
@@ -183,7 +186,7 @@ class BluetoothRemoteScreenTest {
   }
 
   @Test
-  fun remoteControl_displaysVolumeBarWithDownMuteUp_andNoChannelOrMediaButtons() {
+  fun remoteControl_displaysMediaBarAndVolumeBar() {
     val recordedConsumerDown = mutableListOf<ConsumerKey>()
     val recordedConsumerUp = mutableListOf<Unit>()
     val testActions = object : RemoteInputActions {
@@ -211,6 +214,27 @@ class BluetoothRemoteScreenTest {
       }
     }
 
+    // Media bar buttons are present directly above volume bar and have the correct tags / descriptions
+    composeTestRule.onNodeWithTag("bt_media_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("bt_media_rewind").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("bt_media_play_pause").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("bt_media_fast_forward").assertIsDisplayed()
+    composeTestRule.onNodeWithContentDescription("Rewind").assertIsDisplayed()
+    composeTestRule.onNodeWithContentDescription("Play/Pause").assertIsDisplayed()
+    composeTestRule.onNodeWithContentDescription("Fast forward").assertIsDisplayed()
+
+    // Test rewind action
+    composeTestRule.onNodeWithTag("bt_media_rewind").performClick()
+    assert(recordedConsumerDown.contains(ConsumerKey.REWIND))
+
+    // Test play/pause action
+    composeTestRule.onNodeWithTag("bt_media_play_pause").performClick()
+    assert(recordedConsumerDown.contains(ConsumerKey.PLAY_PAUSE))
+
+    // Test fast forward action
+    composeTestRule.onNodeWithTag("bt_media_fast_forward").performClick()
+    assert(recordedConsumerDown.contains(ConsumerKey.FAST_FORWARD))
+
     // Volume bar buttons are present and have the correct tags / descriptions
     composeTestRule.onNodeWithTag("bt_volume_bar").assertIsDisplayed()
     composeTestRule.onNodeWithTag("bt_volume_down").assertIsDisplayed()
@@ -234,10 +258,9 @@ class BluetoothRemoteScreenTest {
     composeTestRule.onNodeWithContentDescription("CH up").assertDoesNotExist()
     composeTestRule.onNodeWithContentDescription("CH down").assertDoesNotExist()
 
-    // Media buttons (play/pause, rewind, fast forward) are removed
-    composeTestRule.onNodeWithContentDescription("Play/Pause").assertDoesNotExist()
-    composeTestRule.onNodeWithContentDescription("Rewind").assertDoesNotExist()
-    composeTestRule.onNodeWithContentDescription("Fast forward").assertDoesNotExist()
+    // Search and voice (Assistant) buttons are removed
+    composeTestRule.onNodeWithContentDescription("Search").assertDoesNotExist()
+    composeTestRule.onNodeWithContentDescription("Assistant").assertDoesNotExist()
   }
 
   @Test
@@ -292,5 +315,128 @@ class BluetoothRemoteScreenTest {
     assert(recordedKeyDown.contains(HidKey.LEFT))
     assert(recordedKeyDown.contains(HidKey.RIGHT))
     assert(recordedKeyDown.contains(HidKey.ENTER))
+  }
+
+  @Test
+  fun remoteControl_dpadTouchSurfaceTriggersAllDirectionsAndCenter() {
+    val recordedKeyDown = mutableListOf<Int>()
+    val recordedKeyUp = mutableListOf<Unit>()
+    val testActions = object : RemoteInputActions {
+      override fun keyDown(keyCode: Int) { recordedKeyDown.add(keyCode) }
+      override fun keyUp() { recordedKeyUp.add(Unit) }
+      override fun tapKey(keyCode: Int) = Unit
+      override fun consumerDown(key: ConsumerKey) = Unit
+      override fun consumerUp() = Unit
+      override fun typeText(text: String, backspaces: Int) = Unit
+      override fun moveMouse(dx: Float, dy: Float) = Unit
+      override fun scroll(amount: Float) = Unit
+      override fun mouseButton(button: Int, pressed: Boolean) = Unit
+      override fun mouseClick() = Unit
+    }
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        Surface {
+          RemoteControlContent(
+            deviceName = "Living Room TV",
+            actions = testActions,
+            onDisconnect = {},
+          )
+        }
+      }
+    }
+
+    // Tap top quadrant of the DPad wheel -> UP
+    composeTestRule.onNodeWithTag("bt_dpad").performTouchInput {
+      click(Offset(width / 2f, 20f))
+    }
+    assert(recordedKeyDown.contains(HidKey.UP))
+
+    // Tap bottom quadrant of the DPad wheel -> DOWN
+    composeTestRule.onNodeWithTag("bt_dpad").performTouchInput {
+      click(Offset(width / 2f, height - 20f))
+    }
+    assert(recordedKeyDown.contains(HidKey.DOWN))
+
+    // Tap left quadrant of the DPad wheel -> LEFT
+    composeTestRule.onNodeWithTag("bt_dpad").performTouchInput {
+      click(Offset(20f, height / 2f))
+    }
+    assert(recordedKeyDown.contains(HidKey.LEFT))
+
+    // Tap right quadrant of the DPad wheel -> RIGHT
+    composeTestRule.onNodeWithTag("bt_dpad").performTouchInput {
+      click(Offset(width - 20f, height / 2f))
+    }
+    assert(recordedKeyDown.contains(HidKey.RIGHT))
+
+    // Tap center of the DPad wheel -> ENTER / OK
+    composeTestRule.onNodeWithTag("bt_dpad").performTouchInput {
+      click(Offset(width / 2f, height / 2f))
+    }
+    assert(recordedKeyDown.contains(HidKey.ENTER))
+
+    // keyUp should have been called on each touch release
+    assert(recordedKeyUp.size >= 5)
+  }
+
+  @Test
+  fun remoteControl_volumeButtonsHandleTouchAndRepeatOnHold() {
+    val recordedConsumerDown = mutableListOf<ConsumerKey>()
+    val recordedConsumerUp = mutableListOf<Unit>()
+    val testActions = object : RemoteInputActions {
+      override fun keyDown(keyCode: Int) = Unit
+      override fun keyUp() = Unit
+      override fun tapKey(keyCode: Int) = Unit
+      override fun consumerDown(key: ConsumerKey) { recordedConsumerDown.add(key) }
+      override fun consumerUp() { recordedConsumerUp.add(Unit) }
+      override fun typeText(text: String, backspaces: Int) = Unit
+      override fun moveMouse(dx: Float, dy: Float) = Unit
+      override fun scroll(amount: Float) = Unit
+      override fun mouseButton(button: Int, pressed: Boolean) = Unit
+      override fun mouseClick() = Unit
+    }
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        Surface {
+          RemoteControlContent(
+            deviceName = "Living Room TV",
+            actions = testActions,
+            onDisconnect = {},
+          )
+        }
+      }
+    }
+
+    // Single touch tap on Volume Down
+    composeTestRule.onNodeWithTag("bt_volume_down").performTouchInput {
+      click()
+    }
+    composeTestRule.waitUntil(timeoutMillis = 1000) {
+      recordedConsumerDown.contains(ConsumerKey.VOLUME_DOWN) && recordedConsumerUp.isNotEmpty()
+    }
+
+    // Single touch tap on Volume Up
+    composeTestRule.onNodeWithTag("bt_volume_up").performTouchInput {
+      click()
+    }
+    composeTestRule.waitUntil(timeoutMillis = 1000) {
+      recordedConsumerDown.contains(ConsumerKey.VOLUME_UP)
+    }
+
+    // Press and hold Volume Up to verify repeat
+    val initialUpCount = recordedConsumerDown.count { it == ConsumerKey.VOLUME_UP }
+    composeTestRule.onNodeWithTag("bt_volume_up").performTouchInput {
+      down(center)
+      advanceEventTime(700L)
+    }
+    composeTestRule.waitUntil(timeoutMillis = 2000) {
+      recordedConsumerDown.count { it == ConsumerKey.VOLUME_UP } > initialUpCount
+    }
+    composeTestRule.onNodeWithTag("bt_volume_up").performTouchInput {
+      up()
+    }
+    assert(recordedConsumerDown.count { it == ConsumerKey.VOLUME_UP } >= initialUpCount + 1)
   }
 }

@@ -94,6 +94,11 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
   private var mouseRemainderY = 0f
   private var scrollRemainder = 0f
 
+  private var lastKeyDownTime = 0L
+  private var pendingKeyUpJob: Job? = null
+  private var lastConsumerDownTime = 0L
+  private var pendingConsumerUpJob: Job? = null
+
   private val hidListener = object : BluetoothHidSessionListener {
     override fun onRegistrationChanged(registered: Boolean) {
       _uiState.update { it.copy(isHidRegistered = registered) }
@@ -404,19 +409,43 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
   }
 
   fun keyDown(keyCode: Int, modifiers: Int = 0) {
+    pendingKeyUpJob?.cancel()
+    lastKeyDownTime = System.currentTimeMillis()
     send(HidProtocol.REPORT_ID_KEYBOARD, HidProtocol.keyboardReport(modifiers, keyCode))
   }
 
   fun keyUp() {
-    send(HidProtocol.REPORT_ID_KEYBOARD, HidProtocol.emptyKeyboardReport())
+    pendingKeyUpJob?.cancel()
+    val elapsed = System.currentTimeMillis() - lastKeyDownTime
+    val minHoldMs = 35L
+    if (elapsed < minHoldMs) {
+      pendingKeyUpJob = viewModelScope.launch {
+        delay(minHoldMs - elapsed)
+        send(HidProtocol.REPORT_ID_KEYBOARD, HidProtocol.emptyKeyboardReport())
+      }
+    } else {
+      send(HidProtocol.REPORT_ID_KEYBOARD, HidProtocol.emptyKeyboardReport())
+    }
   }
 
   fun consumerDown(key: ConsumerKey) {
+    pendingConsumerUpJob?.cancel()
+    lastConsumerDownTime = System.currentTimeMillis()
     send(HidProtocol.REPORT_ID_CONSUMER, HidProtocol.consumerReport(key.usage))
   }
 
   fun consumerUp() {
-    send(HidProtocol.REPORT_ID_CONSUMER, HidProtocol.consumerReport(0))
+    pendingConsumerUpJob?.cancel()
+    val elapsed = System.currentTimeMillis() - lastConsumerDownTime
+    val minHoldMs = 40L
+    if (elapsed < minHoldMs) {
+      pendingConsumerUpJob = viewModelScope.launch {
+        delay(minHoldMs - elapsed)
+        send(HidProtocol.REPORT_ID_CONSUMER, HidProtocol.consumerReport(0))
+      }
+    } else {
+      send(HidProtocol.REPORT_ID_CONSUMER, HidProtocol.consumerReport(0))
+    }
   }
 
   /** Taps a single key (press + release), serialised with typed text. */
@@ -481,8 +510,10 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
 
   private fun releaseAllInput() {
     if (connectedDevice == null) return
-    keyUp()
-    consumerUp()
+    pendingKeyUpJob?.cancel()
+    pendingConsumerUpJob?.cancel()
+    send(HidProtocol.REPORT_ID_KEYBOARD, HidProtocol.emptyKeyboardReport())
+    send(HidProtocol.REPORT_ID_CONSUMER, HidProtocol.consumerReport(0))
     mouseButtons = 0
     send(HidProtocol.REPORT_ID_MOUSE, HidProtocol.mouseReport(0, 0, 0))
   }
@@ -512,7 +543,7 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
 
   companion object {
     private const val CONNECT_TIMEOUT_MS = 30_000L
-    private const val KEY_STROKE_DELAY_MS = 12L
+    private const val KEY_STROKE_DELAY_MS = 35L
 
     private val TV_NAME_HINTS = listOf(
       "tv", "shield", "chromecast", "fire", "bravia", "streamer", "mibox", "projector",

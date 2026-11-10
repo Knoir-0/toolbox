@@ -21,9 +21,12 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -64,6 +67,8 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
@@ -72,7 +77,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhoneAndroid
@@ -80,7 +84,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ScreenRotation
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tv
@@ -117,6 +120,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -125,6 +129,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -155,6 +160,11 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.toolbox.ui.theme.ToolboxTheme
+import kotlin.math.abs
+import kotlin.math.sqrt
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 // =================================================================================================
 // Input actions abstraction (keeps the UI previewable and decoupled from the ViewModel)
@@ -1007,7 +1017,7 @@ internal fun RemoteControlContent(
       }
     }
 
-    // ---- Top row: power / assistant / keyboard / mouse ----
+    // ---- Top row: power / keyboard / mouse ----
     Row(
       modifier = Modifier.fillMaxWidth(),
       horizontalArrangement = Arrangement.SpaceBetween,
@@ -1021,25 +1031,28 @@ internal fun RemoteControlContent(
         containerColor = MaterialTheme.colorScheme.errorContainer,
         contentColor = MaterialTheme.colorScheme.onErrorContainer,
       )
-      ConsumerButton(ConsumerKey.VOICE_ASSIST, Icons.Default.Mic, "Assistant", actions)
-      ConsumerButton(ConsumerKey.SEARCH, Icons.Default.Search, "Search", actions)
-      FilledTonalIconToggleButton(
-        checked = keyboardOpen,
-        onCheckedChange = { keyboardOpen = it },
-        modifier = Modifier
-          .size(56.dp)
-          .testTag("bt_keyboard_toggle"),
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
       ) {
-        Icon(Icons.Default.Keyboard, contentDescription = "Keyboard")
-      }
-      FilledTonalIconToggleButton(
-        checked = mouseMode,
-        onCheckedChange = { mouseMode = it },
-        modifier = Modifier
-          .size(56.dp)
-          .testTag("bt_mouse_toggle"),
-      ) {
-        Icon(Icons.Default.Mouse, contentDescription = "Mouse cursor")
+        FilledTonalIconToggleButton(
+          checked = keyboardOpen,
+          onCheckedChange = { keyboardOpen = it },
+          modifier = Modifier
+            .size(56.dp)
+            .testTag("bt_keyboard_toggle"),
+        ) {
+          Icon(Icons.Default.Keyboard, contentDescription = "Keyboard")
+        }
+        FilledTonalIconToggleButton(
+          checked = mouseMode,
+          onCheckedChange = { mouseMode = it },
+          modifier = Modifier
+            .size(56.dp)
+            .testTag("bt_mouse_toggle"),
+        ) {
+          Icon(Icons.Default.Mouse, contentDescription = "Mouse cursor")
+        }
       }
     }
 
@@ -1071,6 +1084,9 @@ internal fun RemoteControlContent(
       ConsumerButton(ConsumerKey.MENU, Icons.Default.Menu, "Menu", actions, size = 64.dp)
     }
 
+    // ---- Media bar (rewind, play/pause, fast forward) ----
+    MediaBar(actions = actions)
+
     // ---- Volume bar (volume down, mute, volume up) ----
     VolumeBar(actions = actions)
     Spacer(Modifier.height(8.dp))
@@ -1079,37 +1095,123 @@ internal fun RemoteControlContent(
 
 // ---- D-pad ----
 
+private fun dpadKeyForOffset(offset: Offset, sizePx: Float): Int? {
+  val cx = sizePx / 2f
+  val cy = sizePx / 2f
+  val dx = offset.x - cx
+  val dy = offset.y - cy
+  val dist = sqrt(dx * dx + dy * dy)
+  val radius = sizePx / 2f
+  if (dist > radius) return null
+
+  // 96dp out of 248dp is ~0.387 ratio of diameter (or 48dp radius)
+  val centerRadius = radius * (96f / 248f)
+  if (dist <= centerRadius) {
+    return HidKey.ENTER
+  }
+
+  return if (abs(dx) <= abs(dy)) {
+    if (dy < 0f) HidKey.UP else HidKey.DOWN
+  } else {
+    if (dx < 0f) HidKey.LEFT else HidKey.RIGHT
+  }
+}
+
 @Composable
 private fun DPad(actions: RemoteInputActions, modifier: Modifier = Modifier) {
   val ringColor = MaterialTheme.colorScheme.surfaceContainerHigh
+  val haptics = LocalHapticFeedback.current
+  var activeKey by remember { mutableStateOf<Int?>(null) }
+
   Box(
     modifier = modifier
       .size(248.dp)
       .clip(CircleShape)
       .background(ringColor)
-      .testTag("bt_dpad"),
+      .testTag("bt_dpad")
+      .pointerInput(Unit) {
+        awaitEachGesture {
+          val down = awaitFirstDown(requireUnconsumed = false)
+          down.consume()
+          val sizePx = size.width.toFloat()
+          val initialKey = dpadKeyForOffset(down.position, sizePx)
+          if (initialKey != null) {
+            activeKey = initialKey
+            haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
+            actions.keyDown(initialKey)
+            var currentKey: Int? = initialKey
+
+            while (true) {
+              val event = awaitPointerEvent()
+              val change = event.changes.firstOrNull { it.id == down.id } ?: break
+              if (!change.pressed) {
+                change.consume()
+                break
+              }
+              change.consume()
+              val newKey = dpadKeyForOffset(change.position, sizePx)
+              if (newKey != currentKey) {
+                if (currentKey != null) {
+                  actions.keyUp()
+                }
+                currentKey = newKey
+                activeKey = newKey
+                if (newKey != null) {
+                  haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
+                  actions.keyDown(newKey)
+                }
+              }
+            }
+
+            if (currentKey != null) {
+              actions.keyUp()
+            }
+            activeKey = null
+          }
+        }
+      },
     contentAlignment = Alignment.Center,
   ) {
-    DPadArrow(Icons.Default.KeyboardArrowUp, "Up", HidKey.UP, actions, Alignment.TopCenter, "bt_dpad_up")
-    DPadArrow(Icons.Default.KeyboardArrowDown, "Down", HidKey.DOWN, actions, Alignment.BottomCenter, "bt_dpad_down")
-    DPadArrow(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left", HidKey.LEFT, actions, Alignment.CenterStart, "bt_dpad_left")
-    DPadArrow(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right", HidKey.RIGHT, actions, Alignment.CenterEnd, "bt_dpad_right")
-    PressableButton(
-      onPress = { actions.keyDown(HidKey.ENTER) },
-      onRelease = { actions.keyUp() },
-      contentDescription = "OK",
-      size = 96.dp,
-      containerColor = MaterialTheme.colorScheme.primaryContainer,
-      contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-      modifier = Modifier.testTag("bt_dpad_ok"),
-    ) {
-      Box(
-        modifier = Modifier
-          .size(20.dp)
-          .clip(CircleShape)
-          .background(MaterialTheme.colorScheme.onPrimaryContainer),
-      )
-    }
+    DPadArrow(
+      icon = Icons.Default.KeyboardArrowUp,
+      label = "Up",
+      keyCode = HidKey.UP,
+      isPressed = activeKey == HidKey.UP,
+      actions = actions,
+      alignment = Alignment.TopCenter,
+      tag = "bt_dpad_up",
+    )
+    DPadArrow(
+      icon = Icons.Default.KeyboardArrowDown,
+      label = "Down",
+      keyCode = HidKey.DOWN,
+      isPressed = activeKey == HidKey.DOWN,
+      actions = actions,
+      alignment = Alignment.BottomCenter,
+      tag = "bt_dpad_down",
+    )
+    DPadArrow(
+      icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+      label = "Left",
+      keyCode = HidKey.LEFT,
+      isPressed = activeKey == HidKey.LEFT,
+      actions = actions,
+      alignment = Alignment.CenterStart,
+      tag = "bt_dpad_left",
+    )
+    DPadArrow(
+      icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+      label = "Right",
+      keyCode = HidKey.RIGHT,
+      isPressed = activeKey == HidKey.RIGHT,
+      actions = actions,
+      alignment = Alignment.CenterEnd,
+      tag = "bt_dpad_right",
+    )
+    DPadCenterButton(
+      isPressed = activeKey == HidKey.ENTER,
+      actions = actions,
+    )
   }
 }
 
@@ -1118,23 +1220,141 @@ private fun BoxScope.DPadArrow(
   icon: ImageVector,
   label: String,
   keyCode: Int,
+  isPressed: Boolean,
   actions: RemoteInputActions,
   alignment: Alignment,
   tag: String,
 ) {
-  PressableButton(
-    onPress = { actions.keyDown(keyCode) },
-    onRelease = { actions.keyUp() },
-    contentDescription = label,
-    size = 72.dp,
-    containerColor = Color.Transparent,
-    contentColor = MaterialTheme.colorScheme.onSurface,
+  val contentColor = MaterialTheme.colorScheme.onSurface
+  val pressedOverlay = contentColor.copy(alpha = 0.16f)
+  Box(
     modifier = Modifier
       .align(alignment)
       .padding(4.dp)
+      .size(72.dp)
+      .clip(CircleShape)
+      .background(if (isPressed) pressedOverlay else Color.Transparent)
+      .semantics {
+        role = Role.Button
+        contentDescription = label
+        onClick {
+          actions.keyDown(keyCode)
+          actions.keyUp()
+          true
+        }
+      }
       .testTag(tag),
+    contentAlignment = Alignment.Center,
   ) {
-    Icon(icon, contentDescription = null, modifier = Modifier.size(40.dp))
+    Icon(
+      imageVector = icon,
+      contentDescription = null,
+      tint = contentColor,
+      modifier = Modifier.size(40.dp),
+    )
+  }
+}
+
+@Composable
+private fun DPadCenterButton(
+  isPressed: Boolean,
+  actions: RemoteInputActions,
+) {
+  val containerColor = MaterialTheme.colorScheme.primaryContainer
+  val contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+  val pressedOverlay = contentColor.copy(alpha = 0.16f)
+  Box(
+    modifier = Modifier
+      .size(96.dp)
+      .clip(CircleShape)
+      .background(containerColor)
+      .semantics {
+        role = Role.Button
+        contentDescription = "OK"
+        onClick {
+          actions.keyDown(HidKey.ENTER)
+          actions.keyUp()
+          true
+        }
+      }
+      .testTag("bt_dpad_ok"),
+    contentAlignment = Alignment.Center,
+  ) {
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .background(if (isPressed) pressedOverlay else Color.Transparent),
+      contentAlignment = Alignment.Center,
+    ) {
+      Box(
+        modifier = Modifier
+          .size(20.dp)
+          .clip(CircleShape)
+          .background(contentColor),
+      )
+    }
+  }
+}
+
+// ---- Media bar ----
+
+@Composable
+private fun MediaBar(
+  actions: RemoteInputActions,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    shape = RoundedCornerShape(32.dp),
+    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    modifier = modifier.testTag("bt_media_bar"),
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 4.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+      PressableButton(
+        onPress = { actions.consumerDown(ConsumerKey.REWIND) },
+        onRelease = { actions.consumerUp() },
+        contentDescription = "Rewind",
+        size = 64.dp,
+        containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        repeatOnHold = true,
+        modifier = Modifier.testTag("bt_media_rewind"),
+      ) {
+        Icon(Icons.Default.FastRewind, contentDescription = null)
+      }
+      PressableButton(
+        onPress = { actions.consumerDown(ConsumerKey.PLAY_PAUSE) },
+        onRelease = { actions.consumerUp() },
+        contentDescription = "Play/Pause",
+        size = 64.dp,
+        containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.testTag("bt_media_play_pause"),
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.Center,
+        ) {
+          Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+          Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(20.dp))
+        }
+      }
+      PressableButton(
+        onPress = { actions.consumerDown(ConsumerKey.FAST_FORWARD) },
+        onRelease = { actions.consumerUp() },
+        contentDescription = "Fast forward",
+        size = 64.dp,
+        containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        repeatOnHold = true,
+        modifier = Modifier.testTag("bt_media_fast_forward"),
+      ) {
+        Icon(Icons.Default.FastForward, contentDescription = null)
+      }
+    }
   }
 }
 
@@ -1162,6 +1382,7 @@ private fun VolumeBar(
         size = 64.dp,
         containerColor = Color.Transparent,
         contentColor = MaterialTheme.colorScheme.onSurface,
+        repeatOnHold = true,
         modifier = Modifier.testTag("bt_volume_down"),
       ) {
         Icon(Icons.AutoMirrored.Filled.VolumeDown, contentDescription = null)
@@ -1184,6 +1405,7 @@ private fun VolumeBar(
         size = 64.dp,
         containerColor = Color.Transparent,
         contentColor = MaterialTheme.colorScheme.onSurface,
+        repeatOnHold = true,
         modifier = Modifier.testTag("bt_volume_up"),
       ) {
         Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null)
@@ -1526,6 +1748,7 @@ private fun ConsumerButton(
   size: Dp = 56.dp,
   containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
   contentColor: Color = MaterialTheme.colorScheme.onSurface,
+  repeatOnHold: Boolean = false,
 ) {
   PressableButton(
     onPress = { actions.consumerDown(key) },
@@ -1534,6 +1757,7 @@ private fun ConsumerButton(
     size = size,
     containerColor = containerColor,
     contentColor = contentColor,
+    repeatOnHold = repeatOnHold,
   ) {
     Icon(icon, contentDescription = null)
   }
@@ -1548,6 +1772,7 @@ private fun PressableButton(
   containerColor: Color,
   contentColor: Color,
   modifier: Modifier = Modifier,
+  repeatOnHold: Boolean = false,
   content: @Composable RowScope.() -> Unit,
 ) {
   PressableSurface(
@@ -1558,13 +1783,14 @@ private fun PressableButton(
     containerColor = containerColor,
     contentColor = contentColor,
     modifier = modifier.size(size),
+    repeatOnHold = repeatOnHold,
     content = content,
   )
 }
 
 /**
- * A surface that reports press and release separately, so holding a button holds the
- * key on the TV (letting the TV auto-repeat D-pad / volume like a real remote).
+ * A surface that reports press and release separately, with optional auto-repeat on hold,
+ * safe touch consumption (preventing scroll interference), and minimum assertion duration.
  */
 @Composable
 private fun PressableSurface(
@@ -1575,9 +1801,11 @@ private fun PressableSurface(
   containerColor: Color,
   contentColor: Color,
   modifier: Modifier = Modifier,
+  repeatOnHold: Boolean = false,
   content: @Composable RowScope.() -> Unit,
 ) {
   val haptics = LocalHapticFeedback.current
+  val coroutineScope = rememberCoroutineScope()
   val currentOnPress by rememberUpdatedState(onPress)
   val currentOnRelease by rememberUpdatedState(onRelease)
   var pressed by remember { mutableStateOf(false) }
@@ -1599,20 +1827,71 @@ private fun PressableSurface(
           true
         }
       }
-      .pointerInput(interactionSource) {
-        detectTapGestures(
-          onPress = {
-            pressed = true
-            haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
-            currentOnPress()
-            try {
-              awaitRelease()
-            } finally {
+      .pointerInput(interactionSource, repeatOnHold) {
+        awaitEachGesture {
+          val down = awaitFirstDown(requireUnconsumed = false)
+          down.consume()
+          pressed = true
+          haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
+          currentOnPress()
+          val pressStartTime = System.currentTimeMillis()
+
+          var isRepeating = false
+          val repeatJob = if (repeatOnHold) {
+            coroutineScope.launch {
+              delay(350L)
+              isRepeating = true
+              while (isActive) {
+                currentOnRelease()
+                delay(30L)
+                if (!isActive) break
+                currentOnPress()
+                haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
+                delay(100L)
+              }
+            }
+          } else null
+
+          val marginPx = 48.dp.toPx()
+          val minX = -marginPx
+          val maxX = size.width + marginPx
+          val minY = -marginPx
+          val maxY = size.height + marginPx
+
+          var cancelled = false
+          while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) {
+              change.consume()
+              break
+            }
+            if (change.position.x !in minX..maxX || change.position.y !in minY..maxY) {
+              cancelled = true
+              break
+            }
+            change.consume()
+          }
+
+          repeatJob?.cancel()
+
+          if (cancelled) {
+            pressed = false
+            currentOnRelease()
+          } else {
+            val elapsed = System.currentTimeMillis() - pressStartTime
+            if (!isRepeating && elapsed < 45L) {
+              coroutineScope.launch {
+                delay(45L - elapsed)
+                pressed = false
+                currentOnRelease()
+              }
+            } else {
               pressed = false
               currentOnRelease()
             }
-          },
-        )
+          }
+        }
       },
   ) {
     Row(

@@ -491,6 +491,7 @@ fun GuitarTunerScreen(modifier: Modifier = Modifier) {
         selectedStringIndex = 0
         centsOffset = 0f
         detectedFrequencyHz = it.strings.first().frequencyHz
+        isSignalActive = false
       },
       activeString = activeString,
       selectedStringIndex = safeIndex,
@@ -636,9 +637,9 @@ private fun GuitarTunerContent(
   hasMicPermission: Boolean,
   onRequestMicPermission: () -> Unit,
 ) {
-  val isInTune = abs(centsOffset) <= 3.0f
+  val isInTune = isSignalActive && abs(centsOffset) <= 3.0f
   val animatedCents by animateFloatAsState(
-    targetValue = centsOffset,
+    targetValue = if (isSignalActive) centsOffset else 0f,
     animationSpec = spring(
       dampingRatio = Spring.DampingRatioMediumBouncy,
       stiffness = Spring.StiffnessMediumLow,
@@ -704,16 +705,19 @@ private fun GuitarTunerContent(
     // 2. Hero Chromatic Gauge Card
     item {
       val statusText = when {
+        !isSignalActive -> "LISTENING"
         isInTune -> "IN TUNE"
         centsOffset < 0f -> "FLAT (♭) · TUNE UP"
         else -> "SHARP (♯) · TUNE DOWN"
       }
       val statusColor = when {
+        !isSignalActive -> MaterialTheme.colorScheme.surfaceVariant
         isInTune -> MaterialTheme.colorScheme.primary
         abs(centsOffset) <= 15f -> MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.error
       }
       val statusContentColor = when {
+        !isSignalActive -> MaterialTheme.colorScheme.onSurfaceVariant
         isInTune -> MaterialTheme.colorScheme.onPrimary
         abs(centsOffset) <= 15f -> MaterialTheme.colorScheme.onTertiary
         else -> MaterialTheme.colorScheme.onError
@@ -760,7 +764,11 @@ private fun GuitarTunerContent(
                   modifier = Modifier.size(16.dp),
                 )
                 Text(
-                  text = "String ${activeString.stringNumber} · ${activeString.noteName}",
+                  text = if (isSignalActive) {
+                    "String ${activeString.stringNumber} · ${activeString.noteName}"
+                  } else {
+                    "No note detected"
+                  },
                   style = MaterialTheme.typography.labelLarge,
                   fontWeight = FontWeight.Bold,
                 )
@@ -809,23 +817,26 @@ private fun GuitarTunerContent(
             }
 
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-              Text(
-                text = activeString.noteName,
-                style = MaterialTheme.typography.displaySmall,
-                fontWeight = FontWeight.Black,
-                color = if (isInTune) statusColor else MaterialTheme.colorScheme.onSurface,
-              )
-              val centsFormatted = if (centsOffset >= 0.05f) {
-                "+${centsOffset.roundToInt()} ¢"
-              } else {
-                "${centsOffset.roundToInt()} ¢"
+              if (isSignalActive) {
+                Text(
+                  text = activeString.noteName,
+                  modifier = Modifier.testTag("detected_note"),
+                  style = MaterialTheme.typography.displaySmall,
+                  fontWeight = FontWeight.Black,
+                  color = if (isInTune) statusColor else MaterialTheme.colorScheme.onSurface,
+                )
+                val centsFormatted = if (centsOffset >= 0.05f) {
+                  "+${centsOffset.roundToInt()} ¢"
+                } else {
+                  "${centsOffset.roundToInt()} ¢"
+                }
+                Text(
+                  text = centsFormatted,
+                  style = MaterialTheme.typography.labelLarge,
+                  fontWeight = FontWeight.Bold,
+                  color = statusColor,
+                )
               }
-              Text(
-                text = centsFormatted,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                color = statusColor,
-              )
             }
 
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -835,7 +846,7 @@ private fun GuitarTunerContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
               Text(
-                text = String.format("%.2f Hz", detectedFrequencyHz),
+                text = if (isSignalActive) String.format("%.2f Hz", detectedFrequencyHz) else "--",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
               )
@@ -865,7 +876,7 @@ private fun GuitarTunerContent(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
           ) {
             selectedPreset.strings.forEachIndexed { idx, spec ->
-              val isSelected = idx == selectedStringIndex
+              val isSelected = isSignalActive && idx == selectedStringIndex
               Surface(
                 onClick = { onPlayReferenceString(idx) },
                 modifier = Modifier.weight(1f),
