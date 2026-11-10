@@ -265,14 +265,14 @@ class BluetoothRemoteScreenTest {
 
   @Test
   fun remoteControl_dpadButtonsTriggerActions() {
-    val recordedKeyDown = mutableListOf<Int>()
-    val recordedKeyUp = mutableListOf<Unit>()
+    val recordedConsumerDown = mutableListOf<ConsumerKey>()
+    val recordedConsumerUp = mutableListOf<Unit>()
     val testActions = object : RemoteInputActions {
-      override fun keyDown(keyCode: Int) { recordedKeyDown.add(keyCode) }
-      override fun keyUp() { recordedKeyUp.add(Unit) }
+      override fun keyDown(keyCode: Int) = Unit
+      override fun keyUp() = Unit
       override fun tapKey(keyCode: Int) = Unit
-      override fun consumerDown(key: ConsumerKey) = Unit
-      override fun consumerUp() = Unit
+      override fun consumerDown(key: ConsumerKey) { recordedConsumerDown.add(key) }
+      override fun consumerUp() { recordedConsumerUp.add(Unit) }
       override fun typeText(text: String, backspaces: Int) = Unit
       override fun moveMouse(dx: Float, dy: Float) = Unit
       override fun scroll(amount: Float) = Unit
@@ -310,23 +310,23 @@ class BluetoothRemoteScreenTest {
     composeTestRule.onNodeWithTag("bt_dpad_right").performClick()
     composeTestRule.onNodeWithTag("bt_dpad_ok").performClick()
 
-    assert(recordedKeyDown.contains(HidKey.UP))
-    assert(recordedKeyDown.contains(HidKey.DOWN))
-    assert(recordedKeyDown.contains(HidKey.LEFT))
-    assert(recordedKeyDown.contains(HidKey.RIGHT))
-    assert(recordedKeyDown.contains(HidKey.ENTER))
+    assert(recordedConsumerDown.contains(ConsumerKey.DPAD_UP))
+    assert(recordedConsumerDown.contains(ConsumerKey.DPAD_DOWN))
+    assert(recordedConsumerDown.contains(ConsumerKey.DPAD_LEFT))
+    assert(recordedConsumerDown.contains(ConsumerKey.DPAD_RIGHT))
+    assert(recordedConsumerDown.contains(ConsumerKey.DPAD_CENTER))
   }
 
   @Test
   fun remoteControl_dpadTouchSurfaceTriggersAllDirectionsAndCenter() {
-    val recordedKeyDown = mutableListOf<Int>()
-    val recordedKeyUp = mutableListOf<Unit>()
+    val recordedConsumerDown = mutableListOf<ConsumerKey>()
+    val recordedConsumerUp = mutableListOf<Unit>()
     val testActions = object : RemoteInputActions {
-      override fun keyDown(keyCode: Int) { recordedKeyDown.add(keyCode) }
-      override fun keyUp() { recordedKeyUp.add(Unit) }
+      override fun keyDown(keyCode: Int) = Unit
+      override fun keyUp() = Unit
       override fun tapKey(keyCode: Int) = Unit
-      override fun consumerDown(key: ConsumerKey) = Unit
-      override fun consumerUp() = Unit
+      override fun consumerDown(key: ConsumerKey) { recordedConsumerDown.add(key) }
+      override fun consumerUp() { recordedConsumerUp.add(Unit) }
       override fun typeText(text: String, backspaces: Int) = Unit
       override fun moveMouse(dx: Float, dy: Float) = Unit
       override fun scroll(amount: Float) = Unit
@@ -346,38 +346,87 @@ class BluetoothRemoteScreenTest {
       }
     }
 
-    // Tap top quadrant of the DPad wheel -> UP
+    // Tap top quadrant of the DPad wheel -> DPAD_UP
     composeTestRule.onNodeWithTag("bt_dpad").performTouchInput {
       click(Offset(width / 2f, 20f))
     }
-    assert(recordedKeyDown.contains(HidKey.UP))
+    assert(recordedConsumerDown.contains(ConsumerKey.DPAD_UP))
 
-    // Tap bottom quadrant of the DPad wheel -> DOWN
+    // Tap bottom quadrant of the DPad wheel -> DPAD_DOWN
     composeTestRule.onNodeWithTag("bt_dpad").performTouchInput {
       click(Offset(width / 2f, height - 20f))
     }
-    assert(recordedKeyDown.contains(HidKey.DOWN))
+    assert(recordedConsumerDown.contains(ConsumerKey.DPAD_DOWN))
 
-    // Tap left quadrant of the DPad wheel -> LEFT
+    // Tap left quadrant of the DPad wheel -> DPAD_LEFT
     composeTestRule.onNodeWithTag("bt_dpad").performTouchInput {
       click(Offset(20f, height / 2f))
     }
-    assert(recordedKeyDown.contains(HidKey.LEFT))
+    assert(recordedConsumerDown.contains(ConsumerKey.DPAD_LEFT))
 
-    // Tap right quadrant of the DPad wheel -> RIGHT
+    // Tap right quadrant of the DPad wheel -> DPAD_RIGHT
     composeTestRule.onNodeWithTag("bt_dpad").performTouchInput {
       click(Offset(width - 20f, height / 2f))
     }
-    assert(recordedKeyDown.contains(HidKey.RIGHT))
+    assert(recordedConsumerDown.contains(ConsumerKey.DPAD_RIGHT))
 
-    // Tap center of the DPad wheel -> ENTER / OK
+    // Tap center of the DPad wheel -> DPAD_CENTER / OK
     composeTestRule.onNodeWithTag("bt_dpad").performTouchInput {
       click(Offset(width / 2f, height / 2f))
     }
-    assert(recordedKeyDown.contains(HidKey.ENTER))
+    assert(recordedConsumerDown.contains(ConsumerKey.DPAD_CENTER))
 
-    // keyUp should have been called on each touch release
-    assert(recordedKeyUp.size >= 5)
+    // consumerUp should have been called on each touch release
+    composeTestRule.waitUntil(timeoutMillis = 1000) {
+      recordedConsumerUp.size >= 5
+    }
+  }
+
+  @Test
+  fun remoteControl_powerAndNavigationButtonsTriggerActions() {
+    val recordedConsumerDown = mutableListOf<ConsumerKey>()
+    val recordedConsumerUp = mutableListOf<Unit>()
+    val testActions = object : RemoteInputActions {
+      override fun keyDown(keyCode: Int) = Unit
+      override fun keyUp() = Unit
+      override fun tapKey(keyCode: Int) = Unit
+      override fun consumerDown(key: ConsumerKey) { recordedConsumerDown.add(key) }
+      override fun consumerUp() { recordedConsumerUp.add(Unit) }
+      override fun typeText(text: String, backspaces: Int) = Unit
+      override fun moveMouse(dx: Float, dy: Float) = Unit
+      override fun scroll(amount: Float) = Unit
+      override fun mouseButton(button: Int, pressed: Boolean) = Unit
+      override fun mouseClick() = Unit
+    }
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        Surface {
+          RemoteControlContent(
+            deviceName = "Living Room TV",
+            actions = testActions,
+            onDisconnect = {},
+          )
+        }
+      }
+    }
+
+    composeTestRule.onNodeWithTag("bt_power").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("bt_nav_back").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("bt_nav_home").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("bt_nav_menu").assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("bt_power").performClick()
+    assert(recordedConsumerDown.contains(ConsumerKey.POWER))
+
+    composeTestRule.onNodeWithTag("bt_nav_back").performClick()
+    assert(recordedConsumerDown.contains(ConsumerKey.BACK))
+
+    composeTestRule.onNodeWithTag("bt_nav_home").performClick()
+    assert(recordedConsumerDown.contains(ConsumerKey.HOME))
+
+    composeTestRule.onNodeWithTag("bt_nav_menu").performClick()
+    assert(recordedConsumerDown.contains(ConsumerKey.MENU))
   }
 
   @Test

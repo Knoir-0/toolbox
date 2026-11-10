@@ -89,11 +89,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.navigation3.runtime.NavKey
 import com.example.toolbox.ui.theme.ToolboxTheme
+import com.example.toolbox.ui.tools.AudioRecorderScreen
 import com.example.toolbox.ui.tools.BluetoothRemoteScreen
 import com.example.toolbox.ui.tools.CalculatorScreen
 import com.example.toolbox.ui.tools.ColorPickerScreen
 import com.example.toolbox.ui.tools.DiceRollerScreen
+import com.example.toolbox.ui.tools.FileConverterScreen
 import com.example.toolbox.ui.tools.FilesScreen
+import com.example.toolbox.ui.tools.GalleryScreen
 import java.io.File
 import com.example.toolbox.ui.tools.GuitarTunerScreen
 import com.example.toolbox.ui.tools.ImageEditorScreen
@@ -1558,8 +1561,24 @@ fun ToolContentView(
       Tool.CALCULATOR -> CalculatorScreen(bottomPadding = bottomPadding, modifier = Modifier)
       Tool.IMAGE_EDITOR -> ImageEditorScreen(modifier = Modifier.padding(bottom = bottomPadding))
       Tool.TODO_LIST -> TodoListScreen(modifier = Modifier.padding(bottom = bottomPadding))
-      Tool.FILES -> FilesScreen(
+      Tool.FILES -> {
+        val activeThemeColor = preferencesRepository?.themeColorFlow?.collectAsState()?.value
+        FilesScreen(
+          initialDirectory = initialDirectory,
+          themeColor = activeThemeColor,
+          modifier = Modifier.padding(bottom = bottomPadding),
+        )
+      }
+      Tool.AUDIO_RECORDER -> AudioRecorderScreen(
         initialDirectory = initialDirectory,
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.FILE_CONVERTER -> FileConverterScreen(
+        initialDirectory = initialDirectory,
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.GALLERY -> GalleryScreen(
+        rootDirectory = initialDirectory,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.SETTINGS -> SettingsScreen(

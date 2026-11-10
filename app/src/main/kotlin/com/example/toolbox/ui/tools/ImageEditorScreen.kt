@@ -1244,29 +1244,39 @@ fun SlimDotSlider(
   value: Float,
   onValueChange: (Float) -> Unit,
   modifier: Modifier = Modifier,
+  onValueChangeFinished: (() -> Unit)? = null,
   valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
   steps: Int = 0,
   enabled: Boolean = true,
+  accentColor: Color = MaterialTheme.colorScheme.primary,
 ) {
+  val sliderColors = SliderDefaults.colors(
+    thumbColor = accentColor,
+    activeTrackColor = accentColor,
+    inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+  )
   Slider(
     value = value,
     onValueChange = onValueChange,
+    onValueChangeFinished = onValueChangeFinished,
     modifier = modifier,
     valueRange = valueRange,
     steps = steps,
     enabled = enabled,
+    colors = sliderColors,
     thumb = {
       Box(
         modifier = Modifier
           .size(16.dp)
           .shadow(2.dp, CircleShape)
-          .background(MaterialTheme.colorScheme.primary, CircleShape),
+          .background(accentColor, CircleShape),
       )
     },
     track = { sliderState ->
       SliderDefaults.Track(
         sliderState = sliderState,
         modifier = Modifier.height(4.dp),
+        colors = sliderColors,
       )
     },
   )

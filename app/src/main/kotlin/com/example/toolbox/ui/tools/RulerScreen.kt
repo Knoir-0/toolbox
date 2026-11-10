@@ -657,7 +657,7 @@ private fun CalibrationPanelCard(
         )
       }
 
-      Slider(
+      SlimDotSlider(
         value = calibrationScale,
         onValueChange = onCalibrationChange,
         valueRange = 0.80f..1.20f,

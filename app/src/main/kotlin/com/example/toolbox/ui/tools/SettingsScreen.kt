@@ -1,6 +1,9 @@
 package com.example.toolbox.ui.tools
 
 import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -47,10 +50,13 @@ import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SortByAlpha
 import androidx.compose.material.icons.filled.TouchApp
@@ -60,7 +66,9 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.ui.platform.LocalContext
 import com.example.toolbox.ui.main.ToolCategory
 import com.example.toolbox.ui.main.addToolToHomeScreen
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -81,6 +89,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -103,6 +112,7 @@ import androidx.compose.ui.unit.sp
 import com.example.toolbox.ui.main.CategorySortingOption
 import com.example.toolbox.ui.main.CategoryToolSortingOption
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
+import com.example.toolbox.ui.main.DEFAULT_SETTINGS_BACKUP_FILENAME
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
 import com.example.toolbox.ui.main.FALLBACK_THEME_COLOR_HEX
 import com.example.toolbox.ui.main.InMemoryNavigationPreferencesRepository
@@ -114,7 +124,10 @@ import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.ToolSortOrder
 import com.example.toolbox.ui.main.ToolSortingOption
 import com.example.toolbox.ui.main.coerceToolsPerRow
+import com.example.toolbox.ui.main.exportSettingsToJson
+import com.example.toolbox.ui.main.importSettingsFromJson
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
+import com.example.toolbox.ui.main.resetAllSettingsToDefaults
 import com.example.toolbox.ui.theme.calculateComplementaryColor
 import com.example.toolbox.ui.theme.parseHexColor
 import kotlin.math.roundToInt
@@ -1658,7 +1671,7 @@ fun SettingsScreen(
 
                           IconButton(
                             onClick = {
-                              addToolToHomeScreen(context, tool)
+                              addToolToHomeScreen(context, tool, themeColor = themeColor)
                             },
                             modifier = Modifier.testTag("add_to_home_${tool.name}"),
                           ) {
@@ -1681,24 +1694,145 @@ fun SettingsScreen(
       }
     }
 
+    // Section 6: Backup & Restore Settings
+    var backupRestoreStatus by rememberSaveable { mutableStateOf<String?>(null) }
+    var showResetConfirmDialog by rememberSaveable { mutableStateOf(false) }
+
+    val backupDocumentLauncher = rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+      if (uri != null) {
+        try {
+          val jsonContent = exportSettingsToJson(preferencesRepository)
+          context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+            outputStream.write(jsonContent.toByteArray(Charsets.UTF_8))
+          }
+          backupRestoreStatus = "Settings backed up successfully."
+          Toast.makeText(context, "Settings backed up to file", Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+          backupRestoreStatus = "Failed to export settings to file."
+          Toast.makeText(context, "Failed to backup settings", Toast.LENGTH_SHORT).show()
+        }
+      }
+    }
+
+    val restoreDocumentLauncher = rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+      if (uri != null) {
+        try {
+          val jsonContent = context.contentResolver.openInputStream(uri)?.use { inputStream ->
+            inputStream.bufferedReader(Charsets.UTF_8).readText()
+          } ?: ""
+          val imported = importSettingsFromJson(jsonContent, preferencesRepository)
+          if (imported) {
+            val restoredThemeColor = preferencesRepository.getThemeColor()
+            val restoredAccentColor = preferencesRepository.getAccentColor()
+            customHexInput = if (restoredThemeColor != DEFAULT_THEME_COLOR_SYSTEM) restoredThemeColor else ""
+            customAccentHexInput = if (restoredAccentColor != DEFAULT_ACCENT_COLOR_AUTO) restoredAccentColor else ""
+            backupRestoreStatus = "Settings restored successfully."
+            Toast.makeText(context, "Settings restored from file", Toast.LENGTH_SHORT).show()
+          } else {
+            backupRestoreStatus = "Invalid or unrecognized settings backup file."
+            Toast.makeText(context, "Invalid settings backup file", Toast.LENGTH_SHORT).show()
+          }
+        } catch (_: Exception) {
+          backupRestoreStatus = "Failed to read settings backup file."
+          Toast.makeText(context, "Failed to restore settings", Toast.LENGTH_SHORT).show()
+        }
+      }
+    }
+
+    Card(
+      modifier = Modifier
+        .fillMaxWidth()
+        .testTag("settings_backup_restore_card"),
+      colors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+      ),
+      shape = RoundedCornerShape(16.dp),
+    ) {
+      Column(
+        modifier = Modifier.padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Default.SaveAlt,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+          )
+          Text(
+            text = "Backup & Restore",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+
+        Text(
+          text = "Save your current settings to a JSON file or restore settings from a previous backup.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          OutlinedButton(
+            onClick = {
+              backupDocumentLauncher.launch(DEFAULT_SETTINGS_BACKUP_FILENAME)
+            },
+            modifier = Modifier
+              .weight(1f)
+              .testTag("backup_settings_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.FileUpload,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Backup")
+          }
+
+          OutlinedButton(
+            onClick = {
+              restoreDocumentLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+            },
+            modifier = Modifier
+              .weight(1f)
+              .testTag("restore_settings_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.FileDownload,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Restore")
+          }
+        }
+
+        backupRestoreStatus?.let { statusMessage ->
+          Text(
+            text = statusMessage,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.testTag("backup_restore_status"),
+          )
+        }
+      }
+    }
+
     // Reset to defaults
     OutlinedButton(
       onClick = {
-        preferencesRepository.setThemeMode(ThemeMode.SYSTEM)
-        preferencesRepository.setThemeColor(DEFAULT_THEME_COLOR_SYSTEM)
-        preferencesRepository.setHiddenTools(emptySet())
-        preferencesRepository.setToolOrder(Tool.entries)
-        preferencesRepository.setToolSorting(ToolSortingOption.USER_CHOICE)
-        preferencesRepository.setToolSortOrder(ToolSortOrder.ASCENDING)
-        preferencesRepository.setCategorySorting(CategorySortingOption.MANUAL)
-        preferencesRepository.setCategoryToolSorting(CategoryToolSortingOption.MANUAL)
-        preferencesRepository.resetToolUsage()
-        preferencesRepository.setAccentColor(DEFAULT_ACCENT_COLOR_AUTO)
-        customHexInput = ""
-        customAccentHexInput = ""
-        collapsedCategories = ToolCategory.entries.toSet()
-        isThemeColorExpanded = false
-        isAccentColorExpanded = false
+        showResetConfirmDialog = true
       },
       modifier = Modifier
         .fillMaxWidth()
@@ -1711,6 +1845,53 @@ fun SettingsScreen(
       )
       Spacer(modifier = Modifier.width(8.dp))
       Text("Reset All Settings to Defaults")
+    }
+
+    if (showResetConfirmDialog) {
+      AlertDialog(
+        onDismissRequest = { showResetConfirmDialog = false },
+        modifier = Modifier.testTag("reset_settings_confirm_dialog"),
+        title = {
+          Text(
+            text = "Reset All Settings?",
+            fontWeight = FontWeight.Bold,
+          )
+        },
+        text = {
+          Text(
+            text = "Are you sure you want to reset all settings (theme, colors, tool order, visibility, and usage stats) back to their defaults?",
+          )
+        },
+        confirmButton = {
+          Button(
+            onClick = {
+              resetAllSettingsToDefaults(preferencesRepository)
+              customHexInput = ""
+              customAccentHexInput = ""
+              collapsedCategories = ToolCategory.entries.toSet()
+              isThemeColorExpanded = false
+              isAccentColorExpanded = false
+              backupRestoreStatus = null
+              showResetConfirmDialog = false
+            },
+            colors = ButtonDefaults.buttonColors(
+              containerColor = MaterialTheme.colorScheme.error,
+              contentColor = MaterialTheme.colorScheme.onError,
+            ),
+            modifier = Modifier.testTag("confirm_reset_settings_button"),
+          ) {
+            Text("Reset")
+          }
+        },
+        dismissButton = {
+          TextButton(
+            onClick = { showResetConfirmDialog = false },
+            modifier = Modifier.testTag("cancel_reset_settings_button"),
+          ) {
+            Text("Cancel")
+          }
+        },
+      )
     }
 
     Spacer(modifier = Modifier.height(24.dp))

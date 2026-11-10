@@ -42,7 +42,7 @@ class NavigationPreferencesTest {
 
   @Test
   fun parseToolOrder_validSavedOrder_preservesOrder() {
-    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,SETTINGS"
+    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,SETTINGS"
     val result = parseToolOrder(raw)
     val expected = listOf(
       Tool.IMAGE_EDITOR,
@@ -56,6 +56,9 @@ class NavigationPreferencesTest {
       Tool.BLUETOOTH_REMOTE,
       Tool.TODO_LIST,
       Tool.FILES,
+      Tool.AUDIO_RECORDER,
+      Tool.FILE_CONVERTER,
+      Tool.GALLERY,
       Tool.SETTINGS,
     )
     assertEquals(expected, result)
@@ -131,6 +134,9 @@ class NavigationPreferencesTest {
       Tool.IMAGE_EDITOR,
       Tool.TODO_LIST,
       Tool.FILES,
+      Tool.AUDIO_RECORDER,
+      Tool.FILE_CONVERTER,
+      Tool.GALLERY,
       Tool.SETTINGS,
     )
     repo.setToolOrder(customOrder)
@@ -164,6 +170,9 @@ class NavigationPreferencesTest {
       Tool.BLUETOOTH_REMOTE,
       Tool.TODO_LIST,
       Tool.FILES,
+      Tool.AUDIO_RECORDER,
+      Tool.FILE_CONVERTER,
+      Tool.GALLERY,
       Tool.SETTINGS,
     )
     repo.setToolOrder(customOrder)

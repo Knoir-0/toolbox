@@ -1205,15 +1205,12 @@ private fun ChannelSliderRow(
         )
       }
 
-      Slider(
+      SlimDotSlider(
         value = value,
         onValueChange = onValueChange,
         valueRange = valueRange,
+        accentColor = accentColor,
         modifier = Modifier.weight(1f),
-        colors = SliderDefaults.colors(
-          thumbColor = accentColor,
-          activeTrackColor = accentColor,
-        ),
       )
 
       FilledTonalIconButton(

@@ -75,6 +75,7 @@ Consistent rounding gives Toolbox its signature modern, friendly, and cohesive a
 - **Buttons (Dialog Confirm / Dismiss)**: `RoundedCornerShape(12.dp)` to `RoundedCornerShape(14.dp)`
 - **Floating Action Buttons (FAB & Mini-FAB)**: `CircleShape`
 - **Header Icon Badges**: `CircleShape` (size: 36.dp to 44.dp)
+- **Sliders & Trackbars (`SlimDotSlider`)**: Slim track (`4.dp` to `6.dp` height) with a circular dot drag handle (`CircleShape`, `16.dp` to `20.dp`). Never use the default thick Material 3 vertical bar thumb.
 
 ---
 
@@ -282,14 +283,70 @@ AlertDialog(
 
 ---
 
+### 5.6 Sliders & Trackbars (`SlimDotSlider`)
+All continuous and stepped sliders across Toolbox must use a **slim track** (`4.dp` to `6.dp` height) paired with a **circular dot drag handle** (`16.dp` to `20.dp` `CircleShape`) rather than the default Material 3 tall vertical bar handle:
+
+- **Continuous / Progress Sliders**: Use `SlimDotSlider` (`4.dp` track height, `16.dp` circular `CircleShape` thumb with `2.dp` elevation/shadow).
+- **Stepped Stop Sliders** (e.g., Tools-Per-Row): Use a `6.dp` rounded Canvas track with `3.5.dp` radius stop dots and a `20.dp` `CircleShape` thumb.
+
+```kotlin
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SlimDotSlider(
+  value: Float,
+  onValueChange: (Float) -> Unit,
+  modifier: Modifier = Modifier,
+  onValueChangeFinished: (() -> Unit)? = null,
+  valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
+  steps: Int = 0,
+  enabled: Boolean = true,
+  accentColor: Color = MaterialTheme.colorScheme.primary,
+) {
+  val sliderColors = SliderDefaults.colors(
+    thumbColor = accentColor,
+    activeTrackColor = accentColor,
+    inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+  )
+  Slider(
+    value = value,
+    onValueChange = onValueChange,
+    onValueChangeFinished = onValueChangeFinished,
+    modifier = modifier,
+    valueRange = valueRange,
+    steps = steps,
+    enabled = enabled,
+    colors = sliderColors,
+    thumb = {
+      Box(
+        modifier = Modifier
+          .size(16.dp)
+          .shadow(2.dp, CircleShape)
+          .background(accentColor, CircleShape),
+      )
+    },
+    track = { sliderState ->
+      SliderDefaults.Track(
+        sliderState = sliderState,
+        modifier = Modifier.height(4.dp),
+        colors = sliderColors,
+      )
+    },
+  )
+}
+```
+
+---
+
 ## 6. Dos and Don'ts Checklist for AI Agents
 
 - [x] **DO** use `MaterialTheme.colorScheme.*` for all colors; verify dark and light mode contrast.
-- [x] **DO** use standard corner radii: `28.dp` for dialogs/sheets, `14.dp` for fields/cards, `CircleShape` for FABs and icon badges.
+- [x] **DO** use standard corner radii: `28.dp` for dialogs/sheets, `14.dp` for fields/cards, `CircleShape` for FABs, icon badges, and slider dot handles.
+- [x] **DO** use `SlimDotSlider` (slim `4.dp`–`6.dp` track with `16.dp`–`20.dp` circular dot thumb) for all sliders and trackbars.
 - [x] **DO** provide immediate haptic feedback (`LocalHapticFeedback`) on meaningful actions (duplicate/copy, create, delete).
 - [x] **DO** support autofocus with `FocusRequester` and pre-select meaningful text in editing dialogs.
 - [x] **DO** provide clear inline error messages and disable confirm buttons when inputs are invalid or unchanged.
 - [ ] **DON'T** use raw drop shadows; use Material 3 `tonalElevation`.
+- [ ] **DON'T** use default thick Material 3 sliders with tall vertical bar handles.
 - [ ] **DON'T** use rectangular square buttons (`RectangleShape`) in dialogs or controls.
 - [ ] **DON'T** hardcode raw string dimensions or colors in `@Composable` code.
 - [ ] **DON'T** leave dialogs as bare text fields without an icon badge, explanatory subtitle, and item context.

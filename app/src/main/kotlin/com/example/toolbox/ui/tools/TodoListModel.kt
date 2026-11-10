@@ -291,12 +291,46 @@ class TodoHistoryManager(
     newCompletedToday: Int = currentSnapshot.completedToday,
     newCompletedTasks: List<TodoItem> = currentSnapshot.completedTasks,
   ) {
+    val nextSnapshot = TodoHistorySnapshot(newTasks, newCompletedToday, newCompletedTasks)
+    if (nextSnapshot == currentSnapshot) return
     undoStack.add(currentSnapshot)
     if (undoStack.size > 50) {
       undoStack.removeAt(0)
     }
     redoStack.clear()
-    currentSnapshot = TodoHistorySnapshot(newTasks, newCompletedToday, newCompletedTasks)
+    currentSnapshot = nextSnapshot
+  }
+
+  fun applySnapshot(nextSnapshot: TodoHistorySnapshot) {
+    applyAction(
+      newTasks = nextSnapshot.tasks,
+      newCompletedToday = nextSnapshot.completedToday,
+      newCompletedTasks = nextSnapshot.completedTasks,
+    )
+  }
+
+  fun completeTask(taskId: String): TodoHistorySnapshot {
+    val next = TodoListEngine.completeTask(currentSnapshot, taskId)
+    applySnapshot(next)
+    return currentSnapshot
+  }
+
+  fun deleteTask(taskId: String): TodoHistorySnapshot {
+    val next = TodoListEngine.deleteTask(currentSnapshot, taskId)
+    applySnapshot(next)
+    return currentSnapshot
+  }
+
+  fun uncompleteTask(taskId: String): TodoHistorySnapshot {
+    val next = TodoListEngine.uncompleteTask(currentSnapshot, taskId)
+    applySnapshot(next)
+    return currentSnapshot
+  }
+
+  fun deleteCompletedTask(taskId: String): TodoHistorySnapshot {
+    val next = TodoListEngine.deleteCompletedTask(currentSnapshot, taskId)
+    applySnapshot(next)
+    return currentSnapshot
   }
 
   fun undo(): TodoHistorySnapshot? {
@@ -318,6 +352,100 @@ class TodoHistoryManager(
  * Helper functions for tasks.
  */
 object TodoListEngine {
+
+  /**
+   * Result of applying a vertical drag delta during task or subtask reordering.
+   */
+  data class DragReorderStepResult<T>(
+    val items: List<T>,
+    val remainingOffsetY: Float,
+    val moved: Boolean,
+    val fromIndex: Int,
+    val toIndex: Int,
+  )
+
+  /**
+   * Calculates item reordering and residual visual offset during a vertical drag gesture,
+   * accounting for individual item heights, inter-item spacing, and list boundaries.
+   */
+  fun <T> calculateDragReorder(
+    items: List<T>,
+    draggedId: String,
+    idSelector: (T) -> String,
+    currentOffsetY: Float,
+    itemHeightsPx: Map<String, Float>,
+    defaultItemHeightPx: Float,
+    itemSpacingPx: Float,
+    thresholdFraction: Float = 0.55f,
+    maxOverscrollPx: Float = 0f,
+  ): DragReorderStepResult<T> {
+    val initialIndex = items.indexOfFirst { idSelector(it) == draggedId }
+    if (initialIndex == -1 || items.size <= 1) {
+      val clamped = currentOffsetY.coerceIn(-maxOverscrollPx, maxOverscrollPx)
+      return DragReorderStepResult(
+        items = items,
+        remainingOffsetY = clamped,
+        moved = false,
+        fromIndex = initialIndex,
+        toIndex = initialIndex,
+      )
+    }
+
+    var currentIndex = initialIndex
+    var offsetY = currentOffsetY
+    var currentList = items
+    var moved = false
+
+    while (true) {
+      if (offsetY > 0f && currentIndex < currentList.size - 1) {
+        val nextItem = currentList[currentIndex + 1]
+        val nextHeight = (itemHeightsPx[idSelector(nextItem)] ?: defaultItemHeightPx).coerceAtLeast(1f)
+        val stepPx = nextHeight + itemSpacingPx
+        val threshold = stepPx * thresholdFraction
+        if (offsetY > threshold) {
+          val mutable = currentList.toMutableList()
+          val item = mutable.removeAt(currentIndex)
+          mutable.add(currentIndex + 1, item)
+          currentList = mutable.toList()
+          offsetY -= stepPx
+          currentIndex += 1
+          moved = true
+          continue
+        }
+      } else if (offsetY < 0f && currentIndex > 0) {
+        val prevItem = currentList[currentIndex - 1]
+        val prevHeight = (itemHeightsPx[idSelector(prevItem)] ?: defaultItemHeightPx).coerceAtLeast(1f)
+        val stepPx = prevHeight + itemSpacingPx
+        val threshold = stepPx * thresholdFraction
+        if (offsetY < -threshold) {
+          val mutable = currentList.toMutableList()
+          val item = mutable.removeAt(currentIndex)
+          mutable.add(currentIndex - 1, item)
+          currentList = mutable.toList()
+          offsetY += stepPx
+          currentIndex -= 1
+          moved = true
+          continue
+        }
+      }
+      break
+    }
+
+    if (currentIndex == 0 && offsetY < -maxOverscrollPx) {
+      offsetY = -maxOverscrollPx
+    }
+    if (currentIndex == currentList.lastIndex && offsetY > maxOverscrollPx) {
+      offsetY = maxOverscrollPx
+    }
+
+    return DragReorderStepResult(
+      items = currentList,
+      remainingOffsetY = offsetY,
+      moved = moved,
+      fromIndex = initialIndex,
+      toIndex = currentIndex,
+    )
+  }
 
   /**
    * Moves a task from [fromIndex] to [toIndex].
@@ -419,5 +547,85 @@ object TodoListEngine {
         item.copy(subtasks = updatedSubtasks)
       } else item
     }
+  }
+
+  /**
+   * Removes a completed task by [taskId] from the completed tasks list.
+   */
+  fun removeCompletedTask(completedTasks: List<TodoItem>, taskId: String): List<TodoItem> {
+    return completedTasks.filter { it.id != taskId }
+  }
+
+  /**
+   * Completes an active task by [taskId], moving it from [TodoHistorySnapshot.tasks]
+   * to [TodoHistorySnapshot.completedTasks] and incrementing [TodoHistorySnapshot.completedToday].
+   */
+  fun completeTask(snapshot: TodoHistorySnapshot, taskId: String): TodoHistorySnapshot {
+    val task = snapshot.tasks.firstOrNull { it.id == taskId } ?: return snapshot
+    val updatedTasks = snapshot.tasks.filter { it.id != taskId }
+    val completedItem = task.copy(
+      isSubtasksCollapsed = true,
+      subtasks = task.subtasks.map { it.copy(isCompleted = true) },
+    )
+    return snapshot.copy(
+      tasks = updatedTasks,
+      completedToday = snapshot.completedToday + 1,
+      completedTasks = listOf(completedItem) + snapshot.completedTasks,
+    )
+  }
+
+  /**
+   * Deletes an active task by [taskId] from [TodoHistorySnapshot.tasks].
+   */
+  fun deleteTask(snapshot: TodoHistorySnapshot, taskId: String): TodoHistorySnapshot {
+    if (snapshot.tasks.none { it.id == taskId }) return snapshot
+    return snapshot.copy(
+      tasks = snapshot.tasks.filter { it.id != taskId },
+    )
+  }
+
+  /**
+   * Uncompletes a completed task by [taskId], restoring it from [TodoHistorySnapshot.completedTasks]
+   * back to [TodoHistorySnapshot.tasks] and decrementing [TodoHistorySnapshot.completedToday].
+   */
+  fun uncompleteTask(snapshot: TodoHistorySnapshot, taskId: String): TodoHistorySnapshot {
+    val completedTask = snapshot.completedTasks.firstOrNull { it.id == taskId } ?: return snapshot
+    val updatedCompleted = snapshot.completedTasks.filter { it.id != taskId }
+    val restoredTask = completedTask.copy(
+      isSubtasksCollapsed = false,
+      subtasks = completedTask.subtasks.map { it.copy(isCompleted = false) },
+    )
+    return snapshot.copy(
+      tasks = listOf(restoredTask) + snapshot.tasks,
+      completedToday = maxOf(0, snapshot.completedToday - 1),
+      completedTasks = updatedCompleted,
+    )
+  }
+
+  /**
+   * Deletes a completed task by [taskId] from [TodoHistorySnapshot.completedTasks]
+   * and decrements [TodoHistorySnapshot.completedToday].
+   */
+  fun deleteCompletedTask(snapshot: TodoHistorySnapshot, taskId: String): TodoHistorySnapshot {
+    if (snapshot.completedTasks.none { it.id == taskId }) return snapshot
+    return snapshot.copy(
+      completedToday = maxOf(0, snapshot.completedToday - 1),
+      completedTasks = snapshot.completedTasks.filter { it.id != taskId },
+    )
+  }
+
+  /**
+   * Saves [task] as a template in [savedTasks], preserving its title and subtasks
+   * (with completion reset to false) and deduplicating by trimmed title.
+   */
+  fun saveTaskAsTemplate(savedTasks: List<TodoItem>, task: TodoItem): List<TodoItem> {
+    val trimmed = task.title.trim()
+    if (trimmed.isEmpty()) return savedTasks
+    val template = TodoItem(
+      title = trimmed,
+      subtasks = task.subtasks.map { TodoSubTask(title = it.title, isCompleted = false) },
+      isSubtasksCollapsed = false,
+    )
+    return listOf(template) + savedTasks.filter { it.title != trimmed }
   }
 }

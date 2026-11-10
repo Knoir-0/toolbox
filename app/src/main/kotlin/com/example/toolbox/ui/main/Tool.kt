@@ -6,12 +6,15 @@ import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material.icons.filled.SquareFoot
 import androidx.compose.material.icons.filled.Straighten
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -91,6 +94,21 @@ enum class Tool(
     title = "Files",
     icon = Icons.Default.Folder,
     category = ToolCategory.PRODUCTIVITY,
+  ),
+  AUDIO_RECORDER(
+    title = "Audio Recorder",
+    icon = Icons.Default.Mic,
+    category = ToolCategory.AUDIO_AND_MUSIC,
+  ),
+  FILE_CONVERTER(
+    title = "File Converter",
+    icon = Icons.Default.SwapHoriz,
+    category = ToolCategory.MEDIA_AND_CREATIVE,
+  ),
+  GALLERY(
+    title = "Gallery",
+    icon = Icons.Default.PhotoLibrary,
+    category = ToolCategory.MEDIA_AND_CREATIVE,
   ),
   SETTINGS(
     title = "Settings",

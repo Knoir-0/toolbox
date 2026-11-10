@@ -9,6 +9,7 @@ import androidx.compose.ui.platform.LocalInspectionMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONObject
 
 const val NAVIGATION_PREFERENCES_NAME = "navigation_preferences"
 const val PREF_KEY_TOOLS_PER_ROW = "tools_per_row"
@@ -332,6 +333,14 @@ interface NavigationPreferencesRepository {
   val categoryToolSortingFlow: StateFlow<CategoryToolSortingOption>
 
   fun getToolUsageCounts(): Map<Tool, Int>
+  fun setToolUsageCounts(usageCounts: Map<Tool, Int>) {
+    resetToolUsage()
+    usageCounts.forEach { (tool, count) ->
+      repeat(count.coerceAtLeast(0)) {
+        incrementToolUsage(tool)
+      }
+    }
+  }
   fun incrementToolUsage(tool: Tool)
   fun resetToolUsage()
   val toolUsageCountsFlow: StateFlow<Map<Tool, Int>>
@@ -511,6 +520,16 @@ class DefaultNavigationPreferencesRepository(
     return parseToolUsage(raw)
   }
 
+  override fun setToolUsageCounts(usageCounts: Map<Tool, Int>) {
+    val sanitized = usageCounts.filter { it.value > 0 }
+    if (sanitized.isEmpty()) {
+      sharedPreferences.edit().remove(PREF_KEY_TOOL_USAGE).apply()
+    } else {
+      sharedPreferences.edit().putString(PREF_KEY_TOOL_USAGE, serializeToolUsage(sanitized)).apply()
+    }
+    _toolUsageCountsFlow.value = sanitized
+  }
+
   override fun incrementToolUsage(tool: Tool) {
     val current = getToolUsageCounts().toMutableMap()
     val updated = (current[tool] ?: 0) + 1
@@ -638,6 +657,10 @@ class InMemoryNavigationPreferencesRepository(
 
   override fun getToolUsageCounts(): Map<Tool, Int> = _toolUsageCountsFlow.value
 
+  override fun setToolUsageCounts(usageCounts: Map<Tool, Int>) {
+    _toolUsageCountsFlow.value = usageCounts.filter { it.value > 0 }
+  }
+
   override fun incrementToolUsage(tool: Tool) {
     val current = _toolUsageCountsFlow.value.toMutableMap()
     current[tool] = (current[tool] ?: 0) + 1
@@ -664,4 +687,147 @@ fun rememberNavigationPreferencesRepository(): NavigationPreferencesRepository {
       DefaultNavigationPreferencesRepository(context.applicationContext)
     }
   }
+}
+
+const val SETTINGS_BACKUP_FORMAT = "toolbox_settings_v1"
+const val DEFAULT_SETTINGS_BACKUP_FILENAME = "toolbox_settings_backup.json"
+
+private val RECOGNIZED_BACKUP_KEYS = setOf(
+  "format",
+  PREF_KEY_TOOLS_PER_ROW,
+  PREF_KEY_TOOL_ORDER,
+  PREF_KEY_THEME_MODE,
+  PREF_KEY_THEME_COLOR,
+  PREF_KEY_ACCENT_COLOR,
+  PREF_KEY_HIDDEN_TOOLS,
+  PREF_KEY_TOOL_SORTING,
+  PREF_KEY_TOOL_SORT_ORDER,
+  PREF_KEY_CATEGORY_SORTING,
+  PREF_KEY_CATEGORY_TOOL_SORTING,
+  PREF_KEY_TOOL_USAGE,
+)
+
+/**
+ * Exports all settings in [repository] to a formatted JSON string suitable for saving to a backup file.
+ */
+fun exportSettingsToJson(repository: NavigationPreferencesRepository): String {
+  val json = JSONObject()
+  json.put("format", SETTINGS_BACKUP_FORMAT)
+  json.put(PREF_KEY_TOOLS_PER_ROW, repository.getToolsPerRow())
+  json.put(PREF_KEY_TOOL_ORDER, serializeToolOrder(repository.getToolOrder()))
+  json.put(PREF_KEY_THEME_MODE, repository.getThemeMode().name)
+  json.put(PREF_KEY_THEME_COLOR, repository.getThemeColor())
+  json.put(PREF_KEY_ACCENT_COLOR, repository.getAccentColor())
+  json.put(PREF_KEY_HIDDEN_TOOLS, serializeHiddenTools(repository.getHiddenTools()))
+  json.put(PREF_KEY_TOOL_SORTING, repository.getToolSorting().name)
+  json.put(PREF_KEY_TOOL_SORT_ORDER, repository.getToolSortOrder().name)
+  json.put(PREF_KEY_CATEGORY_SORTING, repository.getCategorySorting().name)
+  json.put(PREF_KEY_CATEGORY_TOOL_SORTING, repository.getCategoryToolSorting().name)
+  json.put(PREF_KEY_TOOL_USAGE, serializeToolUsage(repository.getToolUsageCounts()))
+  return json.toString(2)
+}
+
+/**
+ * Imports and applies settings from [jsonString] into [repository].
+ * Returns `true` if the JSON was valid and contained recognized settings, or `false` otherwise.
+ */
+fun importSettingsFromJson(
+  jsonString: String,
+  repository: NavigationPreferencesRepository,
+): Boolean {
+  val trimmed = jsonString.trim()
+  if (trimmed.isEmpty()) return false
+  return try {
+    val json = JSONObject(trimmed)
+    val hasRecognizedKey = RECOGNIZED_BACKUP_KEYS.any { json.has(it) }
+    if (!hasRecognizedKey) return false
+
+    if (json.has(PREF_KEY_TOOLS_PER_ROW)) {
+      repository.setToolsPerRow(coerceToolsPerRow(json.optInt(PREF_KEY_TOOLS_PER_ROW, DEFAULT_TOOLS_PER_ROW)))
+    }
+    if (json.has(PREF_KEY_TOOL_ORDER)) {
+      repository.setToolOrder(parseToolOrder(json.optString(PREF_KEY_TOOL_ORDER, "")))
+    }
+    if (json.has(PREF_KEY_THEME_MODE)) {
+      val modeName = json.optString(PREF_KEY_THEME_MODE, ThemeMode.SYSTEM.name)
+      val mode = try {
+        ThemeMode.valueOf(modeName)
+      } catch (_: IllegalArgumentException) {
+        ThemeMode.SYSTEM
+      }
+      repository.setThemeMode(mode)
+    }
+    if (json.has(PREF_KEY_THEME_COLOR)) {
+      val color = json.optString(PREF_KEY_THEME_COLOR, DEFAULT_THEME_COLOR_SYSTEM)
+        .ifBlank { DEFAULT_THEME_COLOR_SYSTEM }
+      repository.setThemeColor(color)
+    }
+    if (json.has(PREF_KEY_ACCENT_COLOR)) {
+      val accent = json.optString(PREF_KEY_ACCENT_COLOR, DEFAULT_ACCENT_COLOR_AUTO)
+        .ifBlank { DEFAULT_ACCENT_COLOR_AUTO }
+      repository.setAccentColor(accent)
+    }
+    if (json.has(PREF_KEY_HIDDEN_TOOLS)) {
+      repository.setHiddenTools(parseHiddenTools(json.optString(PREF_KEY_HIDDEN_TOOLS, "")))
+    }
+    if (json.has(PREF_KEY_TOOL_SORTING)) {
+      val sortingName = json.optString(PREF_KEY_TOOL_SORTING, ToolSortingOption.USER_CHOICE.name)
+      val sorting = try {
+        ToolSortingOption.valueOf(sortingName)
+      } catch (_: IllegalArgumentException) {
+        ToolSortingOption.USER_CHOICE
+      }
+      repository.setToolSorting(sorting)
+    }
+    if (json.has(PREF_KEY_TOOL_SORT_ORDER)) {
+      val orderName = json.optString(PREF_KEY_TOOL_SORT_ORDER, ToolSortOrder.ASCENDING.name)
+      val order = try {
+        ToolSortOrder.valueOf(orderName)
+      } catch (_: IllegalArgumentException) {
+        ToolSortOrder.ASCENDING
+      }
+      repository.setToolSortOrder(order)
+    }
+    if (json.has(PREF_KEY_CATEGORY_SORTING)) {
+      val catSortName = json.optString(PREF_KEY_CATEGORY_SORTING, CategorySortingOption.MANUAL.name)
+      val catSort = try {
+        CategorySortingOption.valueOf(catSortName)
+      } catch (_: IllegalArgumentException) {
+        CategorySortingOption.MANUAL
+      }
+      repository.setCategorySorting(catSort)
+    }
+    if (json.has(PREF_KEY_CATEGORY_TOOL_SORTING)) {
+      val catToolSortName = json.optString(PREF_KEY_CATEGORY_TOOL_SORTING, CategoryToolSortingOption.MANUAL.name)
+      val catToolSort = try {
+        CategoryToolSortingOption.valueOf(catToolSortName)
+      } catch (_: IllegalArgumentException) {
+        CategoryToolSortingOption.MANUAL
+      }
+      repository.setCategoryToolSorting(catToolSort)
+    }
+    if (json.has(PREF_KEY_TOOL_USAGE)) {
+      repository.setToolUsageCounts(parseToolUsage(json.optString(PREF_KEY_TOOL_USAGE, "")))
+    }
+    true
+  } catch (_: Exception) {
+    false
+  }
+}
+
+/**
+ * Resets all settings in [repository] back to their default values.
+ */
+fun resetAllSettingsToDefaults(repository: NavigationPreferencesRepository) {
+  repository.setToolsPerRow(DEFAULT_TOOLS_PER_ROW)
+  repository.setThemeMode(ThemeMode.SYSTEM)
+  repository.setThemeColor(DEFAULT_THEME_COLOR_SYSTEM)
+  repository.setAccentColor(DEFAULT_ACCENT_COLOR_AUTO)
+  repository.setHiddenTools(emptySet())
+  repository.setToolOrder(Tool.entries)
+  repository.setToolSorting(ToolSortingOption.USER_CHOICE)
+  repository.setToolSortOrder(ToolSortOrder.ASCENDING)
+  repository.setCategorySorting(CategorySortingOption.MANUAL)
+  repository.setCategoryToolSorting(CategoryToolSortingOption.MANUAL)
+  repository.resetToolUsage()
 }

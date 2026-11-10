@@ -548,7 +548,7 @@ private fun MetronomeContent(
             }
           }
 
-          Slider(
+          SlimDotSlider(
             value = bpm.toFloat(),
             onValueChange = { onBpmChange(it.roundToInt()) },
             valueRange = 30f..240f,

@@ -161,6 +161,11 @@ object HidKey {
 enum class ConsumerKey(val usage: Int) {
   POWER(0x0030),
   MENU(0x0040),
+  DPAD_CENTER(0x0041),
+  DPAD_UP(0x0042),
+  DPAD_DOWN(0x0043),
+  DPAD_LEFT(0x0044),
+  DPAD_RIGHT(0x0045),
   CHANNEL_UP(0x009C),
   CHANNEL_DOWN(0x009D),
   FAST_FORWARD(0x00B3),

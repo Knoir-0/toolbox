@@ -5,6 +5,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -21,6 +22,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +37,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -74,13 +77,14 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -93,6 +97,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -102,9 +107,11 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -112,6 +119,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -141,6 +149,7 @@ fun TodoListScreen(
 
   var undoStack by remember { mutableStateOf(listOf<TodoHistorySnapshot>()) }
   var redoStack by remember { mutableStateOf(listOf<TodoHistorySnapshot>()) }
+  var historyVersion by remember { mutableIntStateOf(0) }
 
   val canUndo = undoStack.isNotEmpty()
   val canRedo = redoStack.isNotEmpty()
@@ -152,10 +161,20 @@ fun TodoListScreen(
   var inlineEditingTaskId by remember { mutableStateOf<String?>(null) }
 
   // Drag-and-drop reorder state
+  val density = LocalDensity.current
+  val listState = rememberLazyListState()
+  val taskSpacingPx = with(density) { 4.dp.toPx() }
+  val defaultTaskHeightPx = with(density) { 60.dp.toPx() }
+  val taskMaxOverscrollPx = with(density) { 12.dp.toPx() }
+  val subtaskSpacingPx = with(density) { 6.dp.toPx() }
+  val defaultSubtaskHeightPx = with(density) { 40.dp.toPx() }
+  val subtaskMaxOverscrollPx = with(density) { 4.dp.toPx() }
+
   var draggedTaskId by remember { mutableStateOf<String?>(null) }
   var dragOffsetY by remember { mutableFloatStateOf(0f) }
   var initialDragSnapshot by remember { mutableStateOf<TodoHistorySnapshot?>(null) }
-  var measuredItemHeightPx by remember { mutableFloatStateOf(0f) }
+  val taskHeightsPx = remember { mutableStateMapOf<String, Float>() }
+  val subtaskHeightsPx = remember { mutableStateMapOf<String, Float>() }
 
   // Check midnight reset periodically / on resume
   LaunchedEffect(Unit) {
@@ -169,8 +188,11 @@ fun TodoListScreen(
     updatedCompletedTasks: List<TodoItem> = completedTasks,
   ) {
     val currentSnapshot = TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)
+    val nextSnapshot = TodoHistorySnapshot(updatedTasks, updatedCompletedToday, updatedCompletedTasks)
+    if (currentSnapshot == nextSnapshot) return
     undoStack = listOf(currentSnapshot) + undoStack.take(49)
     redoStack = emptyList()
+    historyVersion += 1
 
     tasks = updatedTasks
     completedTodayCount = updatedCompletedToday
@@ -181,12 +203,21 @@ fun TodoListScreen(
     repo.saveCompletedTasks(updatedCompletedTasks, getTodayDateKey())
   }
 
+  fun applySnapshot(nextSnapshot: TodoHistorySnapshot) {
+    applyAction(
+      updatedTasks = nextSnapshot.tasks,
+      updatedCompletedToday = nextSnapshot.completedToday,
+      updatedCompletedTasks = nextSnapshot.completedTasks,
+    )
+  }
+
   fun undo() {
     if (undoStack.isEmpty()) return
     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     val previousState = undoStack.first()
     undoStack = undoStack.drop(1)
     redoStack = listOf(TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)) + redoStack
+    historyVersion += 1
 
     tasks = previousState.tasks
     completedTodayCount = previousState.completedToday
@@ -203,6 +234,7 @@ fun TodoListScreen(
     val nextState = redoStack.first()
     redoStack = redoStack.drop(1)
     undoStack = listOf(TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)) + undoStack
+    historyVersion += 1
 
     tasks = nextState.tasks
     completedTodayCount = nextState.completedToday
@@ -214,23 +246,35 @@ fun TodoListScreen(
   }
 
   fun completeTask(task: TodoItem) {
+    val currentSnapshot = TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)
+    val nextSnapshot = TodoListEngine.completeTask(currentSnapshot, task.id)
+    if (nextSnapshot == currentSnapshot) return
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-    val updated = tasks.filter { it.id != task.id }
-    val completedItem = task.copy(
-      isSubtasksCollapsed = true,
-      subtasks = task.subtasks.map { it.copy(isCompleted = true) },
-    )
-    applyAction(
-      updated,
-      updatedCompletedToday = completedTodayCount + 1,
-      updatedCompletedTasks = listOf(completedItem) + completedTasks,
-    )
+    applySnapshot(nextSnapshot)
   }
 
   fun deleteTask(task: TodoItem) {
+    val currentSnapshot = TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)
+    val nextSnapshot = TodoListEngine.deleteTask(currentSnapshot, task.id)
+    if (nextSnapshot == currentSnapshot) return
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-    val updated = tasks.filter { it.id != task.id }
-    applyAction(updated)
+    applySnapshot(nextSnapshot)
+  }
+
+  fun deleteCompletedTask(task: TodoItem) {
+    val currentSnapshot = TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)
+    val nextSnapshot = TodoListEngine.deleteCompletedTask(currentSnapshot, task.id)
+    if (nextSnapshot == currentSnapshot) return
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    applySnapshot(nextSnapshot)
+  }
+
+  fun uncompleteTask(task: TodoItem) {
+    val currentSnapshot = TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)
+    val nextSnapshot = TodoListEngine.uncompleteTask(currentSnapshot, task.id)
+    if (nextSnapshot == currentSnapshot) return
+    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    applySnapshot(nextSnapshot)
   }
 
   fun addTask() {
@@ -257,12 +301,7 @@ fun TodoListScreen(
     val trimmed = task.title.trim()
     if (trimmed.isEmpty()) return
     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-    val template = TodoItem(
-      title = trimmed,
-      subtasks = task.subtasks.map { TodoSubTask(title = it.title, isCompleted = false) },
-      isSubtasksCollapsed = false,
-    )
-    val updated = listOf(template) + savedTasks.filter { it.title != trimmed }
+    val updated = TodoListEngine.saveTaskAsTemplate(savedTasks, task)
     savedTasks = updated
     repo.saveSavedTasks(updated)
     Toast.makeText(context, "Saved \"$trimmed\" as template", Toast.LENGTH_SHORT).show()
@@ -308,32 +347,59 @@ fun TodoListScreen(
     applyAction(updated)
   }
 
+  var draggedSubtaskId by remember { mutableStateOf<String?>(null) }
+  var subtaskDragOffsetY by remember { mutableFloatStateOf(0f) }
+  var initialSubtaskDragSnapshot by remember { mutableStateOf<TodoHistorySnapshot?>(null) }
+
+  fun endDraggingSubTask() {
+    val before = initialSubtaskDragSnapshot
+    draggedSubtaskId = null
+    subtaskDragOffsetY = 0f
+    initialSubtaskDragSnapshot = null
+
+    if (before != null && before.tasks != tasks) {
+      undoStack = listOf(before) + undoStack.take(49)
+      redoStack = emptyList()
+      historyVersion += 1
+      repo.saveTasks(tasks)
+    }
+  }
+
   fun startDragging(taskId: String) {
+    if (draggedSubtaskId != null) {
+      endDraggingSubTask()
+    }
     inlineEditingTaskId = null
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     draggedTaskId = taskId
     dragOffsetY = 0f
-    initialDragSnapshot = TodoHistorySnapshot(tasks, completedTodayCount)
+    initialDragSnapshot = TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)
   }
 
   fun onDragDelta(taskId: String, deltaY: Float) {
     if (draggedTaskId != taskId) return
-    dragOffsetY += deltaY
+    val firstVisibleIndex = listState.firstVisibleItemIndex
+    val firstVisibleOffset = listState.firstVisibleItemScrollOffset
 
-    val itemHeight = if (measuredItemHeightPx > 0f) measuredItemHeightPx else 160f
-    val currentIndex = tasks.indexOfFirst { it.id == taskId }
-    if (currentIndex == -1) return
+    val stepResult = TodoListEngine.calculateDragReorder(
+      items = tasks,
+      draggedId = taskId,
+      idSelector = { it.id },
+      currentOffsetY = dragOffsetY + deltaY,
+      itemHeightsPx = taskHeightsPx,
+      defaultItemHeightPx = defaultTaskHeightPx,
+      itemSpacingPx = taskSpacingPx,
+      maxOverscrollPx = taskMaxOverscrollPx,
+    )
 
-    val threshold = itemHeight * 0.75f
-    if (dragOffsetY > threshold && currentIndex < tasks.size - 1) {
-      val newTasks = TodoListEngine.reorderTasks(tasks, currentIndex, currentIndex + 1)
-      tasks = newTasks
-      dragOffsetY -= itemHeight
-      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-    } else if (dragOffsetY < -threshold && currentIndex > 0) {
-      val newTasks = TodoListEngine.reorderTasks(tasks, currentIndex, currentIndex - 1)
-      tasks = newTasks
-      dragOffsetY += itemHeight
+    dragOffsetY = stepResult.remainingOffsetY
+    if (stepResult.moved) {
+      tasks = stepResult.items
+      val minIdx = minOf(stepResult.fromIndex, stepResult.toIndex)
+      val maxIdx = maxOf(stepResult.fromIndex, stepResult.toIndex)
+      if (firstVisibleIndex in minIdx..maxIdx) {
+        listState.requestScrollToItem(firstVisibleIndex, firstVisibleOffset)
+      }
       haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
   }
@@ -347,55 +413,43 @@ fun TodoListScreen(
     if (before != null && before.tasks != tasks) {
       undoStack = listOf(before) + undoStack.take(49)
       redoStack = emptyList()
+      historyVersion += 1
       repo.saveTasks(tasks)
     }
   }
 
-  var draggedSubtaskId by remember { mutableStateOf<String?>(null) }
-  var subtaskDragOffsetY by remember { mutableFloatStateOf(0f) }
-  var initialSubtaskDragSnapshot by remember { mutableStateOf<TodoHistorySnapshot?>(null) }
-
   fun startDraggingSubTask(subtaskId: String) {
+    if (draggedTaskId != null) {
+      endDragging()
+    }
     inlineEditingTaskId = null
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     draggedSubtaskId = subtaskId
     subtaskDragOffsetY = 0f
-    initialSubtaskDragSnapshot = TodoHistorySnapshot(tasks, completedTodayCount)
+    initialSubtaskDragSnapshot = TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)
   }
 
   fun onDragSubTaskDelta(taskId: String, subtaskId: String, deltaY: Float) {
     if (draggedSubtaskId != subtaskId) return
-    subtaskDragOffsetY += deltaY
-
-    val itemHeight = 100f
     val task = tasks.firstOrNull { it.id == taskId } ?: return
-    val currentIndex = task.subtasks.indexOfFirst { it.id == subtaskId }
-    if (currentIndex == -1) return
 
-    val threshold = itemHeight * 0.75f
-    if (subtaskDragOffsetY > threshold && currentIndex < task.subtasks.size - 1) {
-      val newTasks = TodoListEngine.reorderSubTasks(tasks, taskId, currentIndex, currentIndex + 1)
-      tasks = newTasks
-      subtaskDragOffsetY -= itemHeight
+    val stepResult = TodoListEngine.calculateDragReorder(
+      items = task.subtasks,
+      draggedId = subtaskId,
+      idSelector = { it.id },
+      currentOffsetY = subtaskDragOffsetY + deltaY,
+      itemHeightsPx = subtaskHeightsPx,
+      defaultItemHeightPx = defaultSubtaskHeightPx,
+      itemSpacingPx = subtaskSpacingPx,
+      maxOverscrollPx = subtaskMaxOverscrollPx,
+    )
+
+    subtaskDragOffsetY = stepResult.remainingOffsetY
+    if (stepResult.moved) {
+      tasks = tasks.map { item ->
+        if (item.id == taskId) item.copy(subtasks = stepResult.items) else item
+      }
       haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-    } else if (subtaskDragOffsetY < -threshold && currentIndex > 0) {
-      val newTasks = TodoListEngine.reorderSubTasks(tasks, taskId, currentIndex, currentIndex - 1)
-      tasks = newTasks
-      subtaskDragOffsetY += itemHeight
-      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-    }
-  }
-
-  fun endDraggingSubTask() {
-    val before = initialSubtaskDragSnapshot
-    draggedSubtaskId = null
-    subtaskDragOffsetY = 0f
-    initialSubtaskDragSnapshot = null
-
-    if (before != null && before.tasks != tasks) {
-      undoStack = listOf(before) + undoStack.take(49)
-      redoStack = emptyList()
-      repo.saveTasks(tasks)
     }
   }
 
@@ -539,6 +593,7 @@ fun TodoListScreen(
         EmptyTasksState()
       } else {
         LazyColumn(
+          state = listState,
           modifier = Modifier
             .fillMaxSize()
             .testTag("todo_tasks_list"),
@@ -553,6 +608,7 @@ fun TodoListScreen(
             val isEditingInline = inlineEditingTaskId == task.id
             SwipeableTaskItem(
               task = task,
+              historyVersion = historyVersion,
               isBeingDragged = isBeingDragged,
               dragOffsetY = if (isBeingDragged) dragOffsetY else 0f,
               isEditingInline = isEditingInline,
@@ -574,29 +630,51 @@ fun TodoListScreen(
               onDeleteSubTask = { subtaskId -> deleteSubTask(task.id, subtaskId) },
               onUpdateSubTask = { subtaskId, newTitle -> updateSubTask(task.id, subtaskId, newTitle) },
               draggedSubtaskId = draggedSubtaskId,
+              subtaskDragOffsetY = subtaskDragOffsetY,
               onStartDragSubTask = { subtaskId -> startDraggingSubTask(subtaskId) },
               onDragSubTask = { subtaskId, deltaY -> onDragSubTaskDelta(task.id, subtaskId, deltaY) },
               onEndDragSubTask = { endDraggingSubTask() },
+              onSubtaskHeightMeasured = { subtaskId, heightPx ->
+                if (heightPx > 0f) {
+                  subtaskHeightsPx[subtaskId] = heightPx
+                }
+              },
               onStartDrag = { startDragging(task.id) },
               onDrag = { deltaY -> onDragDelta(task.id, deltaY) },
               onEndDrag = { endDragging() },
               onItemHeightMeasured = { heightPx ->
-                if (!isBeingDragged && heightPx > measuredItemHeightPx) {
-                  measuredItemHeightPx = heightPx
+                if (heightPx > 0f) {
+                  taskHeightsPx[task.id] = heightPx
                 }
               },
-              modifier = Modifier.animateItem(),
+              modifier = Modifier.animateItem(
+                placementSpec = if (isBeingDragged) {
+                  null
+                } else {
+                  spring(
+                    stiffness = Spring.StiffnessMediumLow,
+                    visibilityThreshold = IntOffset.VisibilityThreshold,
+                  )
+                },
+              ),
             )
           }
         }
       }
     }
 
-    // Read-only Completed Tasks Sheet
+    // Completed Tasks Sheet
     if (showCompletedTasksSheet) {
       CompletedTasksSheet(
         completedTasks = completedTasks,
         completedCount = completedTodayCount,
+        historyVersion = historyVersion,
+        canUndo = canUndo,
+        canRedo = canRedo,
+        onUndo = { undo() },
+        onRedo = { redo() },
+        onUncompleteTask = { task -> uncompleteTask(task) },
+        onRemoveCompletedTask = { task -> deleteCompletedTask(task) },
         onDismiss = { showCompletedTasksSheet = false },
       )
     }
@@ -629,6 +707,7 @@ fun TodoListScreen(
 @Composable
 private fun SwipeableTaskItem(
   task: TodoItem,
+  historyVersion: Int = 0,
   isBeingDragged: Boolean,
   dragOffsetY: Float,
   isEditingInline: Boolean,
@@ -643,27 +722,44 @@ private fun SwipeableTaskItem(
   onDeleteSubTask: (String) -> Unit,
   onUpdateSubTask: (String, String) -> Unit,
   draggedSubtaskId: String? = null,
+  subtaskDragOffsetY: Float = 0f,
   onStartDragSubTask: (String) -> Unit = {},
   onDragSubTask: (String, Float) -> Unit = { _, _ -> },
   onEndDragSubTask: () -> Unit = {},
+  onSubtaskHeightMeasured: (String, Float) -> Unit = { _, _ -> },
   onStartDrag: () -> Unit,
   onDrag: (Float) -> Unit,
   onEndDrag: () -> Unit,
   onItemHeightMeasured: (Float) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val dismissState = rememberSwipeToDismissBoxState(
-    positionalThreshold = { it * 0.35f },
-  )
+  val isSubtaskBeingDragged = draggedSubtaskId != null && task.subtasks.any { it.id == draggedSubtaskId }
+  var isDragHandlePressed by remember { mutableStateOf(false) }
+  val isSwipeEnabled = !isBeingDragged && !isSubtaskBeingDragged && !isEditingInline && !isDragHandlePressed
 
-  LaunchedEffect(dismissState.currentValue) {
-    if (!isBeingDragged) {
+  val currentOnComplete by rememberUpdatedState(onComplete)
+  val currentOnDelete by rememberUpdatedState(onDelete)
+
+  val dismissState = remember(task.id, historyVersion) {
+    SwipeToDismissBoxState(
+      initialValue = SwipeToDismissBoxValue.Settled,
+      positionalThreshold = { it * 0.35f },
+    )
+  }
+  var hasDismissTriggered by remember(dismissState) { mutableStateOf(false) }
+
+  LaunchedEffect(dismissState, dismissState.currentValue, isSwipeEnabled) {
+    if (isSwipeEnabled && !hasDismissTriggered) {
       when (dismissState.currentValue) {
         SwipeToDismissBoxValue.StartToEnd -> {
-          onComplete()
+          hasDismissTriggered = true
+          currentOnComplete()
+          dismissState.snapTo(SwipeToDismissBoxValue.Settled)
         }
         SwipeToDismissBoxValue.EndToStart -> {
-          onDelete()
+          hasDismissTriggered = true
+          currentOnDelete()
+          dismissState.snapTo(SwipeToDismissBoxValue.Settled)
         }
         SwipeToDismissBoxValue.Settled -> {}
       }
@@ -678,8 +774,9 @@ private fun SwipeableTaskItem(
 
   SwipeToDismissBox(
     state = dismissState,
-    enableDismissFromStartToEnd = !isBeingDragged && !isEditingInline,
-    enableDismissFromEndToStart = !isBeingDragged && !isEditingInline,
+    enableDismissFromStartToEnd = isSwipeEnabled,
+    enableDismissFromEndToStart = isSwipeEnabled,
+    gesturesEnabled = isSwipeEnabled,
     backgroundContent = {
       val direction = dismissState.dismissDirection
       val isCompleteSwipe = direction == SwipeToDismissBoxValue.StartToEnd
@@ -751,6 +848,7 @@ private fun SwipeableTaskItem(
       TaskCardContent(
         task = task,
         isBeingDragged = isBeingDragged,
+        dragScale = dragScale,
         isEditingInline = isEditingInline,
         onCheckboxClick = onComplete,
         onStartInlineEdit = onStartInlineEdit,
@@ -762,19 +860,22 @@ private fun SwipeableTaskItem(
         onDeleteSubTask = onDeleteSubTask,
         onUpdateSubTask = onUpdateSubTask,
         draggedSubtaskId = draggedSubtaskId,
+        subtaskDragOffsetY = subtaskDragOffsetY,
         onStartDragSubTask = onStartDragSubTask,
         onDragSubTask = onDragSubTask,
         onEndDragSubTask = onEndDragSubTask,
+        onSubtaskHeightMeasured = onSubtaskHeightMeasured,
         onStartDrag = onStartDrag,
         onDrag = onDrag,
         onEndDrag = onEndDrag,
+        onDragHandlePressedChange = { isDragHandlePressed = it },
         onHeightMeasured = onItemHeightMeasured,
       )
     },
     modifier = modifier
-      .zIndex(if (isBeingDragged) 2f else 1f)
+      .zIndex(if (isBeingDragged) 2f else if (isSubtaskBeingDragged) 1.5f else 1f)
       .graphicsLayer {
-        translationY = dragOffsetY
+        translationY = if (isBeingDragged) dragOffsetY else 0f
         scaleX = dragScale
         scaleY = dragScale
       }
@@ -790,6 +891,7 @@ private fun SwipeableTaskItem(
 private fun TaskCardContent(
   task: TodoItem,
   isBeingDragged: Boolean,
+  dragScale: Float = 1f,
   isEditingInline: Boolean,
   onCheckboxClick: () -> Unit,
   onStartInlineEdit: () -> Unit,
@@ -801,12 +903,15 @@ private fun TaskCardContent(
   onDeleteSubTask: (String) -> Unit,
   onUpdateSubTask: (String, String) -> Unit,
   draggedSubtaskId: String? = null,
+  subtaskDragOffsetY: Float = 0f,
   onStartDragSubTask: (String) -> Unit = {},
   onDragSubTask: (String, Float) -> Unit = { _, _ -> },
   onEndDragSubTask: () -> Unit = {},
+  onSubtaskHeightMeasured: (String, Float) -> Unit = { _, _ -> },
   onStartDrag: () -> Unit,
   onDrag: (Float) -> Unit,
   onEndDrag: () -> Unit,
+  onDragHandlePressedChange: (Boolean) -> Unit = {},
   onHeightMeasured: (Float) -> Unit,
 ) {
   val haptic = LocalHapticFeedback.current
@@ -817,8 +922,19 @@ private fun TaskCardContent(
   var editingSubtaskId by remember { mutableStateOf<String?>(null) }
   val newSubtaskFocusRequester = remember { FocusRequester() }
 
-  LaunchedEffect(isBeingDragged) {
-    if (isBeingDragged) {
+  val currentOnCheckboxClick by rememberUpdatedState(onCheckboxClick)
+  val currentOnSaveAsTemplate by rememberUpdatedState(onSaveAsTemplate)
+  val currentOnStartDrag by rememberUpdatedState(onStartDrag)
+  val currentOnDrag by rememberUpdatedState(onDrag)
+  val currentOnEndDrag by rememberUpdatedState(onEndDrag)
+  val currentOnStartDragSubTask by rememberUpdatedState(onStartDragSubTask)
+  val currentOnDragSubTask by rememberUpdatedState(onDragSubTask)
+  val currentOnEndDragSubTask by rememberUpdatedState(onEndDragSubTask)
+  val currentOnDragHandlePressedChange by rememberUpdatedState(onDragHandlePressedChange)
+  val currentDragScale by rememberUpdatedState(dragScale)
+
+  LaunchedEffect(isBeingDragged, draggedSubtaskId) {
+    if (isBeingDragged || draggedSubtaskId != null) {
       editingSubtaskId = null
       showAddSubtaskInput = false
     }
@@ -845,6 +961,11 @@ private fun TaskCardContent(
       .fillMaxWidth()
       .onGloballyPositioned { coords ->
         onHeightMeasured(coords.size.height.toFloat())
+      }
+      .pointerInput(task.id) {
+        detectTapGestures(
+          onDoubleTap = { currentOnSaveAsTemplate() },
+        )
       }
       .testTag("todo_item_card_${task.id}"),
     shape = RoundedCornerShape(14.dp),
@@ -878,15 +999,42 @@ private fun TaskCardContent(
             .size(36.dp)
             .clip(CircleShape)
             .pointerInput(task.id) {
-              detectDragGestures(
-                onDragStart = { onStartDrag() },
-                onDrag = { change, dragAmount ->
-                  change.consume()
-                  onDrag(dragAmount.y)
-                },
-                onDragEnd = { onEndDrag() },
-                onDragCancel = { onEndDrag() },
-              )
+              awaitPointerEventScope {
+                while (true) {
+                  val event = awaitPointerEvent(PointerEventPass.Initial)
+                  currentOnDragHandlePressedChange(event.changes.any { it.pressed })
+                }
+              }
+            }
+            .pointerInput(task.id) {
+              var draggingThis = false
+              try {
+                detectDragGestures(
+                  onDragStart = {
+                    draggingThis = true
+                    currentOnStartDrag()
+                  },
+                  onDrag = { change, dragAmount ->
+                    change.consume()
+                    currentOnDrag(dragAmount.y * currentDragScale)
+                  },
+                  onDragEnd = {
+                    draggingThis = false
+                    currentOnDragHandlePressedChange(false)
+                    currentOnEndDrag()
+                  },
+                  onDragCancel = {
+                    draggingThis = false
+                    currentOnDragHandlePressedChange(false)
+                    currentOnEndDrag()
+                  },
+                )
+              } finally {
+                if (draggingThis) {
+                  currentOnDragHandlePressedChange(false)
+                  currentOnEndDrag()
+                }
+              }
             }
             .testTag("todo_item_drag_${task.id}"),
           contentAlignment = Alignment.Center,
@@ -905,22 +1053,14 @@ private fun TaskCardContent(
 
         Spacer(modifier = Modifier.width(4.dp))
 
-        // Checkbox with spring bounce animation
+        // Checkbox to complete task
         Box(
           modifier = Modifier
             .size(32.dp)
             .scale(checkScale.value)
             .clip(CircleShape)
             .clickable {
-              scope.launch {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                checkScale.animateTo(
-                  targetValue = 1.3f,
-                  animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
-                )
-                checkScale.animateTo(1f, tween(100))
-                onCheckboxClick()
-              }
+              currentOnCheckboxClick()
             }
             .testTag("todo_item_checkbox_${task.id}"),
           contentAlignment = Alignment.Center,
@@ -989,6 +1129,7 @@ private fun TaskCardContent(
               .clip(RoundedCornerShape(8.dp))
               .combinedClickable(
                 onClick = onStartInlineEdit,
+                onDoubleClick = { currentOnSaveAsTemplate() },
                 onLongClick = {
                   haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                   showContextMenu = true
@@ -1135,9 +1276,9 @@ private fun TaskCardContent(
         }
       }
 
-      // Subtasks Section (hidden when re-ordering tasks or collapsed)
+      // Subtasks Section (hidden when collapsed)
       AnimatedVisibility(
-        visible = !isBeingDragged && !task.isSubtasksCollapsed && (task.subtasks.isNotEmpty() || showAddSubtaskInput),
+        visible = !task.isSubtasksCollapsed && (task.subtasks.isNotEmpty() || showAddSubtaskInput),
         enter = fadeIn(animationSpec = tween(250)) +
           slideInVertically(animationSpec = tween(250), initialOffsetY = { -it / 3 }) +
           expandVertically(animationSpec = tween(250)),
@@ -1153,158 +1294,205 @@ private fun TaskCardContent(
         ) {
           // Subtask items (always shown directly, not collapsible, blends into background)
           task.subtasks.forEach { subtask ->
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 2.dp),
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              // Smaller drag handle with double bar
+            key(subtask.id) {
               val isSubtaskBeingDragged = draggedSubtaskId == subtask.id
-              Box(
+              Row(
                 modifier = Modifier
-                  .size(36.dp)
-                  .clip(CircleShape)
-                  .pointerInput(subtask.id) {
-                    detectDragGestures(
-                      onDragStart = { onStartDragSubTask(subtask.id) },
-                      onDrag = { change, dragAmount ->
-                        change.consume()
-                        onDragSubTask(subtask.id, dragAmount.y)
-                      },
-                      onDragEnd = { onEndDragSubTask() },
-                      onDragCancel = { onEndDragSubTask() },
+                  .fillMaxWidth()
+                  .zIndex(if (isSubtaskBeingDragged) 2f else 0f)
+                  .graphicsLayer {
+                    translationY = if (isSubtaskBeingDragged) subtaskDragOffsetY else 0f
+                  }
+                  .onGloballyPositioned { coords ->
+                    val height = coords.size.height.toFloat()
+                    if (height > 0f) {
+                      onSubtaskHeightMeasured(subtask.id, height)
+                    }
+                  }
+                  .clip(RoundedCornerShape(8.dp))
+                  .background(
+                    if (isSubtaskBeingDragged) {
+                      MaterialTheme.colorScheme.surfaceContainerHigh
+                    } else {
+                      Color.Transparent
+                    },
+                  )
+                  .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                // Smaller drag handle with double bar
+                Box(
+                  modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .pointerInput(subtask.id) {
+                      awaitPointerEventScope {
+                        while (true) {
+                          val event = awaitPointerEvent(PointerEventPass.Initial)
+                          currentOnDragHandlePressedChange(event.changes.any { it.pressed })
+                        }
+                      }
+                    }
+                    .pointerInput(subtask.id) {
+                      var draggingThisSubtask = false
+                      try {
+                        detectDragGestures(
+                          onDragStart = {
+                            draggingThisSubtask = true
+                            currentOnStartDragSubTask(subtask.id)
+                          },
+                          onDrag = { change, dragAmount ->
+                            change.consume()
+                            currentOnDragSubTask(subtask.id, dragAmount.y * currentDragScale)
+                          },
+                          onDragEnd = {
+                            draggingThisSubtask = false
+                            currentOnDragHandlePressedChange(false)
+                            currentOnEndDragSubTask()
+                          },
+                          onDragCancel = {
+                            draggingThisSubtask = false
+                            currentOnDragHandlePressedChange(false)
+                            currentOnEndDragSubTask()
+                          },
+                        )
+                      } finally {
+                        if (draggingThisSubtask) {
+                          currentOnDragHandlePressedChange(false)
+                          currentOnEndDragSubTask()
+                        }
+                      }
+                    }
+                    .testTag("todo_subtask_drag_${subtask.id}"),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.DragHandle,
+                    contentDescription = "Drag to reorder subtask",
+                    tint = if (isSubtaskBeingDragged) {
+                      MaterialTheme.colorScheme.primary
+                    } else {
+                      MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                    },
+                    modifier = Modifier.size(16.dp),
+                  )
+                }
+
+                Spacer(modifier = Modifier.width(2.dp))
+
+                // Subtask checkbox
+                Box(
+                  modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .clickable { onToggleSubTask(subtask.id) }
+                    .testTag("todo_subtask_checkbox_${subtask.id}"),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  if (subtask.isCompleted) {
+                    Icon(
+                      imageVector = Icons.Default.CheckCircle,
+                      contentDescription = "Complete subtask",
+                      tint = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.size(22.dp),
+                    )
+                  } else {
+                    Icon(
+                      imageVector = Icons.Default.RadioButtonUnchecked,
+                      contentDescription = "Incomplete subtask",
+                      tint = MaterialTheme.colorScheme.outline,
+                      modifier = Modifier.size(22.dp),
                     )
                   }
-                  .testTag("todo_subtask_drag_${subtask.id}"),
-                contentAlignment = Alignment.Center,
-              ) {
-                Icon(
-                  imageVector = Icons.Default.DragHandle,
-                  contentDescription = "Drag to reorder subtask",
-                  tint = if (isSubtaskBeingDragged) {
-                    MaterialTheme.colorScheme.primary
-                  } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
-                  },
-                  modifier = Modifier.size(16.dp),
-                )
-              }
-
-              Spacer(modifier = Modifier.width(2.dp))
-
-              // Subtask checkbox
-              Box(
-                modifier = Modifier
-                  .size(32.dp)
-                  .clip(CircleShape)
-                  .clickable { onToggleSubTask(subtask.id) }
-                  .testTag("todo_subtask_checkbox_${subtask.id}"),
-                contentAlignment = Alignment.Center,
-              ) {
-                if (subtask.isCompleted) {
-                  Icon(
-                    imageVector = Icons.Default.CheckCircle,
-                    contentDescription = "Complete subtask",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(22.dp),
-                  )
-                } else {
-                  Icon(
-                    imageVector = Icons.Default.RadioButtonUnchecked,
-                    contentDescription = "Incomplete subtask",
-                    tint = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.size(22.dp),
-                  )
                 }
-              }
 
-              Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(6.dp))
 
-              // Subtask Title or Inline Editor (blends seamlessly into background, cursor at end)
-              if (editingSubtaskId == subtask.id) {
-                var subtaskTextFieldValue by remember(subtask.id, subtask.title) {
-                  mutableStateOf(
-                    TextFieldValue(
-                      text = subtask.title,
-                      selection = TextRange(subtask.title.length),
+                // Subtask Title or Inline Editor (blends seamlessly into background, cursor at end)
+                if (editingSubtaskId == subtask.id) {
+                  var subtaskTextFieldValue by remember(subtask.id, subtask.title) {
+                    mutableStateOf(
+                      TextFieldValue(
+                        text = subtask.title,
+                        selection = TextRange(subtask.title.length),
+                      )
                     )
-                  )
-                }
-                val subtaskFocusRequester = remember { FocusRequester() }
-                var subtaskHasBeenFocused by remember { mutableStateOf(false) }
+                  }
+                  val subtaskFocusRequester = remember { FocusRequester() }
+                  var subtaskHasBeenFocused by remember { mutableStateOf(false) }
 
-                LaunchedEffect(Unit) {
-                  subtaskFocusRequester.requestFocus()
-                }
+                  LaunchedEffect(Unit) {
+                    subtaskFocusRequester.requestFocus()
+                  }
 
-                BasicTextField(
-                  value = subtaskTextFieldValue,
-                  onValueChange = { subtaskTextFieldValue = it },
-                  textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    color = MaterialTheme.colorScheme.onSurface,
-                  ),
-                  cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                  singleLine = true,
-                  keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                  keyboardActions = KeyboardActions(
-                    onDone = {
-                      val trimmed = subtaskTextFieldValue.text.trim()
-                      if (trimmed.isNotEmpty() && trimmed != subtask.title) {
-                        onUpdateSubTask(subtask.id, trimmed)
-                      }
-                      editingSubtaskId = null
-                    },
-                  ),
-                  modifier = Modifier
-                    .weight(1f)
-                    .focusRequester(subtaskFocusRequester)
-                    .onFocusChanged { focusState ->
-                      if (focusState.isFocused) {
-                        subtaskHasBeenFocused = true
-                      } else if (subtaskHasBeenFocused) {
+                  BasicTextField(
+                    value = subtaskTextFieldValue,
+                    onValueChange = { subtaskTextFieldValue = it },
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                      color = MaterialTheme.colorScheme.onSurface,
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                      onDone = {
                         val trimmed = subtaskTextFieldValue.text.trim()
                         if (trimmed.isNotEmpty() && trimmed != subtask.title) {
                           onUpdateSubTask(subtask.id, trimmed)
                         }
                         editingSubtaskId = null
+                      },
+                    ),
+                    modifier = Modifier
+                      .weight(1f)
+                      .focusRequester(subtaskFocusRequester)
+                      .onFocusChanged { focusState ->
+                        if (focusState.isFocused) {
+                          subtaskHasBeenFocused = true
+                        } else if (subtaskHasBeenFocused) {
+                          val trimmed = subtaskTextFieldValue.text.trim()
+                          if (trimmed.isNotEmpty() && trimmed != subtask.title) {
+                            onUpdateSubTask(subtask.id, trimmed)
+                          }
+                          editingSubtaskId = null
+                        }
                       }
-                    }
-                    .padding(vertical = 2.dp, horizontal = 2.dp)
-                    .testTag("todo_subtask_edit_${subtask.id}"),
-                )
-              } else {
-                Text(
-                  text = subtask.title,
-                  style = MaterialTheme.typography.bodyMedium,
-                  color = if (subtask.isCompleted) {
-                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-                  } else {
-                    MaterialTheme.colorScheme.onSurface
-                  },
-                  textDecoration = if (subtask.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
-                  modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(4.dp))
-                    .clickable { editingSubtaskId = subtask.id }
-                    .padding(vertical = 2.dp, horizontal = 2.dp)
-                    .testTag("todo_subtask_title_${subtask.id}"),
-                )
-              }
+                      .padding(vertical = 2.dp, horizontal = 2.dp)
+                      .testTag("todo_subtask_edit_${subtask.id}"),
+                  )
+                } else {
+                  Text(
+                    text = subtask.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (subtask.isCompleted) {
+                      MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                    } else {
+                      MaterialTheme.colorScheme.onSurface
+                    },
+                    textDecoration = if (subtask.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
+                    modifier = Modifier
+                      .weight(1f)
+                      .clip(RoundedCornerShape(4.dp))
+                      .clickable { editingSubtaskId = subtask.id }
+                      .padding(vertical = 2.dp, horizontal = 2.dp)
+                      .testTag("todo_subtask_title_${subtask.id}"),
+                  )
+                }
 
-              // Delete subtask button (x icon, aligned with the + icon on main task row)
-              IconButton(
-                onClick = { onDeleteSubTask(subtask.id) },
-                modifier = Modifier
-                  .size(32.dp)
-                  .testTag("todo_subtask_delete_${subtask.id}"),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Clear,
-                  contentDescription = "Delete subtask",
-                  tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                  modifier = Modifier.size(15.dp),
-                )
+                // Delete subtask button (x icon, aligned with the + icon on main task row)
+                IconButton(
+                  onClick = { onDeleteSubTask(subtask.id) },
+                  modifier = Modifier
+                    .size(32.dp)
+                    .testTag("todo_subtask_delete_${subtask.id}"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Clear,
+                    contentDescription = "Delete subtask",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.size(15.dp),
+                  )
+                }
               }
             }
           }
@@ -1559,7 +1747,7 @@ private fun EmptyTasksState() {
 
 
 /**
- * Read-only modal sheet displaying tasks completed today.
+ * Modal sheet displaying tasks completed today, supporting swipe-to-remove.
  * Subtasks are collapsed by default, but can be uncollapsed by tapping the indicator.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1567,11 +1755,20 @@ private fun EmptyTasksState() {
 private fun CompletedTasksSheet(
   completedTasks: List<TodoItem>,
   completedCount: Int,
+  historyVersion: Int = 0,
+  canUndo: Boolean = false,
+  canRedo: Boolean = false,
+  onUndo: () -> Unit = {},
+  onRedo: () -> Unit = {},
+  onUncompleteTask: (TodoItem) -> Unit = {},
+  onRemoveCompletedTask: (TodoItem) -> Unit = {},
   onDismiss: () -> Unit,
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   // Subtasks are collapsed by default, but can be uncollapsed per task
   val uncollapsedTaskIds = remember { mutableStateMapOf<String, Boolean>() }
+  val currentOnUncompleteTask by rememberUpdatedState(onUncompleteTask)
+  val currentOnRemoveCompletedTask by rememberUpdatedState(onRemoveCompletedTask)
 
   ModalBottomSheet(
     onDismissRequest = onDismiss,
@@ -1603,6 +1800,42 @@ private fun CompletedTasksSheet(
             text = if (completedCount == 1) "1 task completed" else "$completedCount tasks completed",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        IconButton(
+          onClick = onUndo,
+          enabled = canUndo,
+          modifier = Modifier
+            .size(32.dp)
+            .testTag("todo_completed_tasks_undo"),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Undo,
+            contentDescription = "Undo",
+            tint = if (canUndo) {
+              MaterialTheme.colorScheme.onSurface
+            } else {
+              MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            },
+            modifier = Modifier.size(20.dp),
+          )
+        }
+        IconButton(
+          onClick = onRedo,
+          enabled = canRedo,
+          modifier = Modifier
+            .size(32.dp)
+            .testTag("todo_completed_tasks_redo"),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Redo,
+            contentDescription = "Redo",
+            tint = if (canRedo) {
+              MaterialTheme.colorScheme.onSurface
+            } else {
+              MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            },
+            modifier = Modifier.size(20.dp),
           )
         }
         IconButton(
@@ -1653,130 +1886,239 @@ private fun CompletedTasksSheet(
         ) {
           items(completedTasks, key = { it.id }) { task ->
             val isUncollapsed = uncollapsedTaskIds[task.id] == true
-            Card(
-              modifier = Modifier
-                .fillMaxWidth()
-                .testTag("todo_completed_item_${task.id}"),
-              shape = RoundedCornerShape(12.dp),
-              colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-              ),
-              elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-            ) {
-              Column(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .padding(horizontal = 12.dp, vertical = 10.dp),
-              ) {
-                // Task row (read-only)
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  verticalAlignment = Alignment.CenterVertically,
+            val dismissState = remember(task.id, historyVersion) {
+              SwipeToDismissBoxState(
+                initialValue = SwipeToDismissBoxValue.Settled,
+                positionalThreshold = { it * 0.35f },
+              )
+            }
+            var hasDismissTriggered by remember(dismissState) { mutableStateOf(false) }
+
+            LaunchedEffect(dismissState, dismissState.currentValue) {
+              if (!hasDismissTriggered) {
+                when (dismissState.currentValue) {
+                  SwipeToDismissBoxValue.StartToEnd,
+                  SwipeToDismissBoxValue.EndToStart -> {
+                    hasDismissTriggered = true
+                    currentOnRemoveCompletedTask(task)
+                    dismissState.snapTo(SwipeToDismissBoxValue.Settled)
+                  }
+                  SwipeToDismissBoxValue.Settled -> {}
+                }
+              }
+            }
+
+            SwipeToDismissBox(
+              state = dismissState,
+              enableDismissFromStartToEnd = true,
+              enableDismissFromEndToStart = true,
+              backgroundContent = {
+                val direction = dismissState.dismissDirection
+                val isSwiping = direction == SwipeToDismissBoxValue.StartToEnd ||
+                  direction == SwipeToDismissBoxValue.EndToStart
+
+                val backgroundColor by animateColorAsState(
+                  targetValue = if (isSwiping) MaterialTheme.colorScheme.error else Color.Transparent,
+                  label = "completed_swipe_bg_${task.id}",
+                )
+
+                val iconScale by animateFloatAsState(
+                  targetValue = if (dismissState.targetValue != SwipeToDismissBoxValue.Settled) 1.25f else 0.85f,
+                  animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+                  label = "completed_swipe_icon_scale_${task.id}",
+                )
+
+                Box(
+                  modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(backgroundColor)
+                    .padding(horizontal = 20.dp),
+                  contentAlignment = if (direction == SwipeToDismissBoxValue.StartToEnd) {
+                    Alignment.CenterStart
+                  } else {
+                    Alignment.CenterEnd
+                  },
                 ) {
-                  // Checked icon
-                  Icon(
-                    imageVector = Icons.Default.CheckCircle,
-                    contentDescription = "Completed",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(22.dp),
-                  )
-
-                  Spacer(modifier = Modifier.width(10.dp))
-
-                  // Task title with strikethrough (read-only)
-                  Text(
-                    text = task.title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    textDecoration = TextDecoration.LineThrough,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                    modifier = Modifier.weight(1f),
-                  )
-
-                  // Subtasks indicator (if task has subtasks)
-                  if (task.subtasks.isNotEmpty()) {
-                    val caretRotation by animateFloatAsState(
-                      targetValue = if (isUncollapsed) 180f else 0f,
-                      animationSpec = tween(durationMillis = 250),
-                      label = "completed_caret_${task.id}",
-                    )
-
-                    Box(
-                      modifier = Modifier
-                        .clip(CircleShape)
-                        .clickable {
-                          uncollapsedTaskIds[task.id] = !isUncollapsed
-                        }
-                        .background(
-                          MaterialTheme.colorScheme.primaryContainer,
-                          CircleShape,
-                        )
-                        .padding(horizontal = 7.dp, vertical = 3.dp)
-                        .testTag("todo_completed_subtask_indicator_${task.id}"),
-                      contentAlignment = Alignment.Center,
+                  if (direction == SwipeToDismissBoxValue.StartToEnd) {
+                    Row(
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(8.dp),
+                      modifier = Modifier.scale(iconScale),
                     ) {
-                      Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                      ) {
-                        Text(
-                          text = "${task.subtasks.count { it.isCompleted }}/${task.subtasks.size}",
-                          style = MaterialTheme.typography.labelSmall,
-                          fontWeight = FontWeight.Bold,
-                          color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        )
-                        Icon(
-                          imageVector = Icons.Default.KeyboardArrowDown,
-                          contentDescription = if (isUncollapsed) "Collapse subtasks" else "Expand subtasks",
-                          tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                          modifier = Modifier
-                            .size(15.dp)
-                            .rotate(caretRotation),
-                        )
-                      }
+                      Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Delete",
+                        tint = MaterialTheme.colorScheme.onError,
+                        modifier = Modifier.size(22.dp),
+                      )
+                      Text(
+                        text = "Delete",
+                        color = MaterialTheme.colorScheme.onError,
+                        fontWeight = FontWeight.Bold,
+                      )
+                    }
+                  } else if (direction == SwipeToDismissBoxValue.EndToStart) {
+                    Row(
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(8.dp),
+                      modifier = Modifier.scale(iconScale),
+                    ) {
+                      Text(
+                        text = "Delete",
+                        color = MaterialTheme.colorScheme.onError,
+                        fontWeight = FontWeight.Bold,
+                      )
+                      Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Delete",
+                        tint = MaterialTheme.colorScheme.onError,
+                        modifier = Modifier.size(22.dp),
+                      )
                     }
                   }
                 }
-
-                // Subtasks section (collapsed by default, but can be uncollapsed)
-                AnimatedVisibility(
-                  visible = isUncollapsed && task.subtasks.isNotEmpty(),
-                  enter = fadeIn(animationSpec = tween(250)) +
-                    slideInVertically(animationSpec = tween(250), initialOffsetY = { -it / 3 }) +
-                    expandVertically(animationSpec = tween(250)),
-                  exit = fadeOut(animationSpec = tween(200)) +
-                    slideOutVertically(animationSpec = tween(200), targetOffsetY = { -it / 3 }) +
-                    shrinkVertically(animationSpec = tween(200)),
+              },
+              content = {
+                Card(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("todo_completed_item_card_${task.id}"),
+                  shape = RoundedCornerShape(12.dp),
+                  colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                  ),
+                  elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                 ) {
                   Column(
                     modifier = Modifier
                       .fillMaxWidth()
-                      .padding(start = 32.dp, top = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                      .padding(horizontal = 12.dp, vertical = 10.dp),
                   ) {
-                    task.subtasks.forEach { subtask ->
-                      Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
+                    // Task row
+                    Row(
+                      modifier = Modifier.fillMaxWidth(),
+                      verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                      // Checked icon (tap to uncomplete task)
+                      Box(
+                        modifier = Modifier
+                          .size(32.dp)
+                          .clip(CircleShape)
+                          .clickable { currentOnUncompleteTask(task) }
+                          .testTag("todo_completed_item_checkbox_${task.id}"),
+                        contentAlignment = Alignment.Center,
                       ) {
                         Icon(
                           imageVector = Icons.Default.CheckCircle,
-                          contentDescription = null,
-                          tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
-                          modifier = Modifier.size(16.dp),
+                          contentDescription = "Uncomplete task",
+                          tint = MaterialTheme.colorScheme.primary,
+                          modifier = Modifier.size(22.dp),
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                          text = subtask.title,
-                          style = MaterialTheme.typography.bodySmall,
-                          textDecoration = TextDecoration.LineThrough,
-                          color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                      }
+
+                      Spacer(modifier = Modifier.width(6.dp))
+
+                      // Task title with strikethrough
+                      Text(
+                        text = task.title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textDecoration = TextDecoration.LineThrough,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        modifier = Modifier.weight(1f),
+                      )
+
+                      // Subtasks indicator (if task has subtasks)
+                      if (task.subtasks.isNotEmpty()) {
+                        val caretRotation by animateFloatAsState(
+                          targetValue = if (isUncollapsed) 180f else 0f,
+                          animationSpec = tween(durationMillis = 250),
+                          label = "completed_caret_${task.id}",
                         )
+
+                        Box(
+                          modifier = Modifier
+                            .clip(CircleShape)
+                            .clickable {
+                              uncollapsedTaskIds[task.id] = !isUncollapsed
+                            }
+                            .background(
+                              MaterialTheme.colorScheme.primaryContainer,
+                              CircleShape,
+                            )
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                            .testTag("todo_completed_subtask_indicator_${task.id}"),
+                          contentAlignment = Alignment.Center,
+                        ) {
+                          Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                          ) {
+                            Text(
+                              text = "${task.subtasks.count { it.isCompleted }}/${task.subtasks.size}",
+                              style = MaterialTheme.typography.labelSmall,
+                              fontWeight = FontWeight.Bold,
+                              color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                            Icon(
+                              imageVector = Icons.Default.KeyboardArrowDown,
+                              contentDescription = if (isUncollapsed) "Collapse subtasks" else "Expand subtasks",
+                              tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                              modifier = Modifier
+                                .size(15.dp)
+                                .rotate(caretRotation),
+                            )
+                          }
+                        }
+                      }
+                    }
+
+                    // Subtasks section (collapsed by default, but can be uncollapsed)
+                    AnimatedVisibility(
+                      visible = isUncollapsed && task.subtasks.isNotEmpty(),
+                      enter = fadeIn(animationSpec = tween(250)) +
+                        slideInVertically(animationSpec = tween(250), initialOffsetY = { -it / 3 }) +
+                        expandVertically(animationSpec = tween(250)),
+                      exit = fadeOut(animationSpec = tween(200)) +
+                        slideOutVertically(animationSpec = tween(200), targetOffsetY = { -it / 3 }) +
+                        shrinkVertically(animationSpec = tween(200)),
+                    ) {
+                      Column(
+                        modifier = Modifier
+                          .fillMaxWidth()
+                          .padding(start = 32.dp, top = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                      ) {
+                        task.subtasks.forEach { subtask ->
+                          Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                          ) {
+                            Icon(
+                              imageVector = Icons.Default.CheckCircle,
+                              contentDescription = null,
+                              tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                              modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                              text = subtask.title,
+                              style = MaterialTheme.typography.bodySmall,
+                              textDecoration = TextDecoration.LineThrough,
+                              color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                            )
+                          }
+                        }
                       }
                     }
                   }
                 }
-              }
-            }
+              },
+              modifier = Modifier
+                .fillMaxWidth()
+                .animateItem()
+                .testTag("todo_completed_item_${task.id}"),
+            )
           }
         }
       }
@@ -1977,12 +2319,14 @@ private fun SavedTasksSheet(
 
                 IconButton(
                   onClick = { onDeleteSavedTask(savedTask.id) },
-                  modifier = Modifier.size(28.dp),
+                  modifier = Modifier
+                    .size(28.dp)
+                    .testTag("todo_saved_item_delete_${savedTask.id}"),
                 ) {
                   Icon(
                     imageVector = Icons.Default.DeleteOutline,
                     contentDescription = "Delete template",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    tint = MaterialTheme.colorScheme.error,
                     modifier = Modifier.size(18.dp),
                   )
                 }

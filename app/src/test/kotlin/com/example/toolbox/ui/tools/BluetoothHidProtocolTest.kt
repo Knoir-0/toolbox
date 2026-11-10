@@ -40,6 +40,14 @@ class BluetoothHidProtocolTest {
     assertEquals(0x23.toByte(), consumer[0])
     assertEquals(0x02.toByte(), consumer[1])
 
+    val dpadCenter = HidProtocol.consumerReport(ConsumerKey.DPAD_CENTER.usage)
+    assertEquals(0x41.toByte(), dpadCenter[0])
+    assertEquals(0x00.toByte(), dpadCenter[1])
+    assertEquals(0x0042, ConsumerKey.DPAD_UP.usage)
+    assertEquals(0x0043, ConsumerKey.DPAD_DOWN.usage)
+    assertEquals(0x0044, ConsumerKey.DPAD_LEFT.usage)
+    assertEquals(0x0045, ConsumerKey.DPAD_RIGHT.usage)
+
     val mouse = HidProtocol.mouseReport(HidProtocol.MOUSE_BUTTON_LEFT, 300, -300, 1)
     assertEquals(1.toByte(), mouse[0])
     assertEquals(127.toByte(), mouse[1])

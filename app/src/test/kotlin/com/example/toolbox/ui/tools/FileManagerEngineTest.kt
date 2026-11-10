@@ -455,4 +455,75 @@ class FileManagerEngineTest {
     assertEquals("a.txt", groups[0].items[0].name)
     assertEquals("z.txt", groups[0].items[1].name)
   }
+
+  @Test
+  fun resolveOpenMimeType_resolvesSpecificMimeAndWildcardForUnknownOnChooseApp() {
+    val pdfFile = File("report.pdf")
+    val apkFile = File("installer.apk")
+    val unknownFile = File("custom.unknownext")
+
+    assertEquals("application/pdf", FileManagerEngine.resolveOpenMimeType(pdfFile, chooseApp = false))
+    assertEquals("application/pdf", FileManagerEngine.resolveOpenMimeType(pdfFile, chooseApp = true))
+    assertEquals(
+      "application/vnd.android.package-archive",
+      FileManagerEngine.resolveOpenMimeType(apkFile, chooseApp = false),
+    )
+    assertEquals(
+      "application/octet-stream",
+      FileManagerEngine.resolveOpenMimeType(unknownFile, chooseApp = false),
+    )
+    assertEquals(
+      "*/*",
+      FileManagerEngine.resolveOpenMimeType(unknownFile, chooseApp = true),
+    )
+  }
+
+  @Test
+  fun folderSortGroupConfig_savesAndResolvesPerFolderAndDefaultConfigs() {
+    FileManagerEngine.clearAllSortGroupConfigs()
+
+    val folderA = File("/storage/emulated/0/Downloads")
+    val folderB = File("/storage/emulated/0/Pictures")
+
+    // Initially uses default (TYPE, NAME_ASC) and is not saved for specific folder
+    val (initialA, isSavedA) = FileManagerEngine.resolveSortGroupConfig(null, folderA)
+    assertFalse(isSavedA)
+    assertEquals(FileGroupOption.TYPE, initialA.groupOption)
+    assertEquals(FileSortOrder.NAME_ASC, initialA.sortOrder)
+
+    // Save specific config for folderA
+    val customConfigA = FolderSortGroupConfig(
+      groupOption = FileGroupOption.DATE,
+      sortOrder = FileSortOrder.DATE_DESC,
+    )
+    FileManagerEngine.setFolderSortGroupConfig(null, folderA, customConfigA)
+
+    assertTrue(FileManagerEngine.hasFolderSortGroupConfig(null, folderA))
+    assertFalse(FileManagerEngine.hasFolderSortGroupConfig(null, folderB))
+
+    val (resolvedA, resolvedSavedA) = FileManagerEngine.resolveSortGroupConfig(null, folderA)
+    assertTrue(resolvedSavedA)
+    assertEquals(customConfigA, resolvedA)
+
+    // folderB still resolves to the global default
+    val (resolvedB, resolvedSavedB) = FileManagerEngine.resolveSortGroupConfig(null, folderB)
+    assertFalse(resolvedSavedB)
+    assertEquals(FolderSortGroupConfig(FileGroupOption.TYPE, FileSortOrder.NAME_ASC), resolvedB)
+
+    // Changing global default affects folderB but not folderA
+    val newDefault = FolderSortGroupConfig(
+      groupOption = FileGroupOption.SIZE,
+      sortOrder = FileSortOrder.SIZE_DESC,
+    )
+    FileManagerEngine.setDefaultSortGroupConfig(null, newDefault)
+    assertEquals(customConfigA, FileManagerEngine.resolveSortGroupConfig(null, folderA).first)
+    assertEquals(newDefault, FileManagerEngine.resolveSortGroupConfig(null, folderB).first)
+
+    // Removing folderA override reverts folderA back to global default
+    FileManagerEngine.removeFolderSortGroupConfig(null, folderA)
+    assertFalse(FileManagerEngine.hasFolderSortGroupConfig(null, folderA))
+    assertEquals(newDefault, FileManagerEngine.resolveSortGroupConfig(null, folderA).first)
+
+    FileManagerEngine.clearAllSortGroupConfigs()
+  }
 }

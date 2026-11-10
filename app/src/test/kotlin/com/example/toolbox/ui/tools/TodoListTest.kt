@@ -267,4 +267,234 @@ class TodoListTest {
     assertEquals(1, history.currentCompletedToday)
     assertEquals(0, history.currentTasks.size)
   }
+
+  @Test
+  fun engine_calculateDragReorder_handlesVariableHeightsAndHysteresis() {
+    val t1 = TodoItem(id = "t1", title = "Tall task with subtasks")
+    val t2 = TodoItem(id = "t2", title = "Compact task 1")
+    val t3 = TodoItem(id = "t3", title = "Compact task 2")
+    val initial = listOf(t1, t2, t3)
+
+    // t1 is 450px tall, while t2 and t3 are 140px tall; spacing is 10px
+    val heights = mapOf(
+      "t1" to 450f,
+      "t2" to 140f,
+      "t3" to 140f,
+    )
+
+    // Dragging compact t2 down toward compact t3 should use t3's step (140 + 10 = 150px),
+    // NOT t1's height (450px). Threshold = 150 * 0.55 = 82.5px.
+    val beforeThreshold = TodoListEngine.calculateDragReorder(
+      items = initial,
+      draggedId = "t2",
+      idSelector = { it.id },
+      currentOffsetY = 80f,
+      itemHeightsPx = heights,
+      defaultItemHeightPx = 140f,
+      itemSpacingPx = 10f,
+    )
+    assertFalse(beforeThreshold.moved)
+    assertEquals(listOf("t1", "t2", "t3"), beforeThreshold.items.map { it.id })
+    assertEquals(80f, beforeThreshold.remainingOffsetY, 0.01f)
+
+    // Dragging past 82.5px swaps t2 and t3 and subtracts 150px from offset
+    val swappedDown = TodoListEngine.calculateDragReorder(
+      items = initial,
+      draggedId = "t2",
+      idSelector = { it.id },
+      currentOffsetY = 90f,
+      itemHeightsPx = heights,
+      defaultItemHeightPx = 140f,
+      itemSpacingPx = 10f,
+    )
+    assertTrue(swappedDown.moved)
+    assertEquals(1, swappedDown.fromIndex)
+    assertEquals(2, swappedDown.toIndex)
+    assertEquals(listOf("t1", "t3", "t2"), swappedDown.items.map { it.id })
+    assertEquals(-60f, swappedDown.remainingOffsetY, 0.01f)
+
+    // Immediately holding steady or nudging slightly (-60f) does NOT oscillate back
+    val steadyAfterSwap = TodoListEngine.calculateDragReorder(
+      items = swappedDown.items,
+      draggedId = "t2",
+      idSelector = { it.id },
+      currentOffsetY = swappedDown.remainingOffsetY,
+      itemHeightsPx = heights,
+      defaultItemHeightPx = 140f,
+      itemSpacingPx = 10f,
+    )
+    assertFalse(steadyAfterSwap.moved)
+    assertEquals(listOf("t1", "t3", "t2"), steadyAfterSwap.items.map { it.id })
+  }
+
+  @Test
+  fun engine_calculateDragReorder_supportsMultiItemFastDragAndBoundaryClamping() {
+    val s1 = TodoSubTask(id = "s1", title = "Step 1")
+    val s2 = TodoSubTask(id = "s2", title = "Step 2")
+    val s3 = TodoSubTask(id = "s3", title = "Step 3")
+    val subtasks = listOf(s1, s2, s3)
+    val heights = mapOf("s1" to 40f, "s2" to 40f, "s3" to 40f)
+
+    // Each step is 40 + 6 = 46px. Dragging s1 down by +120px crosses both s2 and s3 in one step.
+    val fastMove = TodoListEngine.calculateDragReorder(
+      items = subtasks,
+      draggedId = "s1",
+      idSelector = { it.id },
+      currentOffsetY = 120f,
+      itemHeightsPx = heights,
+      defaultItemHeightPx = 40f,
+      itemSpacingPx = 6f,
+      maxOverscrollPx = 4f,
+    )
+    assertTrue(fastMove.moved)
+    assertEquals(0, fastMove.fromIndex)
+    assertEquals(2, fastMove.toIndex)
+    assertEquals(listOf("s2", "s3", "s1"), fastMove.items.map { it.id })
+    // 120 - 46 - 46 = 28, then clamped to maxOverscrollPx (4f) because s1 is now at lastIndex
+    assertEquals(4f, fastMove.remainingOffsetY, 0.01f)
+
+    // Dragging above index 0 clamps to -maxOverscrollPx
+    val topClamp = TodoListEngine.calculateDragReorder(
+      items = subtasks,
+      draggedId = "s1",
+      idSelector = { it.id },
+      currentOffsetY = -100f,
+      itemHeightsPx = heights,
+      defaultItemHeightPx = 40f,
+      itemSpacingPx = 6f,
+      maxOverscrollPx = 4f,
+    )
+    assertFalse(topClamp.moved)
+    assertEquals(-4f, topClamp.remainingOffsetY, 0.01f)
+  }
+
+  @Test
+  fun engine_removeCompletedTask_removesMatchingTask() {
+    val c1 = TodoItem(id = "c1", title = "Completed 1")
+    val c2 = TodoItem(id = "c2", title = "Completed 2")
+    val completed = listOf(c1, c2)
+
+    val afterRemove = TodoListEngine.removeCompletedTask(completed, "c1")
+    assertEquals(1, afterRemove.size)
+    assertEquals("c2", afterRemove[0].id)
+  }
+
+  @Test
+  fun historyManager_tracksCompleteDeleteAndUncompleteTasksAcrossUndoRedo() {
+    val t1 = TodoItem(id = "t1", title = "Task 1")
+    val t2 = TodoItem(id = "t2", title = "Task 2")
+    val history = TodoHistoryManager(
+      initialTasks = listOf(t1, t2),
+      initialCompletedToday = 0,
+      initialCompletedTasks = emptyList(),
+    )
+
+    assertFalse(history.canUndo)
+    assertFalse(history.canRedo)
+
+    // 1. Complete Task 1
+    history.completeTask("t1")
+    assertTrue(history.canUndo)
+    assertFalse(history.canRedo)
+    assertEquals(listOf("t2"), history.currentTasks.map { it.id })
+    assertEquals(1, history.currentCompletedToday)
+    assertEquals(listOf("t1"), history.currentCompletedTasks.map { it.id })
+
+    // 2. Delete active Task 2
+    history.deleteTask("t2")
+    assertTrue(history.canUndo)
+    assertFalse(history.canRedo)
+    assertTrue(history.currentTasks.isEmpty())
+    assertEquals(1, history.currentCompletedToday)
+    assertEquals(listOf("t1"), history.currentCompletedTasks.map { it.id })
+
+    // 3. Undo delete Task 2 -> Task 2 returns, Task 1 stays completed
+    val afterUndoDelete = history.undo()
+    assertNotNull(afterUndoDelete)
+    assertEquals(listOf("t2"), history.currentTasks.map { it.id })
+    assertEquals(1, history.currentCompletedToday)
+    assertEquals(listOf("t1"), history.currentCompletedTasks.map { it.id })
+    assertTrue(history.canUndo)
+    assertTrue(history.canRedo)
+
+    // 4. Redo delete Task 2 -> Task 2 deleted again
+    val afterRedoDelete = history.redo()
+    assertNotNull(afterRedoDelete)
+    assertTrue(history.currentTasks.isEmpty())
+    assertEquals(1, history.currentCompletedToday)
+    assertEquals(listOf("t1"), history.currentCompletedTasks.map { it.id })
+    assertTrue(history.canUndo)
+    assertFalse(history.canRedo)
+
+    // 5. Uncomplete Task 1 from completed tasks -> moves back to active tasks & decrements completedToday
+    history.uncompleteTask("t1")
+    assertEquals(listOf("t1"), history.currentTasks.map { it.id })
+    assertEquals(0, history.currentCompletedToday)
+    assertTrue(history.currentCompletedTasks.isEmpty())
+    assertTrue(history.canUndo)
+    assertFalse(history.canRedo)
+
+    // 6. Undo uncomplete Task 1 -> moves back to completedTasks & restores completedToday = 1
+    history.undo()
+    assertTrue(history.currentTasks.isEmpty())
+    assertEquals(1, history.currentCompletedToday)
+    assertEquals(listOf("t1"), history.currentCompletedTasks.map { it.id })
+    assertTrue(history.canRedo)
+
+    // 7. Redo uncomplete Task 1 -> back in active tasks
+    history.redo()
+    assertEquals(listOf("t1"), history.currentTasks.map { it.id })
+    assertEquals(0, history.currentCompletedToday)
+    assertTrue(history.currentCompletedTasks.isEmpty())
+    assertFalse(history.canRedo)
+
+    // 8. Complete Task 1 again, then delete it from completedTasks, then undo & redo
+    history.completeTask("t1")
+    assertEquals(listOf("t1"), history.currentCompletedTasks.map { it.id })
+    history.deleteCompletedTask("t1")
+    assertTrue(history.currentCompletedTasks.isEmpty())
+    assertEquals(0, history.currentCompletedToday)
+
+    history.undo()
+    assertEquals(listOf("t1"), history.currentCompletedTasks.map { it.id })
+    assertEquals(1, history.currentCompletedToday)
+    assertTrue(history.canRedo)
+
+    history.redo()
+    assertTrue(history.currentCompletedTasks.isEmpty())
+    assertEquals(0, history.currentCompletedToday)
+    assertFalse(history.canRedo)
+  }
+
+  @Test
+  fun engine_saveTaskAsTemplate_savesTaskWithResetSubtasksAndDeduplicatesByTitle() {
+    val taskWithSubtasks = TodoItem(
+      id = "task-1",
+      title = "  Morning Routine  ",
+      subtasks = listOf(
+        TodoSubTask(id = "sub-1", title = "Make coffee", isCompleted = true),
+        TodoSubTask(id = "sub-2", title = "Review schedule", isCompleted = false),
+      ),
+      isSubtasksCollapsed = true,
+    )
+
+    val saved1 = TodoListEngine.saveTaskAsTemplate(emptyList(), taskWithSubtasks)
+    assertEquals(1, saved1.size)
+    assertEquals("Morning Routine", saved1[0].title)
+    assertFalse(saved1[0].isSubtasksCollapsed)
+    assertEquals(2, saved1[0].subtasks.size)
+    assertFalse(saved1[0].subtasks[0].isCompleted)
+    assertFalse(saved1[0].subtasks[1].isCompleted)
+
+    // Saving another task with the same trimmed title replaces the existing template at the top
+    val updatedTask = taskWithSubtasks.copy(
+      subtasks = listOf(TodoSubTask(title = "Make espresso", isCompleted = true)),
+    )
+    val saved2 = TodoListEngine.saveTaskAsTemplate(saved1, updatedTask)
+    assertEquals(1, saved2.size)
+    assertEquals("Morning Routine", saved2[0].title)
+    assertEquals(1, saved2[0].subtasks.size)
+    assertEquals("Make espresso", saved2[0].subtasks[0].title)
+    assertFalse(saved2[0].subtasks[0].isCompleted)
+  }
 }

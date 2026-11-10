@@ -54,6 +54,14 @@ enum class FileGroupOption(val displayName: String) {
 }
 
 /**
+ * Holds a combined group-by and sort-by configuration for a folder or default preference.
+ */
+data class FolderSortGroupConfig(
+  val groupOption: FileGroupOption = FileGroupOption.TYPE,
+  val sortOrder: FileSortOrder = FileSortOrder.NAME_ASC,
+)
+
+/**
  * Represents a group of files under a common header/section.
  */
 data class FileGroup(
@@ -176,14 +184,26 @@ object FileManagerEngine {
     "ogg" to "audio/ogg",
     "m4a" to "audio/mp4",
     "flac" to "audio/flac",
+    "aac" to "audio/aac",
     "mp4" to "video/mp4",
     "mkv" to "video/x-matroska",
     "webm" to "video/webm",
+    "avi" to "video/x-msvideo",
+    "mov" to "video/quicktime",
     "zip" to "application/zip",
     "tar" to "application/x-tar",
     "gz" to "application/gzip",
     "7z" to "application/x-7z-compressed",
     "rar" to "application/vnd.rar",
+    "apk" to "application/vnd.android.package-archive",
+    "doc" to "application/msword",
+    "docx" to "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xls" to "application/vnd.ms-excel",
+    "xlsx" to "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "ppt" to "application/vnd.ms-powerpoint",
+    "pptx" to "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "epub" to "application/epub+zip",
+    "rtf" to "application/rtf",
   )
 
   /**
@@ -1022,6 +1042,236 @@ object FileManagerEngine {
     } catch (_: Throwable) {
       null
     }
+  }
+
+  /**
+   * Resolves the MIME type to use when launching an `ACTION_VIEW` intent for [file].
+   * When [chooseApp] is true and the resolved MIME type is generic (`application/octet-stream`),
+   * returns a wildcard MIME type so that the system app chooser presents all available handler apps.
+   */
+  fun resolveOpenMimeType(file: File, chooseApp: Boolean = false): String {
+    val mime = getMimeType(file)
+    return if (chooseApp && mime == "application/octet-stream") "*/*" else mime
+  }
+
+  /**
+   * Opens [file] using an Android `ACTION_VIEW` intent backed by `FileProvider`.
+   * When [chooseApp] is `false`, opens the file directly with the default app (or system resolver).
+   * When [chooseApp] is `true`, wraps the intent in `Intent.createChooser` so the user can choose
+   * a specific app to open the file with.
+   */
+  fun openFile(
+    context: android.content.Context,
+    file: File,
+    chooseApp: Boolean = false,
+  ): Boolean {
+    if (file.isDirectory || !file.exists()) return false
+    return try {
+      val contentUri = androidx.core.content.FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file,
+      )
+      val mime = resolveOpenMimeType(file, chooseApp)
+      val baseFlags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+        if (context !is android.app.Activity) android.content.Intent.FLAG_ACTIVITY_NEW_TASK else 0
+
+      val viewIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+        setDataAndType(contentUri, mime)
+        addFlags(baseFlags)
+      }
+
+      if (chooseApp) {
+        val chooserIntent = android.content.Intent.createChooser(
+          viewIntent,
+          "Open ${file.name} with",
+        ).apply {
+          if (context !is android.app.Activity) {
+            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+          }
+        }
+        context.startActivity(chooserIntent)
+        true
+      } else {
+        try {
+          context.startActivity(viewIntent)
+          true
+        } catch (_: android.content.ActivityNotFoundException) {
+          val fallbackIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+            setDataAndType(contentUri, "*/*")
+            addFlags(baseFlags)
+          }
+          val chooserIntent = android.content.Intent.createChooser(
+            fallbackIntent,
+            "Open ${file.name} with",
+          ).apply {
+            if (context !is android.app.Activity) {
+              addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+          }
+          context.startActivity(chooserIntent)
+          true
+        }
+      }
+    } catch (e: Exception) {
+      android.widget.Toast.makeText(
+        context,
+        "No app found to open ${file.name}",
+        android.widget.Toast.LENGTH_SHORT,
+      ).show()
+      false
+    }
+  }
+
+  private const val FILES_PREFS_NAME = "files_tool_preferences"
+  private const val PREF_KEY_DEFAULT_SORT_GROUP = "default_sort_group"
+  private const val PREF_PREFIX_FOLDER_SORT_GROUP = "folder_sort_group_"
+
+  private var inMemoryDefaultSortGroupConfig = FolderSortGroupConfig()
+  private val inMemoryFolderSortGroupMap = mutableMapOf<String, FolderSortGroupConfig>()
+
+  /**
+   * Serializes a [FolderSortGroupConfig] into `"GROUP:SORT"` format.
+   */
+  fun serializeSortGroupConfig(config: FolderSortGroupConfig): String {
+    return "${config.groupOption.name}:${config.sortOrder.name}"
+  }
+
+  /**
+   * Parses a `"GROUP:SORT"` string into a [FolderSortGroupConfig], or returns null if invalid.
+   */
+  fun parseSortGroupConfig(raw: String?): FolderSortGroupConfig? {
+    if (raw.isNullOrBlank()) return null
+    val parts = raw.split(":")
+    if (parts.size != 2) return null
+    return try {
+      val group = FileGroupOption.valueOf(parts[0].trim())
+      val sort = FileSortOrder.valueOf(parts[1].trim())
+      FolderSortGroupConfig(groupOption = group, sortOrder = sort)
+    } catch (_: IllegalArgumentException) {
+      null
+    }
+  }
+
+  /**
+   * Returns the global/default [FolderSortGroupConfig] used for folders without a custom override.
+   */
+  fun getDefaultSortGroupConfig(context: android.content.Context? = null): FolderSortGroupConfig {
+    if (context == null) return inMemoryDefaultSortGroupConfig
+    return try {
+      val prefs = context.getSharedPreferences(FILES_PREFS_NAME, android.content.Context.MODE_PRIVATE)
+      parseSortGroupConfig(prefs.getString(PREF_KEY_DEFAULT_SORT_GROUP, null))
+        ?: inMemoryDefaultSortGroupConfig
+    } catch (_: Throwable) {
+      inMemoryDefaultSortGroupConfig
+    }
+  }
+
+  /**
+   * Persists the global/default [FolderSortGroupConfig] used for folders without a custom override.
+   */
+  fun setDefaultSortGroupConfig(
+    context: android.content.Context? = null,
+    config: FolderSortGroupConfig,
+  ) {
+    inMemoryDefaultSortGroupConfig = config
+    if (context == null) return
+    try {
+      val prefs = context.getSharedPreferences(FILES_PREFS_NAME, android.content.Context.MODE_PRIVATE)
+      prefs.edit().putString(PREF_KEY_DEFAULT_SORT_GROUP, serializeSortGroupConfig(config)).apply()
+    } catch (_: Throwable) {}
+  }
+
+  /**
+   * Returns the saved [FolderSortGroupConfig] for [directory], or null if none is saved for that folder.
+   */
+  fun getFolderSortGroupConfig(
+    context: android.content.Context? = null,
+    directory: File,
+  ): FolderSortGroupConfig? {
+    val pathKey = directory.absolutePath
+    if (context == null) return inMemoryFolderSortGroupMap[pathKey]
+    return try {
+      val prefs = context.getSharedPreferences(FILES_PREFS_NAME, android.content.Context.MODE_PRIVATE)
+      parseSortGroupConfig(prefs.getString(PREF_PREFIX_FOLDER_SORT_GROUP + pathKey, null))
+        ?: inMemoryFolderSortGroupMap[pathKey]
+    } catch (_: Throwable) {
+      inMemoryFolderSortGroupMap[pathKey]
+    }
+  }
+
+  /**
+   * Returns whether [directory] has a saved folder-specific sort/group configuration.
+   */
+  fun hasFolderSortGroupConfig(
+    context: android.content.Context? = null,
+    directory: File,
+  ): Boolean {
+    return getFolderSortGroupConfig(context, directory) != null
+  }
+
+  /**
+   * Saves a folder-specific [FolderSortGroupConfig] for [directory].
+   */
+  fun setFolderSortGroupConfig(
+    context: android.content.Context? = null,
+    directory: File,
+    config: FolderSortGroupConfig,
+  ) {
+    val pathKey = directory.absolutePath
+    inMemoryFolderSortGroupMap[pathKey] = config
+    if (context == null) return
+    try {
+      val prefs = context.getSharedPreferences(FILES_PREFS_NAME, android.content.Context.MODE_PRIVATE)
+      prefs.edit()
+        .putString(PREF_PREFIX_FOLDER_SORT_GROUP + pathKey, serializeSortGroupConfig(config))
+        .apply()
+    } catch (_: Throwable) {}
+  }
+
+  /**
+   * Removes any saved folder-specific [FolderSortGroupConfig] for [directory].
+   */
+  fun removeFolderSortGroupConfig(
+    context: android.content.Context? = null,
+    directory: File,
+  ) {
+    val pathKey = directory.absolutePath
+    inMemoryFolderSortGroupMap.remove(pathKey)
+    if (context == null) return
+    try {
+      val prefs = context.getSharedPreferences(FILES_PREFS_NAME, android.content.Context.MODE_PRIVATE)
+      prefs.edit().remove(PREF_PREFIX_FOLDER_SORT_GROUP + pathKey).apply()
+    } catch (_: Throwable) {}
+  }
+
+  /**
+   * Resolves the active [FolderSortGroupConfig] for [directory] along with a boolean flag
+   * indicating whether the configuration is specifically saved for [directory].
+   */
+  fun resolveSortGroupConfig(
+    context: android.content.Context? = null,
+    directory: File,
+  ): Pair<FolderSortGroupConfig, Boolean> {
+    val folderSpecific = getFolderSortGroupConfig(context, directory)
+    return if (folderSpecific != null) {
+      folderSpecific to true
+    } else {
+      getDefaultSortGroupConfig(context) to false
+    }
+  }
+
+  /**
+   * Clears all in-memory and persisted folder sort/group configurations and resets the default.
+   */
+  fun clearAllSortGroupConfigs(context: android.content.Context? = null) {
+    inMemoryDefaultSortGroupConfig = FolderSortGroupConfig()
+    inMemoryFolderSortGroupMap.clear()
+    if (context == null) return
+    try {
+      val prefs = context.getSharedPreferences(FILES_PREFS_NAME, android.content.Context.MODE_PRIVATE)
+      prefs.edit().clear().apply()
+    } catch (_: Throwable) {}
   }
 
   /**

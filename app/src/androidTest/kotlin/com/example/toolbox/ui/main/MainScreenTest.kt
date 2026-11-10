@@ -309,13 +309,18 @@ class MainScreenTest {
     // Row 2 and Row 3 are now displayed on Page 1
     composeTestRule.onNodeWithTag("tools_grid_row_2").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tools_grid_row_3").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tool_item_AUDIO_RECORDER").assertIsDisplayed()
+
+    // Navigate to Page 2 via indicator dot where Settings is located
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
+    composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").assertIsDisplayed()
 
-    // Select Settings on Page 1 (automatically collapses back to one row)
+    // Select Settings on Page 2 (automatically collapses back to one row)
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
     composeTestRule.waitForIdle()
 
-    // Since Settings (Row 3) was selected, collapsed panel shows Row 3
+    // Since Settings (Row 4) was selected, collapsed panel shows Row 4
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").assertIsDisplayed()
   }
 
@@ -403,19 +408,20 @@ class MainScreenTest {
 
     // With 4 tools per row:
     // Page 0: Math & Measurement (3 tools)
-    // Page 1: Audio & Music (2 tools) + Media & Creative (2 tools) = 4 tools on 1 row!
-    // Page 2: Productivity (2 tools) + Entertainment & Devices (2 tools) = 4 tools on 1 row!
-    // Page 3: System (1 tool)
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
+    // Page 1: Audio & Music (3 tools)
+    // Page 2: Media & Creative (3 tools)
+    // Page 3: Productivity (2 tools) + Entertainment & Devices (2 tools) = 4 tools on 1 row!
+    // Page 4: System (1 tool)
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_3").performClick()
     composeTestRule.waitForIdle()
 
-    // Both Audio & Music and Media & Creative fit on Page 1 as one row
-    composeTestRule.onNodeWithText("Audio & Music").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Media & Creative").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Guitar Tuner").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Metronome").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Color Picker").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Image Editor").assertIsDisplayed()
+    // Both Productivity and Entertainment & Devices fit on Page 3 as one row
+    composeTestRule.onNodeWithText("Productivity").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Entertainment & Devices").assertIsDisplayed()
+    composeTestRule.onNodeWithText("To-Do").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Files").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Dice Roller").assertIsDisplayed()
+    composeTestRule.onNodeWithText("TV Remote").assertIsDisplayed()
 
     // Pull up the panel to reveal the tools per row slider
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()

@@ -1030,6 +1030,7 @@ internal fun RemoteControlContent(
         actions = actions,
         containerColor = MaterialTheme.colorScheme.errorContainer,
         contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        modifier = Modifier.testTag("bt_power"),
       )
       Row(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -1079,9 +1080,30 @@ internal fun RemoteControlContent(
       horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      ConsumerButton(ConsumerKey.BACK, Icons.AutoMirrored.Filled.ArrowBack, "Back", actions, size = 64.dp)
-      ConsumerButton(ConsumerKey.HOME, Icons.Default.Home, "Home", actions, size = 64.dp)
-      ConsumerButton(ConsumerKey.MENU, Icons.Default.Menu, "Menu", actions, size = 64.dp)
+      ConsumerButton(
+        key = ConsumerKey.BACK,
+        icon = Icons.AutoMirrored.Filled.ArrowBack,
+        label = "Back",
+        actions = actions,
+        size = 64.dp,
+        modifier = Modifier.testTag("bt_nav_back"),
+      )
+      ConsumerButton(
+        key = ConsumerKey.HOME,
+        icon = Icons.Default.Home,
+        label = "Home",
+        actions = actions,
+        size = 64.dp,
+        modifier = Modifier.testTag("bt_nav_home"),
+      )
+      ConsumerButton(
+        key = ConsumerKey.MENU,
+        icon = Icons.Default.Menu,
+        label = "Menu",
+        actions = actions,
+        size = 64.dp,
+        modifier = Modifier.testTag("bt_nav_menu"),
+      )
     }
 
     // ---- Media bar (rewind, play/pause, fast forward) ----
@@ -1095,7 +1117,7 @@ internal fun RemoteControlContent(
 
 // ---- D-pad ----
 
-private fun dpadKeyForOffset(offset: Offset, sizePx: Float): Int? {
+internal fun dpadKeyForOffset(offset: Offset, sizePx: Float): ConsumerKey? {
   val cx = sizePx / 2f
   val cy = sizePx / 2f
   val dx = offset.x - cx
@@ -1107,13 +1129,13 @@ private fun dpadKeyForOffset(offset: Offset, sizePx: Float): Int? {
   // 96dp out of 248dp is ~0.387 ratio of diameter (or 48dp radius)
   val centerRadius = radius * (96f / 248f)
   if (dist <= centerRadius) {
-    return HidKey.ENTER
+    return ConsumerKey.DPAD_CENTER
   }
 
   return if (abs(dx) <= abs(dy)) {
-    if (dy < 0f) HidKey.UP else HidKey.DOWN
+    if (dy < 0f) ConsumerKey.DPAD_UP else ConsumerKey.DPAD_DOWN
   } else {
-    if (dx < 0f) HidKey.LEFT else HidKey.RIGHT
+    if (dx < 0f) ConsumerKey.DPAD_LEFT else ConsumerKey.DPAD_RIGHT
   }
 }
 
@@ -1121,7 +1143,9 @@ private fun dpadKeyForOffset(offset: Offset, sizePx: Float): Int? {
 private fun DPad(actions: RemoteInputActions, modifier: Modifier = Modifier) {
   val ringColor = MaterialTheme.colorScheme.surfaceContainerHigh
   val haptics = LocalHapticFeedback.current
-  var activeKey by remember { mutableStateOf<Int?>(null) }
+  val coroutineScope = rememberCoroutineScope()
+  val currentActions by rememberUpdatedState(actions)
+  var activeKey by remember { mutableStateOf<ConsumerKey?>(null) }
 
   Box(
     modifier = modifier
@@ -1136,10 +1160,32 @@ private fun DPad(actions: RemoteInputActions, modifier: Modifier = Modifier) {
           val sizePx = size.width.toFloat()
           val initialKey = dpadKeyForOffset(down.position, sizePx)
           if (initialKey != null) {
+            var currentKey: ConsumerKey? = initialKey
             activeKey = initialKey
             haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
-            actions.keyDown(initialKey)
-            var currentKey: Int? = initialKey
+            currentActions.consumerDown(initialKey)
+            val pressStartTime = System.currentTimeMillis()
+            var isRepeating = false
+
+            fun startRepeatIfDirectional(key: ConsumerKey) =
+              if (key != ConsumerKey.DPAD_CENTER) {
+                coroutineScope.launch {
+                  delay(350L)
+                  isRepeating = true
+                  while (isActive) {
+                    currentActions.consumerUp()
+                    delay(30L)
+                    if (!isActive) break
+                    currentActions.consumerDown(key)
+                    haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
+                    delay(100L)
+                  }
+                }
+              } else {
+                null
+              }
+
+            var repeatJob = startRepeatIfDirectional(initialKey)
 
             while (true) {
               val event = awaitPointerEvent()
@@ -1151,22 +1197,38 @@ private fun DPad(actions: RemoteInputActions, modifier: Modifier = Modifier) {
               change.consume()
               val newKey = dpadKeyForOffset(change.position, sizePx)
               if (newKey != currentKey) {
+                repeatJob?.cancel()
+                repeatJob = null
                 if (currentKey != null) {
-                  actions.keyUp()
+                  currentActions.consumerUp()
                 }
                 currentKey = newKey
                 activeKey = newKey
                 if (newKey != null) {
                   haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
-                  actions.keyDown(newKey)
+                  currentActions.consumerDown(newKey)
+                  repeatJob = startRepeatIfDirectional(newKey)
                 }
               }
             }
 
+            repeatJob?.cancel()
+
             if (currentKey != null) {
-              actions.keyUp()
+              val elapsed = System.currentTimeMillis() - pressStartTime
+              if (!isRepeating && elapsed < 45L) {
+                coroutineScope.launch {
+                  delay(45L - elapsed)
+                  activeKey = null
+                  currentActions.consumerUp()
+                }
+              } else {
+                activeKey = null
+                currentActions.consumerUp()
+              }
+            } else {
+              activeKey = null
             }
-            activeKey = null
           }
         }
       },
@@ -1175,8 +1237,8 @@ private fun DPad(actions: RemoteInputActions, modifier: Modifier = Modifier) {
     DPadArrow(
       icon = Icons.Default.KeyboardArrowUp,
       label = "Up",
-      keyCode = HidKey.UP,
-      isPressed = activeKey == HidKey.UP,
+      key = ConsumerKey.DPAD_UP,
+      isPressed = activeKey == ConsumerKey.DPAD_UP,
       actions = actions,
       alignment = Alignment.TopCenter,
       tag = "bt_dpad_up",
@@ -1184,8 +1246,8 @@ private fun DPad(actions: RemoteInputActions, modifier: Modifier = Modifier) {
     DPadArrow(
       icon = Icons.Default.KeyboardArrowDown,
       label = "Down",
-      keyCode = HidKey.DOWN,
-      isPressed = activeKey == HidKey.DOWN,
+      key = ConsumerKey.DPAD_DOWN,
+      isPressed = activeKey == ConsumerKey.DPAD_DOWN,
       actions = actions,
       alignment = Alignment.BottomCenter,
       tag = "bt_dpad_down",
@@ -1193,8 +1255,8 @@ private fun DPad(actions: RemoteInputActions, modifier: Modifier = Modifier) {
     DPadArrow(
       icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
       label = "Left",
-      keyCode = HidKey.LEFT,
-      isPressed = activeKey == HidKey.LEFT,
+      key = ConsumerKey.DPAD_LEFT,
+      isPressed = activeKey == ConsumerKey.DPAD_LEFT,
       actions = actions,
       alignment = Alignment.CenterStart,
       tag = "bt_dpad_left",
@@ -1202,14 +1264,14 @@ private fun DPad(actions: RemoteInputActions, modifier: Modifier = Modifier) {
     DPadArrow(
       icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
       label = "Right",
-      keyCode = HidKey.RIGHT,
-      isPressed = activeKey == HidKey.RIGHT,
+      key = ConsumerKey.DPAD_RIGHT,
+      isPressed = activeKey == ConsumerKey.DPAD_RIGHT,
       actions = actions,
       alignment = Alignment.CenterEnd,
       tag = "bt_dpad_right",
     )
     DPadCenterButton(
-      isPressed = activeKey == HidKey.ENTER,
+      isPressed = activeKey == ConsumerKey.DPAD_CENTER,
       actions = actions,
     )
   }
@@ -1219,7 +1281,7 @@ private fun DPad(actions: RemoteInputActions, modifier: Modifier = Modifier) {
 private fun BoxScope.DPadArrow(
   icon: ImageVector,
   label: String,
-  keyCode: Int,
+  key: ConsumerKey,
   isPressed: Boolean,
   actions: RemoteInputActions,
   alignment: Alignment,
@@ -1238,8 +1300,8 @@ private fun BoxScope.DPadArrow(
         role = Role.Button
         contentDescription = label
         onClick {
-          actions.keyDown(keyCode)
-          actions.keyUp()
+          actions.consumerDown(key)
+          actions.consumerUp()
           true
         }
       }
@@ -1272,8 +1334,8 @@ private fun DPadCenterButton(
         role = Role.Button
         contentDescription = "OK"
         onClick {
-          actions.keyDown(HidKey.ENTER)
-          actions.keyUp()
+          actions.consumerDown(ConsumerKey.DPAD_CENTER)
+          actions.consumerUp()
           true
         }
       }
@@ -1569,7 +1631,7 @@ private fun MousePanel(actions: RemoteInputActions, modifier: Modifier = Modifie
 
     Row(verticalAlignment = Alignment.CenterVertically) {
       Text("Speed", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(48.dp))
-      Slider(
+      SlimDotSlider(
         value = sensitivity,
         onValueChange = { sensitivity = it },
         valueRange = 0.3f..3f,
@@ -1745,6 +1807,7 @@ private fun ConsumerButton(
   icon: ImageVector,
   label: String,
   actions: RemoteInputActions,
+  modifier: Modifier = Modifier,
   size: Dp = 56.dp,
   containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
   contentColor: Color = MaterialTheme.colorScheme.onSurface,
@@ -1757,6 +1820,7 @@ private fun ConsumerButton(
     size = size,
     containerColor = containerColor,
     contentColor = contentColor,
+    modifier = modifier,
     repeatOnHold = repeatOnHold,
   ) {
     Icon(icon, contentDescription = null)

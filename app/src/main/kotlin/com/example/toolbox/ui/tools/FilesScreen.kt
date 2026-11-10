@@ -68,9 +68,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.NoteAdd
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
@@ -175,6 +177,8 @@ fun FilesScreen(
   modifier: Modifier = Modifier,
   initialDirectory: File? = null,
   initialSearchActive: Boolean = false,
+  themeColor: String? = null,
+  onOpenFile: ((File, Boolean) -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
@@ -293,8 +297,37 @@ fun FilesScreen(
     }
   }
 
-  var groupOption by rememberSaveable { mutableStateOf(FileGroupOption.TYPE) }
-  var sortOrder by rememberSaveable { mutableStateOf(FileSortOrder.NAME_ASC) }
+  // Default sort & group configuration for folders without a saved folder-specific override
+  var defaultSortGroupConfig by remember {
+    mutableStateOf(
+      if (isInspection) {
+        FolderSortGroupConfig()
+      } else {
+        FileManagerEngine.getDefaultSortGroupConfig(context)
+      }
+    )
+  }
+
+  val initialResolvedSortGroup = remember {
+    if (isInspection) {
+      FolderSortGroupConfig() to false
+    } else {
+      FileManagerEngine.resolveSortGroupConfig(context, currentDirectory)
+    }
+  }
+
+  var isSortGroupSavedForFolder by remember(currentDirectory) {
+    mutableStateOf(
+      if (isInspection) false else FileManagerEngine.hasFolderSortGroupConfig(context, currentDirectory)
+    )
+  }
+
+  var folderEntryDefaultConfig by remember(currentDirectory) {
+    mutableStateOf(defaultSortGroupConfig)
+  }
+
+  var groupOption by rememberSaveable { mutableStateOf(initialResolvedSortGroup.first.groupOption) }
+  var sortOrder by rememberSaveable { mutableStateOf(initialResolvedSortGroup.first.sortOrder) }
   var viewMode by rememberSaveable { mutableStateOf(FileViewMode.LIST) }
   var searchQuery by rememberSaveable { mutableStateOf("") }
   var isSearchActive by rememberSaveable { mutableStateOf(initialSearchActive) }
@@ -391,6 +424,16 @@ fun FilesScreen(
 
   fun navigateTo(dir: File) {
     currentDirectory = dir
+    val folderConfig = if (isInspection) null else FileManagerEngine.getFolderSortGroupConfig(context, dir)
+    if (folderConfig != null) {
+      isSortGroupSavedForFolder = true
+      groupOption = folderConfig.groupOption
+      sortOrder = folderConfig.sortOrder
+    } else {
+      isSortGroupSavedForFolder = false
+      groupOption = defaultSortGroupConfig.groupOption
+      sortOrder = defaultSortGroupConfig.sortOrder
+    }
     searchQuery = ""
     isSearchActive = false
     isSelectionMode = false
@@ -413,6 +456,14 @@ fun FilesScreen(
       true
     } else {
       false
+    }
+  }
+
+  fun openFile(file: File, chooseApp: Boolean = false) {
+    if (onOpenFile != null) {
+      onOpenFile(file, chooseApp)
+    } else {
+      FileManagerEngine.openFile(context, file, chooseApp)
     }
   }
 
@@ -521,17 +572,68 @@ fun FilesScreen(
         onDismissSortMenu = { showSortMenu = false },
         onSelectSortOrder = {
           sortOrder = it
+          val updated = FolderSortGroupConfig(groupOption = groupOption, sortOrder = it)
+          if (isSortGroupSavedForFolder) {
+            if (!isInspection) {
+              FileManagerEngine.setFolderSortGroupConfig(context, currentDirectory, updated)
+            }
+          } else {
+            defaultSortGroupConfig = updated
+            if (!isInspection) {
+              FileManagerEngine.setDefaultSortGroupConfig(context, updated)
+            }
+          }
           showSortMenu = false
         },
         onSelectGroupOption = {
           groupOption = it
+          val updated = FolderSortGroupConfig(groupOption = it, sortOrder = sortOrder)
+          if (isSortGroupSavedForFolder) {
+            if (!isInspection) {
+              FileManagerEngine.setFolderSortGroupConfig(context, currentDirectory, updated)
+            }
+          } else {
+            defaultSortGroupConfig = updated
+            if (!isInspection) {
+              FileManagerEngine.setDefaultSortGroupConfig(context, updated)
+            }
+          }
           showSortMenu = false
+        },
+        isSortGroupSavedForFolder = isSortGroupSavedForFolder,
+        onToggleSaveSortGroupForFolder = {
+          val newSaved = !isSortGroupSavedForFolder
+          isSortGroupSavedForFolder = newSaved
+          if (newSaved) {
+            val folderConfig = FolderSortGroupConfig(groupOption = groupOption, sortOrder = sortOrder)
+            if (!isInspection) {
+              FileManagerEngine.setFolderSortGroupConfig(context, currentDirectory, folderConfig)
+            }
+            if (defaultSortGroupConfig != folderEntryDefaultConfig) {
+              defaultSortGroupConfig = folderEntryDefaultConfig
+              if (!isInspection) {
+                FileManagerEngine.setDefaultSortGroupConfig(context, folderEntryDefaultConfig)
+              }
+            }
+          } else {
+            if (!isInspection) {
+              FileManagerEngine.removeFolderSortGroupConfig(context, currentDirectory)
+            }
+            groupOption = defaultSortGroupConfig.groupOption
+            sortOrder = defaultSortGroupConfig.sortOrder
+          }
         },
         onNavigateUp = { navigateUp() },
         canNavigateUp = canNavigateUp(),
         singleSelectedFolder = if (selectedItems.size == 1 && selectedItems.first().isDirectory) selectedItems.first().file else null,
-        onAddFolderToHomeScreen = { folder -> addFolderToHomeScreen(context, folder) },
-        onAddCurrentFolderToHomeScreen = { addFolderToHomeScreen(context, currentDirectory) },
+        singleSelectedFile = if (selectedItems.size == 1 && !selectedItems.first().isDirectory) selectedItems.first().file else null,
+        onOpenSelectedFile = { file, chooseApp ->
+          isSelectionMode = false
+          selectedPaths = emptySet()
+          openFile(file, chooseApp)
+        },
+        onAddFolderToHomeScreen = { folder -> addFolderToHomeScreen(context, folder, themeColor) },
+        onAddCurrentFolderToHomeScreen = { addFolderToHomeScreen(context, currentDirectory, themeColor) },
       )
 
       // 2. Storage Pill Buttons Row:
@@ -629,11 +731,10 @@ fun FilesScreen(
                               selectedPaths + item.path
                             }
                           } else {
-                            when {
-                              item.isDirectory -> navigateTo(item.file)
-                              FileManagerEngine.isTextFile(item.file) -> fileForTextEdit = item
-                              FileManagerEngine.isImageFile(item.file) -> fileForImagePreview = item
-                              else -> fileForDetails = item
+                            if (item.isDirectory) {
+                              navigateTo(item.file)
+                            } else {
+                              openFile(item.file, chooseApp = false)
                             }
                           }
                         },
@@ -650,6 +751,8 @@ fun FilesScreen(
                             }
                           }
                         },
+                        onOpen = { openFile(item.file, chooseApp = false) },
+                        onOpenWith = { openFile(item.file, chooseApp = true) },
                         onOpenText = { fileForTextEdit = item },
                         onOpenImage = { fileForImagePreview = item },
                         onShare = { shareFile(item.file) },
@@ -661,7 +764,7 @@ fun FilesScreen(
                         onRename = { fileToRename = item },
                         onDetails = { fileForDetails = item },
                         onDelete = { fileToDelete = item },
-                        onAddToHomeScreen = { addFolderToHomeScreen(context, item.file) },
+                        onAddToHomeScreen = { addFolderToHomeScreen(context, item.file, themeColor) },
                       )
                     }
                   }
@@ -723,11 +826,10 @@ fun FilesScreen(
                             selectedPaths + item.path
                           }
                         } else {
-                          when {
-                            item.isDirectory -> navigateTo(item.file)
-                            FileManagerEngine.isTextFile(item.file) -> fileForTextEdit = item
-                            FileManagerEngine.isImageFile(item.file) -> fileForImagePreview = item
-                            else -> fileForDetails = item
+                          if (item.isDirectory) {
+                            navigateTo(item.file)
+                          } else {
+                            openFile(item.file, chooseApp = false)
                           }
                         }
                       },
@@ -744,6 +846,10 @@ fun FilesScreen(
                           }
                         }
                       },
+                      onOpen = { openFile(item.file, chooseApp = false) },
+                      onOpenWith = { openFile(item.file, chooseApp = true) },
+                      onOpenText = { fileForTextEdit = item },
+                      onOpenImage = { fileForImagePreview = item },
                       onShare = { shareFile(item.file) },
                       onDuplicate = {
                         FileManagerEngine.duplicateFile(item.file)
@@ -753,7 +859,7 @@ fun FilesScreen(
                       onRename = { fileToRename = item },
                       onDetails = { fileForDetails = item },
                       onDelete = { fileToDelete = item },
-                      onAddToHomeScreen = { addFolderToHomeScreen(context, item.file) },
+                      onAddToHomeScreen = { addFolderToHomeScreen(context, item.file, themeColor) },
                     )
                   }
                 }
@@ -1042,6 +1148,8 @@ fun FilesScreen(
       FileDetailsDialog(
         item = item,
         onDismiss = { fileForDetails = null },
+        onOpen = { openFile(item.file, chooseApp = false) },
+        onOpenWith = { openFile(item.file, chooseApp = true) },
         onShare = { shareFile(item.file) },
       )
     }
@@ -1120,9 +1228,13 @@ private fun FilesHeader(
   onDismissSortMenu: () -> Unit,
   onSelectSortOrder: (FileSortOrder) -> Unit,
   onSelectGroupOption: (FileGroupOption) -> Unit = {},
+  isSortGroupSavedForFolder: Boolean = false,
+  onToggleSaveSortGroupForFolder: () -> Unit = {},
   onNavigateUp: () -> Unit,
   canNavigateUp: Boolean,
   singleSelectedFolder: File? = null,
+  singleSelectedFile: File? = null,
+  onOpenSelectedFile: ((File, Boolean) -> Unit)? = null,
   onAddFolderToHomeScreen: ((File) -> Unit)? = null,
   onAddCurrentFolderToHomeScreen: (() -> Unit)? = null,
 ) {
@@ -1324,6 +1436,26 @@ private fun FilesHeader(
                     onBulkCopy()
                   },
                 )
+                if (singleSelectedFile != null && onOpenSelectedFile != null) {
+                  DropdownMenuItem(
+                    text = { Text("Open") },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null) },
+                    onClick = {
+                      showOverflowMenu = false
+                      onOpenSelectedFile(singleSelectedFile, false)
+                    },
+                    modifier = Modifier.testTag("action_selection_open"),
+                  )
+                  DropdownMenuItem(
+                    text = { Text("Open with…") },
+                    leadingIcon = { Icon(Icons.Default.Apps, contentDescription = null) },
+                    onClick = {
+                      showOverflowMenu = false
+                      onOpenSelectedFile(singleSelectedFile, true)
+                    },
+                    modifier = Modifier.testTag("action_selection_open_with"),
+                  )
+                }
                 if (singleSelectedFolder != null && onAddFolderToHomeScreen != null) {
                   DropdownMenuItem(
                     text = { Text("Add to Home screen") },
@@ -1495,6 +1627,44 @@ private fun FilesHeader(
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                         onClick = { onSelectGroupOption(option) },
                         modifier = Modifier.testTag("group_option_${option.name.lowercase()}"),
+                      )
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    HorizontalDivider(
+                      color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+                    )
+
+                    // Bottom-left checkbox to save sort/group for this specific folder
+                    Row(
+                      verticalAlignment = Alignment.CenterVertically,
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onToggleSaveSortGroupForFolder() }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .testTag("save_sort_group_for_folder"),
+                    ) {
+                      Checkbox(
+                        checked = isSortGroupSavedForFolder,
+                        onCheckedChange = { onToggleSaveSortGroupForFolder() },
+                        colors = CheckboxDefaults.colors(
+                          checkedColor = MaterialTheme.colorScheme.primary,
+                        ),
+                        modifier = Modifier
+                          .size(28.dp)
+                          .testTag("save_sort_group_for_folder_checkbox"),
+                      )
+                      Spacer(modifier = Modifier.width(6.dp))
+                      Text(
+                        text = "Save for folder",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = if (isSortGroupSavedForFolder) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (isSortGroupSavedForFolder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                       )
                     }
                   }
@@ -1917,6 +2087,8 @@ private fun FileListItem(
   onToggleSelect: () -> Unit = {},
   onClick: () -> Unit,
   onLongClick: () -> Unit = {},
+  onOpen: () -> Unit = {},
+  onOpenWith: () -> Unit = {},
   onOpenText: () -> Unit,
   onOpenImage: () -> Unit,
   onShare: () -> Unit,
@@ -2015,7 +2187,9 @@ private fun FileListItem(
         Box {
           IconButton(
             onClick = { showMenu = true },
-            modifier = Modifier.size(36.dp),
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("file_options_${item.name}"),
           ) {
             Icon(Icons.Default.MoreVert, contentDescription = "Options")
           }
@@ -2024,6 +2198,14 @@ private fun FileListItem(
             item = item,
             expanded = showMenu,
             onDismiss = { showMenu = false },
+            onOpen = {
+              showMenu = false
+              onOpen()
+            },
+            onOpenWith = {
+              showMenu = false
+              onOpenWith()
+            },
             onOpenText = {
               showMenu = false
               onOpenText()
@@ -2072,6 +2254,10 @@ private fun FileGridItem(
   onToggleSelect: () -> Unit = {},
   onClick: () -> Unit,
   onLongClick: () -> Unit = {},
+  onOpen: () -> Unit = {},
+  onOpenWith: () -> Unit = {},
+  onOpenText: () -> Unit = {},
+  onOpenImage: () -> Unit = {},
   onShare: () -> Unit,
   onDuplicate: () -> Unit,
   onRename: () -> Unit,
@@ -2163,7 +2349,9 @@ private fun FileGridItem(
         ) {
           IconButton(
             onClick = { showMenu = true },
-            modifier = Modifier.size(28.dp),
+            modifier = Modifier
+              .size(28.dp)
+              .testTag("file_grid_options_${item.name}"),
           ) {
             Icon(Icons.Default.MoreVert, contentDescription = "Options", modifier = Modifier.size(16.dp))
           }
@@ -2172,13 +2360,21 @@ private fun FileGridItem(
             item = item,
             expanded = showMenu,
             onDismiss = { showMenu = false },
+            onOpen = {
+              showMenu = false
+              onOpen()
+            },
+            onOpenWith = {
+              showMenu = false
+              onOpenWith()
+            },
             onOpenText = {
               showMenu = false
-              onClick()
+              onOpenText()
             },
             onOpenImage = {
               showMenu = false
-              onClick()
+              onOpenImage()
             },
             onShare = {
               showMenu = false
@@ -2244,6 +2440,8 @@ private fun FileActionMenu(
   item: FileItem,
   expanded: Boolean,
   onDismiss: () -> Unit,
+  onOpen: () -> Unit = {},
+  onOpenWith: () -> Unit = {},
   onOpenText: () -> Unit,
   onOpenImage: () -> Unit,
   onShare: () -> Unit,
@@ -2258,17 +2456,31 @@ private fun FileActionMenu(
     onDismissRequest = onDismiss,
   ) {
     if (!item.isDirectory) {
+      DropdownMenuItem(
+        text = { Text("Open") },
+        leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null) },
+        onClick = onOpen,
+        modifier = Modifier.testTag("action_open_file"),
+      )
+      DropdownMenuItem(
+        text = { Text("Open with…") },
+        leadingIcon = { Icon(Icons.Default.Apps, contentDescription = null) },
+        onClick = onOpenWith,
+        modifier = Modifier.testTag("action_open_with"),
+      )
       if (FileManagerEngine.isTextFile(item.file)) {
         DropdownMenuItem(
           text = { Text("Edit / View") },
           leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
           onClick = onOpenText,
+          modifier = Modifier.testTag("action_edit_text"),
         )
       } else if (FileManagerEngine.isImageFile(item.file)) {
         DropdownMenuItem(
           text = { Text("Preview") },
           leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
           onClick = onOpenImage,
+          modifier = Modifier.testTag("action_preview_image"),
         )
       }
       DropdownMenuItem(
@@ -3046,6 +3258,8 @@ private fun BulkDeleteConfirmDialog(
 private fun FileDetailsDialog(
   item: FileItem,
   onDismiss: () -> Unit,
+  onOpen: () -> Unit = {},
+  onOpenWith: () -> Unit = {},
   onShare: () -> Unit,
 ) {
   val details = remember(item) {
@@ -3095,10 +3309,23 @@ private fun FileDetailsDialog(
     },
     dismissButton = {
       if (!item.isDirectory) {
-        OutlinedButton(onClick = onShare) {
-          Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-          Spacer(modifier = Modifier.width(6.dp))
-          Text("Share")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          OutlinedButton(
+            onClick = {
+              onDismiss()
+              onOpenWith()
+            },
+            modifier = Modifier.testTag("details_action_open_with"),
+          ) {
+            Icon(Icons.Default.Apps, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Open with")
+          }
+          OutlinedButton(onClick = onShare) {
+            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Share")
+          }
         }
       }
     },

@@ -190,8 +190,11 @@ class SettingsScreenTest {
     assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.RULER.category)
     assertEquals(ToolCategory.AUDIO_AND_MUSIC, Tool.GUITAR_TUNER.category)
     assertEquals(ToolCategory.AUDIO_AND_MUSIC, Tool.METRONOME.category)
+    assertEquals(ToolCategory.AUDIO_AND_MUSIC, Tool.AUDIO_RECORDER.category)
     assertEquals(ToolCategory.MEDIA_AND_CREATIVE, Tool.COLOR_PICKER.category)
     assertEquals(ToolCategory.MEDIA_AND_CREATIVE, Tool.IMAGE_EDITOR.category)
+    assertEquals(ToolCategory.MEDIA_AND_CREATIVE, Tool.FILE_CONVERTER.category)
+    assertEquals(ToolCategory.MEDIA_AND_CREATIVE, Tool.GALLERY.category)
     assertEquals(ToolCategory.PRODUCTIVITY, Tool.TODO_LIST.category)
     assertEquals(ToolCategory.PRODUCTIVITY, Tool.FILES.category)
     assertEquals(ToolCategory.ENTERTAINMENT_AND_DEVICES, Tool.DICE_ROLLER.category)
@@ -319,5 +322,74 @@ class SettingsScreenTest {
       assertEquals(preset, foundLower)
       assertEquals(preset, foundUpper)
     }
+  }
+
+  @Test
+  fun exportAndImportSettingsJson_roundTripPreservesAllSettings() {
+    val sourceRepo = InMemoryNavigationPreferencesRepository()
+    sourceRepo.setToolsPerRow(5)
+    sourceRepo.setThemeMode(ThemeMode.DARK)
+    sourceRepo.setThemeColor("#00668B")
+    sourceRepo.setAccentColor("#E65100")
+    sourceRepo.setHiddenTools(setOf(Tool.RULER, Tool.METRONOME))
+    sourceRepo.setToolSorting(ToolSortingOption.ALPHABETICAL)
+    sourceRepo.setToolSortOrder(ToolSortOrder.DESCENDING)
+    sourceRepo.setCategorySorting(CategorySortingOption.USAGE)
+    sourceRepo.setCategoryToolSorting(CategoryToolSortingOption.ALPHABETICAL)
+    sourceRepo.setToolUsageCounts(mapOf(Tool.CALCULATOR to 7, Tool.DICE_ROLLER to 3))
+
+    val exportedJson = com.example.toolbox.ui.main.exportSettingsToJson(sourceRepo)
+    assertTrue(exportedJson.contains("toolbox_settings_v1"))
+
+    val targetRepo = InMemoryNavigationPreferencesRepository()
+    val imported = com.example.toolbox.ui.main.importSettingsFromJson(exportedJson, targetRepo)
+    assertTrue(imported)
+
+    assertEquals(5, targetRepo.getToolsPerRow())
+    assertEquals(ThemeMode.DARK, targetRepo.getThemeMode())
+    assertEquals("#00668B", targetRepo.getThemeColor())
+    assertEquals("#E65100", targetRepo.getAccentColor())
+    assertEquals(setOf(Tool.RULER, Tool.METRONOME), targetRepo.getHiddenTools())
+    assertEquals(ToolSortingOption.ALPHABETICAL, targetRepo.getToolSorting())
+    assertEquals(ToolSortOrder.DESCENDING, targetRepo.getToolSortOrder())
+    assertEquals(CategorySortingOption.USAGE, targetRepo.getCategorySorting())
+    assertEquals(CategoryToolSortingOption.ALPHABETICAL, targetRepo.getCategoryToolSorting())
+    assertEquals(mapOf(Tool.CALCULATOR to 7, Tool.DICE_ROLLER to 3), targetRepo.getToolUsageCounts())
+  }
+
+  @Test
+  fun importSettingsFromJson_rejectsInvalidOrUnrecognizedJson() {
+    val repo = InMemoryNavigationPreferencesRepository()
+    assertFalse(com.example.toolbox.ui.main.importSettingsFromJson("", repo))
+    assertFalse(com.example.toolbox.ui.main.importSettingsFromJson("not-json", repo))
+    assertFalse(com.example.toolbox.ui.main.importSettingsFromJson("{\"unrelated_key\": 123}", repo))
+  }
+
+  @Test
+  fun resetAllSettingsToDefaults_restoresEveryPreference() {
+    val repo = InMemoryNavigationPreferencesRepository()
+    repo.setToolsPerRow(6)
+    repo.setThemeMode(ThemeMode.DARK)
+    repo.setThemeColor("#386A20")
+    repo.setAccentColor("#B3261E")
+    repo.setHiddenTools(setOf(Tool.CALCULATOR))
+    repo.setToolSorting(ToolSortingOption.USAGE)
+    repo.setToolSortOrder(ToolSortOrder.DESCENDING)
+    repo.setCategorySorting(CategorySortingOption.ALPHABETICAL)
+    repo.setCategoryToolSorting(CategoryToolSortingOption.USAGE)
+    repo.incrementToolUsage(Tool.CALCULATOR)
+
+    com.example.toolbox.ui.main.resetAllSettingsToDefaults(repo)
+
+    assertEquals(com.example.toolbox.ui.main.DEFAULT_TOOLS_PER_ROW, repo.getToolsPerRow())
+    assertEquals(ThemeMode.SYSTEM, repo.getThemeMode())
+    assertEquals(DEFAULT_THEME_COLOR_SYSTEM, repo.getThemeColor())
+    assertEquals(DEFAULT_ACCENT_COLOR_AUTO, repo.getAccentColor())
+    assertTrue(repo.getHiddenTools().isEmpty())
+    assertEquals(ToolSortingOption.USER_CHOICE, repo.getToolSorting())
+    assertEquals(ToolSortOrder.ASCENDING, repo.getToolSortOrder())
+    assertEquals(CategorySortingOption.MANUAL, repo.getCategorySorting())
+    assertEquals(CategoryToolSortingOption.MANUAL, repo.getCategoryToolSorting())
+    assertTrue(repo.getToolUsageCounts().isEmpty())
   }
 }
