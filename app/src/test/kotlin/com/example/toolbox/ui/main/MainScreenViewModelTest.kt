@@ -72,6 +72,21 @@ class MainScreenViewModelTest {
       reorderedBackward,
     )
   }
+
+  @Test
+  fun toolBackgroundStyle_rulerAndTodoListUseContainerStyles_othersUseBackground() {
+    assertEquals(ToolBackgroundStyle.SURFACE_CONTAINER_LOWEST, toolBackgroundStyle(Tool.RULER))
+    assertEquals(ToolBackgroundStyle.SURFACE_CONTAINER, toolBackgroundStyle(Tool.TODO_LIST))
+
+    val otherTools = Tool.entries.filter { it != Tool.RULER && it != Tool.TODO_LIST }
+    for (tool in otherTools) {
+      assertEquals(
+        "Expected BACKGROUND style for $tool",
+        ToolBackgroundStyle.BACKGROUND,
+        toolBackgroundStyle(tool),
+      )
+    }
+  }
 }
 
 private class FakeMyModelRepository : DataRepository {

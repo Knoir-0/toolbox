@@ -96,7 +96,6 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
@@ -366,9 +365,12 @@ internal fun DeviceListContent(
         }
       }
 
-      state.message?.let { message ->
+      val hasDeviceError = state.message != null &&
+        state.messageDeviceAddress != null &&
+        paired.any { it.address == state.messageDeviceAddress }
+      if (state.message != null && !hasDeviceError) {
         item {
-          MessageCard(message = message, onDismiss = onDismissMessage)
+          MessageCard(message = state.message, onDismiss = onDismissMessage)
         }
       }
 
@@ -410,7 +412,8 @@ internal fun DeviceListContent(
         }
 
         else -> {
-          if (connecting != null) {
+          val isConnectingPaired = connecting != null && paired.any { it.address == connecting.device.address }
+          if (connecting != null && !isConnectingPaired) {
             item {
               ConnectingCard(connecting = connecting, onCancel = onCancelConnect)
             }
@@ -473,9 +476,12 @@ internal fun DeviceListContent(
             items(paired, key = { "paired_${it.address}" }) { device ->
               DeviceRow(
                 device = device,
-                isConnecting = connecting?.device?.address == device.address,
+                connecting = if (connecting?.device?.address == device.address) connecting else null,
+                errorMessage = if (state.messageDeviceAddress == device.address) state.message else null,
                 enabled = connecting == null,
                 onClick = { onConnect(device) },
+                onCancelConnect = onCancelConnect,
+                onDismissError = onDismissMessage,
               )
             }
           }
@@ -518,6 +524,7 @@ internal fun DeviceListContent(
         showScanModal = false
       },
       onCancelConnect = onCancelConnect,
+      onDismissMessage = onDismissMessage,
       onDismiss = {
         showScanModal = false
         onStopScan()
@@ -537,6 +544,7 @@ private fun ScanDeviceModal(
   onMakeDiscoverable: () -> Unit,
   onConnect: (BtDeviceInfo) -> Unit,
   onCancelConnect: () -> Unit,
+  onDismissMessage: () -> Unit,
   onDismiss: () -> Unit,
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -624,19 +632,10 @@ private fun ScanDeviceModal(
         }
       }
 
-      if (state.isScanning) {
-        item {
-          LinearProgressIndicator(
-            modifier = Modifier
-              .fillMaxWidth()
-              .height(3.dp),
-          )
-        }
-      }
-
       item { PairingTipCard() }
 
-      if (connecting != null) {
+      val isConnectingNearby = connecting != null && nearbyDevices.any { it.address == connecting.device.address }
+      if (connecting != null && !isConnectingNearby) {
         item {
           ConnectingCard(connecting = connecting, onCancel = onCancelConnect)
         }
@@ -691,9 +690,12 @@ private fun ScanDeviceModal(
         items(nearbyDevices, key = { "modal_nearby_${it.address}" }) { device ->
           DeviceRow(
             device = device,
-            isConnecting = connecting?.device?.address == device.address,
+            connecting = if (connecting?.device?.address == device.address) connecting else null,
+            errorMessage = if (state.messageDeviceAddress == device.address) state.message else null,
             enabled = connecting == null,
             onClick = { onConnect(device) },
+            onCancelConnect = onCancelConnect,
+            onDismissError = onDismissMessage,
           )
         }
       }
@@ -704,57 +706,122 @@ private fun ScanDeviceModal(
 @Composable
 private fun DeviceRow(
   device: BtDeviceInfo,
-  isConnecting: Boolean,
-  enabled: Boolean,
-  onClick: () -> Unit,
+  connecting: RemoteConnection.Connecting? = null,
+  errorMessage: String? = null,
+  enabled: Boolean = true,
+  onClick: () -> Unit = {},
+  onCancelConnect: () -> Unit = {},
+  onDismissError: () -> Unit = {},
 ) {
+  val isConnecting = connecting != null
   Card(
     shape = RoundedCornerShape(16.dp),
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    colors = CardDefaults.cardColors(
+      containerColor = when {
+        errorMessage != null -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
+        isConnecting -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)
+        else -> MaterialTheme.colorScheme.surfaceContainerLow
+      },
+    ),
     modifier = Modifier
       .fillMaxWidth()
-      .clip(RoundedCornerShape(16.dp))
-      .clickable(enabled = enabled, onClick = onClick)
       .testTag("bt_device_${device.address}"),
   ) {
-    ListItem(
-      colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-      leadingContent = {
-        Box(
+    Column {
+      ListItem(
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier
+          .fillMaxWidth()
+          .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = if (connecting != null || errorMessage != null) 0.dp else 16.dp, bottomEnd = if (connecting != null || errorMessage != null) 0.dp else 16.dp))
+          .clickable(enabled = enabled && !isConnecting, onClick = onClick),
+        leadingContent = {
+          Box(
+            modifier = Modifier
+              .size(40.dp)
+              .clip(CircleShape)
+              .background(
+                if (device.kind == BtDeviceKind.TV) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant,
+              ),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = device.kind.icon(),
+              contentDescription = null,
+              tint = if (device.kind == BtDeviceKind.TV) MaterialTheme.colorScheme.onPrimaryContainer
+              else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        },
+        headlineContent = { Text(device.name, fontWeight = FontWeight.Medium) },
+        supportingContent = {
+          val parts = buildList {
+            add(if (device.isBonded) "Paired" else "Not paired")
+            device.rssi?.let { add(signalLabel(it)) }
+            add(device.address)
+          }
+          Text(parts.joinToString(" • "), style = MaterialTheme.typography.bodySmall)
+        },
+        trailingContent = {
+          if (isConnecting) {
+            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+          } else {
+            Icon(Icons.Default.ChevronRight, contentDescription = "Connect")
+          }
+        },
+      )
+
+      if (connecting != null) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+        Row(
           modifier = Modifier
-            .size(40.dp)
-            .clip(CircleShape)
-            .background(
-              if (device.kind == BtDeviceKind.TV) MaterialTheme.colorScheme.primaryContainer
-              else MaterialTheme.colorScheme.surfaceVariant,
-            ),
-          contentAlignment = Alignment.Center,
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+          verticalAlignment = Alignment.CenterVertically,
         ) {
-          Icon(
-            imageVector = device.kind.icon(),
-            contentDescription = null,
-            tint = if (device.kind == BtDeviceKind.TV) MaterialTheme.colorScheme.onPrimaryContainer
-            else MaterialTheme.colorScheme.onSurfaceVariant,
+          CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+          Spacer(Modifier.width(12.dp))
+          Column(Modifier.weight(1f)) {
+            Text(
+              text = if (connecting.pairing) "Pairing with ${connecting.device.name}…" else "Connecting to ${connecting.device.name}…",
+              style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+              text = if (connecting.pairing) "Accept the pairing request on both devices." else "This can take a few seconds.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          TextButton(onClick = onCancelConnect) {
+            Text("Cancel")
+          }
+        }
+      }
+
+      if (errorMessage != null) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = errorMessage,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier.weight(1f),
           )
+          IconButton(onClick = onDismissError) {
+            Icon(
+              Icons.Default.Close,
+              contentDescription = "Dismiss",
+              tint = MaterialTheme.colorScheme.onErrorContainer,
+            )
+          }
         }
-      },
-      headlineContent = { Text(device.name, fontWeight = FontWeight.Medium) },
-      supportingContent = {
-        val parts = buildList {
-          add(if (device.isBonded) "Paired" else "Not paired")
-          device.rssi?.let { add(signalLabel(it)) }
-          add(device.address)
-        }
-        Text(parts.joinToString(" • "), style = MaterialTheme.typography.bodySmall)
-      },
-      trailingContent = {
-        if (isConnecting) {
-          CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-        } else {
-          Icon(Icons.Default.ChevronRight, contentDescription = "Connect")
-        }
-      },
-    )
+      }
+    }
   }
 }
 
@@ -996,7 +1063,8 @@ internal fun RemoteControlContent(
     // ---- Navigation row ----
     Row(
       modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceEvenly,
+      horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+      verticalAlignment = Alignment.CenterVertically,
     ) {
       ConsumerButton(ConsumerKey.BACK, Icons.AutoMirrored.Filled.ArrowBack, "Back", actions, size = 64.dp)
       ConsumerButton(ConsumerKey.HOME, Icons.Default.Home, "Home", actions, size = 64.dp)
@@ -1035,7 +1103,12 @@ private fun DPad(actions: RemoteInputActions, modifier: Modifier = Modifier) {
       contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
       modifier = Modifier.testTag("bt_dpad_ok"),
     ) {
-      Text("OK", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+      Box(
+        modifier = Modifier
+          .size(20.dp)
+          .clip(CircleShape)
+          .background(MaterialTheme.colorScheme.onPrimaryContainer),
+      )
     }
   }
 }

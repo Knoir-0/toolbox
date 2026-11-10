@@ -2,6 +2,12 @@ package com.example.toolbox.ui.tools
 
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,13 +28,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.BrightnessAuto
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -37,6 +50,7 @@ import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
@@ -45,6 +59,8 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -57,7 +73,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -65,11 +84,16 @@ import androidx.compose.ui.unit.dp
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
 import com.example.toolbox.ui.main.FALLBACK_THEME_COLOR_HEX
 import com.example.toolbox.ui.main.InMemoryNavigationPreferencesRepository
+import com.example.toolbox.ui.main.MAX_TOOLS_PER_ROW
+import com.example.toolbox.ui.main.MIN_TOOLS_PER_ROW
 import com.example.toolbox.ui.main.NavigationPreferencesRepository
 import com.example.toolbox.ui.main.ThemeMode
 import com.example.toolbox.ui.main.Tool
+import com.example.toolbox.ui.main.ToolSortingOption
+import com.example.toolbox.ui.main.coerceToolsPerRow
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
 import com.example.toolbox.ui.theme.parseHexColor
+import kotlin.math.roundToInt
 
 data class ColorPreset(
   val name: String,
@@ -94,10 +118,14 @@ val PRESET_COLORS = listOf(
 fun SettingsScreen(
   modifier: Modifier = Modifier,
   preferencesRepository: NavigationPreferencesRepository = rememberNavigationPreferencesRepository(),
+  initialVisibilityExpanded: Boolean = false,
 ) {
   val themeMode by preferencesRepository.themeModeFlow.collectAsState()
   val themeColor by preferencesRepository.themeColorFlow.collectAsState()
   val hiddenTools by preferencesRepository.hiddenToolsFlow.collectAsState()
+  val toolSorting by preferencesRepository.toolSortingFlow.collectAsState()
+  val toolUsageCounts by preferencesRepository.toolUsageCountsFlow.collectAsState()
+  val toolsPerRow by preferencesRepository.toolsPerRowFlow.collectAsState()
 
   var customHexInput by rememberSaveable {
     mutableStateOf(if (themeColor != DEFAULT_THEME_COLOR_SYSTEM) themeColor else "")
@@ -150,7 +178,203 @@ fun SettingsScreen(
 
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-    // Section 1: Theme Mode
+    // Section 1: Toolbox Default Sorting
+    Card(
+      modifier = Modifier
+        .fillMaxWidth()
+        .testTag("toolbox_sorting_card"),
+      colors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+      ),
+      shape = RoundedCornerShape(16.dp),
+    ) {
+      Column(
+        modifier = Modifier.padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Sort,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+          )
+          Text(
+            text = "Default Sorting",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+
+        Text(
+          text = "Choose how tools are ordered and paginated in the navigation panel",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        SingleChoiceSegmentedButtonRow(
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          val sortingOptions = listOf(
+            Triple(ToolSortingOption.USER_CHOICE, "Manual", Icons.Default.TouchApp),
+            Triple(ToolSortingOption.TOOL_CATEGORIES, "Categories", Icons.Default.Category),
+            Triple(ToolSortingOption.USAGE, "By usage", Icons.AutoMirrored.Filled.TrendingUp),
+          )
+
+          sortingOptions.forEachIndexed { index, (option, label, icon) ->
+            SegmentedButton(
+              selected = toolSorting == option,
+              onClick = { preferencesRepository.setToolSorting(option) },
+              shape = SegmentedButtonDefaults.itemShape(index = index, count = sortingOptions.size),
+              icon = {
+                Icon(
+                  imageVector = icon,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+              },
+              modifier = Modifier.testTag("sorting_option_${option.name.lowercase()}"),
+            ) {
+              Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+              )
+            }
+          }
+        }
+
+        if (toolSorting == ToolSortingOption.USAGE) {
+          Text(
+            text = "Tools will appear with your most frequently used tools first.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+          )
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Default.GridView,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(20.dp),
+            )
+            Text(
+              text = "Tools per row",
+              style = MaterialTheme.typography.titleSmall,
+              fontWeight = FontWeight.SemiBold,
+            )
+          }
+          Text(
+            text = "$toolsPerRow",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.ExtraBold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.testTag("settings_tools_per_row_count"),
+          )
+        }
+
+        Text(
+          text = if (toolSorting == ToolSortingOption.TOOL_CATEGORIES) {
+            "Small categories will share a single row when their combined tool count fits within this setting."
+          } else {
+            "Number of tool icons displayed per row in the toolbox panel."
+          },
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        val coercedToolsPerRow = coerceToolsPerRow(toolsPerRow)
+        val stops = (MIN_TOOLS_PER_ROW..MAX_TOOLS_PER_ROW).toList()
+        val activeColor = MaterialTheme.colorScheme.primary
+        val inactiveColor = MaterialTheme.colorScheme.surfaceVariant
+        val activeDotColor = MaterialTheme.colorScheme.onPrimary
+        val inactiveDotColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+        Slider(
+          value = coercedToolsPerRow.toFloat(),
+          onValueChange = { newValue ->
+            preferencesRepository.setToolsPerRow(coerceToolsPerRow(newValue.roundToInt()))
+          },
+          valueRange = MIN_TOOLS_PER_ROW.toFloat()..MAX_TOOLS_PER_ROW.toFloat(),
+          steps = MAX_TOOLS_PER_ROW - MIN_TOOLS_PER_ROW - 1,
+          modifier = Modifier
+            .fillMaxWidth()
+            .height(32.dp)
+            .testTag("settings_tools_per_row_slider"),
+          thumb = {
+            Surface(
+              modifier = Modifier.size(20.dp),
+              shape = CircleShape,
+              color = MaterialTheme.colorScheme.primary,
+              shadowElevation = 3.dp,
+            ) {}
+          },
+          track = { sliderState ->
+            Canvas(
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(12.dp),
+            ) {
+              val trackStroke = 6.dp.toPx()
+              val dotRadius = 3.5.dp.toPx()
+              val centerY = size.height / 2f
+              val fraction = (sliderState.value - MIN_TOOLS_PER_ROW) /
+                (MAX_TOOLS_PER_ROW - MIN_TOOLS_PER_ROW).toFloat()
+              val activeEndX = size.width * fraction.coerceIn(0f, 1f)
+
+              // Inactive track
+              drawLine(
+                color = inactiveColor,
+                start = Offset(0f, centerY),
+                end = Offset(size.width, centerY),
+                strokeWidth = trackStroke,
+                cap = StrokeCap.Round,
+              )
+              // Active track
+              drawLine(
+                color = activeColor,
+                start = Offset(0f, centerY),
+                end = Offset(activeEndX, centerY),
+                strokeWidth = trackStroke,
+                cap = StrokeCap.Round,
+              )
+              // Dots for 3, 4, 5, 6
+              stops.forEachIndexed { index, stop ->
+                val stopFraction = index.toFloat() / (stops.size - 1).toFloat()
+                val dotX = size.width * stopFraction
+                val isReached = stop <= coercedToolsPerRow
+                drawCircle(
+                  color = if (isReached) activeDotColor else inactiveDotColor,
+                  radius = dotRadius,
+                  center = Offset(dotX, centerY),
+                )
+              }
+            }
+          },
+          colors = SliderDefaults.colors(
+            thumbColor = MaterialTheme.colorScheme.primary,
+            activeTrackColor = MaterialTheme.colorScheme.primary,
+            inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+          ),
+        )
+      }
+    }
+
+    // Section 2: Theme Mode
     Card(
       modifier = Modifier.fillMaxWidth(),
       colors = CardDefaults.cardColors(
@@ -219,7 +443,7 @@ fun SettingsScreen(
       }
     }
 
-    // Section 2: Color Customization
+    // Section 3: Color Customization
     Card(
       modifier = Modifier.fillMaxWidth(),
       colors = CardDefaults.cardColors(
@@ -462,9 +686,16 @@ fun SettingsScreen(
       }
     }
 
-    // Section 3: Tool Visibility
+    // Section 4: Tool Visibility (Collapsible Panel)
+    var isToolVisibilityExpanded by rememberSaveable { mutableStateOf(initialVisibilityExpanded) }
+    val configurableTools = remember { Tool.entries.filter { it != Tool.SETTINGS } }
+    val hiddenCount = configurableTools.count { it in hiddenTools }
+    val visibleCount = configurableTools.size - hiddenCount
+
     Card(
-      modifier = Modifier.fillMaxWidth(),
+      modifier = Modifier
+        .fillMaxWidth()
+        .testTag("tool_visibility_card"),
       colors = CardDefaults.cardColors(
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
       ),
@@ -474,112 +705,171 @@ fun SettingsScreen(
         modifier = Modifier.padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
+        // Collapsible Header Row
         Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { isToolVisibilityExpanded = !isToolVisibilityExpanded }
+            .testTag("tool_visibility_toggle"),
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-          Icon(
-            imageVector = Icons.Default.Settings,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Visibility,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(20.dp),
+            )
+            Column {
+              Text(
+                text = "Tool Visibility",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+              )
+              Text(
+                text = if (hiddenCount == 0) "All tools visible" else "$hiddenCount hidden • $visibleCount visible",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+
+          val rotationAngle by animateFloatAsState(
+            targetValue = if (isToolVisibilityExpanded) 180f else 0f,
+            label = "tool_visibility_chevron",
           )
-          Text(
-            text = "Tool Visibility",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-          )
+
+          IconButton(
+            onClick = { isToolVisibilityExpanded = !isToolVisibilityExpanded },
+          ) {
+            Icon(
+              imageVector = Icons.Default.ExpandMore,
+              contentDescription = if (isToolVisibilityExpanded) "Collapse tool visibility" else "Expand tool visibility",
+              modifier = Modifier.rotate(rotationAngle),
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
         }
 
-        Text(
-          text = "Select which tools appear in the navigation bar. Settings is always visible and positioned as the last tool.",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-        // Tool List (excluding Settings since it cannot be hidden)
-        Column(
-          modifier = Modifier.fillMaxWidth(),
-          verticalArrangement = Arrangement.spacedBy(2.dp),
+        AnimatedVisibility(
+          visible = isToolVisibilityExpanded,
+          enter = expandVertically() + fadeIn(),
+          exit = shrinkVertically() + fadeOut(),
         ) {
-          val configurableTools = remember { Tool.entries.filter { it != Tool.SETTINGS } }
-          configurableTools.forEach { tool ->
-            val isVisible = tool !in hiddenTools
+          Column(
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            Text(
+              text = "Select which tools appear in the navigation bar. Settings is always visible and positioned as the last tool.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .clickable {
-                  val updated = if (isVisible) {
-                    hiddenTools + tool
-                  } else {
-                    hiddenTools - tool
-                  }
-                  preferencesRepository.setHiddenTools(updated)
-                }
-                .padding(vertical = 2.dp, horizontal = 2.dp)
-                .testTag("tool_visibility_row_${tool.name}"),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+            // Tool List (excluding Settings since it cannot be hidden)
+            Column(
+              modifier = Modifier.fillMaxWidth(),
+              verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-              Checkbox(
-                checked = isVisible,
-                onCheckedChange = { checked ->
-                  val updated = if (checked) {
-                    hiddenTools - tool
-                  } else {
-                    hiddenTools + tool
+              configurableTools.forEach { tool ->
+                val isVisible = tool !in hiddenTools
+
+                Row(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable {
+                      val updated = if (isVisible) {
+                        hiddenTools + tool
+                      } else {
+                        hiddenTools - tool
+                      }
+                      preferencesRepository.setHiddenTools(updated)
+                    }
+                    .padding(vertical = 2.dp, horizontal = 2.dp)
+                    .testTag("tool_visibility_row_${tool.name}"),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                  Checkbox(
+                    checked = isVisible,
+                    onCheckedChange = { checked ->
+                      val updated = if (checked) {
+                        hiddenTools - tool
+                      } else {
+                        hiddenTools + tool
+                      }
+                      preferencesRepository.setHiddenTools(updated)
+                    },
+                    modifier = Modifier.testTag("tool_visibility_checkbox_${tool.name}"),
+                    colors = CheckboxDefaults.colors(),
+                  )
+
+                  Surface(
+                    modifier = Modifier.size(32.dp),
+                    shape = CircleShape,
+                    color = if (isVisible) {
+                      MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                      MaterialTheme.colorScheme.surfaceVariant
+                    },
+                    contentColor = if (isVisible) {
+                      MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                      MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                  ) {
+                    Box(contentAlignment = Alignment.Center) {
+                      Icon(
+                        imageVector = tool.icon,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                      )
+                    }
                   }
-                  preferencesRepository.setHiddenTools(updated)
-                },
-                modifier = Modifier.testTag("tool_visibility_checkbox_${tool.name}"),
-                colors = CheckboxDefaults.colors(),
-              )
 
-              Surface(
-                modifier = Modifier.size(32.dp),
-                shape = CircleShape,
-                color = if (isVisible) {
-                  MaterialTheme.colorScheme.primaryContainer
-                } else {
-                  MaterialTheme.colorScheme.surfaceVariant
-                },
-                contentColor = if (isVisible) {
-                  MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant
-                },
-              ) {
-                Box(contentAlignment = Alignment.Center) {
-                  Icon(
-                    imageVector = tool.icon,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                  )
-                }
-              }
+                  Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                      text = tool.title,
+                      style = MaterialTheme.typography.bodyMedium,
+                      fontWeight = if (isVisible) FontWeight.Medium else FontWeight.Normal,
+                      color = if (isVisible) {
+                        MaterialTheme.colorScheme.onSurface
+                      } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                      },
+                    )
 
-              Column(modifier = Modifier.weight(1f)) {
-                Text(
-                  text = tool.title,
-                  style = MaterialTheme.typography.bodyMedium,
-                  fontWeight = if (isVisible) FontWeight.Medium else FontWeight.Normal,
-                  color = if (isVisible) {
-                    MaterialTheme.colorScheme.onSurface
-                  } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                  },
-                )
+                    if (!isVisible) {
+                      Text(
+                        text = "Hidden from navigation",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                      )
+                    }
+                  }
 
-                if (!isVisible) {
-                  Text(
-                    text = "Hidden from navigation",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                  )
+                  val usage = toolUsageCounts[tool] ?: 0
+                  if (usage > 0) {
+                    Surface(
+                      shape = CircleShape,
+                      color = MaterialTheme.colorScheme.secondaryContainer,
+                      contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    ) {
+                      Text(
+                        text = "$usage ${if (usage == 1) "use" else "uses"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                      )
+                    }
+                  }
                 }
               }
             }
@@ -595,6 +885,8 @@ fun SettingsScreen(
         preferencesRepository.setThemeColor(DEFAULT_THEME_COLOR_SYSTEM)
         preferencesRepository.setHiddenTools(emptySet())
         preferencesRepository.setToolOrder(Tool.entries)
+        preferencesRepository.setToolSorting(ToolSortingOption.USER_CHOICE)
+        preferencesRepository.resetToolUsage()
         customHexInput = ""
       },
       modifier = Modifier

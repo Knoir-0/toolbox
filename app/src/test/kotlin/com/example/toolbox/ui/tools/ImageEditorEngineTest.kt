@@ -244,6 +244,25 @@ class ImageEditorEngineTest {
   }
 
   @Test
+  fun hitTestCropHandle_withBiggerHitboxes_detectsTouchesGenerously() {
+    val cropRect = NormalizedRect(left = 0.3f, top = 0.3f, right = 0.7f, bottom = 0.7f)
+    val width = 1000f
+    val height = 1000f
+    // Top-left corner is at (300, 300). With cornerThresholdPx = 160f, touch at (170, 170) is ~183px away (outside 160),
+    // but touch at (200, 200) is sqrt(100^2 + 100^2) = 141.4px <= 160f
+    assertEquals(
+      CropHandle.TOP_LEFT,
+      hitTestCropHandle(200f, 200f, cropRect, width, height)
+    )
+
+    // Top edge at y=300. Touch at (500, 200) is 100px away <= 120f edgeThreshold
+    assertEquals(
+      CropHandle.TOP,
+      hitTestCropHandle(500f, 200f, cropRect, width, height)
+    )
+  }
+
+  @Test
   fun calculateInSampleSize_handlesDifferentResolutions() {
     // 1080p within 2048 -> sample size 1
     assertEquals(1, calculateInSampleSize(1920, 1080, maxDimension = 2048))

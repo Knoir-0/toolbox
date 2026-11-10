@@ -29,6 +29,50 @@ class ToolsUnitTest {
   }
 
   @Test
+  fun unitCatalog_convertsDataUnitsCorrectly() {
+    val bit = UnitCatalog.dataUnits.first { it.id == "b" }
+    val byte = UnitCatalog.dataUnits.first { it.id == "B" }
+    val kilobyte = UnitCatalog.dataUnits.first { it.id == "KB" }
+    val megabyte = UnitCatalog.dataUnits.first { it.id == "MB" }
+    val gigabyte = UnitCatalog.dataUnits.first { it.id == "GB" }
+    val terabyte = UnitCatalog.dataUnits.first { it.id == "TB" }
+    val petabyte = UnitCatalog.dataUnits.first { it.id == "PB" }
+    val kibibyte = UnitCatalog.dataUnits.first { it.id == "KiB" }
+    val mebibyte = UnitCatalog.dataUnits.first { it.id == "MiB" }
+    val gibibyte = UnitCatalog.dataUnits.first { it.id == "GiB" }
+    val tebibyte = UnitCatalog.dataUnits.first { it.id == "TiB" }
+    val gigabit = UnitCatalog.dataUnits.first { it.id == "Gb" }
+    val megabit = UnitCatalog.dataUnits.first { it.id == "Mb" }
+
+    // Decimal Byte conversions
+    assertEquals(8.0, UnitCatalog.convert(1.0, byte, bit), 1e-6)
+    assertEquals(1.0, UnitCatalog.convert(8.0, bit, byte), 1e-6)
+    assertEquals(1000.0, UnitCatalog.convert(1.0, kilobyte, byte), 1e-6)
+    assertEquals(1000.0, UnitCatalog.convert(1.0, megabyte, kilobyte), 1e-6)
+    assertEquals(1000.0, UnitCatalog.convert(1.0, gigabyte, megabyte), 1e-6)
+    assertEquals(1_000_000.0, UnitCatalog.convert(1.0, gigabyte, kilobyte), 1e-6)
+    assertEquals(1000.0, UnitCatalog.convert(1.0, terabyte, gigabyte), 1e-6)
+    assertEquals(1000.0, UnitCatalog.convert(1.0, petabyte, terabyte), 1e-6)
+
+    // Binary IEC conversions
+    assertEquals(1024.0, UnitCatalog.convert(1.0, kibibyte, byte), 1e-6)
+    assertEquals(1024.0, UnitCatalog.convert(1.0, mebibyte, kibibyte), 1e-6)
+    assertEquals(1024.0, UnitCatalog.convert(1.0, gibibyte, mebibyte), 1e-6)
+    assertEquals(1024.0, UnitCatalog.convert(1.0, tebibyte, gibibyte), 1e-6)
+
+    // Bit rate / networking units
+    assertEquals(1000.0, UnitCatalog.convert(1.0, gigabit, megabit), 1e-6)
+    assertEquals(1.0, UnitCatalog.convert(8.0, gigabit, gigabyte), 1e-6)
+
+    // Category catalog & defaults
+    val dataFromCatalog = UnitCatalog.unitsFor(UnitCategory.DATA)
+    assertEquals(UnitCatalog.dataUnits.size, dataFromCatalog.size)
+    val (defaultFrom, defaultTo) = UnitCatalog.defaultIndicesFor(UnitCategory.DATA)
+    assertEquals("GB", dataFromCatalog[defaultFrom].symbol)
+    assertEquals("MB", dataFromCatalog[defaultTo].symbol)
+  }
+
+  @Test
   fun guitarTuningPresets_haveSixStringsFromLowToHigh() {
     GuitarTuningPreset.entries.forEach { preset ->
       assertEquals(6, preset.strings.size)

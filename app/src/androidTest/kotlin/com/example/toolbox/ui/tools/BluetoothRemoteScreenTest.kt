@@ -3,8 +3,10 @@ package com.example.toolbox.ui.tools
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Surface
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -127,6 +129,14 @@ class BluetoothRemoteScreenTest {
     composeTestRule.onNodeWithText("This can take a few seconds.").assertIsDisplayed()
     composeTestRule.onNodeWithText("Cancel").assertIsDisplayed()
 
+    // Assert that the connecting info and cancel action are inside the individual device card
+    composeTestRule.onNode(
+      hasText("Connecting to Living Room TV…") and hasAnyAncestor(hasTestTag("bt_device_${pairedTv.address}")),
+    ).assertIsDisplayed()
+    composeTestRule.onNode(
+      hasText("Cancel") and hasAnyAncestor(hasTestTag("bt_device_${pairedTv.address}")),
+    ).assertIsDisplayed()
+
     // Clicking cancel triggers onCancelConnect
     composeTestRule.onNodeWithText("Cancel").performClick()
     assert(cancelClicked)
@@ -165,6 +175,9 @@ class BluetoothRemoteScreenTest {
 
     // Error text and dismiss button are displayed inside the device card
     composeTestRule.onNodeWithText("Failed to connect to Living Room TV.").assertIsDisplayed()
+    composeTestRule.onNode(
+      hasText("Failed to connect to Living Room TV.") and hasAnyAncestor(hasTestTag("bt_device_${pairedTv.address}")),
+    ).assertIsDisplayed()
     composeTestRule.onNodeWithContentDescription("Dismiss").performClick()
     assert(dismissClicked)
   }

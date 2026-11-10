@@ -6,6 +6,8 @@ import com.example.toolbox.ui.main.FALLBACK_THEME_COLOR_HEX
 import com.example.toolbox.ui.main.InMemoryNavigationPreferencesRepository
 import com.example.toolbox.ui.main.ThemeMode
 import com.example.toolbox.ui.main.Tool
+import com.example.toolbox.ui.main.ToolCategory
+import com.example.toolbox.ui.main.ToolSortingOption
 import com.example.toolbox.ui.theme.createCustomColorScheme
 import com.example.toolbox.ui.theme.parseHexColor
 import junit.framework.TestCase.assertEquals
@@ -96,5 +98,60 @@ class SettingsScreenTest {
     val configurable = Tool.entries.filter { it != Tool.SETTINGS }
     assertFalse(configurable.contains(Tool.SETTINGS))
     assertEquals(Tool.entries.size - 1, configurable.size)
+  }
+
+  @Test
+  fun toolCategories_everyToolHasCategoryAndAllCategoriesHaveTools() {
+    for (tool in Tool.entries) {
+      assertNotNull(tool.category)
+      assertTrue(tool.category.title.isNotBlank())
+    }
+
+    for (category in ToolCategory.entries) {
+      val tools = Tool.entries.filter { it.category == category }
+      assertTrue("Category ${category.name} should have tools", tools.isNotEmpty())
+    }
+
+    // Specific category assignments
+    assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.CALCULATOR.category)
+    assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.UNIT_CONVERTER.category)
+    assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.RULER.category)
+    assertEquals(ToolCategory.AUDIO_AND_MUSIC, Tool.GUITAR_TUNER.category)
+    assertEquals(ToolCategory.AUDIO_AND_MUSIC, Tool.METRONOME.category)
+    assertEquals(ToolCategory.MEDIA_AND_CREATIVE, Tool.COLOR_PICKER.category)
+    assertEquals(ToolCategory.MEDIA_AND_CREATIVE, Tool.IMAGE_EDITOR.category)
+    assertEquals(ToolCategory.PRODUCTIVITY, Tool.TODO_LIST.category)
+    assertEquals(ToolCategory.PRODUCTIVITY, Tool.FILES.category)
+    assertEquals(ToolCategory.ENTERTAINMENT_AND_DEVICES, Tool.DICE_ROLLER.category)
+    assertEquals(ToolCategory.ENTERTAINMENT_AND_DEVICES, Tool.BLUETOOTH_REMOTE.category)
+    assertEquals(ToolCategory.SYSTEM, Tool.SETTINGS.category)
+  }
+
+  @Test
+  fun toolSortingPreferences_inMemoryRepository_updatesCorrectly() {
+    val repo = InMemoryNavigationPreferencesRepository()
+    assertEquals(ToolSortingOption.USER_CHOICE, repo.getToolSorting())
+    assertEquals(ToolSortingOption.USER_CHOICE, repo.toolSortingFlow.value)
+
+    repo.setToolSorting(ToolSortingOption.TOOL_CATEGORIES)
+    assertEquals(ToolSortingOption.TOOL_CATEGORIES, repo.getToolSorting())
+    assertEquals(ToolSortingOption.TOOL_CATEGORIES, repo.toolSortingFlow.value)
+
+    repo.setToolSorting(ToolSortingOption.USAGE)
+    assertEquals(ToolSortingOption.USAGE, repo.getToolSorting())
+    assertEquals(ToolSortingOption.USAGE, repo.toolSortingFlow.value)
+
+    repo.setToolSorting(ToolSortingOption.USER_CHOICE)
+    assertEquals(ToolSortingOption.USER_CHOICE, repo.getToolSorting())
+    assertEquals(ToolSortingOption.USER_CHOICE, repo.toolSortingFlow.value)
+
+    // Usage tracking
+    assertTrue(repo.getToolUsageCounts().isEmpty())
+    repo.incrementToolUsage(Tool.CALCULATOR)
+    assertEquals(1, repo.getToolUsageCounts()[Tool.CALCULATOR])
+    repo.incrementToolUsage(Tool.CALCULATOR)
+    assertEquals(2, repo.getToolUsageCounts()[Tool.CALCULATOR])
+    repo.resetToolUsage()
+    assertTrue(repo.getToolUsageCounts().isEmpty())
   }
 }

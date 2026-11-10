@@ -110,8 +110,8 @@ fun hitTestCropHandle(
   cropRect: NormalizedRect,
   containerWidth: Float,
   containerHeight: Float,
-  cornerThresholdPx: Float = 120f,
-  edgeThresholdPx: Float = 90f,
+  cornerThresholdPx: Float = 160f,
+  edgeThresholdPx: Float = 120f,
 ): CropHandle? {
   if (containerWidth <= 0f || containerHeight <= 0f) return null
 

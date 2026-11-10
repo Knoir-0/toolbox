@@ -4,6 +4,11 @@
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- Storage permissions for File Manager -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
+
     <!-- Bluetooth Remote: legacy permissions (Android 11 and below) -->
     <uses-permission
         android:name="android.permission.BLUETOOTH"
@@ -35,6 +40,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
+        android:requestLegacyExternalStorage="true"
         android:windowSoftInputMode="adjustResize"
         android:theme="@style/Theme.Toolbox">
         <activity

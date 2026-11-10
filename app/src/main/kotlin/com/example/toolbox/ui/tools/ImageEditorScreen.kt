@@ -45,6 +45,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.res.painterResource
+import com.example.toolbox.R
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.RotateLeft
@@ -71,9 +73,8 @@ import androidx.compose.material.icons.filled.ZoomInMap
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FilledTonalButton
@@ -88,6 +89,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -105,6 +107,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -112,6 +115,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -307,56 +311,40 @@ fun OpenFileInitialView(
   Box(
     modifier = modifier
       .fillMaxSize()
+      .clickable(onClick = onOpenFile)
+      .testTag("open_file_button")
       .padding(24.dp),
     contentAlignment = Alignment.Center,
   ) {
-    Card(
-      modifier = Modifier
-        .size(240.dp)
-        .clip(RoundedCornerShape(28.dp))
-        .clickable(onClick = onOpenFile)
-        .testTag("open_file_button"),
-      colors = CardDefaults.cardColors(
-        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-      ),
-      border = BorderStroke(
-        width = 2.dp,
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
-      ),
-      shape = RoundedCornerShape(28.dp),
+    Column(
+      modifier = Modifier.align(Alignment.Center),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
     ) {
-      Column(
-        modifier = Modifier
-          .fillMaxSize()
-          .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+      Surface(
+        modifier = Modifier.size(72.dp),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        shadowElevation = 4.dp,
       ) {
-        Surface(
-          modifier = Modifier.size(72.dp),
-          shape = CircleShape,
-          color = MaterialTheme.colorScheme.primaryContainer,
-          contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-          shadowElevation = 4.dp,
-        ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(
-              imageVector = Icons.Default.Add,
-              contentDescription = "Open file",
-              modifier = Modifier.size(40.dp),
-            )
-          }
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = "Open file",
+            modifier = Modifier.size(40.dp),
+          )
         }
-        Spacer(modifier = Modifier.height(20.dp))
-        Text(
-          text = "tap to open file",
-          style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Medium,
-          color = MaterialTheme.colorScheme.onSurface,
-          textAlign = TextAlign.Center,
-          modifier = Modifier.testTag("tap_to_open_file_text"),
-        )
       }
+      Spacer(modifier = Modifier.height(20.dp))
+      Text(
+        text = "tap to open file",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Medium,
+        color = MaterialTheme.colorScheme.onSurface,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.testTag("tap_to_open_file_text"),
+      )
     }
 
     // Convenient sample option for testing without requiring local images
@@ -436,7 +424,7 @@ fun ImageEditorContent(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .padding(horizontal = 8.dp),
+      .padding(horizontal = 4.dp),
   ) {
     // Top Bar: Actions (Close, New photo, Undo, Redo, Reset, Share, Save)
     Row(
@@ -502,9 +490,7 @@ fun ImageEditorContent(
       modifier = Modifier
         .fillMaxWidth()
         .weight(1f)
-        .padding(horizontal = 12.dp, vertical = 4.dp)
-        .clip(RoundedCornerShape(16.dp))
-        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+        .padding(horizontal = 2.dp, vertical = 2.dp)
         .testTag("image_canvas_container"),
       contentAlignment = Alignment.Center,
     ) {
@@ -514,7 +500,7 @@ fun ImageEditorContent(
       val bmpHeight = bitmap.height.toFloat()
 
       val density = LocalContext.current.resources.displayMetrics.density
-      val marginPx = 28.dp.value * density
+      val marginPx = 8.dp.value * density
       val availWidth = (boxWidth - marginPx).coerceAtLeast(10f)
       val availHeight = (boxHeight - marginPx).coerceAtLeast(10f)
 
@@ -1008,8 +994,8 @@ fun CropOverlay(
                 cropRect = currentCropRect,
                 containerWidth = containerSize.width,
                 containerHeight = containerSize.height,
-                cornerThresholdPx = 44.dp.toPx(),
-                edgeThresholdPx = 36.dp.toPx(),
+                cornerThresholdPx = 64.dp.toPx(),
+                edgeThresholdPx = 48.dp.toPx(),
               )
               if (activeHandle != null) {
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -1081,9 +1067,20 @@ fun CropOverlay(
       fun drawCorner(x: Float, y: Float, dx: Float, dy: Float, isHighlighted: Boolean) {
         val color = if (isHighlighted) Color.White else primaryColor
         val stroke = if (isHighlighted) cornerStrokeWidth + 1.5.dp.toPx() else cornerStrokeWidth
-        drawLine(color, Offset(x, y), Offset(x + dx, y), stroke, StrokeCap.Round)
-        drawLine(color, Offset(x, y), Offset(x, y + dy), stroke, StrokeCap.Round)
-        drawCircle(color, radius = stroke * 0.9f, center = Offset(x, y))
+        val path = Path().apply {
+          moveTo(x + dx, y)
+          lineTo(x, y)
+          lineTo(x, y + dy)
+        }
+        drawPath(
+          path = path,
+          color = color,
+          style = Stroke(
+            width = stroke,
+            cap = StrokeCap.Round,
+            join = StrokeJoin.Miter,
+          ),
+        )
       }
 
       drawCorner(left, top, handleLen, handleLen, activeHandle == CropHandle.TOP_LEFT)
@@ -1155,6 +1152,7 @@ fun CropControls(
           selected = selectedAspect == preset,
           onClick = { onAspectSelected(preset) },
           label = { Text(preset.label, style = MaterialTheme.typography.bodySmall) },
+          shape = CircleShape,
         )
       }
     }
@@ -1168,6 +1166,7 @@ fun CropControls(
     ) {
       OutlinedButton(
         onClick = onResetCrop,
+        shape = CircleShape,
         modifier = Modifier.testTag("crop_reset_button"),
       ) {
         Text("Reset")
@@ -1175,6 +1174,7 @@ fun CropControls(
       Spacer(modifier = Modifier.width(8.dp))
       Button(
         onClick = onApplyCrop,
+        shape = CircleShape,
         modifier = Modifier.testTag("crop_apply_button"),
       ) {
         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -1183,6 +1183,44 @@ fun CropControls(
       }
     }
   }
+}
+
+// -------------------------------------------------------------
+// Slim Dot Slider
+// -------------------------------------------------------------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SlimDotSlider(
+  value: Float,
+  onValueChange: (Float) -> Unit,
+  modifier: Modifier = Modifier,
+  valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
+  steps: Int = 0,
+  enabled: Boolean = true,
+) {
+  Slider(
+    value = value,
+    onValueChange = onValueChange,
+    modifier = modifier,
+    valueRange = valueRange,
+    steps = steps,
+    enabled = enabled,
+    thumb = {
+      Box(
+        modifier = Modifier
+          .size(16.dp)
+          .shadow(2.dp, CircleShape)
+          .background(MaterialTheme.colorScheme.primary, CircleShape),
+      )
+    },
+    track = { sliderState ->
+      SliderDefaults.Track(
+        sliderState = sliderState,
+        modifier = Modifier.height(4.dp),
+      )
+    },
+  )
 }
 
 // -------------------------------------------------------------
@@ -1250,7 +1288,7 @@ fun RotateControls(
         fontWeight = FontWeight.Bold,
         modifier = Modifier.width(48.dp),
       )
-      Slider(
+      SlimDotSlider(
         value = degrees,
         onValueChange = onDegreesChange,
         valueRange = -180f..180f,
@@ -1326,7 +1364,7 @@ fun TiltControls(
         fontWeight = FontWeight.Medium,
         modifier = Modifier.width(96.dp),
       )
-      Slider(
+      SlimDotSlider(
         value = tiltAngle,
         onValueChange = onTiltAngleChange,
         valueRange = -45f..45f,
@@ -1358,7 +1396,7 @@ fun TiltControls(
         fontWeight = FontWeight.Medium,
         modifier = Modifier.width(96.dp),
       )
-      Slider(
+      SlimDotSlider(
         value = horizontalTilt,
         onValueChange = onHorizontalTiltChange,
         valueRange = -30f..30f,
@@ -1390,7 +1428,7 @@ fun TiltControls(
         fontWeight = FontWeight.Medium,
         modifier = Modifier.width(96.dp),
       )
-      Slider(
+      SlimDotSlider(
         value = verticalTilt,
         onValueChange = onVerticalTiltChange,
         valueRange = -30f..30f,
@@ -1473,6 +1511,7 @@ fun AdjustControls(
           selected = adjustments.filterPreset == preset,
           onClick = { onAdjustmentsChange(adjustments.copy(filterPreset = preset)) },
           label = { Text(preset.label, style = MaterialTheme.typography.bodySmall) },
+          shape = CircleShape,
         )
       }
     }
@@ -1486,7 +1525,7 @@ fun AdjustControls(
         style = MaterialTheme.typography.bodySmall,
         modifier = Modifier.width(110.dp),
       )
-      Slider(
+      SlimDotSlider(
         value = adjustments.brightness,
         onValueChange = { onAdjustmentsChange(adjustments.copy(brightness = it)) },
         valueRange = -80f..80f,
@@ -1501,7 +1540,7 @@ fun AdjustControls(
         style = MaterialTheme.typography.bodySmall,
         modifier = Modifier.width(110.dp),
       )
-      Slider(
+      SlimDotSlider(
         value = adjustments.contrast,
         onValueChange = { onAdjustmentsChange(adjustments.copy(contrast = it)) },
         valueRange = 0.5f..1.5f,
@@ -1516,7 +1555,7 @@ fun AdjustControls(
         style = MaterialTheme.typography.bodySmall,
         modifier = Modifier.width(110.dp),
       )
-      Slider(
+      SlimDotSlider(
         value = adjustments.saturation,
         onValueChange = { onAdjustmentsChange(adjustments.copy(saturation = it)) },
         valueRange = 0f..2f,
@@ -1530,12 +1569,16 @@ fun AdjustControls(
       horizontalArrangement = Arrangement.End,
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      OutlinedButton(onClick = onResetAdjustments) {
+      OutlinedButton(
+        onClick = onResetAdjustments,
+        shape = CircleShape,
+      ) {
         Text("Reset")
       }
       Spacer(modifier = Modifier.width(8.dp))
       Button(
         onClick = onApplyAdjustments,
+        shape = CircleShape,
         modifier = Modifier.testTag("adjust_apply_button"),
       ) {
         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -1742,6 +1785,7 @@ fun DrawControls(
   )
 
   Column(modifier = modifier.fillMaxWidth()) {
+    // Bar 1: Color selection
     Row(
       modifier = Modifier
         .fillMaxWidth()
@@ -1767,21 +1811,85 @@ fun DrawControls(
             .clickable { onColorSelected(color) },
         )
       }
+    }
 
-      Spacer(modifier = Modifier.width(4.dp))
+    Spacer(modifier = Modifier.height(8.dp))
 
-      listOf(4f to "Thin", 12f to "Med", 24f to "Thick").forEach { (width, label) ->
-        FilterChip(
-          selected = currentStrokeWidth == width,
-          onClick = { onStrokeWidthSelected(width) },
-          label = { Text(label, style = MaterialTheme.typography.labelSmall) },
-        )
-      }
+    // Bar 2: Line width & tool selection
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .horizontalScroll(rememberScrollState()),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      val strokeOptions = listOf(4f to "Thin", 12f to "Med", 24f to "Thick")
+      val currentOption = strokeOptions.firstOrNull { it.first == currentStrokeWidth } ?: strokeOptions[1]
+
+      FilterChip(
+        selected = !isEraser,
+        onClick = {
+          val currentIndex = strokeOptions.indexOfFirst { it.first == currentStrokeWidth }
+          val nextIndex = if (currentIndex == -1) 0 else (currentIndex + 1) % strokeOptions.size
+          onStrokeWidthSelected(strokeOptions[nextIndex].first)
+        },
+        label = {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+              modifier = Modifier.size(12.dp),
+              contentAlignment = Alignment.Center,
+            ) {
+              Box(
+                modifier = Modifier
+                  .size(
+                    when (currentOption.first) {
+                      4f -> 4.dp
+                      24f -> 10.dp
+                      else -> 7.dp
+                    },
+                  )
+                  .background(
+                    color = if (!isEraser) {
+                      MaterialTheme.colorScheme.onSecondaryContainer
+                    } else {
+                      MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    shape = CircleShape,
+                  ),
+              )
+            }
+            Spacer(modifier = Modifier.width(6.dp))
+            Box(
+              modifier = Modifier.width(36.dp),
+              contentAlignment = Alignment.CenterStart,
+            ) {
+              Text(
+                currentOption.second,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+              )
+            }
+          }
+        },
+        shape = CircleShape,
+        modifier = Modifier.testTag("draw_stroke_width_toggle"),
+      )
 
       FilterChip(
         selected = isEraser,
         onClick = onToggleEraser,
-        label = { Text("Eraser", style = MaterialTheme.typography.labelSmall) },
+        label = {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+              painter = painterResource(id = R.drawable.ic_eraser),
+              contentDescription = null,
+              modifier = Modifier.size(14.dp),
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("Eraser", style = MaterialTheme.typography.labelSmall)
+          }
+        },
+        shape = CircleShape,
       )
 
       FilterChip(
@@ -1794,6 +1902,7 @@ fun DrawControls(
             Text("Text", style = MaterialTheme.typography.labelSmall)
           }
         },
+        shape = CircleShape,
       )
     }
 
@@ -1822,6 +1931,7 @@ fun DrawControls(
       Button(
         onClick = onApplyDrawing,
         enabled = strokesCount > 0 || textCount > 0,
+        shape = CircleShape,
         modifier = Modifier.testTag("draw_apply_button"),
       ) {
         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))

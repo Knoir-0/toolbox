@@ -91,11 +91,13 @@ import com.example.toolbox.ui.tools.BluetoothRemoteScreen
 import com.example.toolbox.ui.tools.CalculatorScreen
 import com.example.toolbox.ui.tools.ColorPickerScreen
 import com.example.toolbox.ui.tools.DiceRollerScreen
+import com.example.toolbox.ui.tools.FilesScreen
 import com.example.toolbox.ui.tools.GuitarTunerScreen
 import com.example.toolbox.ui.tools.ImageEditorScreen
 import com.example.toolbox.ui.tools.MetronomeScreen
 import com.example.toolbox.ui.tools.RulerScreen
 import com.example.toolbox.ui.tools.SettingsScreen
+import com.example.toolbox.ui.tools.TodoListScreen
 import com.example.toolbox.ui.tools.UnitConverterScreen
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
@@ -105,6 +107,42 @@ const val MAX_TOOLS_PER_ROW = 6
 const val DEFAULT_TOOLS_PER_ROW = 3
 const val ROWS_PER_PAGE_EXPANDED = 2
 const val ROWS_PER_PAGE_COLLAPSED = 1
+
+/**
+ * Defines the background style used by each tool screen.
+ */
+enum class ToolBackgroundStyle {
+  SURFACE_CONTAINER_LOWEST,
+  SURFACE_CONTAINER,
+  BACKGROUND,
+}
+
+/**
+ * Returns the [ToolBackgroundStyle] for the given [tool].
+ * [Tool.RULER] uses [ToolBackgroundStyle.SURFACE_CONTAINER_LOWEST] to provide high contrast
+ * for screen edge measurements.
+ * [Tool.TODO_LIST] uses [ToolBackgroundStyle.SURFACE_CONTAINER] so the background behind
+ * the toolbox navigation drawer matches the docked quick-add bar above it.
+ * Other tools use [ToolBackgroundStyle.BACKGROUND].
+ */
+fun toolBackgroundStyle(tool: Tool): ToolBackgroundStyle = when (tool) {
+  Tool.RULER -> ToolBackgroundStyle.SURFACE_CONTAINER_LOWEST
+  Tool.TODO_LIST -> ToolBackgroundStyle.SURFACE_CONTAINER
+  else -> ToolBackgroundStyle.BACKGROUND
+}
+
+/**
+ * Returns the matching background color for a given [tool] so that the background
+ * behind the toolbox navigation drawer seamlessly matches the tool screen above it.
+ */
+@Composable
+fun toolBackgroundColor(tool: Tool): Color {
+  return when (toolBackgroundStyle(tool)) {
+    ToolBackgroundStyle.SURFACE_CONTAINER_LOWEST -> MaterialTheme.colorScheme.surfaceContainerLowest
+    ToolBackgroundStyle.SURFACE_CONTAINER -> MaterialTheme.colorScheme.surfaceContainer
+    ToolBackgroundStyle.BACKGROUND -> MaterialTheme.colorScheme.background
+  }
+}
 
 /**
  * Ensures the tools-per-row count is within [MIN_TOOLS_PER_ROW]..[MAX_TOOLS_PER_ROW].
@@ -221,6 +259,10 @@ fun ToolboxScaffold(
     ?: remember { mutableStateOf(emptySet()) }
   val persistedToolsPerRow by preferencesRepository?.toolsPerRowFlow?.collectAsState()
     ?: remember { mutableIntStateOf(initialToolsPerRow ?: DEFAULT_TOOLS_PER_ROW) }
+  val toolSorting by preferencesRepository?.toolSortingFlow?.collectAsState()
+    ?: remember { mutableStateOf(ToolSortingOption.USER_CHOICE) }
+  val toolUsageCounts by preferencesRepository?.toolUsageCountsFlow?.collectAsState()
+    ?: remember { mutableStateOf(emptyMap()) }
 
   val allOrderedTools = remember(initialTools, persistedToolOrder) {
     val base = initialTools ?: persistedToolOrder
@@ -231,10 +273,18 @@ fun ToolboxScaffold(
     allOrderedTools.filter { it !in hiddenTools || it == Tool.SETTINGS }
   }
 
+  val displayTools = remember(visibleTools, toolSorting, toolUsageCounts) {
+    if (toolSorting == ToolSortingOption.USAGE) {
+      sortToolsByUsage(visibleTools, toolUsageCounts)
+    } else {
+      visibleTools
+    }
+  }
+
   // Auto-switch selectedTool if it becomes hidden
-  LaunchedEffect(selectedTool, visibleTools) {
+  LaunchedEffect(selectedTool, displayTools) {
     if (selectedTool in hiddenTools && selectedTool != Tool.SETTINGS) {
-      onSelectTool(visibleTools.firstOrNull() ?: Tool.SETTINGS)
+      onSelectTool(displayTools.firstOrNull() ?: Tool.SETTINGS)
     }
   }
 
@@ -250,9 +300,11 @@ fun ToolboxScaffold(
 
   // Native NavigationBar height (80.dp) + compact pull-up handle (28.dp) + bottom clearance + navigation bar insets
   val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-  val sheetPeekHeight = 118.dp + navBarBottom
+  val basePeekHeight = if (toolSorting == ToolSortingOption.TOOL_CATEGORIES) 130.dp else 118.dp
+  val sheetPeekHeight = basePeekHeight + navBarBottom
   val isExpanded = sheetState.currentValue == SheetValue.Expanded ||
     sheetState.targetValue == SheetValue.Expanded
+  val currentToolBackgroundColor = toolBackgroundColor(selectedTool)
 
   BottomSheetScaffold(
     modifier = modifier.fillMaxSize(),
@@ -264,11 +316,13 @@ fun ToolboxScaffold(
     sheetTonalElevation = NavigationBarDefaults.Elevation,
     sheetShadowElevation = 8.dp,
     sheetDragHandle = null,
+    containerColor = currentToolBackgroundColor,
     sheetContent = {
       ToolsPullUpPanelContent(
-        tools = visibleTools,
+        tools = displayTools,
         selectedTool = selectedTool,
         toolsPerRow = toolsPerRow,
+        toolSorting = toolSorting,
         isExpanded = isExpanded,
         onTogglePanel = {
           coroutineScope.launch {
@@ -279,13 +333,23 @@ fun ToolboxScaffold(
             }
           }
         },
-        onSelectTool = onSelectTool,
+        onSelectTool = { tool ->
+          preferencesRepository?.incrementToolUsage(tool)
+          onSelectTool(tool)
+          if (sheetState.currentValue == SheetValue.Expanded ||
+            sheetState.targetValue == SheetValue.Expanded
+          ) {
+            coroutineScope.launch {
+              sheetState.partialExpand()
+            }
+          }
+        },
         onToolsPerRowChange = { newCount ->
           val coerced = coerceToolsPerRow(newCount)
           preferencesRepository?.setToolsPerRow(coerced)
         },
         onReorderTools = { fromIndex, toIndex ->
-          val reordered = reorderTools(visibleTools, fromIndex, toIndex)
+          val reordered = reorderTools(displayTools, fromIndex, toIndex)
           val merged = mergeReorderedVisible(allOrderedTools, reordered)
           preferencesRepository?.setToolOrder(merged)
         },
@@ -298,6 +362,7 @@ fun ToolboxScaffold(
     Box(
       modifier = Modifier
         .fillMaxSize()
+        .background(currentToolBackgroundColor)
         .statusBarsPadding(),
       contentAlignment = Alignment.Center,
     ) {
@@ -320,6 +385,7 @@ fun ToolsPullUpPanelContent(
   onSelectTool: (Tool) -> Unit,
   onToolsPerRowChange: (Int) -> Unit,
   onReorderTools: (fromIndex: Int, toIndex: Int) -> Unit,
+  toolSorting: ToolSortingOption = ToolSortingOption.USER_CHOICE,
   onDraggingChanged: (Boolean) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
@@ -364,6 +430,7 @@ fun ToolsPullUpPanelContent(
       selectedTool = selectedTool,
       toolsPerRow = coerceToolsPerRow(toolsPerRow),
       isExpanded = isExpanded,
+      toolSorting = toolSorting,
       onSelectTool = onSelectTool,
       onReorderTools = onReorderTools,
       onDraggingChanged = onDraggingChanged,
@@ -384,6 +451,7 @@ fun ToolsPullUpPanelContent(
         showHelp = showReorderHelp,
         onToolsPerRowChange = onToolsPerRowChange,
         onToggleHelp = { showReorderHelp = !showReorderHelp },
+        toolSorting = toolSorting,
         modifier = Modifier
           .fillMaxWidth()
           .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -402,6 +470,7 @@ fun ToolsPerRowControl(
   showHelp: Boolean,
   onToolsPerRowChange: (Int) -> Unit,
   onToggleHelp: () -> Unit,
+  toolSorting: ToolSortingOption = ToolSortingOption.USER_CHOICE,
   modifier: Modifier = Modifier,
 ) {
   val coercedValue = coerceToolsPerRow(toolsPerRow)
@@ -562,7 +631,14 @@ fun ToolsPerRowControl(
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
       ) {
         Text(
-          text = "Touch and hold any tool icon, then drag and drop it to rearrange your toolbox. The first row stays visible in the bottom navigation bar.",
+          text = when (toolSorting) {
+            ToolSortingOption.TOOL_CATEGORIES ->
+              "Tools are grouped by category. Small categories share a single row when their combined tool count fits within the tools-per-row slider setting."
+            ToolSortingOption.USAGE ->
+              "Tools are sorted by how frequently you use them. Switch to Manual in Settings to manually reorder tools."
+            ToolSortingOption.USER_CHOICE ->
+              "Touch and hold any tool icon, then drag and drop it to rearrange your toolbox. The first row stays visible in the bottom navigation bar."
+          },
           style = MaterialTheme.typography.bodySmall,
           modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
         )
@@ -577,11 +653,24 @@ fun ReorderableToolsGrid(
   selectedTool: Tool,
   toolsPerRow: Int,
   isExpanded: Boolean = true,
+  toolSorting: ToolSortingOption = ToolSortingOption.USER_CHOICE,
   onSelectTool: (Tool) -> Unit,
   onReorderTools: (fromIndex: Int, toIndex: Int) -> Unit,
   onDraggingChanged: (Boolean) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
+  if (toolSorting == ToolSortingOption.TOOL_CATEGORIES) {
+    CategoryToolsGrid(
+      tools = tools,
+      selectedTool = selectedTool,
+      toolsPerRow = toolsPerRow,
+      isExpanded = isExpanded,
+      onSelectTool = onSelectTool,
+      modifier = modifier,
+    )
+    return
+  }
+
   val effectiveColumns = coerceToolsPerRow(toolsPerRow)
   val rowCount = calculateRowCount(tools.size, effectiveColumns)
   val expandedPageCount = calculateExpandedPageCount(rowCount)
@@ -654,7 +743,8 @@ fun ReorderableToolsGrid(
       .onGloballyPositioned { coords ->
         gridCoordinates = coords
       }
-      .pointerInput(effectiveColumns, isExpanded) {
+      .pointerInput(effectiveColumns, isExpanded, toolSorting) {
+        if (toolSorting != ToolSortingOption.USER_CHOICE) return@pointerInput
         detectDragGesturesAfterLongPress(
           onDragStart = { startOffset ->
             val hitSlotIndex = findTargetSlotIndex(
@@ -793,6 +883,196 @@ fun ReorderableToolsGrid(
           modifier = Modifier.padding(top = 2.dp),
         )
       }
+    }
+  }
+}
+
+data class CategoryGroup(
+  val category: ToolCategory,
+  val tools: List<Tool>,
+)
+
+data class CategoryPage(
+  val groups: List<CategoryGroup>,
+)
+
+@Composable
+fun CategoryToolsGrid(
+  tools: List<Tool>,
+  selectedTool: Tool,
+  toolsPerRow: Int,
+  onSelectTool: (Tool) -> Unit,
+  isExpanded: Boolean = true,
+  modifier: Modifier = Modifier,
+) {
+  val effectiveColumns = coerceToolsPerRow(toolsPerRow)
+  val activeCategories = remember(tools) {
+    ToolCategory.entries.mapNotNull { category ->
+      val categoryTools = tools.filter { it.category == category }
+      if (categoryTools.isNotEmpty()) {
+        CategoryGroup(category, categoryTools)
+      } else {
+        null
+      }
+    }
+  }
+
+  // Pack categories into pages: multiple categories fit on one page as one row if categories are small enough
+  val pages = remember(activeCategories, effectiveColumns) {
+    val result = mutableListOf<CategoryPage>()
+    var currentGroups = mutableListOf<CategoryGroup>()
+    var currentCount = 0
+
+    for (group in activeCategories) {
+      if (currentGroups.isEmpty()) {
+        currentGroups.add(group)
+        currentCount = group.tools.size
+      } else if (currentCount + group.tools.size <= effectiveColumns) {
+        currentGroups.add(group)
+        currentCount += group.tools.size
+      } else {
+        result.add(CategoryPage(currentGroups.toList()))
+        currentGroups = mutableListOf(group)
+        currentCount = group.tools.size
+      }
+    }
+    if (currentGroups.isNotEmpty()) {
+      result.add(CategoryPage(currentGroups.toList()))
+    }
+    result
+  }
+
+  val coroutineScope = rememberCoroutineScope()
+  val categoryPagerState = rememberPagerState(
+    initialPage = 0,
+    pageCount = { maxOf(1, pages.size) },
+  )
+
+  LaunchedEffect(selectedTool, pages) {
+    val targetIndex = pages.indexOfFirst { page ->
+      page.groups.any { it.category == selectedTool.category }
+    }
+    if (targetIndex >= 0 && targetIndex != categoryPagerState.currentPage) {
+      categoryPagerState.scrollToPage(targetIndex)
+    }
+  }
+
+  Column(
+    modifier = modifier.testTag("tools_grid"),
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
+  ) {
+    HorizontalPager(
+      state = categoryPagerState,
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+    ) { pageIndex ->
+      if (pageIndex in pages.indices) {
+        val page = pages[pageIndex]
+        val totalPageTools = page.groups.sumOf { it.tools.size }
+        val dummySpacers = maxOf(0, effectiveColumns - totalPageTools)
+        val sideSpacerWeight = dummySpacers / 2f
+
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("tools_grid_row_$pageIndex"),
+          horizontalArrangement = Arrangement.Center,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          if (sideSpacerWeight > 0f) {
+            Spacer(modifier = Modifier.weight(sideSpacerWeight))
+          }
+
+          for ((groupIndex, group) in page.groups.withIndex()) {
+            if (groupIndex > 0) {
+              Box(
+                modifier = Modifier
+                  .padding(horizontal = 2.dp)
+                  .height(36.dp)
+                  .width(1.dp)
+                  .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+              )
+            }
+
+            val toolRows = group.tools.chunked(effectiveColumns)
+
+            Column(
+              modifier = Modifier.weight(minOf(group.tools.size, effectiveColumns).toFloat()),
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              // Category Label
+              Text(
+                text = group.category.title,
+                style = if (page.groups.size > 1) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .then(
+                    if (groupIndex == 0) Modifier.testTag("category_label") else Modifier
+                  )
+                  .testTag("category_label_${group.category.name.lowercase()}"),
+              )
+
+              // Tools in this Category
+              for (rowTools in toolRows) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.Center,
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  val rowDummySpacers = maxOf(0, effectiveColumns - rowTools.size)
+                  val rowSideSpacer = if (toolRows.size > 1) rowDummySpacers / 2f else 0f
+
+                  if (rowSideSpacer > 0f) {
+                    Spacer(modifier = Modifier.weight(rowSideSpacer))
+                  }
+                  for (tool in rowTools) {
+                    Box(
+                      modifier = Modifier.weight(1f),
+                      contentAlignment = Alignment.Center,
+                    ) {
+                      ToolGridItem(
+                        tool = tool,
+                        isSelected = tool == selectedTool,
+                        isDragging = false,
+                        translationOffset = Offset.Zero,
+                        onClick = { onSelectTool(tool) },
+                      )
+                    }
+                  }
+                  if (rowSideSpacer > 0f) {
+                    Spacer(modifier = Modifier.weight(rowSideSpacer))
+                  }
+                }
+              }
+            }
+          }
+
+          if (sideSpacerWeight > 0f) {
+            Spacer(modifier = Modifier.weight(sideSpacerWeight))
+          }
+        }
+      }
+    }
+
+    if (pages.size > 1) {
+      PanelPageIndicator(
+        pageCount = pages.size,
+        currentPage = categoryPagerState.currentPage,
+        onPageSelected = { page ->
+          coroutineScope.launch {
+            categoryPagerState.animateScrollToPage(page)
+          }
+        },
+        testTag = "tools_panel_page_indicator",
+        modifier = Modifier.padding(top = 2.dp),
+      )
     }
   }
 }
@@ -1027,20 +1307,29 @@ fun ToolContentView(
   modifier: Modifier = Modifier,
   preferencesRepository: NavigationPreferencesRepository? = null,
 ) {
-  when (tool) {
-    Tool.DICE_ROLLER -> DiceRollerScreen(modifier = modifier.padding(bottom = bottomPadding))
-    Tool.UNIT_CONVERTER -> UnitConverterScreen(modifier = modifier.padding(bottom = bottomPadding))
-    Tool.GUITAR_TUNER -> GuitarTunerScreen(modifier = modifier.padding(bottom = bottomPadding))
-    Tool.METRONOME -> MetronomeScreen(modifier = modifier.padding(bottom = bottomPadding))
-    Tool.COLOR_PICKER -> ColorPickerScreen(modifier = modifier.padding(bottom = bottomPadding))
-    Tool.RULER -> RulerScreen(modifier = modifier.padding(bottom = bottomPadding))
-    Tool.BLUETOOTH_REMOTE -> BluetoothRemoteScreen(modifier = modifier.padding(bottom = bottomPadding))
-    Tool.CALCULATOR -> CalculatorScreen(bottomPadding = bottomPadding, modifier = modifier)
-    Tool.IMAGE_EDITOR -> ImageEditorScreen(modifier = modifier.padding(bottom = bottomPadding))
-    Tool.SETTINGS -> SettingsScreen(
-      preferencesRepository = preferencesRepository ?: rememberNavigationPreferencesRepository(),
-      modifier = modifier.padding(bottom = bottomPadding),
-    )
+  val bgColor = toolBackgroundColor(tool)
+  Box(
+    modifier = modifier
+      .fillMaxSize()
+      .background(bgColor),
+  ) {
+    when (tool) {
+      Tool.DICE_ROLLER -> DiceRollerScreen(modifier = Modifier.padding(bottom = bottomPadding))
+      Tool.UNIT_CONVERTER -> UnitConverterScreen(modifier = Modifier.padding(bottom = bottomPadding))
+      Tool.GUITAR_TUNER -> GuitarTunerScreen(modifier = Modifier.padding(bottom = bottomPadding))
+      Tool.METRONOME -> MetronomeScreen(modifier = Modifier.padding(bottom = bottomPadding))
+      Tool.COLOR_PICKER -> ColorPickerScreen(modifier = Modifier.padding(bottom = bottomPadding))
+      Tool.RULER -> RulerScreen(modifier = Modifier.padding(bottom = bottomPadding))
+      Tool.BLUETOOTH_REMOTE -> BluetoothRemoteScreen(modifier = Modifier.padding(bottom = bottomPadding))
+      Tool.CALCULATOR -> CalculatorScreen(bottomPadding = bottomPadding, modifier = Modifier)
+      Tool.IMAGE_EDITOR -> ImageEditorScreen(modifier = Modifier.padding(bottom = bottomPadding))
+      Tool.TODO_LIST -> TodoListScreen(modifier = Modifier.padding(bottom = bottomPadding))
+      Tool.FILES -> FilesScreen(modifier = Modifier.padding(bottom = bottomPadding))
+      Tool.SETTINGS -> SettingsScreen(
+        preferencesRepository = preferencesRepository ?: rememberNavigationPreferencesRepository(),
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+    }
   }
 }
 

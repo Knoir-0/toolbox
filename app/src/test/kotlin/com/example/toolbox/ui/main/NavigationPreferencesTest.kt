@@ -42,7 +42,7 @@ class NavigationPreferencesTest {
 
   @Test
   fun parseToolOrder_validSavedOrder_preservesOrder() {
-    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,SETTINGS"
+    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,SETTINGS"
     val result = parseToolOrder(raw)
     val expected = listOf(
       Tool.IMAGE_EDITOR,
@@ -54,6 +54,8 @@ class NavigationPreferencesTest {
       Tool.UNIT_CONVERTER,
       Tool.DICE_ROLLER,
       Tool.BLUETOOTH_REMOTE,
+      Tool.TODO_LIST,
+      Tool.FILES,
       Tool.SETTINGS,
     )
     assertEquals(expected, result)
@@ -127,6 +129,8 @@ class NavigationPreferencesTest {
       Tool.COLOR_PICKER,
       Tool.BLUETOOTH_REMOTE,
       Tool.IMAGE_EDITOR,
+      Tool.TODO_LIST,
+      Tool.FILES,
       Tool.SETTINGS,
     )
     repo.setToolOrder(customOrder)
@@ -158,6 +162,8 @@ class NavigationPreferencesTest {
       Tool.UNIT_CONVERTER,
       Tool.DICE_ROLLER,
       Tool.BLUETOOTH_REMOTE,
+      Tool.TODO_LIST,
+      Tool.FILES,
       Tool.SETTINGS,
     )
     repo.setToolOrder(customOrder)
@@ -287,6 +293,129 @@ class NavigationPreferencesTest {
     repo.setThemeColor("#123456")
     assertEquals("#123456", repo.getThemeColor())
     assertEquals("#123456", fakePrefs.getString(PREF_KEY_THEME_COLOR, null))
+  }
+
+  @Test
+  fun toolSorting_persistsCorrectly() {
+    val fakePrefs = FakeSharedPreferences()
+    val repo = DefaultNavigationPreferencesRepository(fakePrefs)
+
+    // Default is USER_CHOICE
+    assertEquals(ToolSortingOption.USER_CHOICE, repo.getToolSorting())
+    assertEquals(ToolSortingOption.USER_CHOICE, repo.toolSortingFlow.value)
+
+    // Set to TOOL_CATEGORIES
+    repo.setToolSorting(ToolSortingOption.TOOL_CATEGORIES)
+    assertEquals(ToolSortingOption.TOOL_CATEGORIES, repo.getToolSorting())
+    assertEquals(ToolSortingOption.TOOL_CATEGORIES, repo.toolSortingFlow.value)
+    assertEquals("TOOL_CATEGORIES", fakePrefs.getString(PREF_KEY_TOOL_SORTING, null))
+
+    // Set back to USER_CHOICE
+    repo.setToolSorting(ToolSortingOption.USER_CHOICE)
+    assertEquals(ToolSortingOption.USER_CHOICE, repo.getToolSorting())
+    assertEquals(ToolSortingOption.USER_CHOICE, repo.toolSortingFlow.value)
+    assertEquals("USER_CHOICE", fakePrefs.getString(PREF_KEY_TOOL_SORTING, null))
+  }
+
+  @Test
+  fun toolSortingOption_displayNamesAreExpected() {
+    assertEquals("Manual", ToolSortingOption.USER_CHOICE.displayName)
+    assertEquals("Tool categories", ToolSortingOption.TOOL_CATEGORIES.displayName)
+    assertEquals("By usage", ToolSortingOption.USAGE.displayName)
+  }
+
+  @Test
+  fun toolSorting_fallbackToUserChoiceOnInvalidValue() {
+    val fakePrefs = FakeSharedPreferences()
+    fakePrefs.edit().putString(PREF_KEY_TOOL_SORTING, "INVALID_VALUE").apply()
+    val repo = DefaultNavigationPreferencesRepository(fakePrefs)
+
+    assertEquals(ToolSortingOption.USER_CHOICE, repo.getToolSorting())
+  }
+
+  @Test
+  fun parseAndSerializeToolUsage_roundtripWorksCorrectly() {
+    val usage = mapOf(
+      Tool.CALCULATOR to 15,
+      Tool.RULER to 3,
+      Tool.DICE_ROLLER to 1,
+    )
+    val serialized = serializeToolUsage(usage)
+    val parsed = parseToolUsage(serialized)
+    assertEquals(usage, parsed)
+
+    // Null or blank string returns empty map
+    assertEquals(emptyMap<Tool, Int>(), parseToolUsage(null))
+    assertEquals(emptyMap<Tool, Int>(), parseToolUsage(""))
+    assertEquals(emptyMap<Tool, Int>(), parseToolUsage("   "))
+
+    // Malformed entries ignored
+    val malformed = "CALCULATOR:10,INVALID_TOOL:5,CORRUPT,RULER:-1"
+    val parsedMalformed = parseToolUsage(malformed)
+    assertEquals(mapOf(Tool.CALCULATOR to 10), parsedMalformed)
+  }
+
+  @Test
+  fun sortToolsByUsage_ordersByCountDescendingAndSettingsAlwaysLast() {
+    val tools = listOf(
+      Tool.DICE_ROLLER,
+      Tool.UNIT_CONVERTER,
+      Tool.GUITAR_TUNER,
+      Tool.CALCULATOR,
+      Tool.SETTINGS,
+    )
+    val usage = mapOf(
+      Tool.GUITAR_TUNER to 5,
+      Tool.CALCULATOR to 20,
+      Tool.DICE_ROLLER to 2,
+      Tool.SETTINGS to 100, // even if Settings has highest count, it must remain last
+    )
+
+    val sorted = sortToolsByUsage(tools, usage)
+    val expected = listOf(
+      Tool.CALCULATOR, // 20
+      Tool.GUITAR_TUNER, // 5
+      Tool.DICE_ROLLER, // 2
+      Tool.UNIT_CONVERTER, // 0
+      Tool.SETTINGS, // last!
+    )
+    assertEquals(expected, sorted)
+    assertEquals(Tool.SETTINGS, sorted.last())
+  }
+
+  @Test
+  fun toolUsage_persistsAndIncrementsCorrectly() {
+    val fakePrefs = FakeSharedPreferences()
+    val repo = DefaultNavigationPreferencesRepository(fakePrefs)
+
+    assertTrue(repo.getToolUsageCounts().isEmpty())
+
+    repo.incrementToolUsage(Tool.CALCULATOR)
+    assertEquals(1, repo.getToolUsageCounts()[Tool.CALCULATOR])
+    assertEquals(1, repo.toolUsageCountsFlow.value[Tool.CALCULATOR])
+
+    repo.incrementToolUsage(Tool.CALCULATOR)
+    assertEquals(2, repo.getToolUsageCounts()[Tool.CALCULATOR])
+
+    repo.incrementToolUsage(Tool.RULER)
+    assertEquals(2, repo.getToolUsageCounts()[Tool.CALCULATOR])
+    assertEquals(1, repo.getToolUsageCounts()[Tool.RULER])
+
+    // Reset clears usage
+    repo.resetToolUsage()
+    assertTrue(repo.getToolUsageCounts().isEmpty())
+    assertTrue(repo.toolUsageCountsFlow.value.isEmpty())
+  }
+
+  @Test
+  fun toolSorting_usageOptionPersistsCorrectly() {
+    val fakePrefs = FakeSharedPreferences()
+    val repo = DefaultNavigationPreferencesRepository(fakePrefs)
+
+    repo.setToolSorting(ToolSortingOption.USAGE)
+    assertEquals(ToolSortingOption.USAGE, repo.getToolSorting())
+    assertEquals(ToolSortingOption.USAGE, repo.toolSortingFlow.value)
+    assertEquals("USAGE", fakePrefs.getString(PREF_KEY_TOOL_SORTING, null))
   }
 }
 

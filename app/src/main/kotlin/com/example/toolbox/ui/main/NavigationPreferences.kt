@@ -16,6 +16,8 @@ const val PREF_KEY_TOOL_ORDER = "tool_order"
 const val PREF_KEY_THEME_MODE = "theme_mode"
 const val PREF_KEY_THEME_COLOR = "theme_color"
 const val PREF_KEY_HIDDEN_TOOLS = "hidden_tools"
+const val PREF_KEY_TOOL_SORTING = "tool_sorting"
+const val PREF_KEY_TOOL_USAGE = "tool_usage"
 
 const val DEFAULT_THEME_COLOR_SYSTEM = "SYSTEM"
 const val FALLBACK_THEME_COLOR_HEX = "#8E66A6"
@@ -27,6 +29,17 @@ enum class ThemeMode {
   SYSTEM,
   LIGHT,
   DARK,
+}
+
+/**
+ * Options for organizing tools in the Toolbox navigation panel.
+ */
+enum class ToolSortingOption(
+  val displayName: String,
+) {
+  USER_CHOICE(displayName = "Manual"),
+  TOOL_CATEGORIES(displayName = "Tool categories"),
+  USAGE(displayName = "By usage"),
 }
 
 /**
@@ -88,6 +101,56 @@ fun serializeHiddenTools(tools: Set<Tool>): String {
 }
 
 /**
+ * Parses a comma-separated key:value string into a map of [Tool] to usage counts.
+ */
+fun parseToolUsage(rawString: String?): Map<Tool, Int> {
+  if (rawString.isNullOrBlank()) return emptyMap()
+  val result = mutableMapOf<Tool, Int>()
+  rawString.split(",").forEach { entry ->
+    val parts = entry.split(":")
+    if (parts.size == 2) {
+      val toolName = parts[0].trim()
+      val count = parts[1].trim().toIntOrNull() ?: 0
+      try {
+        val tool = Tool.valueOf(toolName)
+        if (count > 0) {
+          result[tool] = count
+        }
+      } catch (_: IllegalArgumentException) {}
+    }
+  }
+  return result
+}
+
+/**
+ * Serializes a map of [Tool] usage counts into a comma-separated key:value string.
+ */
+fun serializeToolUsage(usage: Map<Tool, Int>): String {
+  return usage.filter { it.value > 0 }
+    .map { "${it.key.name}:${it.value}" }
+    .joinToString(",")
+}
+
+/**
+ * Sorts tools in descending order of usage counts while guaranteeing [Tool.SETTINGS] is last.
+ */
+fun sortToolsByUsage(
+  tools: List<Tool>,
+  usageCounts: Map<Tool, Int>,
+): List<Tool> {
+  val nonSettings = tools.filter { it != Tool.SETTINGS }
+  val sorted = nonSettings.sortedWith(
+    compareByDescending<Tool> { usageCounts[it] ?: 0 }
+      .thenBy { tools.indexOf(it) }
+  )
+  return if (tools.contains(Tool.SETTINGS)) {
+    sorted + Tool.SETTINGS
+  } else {
+    sorted
+  }
+}
+
+/**
  * Repository interface for persisting user navigation preferences (tools per row, tool order,
  * theme mode, theme color, and tool visibility).
  */
@@ -111,6 +174,15 @@ interface NavigationPreferencesRepository {
   fun getHiddenTools(): Set<Tool>
   fun setHiddenTools(tools: Set<Tool>)
   val hiddenToolsFlow: StateFlow<Set<Tool>>
+
+  fun getToolSorting(): ToolSortingOption
+  fun setToolSorting(sorting: ToolSortingOption)
+  val toolSortingFlow: StateFlow<ToolSortingOption>
+
+  fun getToolUsageCounts(): Map<Tool, Int>
+  fun incrementToolUsage(tool: Tool)
+  fun resetToolUsage()
+  val toolUsageCountsFlow: StateFlow<Map<Tool, Int>>
 }
 
 /**
@@ -138,6 +210,12 @@ class DefaultNavigationPreferencesRepository(
 
   private val _hiddenToolsFlow = MutableStateFlow(getHiddenTools())
   override val hiddenToolsFlow: StateFlow<Set<Tool>> = _hiddenToolsFlow.asStateFlow()
+
+  private val _toolSortingFlow = MutableStateFlow(getToolSorting())
+  override val toolSortingFlow: StateFlow<ToolSortingOption> = _toolSortingFlow.asStateFlow()
+
+  private val _toolUsageCountsFlow = MutableStateFlow(getToolUsageCounts())
+  override val toolUsageCountsFlow: StateFlow<Map<Tool, Int>> = _toolUsageCountsFlow.asStateFlow()
 
   override fun getToolsPerRow(): Int {
     val count = sharedPreferences.getInt(PREF_KEY_TOOLS_PER_ROW, DEFAULT_TOOLS_PER_ROW)
@@ -197,6 +275,38 @@ class DefaultNavigationPreferencesRepository(
     sharedPreferences.edit().putString(PREF_KEY_HIDDEN_TOOLS, serialized).apply()
     _hiddenToolsFlow.value = sanitized
   }
+
+  override fun getToolSorting(): ToolSortingOption {
+    val raw = sharedPreferences.getString(PREF_KEY_TOOL_SORTING, null) ?: return ToolSortingOption.USER_CHOICE
+    return try {
+      ToolSortingOption.valueOf(raw)
+    } catch (_: IllegalArgumentException) {
+      ToolSortingOption.USER_CHOICE
+    }
+  }
+
+  override fun setToolSorting(sorting: ToolSortingOption) {
+    sharedPreferences.edit().putString(PREF_KEY_TOOL_SORTING, sorting.name).apply()
+    _toolSortingFlow.value = sorting
+  }
+
+  override fun getToolUsageCounts(): Map<Tool, Int> {
+    val raw = sharedPreferences.getString(PREF_KEY_TOOL_USAGE, null)
+    return parseToolUsage(raw)
+  }
+
+  override fun incrementToolUsage(tool: Tool) {
+    val current = getToolUsageCounts().toMutableMap()
+    val updated = (current[tool] ?: 0) + 1
+    current[tool] = updated
+    sharedPreferences.edit().putString(PREF_KEY_TOOL_USAGE, serializeToolUsage(current)).apply()
+    _toolUsageCountsFlow.value = current
+  }
+
+  override fun resetToolUsage() {
+    sharedPreferences.edit().remove(PREF_KEY_TOOL_USAGE).apply()
+    _toolUsageCountsFlow.value = emptyMap()
+  }
 }
 
 /**
@@ -208,6 +318,8 @@ class InMemoryNavigationPreferencesRepository(
   initialThemeMode: ThemeMode = ThemeMode.SYSTEM,
   initialThemeColor: String = DEFAULT_THEME_COLOR_SYSTEM,
   initialHiddenTools: Set<Tool> = emptySet(),
+  initialToolSorting: ToolSortingOption = ToolSortingOption.USER_CHOICE,
+  initialToolUsage: Map<Tool, Int> = emptyMap(),
 ) : NavigationPreferencesRepository {
   private val _toolsPerRowFlow = MutableStateFlow(coerceToolsPerRow(initialToolsPerRow))
   override val toolsPerRowFlow: StateFlow<Int> = _toolsPerRowFlow.asStateFlow()
@@ -225,6 +337,12 @@ class InMemoryNavigationPreferencesRepository(
 
   private val _hiddenToolsFlow = MutableStateFlow(initialHiddenTools.filter { it != Tool.SETTINGS }.toSet())
   override val hiddenToolsFlow: StateFlow<Set<Tool>> = _hiddenToolsFlow.asStateFlow()
+
+  private val _toolSortingFlow = MutableStateFlow(initialToolSorting)
+  override val toolSortingFlow: StateFlow<ToolSortingOption> = _toolSortingFlow.asStateFlow()
+
+  private val _toolUsageCountsFlow = MutableStateFlow(initialToolUsage)
+  override val toolUsageCountsFlow: StateFlow<Map<Tool, Int>> = _toolUsageCountsFlow.asStateFlow()
 
   override fun getToolsPerRow(): Int = _toolsPerRowFlow.value
 
@@ -254,6 +372,24 @@ class InMemoryNavigationPreferencesRepository(
 
   override fun setHiddenTools(tools: Set<Tool>) {
     _hiddenToolsFlow.value = tools.filter { it != Tool.SETTINGS }.toSet()
+  }
+
+  override fun getToolSorting(): ToolSortingOption = _toolSortingFlow.value
+
+  override fun setToolSorting(sorting: ToolSortingOption) {
+    _toolSortingFlow.value = sorting
+  }
+
+  override fun getToolUsageCounts(): Map<Tool, Int> = _toolUsageCountsFlow.value
+
+  override fun incrementToolUsage(tool: Tool) {
+    val current = _toolUsageCountsFlow.value.toMutableMap()
+    current[tool] = (current[tool] ?: 0) + 1
+    _toolUsageCountsFlow.value = current
+  }
+
+  override fun resetToolUsage() {
+    _toolUsageCountsFlow.value = emptyMap()
   }
 }
 

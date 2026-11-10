@@ -20,6 +20,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -293,6 +294,7 @@ internal fun DiceRollerScreen(
     sheetTonalElevation = 6.dp,
     sheetShadowElevation = 12.dp,
     sheetDragHandle = null,
+    containerColor = MaterialTheme.colorScheme.background,
     sheetContent = {
       RollHistorySheetContent(
         history = history,
@@ -371,17 +373,31 @@ internal fun DiceRollerScreen(
               }
             }
 
-            FlowRow(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-              verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              DieType.entries.forEach { die ->
-                DieSelectionButton(
-                  die = die,
-                  isSelected = die == selectedDie,
-                  onClick = { selectedDie = die },
-                )
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+              val totalDice = DieType.entries.size
+              val targetSpacing = if (maxWidth < 320.dp) 2.dp else 4.dp
+              val maxButtonSize = 40.dp
+              val calculatedSize = (maxWidth - (targetSpacing * (totalDice - 1))) / totalDice
+              val buttonSize = minOf(maxButtonSize, calculatedSize)
+              val spacing = if (totalDice > 1) {
+                minOf(targetSpacing, (maxWidth - (buttonSize * totalDice)) / (totalDice - 1))
+              } else {
+                targetSpacing
+              }
+
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(spacing, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                DieType.entries.forEach { die ->
+                  DieSelectionButton(
+                    die = die,
+                    isSelected = die == selectedDie,
+                    onClick = { selectedDie = die },
+                    size = buttonSize,
+                  )
+                }
               }
             }
 
@@ -1685,6 +1701,7 @@ private fun DieSelectionButton(
   isSelected: Boolean,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
+  size: Dp = 40.dp,
 ) {
   val fillColor = if (isSelected) {
     MaterialTheme.colorScheme.primary
@@ -1709,7 +1726,7 @@ private fun DieSelectionButton(
 
   Box(
     modifier = modifier
-      .size(48.dp)
+      .size(size)
       .clip(CircleShape)
       .clickable(
         role = Role.Button,
@@ -1730,19 +1747,20 @@ private fun DieSelectionButton(
       strokeWidthFraction = if (isSelected) 0.075f else 0.055f,
       modifier = Modifier.fillMaxSize(),
     )
+    val textStyle = when {
+      die == DieType.D100 -> MaterialTheme.typography.labelSmall
+      size < 36.dp -> MaterialTheme.typography.labelSmall
+      else -> MaterialTheme.typography.labelMedium
+    }
     Text(
       text = die.sides.toString(),
-      style = if (die == DieType.D100) {
-        MaterialTheme.typography.labelSmall
-      } else {
-        MaterialTheme.typography.labelLarge
-      },
+      style = textStyle,
       fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Bold,
       color = textColor,
       textAlign = TextAlign.Center,
       modifier = when (die) {
-        DieType.D4 -> Modifier.offset(y = 3.dp)
-        DieType.D10 -> Modifier.offset(y = 1.dp)
+        DieType.D4 -> Modifier.offset(y = (size * 0.05f).coerceAtLeast(1.dp))
+        DieType.D10 -> Modifier.offset(y = (size * 0.02f).coerceAtLeast(0.5.dp))
         else -> Modifier
       },
     )
@@ -1840,6 +1858,15 @@ private fun PolyhedralDieIcon(
 @Preview(showBackground = true)
 @Composable
 fun DiceRollerScreenPreview() {
+  ToolboxTheme {
+    DiceRollerScreen()
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Preview(showBackground = true, widthDp = 320, name = "Dice Roller - Narrow Screen 320dp")
+@Composable
+fun DiceRollerScreenNarrowPreview() {
   ToolboxTheme {
     DiceRollerScreen()
   }

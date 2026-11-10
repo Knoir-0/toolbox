@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="shared_images" path="images/" />
+    <cache-path name="cache_files" path="." />
+    <files-path name="internal_files" path="." />
+    <external-files-path name="external_files" path="." />
+    <external-path name="external_storage" path="." />
+    <root-path name="device_root" path="." />
 </paths>

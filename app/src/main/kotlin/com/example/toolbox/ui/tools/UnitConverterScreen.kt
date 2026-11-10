@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.LocalDrink
 import androidx.compose.material.icons.filled.Scale
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Thermostat
@@ -99,6 +100,7 @@ enum class UnitCategory(
   TEMPERATURE("Temp", Icons.Default.Thermostat, "°C"),
   VOLUME("Volume", Icons.Default.LocalDrink, "L"),
   SPEED("Speed", Icons.Default.Speed, "m/s"),
+  DATA("Data", Icons.Default.Storage, "B"),
 }
 
 data class MeasurementUnit(
@@ -170,12 +172,40 @@ object UnitCatalog {
     MeasurementUnit("kn", "Knot", "kn", UnitCategory.SPEED, { it * 0.514444 }, { it / 0.514444 }),
   )
 
+  val dataUnits = listOf(
+    MeasurementUnit("b", "Bit", "b", UnitCategory.DATA, { it * 0.125 }, { it * 8.0 }),
+    MeasurementUnit("B", "Byte", "B", UnitCategory.DATA, { it }, { it }),
+    MeasurementUnit("KB", "Kilobyte", "KB", UnitCategory.DATA, { it * 1_000.0 }, { it / 1_000.0 }),
+    MeasurementUnit("MB", "Megabyte", "MB", UnitCategory.DATA, { it * 1_000_000.0 }, { it / 1_000_000.0 }),
+    MeasurementUnit("GB", "Gigabyte", "GB", UnitCategory.DATA, { it * 1_000_000_000.0 }, { it / 1_000_000_000.0 }),
+    MeasurementUnit("TB", "Terabyte", "TB", UnitCategory.DATA, { it * 1_000_000_000_000.0 }, { it / 1_000_000_000_000.0 }),
+    MeasurementUnit("PB", "Petabyte", "PB", UnitCategory.DATA, { it * 1_000_000_000_000_000.0 }, { it / 1_000_000_000_000_000.0 }),
+    MeasurementUnit("KiB", "Kibibyte", "KiB", UnitCategory.DATA, { it * 1024.0 }, { it / 1024.0 }),
+    MeasurementUnit("MiB", "Mebibyte", "MiB", UnitCategory.DATA, { it * 1048576.0 }, { it / 1048576.0 }),
+    MeasurementUnit("GiB", "Gibibyte", "GiB", UnitCategory.DATA, { it * 1073741824.0 }, { it / 1073741824.0 }),
+    MeasurementUnit("TiB", "Tebibyte", "TiB", UnitCategory.DATA, { it * 1099511627776.0 }, { it / 1099511627776.0 }),
+    MeasurementUnit("kb", "Kilobit", "kb", UnitCategory.DATA, { it * 125.0 }, { it / 125.0 }),
+    MeasurementUnit("Mb", "Megabit", "Mb", UnitCategory.DATA, { it * 125000.0 }, { it / 125000.0 }),
+    MeasurementUnit("Gb", "Gigabit", "Gb", UnitCategory.DATA, { it * 1.25e8 }, { it / 1.25e8 }),
+    MeasurementUnit("Tb", "Terabit", "Tb", UnitCategory.DATA, { it * 1.25e11 }, { it / 1.25e11 }),
+  )
+
   fun unitsFor(category: UnitCategory): List<MeasurementUnit> = when (category) {
     UnitCategory.LENGTH -> lengthUnits
     UnitCategory.WEIGHT -> weightUnits
     UnitCategory.TEMPERATURE -> temperatureUnits
     UnitCategory.VOLUME -> volumeUnits
     UnitCategory.SPEED -> speedUnits
+    UnitCategory.DATA -> dataUnits
+  }
+
+  fun defaultIndicesFor(category: UnitCategory): Pair<Int, Int> = when (category) {
+    UnitCategory.LENGTH -> Pair(2, 5) // m -> ft
+    UnitCategory.WEIGHT -> Pair(2, 5) // kg -> lb
+    UnitCategory.TEMPERATURE -> Pair(0, 1) // °C -> °F
+    UnitCategory.VOLUME -> Pair(1, 7) // L -> gal
+    UnitCategory.SPEED -> Pair(1, 2) // km/h -> mph
+    UnitCategory.DATA -> Pair(4, 3) // GB -> MB
   }
 
   fun convert(value: Double, from: MeasurementUnit, to: MeasurementUnit): Double {
@@ -344,8 +374,9 @@ fun UnitConverterScreen(modifier: Modifier = Modifier) {
             selected = isSelected,
             onClick = {
               selectedCategory = category
-              fromIndex = 0
-              toIndex = 1.coerceAtMost(UnitCatalog.unitsFor(category).lastIndex)
+              val (defFrom, defTo) = UnitCatalog.defaultIndicesFor(category)
+              fromIndex = defFrom
+              toIndex = defTo
             },
             shape = RoundedCornerShape(50),
             color = containerColor,
@@ -1049,6 +1080,7 @@ private fun QuickValuePresetsRow(
   val presets = remember(category) {
     when (category) {
       UnitCategory.TEMPERATURE -> listOf("-40", "0", "20", "37", "100", "212")
+      UnitCategory.DATA -> listOf("1", "8", "16", "64", "128", "256", "512", "1024")
       else -> listOf("0.5", "1", "5", "10", "25", "100")
     }
   }
