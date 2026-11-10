@@ -71,6 +71,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -83,6 +84,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.navigation3.runtime.NavKey
@@ -100,6 +102,8 @@ import com.example.toolbox.ui.tools.SettingsScreen
 import com.example.toolbox.ui.tools.TodoListScreen
 import com.example.toolbox.ui.tools.UnitConverterScreen
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 const val MIN_TOOLS_PER_ROW = 3
@@ -107,6 +111,8 @@ const val MAX_TOOLS_PER_ROW = 6
 const val DEFAULT_TOOLS_PER_ROW = 3
 const val ROWS_PER_PAGE_EXPANDED = 2
 const val ROWS_PER_PAGE_COLLAPSED = 1
+const val PAGE_HOVER_EDGE_DWELL_MS = 400L
+const val PAGE_HOVER_REPEAT_DELAY_MS = 700L
 
 /**
  * Defines the background style used by each tool screen.
@@ -163,6 +169,37 @@ fun calculateRowCount(toolCount: Int, toolsPerRow: Int): Int {
  */
 fun calculateExpandedPageCount(rowCount: Int): Int {
   return maxOf(1, (rowCount + ROWS_PER_PAGE_EXPANDED - 1) / ROWS_PER_PAGE_EXPANDED)
+}
+
+/**
+ * Calculates the target slot index for a tool being dragged into [targetPage].
+ *
+ * When dragging forward ([direction] > 0), the tool enters at the beginning of [targetPage].
+ * When dragging backward ([direction] < 0), the tool enters at the end of [targetPage].
+ *
+ * The returned index is clamped so it never exceeds [settingsIndex] - 1 (Settings cannot be moved).
+ */
+fun calculatePageTransitionTargetIndex(
+  targetPage: Int,
+  direction: Int,
+  rowsPerPage: Int,
+  effectiveColumns: Int,
+  totalTools: Int,
+  settingsIndex: Int = totalTools - 1,
+): Int {
+  val startRow = targetPage * rowsPerPage
+  val startIndex = startRow * effectiveColumns
+  val rowCount = calculateRowCount(totalTools, effectiveColumns)
+  val endRow = minOf(startRow + rowsPerPage, rowCount)
+  val endIndex = minOf(endRow * effectiveColumns, totalTools)
+
+  val maxAllowedIndex = if (settingsIndex >= 0) settingsIndex - 1 else totalTools - 1
+  val candidateIndex = if (direction > 0) {
+    startIndex
+  } else {
+    maxOf(startIndex, endIndex - 1)
+  }
+  return candidateIndex.coerceIn(0, maxOf(0, maxAllowedIndex))
 }
 
 /**
@@ -637,7 +674,7 @@ fun ToolsPerRowControl(
             ToolSortingOption.USAGE ->
               "Tools are sorted by how frequently you use them. Switch to Manual in Settings to manually reorder tools."
             ToolSortingOption.USER_CHOICE ->
-              "Touch and hold any tool icon, then drag and drop it to rearrange your toolbox. The first row stays visible in the bottom navigation bar."
+              "Touch and hold any tool icon, then drag and drop it to rearrange your toolbox. Drag to the edge of the panel to move tools between pages. The first row stays visible in the bottom navigation bar."
           },
           style = MaterialTheme.typography.bodySmall,
           modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -680,6 +717,7 @@ fun ReorderableToolsGrid(
   val currentOnDraggingChanged by rememberUpdatedState(onDraggingChanged)
   val hapticFeedback = LocalHapticFeedback.current
   val coroutineScope = rememberCoroutineScope()
+  val density = LocalDensity.current
 
   val expandedPagerState = rememberPagerState(
     initialPage = 0,
@@ -696,8 +734,51 @@ fun ReorderableToolsGrid(
   var draggedTool by remember { mutableStateOf<Tool?>(null) }
   var dragPointerOffset by remember { mutableStateOf(Offset.Zero) }
   var grabOffsetFromCenter by remember { mutableStateOf(Offset.Zero) }
+  var draggedSlotSize by remember { mutableStateOf<IntSize?>(null) }
+  var edgeHoverDirection by remember { mutableIntStateOf(0) }
 
   val draggedIndex = draggedTool?.let { currentTools.indexOf(it) } ?: -1
+
+  // Edge hover dwell and auto-page switching during drag
+  LaunchedEffect(edgeHoverDirection, draggedTool) {
+    if (draggedTool == null || edgeHoverDirection == 0) return@LaunchedEffect
+
+    delay(PAGE_HOVER_EDGE_DWELL_MS)
+
+    while (isActive && draggedTool != null && edgeHoverDirection != 0) {
+      val pagerState = if (isExpanded) expandedPagerState else collapsedPagerState
+      val pageCount = if (isExpanded) expandedPageCount else rowCount
+      val currentPage = pagerState.currentPage
+      val targetPage = currentPage + edgeHoverDirection
+
+      if (targetPage in 0 until pageCount && !pagerState.isScrollInProgress) {
+        val activeTool = draggedTool ?: break
+        val fromIndex = currentTools.indexOf(activeTool)
+        val rowsPerPage = if (isExpanded) ROWS_PER_PAGE_EXPANDED else ROWS_PER_PAGE_COLLAPSED
+        val settingsIndex = currentTools.indexOf(Tool.SETTINGS)
+
+        val targetIndex = calculatePageTransitionTargetIndex(
+          targetPage = targetPage,
+          direction = edgeHoverDirection,
+          rowsPerPage = rowsPerPage,
+          effectiveColumns = effectiveColumns,
+          totalTools = currentTools.size,
+          settingsIndex = settingsIndex,
+        )
+
+        if (fromIndex != -1 && targetIndex != fromIndex) {
+          currentOnReorderTools(fromIndex, targetIndex)
+        }
+
+        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        pagerState.animateScrollToPage(targetPage)
+      } else {
+        break
+      }
+
+      delay(PAGE_HOVER_REPEAT_DELAY_MS)
+    }
+  }
 
   // Synchronize pagers between collapsed and expanded states
   LaunchedEffect(isExpanded) {
@@ -737,7 +818,7 @@ fun ReorderableToolsGrid(
     slotBounds.clear()
   }
 
-  Column(
+  Box(
     modifier = modifier
       .testTag("tools_grid")
       .onGloballyPositioned { coords ->
@@ -765,6 +846,8 @@ fun ReorderableToolsGrid(
                 } else {
                   Offset.Zero
                 }
+                draggedSlotSize = slotRect?.let { IntSize(it.width.roundToInt(), it.height.roundToInt()) }
+                edgeHoverDirection = 0
                 currentOnDraggingChanged(true)
                 hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
               }
@@ -777,21 +860,49 @@ fun ReorderableToolsGrid(
             dragPointerOffset += dragAmount
             val desiredCenter = dragPointerOffset - grabOffsetFromCenter
 
-            val targetIndex = findTargetSlotIndex(
-              point = desiredCenter,
-              slotBounds = slotBounds,
-              itemCount = currentTools.size,
-              requireContains = false,
-            )
-            val fromIndex = currentTools.indexOf(activeTool)
-            val settingsIndex = currentTools.indexOf(Tool.SETTINGS)
-            val maxAllowedTargetIndex = if (settingsIndex >= 0) settingsIndex - 1 else currentTools.lastIndex
+            val pagerState = if (isExpanded) expandedPagerState else collapsedPagerState
+            val pageCount = if (isExpanded) expandedPageCount else rowCount
+            val currentPage = pagerState.currentPage
 
-            if (targetIndex != null && fromIndex != -1) {
-              val clampedTarget = targetIndex.coerceIn(0, maxAllowedTargetIndex)
-              if (clampedTarget != fromIndex) {
-                currentOnReorderTools(fromIndex, clampedTarget)
-                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            val gridWidth = gridCoordinates?.size?.width ?: 1
+            val gridHeight = gridCoordinates?.size?.height ?: 1
+            val columnWidth = gridWidth.toFloat() / effectiveColumns.toFloat()
+            val maxEdgeThresholdPx = with(density) { 48.dp.toPx() }
+            val edgeThresholdPx = minOf(maxEdgeThresholdPx, columnWidth * 0.45f)
+
+            val pointerX = dragPointerOffset.x
+            val pointerY = dragPointerOffset.y
+            val isWithinVerticalBounds = pointerY in (-60f)..(gridHeight.toFloat() + 60f)
+
+            if (isWithinVerticalBounds) {
+              if (pointerX <= edgeThresholdPx && currentPage > 0) {
+                edgeHoverDirection = -1
+              } else if (pointerX >= gridWidth - edgeThresholdPx && currentPage < pageCount - 1) {
+                edgeHoverDirection = 1
+              } else {
+                edgeHoverDirection = 0
+              }
+            } else {
+              edgeHoverDirection = 0
+            }
+
+            if (!pagerState.isScrollInProgress) {
+              val targetIndex = findTargetSlotIndex(
+                point = desiredCenter,
+                slotBounds = slotBounds,
+                itemCount = currentTools.size,
+                requireContains = false,
+              )
+              val fromIndex = currentTools.indexOf(activeTool)
+              val settingsIndex = currentTools.indexOf(Tool.SETTINGS)
+              val maxAllowedTargetIndex = if (settingsIndex >= 0) settingsIndex - 1 else currentTools.lastIndex
+
+              if (targetIndex != null && fromIndex != -1) {
+                val clampedTarget = targetIndex.coerceIn(0, maxAllowedTargetIndex)
+                if (clampedTarget != fromIndex) {
+                  currentOnReorderTools(fromIndex, clampedTarget)
+                  hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
               }
             }
           },
@@ -799,88 +910,124 @@ fun ReorderableToolsGrid(
             draggedTool = null
             dragPointerOffset = Offset.Zero
             grabOffsetFromCenter = Offset.Zero
+            draggedSlotSize = null
+            edgeHoverDirection = 0
             currentOnDraggingChanged(false)
           },
           onDragCancel = {
             draggedTool = null
             dragPointerOffset = Offset.Zero
             grabOffsetFromCenter = Offset.Zero
+            draggedSlotSize = null
+            edgeHoverDirection = 0
             currentOnDraggingChanged(false)
           },
         )
       },
-    verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
-    if (isExpanded) {
-      HorizontalPager(
-        state = expandedPagerState,
-        userScrollEnabled = draggedTool == null,
-        modifier = Modifier.fillMaxWidth(),
-      ) { pageIndex ->
-        val pageStartRow = pageIndex * ROWS_PER_PAGE_EXPANDED
-        val pageEndRow = minOf(pageStartRow + ROWS_PER_PAGE_EXPANDED, rowCount)
-        val rowsOnPage = pageStartRow until pageEndRow
+    Column(
+      modifier = Modifier.fillMaxWidth(),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+      if (isExpanded) {
+        HorizontalPager(
+          state = expandedPagerState,
+          userScrollEnabled = draggedTool == null,
+          modifier = Modifier.fillMaxWidth(),
+        ) { pageIndex ->
+          val pageStartRow = pageIndex * ROWS_PER_PAGE_EXPANDED
+          val pageEndRow = minOf(pageStartRow + ROWS_PER_PAGE_EXPANDED, rowCount)
+          val rowsOnPage = pageStartRow until pageEndRow
 
-        ToolsPageRows(
-          rows = rowsOnPage,
-          effectiveColumns = effectiveColumns,
-          tools = currentTools,
-          draggedIndex = draggedIndex,
-          draggedTool = draggedTool,
-          dragPointerOffset = dragPointerOffset,
-          grabOffsetFromCenter = grabOffsetFromCenter,
-          slotBounds = slotBounds,
-          gridCoordinates = gridCoordinates,
-          selectedTool = selectedTool,
-          onSelectTool = onSelectTool,
-        )
-      }
+          ToolsPageRows(
+            rows = rowsOnPage,
+            effectiveColumns = effectiveColumns,
+            tools = currentTools,
+            draggedIndex = draggedIndex,
+            draggedTool = draggedTool,
+            slotBounds = slotBounds,
+            gridCoordinates = gridCoordinates,
+            selectedTool = selectedTool,
+            onSelectTool = onSelectTool,
+          )
+        }
 
-      if (expandedPageCount > 1) {
-        PanelPageIndicator(
-          pageCount = expandedPageCount,
-          currentPage = expandedPagerState.currentPage,
-          onPageSelected = { page ->
-            coroutineScope.launch {
-              expandedPagerState.animateScrollToPage(page)
-            }
-          },
-          testTag = "tools_panel_page_indicator",
-          modifier = Modifier.padding(top = 4.dp),
-        )
-      }
-    } else {
-      HorizontalPager(
-        state = collapsedPagerState,
-        userScrollEnabled = draggedTool == null,
-        modifier = Modifier.fillMaxWidth(),
-      ) { rowIndex ->
-        ToolsPageRows(
-          rows = rowIndex..rowIndex,
-          effectiveColumns = effectiveColumns,
-          tools = currentTools,
-          draggedIndex = draggedIndex,
-          draggedTool = draggedTool,
-          dragPointerOffset = dragPointerOffset,
-          grabOffsetFromCenter = grabOffsetFromCenter,
-          slotBounds = slotBounds,
-          gridCoordinates = gridCoordinates,
-          selectedTool = selectedTool,
-          onSelectTool = onSelectTool,
-        )
-      }
+        if (expandedPageCount > 1) {
+          PanelPageIndicator(
+            pageCount = expandedPageCount,
+            currentPage = expandedPagerState.currentPage,
+            onPageSelected = { page ->
+              coroutineScope.launch {
+                expandedPagerState.animateScrollToPage(page)
+              }
+            },
+            testTag = "tools_panel_page_indicator",
+            modifier = Modifier.padding(top = 4.dp),
+          )
+        }
+      } else {
+        HorizontalPager(
+          state = collapsedPagerState,
+          userScrollEnabled = draggedTool == null,
+          modifier = Modifier.fillMaxWidth(),
+        ) { rowIndex ->
+          ToolsPageRows(
+            rows = rowIndex..rowIndex,
+            effectiveColumns = effectiveColumns,
+            tools = currentTools,
+            draggedIndex = draggedIndex,
+            draggedTool = draggedTool,
+            slotBounds = slotBounds,
+            gridCoordinates = gridCoordinates,
+            selectedTool = selectedTool,
+            onSelectTool = onSelectTool,
+          )
+        }
 
-      if (rowCount > 1) {
-        PanelPageIndicator(
-          pageCount = rowCount,
-          currentPage = collapsedPagerState.currentPage,
-          onPageSelected = { row ->
-            coroutineScope.launch {
-              collapsedPagerState.animateScrollToPage(row)
-            }
-          },
-          testTag = "tools_panel_row_indicator",
-          modifier = Modifier.padding(top = 2.dp),
+        if (rowCount > 1) {
+          PanelPageIndicator(
+            pageCount = rowCount,
+            currentPage = collapsedPagerState.currentPage,
+            onPageSelected = { row ->
+              coroutineScope.launch {
+                collapsedPagerState.animateScrollToPage(row)
+              }
+            },
+            testTag = "tools_panel_row_indicator",
+            modifier = Modifier.padding(top = 2.dp),
+          )
+        }
+      }
+    }
+
+    // Floating lifted item overlay during drag
+    if (draggedTool != null && gridCoordinates != null) {
+      val activeTool = draggedTool!!
+      val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+      val defaultSlotWidthPx = (gridCoordinates?.size?.width ?: 1) / effectiveColumns.toFloat()
+      val slotWidthPx = draggedSlotSize?.width?.toFloat() ?: defaultSlotWidthPx
+      val slotHeightPx = draggedSlotSize?.height?.toFloat()
+        ?: with(density) { 68.dp.toPx() }
+
+      Box(
+        modifier = Modifier
+          .size(
+            with(density) { slotWidthPx.toDp() },
+            with(density) { slotHeightPx.toDp() },
+          )
+          .graphicsLayer {
+            translationX = desiredCenter.x - slotWidthPx / 2f
+            translationY = desiredCenter.y - slotHeightPx / 2f
+          }
+          .zIndex(100f),
+      ) {
+        ToolGridItem(
+          tool = activeTool,
+          isSelected = activeTool == selectedTool,
+          isDragging = true,
+          translationOffset = Offset.Zero,
+          testTagOverride = "dragged_tool_overlay",
+          onClick = {},
         )
       }
     }
@@ -1084,8 +1231,6 @@ private fun ToolsPageRows(
   tools: List<Tool>,
   draggedIndex: Int,
   draggedTool: Tool?,
-  dragPointerOffset: Offset,
-  grabOffsetFromCenter: Offset,
   slotBounds: MutableMap<Int, Rect>,
   gridCoordinates: LayoutCoordinates?,
   selectedTool: Tool,
@@ -1114,14 +1259,6 @@ private fun ToolsPageRows(
           if (slotIndex < tools.size) {
             val tool = tools[slotIndex]
             val isDragging = tool == draggedTool
-            val slotRect = slotBounds[slotIndex]
-
-            val translationOffset = if (isDragging && slotRect != null) {
-              val desiredCenter = dragPointerOffset - grabOffsetFromCenter
-              desiredCenter - slotRect.center
-            } else {
-              Offset.Zero
-            }
 
             Box(
               modifier = Modifier
@@ -1137,8 +1274,13 @@ private fun ToolsPageRows(
               ToolGridItem(
                 tool = tool,
                 isSelected = tool == selectedTool,
-                isDragging = isDragging,
-                translationOffset = translationOffset,
+                isDragging = false,
+                translationOffset = Offset.Zero,
+                modifier = Modifier.graphicsLayer {
+                  if (isDragging) {
+                    alpha = 0.25f
+                  }
+                },
                 onClick = {
                   if (draggedTool == null) {
                     onSelectTool(tool)
@@ -1226,7 +1368,8 @@ private fun ToolGridItem(
   tool: Tool,
   isSelected: Boolean,
   isDragging: Boolean,
-  translationOffset: Offset,
+  translationOffset: Offset = Offset.Zero,
+  testTagOverride: String? = null,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -1263,7 +1406,7 @@ private fun ToolGridItem(
         onClick = onClick,
       )
       .padding(horizontal = 4.dp, vertical = 6.dp)
-      .testTag("tool_item_${tool.name}")
+      .testTag(testTagOverride ?: "tool_item_${tool.name}")
       .semantics {
         role = Role.Tab
         selected = isSelected

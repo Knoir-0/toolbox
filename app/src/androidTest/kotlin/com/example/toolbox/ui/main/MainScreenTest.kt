@@ -220,6 +220,43 @@ class MainScreenTest {
   }
 
   @Test
+  fun pullUpPanel_dragToolToRightEdge_flipsToNextPageAndMovesTool() {
+    // Open the pull up panel (expanded)
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+
+    // Page 0 initially shows Dice Roller; Page 1 rows (row 2 and row 3) do not exist on Page 0
+    composeTestRule.onNodeWithTag("tool_item_DICE_ROLLER").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tools_grid_row_2").assertDoesNotExist()
+
+    // Drag Dice Roller (col 0, row 0) to the far right edge of tools_grid and hold to trigger page switch
+    composeTestRule.onNodeWithTag("tools_grid").performTouchInput {
+      val start = Offset(width / 6f, height / 6f)
+      down(start)
+      advanceEventTime(viewConfiguration.longPressTimeoutMillis + 100L)
+      // Drag near the right edge
+      moveTo(Offset(width - 5f, height / 6f))
+      // Hold in edge zone for dwell duration (400ms) + buffer
+      advanceEventTime(600L)
+      up()
+    }
+    composeTestRule.waitForIdle()
+
+    // Pager has switched to Page 1! Row 2 and Row 3 are now displayed
+    composeTestRule.onNodeWithTag("tools_grid_row_2").assertIsDisplayed()
+
+    // Dice Roller was moved to Page 1 and is displayed on Page 1!
+    composeTestRule.onNodeWithTag("tool_item_DICE_ROLLER").assertIsDisplayed()
+
+    // Preference was updated and persisted
+    val repo = DefaultNavigationPreferencesRepository(composeTestRule.activity)
+    val savedOrder = repo.getToolOrder()
+    val diceIndex = savedOrder.indexOf(Tool.DICE_ROLLER)
+    // On Page 1 with 3/row and 2 rows/page, Page 1 indices start at index 6
+    assertTrue("Dice Roller should be on Page 1 (index >= 6), but was at $diceIndex", diceIndex >= 6)
+  }
+
+  @Test
   fun collapsedPanel_swipeBetweenRows_allowsNavigatingAndSelectingTools() {
     // Initially on Row 0
     composeTestRule.onNodeWithText("Dice Roller").assertIsDisplayed()
