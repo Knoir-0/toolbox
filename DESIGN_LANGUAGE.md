@@ -18,7 +18,7 @@ All AI agents and developers implementing new tools, screens, dialogs, or UI enh
 ## 2. Color System & Theming
 
 ### 2.1 Dynamic Material You & Color Tokens
-Toolbox supports system dynamic theming (Android 12+ / API 31+) and custom user-selected themes in **Settings**, falling back to a curated purple-lavender palette (`#8E66A6`) on older systems.
+Toolbox supports system dynamic theming (Android 12+ / API 31+) and custom user-selected themes in **Settings**, falling back to a curated purple-lavender palette (`#8E66A6`) on older systems. The **Accent Color** is also configurable in Settings: it defaults to **Auto (Complement)** (dynamically driven by the 180° hue complement of the active main theme color) or can be set to any preset swatch or custom hex code.
 
 > **CRITICAL RULE**: Never hardcode hex values (e.g., `#FFFFFF`, `#1E1E1E`, `#000000`) for surfaces, text, or borders. Always reference `MaterialTheme.colorScheme` tokens so dark mode, light mode, and dynamic palette switches work seamlessly.
 
@@ -35,6 +35,7 @@ Toolbox supports system dynamic theming (Android 12+ / API 31+) and custom user-
 | `colorScheme.onSurface` | Primary titles, primary item text, field labels |
 | `colorScheme.onSurfaceVariant` | Subtitles, timestamps, item counts, secondary metadata, inactive icons |
 | `colorScheme.outlineVariant` | Subtle separators, dividers (`copy(alpha = 0.5f)`), container outlines |
+| `colorScheme.tertiary` / `tertiaryContainer` | Accent highlights & actions (Calculator action keys, Metronome downbeat, Guitar Tuner in-tune needle, Ruler calipers, Unit Converter target well, dice roll badges) |
 | `colorScheme.error` / `errorContainer` | Validation errors, delete confirmation buttons, destructive actions |
 
 ### 2.2 Elevation & Depth

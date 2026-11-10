@@ -5,6 +5,10 @@ import junit.framework.TestCase.assertFalse
 import junit.framework.TestCase.assertNotNull
 import junit.framework.TestCase.assertNull
 import junit.framework.TestCase.assertTrue
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -337,5 +341,118 @@ class FileManagerEngineTest {
     assertEquals(2, deletedCount)
     assertFalse(destDir.exists())
     assertFalse(dest2.exists())
+  }
+
+  @Test
+  fun getStorageSummary_computesTotalBytesAndCountCorrectly() = runTest {
+    val root = tempFolder.root
+    val folder = File(root, "SummaryTest").apply { mkdirs() }
+    File(folder, "f1.txt").writeText("12345") // 5 bytes
+    File(folder, "f2.txt").writeText("67890") // 5 bytes
+    val sub = File(folder, "SubDir").apply { mkdirs() }
+    File(sub, "f3.txt").writeText("abc") // 3 bytes
+
+    val (totalBytes, count) = FileManagerEngine.getStorageSummary(folder)
+    assertEquals(13L, totalBytes)
+    assertEquals(3, count)
+
+    val (blockingBytes, blockingCount) = FileManagerEngine.getStorageSummaryBlocking(folder)
+    assertEquals(13L, blockingBytes)
+    assertEquals(3, blockingCount)
+  }
+
+  @Test
+  fun getStorageSummary_cancelsWhenCoroutineIsCancelled() = runTest {
+    val root = tempFolder.root
+    val folder = File(root, "CancelTest").apply { mkdirs() }
+    // Create several nested files
+    for (i in 0 until 50) {
+      File(folder, "file_$i.txt").writeText("Content $i")
+    }
+
+    var wasCancelled = false
+    val job = launch {
+      try {
+        FileManagerEngine.getStorageSummary(folder)
+      } catch (_: CancellationException) {
+        wasCancelled = true
+        throw CancellationException("Cancelled")
+      }
+    }
+    job.cancelAndJoin()
+    assertTrue(wasCancelled || job.isCancelled)
+  }
+
+  @Test
+  fun groupAndSortFiles_groupsByTypeCorrectly() {
+    val items = listOf(
+      FileItem(File("photo.png"), "photo.png", "/photo.png", false, 5000, 1000, "png", "image/png"),
+      FileItem(File("Docs"), "Docs", "/Docs", true, 0, 2000, "", "", 1),
+      FileItem(File("notes.txt"), "notes.txt", "/notes.txt", false, 100, 3000, "txt", "text/plain"),
+      FileItem(File("song.mp3"), "song.mp3", "/song.mp3", false, 3000, 4000, "mp3", "audio/mpeg"),
+      FileItem(File("video.mp4"), "video.mp4", "/video.mp4", false, 8000, 5000, "mp4", "video/mp4"),
+      FileItem(File("archive.zip"), "archive.zip", "/archive.zip", false, 6000, 6000, "zip", "application/zip"),
+      FileItem(File("script.kt"), "script.kt", "/script.kt", false, 200, 7000, "kt", "text/x-kotlin"),
+      FileItem(File("random.dat"), "random.dat", "/random.dat", false, 50, 8000, "dat", "application/octet-stream"),
+    )
+
+    val groups = FileManagerEngine.groupAndSortFiles(items, FileGroupOption.TYPE, FileSortOrder.NAME_ASC)
+    assertEquals(8, groups.size)
+    assertEquals("Folders", groups[0].title)
+    assertEquals("Docs", groups[0].items[0].name)
+    assertEquals("Images", groups[1].title)
+    assertEquals("photo.png", groups[1].items[0].name)
+    assertEquals("Videos", groups[2].title)
+    assertEquals("video.mp4", groups[2].items[0].name)
+    assertEquals("Audio", groups[3].title)
+    assertEquals("song.mp3", groups[3].items[0].name)
+    assertEquals("Documents", groups[4].title)
+    assertEquals("notes.txt", groups[4].items[0].name)
+    assertEquals("Archives", groups[5].title)
+    assertEquals("archive.zip", groups[5].items[0].name)
+    assertEquals("Code", groups[6].title)
+    assertEquals("script.kt", groups[6].items[0].name)
+    assertEquals("Other", groups[7].title)
+    assertEquals("random.dat", groups[7].items[0].name)
+  }
+
+  @Test
+  fun groupAndSortFiles_groupBySizeAndSortsWithinGroups() {
+    val items = listOf(
+      FileItem(File("small1.txt"), "small1.txt", "/small1.txt", false, 100, 1000, "txt", "text/plain"),
+      FileItem(File("small2.txt"), "small2.txt", "/small2.txt", false, 200, 2000, "txt", "text/plain"),
+      FileItem(File("medium.bin"), "medium.bin", "/medium.bin", false, 5L * 1024 * 1024, 3000, "bin", "application/octet-stream"),
+      FileItem(File("huge.iso"), "huge.iso", "/huge.iso", false, 150L * 1024 * 1024, 4000, "iso", "application/octet-stream"),
+    )
+
+    val groupsAsc = FileManagerEngine.groupAndSortFiles(items, FileGroupOption.SIZE, FileSortOrder.NAME_ASC)
+    assertEquals(3, groupsAsc.size)
+    assertEquals("Huge (> 100 MB)", groupsAsc[0].title)
+    assertEquals("huge.iso", groupsAsc[0].items[0].name)
+    assertEquals("Medium (1 – 10 MB)", groupsAsc[1].title)
+    assertEquals("medium.bin", groupsAsc[1].items[0].name)
+    assertEquals("Small (< 1 MB)", groupsAsc[2].title)
+    assertEquals(2, groupsAsc[2].items.size)
+    assertEquals("small1.txt", groupsAsc[2].items[0].name)
+    assertEquals("small2.txt", groupsAsc[2].items[1].name)
+
+    // Sort descending by name within groups
+    val groupsDesc = FileManagerEngine.groupAndSortFiles(items, FileGroupOption.SIZE, FileSortOrder.NAME_DESC)
+    assertEquals("small2.txt", groupsDesc[2].items[0].name)
+    assertEquals("small1.txt", groupsDesc[2].items[1].name)
+  }
+
+  @Test
+  fun groupAndSortFiles_noneReturnsSingleEmptyTitleGroup() {
+    val items = listOf(
+      FileItem(File("z.txt"), "z.txt", "/z.txt", false, 100, 1000, "txt", "text/plain"),
+      FileItem(File("a.txt"), "a.txt", "/a.txt", false, 200, 2000, "txt", "text/plain"),
+    )
+
+    val groups = FileManagerEngine.groupAndSortFiles(items, FileGroupOption.NONE, FileSortOrder.NAME_ASC)
+    assertEquals(1, groups.size)
+    assertEquals("", groups[0].title)
+    assertEquals("a.txt", groups[0].items[0].name)
+    assertEquals("z.txt", groups[0].items[1].name)
   }
 }

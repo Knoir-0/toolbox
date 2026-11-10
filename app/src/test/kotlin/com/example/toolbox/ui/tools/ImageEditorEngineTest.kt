@@ -367,4 +367,80 @@ class ImageEditorEngineTest {
     // Wide and tall with reciprocal aspect ratios should require identical scale factor
     assertEquals(wideScale, tallScale, 1e-3f)
   }
+
+  @Test
+  fun aspectRatioPreset_swapOrientation_invertsStandardRatios() {
+    assertEquals(AspectRatioPreset.RATIO_3_4, AspectRatioPreset.RATIO_4_3.swapOrientation())
+    assertEquals(AspectRatioPreset.RATIO_4_3, AspectRatioPreset.RATIO_3_4.swapOrientation())
+    assertEquals(AspectRatioPreset.RATIO_9_16, AspectRatioPreset.RATIO_16_9.swapOrientation())
+    assertEquals(AspectRatioPreset.RATIO_16_9, AspectRatioPreset.RATIO_9_16.swapOrientation())
+    assertEquals(AspectRatioPreset.SQUARE, AspectRatioPreset.SQUARE.swapOrientation())
+    assertEquals(AspectRatioPreset.FREE, AspectRatioPreset.FREE.swapOrientation())
+  }
+
+  @Test
+  fun isVerticalAspectRatio_detectsOrientationAccurately() {
+    val fullRect = NormalizedRect(0f, 0f, 1f, 1f)
+
+    // Presets
+    assertTrue(isVerticalAspectRatio(AspectRatioPreset.RATIO_3_4, fullRect, 1000f, 1000f))
+    assertTrue(isVerticalAspectRatio(AspectRatioPreset.RATIO_9_16, fullRect, 1000f, 1000f))
+    assertFalse(isVerticalAspectRatio(AspectRatioPreset.RATIO_4_3, fullRect, 1000f, 1000f))
+    assertFalse(isVerticalAspectRatio(AspectRatioPreset.RATIO_16_9, fullRect, 1000f, 1000f))
+
+    // Square honors squareIsVertical toggle flag
+    assertFalse(isVerticalAspectRatio(AspectRatioPreset.SQUARE, fullRect, 1000f, 1000f, squareIsVertical = false))
+    assertTrue(isVerticalAspectRatio(AspectRatioPreset.SQUARE, fullRect, 1000f, 1000f, squareIsVertical = true))
+
+    // Free mode: landscape image
+    assertFalse(isVerticalAspectRatio(AspectRatioPreset.FREE, fullRect, 1920f, 1080f))
+    // Free mode: portrait image
+    assertTrue(isVerticalAspectRatio(AspectRatioPreset.FREE, fullRect, 1080f, 1920f))
+
+    // Free mode: arbitrary crop dimensions
+    val wideCrop = NormalizedRect(left = 0.1f, top = 0.2f, right = 0.9f, bottom = 0.4f) // w=0.8, h=0.2
+    assertFalse(isVerticalAspectRatio(AspectRatioPreset.FREE, wideCrop, 1000f, 1000f))
+
+    val tallCrop = NormalizedRect(left = 0.2f, top = 0.1f, right = 0.4f, bottom = 0.9f) // w=0.2, h=0.8
+    assertTrue(isVerticalAspectRatio(AspectRatioPreset.FREE, tallCrop, 1000f, 1000f))
+  }
+
+  @Test
+  fun swapCropAspectRatio_swapsPresetsAndComputesCorrectCropRect() {
+    val initialRect = NormalizedRect(0f, 0f, 1f, 1f)
+    val imgW = 1000f
+    val imgH = 1000f
+
+    // 4:3 -> 3:4
+    val (swapped43, rect43) = swapCropAspectRatio(AspectRatioPreset.RATIO_4_3, initialRect, imgW, imgH)
+    assertEquals(AspectRatioPreset.RATIO_3_4, swapped43)
+    assertEquals(3f / 4f, (rect43.width * imgW) / (rect43.height * imgH), 1e-3f)
+
+    // 3:4 -> 4:3
+    val (swapped34, rect34) = swapCropAspectRatio(AspectRatioPreset.RATIO_3_4, rect43, imgW, imgH)
+    assertEquals(AspectRatioPreset.RATIO_4_3, swapped34)
+    assertEquals(4f / 3f, (rect34.width * imgW) / (rect34.height * imgH), 1e-3f)
+
+    // 16:9 -> 9:16
+    val (swapped169, rect169) = swapCropAspectRatio(AspectRatioPreset.RATIO_16_9, initialRect, imgW, imgH)
+    assertEquals(AspectRatioPreset.RATIO_9_16, swapped169)
+    assertEquals(9f / 16f, (rect169.width * imgW) / (rect169.height * imgH), 1e-3f)
+
+    // 9:16 -> 16:9
+    val (swapped916, rect916) = swapCropAspectRatio(AspectRatioPreset.RATIO_9_16, rect169, imgW, imgH)
+    assertEquals(AspectRatioPreset.RATIO_16_9, swapped916)
+    assertEquals(16f / 9f, (rect916.width * imgW) / (rect916.height * imgH), 1e-3f)
+
+    // Free mode: on a 2000x1000 (aspect 2.0) image, full rect starts at 2.0. Swapping gives aspect 0.5.
+    val (swappedFree, rectFree) = swapCropAspectRatio(AspectRatioPreset.FREE, initialRect, 2000f, 1000f)
+    assertEquals(AspectRatioPreset.FREE, swappedFree)
+    val freeAspect = (rectFree.width * 2000f) / (rectFree.height * 1000f)
+    assertEquals(0.5f, freeAspect, 1e-3f)
+
+    // Swapping free mode again returns to 2.0
+    val (swappedBackFree, rectBackFree) = swapCropAspectRatio(AspectRatioPreset.FREE, rectFree, 2000f, 1000f)
+    assertEquals(AspectRatioPreset.FREE, swappedBackFree)
+    val backAspect = (rectBackFree.width * 2000f) / (rectBackFree.height * 1000f)
+    assertEquals(2.0f, backAspect, 1e-3f)
+  }
 }

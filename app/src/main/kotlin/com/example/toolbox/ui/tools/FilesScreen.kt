@@ -16,12 +16,17 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -29,13 +34,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -43,8 +51,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
@@ -60,6 +70,7 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
@@ -73,6 +84,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FolderShared
@@ -87,6 +99,7 @@ import androidx.compose.material.icons.filled.SdCard
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.AlertDialog
@@ -114,6 +127,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -126,6 +140,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -148,6 +163,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
+import com.example.toolbox.ui.main.addFolderToHomeScreen
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
 import java.io.FileOutputStream
@@ -158,6 +174,7 @@ import java.util.Locale
 fun FilesScreen(
   modifier: Modifier = Modifier,
   initialDirectory: File? = null,
+  initialSearchActive: Boolean = false,
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
@@ -276,10 +293,17 @@ fun FilesScreen(
     }
   }
 
+  var groupOption by rememberSaveable { mutableStateOf(FileGroupOption.TYPE) }
   var sortOrder by rememberSaveable { mutableStateOf(FileSortOrder.NAME_ASC) }
   var viewMode by rememberSaveable { mutableStateOf(FileViewMode.LIST) }
   var searchQuery by rememberSaveable { mutableStateOf("") }
-  var isSearchActive by rememberSaveable { mutableStateOf(false) }
+  var isSearchActive by rememberSaveable { mutableStateOf(initialSearchActive) }
+  var isFabExpanded by rememberSaveable { mutableStateOf(false) }
+
+  // Collapsed group titles for collapsible categories (resets on folder or group option change)
+  var collapsedGroupTitles by remember(currentDirectory, groupOption) {
+    mutableStateOf(setOf<String>())
+  }
 
   // Directory content revision token to trigger recomposition on modifications
   var refreshTrigger by remember { mutableIntStateOf(0) }
@@ -293,15 +317,29 @@ fun FilesScreen(
     }
   }
 
-  // Filtered & sorted items
-  val processedItems = remember(items, searchQuery, sortOrder) {
+  // Filtered, sorted & grouped items
+  val groupedItems = remember(items, searchQuery, sortOrder, groupOption) {
     val filtered = FileManagerEngine.filterFiles(items, searchQuery)
-    FileManagerEngine.sortFiles(filtered, sortOrder)
+    FileManagerEngine.groupAndSortFiles(filtered, groupOption, sortOrder)
   }
 
-  // Storage summary info
-  val storageSummary = remember(currentDirectory, refreshTrigger, isInspection) {
-    if (isInspection) 124000L to 4 else FileManagerEngine.getStorageSummary(currentDirectory)
+  // Flattened list for selection / counts / empty state
+  val processedItems = remember(groupedItems) {
+    groupedItems.flatMap { it.items }
+  }
+
+  // Storage summary info (computed asynchronously in background task, cancellable on folder navigation)
+  var storageSummary by remember(currentDirectory, refreshTrigger) {
+    mutableStateOf<Pair<Long, Int>?>(if (isInspection) 124000L to 4 else null)
+  }
+
+  LaunchedEffect(currentDirectory, refreshTrigger, isInspection) {
+    if (isInspection) {
+      storageSummary = 124000L to 4
+    } else {
+      storageSummary = null
+      storageSummary = FileManagerEngine.getStorageSummary(currentDirectory)
+    }
   }
 
   // Device storage space information (used/total) for the active volume
@@ -342,9 +380,13 @@ fun FilesScreen(
     processedItems.filter { it.path in selectedPaths }
   }
 
-  BackHandler(enabled = isSelectionMode) {
-    isSelectionMode = false
-    selectedPaths = emptySet()
+  BackHandler(enabled = isSelectionMode || isFabExpanded) {
+    if (isFabExpanded) {
+      isFabExpanded = false
+    } else {
+      isSelectionMode = false
+      selectedPaths = emptySet()
+    }
   }
 
   fun navigateTo(dir: File) {
@@ -353,6 +395,7 @@ fun FilesScreen(
     isSearchActive = false
     isSelectionMode = false
     selectedPaths = emptySet()
+    isFabExpanded = false
   }
 
   fun canNavigateUp(): Boolean {
@@ -404,8 +447,13 @@ fun FilesScreen(
     ) {
       // 1. Top Bar / Header
       val headerSubtext = if (canNavigateUp()) {
-        val folderSizeFormatted = FileManagerEngine.formatFileSize(storageSummary.first)
-        "$folderSizeFormatted • $storageInfoSubtext"
+        val folderSize = storageSummary?.first
+        if (folderSize != null) {
+          val folderSizeFormatted = FileManagerEngine.formatFileSize(folderSize)
+          "$folderSizeFormatted • $storageInfoSubtext"
+        } else {
+          storageInfoSubtext
+        }
       } else {
         storageInfoSubtext
       }
@@ -417,6 +465,7 @@ fun FilesScreen(
         storageInfoSubtext = headerSubtext,
         viewMode = viewMode,
         sortOrder = sortOrder,
+        groupOption = groupOption,
         showSortMenu = showSortMenu,
         isSelectionMode = isSelectionMode,
         selectedCount = selectedPaths.size,
@@ -474,8 +523,15 @@ fun FilesScreen(
           sortOrder = it
           showSortMenu = false
         },
+        onSelectGroupOption = {
+          groupOption = it
+          showSortMenu = false
+        },
         onNavigateUp = { navigateUp() },
         canNavigateUp = canNavigateUp(),
+        singleSelectedFolder = if (selectedItems.size == 1 && selectedItems.first().isDirectory) selectedItems.first().file else null,
+        onAddFolderToHomeScreen = { folder -> addFolderToHomeScreen(context, folder) },
+        onAddCurrentFolderToHomeScreen = { addFolderToHomeScreen(context, currentDirectory) },
       )
 
       // 2. Storage Pill Buttons Row:
@@ -500,8 +556,7 @@ fun FilesScreen(
       BreadcrumbBar(
         currentDirectory = currentDirectory,
         volumeRoot = activeVolume?.file ?: userRoot,
-        itemCount = storageSummary.second,
-        totalBytes = storageSummary.first,
+        storageSummary = storageSummary,
         onNavigateToDir = { navigateTo(it) },
       )
 
@@ -532,62 +587,84 @@ fun FilesScreen(
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 88.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
               ) {
-                items(
-                  items = processedItems,
-                  key = { it.path },
-                ) { item ->
-                  FileListItem(
-                    item = item,
-                    isSelectionMode = isSelectionMode,
-                    isSelected = item.path in selectedPaths,
-                    onToggleSelect = {
-                      selectedPaths = if (item.path in selectedPaths) {
-                        selectedPaths - item.path
-                      } else {
-                        selectedPaths + item.path
-                      }
-                    },
-                    onClick = {
-                      if (isSelectionMode) {
-                        selectedPaths = if (item.path in selectedPaths) {
-                          selectedPaths - item.path
-                        } else {
-                          selectedPaths + item.path
-                        }
-                      } else {
-                        when {
-                          item.isDirectory -> navigateTo(item.file)
-                          FileManagerEngine.isTextFile(item.file) -> fileForTextEdit = item
-                          FileManagerEngine.isImageFile(item.file) -> fileForImagePreview = item
-                          else -> fileForDetails = item
-                        }
-                      }
-                    },
-                    onLongClick = {
-                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                      if (!isSelectionMode) {
-                        isSelectionMode = true
-                        selectedPaths = setOf(item.path)
-                      } else {
-                        selectedPaths = if (item.path in selectedPaths) {
-                          selectedPaths - item.path
-                        } else {
-                          selectedPaths + item.path
-                        }
-                      }
-                    },
-                    onOpenText = { fileForTextEdit = item },
-                    onOpenImage = { fileForImagePreview = item },
-                    onShare = { shareFile(item.file) },
-                    onDuplicate = {
-                      FileManagerEngine.duplicateFile(item.file)
-                      refreshTrigger++
-                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    },
-                    onRename = { fileToRename = item },
-                    onDetails = { fileForDetails = item },
-                    onDelete = { fileToDelete = item },
-                  )
+                groupedItems.forEach { group ->
+                  val isCollapsed = group.title.isNotEmpty() && group.title in collapsedGroupTitles
+                  if (group.title.isNotEmpty()) {
+                    item(key = "header_${group.title}") {
+                      FileGroupHeader(
+                        title = group.title,
+                        count = group.items.size,
+                        isCollapsed = isCollapsed,
+                        onToggleCollapse = {
+                          collapsedGroupTitles = if (isCollapsed) {
+                            collapsedGroupTitles - group.title
+                          } else {
+                            collapsedGroupTitles + group.title
+                          }
+                        },
+                      )
+                    }
+                  }
+                  if (!isCollapsed) {
+                    items(
+                      items = group.items,
+                      key = { it.path },
+                    ) { item ->
+                      FileListItem(
+                        item = item,
+                        isSelectionMode = isSelectionMode,
+                        isSelected = item.path in selectedPaths,
+                        onToggleSelect = {
+                          selectedPaths = if (item.path in selectedPaths) {
+                            selectedPaths - item.path
+                          } else {
+                            selectedPaths + item.path
+                          }
+                        },
+                        onClick = {
+                          if (isSelectionMode) {
+                            selectedPaths = if (item.path in selectedPaths) {
+                              selectedPaths - item.path
+                            } else {
+                              selectedPaths + item.path
+                            }
+                          } else {
+                            when {
+                              item.isDirectory -> navigateTo(item.file)
+                              FileManagerEngine.isTextFile(item.file) -> fileForTextEdit = item
+                              FileManagerEngine.isImageFile(item.file) -> fileForImagePreview = item
+                              else -> fileForDetails = item
+                            }
+                          }
+                        },
+                        onLongClick = {
+                          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                          if (!isSelectionMode) {
+                            isSelectionMode = true
+                            selectedPaths = setOf(item.path)
+                          } else {
+                            selectedPaths = if (item.path in selectedPaths) {
+                              selectedPaths - item.path
+                            } else {
+                              selectedPaths + item.path
+                            }
+                          }
+                        },
+                        onOpenText = { fileForTextEdit = item },
+                        onOpenImage = { fileForImagePreview = item },
+                        onShare = { shareFile(item.file) },
+                        onDuplicate = {
+                          FileManagerEngine.duplicateFile(item.file)
+                          refreshTrigger++
+                          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        },
+                        onRename = { fileToRename = item },
+                        onDetails = { fileForDetails = item },
+                        onDelete = { fileToDelete = item },
+                        onAddToHomeScreen = { addFolderToHomeScreen(context, item.file) },
+                      )
+                    }
+                  }
                 }
               }
             }
@@ -601,95 +678,243 @@ fun FilesScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
               ) {
-                items(
-                  items = processedItems,
-                  key = { it.path },
-                ) { item ->
-                  FileGridItem(
-                    item = item,
-                    isSelectionMode = isSelectionMode,
-                    isSelected = item.path in selectedPaths,
-                    onToggleSelect = {
-                      selectedPaths = if (item.path in selectedPaths) {
-                        selectedPaths - item.path
-                      } else {
-                        selectedPaths + item.path
-                      }
-                    },
-                    onClick = {
-                      if (isSelectionMode) {
+                groupedItems.forEach { group ->
+                  val isCollapsed = group.title.isNotEmpty() && group.title in collapsedGroupTitles
+                  if (group.title.isNotEmpty()) {
+                    item(
+                      key = "header_${group.title}",
+                      span = { GridItemSpan(maxLineSpan) },
+                    ) {
+                      FileGroupHeader(
+                        title = group.title,
+                        count = group.items.size,
+                        isCollapsed = isCollapsed,
+                        onToggleCollapse = {
+                          collapsedGroupTitles = if (isCollapsed) {
+                            collapsedGroupTitles - group.title
+                          } else {
+                            collapsedGroupTitles + group.title
+                          }
+                        },
+                      )
+                    }
+                  }
+                  if (!isCollapsed) {
+                    items(
+                      items = group.items,
+                      key = { it.path },
+                    ) { item ->
+                    FileGridItem(
+                      item = item,
+                      isSelectionMode = isSelectionMode,
+                      isSelected = item.path in selectedPaths,
+                      onToggleSelect = {
                         selectedPaths = if (item.path in selectedPaths) {
                           selectedPaths - item.path
                         } else {
                           selectedPaths + item.path
                         }
-                      } else {
-                        when {
-                          item.isDirectory -> navigateTo(item.file)
-                          FileManagerEngine.isTextFile(item.file) -> fileForTextEdit = item
-                          FileManagerEngine.isImageFile(item.file) -> fileForImagePreview = item
-                          else -> fileForDetails = item
-                        }
-                      }
-                    },
-                    onLongClick = {
-                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                      if (!isSelectionMode) {
-                        isSelectionMode = true
-                        selectedPaths = setOf(item.path)
-                      } else {
-                        selectedPaths = if (item.path in selectedPaths) {
-                          selectedPaths - item.path
+                      },
+                      onClick = {
+                        if (isSelectionMode) {
+                          selectedPaths = if (item.path in selectedPaths) {
+                            selectedPaths - item.path
+                          } else {
+                            selectedPaths + item.path
+                          }
                         } else {
-                          selectedPaths + item.path
+                          when {
+                            item.isDirectory -> navigateTo(item.file)
+                            FileManagerEngine.isTextFile(item.file) -> fileForTextEdit = item
+                            FileManagerEngine.isImageFile(item.file) -> fileForImagePreview = item
+                            else -> fileForDetails = item
+                          }
                         }
-                      }
-                    },
-                    onShare = { shareFile(item.file) },
-                    onDuplicate = {
-                      FileManagerEngine.duplicateFile(item.file)
-                      refreshTrigger++
-                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    },
-                    onRename = { fileToRename = item },
-                    onDetails = { fileForDetails = item },
-                    onDelete = { fileToDelete = item },
-                  )
+                      },
+                      onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        if (!isSelectionMode) {
+                          isSelectionMode = true
+                          selectedPaths = setOf(item.path)
+                        } else {
+                          selectedPaths = if (item.path in selectedPaths) {
+                            selectedPaths - item.path
+                          } else {
+                            selectedPaths + item.path
+                          }
+                        }
+                      },
+                      onShare = { shareFile(item.file) },
+                      onDuplicate = {
+                        FileManagerEngine.duplicateFile(item.file)
+                        refreshTrigger++
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                      },
+                      onRename = { fileToRename = item },
+                      onDetails = { fileForDetails = item },
+                      onDelete = { fileToDelete = item },
+                      onAddToHomeScreen = { addFolderToHomeScreen(context, item.file) },
+                    )
+                  }
                 }
               }
             }
+          }
           }
         }
       }
     }
 
-    // Floating action buttons for adding/creating files and folders (hidden during multi-select)
+    // Scrim overlay when speed dial FAB is expanded
+    AnimatedVisibility(
+      visible = isFabExpanded && !isSelectionMode,
+      enter = fadeIn(tween(150)),
+      exit = fadeOut(tween(150)),
+      modifier = Modifier.fillMaxSize(),
+    ) {
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .background(Color.Black.copy(alpha = 0.32f))
+          .clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+          ) {
+            isFabExpanded = false
+          },
+      )
+    }
+
+    // Speed dial FAB menu for adding/creating files and folders (hidden during multi-select)
     if (!isSelectionMode) {
-      Row(
+      Column(
         modifier = Modifier
           .align(Alignment.BottomEnd)
           .padding(end = 16.dp, bottom = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
-        SmallFloatingActionButton(
-          onClick = { showCreateFolderDialog = true },
-          shape = CircleShape,
-          containerColor = MaterialTheme.colorScheme.secondaryContainer,
-          contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-          modifier = Modifier.testTag("action_new_folder"),
+        // Mini FABs sliding out from underneath
+        AnimatedVisibility(
+          visible = isFabExpanded,
+          enter = fadeIn(tween(160)) + slideInVertically(
+            initialOffsetY = { it },
+            animationSpec = spring(
+              dampingRatio = Spring.DampingRatioMediumBouncy,
+              stiffness = Spring.StiffnessMediumLow,
+            ),
+          ) + expandVertically(),
+          exit = fadeOut(tween(120)) + slideOutVertically(
+            targetOffsetY = { it },
+            animationSpec = tween(140),
+          ) + shrinkVertically(),
         ) {
-          Icon(Icons.Default.CreateNewFolder, contentDescription = "New Folder")
+          Column(
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            // Mini FAB: New File
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              modifier = Modifier.clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+              ) {
+                isFabExpanded = false
+                showCreateFileDialog = true
+              },
+            ) {
+              Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                tonalElevation = 2.dp,
+                shadowElevation = 2.dp,
+              ) {
+                Text(
+                  text = "New file",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                )
+              }
+              SmallFloatingActionButton(
+                onClick = {
+                  isFabExpanded = false
+                  showCreateFileDialog = true
+                },
+                shape = CircleShape,
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.testTag("action_new_file"),
+              ) {
+                Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = "New File")
+              }
+            }
+
+            // Mini FAB: New Folder
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              modifier = Modifier.clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+              ) {
+                isFabExpanded = false
+                showCreateFolderDialog = true
+              },
+            ) {
+              Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                tonalElevation = 2.dp,
+                shadowElevation = 2.dp,
+              ) {
+                Text(
+                  text = "New folder",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                )
+              }
+              SmallFloatingActionButton(
+                onClick = {
+                  isFabExpanded = false
+                  showCreateFolderDialog = true
+                },
+                shape = CircleShape,
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.testTag("action_new_folder"),
+              ) {
+                Icon(Icons.Default.CreateNewFolder, contentDescription = "New Folder")
+              }
+            }
+          }
         }
 
+        // Main Add Button (rotates from + to × when expanded)
+        val addIconRotation by animateFloatAsState(
+          targetValue = if (isFabExpanded) 135f else 0f,
+          label = "add_fab_rotation",
+        )
+
         FloatingActionButton(
-          onClick = { showCreateFileDialog = true },
+          onClick = { isFabExpanded = !isFabExpanded },
           shape = CircleShape,
-          containerColor = MaterialTheme.colorScheme.primaryContainer,
-          contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-          modifier = Modifier.testTag("action_new_file"),
+          containerColor = if (isFabExpanded) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.primaryContainer,
+          contentColor = if (isFabExpanded) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onPrimaryContainer,
+          modifier = Modifier
+            .testTag("action_add")
+            .testTag("action_add_button"),
         ) {
-          Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = "New File")
+          Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = if (isFabExpanded) "Close add menu" else "Add",
+            modifier = Modifier.rotate(addIconRotation),
+          )
         }
       }
     }
@@ -877,6 +1102,7 @@ private fun FilesHeader(
   storageInfoSubtext: String,
   viewMode: FileViewMode,
   sortOrder: FileSortOrder,
+  groupOption: FileGroupOption = FileGroupOption.TYPE,
   showSortMenu: Boolean,
   isSelectionMode: Boolean = false,
   selectedCount: Int = 0,
@@ -893,8 +1119,12 @@ private fun FilesHeader(
   onOpenSortMenu: () -> Unit,
   onDismissSortMenu: () -> Unit,
   onSelectSortOrder: (FileSortOrder) -> Unit,
+  onSelectGroupOption: (FileGroupOption) -> Unit = {},
   onNavigateUp: () -> Unit,
   canNavigateUp: Boolean,
+  singleSelectedFolder: File? = null,
+  onAddFolderToHomeScreen: ((File) -> Unit)? = null,
+  onAddCurrentFolderToHomeScreen: (() -> Unit)? = null,
 ) {
   val focusRequester = remember { FocusRequester() }
   val keyboardController = LocalSoftwareKeyboardController.current
@@ -1094,6 +1324,17 @@ private fun FilesHeader(
                     onBulkCopy()
                   },
                 )
+                if (singleSelectedFolder != null && onAddFolderToHomeScreen != null) {
+                  DropdownMenuItem(
+                    text = { Text("Add to Home screen") },
+                    leadingIcon = { Icon(Icons.Default.Home, contentDescription = null) },
+                    onClick = {
+                      showOverflowMenu = false
+                      onAddFolderToHomeScreen(singleSelectedFolder)
+                    },
+                    modifier = Modifier.testTag("action_selection_add_to_home"),
+                  )
+                }
                 DropdownMenuItem(
                   text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
                   leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
@@ -1203,22 +1444,131 @@ private fun FilesHeader(
 
             Box {
               IconButton(onClick = onOpenSortMenu, modifier = Modifier.testTag("action_sort_menu")) {
-                Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort Files")
+                Icon(Icons.Default.Tune, contentDescription = "Sort and group options")
               }
               DropdownMenu(
                 expanded = showSortMenu,
                 onDismissRequest = onDismissSortMenu,
+                modifier = Modifier
+                  .widthIn(min = 320.dp, max = 390.dp)
+                  .testTag("sort_and_group_menu"),
               ) {
-                FileSortOrder.entries.forEach { order ->
-                  DropdownMenuItem(
-                    text = {
-                      Text(
-                        text = order.displayName,
-                        fontWeight = if (order == sortOrder) FontWeight.Bold else FontWeight.Normal,
-                        color = if (order == sortOrder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                Row(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min)
+                    .padding(vertical = 4.dp),
+                ) {
+                  // Left panel: GROUP BY
+                  Column(
+                    modifier = Modifier
+                      .weight(1f)
+                      .fillMaxHeight(),
+                  ) {
+                    Text(
+                      text = "GROUP BY",
+                      style = MaterialTheme.typography.labelSmall,
+                      fontWeight = FontWeight.Bold,
+                      color = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                    )
+                    FileGroupOption.entries.forEach { option ->
+                      DropdownMenuItem(
+                        text = {
+                          Text(
+                            text = option.displayName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (option == groupOption) FontWeight.Bold else FontWeight.Normal,
+                            color = if (option == groupOption) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                          )
+                        },
+                        trailingIcon = if (option == groupOption) {
+                          {
+                            Icon(
+                              imageVector = Icons.Default.Check,
+                              contentDescription = null,
+                              tint = MaterialTheme.colorScheme.primary,
+                              modifier = Modifier.size(18.dp),
+                            )
+                          }
+                        } else null,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        onClick = { onSelectGroupOption(option) },
+                        modifier = Modifier.testTag("group_option_${option.name.lowercase()}"),
                       )
+                    }
+                  }
+
+                  // Vertical divider between Group By and Sort By panels
+                  VerticalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(vertical = 6.dp),
+                  )
+
+                  // Right panel: SORT BY
+                  Column(
+                    modifier = Modifier
+                      .weight(1f)
+                      .fillMaxHeight(),
+                  ) {
+                    Text(
+                      text = "SORT BY",
+                      style = MaterialTheme.typography.labelSmall,
+                      fontWeight = FontWeight.Bold,
+                      color = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                    )
+                    FileSortOrder.entries.forEach { order ->
+                      DropdownMenuItem(
+                        text = {
+                          Text(
+                            text = order.displayName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (order == sortOrder) FontWeight.Bold else FontWeight.Normal,
+                            color = if (order == sortOrder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                          )
+                        },
+                        trailingIcon = if (order == sortOrder) {
+                          {
+                            Icon(
+                              imageVector = Icons.Default.Check,
+                              contentDescription = null,
+                              tint = MaterialTheme.colorScheme.primary,
+                              modifier = Modifier.size(18.dp),
+                            )
+                          }
+                        } else null,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        onClick = { onSelectSortOrder(order) },
+                        modifier = Modifier.testTag("sort_order_${order.name.lowercase()}"),
+                      )
+                    }
+                  }
+                }
+              }
+            }
+
+            if (canNavigateUp && onAddCurrentFolderToHomeScreen != null) {
+              var showFolderMenu by remember { mutableStateOf(false) }
+              Box {
+                IconButton(
+                  onClick = { showFolderMenu = true },
+                  modifier = Modifier.testTag("action_current_folder_menu"),
+                ) {
+                  Icon(Icons.Default.MoreVert, contentDescription = "Folder options")
+                }
+                DropdownMenu(
+                  expanded = showFolderMenu,
+                  onDismissRequest = { showFolderMenu = false },
+                ) {
+                  DropdownMenuItem(
+                    text = { Text("Add to Home screen") },
+                    leadingIcon = { Icon(Icons.Default.Home, contentDescription = null) },
+                    onClick = {
+                      showFolderMenu = false
+                      onAddCurrentFolderToHomeScreen()
                     },
-                    onClick = { onSelectSortOrder(order) },
+                    modifier = Modifier.testTag("action_add_current_folder_to_home"),
                   )
                 }
               }
@@ -1230,7 +1580,7 @@ private fun FilesHeader(
       // 2. Animated Expanding Search Bar
       // Animates expanding from the search button on the right to fill the entire toolbar
       AnimatedVisibility(
-        visible = isSearchActive,
+        visible = isSearchActive && !isSelectionMode,
         enter = fadeIn(animationSpec = tween(220)) + expandHorizontally(
           animationSpec = spring(
             dampingRatio = Spring.DampingRatioNoBouncy,
@@ -1242,10 +1592,16 @@ private fun FilesHeader(
           animationSpec = tween(200),
           shrinkTowards = Alignment.End,
         ),
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.matchParentSize(),
       ) {
         Surface(
-          modifier = Modifier.fillMaxSize(),
+          modifier = Modifier
+            .fillMaxSize()
+            .clickable(
+              interactionSource = remember { MutableInteractionSource() },
+              indication = null,
+              onClick = {},
+            ),
           color = MaterialTheme.colorScheme.surface,
           tonalElevation = 2.dp,
         ) {
@@ -1417,12 +1773,79 @@ private fun StoragePermissionBanner(
   }
 }
 
+/**
+ * Section header displaying group title (Folders, Images, Documents, etc.) with count badge
+ * and collapsible toggle with animated chevron.
+ */
+@Composable
+private fun FileGroupHeader(
+  title: String,
+  count: Int,
+  isCollapsed: Boolean = false,
+  onToggleCollapse: () -> Unit = {},
+  modifier: Modifier = Modifier,
+) {
+  val rotationState by animateFloatAsState(
+    targetValue = if (isCollapsed) -90f else 0f,
+    label = "group_expand_rotation",
+  )
+
+  Surface(
+    modifier = modifier
+      .fillMaxWidth()
+      .testTag("file_group_header_${title.lowercase().replace(" ", "_")}"),
+    shape = RoundedCornerShape(8.dp),
+    color = Color.Transparent,
+    onClick = onToggleCollapse,
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 4.dp, vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Text(
+          text = title,
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.primary,
+        )
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f),
+        ) {
+          Text(
+            text = count.toString(),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+          )
+        }
+      }
+
+      Icon(
+        imageVector = Icons.Default.ExpandMore,
+        contentDescription = if (isCollapsed) "Expand $title" else "Collapse $title",
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+          .size(20.dp)
+          .rotate(rotationState),
+      )
+    }
+  }
+}
+
 @Composable
 private fun BreadcrumbBar(
   currentDirectory: File,
   volumeRoot: File,
-  itemCount: Int,
-  totalBytes: Long,
+  storageSummary: Pair<Long, Int>?,
   onNavigateToDir: (File) -> Unit,
 ) {
   val pathAncestors = remember(currentDirectory, volumeRoot) {
@@ -1469,12 +1892,15 @@ private fun BreadcrumbBar(
       }
     }
 
-    Text(
-      text = "$itemCount items • ${FileManagerEngine.formatFileSize(totalBytes)}",
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-      fontSize = 11.sp,
-      fontWeight = FontWeight.Medium,
-    )
+    if (storageSummary != null) {
+      val (totalBytes, itemCount) = storageSummary
+      Text(
+        text = "$itemCount items • ${FileManagerEngine.formatFileSize(totalBytes)}",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Medium,
+      )
+    }
   }
 }
 
@@ -1498,6 +1924,7 @@ private fun FileListItem(
   onRename: () -> Unit,
   onDetails: () -> Unit,
   onDelete: () -> Unit,
+  onAddToHomeScreen: () -> Unit = {},
 ) {
   var showMenu by remember { mutableStateOf(false) }
 
@@ -1625,6 +2052,10 @@ private fun FileListItem(
               showMenu = false
               onDelete()
             },
+            onAddToHomeScreen = {
+              showMenu = false
+              onAddToHomeScreen()
+            },
           )
         }
       }
@@ -1646,6 +2077,7 @@ private fun FileGridItem(
   onRename: () -> Unit,
   onDetails: () -> Unit,
   onDelete: () -> Unit,
+  onAddToHomeScreen: () -> Unit = {},
 ) {
   var showMenu by remember { mutableStateOf(false) }
 
@@ -1768,6 +2200,10 @@ private fun FileGridItem(
               showMenu = false
               onDelete()
             },
+            onAddToHomeScreen = {
+              showMenu = false
+              onAddToHomeScreen()
+            },
           )
         }
       }
@@ -1815,6 +2251,7 @@ private fun FileActionMenu(
   onRename: () -> Unit,
   onDetails: () -> Unit,
   onDelete: () -> Unit,
+  onAddToHomeScreen: () -> Unit = {},
 ) {
   DropdownMenu(
     expanded = expanded,
@@ -1856,6 +2293,14 @@ private fun FileActionMenu(
       leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
       onClick = onDetails,
     )
+    if (item.isDirectory) {
+      DropdownMenuItem(
+        text = { Text("Add to Home screen") },
+        leadingIcon = { Icon(Icons.Default.Home, contentDescription = null) },
+        onClick = onAddToHomeScreen,
+        modifier = Modifier.testTag("action_add_to_home_screen"),
+      )
+    }
     HorizontalDivider()
     DropdownMenuItem(
       text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
@@ -1929,15 +2374,15 @@ private fun EmptyFilesView(
       Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        OutlinedButton(onClick = onCreateFolder) {
-          Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp))
-          Spacer(modifier = Modifier.width(6.dp))
-          Text("Folder")
-        }
-        Button(onClick = onCreateFile) {
+        OutlinedButton(onClick = onCreateFile) {
           Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null, modifier = Modifier.size(18.dp))
           Spacer(modifier = Modifier.width(6.dp))
           Text("File")
+        }
+        Button(onClick = onCreateFolder) {
+          Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("Folder")
         }
       }
     }
@@ -2938,5 +3383,70 @@ private fun getPreviewSampleFiles(): List<FileItem> {
 fun FilesScreenPreview() {
   ToolboxTheme {
     FilesScreen()
+  }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun FilesScreenSearchActivePreview() {
+  ToolboxTheme {
+    FilesScreen(initialSearchActive = true)
+  }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun FileGroupHeaderExpandedPreview() {
+  ToolboxTheme {
+    Column(modifier = Modifier.padding(16.dp)) {
+      FileGroupHeader(
+        title = "Folders",
+        count = 4,
+        isCollapsed = false,
+        onToggleCollapse = {},
+      )
+    }
+  }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun FileGroupHeaderCollapsedPreview() {
+  ToolboxTheme {
+    Column(modifier = Modifier.padding(16.dp)) {
+      FileGroupHeader(
+        title = "Folders",
+        count = 4,
+        isCollapsed = true,
+        onToggleCollapse = {},
+      )
+    }
+  }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun FilesHeaderSortMenuPreview() {
+  ToolboxTheme {
+    Box(modifier = Modifier.padding(16.dp)) {
+      FilesHeader(
+        currentDirectory = File("/storage/emulated/0/Documents"),
+        isSearchActive = false,
+        searchQuery = "",
+        storageInfoSubtext = "Internal Storage",
+        viewMode = FileViewMode.LIST,
+        sortOrder = FileSortOrder.NAME_ASC,
+        groupOption = FileGroupOption.TYPE,
+        showSortMenu = true,
+        onToggleSearch = {},
+        onSearchQueryChange = {},
+        onToggleViewMode = {},
+        onOpenSortMenu = {},
+        onDismissSortMenu = {},
+        onSelectSortOrder = {},
+        onNavigateUp = {},
+        canNavigateUp = true,
+      )
+    }
   }
 }

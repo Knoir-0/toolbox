@@ -29,9 +29,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
+import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
 import com.example.toolbox.ui.main.FALLBACK_THEME_COLOR_HEX
 import com.example.toolbox.ui.main.ThemeMode
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private val DarkColorScheme = darkColorScheme(
     primary = primaryDark,
@@ -175,7 +178,108 @@ fun parseHexColor(hex: String): Color? {
     }
 }
 
-fun createCustomColorScheme(seedColor: Color, darkTheme: Boolean): ColorScheme {
+/**
+ * Calculates the complementary color (180-degree hue shift in HSV space) for a given [Color].
+ * Ensures the resulting color has sufficient saturation and brightness to function effectively
+ * as a Material 3 accent/tertiary color.
+ */
+fun calculateComplementaryColor(baseColor: Color): Color {
+    val r = (baseColor.red * 255f).roundToInt().coerceIn(0, 255)
+    val g = (baseColor.green * 255f).roundToInt().coerceIn(0, 255)
+    val b = (baseColor.blue * 255f).roundToInt().coerceIn(0, 255)
+
+    val rf = r / 255f
+    val gf = g / 255f
+    val bf = b / 255f
+    val maxC = maxOf(rf, maxOf(gf, bf))
+    val minC = minOf(rf, minOf(gf, bf))
+    val delta = maxC - minC
+
+    val hue = when {
+        delta == 0f -> 0f
+        maxC == rf -> 60f * (((gf - bf) / delta) % 6f)
+        maxC == gf -> 60f * (((bf - rf) / delta) + 2f)
+        else -> 60f * (((rf - gf) / delta) + 4f)
+    }
+    val normalizedHue = ((hue % 360f) + 360f) % 360f
+    val complementHue = (normalizedHue + 180f) % 360f
+
+    val sat = if (maxC == 0f) 0f else (delta / maxC)
+    val value = maxC
+
+    // If base color is nearly monochromatic (e.g. grayscale/black/white), fallback to warm amber accent
+    val targetSat = if (delta < 0.05f) 0.85f else sat.coerceIn(0.50f, 0.95f)
+    val targetVal = if (delta < 0.05f) 0.90f else value.coerceIn(0.60f, 0.95f)
+    val effectiveHue = if (delta < 0.05f) 30f else complementHue
+
+    val c = targetVal * targetSat
+    val x = c * (1f - abs(((effectiveHue / 60f) % 2f) - 1f))
+    val m = targetVal - c
+
+    val (rPrime, gPrime, bPrime) = when {
+        effectiveHue < 60f -> Triple(c, x, 0f)
+        effectiveHue < 120f -> Triple(x, c, 0f)
+        effectiveHue < 180f -> Triple(0f, c, x)
+        effectiveHue < 240f -> Triple(0f, x, c)
+        effectiveHue < 300f -> Triple(x, 0f, c)
+        else -> Triple(c, 0f, x)
+    }
+
+    return Color(
+        red = (rPrime + m).coerceIn(0f, 1f),
+        green = (gPrime + m).coerceIn(0f, 1f),
+        blue = (bPrime + m).coerceIn(0f, 1f),
+        alpha = 1f,
+    )
+}
+
+data class TertiaryColorTokens(
+    val tertiary: Color,
+    val onTertiary: Color,
+    val tertiaryContainer: Color,
+    val onTertiaryContainer: Color,
+)
+
+fun createTertiaryTokens(accentSeed: Color, darkTheme: Boolean): TertiaryColorTokens {
+    return if (darkTheme) {
+        val tertiary = lerp(accentSeed, Color.White, 0.45f)
+        TertiaryColorTokens(
+            tertiary = tertiary,
+            onTertiary = if (tertiary.luminance() > 0.5f) Color(0xFF1F1F1F) else Color.White,
+            tertiaryContainer = lerp(accentSeed, Color.Black, 0.4f),
+            onTertiaryContainer = lerp(accentSeed, Color.White, 0.88f),
+        )
+    } else {
+        val tertiary = accentSeed
+        TertiaryColorTokens(
+            tertiary = tertiary,
+            onTertiary = if (tertiary.luminance() > 0.5f) Color.Black else Color.White,
+            tertiaryContainer = lerp(accentSeed, Color.White, 0.82f),
+            onTertiaryContainer = lerp(accentSeed, Color.Black, 0.78f),
+        )
+    }
+}
+
+fun resolveEffectiveAccentColor(
+    themeColorHex: String,
+    accentColorSetting: String,
+    fallbackPrimary: Color = Color(0xFF8E66A6),
+): Color {
+    if (!accentColorSetting.equals(DEFAULT_ACCENT_COLOR_AUTO, ignoreCase = true)) {
+        val parsed = parseHexColor(accentColorSetting)
+        if (parsed != null) return parsed
+    }
+    val primary = parseHexColor(themeColorHex) ?: fallbackPrimary
+    return calculateComplementaryColor(primary)
+}
+
+fun createCustomColorScheme(
+    seedColor: Color,
+    darkTheme: Boolean,
+    accentColor: Color? = null,
+): ColorScheme {
+    val accentSeed = accentColor ?: calculateComplementaryColor(seedColor)
+    val tertiaryTokens = createTertiaryTokens(accentSeed, darkTheme)
     return if (darkTheme) {
         darkColorScheme(
             primary = lerp(seedColor, Color.White, 0.45f),
@@ -186,6 +290,10 @@ fun createCustomColorScheme(seedColor: Color, darkTheme: Boolean): ColorScheme {
             onSecondary = Color(0xFF1F1F1F),
             secondaryContainer = lerp(seedColor, Color(0xFF333333), 0.6f),
             onSecondaryContainer = lerp(seedColor, Color.White, 0.85f),
+            tertiary = tertiaryTokens.tertiary,
+            onTertiary = tertiaryTokens.onTertiary,
+            tertiaryContainer = tertiaryTokens.tertiaryContainer,
+            onTertiaryContainer = tertiaryTokens.onTertiaryContainer,
             surface = Color(0xFF151217),
             onSurface = Color(0xFFE7E1E6),
             surfaceVariant = lerp(seedColor, Color(0xFF4A454E), 0.75f),
@@ -203,6 +311,10 @@ fun createCustomColorScheme(seedColor: Color, darkTheme: Boolean): ColorScheme {
             onSecondary = Color.White,
             secondaryContainer = lerp(seedColor, Color.White, 0.86f),
             onSecondaryContainer = lerp(seedColor, Color.Black, 0.75f),
+            tertiary = tertiaryTokens.tertiary,
+            onTertiary = tertiaryTokens.onTertiary,
+            tertiaryContainer = tertiaryTokens.tertiaryContainer,
+            onTertiaryContainer = tertiaryTokens.onTertiaryContainer,
             surface = Color(0xFFFDF8FD),
             onSurface = Color(0xFF1D1B1E),
             surfaceVariant = lerp(seedColor, Color(0xFFE7E0EC), 0.85f),
@@ -217,6 +329,7 @@ fun createCustomColorScheme(seedColor: Color, darkTheme: Boolean): ColorScheme {
 fun ToolboxTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
     themeColor: String = DEFAULT_THEME_COLOR_SYSTEM,
+    accentColor: String = DEFAULT_ACCENT_COLOR_AUTO,
     darkTheme: Boolean = when (themeMode) {
         ThemeMode.SYSTEM -> isSystemInDarkTheme()
         ThemeMode.LIGHT -> false
@@ -226,7 +339,7 @@ fun ToolboxTheme(
     dynamicColor: Boolean = (themeColor == DEFAULT_THEME_COLOR_SYSTEM),
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = when {
+    val baseColorScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
@@ -250,6 +363,20 @@ fun ToolboxTheme(
             }
         }
     }
+
+    val resolvedAccentColor = if (accentColor.equals(DEFAULT_ACCENT_COLOR_AUTO, ignoreCase = true)) {
+        calculateComplementaryColor(baseColorScheme.primary)
+    } else {
+        parseHexColor(accentColor) ?: calculateComplementaryColor(baseColorScheme.primary)
+    }
+
+    val tertiaryTokens = createTertiaryTokens(resolvedAccentColor, darkTheme)
+    val colorScheme = baseColorScheme.copy(
+        tertiary = tertiaryTokens.tertiary,
+        onTertiary = tertiaryTokens.onTertiary,
+        tertiaryContainer = tertiaryTokens.tertiaryContainer,
+        onTertiaryContainer = tertiaryTokens.onTertiaryContainer,
+    )
 
     MaterialTheme(
         colorScheme = colorScheme,

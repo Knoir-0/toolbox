@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import android.content.Context
+import android.content.SharedPreferences
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -43,13 +45,23 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.Button
@@ -60,6 +72,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -67,13 +81,17 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberBottomSheetScaffoldState
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberStandardBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -104,6 +122,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -111,6 +132,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -121,6 +143,8 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 
 enum class DieType(val sides: Int, val label: String, val polygonSides: Int) {
   D4(4, "d4", 3),
@@ -193,13 +217,121 @@ data class DiceRollResult(
     get() = dieType == DieType.D20 && keptRolls.size == 1 && keptRolls.first() == 1
 }
 
+data class SavedDiceRoll(
+  val id: String = java.util.UUID.randomUUID().toString(),
+  val name: String,
+  val dieType: DieType,
+  val diceCount: Int,
+  val modifier: Int,
+  val rollMode: RollMode = RollMode.NORMAL,
+) {
+  val notation: String
+    get() {
+      val base = "${diceCount}${dieType.label}"
+      val modeSuffix = when (rollMode) {
+        RollMode.NORMAL -> ""
+        RollMode.ADVANTAGE -> " (Adv)"
+        RollMode.DISADVANTAGE -> " (Dis)"
+      }
+      val modSuffix = when {
+        modifier > 0 -> " + $modifier"
+        modifier < 0 -> " - ${-modifier}"
+        else -> ""
+      }
+      return "$base$modeSuffix$modSuffix"
+    }
+
+  fun toJson(): JSONObject {
+    val obj = JSONObject()
+    obj.put("id", id)
+    obj.put("name", name)
+    obj.put("dieType", dieType.name)
+    obj.put("diceCount", diceCount)
+    obj.put("modifier", modifier)
+    obj.put("rollMode", rollMode.name)
+    return obj
+  }
+
+  companion object {
+    fun fromJson(obj: JSONObject): SavedDiceRoll {
+      val id = obj.optString("id", java.util.UUID.randomUUID().toString())
+      val name = obj.optString("name", "Custom Roll")
+      val dieType = try {
+        DieType.valueOf(obj.optString("dieType", DieType.D20.name))
+      } catch (_: Exception) {
+        DieType.D20
+      }
+      val diceCount = obj.optInt("diceCount", 1).coerceIn(1, 20)
+      val modifier = obj.optInt("modifier", 0).coerceIn(-20, 20)
+      val rollMode = try {
+        RollMode.valueOf(obj.optString("rollMode", RollMode.NORMAL.name))
+      } catch (_: Exception) {
+        RollMode.NORMAL
+      }
+      return SavedDiceRoll(
+        id = id,
+        name = name,
+        dieType = dieType,
+        diceCount = diceCount,
+        modifier = modifier,
+        rollMode = rollMode,
+      )
+    }
+  }
+}
+
+class DiceRollerPreferences(private val sharedPreferences: SharedPreferences) {
+  companion object {
+    const val PREFS_NAME = "dice_roller_preferences"
+    const val KEY_SAVED_ROLLS_JSON = "saved_rolls_json"
+  }
+
+  constructor(context: Context) : this(
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+  )
+
+  fun loadSavedRolls(): List<SavedDiceRoll> {
+    val jsonString = sharedPreferences.getString(KEY_SAVED_ROLLS_JSON, null) ?: return emptyList()
+    return try {
+      val array = JSONArray(jsonString)
+      val list = mutableListOf<SavedDiceRoll>()
+      for (i in 0 until array.length()) {
+        val obj = array.getJSONObject(i)
+        list.add(SavedDiceRoll.fromJson(obj))
+      }
+      list
+    } catch (_: Exception) {
+      emptyList()
+    }
+  }
+
+  fun saveSavedRolls(savedRolls: List<SavedDiceRoll>) {
+    val array = JSONArray()
+    savedRolls.forEach { array.put(it.toJson()) }
+    sharedPreferences.edit().putString(KEY_SAVED_ROLLS_JSON, array.toString()).apply()
+  }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DiceRollerScreen(modifier: Modifier = Modifier) {
+  val context = LocalContext.current
+  val isInspection = LocalInspectionMode.current
+  val preferences = remember(context, isInspection) {
+    if (isInspection) null else runCatching { DiceRollerPreferences(context) }.getOrNull()
+  }
+  val initialSavedRolls = remember(preferences) {
+    preferences?.loadSavedRolls() ?: emptyList()
+  }
+
   DiceRollerScreen(
     modifier = modifier,
     initialSheetValue = SheetValue.PartiallyExpanded,
     initialHistory = emptyList(),
+    initialSavedRolls = initialSavedRolls,
+    onSaveRolls = { rolls ->
+      preferences?.saveSavedRolls(rolls)
+    },
   )
 }
 
@@ -209,12 +341,23 @@ internal fun DiceRollerScreen(
   modifier: Modifier = Modifier,
   initialSheetValue: SheetValue,
   initialHistory: List<DiceRollResult> = emptyList(),
+  initialSavedRolls: List<SavedDiceRoll> = emptyList(),
+  onSaveRolls: (List<SavedDiceRoll>) -> Unit = {},
 ) {
   var selectedDie by rememberSaveable { mutableStateOf(DieType.D20) }
   var diceCount by rememberSaveable { mutableIntStateOf(1) }
   var modifierValue by rememberSaveable { mutableIntStateOf(0) }
   var rollMode by rememberSaveable { mutableStateOf(RollMode.NORMAL) }
   var rollCounter by rememberSaveable { mutableIntStateOf(0) }
+  var showSaveDialog by rememberSaveable { mutableStateOf(false) }
+  var showSavedRollsSheet by rememberSaveable { mutableStateOf(false) }
+
+  val savedRolls = remember {
+    mutableStateListOf<SavedDiceRoll>().apply {
+      addAll(initialSavedRolls)
+    }
+  }
+
   val history = remember {
     mutableStateListOf<DiceRollResult>().apply {
       addAll(initialHistory)
@@ -259,6 +402,49 @@ internal fun DiceRollerScreen(
     )
   }
 
+  fun rollPreset(savedRoll: SavedDiceRoll) {
+    selectedDie = savedRoll.dieType
+    diceCount = savedRoll.diceCount
+    modifierValue = savedRoll.modifier
+    rollMode = savedRoll.rollMode
+
+    rollCounter++
+    val kept: List<Int>
+    val dropped: List<Int>
+
+    val effectiveMode = if (savedRoll.dieType == DieType.D20 && savedRoll.diceCount == 1) savedRoll.rollMode else RollMode.NORMAL
+
+    if (effectiveMode != RollMode.NORMAL) {
+      val r1 = Random.nextInt(1, savedRoll.dieType.sides + 1)
+      val r2 = Random.nextInt(1, savedRoll.dieType.sides + 1)
+      if (effectiveMode == RollMode.ADVANTAGE) {
+        kept = listOf(maxOf(r1, r2))
+        dropped = listOf(minOf(r1, r2))
+      } else {
+        kept = listOf(minOf(r1, r2))
+        dropped = listOf(maxOf(r1, r2))
+      }
+    } else {
+      kept = List(savedRoll.diceCount) { Random.nextInt(1, savedRoll.dieType.sides + 1) }
+      dropped = emptyList()
+    }
+
+    val total = kept.sum() + savedRoll.modifier
+    history.add(
+      0,
+      DiceRollResult(
+        id = rollCounter.toLong(),
+        dieType = savedRoll.dieType,
+        diceCount = savedRoll.diceCount,
+        modifier = savedRoll.modifier,
+        rollMode = effectiveMode,
+        keptRolls = kept,
+        droppedRolls = dropped,
+        total = total,
+      ),
+    )
+  }
+
   val currentNotation = remember(selectedDie, diceCount, modifierValue, effectiveRollMode) {
     val base = "${diceCount}${selectedDie.label}"
     val modeSuffix = when (effectiveRollMode) {
@@ -281,7 +467,7 @@ internal fun DiceRollerScreen(
   val scaffoldState = rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
   val coroutineScope = rememberCoroutineScope()
 
-  val sheetPeekHeight = 68.dp
+  val sheetPeekHeight = 44.dp
   val isSheetExpanded = sheetState.currentValue == SheetValue.Expanded ||
     sheetState.targetValue == SheetValue.Expanded
 
@@ -421,26 +607,76 @@ internal fun DiceRollerScreen(
               )
             }
 
-            Button(
-              onClick = ::performRoll,
-              modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-              shape = RoundedCornerShape(16.dp),
-              elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp),
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalAlignment = Alignment.CenterVertically,
             ) {
-              PolyhedralDieIcon(
-                dieType = selectedDie,
-                color = LocalContentColor.current,
+              // Roll button: rounded corners
+              Button(
+                onClick = ::performRoll,
                 modifier = Modifier
-                  .padding(end = 10.dp)
-                  .size(24.dp),
-              )
-              Text(
-                text = "Roll $currentNotation",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-              )
+                  .weight(1f)
+                  .height(56.dp)
+                  .testTag("dice_roller_roll_button"),
+                shape = CircleShape,
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp),
+              ) {
+                PolyhedralDieIcon(
+                  dieType = selectedDie,
+                  color = LocalContentColor.current,
+                  modifier = Modifier
+                    .padding(end = 8.dp)
+                    .size(22.dp),
+                )
+                Text(
+                  text = "Roll $currentNotation",
+                  style = MaterialTheme.typography.titleMedium,
+                  fontWeight = FontWeight.Bold,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+
+              // Save button: floppy disk icon, rounded corners, no text
+              FilledTonalIconButton(
+                onClick = { showSaveDialog = true },
+                modifier = Modifier
+                  .size(56.dp)
+                  .semantics { contentDescription = "Save roll" }
+                  .testTag("dice_roller_save_button"),
+                shape = CircleShape,
+                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                  containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                  contentColor = MaterialTheme.colorScheme.primary,
+                ),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Save,
+                  contentDescription = "Save roll",
+                  modifier = Modifier.size(24.dp),
+                )
+              }
+
+              // Load button: load (folder open) icon, rounded corners, no text
+              FilledTonalIconButton(
+                onClick = { showSavedRollsSheet = true },
+                modifier = Modifier
+                  .size(56.dp)
+                  .semantics { contentDescription = "Load saved rolls" }
+                  .testTag("dice_roller_load_button"),
+                shape = CircleShape,
+                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                  containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                  contentColor = MaterialTheme.colorScheme.primary,
+                ),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.FolderOpen,
+                  contentDescription = "Load saved rolls",
+                  modifier = Modifier.size(24.dp),
+                )
+              }
             }
           }
         }
@@ -464,6 +700,420 @@ internal fun DiceRollerScreen(
               }
             },
         )
+      }
+    }
+  }
+
+  if (showSaveDialog) {
+    SaveRollDialog(
+      dieType = selectedDie,
+      diceCount = diceCount,
+      modifierValue = modifierValue,
+      rollMode = effectiveRollMode,
+      currentNotation = currentNotation,
+      onDismiss = { showSaveDialog = false },
+      onSave = { name ->
+        val newSavedRoll = SavedDiceRoll(
+          id = java.util.UUID.randomUUID().toString(),
+          name = name,
+          dieType = selectedDie,
+          diceCount = diceCount,
+          modifier = modifierValue,
+          rollMode = effectiveRollMode,
+        )
+        savedRolls.add(0, newSavedRoll)
+        onSaveRolls(savedRolls.toList())
+        showSaveDialog = false
+      },
+    )
+  }
+
+  if (showSavedRollsSheet) {
+    SavedRollsSheet(
+      savedRolls = savedRolls,
+      onRollSaved = { savedRoll ->
+        showSavedRollsSheet = false
+        rollPreset(savedRoll)
+      },
+      onDeleteSaved = { id ->
+        savedRolls.removeAll { it.id == id }
+        onSaveRolls(savedRolls.toList())
+      },
+      onDismiss = { showSavedRollsSheet = false },
+    )
+  }
+}
+
+@Composable
+private fun SaveRollDialog(
+  dieType: DieType,
+  diceCount: Int,
+  modifierValue: Int,
+  rollMode: RollMode,
+  currentNotation: String,
+  onDismiss: () -> Unit,
+  onSave: (name: String) -> Unit,
+) {
+  var rollName by rememberSaveable { mutableStateOf("") }
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Save,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "Save Roll",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "Enter a name to save this roll preset",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+      ) {
+        // Context Preview Card
+        Card(
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+          ),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            Box(
+              modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+              contentAlignment = Alignment.Center,
+            ) {
+              PolyhedralDieIcon(
+                dieType = dieType,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp),
+              )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = currentNotation,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              val detailText = buildString {
+                append("${diceCount}x ${dieType.label.uppercase()}")
+                if (modifierValue != 0) {
+                  append(if (modifierValue > 0) " (+$modifierValue)" else " ($modifierValue)")
+                }
+                if (rollMode != RollMode.NORMAL) {
+                  append(" • ${rollMode.label}")
+                }
+              }
+              Text(
+                text = detailText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
+
+        // Input Field
+        OutlinedTextField(
+          value = rollName,
+          onValueChange = { rollName = it },
+          label = { Text("Roll Name") },
+          placeholder = { Text("e.g., Attack Roll, Sneak Attack, Fireball") },
+          singleLine = true,
+          shape = RoundedCornerShape(14.dp),
+          leadingIcon = {
+            Icon(
+              imageVector = Icons.Default.Save,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          },
+          trailingIcon = {
+            if (rollName.isNotEmpty()) {
+              IconButton(onClick = { rollName = "" }) {
+                Icon(
+                  imageVector = Icons.Default.Clear,
+                  contentDescription = "Clear text",
+                )
+              }
+            }
+          },
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("save_roll_name_input"),
+        )
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = { onSave(rollName.trim()) },
+        enabled = rollName.trim().isNotEmpty(),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.testTag("save_roll_confirm_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Check,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Save")
+      }
+    },
+    dismissButton = {
+      TextButton(
+        onClick = onDismiss,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.testTag("save_roll_dismiss_button"),
+      ) {
+        Text("Cancel")
+      }
+    },
+  )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SavedRollsSheet(
+  savedRolls: List<SavedDiceRoll>,
+  onRollSaved: (SavedDiceRoll) -> Unit,
+  onDeleteSaved: (String) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+  ModalBottomSheet(
+    onDismissRequest = onDismiss,
+    sheetState = sheetState,
+    containerColor = MaterialTheme.colorScheme.surface,
+    shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+    modifier = Modifier.testTag("saved_rolls_sheet"),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 16.dp)
+        .padding(bottom = 32.dp),
+    ) {
+      // Header
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Box(
+          modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.FolderOpen,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+          )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = "Saved Rolls",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "Tap a roll to quickly roll it",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        IconButton(
+          onClick = onDismiss,
+          modifier = Modifier
+            .size(32.dp)
+            .testTag("saved_rolls_close_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = "Close",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+          )
+        }
+      }
+
+      HorizontalDivider(
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+        modifier = Modifier.padding(bottom = 12.dp),
+      )
+
+      if (savedRolls.isEmpty()) {
+        Box(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 36.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Default.FolderOpen,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f),
+              modifier = Modifier.size(48.dp),
+            )
+            Text(
+              text = "No saved rolls yet",
+              style = MaterialTheme.typography.titleSmall,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+              text = "Configure your dice and tap the Save button to save frequent rolls for fast access.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              textAlign = TextAlign.Center,
+              modifier = Modifier.padding(horizontal = 24.dp),
+            )
+          }
+        }
+      } else {
+        LazyColumn(
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("saved_rolls_list"),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          items(savedRolls, key = { it.id }) { savedRoll ->
+            Card(
+              modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .clickable { onRollSaved(savedRoll) }
+                .testTag("saved_roll_item_${savedRoll.id}"),
+              shape = RoundedCornerShape(14.dp),
+              colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+              ),
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Box(
+                  modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  PolyhedralDieIcon(
+                    dieType = savedRoll.dieType,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp),
+                  )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                  Text(
+                    text = savedRoll.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                  )
+                  Text(
+                    text = savedRoll.notation,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.primary,
+                  )
+                }
+
+                Button(
+                  onClick = { onRollSaved(savedRoll) },
+                  shape = RoundedCornerShape(10.dp),
+                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                  modifier = Modifier
+                    .height(36.dp)
+                    .testTag("saved_roll_action_${savedRoll.id}"),
+                ) {
+                  Text(
+                    text = "Roll",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                  )
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                IconButton(
+                  onClick = { onDeleteSaved(savedRoll.id) },
+                  modifier = Modifier
+                    .size(36.dp)
+                    .testTag("saved_roll_delete_${savedRoll.id}"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.DeleteOutline,
+                    contentDescription = "Delete ${savedRoll.name}",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.size(20.dp),
+                  )
+                }
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -491,7 +1141,7 @@ internal fun RollResultHero(
   val accentColor = when {
     isNat20 -> MaterialTheme.colorScheme.primary
     isNat1 -> MaterialTheme.colorScheme.error
-    else -> MaterialTheme.colorScheme.primary
+    else -> MaterialTheme.colorScheme.tertiary
   }
   val dieFaceBaseColor = when {
     isNat20 -> MaterialTheme.colorScheme.primary
@@ -1300,19 +1950,19 @@ private fun RollHistorySheetContent(
       modifier = Modifier
         .fillMaxWidth()
         .clickable(onClick = onToggleSheet)
-        .padding(horizontal = 20.dp, vertical = 10.dp),
+        .padding(horizontal = 20.dp, vertical = 6.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
     ) {
       // Drag handle pill
       Surface(
         modifier = Modifier
-          .width(36.dp)
-          .height(4.dp),
+          .width(32.dp)
+          .height(3.dp),
         shape = CircleShape,
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
       ) {}
 
-      Spacer(modifier = Modifier.height(10.dp))
+      Spacer(modifier = Modifier.height(4.dp))
 
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1327,10 +1977,11 @@ private fun RollHistorySheetContent(
             imageVector = Icons.Default.History,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
           )
           Text(
             text = "Roll History",
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Bold,
           )
           if (history.isNotEmpty()) {

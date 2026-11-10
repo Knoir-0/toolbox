@@ -271,26 +271,26 @@ private fun rememberConverterPalette(): ConverterPalette {
       heroCardSurface = colorScheme.surfaceContainerHigh,
       heroCardBorder = colorScheme.outlineVariant.copy(alpha = 0.7f),
       heroGlow = colorScheme.primary.copy(alpha = 0.12f),
-      accentPrimary = colorScheme.primary,
-      onAccentPrimary = colorScheme.onPrimary,
-      accentSoftContainer = colorScheme.primaryContainer,
-      onAccentSoftContainer = colorScheme.onPrimaryContainer,
-      accentBorder = colorScheme.primary.copy(alpha = 0.5f),
+      accentPrimary = colorScheme.tertiary,
+      onAccentPrimary = colorScheme.onTertiary,
+      accentSoftContainer = colorScheme.tertiaryContainer,
+      onAccentSoftContainer = colorScheme.onTertiaryContainer,
+      accentBorder = colorScheme.tertiary.copy(alpha = 0.5f),
       fromWellSurface = colorScheme.surfaceContainerLow,
       fromWellBorder = colorScheme.outlineVariant.copy(alpha = 0.6f),
-      toWellGradientStart = colorScheme.primaryContainer.copy(alpha = 0.55f),
+      toWellGradientStart = colorScheme.tertiaryContainer.copy(alpha = 0.55f),
       toWellGradientEnd = colorScheme.secondaryContainer.copy(alpha = 0.45f),
-      toWellBorder = colorScheme.primary.copy(alpha = 0.6f),
+      toWellBorder = colorScheme.tertiary.copy(alpha = 0.6f),
       pillSurface = colorScheme.surfaceContainerHighest,
       pillBorder = colorScheme.outlineVariant,
-      targetPillSurface = colorScheme.primaryContainer,
-      targetPillBorder = colorScheme.primary,
+      targetPillSurface = colorScheme.tertiaryContainer,
+      targetPillBorder = colorScheme.tertiary,
       rowSurface = colorScheme.surfaceContainerLow,
       rowBorder = colorScheme.outlineVariant.copy(alpha = 0.5f),
       rowSourceSurface = colorScheme.secondaryContainer.copy(alpha = 0.55f),
       rowSourceBorder = colorScheme.secondary.copy(alpha = 0.6f),
-      rowTargetSurface = colorScheme.primaryContainer.copy(alpha = 0.65f),
-      rowTargetBorder = colorScheme.primary,
+      rowTargetSurface = colorScheme.tertiaryContainer.copy(alpha = 0.65f),
+      rowTargetBorder = colorScheme.tertiary,
       textPrimary = colorScheme.onSurface,
       textSecondary = colorScheme.onSurfaceVariant,
       textMuted = colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
@@ -347,7 +347,6 @@ fun UnitConverterScreen(modifier: Modifier = Modifier) {
       .fillMaxSize()
       .background(palette.screenBackground),
     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-    verticalArrangement = Arrangement.spacedBy(14.dp),
   ) {
     // 1. Category Selector Row
     item {
@@ -421,6 +420,7 @@ fun UnitConverterScreen(modifier: Modifier = Modifier) {
           }
         }
       }
+      Spacer(modifier = Modifier.height(14.dp))
     }
 
     // 2. Hero Conversion Card
@@ -444,6 +444,7 @@ fun UnitConverterScreen(modifier: Modifier = Modifier) {
         onSwapUnits = ::swapUnits,
         palette = palette,
       )
+      Spacer(modifier = Modifier.height(6.dp))
     }
 
     // 3. Quick Value Presets
@@ -454,6 +455,7 @@ fun UnitConverterScreen(modifier: Modifier = Modifier) {
         onSelectPreset = { preset -> inputText = preset },
         palette = palette,
       )
+      Spacer(modifier = Modifier.height(6.dp))
     }
 
     // 4. Unified All-Units Comparison Card
@@ -1076,29 +1078,23 @@ private fun QuickValuePresetsRow(
   currentInput: String,
   onSelectPreset: (String) -> Unit,
   palette: ConverterPalette,
+  modifier: Modifier = Modifier,
 ) {
   val presets = remember(category) {
     when (category) {
       UnitCategory.TEMPERATURE -> listOf("-40", "0", "20", "37", "100", "212")
       UnitCategory.DATA -> listOf("1", "8", "16", "64", "128", "256", "512", "1024")
-      else -> listOf("0.5", "1", "5", "10", "25", "100")
+      else -> listOf("0.5", "1", "3", "5", "10", "15", "25", "50", "100")
     }
   }
 
   Row(
-    modifier = Modifier
+    modifier = modifier
       .fillMaxWidth()
       .horizontalScroll(rememberScrollState()),
     horizontalArrangement = Arrangement.spacedBy(8.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    Text(
-      text = "Quick values:",
-      style = MaterialTheme.typography.labelMedium,
-      fontWeight = FontWeight.SemiBold,
-      color = palette.textSecondary,
-      modifier = Modifier.padding(end = 2.dp),
-    )
     presets.forEach { preset ->
       val isSelected = currentInput.trim() == preset
       Surface(

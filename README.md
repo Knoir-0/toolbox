@@ -23,17 +23,18 @@ The application includes 12 specialized tools grouped into intuitive functional 
 | **🖼️ Image Editor** | Media & Creative | Photo editing, filters, adjustments, and annotation | Aspect-ratio crop presets (1:1, 4:3, 16:9, Free), rotation & flip, color adjustments (brightness, contrast, saturation), artistic filters, freehand drawing with variable stroke widths (Thin, Med, Thick), dedicated eraser tool, text overlay annotations with custom colors, undo/redo history, and high-resolution export. |
 | **📝 To-Do** | Productivity | Streamlined offline task manager with gesture actions | Ergonomic pill-shaped quick-add bar with instant keyboard entry, hierarchical subtasks with expand/collapse support, swipe-to-complete (right) and swipe-to-delete (left), full undo/redo action history, daily completion counter with automatic midnight reset, completed task archive with restoration, and spring micro-interactions. |
 | **📁 Files** | Productivity | Built-in offline file and storage manager | Directory browsing, breadcrumb path navigation, quick storage volumes (Internal Storage, Documents, Downloads, Cache), list and grid view modes, multi-attribute sorting (Name, Date, Size, Type), file & folder creation, duplication, safe renaming with file extension preservation, recursive deletion with safety prompts, in-app plain text editor, image previewer, metadata & MD5 checksum inspector, file sharing, and external file import. |
-| **⚙️ Settings** | System | Application preferences, theme, colors, sorting, and tool visibility | Theme mode (System, Light, Dark), dynamic Material You colors with custom hex color picker and preset themes (fallback to `#8E66A6`), navigation drawer density slider (3 to 6 tools per row), tool sorting modes (**Manual**, **Tool categories**, and **By usage** with tracked activity counters and reset option), per-tool visibility toggles, and reset to defaults. Always positioned as the final tool. |
+| **⚙️ Settings** | System | Application preferences, theme, colors, sorting, and tool visibility | Theme mode (System, Light, Dark), dynamic Material You colors with custom hex color picker and preset themes (fallback to `#8E66A6`), navigation drawer density slider (3 to 6 tools per row), tool sorting modes (**Manual**, **Tool categories** with configurable sub-sorting for categories and tools within categories by **Manual**, **Alpha**, or **Usage**, **Usage** with tracked activity counters and reset option, and **Alphabetical** with ascending / descending toggle), per-tool visibility toggles, and reset to defaults. Always positioned as the final tool. |
 
 ---
 
 ## ✨ Interface & Experience
 
 - **Customizable Pull-Up Drawer**: Fluid pull-up bottom sheet navigation with customizable grid density (3 to 6 tools per row).
-- **Three Navigation Organization Modes**:
+- **Four Navigation Organization Modes**:
   - **Manual**: Personalize your drawer layout with intuitive drag-and-drop tool reordering.
-  - **Tool Categories**: Group tools logically into categorized pages with clear category headers and swipeable page indicators.
-  - **By Usage**: Automatically sort tools based on real usage frequency, keeping your most frequented utilities within immediate reach.
+  - **Tool Categories**: Group tools logically into categorized pages with clear category headers, swipeable page indicators, and secondary pill sorting for both categories and tools within categories by Manual, Alpha, or Usage.
+  - **Usage**: Automatically sort tools based on real usage frequency, keeping your most frequented utilities within immediate reach.
+  - **Alphabetical**: Sort tools by name with selectable ascending (A-Z) or descending (Z-A) ordering.
 - **Material Design 3 & Expressive Theming**: Full Material You dynamic theming, custom color palettes, tonal elevation, and complete dark mode / light mode support.
 - **Dock & Background Seamlessness**: Coordinated background color transitions ensure docked action bars (such as in To-Do and Ruler) blend seamlessly with the bottom navigation drawer.
 - **Edge-to-Edge & Gesture Navigation**: Modern edge-to-edge layout supporting system gesture navigation, window insets, and predictive back animations.

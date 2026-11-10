@@ -59,6 +59,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Crop
+import androidx.compose.material.icons.filled.CropLandscape
+import androidx.compose.material.icons.filled.CropPortrait
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Refresh
@@ -79,6 +81,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FilledTonalIconToggleButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -391,6 +394,7 @@ fun ImageEditorContent(
   // Crop state
   var cropRect by remember(bitmap) { mutableStateOf(NormalizedRect(0f, 0f, 1f, 1f)) }
   var selectedAspect by remember { mutableStateOf(AspectRatioPreset.FREE) }
+  var squareOrientationVertical by remember(bitmap) { mutableStateOf(false) }
 
   // Rotate state
   var rotateDegrees by remember { mutableFloatStateOf(0f) }
@@ -689,8 +693,16 @@ fun ImageEditorContent(
           ImageEditorMode.CROP -> {
             CropControls(
               selectedAspect = selectedAspect,
+              isVertical = isVerticalAspectRatio(
+                preset = selectedAspect,
+                cropRect = cropRect,
+                imageWidth = bitmap.width.toFloat(),
+                imageHeight = bitmap.height.toFloat(),
+                squareIsVertical = squareOrientationVertical,
+              ),
               onAspectSelected = { preset ->
                 selectedAspect = preset
+                squareOrientationVertical = false
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 if (preset.ratio != null) {
                   cropRect = computeCropForAspectRatio(
@@ -702,15 +714,32 @@ fun ImageEditorContent(
                   cropRect = NormalizedRect(0f, 0f, 1f, 1f)
                 }
               },
+              onSwapAspectRatio = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                if (selectedAspect == AspectRatioPreset.SQUARE) {
+                  squareOrientationVertical = !squareOrientationVertical
+                } else {
+                  val (newPreset, newRect) = swapCropAspectRatio(
+                    preset = selectedAspect,
+                    cropRect = cropRect,
+                    imageWidth = bitmap.width.toFloat(),
+                    imageHeight = bitmap.height.toFloat(),
+                  )
+                  selectedAspect = newPreset
+                  cropRect = newRect
+                }
+              },
               onApplyCrop = {
                 val cropped = BitmapOperations.crop(bitmap, cropRect)
                 onApplyBitmapChange(cropped)
                 cropRect = NormalizedRect(0f, 0f, 1f, 1f)
                 selectedAspect = AspectRatioPreset.FREE
+                squareOrientationVertical = false
               },
               onResetCrop = {
                 cropRect = NormalizedRect(0f, 0f, 1f, 1f)
                 selectedAspect = AspectRatioPreset.FREE
+                squareOrientationVertical = false
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
               },
             )
@@ -1135,7 +1164,9 @@ fun CropOverlay(
 @Composable
 fun CropControls(
   selectedAspect: AspectRatioPreset,
+  isVertical: Boolean = false,
   onAspectSelected: (AspectRatioPreset) -> Unit,
+  onSwapAspectRatio: () -> Unit = {},
   onApplyCrop: () -> Unit,
   onResetCrop: () -> Unit,
   modifier: Modifier = Modifier,
@@ -1161,25 +1192,43 @@ fun CropControls(
 
     Row(
       modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.End,
+      horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      OutlinedButton(
-        onClick = onResetCrop,
-        shape = CircleShape,
-        modifier = Modifier.testTag("crop_reset_button"),
+      FilledTonalIconToggleButton(
+        checked = isVertical,
+        onCheckedChange = { onSwapAspectRatio() },
+        modifier = Modifier
+          .size(40.dp)
+          .testTag("crop_aspect_swap_toggle"),
       ) {
-        Text("Reset")
+        Icon(
+          imageVector = if (isVertical) Icons.Default.CropPortrait else Icons.Default.CropLandscape,
+          contentDescription = if (isVertical) "Swap to horizontal aspect ratio" else "Swap to vertical aspect ratio",
+          modifier = Modifier.size(20.dp),
+        )
       }
-      Spacer(modifier = Modifier.width(8.dp))
-      Button(
-        onClick = onApplyCrop,
-        shape = CircleShape,
-        modifier = Modifier.testTag("crop_apply_button"),
+
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
       ) {
-        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(4.dp))
-        Text("Apply Crop")
+        OutlinedButton(
+          onClick = onResetCrop,
+          shape = CircleShape,
+          modifier = Modifier.testTag("crop_reset_button"),
+        ) {
+          Text("Reset")
+        }
+        Button(
+          onClick = onApplyCrop,
+          shape = CircleShape,
+          modifier = Modifier.testTag("crop_apply_button"),
+        ) {
+          Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("Apply Crop")
+        }
       }
     }
   }
@@ -2064,5 +2113,55 @@ fun OpenFileInitialViewPreview() {
       onOpenFile = {},
       onUseSample = {},
     )
+  }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun CropControlsPreview() {
+  ToolboxTheme {
+    Surface(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(16.dp),
+      shape = RoundedCornerShape(16.dp),
+      color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    ) {
+      Box(modifier = Modifier.padding(8.dp)) {
+        CropControls(
+          selectedAspect = AspectRatioPreset.RATIO_4_3,
+          isVertical = false,
+          onAspectSelected = {},
+          onSwapAspectRatio = {},
+          onApplyCrop = {},
+          onResetCrop = {},
+        )
+      }
+    }
+  }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun CropControlsVerticalPreview() {
+  ToolboxTheme {
+    Surface(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(16.dp),
+      shape = RoundedCornerShape(16.dp),
+      color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    ) {
+      Box(modifier = Modifier.padding(8.dp)) {
+        CropControls(
+          selectedAspect = AspectRatioPreset.RATIO_3_4,
+          isVertical = true,
+          onAspectSelected = {},
+          onSwapAspectRatio = {},
+          onApplyCrop = {},
+          onResetCrop = {},
+        )
+      }
+    }
   }
 }

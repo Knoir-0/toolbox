@@ -296,6 +296,27 @@ class NavigationPreferencesTest {
   }
 
   @Test
+  fun accentColor_persistsCorrectly() {
+    val fakePrefs = FakeSharedPreferences()
+    val repo = DefaultNavigationPreferencesRepository(fakePrefs)
+
+    // Default is AUTO
+    assertEquals(DEFAULT_ACCENT_COLOR_AUTO, repo.getAccentColor())
+    assertEquals(DEFAULT_ACCENT_COLOR_AUTO, repo.accentColorFlow.value)
+
+    // Set to preset hex
+    repo.setAccentColor("#E65100")
+    assertEquals("#E65100", repo.getAccentColor())
+    assertEquals("#E65100", repo.accentColorFlow.value)
+    assertEquals("#E65100", fakePrefs.getString(PREF_KEY_ACCENT_COLOR, null))
+
+    // Set back to AUTO
+    repo.setAccentColor(DEFAULT_ACCENT_COLOR_AUTO)
+    assertEquals(DEFAULT_ACCENT_COLOR_AUTO, repo.getAccentColor())
+    assertEquals(DEFAULT_ACCENT_COLOR_AUTO, repo.accentColorFlow.value)
+  }
+
+  @Test
   fun toolSorting_persistsCorrectly() {
     val fakePrefs = FakeSharedPreferences()
     val repo = DefaultNavigationPreferencesRepository(fakePrefs)
@@ -321,7 +342,176 @@ class NavigationPreferencesTest {
   fun toolSortingOption_displayNamesAreExpected() {
     assertEquals("Manual", ToolSortingOption.USER_CHOICE.displayName)
     assertEquals("Tool categories", ToolSortingOption.TOOL_CATEGORIES.displayName)
-    assertEquals("By usage", ToolSortingOption.USAGE.displayName)
+    assertEquals("Usage", ToolSortingOption.USAGE.displayName)
+    assertEquals("Alphabetical", ToolSortingOption.ALPHABETICAL.displayName)
+  }
+
+  @Test
+  fun toolSortOrder_displayNamesAreExpected() {
+    assertEquals("Ascending", ToolSortOrder.ASCENDING.displayName)
+    assertEquals("Descending", ToolSortOrder.DESCENDING.displayName)
+  }
+
+  @Test
+  fun categorySortingOption_displayNamesAreExpected() {
+    assertEquals("Manual", CategorySortingOption.MANUAL.displayName)
+    assertEquals("Alpha", CategorySortingOption.ALPHABETICAL.displayName)
+    assertEquals("Usage", CategorySortingOption.USAGE.displayName)
+  }
+
+  @Test
+  fun categoryToolSortingOption_displayNamesAreExpected() {
+    assertEquals("Manual", CategoryToolSortingOption.MANUAL.displayName)
+    assertEquals("Alpha", CategoryToolSortingOption.ALPHABETICAL.displayName)
+    assertEquals("Usage", CategoryToolSortingOption.USAGE.displayName)
+  }
+
+  @Test
+  fun categoryToolSorting_persistenceAndFallback() {
+    val fakePrefs = FakeSharedPreferences()
+    val repo = DefaultNavigationPreferencesRepository(fakePrefs)
+
+    // Default is MANUAL
+    assertEquals(CategoryToolSortingOption.MANUAL, repo.getCategoryToolSorting())
+    assertEquals(CategoryToolSortingOption.MANUAL, repo.categoryToolSortingFlow.value)
+
+    // Update to ALPHABETICAL
+    repo.setCategoryToolSorting(CategoryToolSortingOption.ALPHABETICAL)
+    assertEquals(CategoryToolSortingOption.ALPHABETICAL, repo.getCategoryToolSorting())
+    assertEquals(CategoryToolSortingOption.ALPHABETICAL, repo.categoryToolSortingFlow.value)
+    assertEquals("ALPHABETICAL", fakePrefs.getString(PREF_KEY_CATEGORY_TOOL_SORTING, null))
+
+    // Update to USAGE
+    repo.setCategoryToolSorting(CategoryToolSortingOption.USAGE)
+    assertEquals(CategoryToolSortingOption.USAGE, repo.getCategoryToolSorting())
+    assertEquals(CategoryToolSortingOption.USAGE, repo.categoryToolSortingFlow.value)
+    assertEquals("USAGE", fakePrefs.getString(PREF_KEY_CATEGORY_TOOL_SORTING, null))
+
+    // Fallback on invalid value
+    fakePrefs.edit().putString(PREF_KEY_CATEGORY_TOOL_SORTING, "CORRUPT").apply()
+    val repo2 = DefaultNavigationPreferencesRepository(fakePrefs)
+    assertEquals(CategoryToolSortingOption.MANUAL, repo2.getCategoryToolSorting())
+  }
+
+  @Test
+  fun sortToolsWithinCategory_manualAlphaAndUsage_keepsSettingsLast() {
+    val mathTools = listOf(
+      Tool.RULER, // "Ruler"
+      Tool.CALCULATOR, // "Calculator"
+      Tool.UNIT_CONVERTER, // "Unit Converter"
+    )
+
+    // Manual preserves order
+    val manual = sortToolsWithinCategory(mathTools, CategoryToolSortingOption.MANUAL)
+    assertEquals(listOf(Tool.RULER, Tool.CALCULATOR, Tool.UNIT_CONVERTER), manual)
+
+    // Alpha sorts by title: Calculator < Ruler < Unit Converter
+    val alpha = sortToolsWithinCategory(mathTools, CategoryToolSortingOption.ALPHABETICAL)
+    assertEquals(listOf(Tool.CALCULATOR, Tool.RULER, Tool.UNIT_CONVERTER), alpha)
+
+    // Usage sorts by usage count
+    val usageCounts = mapOf(
+      Tool.UNIT_CONVERTER to 30,
+      Tool.RULER to 10,
+      Tool.CALCULATOR to 5,
+    )
+    val usage = sortToolsWithinCategory(mathTools, CategoryToolSortingOption.USAGE, usageCounts)
+    assertEquals(listOf(Tool.UNIT_CONVERTER, Tool.RULER, Tool.CALCULATOR), usage)
+  }
+
+  @Test
+  fun categorySorting_persistenceAndFallback() {
+    val fakePrefs = FakeSharedPreferences()
+    val repo = DefaultNavigationPreferencesRepository(fakePrefs)
+
+    // Default is MANUAL
+    assertEquals(CategorySortingOption.MANUAL, repo.getCategorySorting())
+    assertEquals(CategorySortingOption.MANUAL, repo.categorySortingFlow.value)
+
+    // Update to ALPHABETICAL
+    repo.setCategorySorting(CategorySortingOption.ALPHABETICAL)
+    assertEquals(CategorySortingOption.ALPHABETICAL, repo.getCategorySorting())
+    assertEquals(CategorySortingOption.ALPHABETICAL, repo.categorySortingFlow.value)
+    assertEquals("ALPHABETICAL", fakePrefs.getString(PREF_KEY_CATEGORY_SORTING, null))
+
+    // Update to USAGE
+    repo.setCategorySorting(CategorySortingOption.USAGE)
+    assertEquals(CategorySortingOption.USAGE, repo.getCategorySorting())
+    assertEquals(CategorySortingOption.USAGE, repo.categorySortingFlow.value)
+    assertEquals("USAGE", fakePrefs.getString(PREF_KEY_CATEGORY_SORTING, null))
+
+    // Fallback on invalid value
+    fakePrefs.edit().putString(PREF_KEY_CATEGORY_SORTING, "CORRUPT").apply()
+    val repo2 = DefaultNavigationPreferencesRepository(fakePrefs)
+    assertEquals(CategorySortingOption.MANUAL, repo2.getCategorySorting())
+  }
+
+  @Test
+  fun sortCategoryGroups_manualAlphaAndUsage_keepsSystemLast() {
+    val groups = listOf(
+      CategoryGroup(ToolCategory.ENTERTAINMENT_AND_DEVICES, listOf(Tool.DICE_ROLLER, Tool.BLUETOOTH_REMOTE)),
+      CategoryGroup(ToolCategory.SYSTEM, listOf(Tool.SETTINGS)),
+      CategoryGroup(ToolCategory.MATH_AND_MEASUREMENT, listOf(Tool.CALCULATOR, Tool.RULER)),
+      CategoryGroup(ToolCategory.AUDIO_AND_MUSIC, listOf(Tool.GUITAR_TUNER)),
+      CategoryGroup(ToolCategory.PRODUCTIVITY, listOf(Tool.TODO_LIST)),
+    )
+
+    // 1. MANUAL preserves ToolCategory.entries order, SYSTEM last
+    val manualSorted = sortCategoryGroups(groups, CategorySortingOption.MANUAL)
+    assertEquals(
+      listOf(
+        ToolCategory.MATH_AND_MEASUREMENT,
+        ToolCategory.AUDIO_AND_MUSIC,
+        ToolCategory.PRODUCTIVITY,
+        ToolCategory.ENTERTAINMENT_AND_DEVICES,
+        ToolCategory.SYSTEM,
+      ),
+      manualSorted.map { it.category },
+    )
+
+    // 2. ALPHABETICAL sorts by category title (A-Z), SYSTEM last
+    val alphaSorted = sortCategoryGroups(groups, CategorySortingOption.ALPHABETICAL)
+    assertEquals(
+      listOf(
+        ToolCategory.AUDIO_AND_MUSIC, // "Audio & Music"
+        ToolCategory.ENTERTAINMENT_AND_DEVICES, // "Entertainment & Devices"
+        ToolCategory.MATH_AND_MEASUREMENT, // "Math & Measurement"
+        ToolCategory.PRODUCTIVITY, // "Productivity"
+        ToolCategory.SYSTEM, // "System" always last
+      ),
+      alphaSorted.map { it.category },
+    )
+
+    // 3. USAGE sorts by total usage of tools in group, SYSTEM last
+    val usageCounts = mapOf(
+      Tool.TODO_LIST to 50, // Productivity = 50
+      Tool.GUITAR_TUNER to 10, // Audio & Music = 10
+      Tool.DICE_ROLLER to 5, // Entertainment = 5 + 20 = 25
+      Tool.BLUETOOTH_REMOTE to 20,
+      Tool.CALCULATOR to 100, // Math = 100 + 0 = 100
+      Tool.SETTINGS to 999, // System should still be last!
+    )
+    val usageSorted = sortCategoryGroups(groups, CategorySortingOption.USAGE, usageCounts = usageCounts)
+    assertEquals(
+      listOf(
+        ToolCategory.MATH_AND_MEASUREMENT, // 100
+        ToolCategory.PRODUCTIVITY, // 50
+        ToolCategory.ENTERTAINMENT_AND_DEVICES, // 25
+        ToolCategory.AUDIO_AND_MUSIC, // 10
+        ToolCategory.SYSTEM, // always last
+      ),
+      usageSorted.map { it.category },
+    )
+
+    // 4. Combined: Category Alpha + Tool Alpha within categories
+    val combinedSorted = sortCategoryGroups(
+      groups = groups,
+      categorySorting = CategorySortingOption.ALPHABETICAL,
+      categoryToolSorting = CategoryToolSortingOption.ALPHABETICAL,
+    )
+    val entertainmentGroup = combinedSorted.first { it.category == ToolCategory.ENTERTAINMENT_AND_DEVICES }
+    // Dice Roller ("Dice Roller") < TV Remote ("TV Remote")
+    assertEquals(listOf(Tool.DICE_ROLLER, Tool.BLUETOOTH_REMOTE), entertainmentGroup.tools)
   }
 
   @Test
@@ -331,6 +521,65 @@ class NavigationPreferencesTest {
     val repo = DefaultNavigationPreferencesRepository(fakePrefs)
 
     assertEquals(ToolSortingOption.USER_CHOICE, repo.getToolSorting())
+  }
+
+  @Test
+  fun toolSortOrder_persistenceAndFallback() {
+    val fakePrefs = FakeSharedPreferences()
+    val repo = DefaultNavigationPreferencesRepository(fakePrefs)
+
+    // Default is ASCENDING
+    assertEquals(ToolSortOrder.ASCENDING, repo.getToolSortOrder())
+    assertEquals(ToolSortOrder.ASCENDING, repo.toolSortOrderFlow.value)
+
+    // Update to DESCENDING
+    repo.setToolSortOrder(ToolSortOrder.DESCENDING)
+    assertEquals(ToolSortOrder.DESCENDING, repo.getToolSortOrder())
+    assertEquals(ToolSortOrder.DESCENDING, repo.toolSortOrderFlow.value)
+    assertEquals("DESCENDING", fakePrefs.getString(PREF_KEY_TOOL_SORT_ORDER, null))
+
+    // Fallback on invalid value
+    fakePrefs.edit().putString(PREF_KEY_TOOL_SORT_ORDER, "CORRUPT").apply()
+    val repo2 = DefaultNavigationPreferencesRepository(fakePrefs)
+    assertEquals(ToolSortOrder.ASCENDING, repo2.getToolSortOrder())
+  }
+
+  @Test
+  fun sortToolsAlphabetically_ascendingAndDescending_keepsSettingsLast() {
+    val tools = listOf(
+      Tool.DICE_ROLLER, // Dice Roller
+      Tool.CALCULATOR, // Calculator
+      Tool.SETTINGS, // Settings
+      Tool.TODO_LIST, // To-Do
+      Tool.BLUETOOTH_REMOTE, // TV Remote
+      Tool.UNIT_CONVERTER, // Unit Converter
+    )
+
+    val ascending = sortToolsAlphabetically(tools, ToolSortOrder.ASCENDING)
+    assertEquals(
+      listOf(
+        Tool.CALCULATOR, // "Calculator"
+        Tool.DICE_ROLLER, // "Dice Roller"
+        Tool.TODO_LIST, // "To-Do"
+        Tool.BLUETOOTH_REMOTE, // "TV Remote"
+        Tool.UNIT_CONVERTER, // "Unit Converter"
+        Tool.SETTINGS, // "Settings" always last
+      ),
+      ascending,
+    )
+
+    val descending = sortToolsAlphabetically(tools, ToolSortOrder.DESCENDING)
+    assertEquals(
+      listOf(
+        Tool.UNIT_CONVERTER, // "Unit Converter"
+        Tool.BLUETOOTH_REMOTE, // "TV Remote"
+        Tool.TODO_LIST, // "To-Do"
+        Tool.DICE_ROLLER, // "Dice Roller"
+        Tool.CALCULATOR, // "Calculator"
+        Tool.SETTINGS, // "Settings" always last
+      ),
+      descending,
+    )
   }
 
   @Test

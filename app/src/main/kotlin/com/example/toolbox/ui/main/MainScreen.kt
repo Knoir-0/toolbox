@@ -94,6 +94,7 @@ import com.example.toolbox.ui.tools.CalculatorScreen
 import com.example.toolbox.ui.tools.ColorPickerScreen
 import com.example.toolbox.ui.tools.DiceRollerScreen
 import com.example.toolbox.ui.tools.FilesScreen
+import java.io.File
 import com.example.toolbox.ui.tools.GuitarTunerScreen
 import com.example.toolbox.ui.tools.ImageEditorScreen
 import com.example.toolbox.ui.tools.MetronomeScreen
@@ -252,30 +253,49 @@ fun mergeReorderedVisible(
 @Composable
 fun MainScreen(
   onItemClick: (NavKey) -> Unit = {},
+  standaloneTool: Tool? = null,
+  initialDirectory: File? = null,
   modifier: Modifier = Modifier,
   preferencesRepository: NavigationPreferencesRepository = rememberNavigationPreferencesRepository(),
 ) {
   val themeMode by preferencesRepository.themeModeFlow.collectAsState()
   val themeColor by preferencesRepository.themeColorFlow.collectAsState()
-  val toolOrder by preferencesRepository.toolOrderFlow.collectAsState()
-  val hiddenTools by preferencesRepository.hiddenToolsFlow.collectAsState()
-
-  val firstVisible = remember(toolOrder, hiddenTools) {
-    toolOrder.firstOrNull { it !in hiddenTools } ?: Tool.SETTINGS
-  }
-
-  var selectedTool by rememberSaveable { mutableStateOf(firstVisible) }
+  val accentColor by preferencesRepository.accentColorFlow.collectAsState()
 
   ToolboxTheme(
     themeMode = themeMode,
     themeColor = themeColor,
+    accentColor = accentColor,
   ) {
-    ToolboxScaffold(
-      selectedTool = selectedTool,
-      onSelectTool = { selectedTool = it },
-      preferencesRepository = preferencesRepository,
-      modifier = modifier,
-    )
+    if (standaloneTool != null) {
+      StandaloneToolScreen(
+        tool = standaloneTool,
+        initialDirectory = initialDirectory,
+        preferencesRepository = preferencesRepository,
+        modifier = modifier,
+      )
+    } else {
+      val toolOrder by preferencesRepository.toolOrderFlow.collectAsState()
+      val hiddenTools by preferencesRepository.hiddenToolsFlow.collectAsState()
+
+      val firstVisible = remember(toolOrder, hiddenTools, initialDirectory) {
+        if (initialDirectory != null) {
+          Tool.FILES
+        } else {
+          toolOrder.firstOrNull { it !in hiddenTools } ?: Tool.SETTINGS
+        }
+      }
+
+      var selectedTool by rememberSaveable { mutableStateOf(if (initialDirectory != null) Tool.FILES else firstVisible) }
+
+      ToolboxScaffold(
+        selectedTool = selectedTool,
+        onSelectTool = { selectedTool = it },
+        initialDirectory = initialDirectory,
+        preferencesRepository = preferencesRepository,
+        modifier = modifier,
+      )
+    }
   }
 }
 
@@ -285,6 +305,7 @@ fun ToolboxScaffold(
   selectedTool: Tool,
   onSelectTool: (Tool) -> Unit,
   modifier: Modifier = Modifier,
+  initialDirectory: File? = null,
   initialTools: List<Tool>? = null,
   initialToolsPerRow: Int? = null,
   initialSheetValue: SheetValue = SheetValue.PartiallyExpanded,
@@ -298,6 +319,12 @@ fun ToolboxScaffold(
     ?: remember { mutableIntStateOf(initialToolsPerRow ?: DEFAULT_TOOLS_PER_ROW) }
   val toolSorting by preferencesRepository?.toolSortingFlow?.collectAsState()
     ?: remember { mutableStateOf(ToolSortingOption.USER_CHOICE) }
+  val toolSortOrder by preferencesRepository?.toolSortOrderFlow?.collectAsState()
+    ?: remember { mutableStateOf(ToolSortOrder.ASCENDING) }
+  val categorySorting by preferencesRepository?.categorySortingFlow?.collectAsState()
+    ?: remember { mutableStateOf(CategorySortingOption.MANUAL) }
+  val categoryToolSorting by preferencesRepository?.categoryToolSortingFlow?.collectAsState()
+    ?: remember { mutableStateOf(CategoryToolSortingOption.MANUAL) }
   val toolUsageCounts by preferencesRepository?.toolUsageCountsFlow?.collectAsState()
     ?: remember { mutableStateOf(emptyMap()) }
 
@@ -310,11 +337,11 @@ fun ToolboxScaffold(
     allOrderedTools.filter { it !in hiddenTools || it == Tool.SETTINGS }
   }
 
-  val displayTools = remember(visibleTools, toolSorting, toolUsageCounts) {
-    if (toolSorting == ToolSortingOption.USAGE) {
-      sortToolsByUsage(visibleTools, toolUsageCounts)
-    } else {
-      visibleTools
+  val displayTools = remember(visibleTools, toolSorting, toolSortOrder, toolUsageCounts) {
+    when (toolSorting) {
+      ToolSortingOption.USAGE -> sortToolsByUsage(visibleTools, toolUsageCounts)
+      ToolSortingOption.ALPHABETICAL -> sortToolsAlphabetically(visibleTools, toolSortOrder)
+      else -> visibleTools
     }
   }
 
@@ -360,6 +387,9 @@ fun ToolboxScaffold(
         selectedTool = selectedTool,
         toolsPerRow = toolsPerRow,
         toolSorting = toolSorting,
+        categorySorting = categorySorting,
+        categoryToolSorting = categoryToolSorting,
+        usageCounts = toolUsageCounts,
         isExpanded = isExpanded,
         onTogglePanel = {
           coroutineScope.launch {
@@ -406,6 +436,7 @@ fun ToolboxScaffold(
       ToolContentView(
         tool = selectedTool,
         bottomPadding = innerPadding.calculateBottomPadding(),
+        initialDirectory = initialDirectory,
         preferencesRepository = preferencesRepository,
       )
     }
@@ -423,6 +454,9 @@ fun ToolsPullUpPanelContent(
   onToolsPerRowChange: (Int) -> Unit,
   onReorderTools: (fromIndex: Int, toIndex: Int) -> Unit,
   toolSorting: ToolSortingOption = ToolSortingOption.USER_CHOICE,
+  categorySorting: CategorySortingOption = CategorySortingOption.MANUAL,
+  categoryToolSorting: CategoryToolSortingOption = CategoryToolSortingOption.MANUAL,
+  usageCounts: Map<Tool, Int> = emptyMap(),
   onDraggingChanged: (Boolean) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
@@ -468,6 +502,9 @@ fun ToolsPullUpPanelContent(
       toolsPerRow = coerceToolsPerRow(toolsPerRow),
       isExpanded = isExpanded,
       toolSorting = toolSorting,
+      categorySorting = categorySorting,
+      categoryToolSorting = categoryToolSorting,
+      usageCounts = usageCounts,
       onSelectTool = onSelectTool,
       onReorderTools = onReorderTools,
       onDraggingChanged = onDraggingChanged,
@@ -489,6 +526,7 @@ fun ToolsPullUpPanelContent(
         onToolsPerRowChange = onToolsPerRowChange,
         onToggleHelp = { showReorderHelp = !showReorderHelp },
         toolSorting = toolSorting,
+        categorySorting = categorySorting,
         modifier = Modifier
           .fillMaxWidth()
           .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -508,6 +546,7 @@ fun ToolsPerRowControl(
   onToolsPerRowChange: (Int) -> Unit,
   onToggleHelp: () -> Unit,
   toolSorting: ToolSortingOption = ToolSortingOption.USER_CHOICE,
+  categorySorting: CategorySortingOption = CategorySortingOption.MANUAL,
   modifier: Modifier = Modifier,
 ) {
   val coercedValue = coerceToolsPerRow(toolsPerRow)
@@ -670,11 +709,20 @@ fun ToolsPerRowControl(
         Text(
           text = when (toolSorting) {
             ToolSortingOption.TOOL_CATEGORIES ->
-              "Tools are grouped by category. Small categories share a single row when their combined tool count fits within the tools-per-row slider setting."
+              when (categorySorting) {
+                CategorySortingOption.MANUAL ->
+                  "Tools are grouped by category. Small categories share a single row when their combined tool count fits within the tools-per-row slider setting."
+                CategorySortingOption.ALPHABETICAL ->
+                  "Tools are grouped alphabetically by category name. Small categories share a single row when their combined tool count fits within the tools-per-row slider setting."
+                CategorySortingOption.USAGE ->
+                  "Tools are grouped by category and ordered by most frequently used categories first. Small categories share a single row when their combined tool count fits within the tools-per-row slider setting."
+              }
             ToolSortingOption.USAGE ->
               "Tools are sorted by how frequently you use them. Switch to Manual in Settings to manually reorder tools."
             ToolSortingOption.USER_CHOICE ->
               "Touch and hold any tool icon, then drag and drop it to rearrange your toolbox. Drag to the edge of the panel to move tools between pages. The first row stays visible in the bottom navigation bar."
+            ToolSortingOption.ALPHABETICAL ->
+              "Tools are sorted alphabetically. Switch to Manual in Settings to manually reorder tools."
           },
           style = MaterialTheme.typography.bodySmall,
           modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -691,6 +739,9 @@ fun ReorderableToolsGrid(
   toolsPerRow: Int,
   isExpanded: Boolean = true,
   toolSorting: ToolSortingOption = ToolSortingOption.USER_CHOICE,
+  categorySorting: CategorySortingOption = CategorySortingOption.MANUAL,
+  categoryToolSorting: CategoryToolSortingOption = CategoryToolSortingOption.MANUAL,
+  usageCounts: Map<Tool, Int> = emptyMap(),
   onSelectTool: (Tool) -> Unit,
   onReorderTools: (fromIndex: Int, toIndex: Int) -> Unit,
   onDraggingChanged: (Boolean) -> Unit = {},
@@ -701,6 +752,9 @@ fun ReorderableToolsGrid(
       tools = tools,
       selectedTool = selectedTool,
       toolsPerRow = toolsPerRow,
+      categorySorting = categorySorting,
+      categoryToolSorting = categoryToolSorting,
+      usageCounts = usageCounts,
       isExpanded = isExpanded,
       onSelectTool = onSelectTool,
       modifier = modifier,
@@ -1034,11 +1088,6 @@ fun ReorderableToolsGrid(
   }
 }
 
-data class CategoryGroup(
-  val category: ToolCategory,
-  val tools: List<Tool>,
-)
-
 data class CategoryPage(
   val groups: List<CategoryGroup>,
 )
@@ -1049,11 +1098,14 @@ fun CategoryToolsGrid(
   selectedTool: Tool,
   toolsPerRow: Int,
   onSelectTool: (Tool) -> Unit,
+  categorySorting: CategorySortingOption = CategorySortingOption.MANUAL,
+  categoryToolSorting: CategoryToolSortingOption = CategoryToolSortingOption.MANUAL,
+  usageCounts: Map<Tool, Int> = emptyMap(),
   isExpanded: Boolean = true,
   modifier: Modifier = Modifier,
 ) {
   val effectiveColumns = coerceToolsPerRow(toolsPerRow)
-  val activeCategories = remember(tools) {
+  val rawCategories = remember(tools) {
     ToolCategory.entries.mapNotNull { category ->
       val categoryTools = tools.filter { it.category == category }
       if (categoryTools.isNotEmpty()) {
@@ -1062,6 +1114,9 @@ fun CategoryToolsGrid(
         null
       }
     }
+  }
+  val activeCategories = remember(rawCategories, categorySorting, categoryToolSorting, usageCounts) {
+    sortCategoryGroups(rawCategories, categorySorting, categoryToolSorting, usageCounts)
   }
 
   // Pack categories into pages: multiple categories fit on one page as one row if categories are small enough
@@ -1442,11 +1497,47 @@ private fun ToolGridItem(
   }
 }
 
+/**
+ * Renders a single tool in full-screen standalone mode without any navigation bar or drawer.
+ * Used when the tool is launched directly from a home screen shortcut.
+ */
+@Composable
+fun StandaloneToolScreen(
+  tool: Tool,
+  initialDirectory: File? = null,
+  modifier: Modifier = Modifier,
+  preferencesRepository: NavigationPreferencesRepository = rememberNavigationPreferencesRepository(),
+) {
+  LaunchedEffect(tool) {
+    preferencesRepository.incrementToolUsage(tool)
+  }
+
+  val bgColor = toolBackgroundColor(tool)
+  Box(
+    modifier = modifier
+      .fillMaxSize()
+      .background(bgColor)
+      .statusBarsPadding()
+      .navigationBarsPadding()
+      .testTag("standalone_tool_screen")
+      .testTag("standalone_tool_screen_${tool.name}"),
+    contentAlignment = Alignment.Center,
+  ) {
+    ToolContentView(
+      tool = tool,
+      bottomPadding = 0.dp,
+      initialDirectory = initialDirectory,
+      preferencesRepository = preferencesRepository,
+    )
+  }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ToolContentView(
   tool: Tool,
   bottomPadding: Dp = 0.dp,
+  initialDirectory: File? = null,
   modifier: Modifier = Modifier,
   preferencesRepository: NavigationPreferencesRepository? = null,
 ) {
@@ -1467,7 +1558,10 @@ fun ToolContentView(
       Tool.CALCULATOR -> CalculatorScreen(bottomPadding = bottomPadding, modifier = Modifier)
       Tool.IMAGE_EDITOR -> ImageEditorScreen(modifier = Modifier.padding(bottom = bottomPadding))
       Tool.TODO_LIST -> TodoListScreen(modifier = Modifier.padding(bottom = bottomPadding))
-      Tool.FILES -> FilesScreen(modifier = Modifier.padding(bottom = bottomPadding))
+      Tool.FILES -> FilesScreen(
+        initialDirectory = initialDirectory,
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
       Tool.SETTINGS -> SettingsScreen(
         preferencesRepository = preferencesRepository ?: rememberNavigationPreferencesRepository(),
         modifier = Modifier.padding(bottom = bottomPadding),

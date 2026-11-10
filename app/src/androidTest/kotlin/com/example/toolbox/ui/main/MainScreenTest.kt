@@ -526,4 +526,171 @@ class MainScreenTest {
 
     composeTestRule.onNodeWithTag("tool_visibility_row_CALCULATOR").assertDoesNotExist()
   }
+
+  @Test
+  fun alphabeticalSorting_showsOrderPillSelectorAndSortsTools() {
+    val repo = DefaultNavigationPreferencesRepository(composeTestRule.activity)
+
+    // Expand panel and navigate to Settings
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+
+    // Page 2 contains Settings in manual mode
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
+    composeTestRule.waitForIdle()
+
+    // Alphabetical sort option button is displayed with "Alpha" text
+    composeTestRule.onNodeWithTag("sorting_option_alphabetical").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("sorting_option_alpha").assertIsDisplayed()
+
+    // Ascending/Descending pill selector is not visible initially (when manual mode)
+    composeTestRule.onNodeWithTag("sort_order_ascending").assertDoesNotExist()
+
+    // Click Alphabetical
+    composeTestRule.onNodeWithTag("sorting_option_alphabetical").performClick()
+    composeTestRule.waitForIdle()
+
+    assertEquals(ToolSortingOption.ALPHABETICAL, repo.getToolSorting())
+
+    // Ascending and Descending pill buttons should now pop up
+    composeTestRule.onNodeWithTag("sort_order_ascending").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("sort_order_descending").assertIsDisplayed()
+
+    // Click Descending
+    composeTestRule.onNodeWithTag("sort_order_descending").performClick()
+    composeTestRule.waitForIdle()
+
+    assertEquals(ToolSortOrder.DESCENDING, repo.getToolSortOrder())
+
+    // Click Ascending
+    composeTestRule.onNodeWithTag("sort_order_ascending").performClick()
+    composeTestRule.waitForIdle()
+
+    assertEquals(ToolSortOrder.ASCENDING, repo.getToolSortOrder())
+  }
+
+  @Test
+  fun categorySorting_showsCategorySortingPillSelectorAndSorts() {
+    val repo = DefaultNavigationPreferencesRepository(composeTestRule.activity)
+
+    // Expand panel and navigate to Settings
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+
+    // Page 2 contains Settings in manual mode
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
+    composeTestRule.waitForIdle()
+
+    // Category sorting pill selector is not visible initially in manual mode
+    composeTestRule.onNodeWithTag("category_sorting_manual").assertDoesNotExist()
+
+    // Click Categories
+    composeTestRule.onNodeWithTag("sorting_option_tool_categories").performClick()
+    composeTestRule.waitForIdle()
+
+    assertEquals(ToolSortingOption.TOOL_CATEGORIES, repo.getToolSorting())
+
+    // Category sorting pill selector buttons should now pop up
+    composeTestRule.onNodeWithTag("category_sorting_manual").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("category_sorting_alpha").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("category_sorting_usage").assertIsDisplayed()
+
+    // Click Alpha
+    composeTestRule.onNodeWithTag("category_sorting_alpha").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(CategorySortingOption.ALPHABETICAL, repo.getCategorySorting())
+
+    // Click Usage
+    composeTestRule.onNodeWithTag("category_sorting_usage").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(CategorySortingOption.USAGE, repo.getCategorySorting())
+
+    // Click Manual
+    composeTestRule.onNodeWithTag("category_sorting_manual").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(CategorySortingOption.MANUAL, repo.getCategorySorting())
+
+    // Tools within categories pill selector buttons should also pop up
+    composeTestRule.onNodeWithTag("category_tool_sorting_manual").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("category_tool_sorting_alpha").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("category_tool_sorting_usage").assertIsDisplayed()
+
+    // Click Alpha for tools within categories
+    composeTestRule.onNodeWithTag("category_tool_sorting_alpha").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(CategoryToolSortingOption.ALPHABETICAL, repo.getCategoryToolSorting())
+
+    // Click Usage for tools within categories
+    composeTestRule.onNodeWithTag("category_tool_sorting_usage").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(CategoryToolSortingOption.USAGE, repo.getCategoryToolSorting())
+
+    // Click Manual for tools within categories
+    composeTestRule.onNodeWithTag("category_tool_sorting_manual").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(CategoryToolSortingOption.MANUAL, repo.getCategoryToolSorting())
+  }
+
+  @Test
+  fun toolSettingsSection_collapsibleCategoriesAndAddToHomeScreen() {
+    // Navigate to Settings
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
+    composeTestRule.waitForIdle()
+
+    // Tool settings card & toggle exist
+    composeTestRule.onNodeWithTag("tool_settings_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tool_settings_toggle").assertIsDisplayed()
+
+    // Expand Tool Settings
+    composeTestRule.onNodeWithTag("tool_settings_toggle").performClick()
+    composeTestRule.waitForIdle()
+
+    // Category headers should exist
+    composeTestRule.onNodeWithTag("category_header_math_and_measurement").assertExists()
+    composeTestRule.onNodeWithTag("category_header_audio_and_music").assertExists()
+    composeTestRule.onNodeWithTag("category_header_system").assertExists()
+
+    // Categories are collapsed by default, so Calculator tool row should not exist yet
+    composeTestRule.onNodeWithTag("tool_settings_row_CALCULATOR").assertDoesNotExist()
+
+    // Expand Math & Measurement category
+    composeTestRule.onNodeWithTag("category_header_math_and_measurement").performClick()
+    composeTestRule.waitForIdle()
+
+    // Calculator tool row and add to homescreen button should now be visible
+    composeTestRule.onNodeWithTag("tool_settings_row_CALCULATOR").assertExists()
+    composeTestRule.onNodeWithTag("add_to_home_CALCULATOR").assertExists()
+
+    // Re-collapse Math & Measurement category
+    composeTestRule.onNodeWithTag("category_header_math_and_measurement").performClick()
+    composeTestRule.waitForIdle()
+
+    // Calculator row should now be collapsed/not visible again
+    composeTestRule.onNodeWithTag("tool_settings_row_CALCULATOR").assertDoesNotExist()
+  }
+
+  @Test
+  fun standaloneTool_launchesWithoutNavigationBar() {
+    composeTestRule.setContent {
+      MainScreen(standaloneTool = Tool.CALCULATOR)
+    }
+    composeTestRule.waitForIdle()
+
+    // Standalone tool screen is displayed
+    composeTestRule.onNodeWithTag("standalone_tool_screen_CALCULATOR").assertIsDisplayed()
+
+    // Navigation pull-up panel and drawer are completely hidden
+    composeTestRule.onNodeWithTag("tools_pull_up_panel").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").assertDoesNotExist()
+  }
 }

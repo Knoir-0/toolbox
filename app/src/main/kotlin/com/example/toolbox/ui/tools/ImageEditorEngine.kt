@@ -72,7 +72,62 @@ enum class AspectRatioPreset(val label: String, val ratio: Float?) {
   RATIO_4_3("4:3", 4f / 3f),
   RATIO_3_4("3:4", 3f / 4f),
   RATIO_16_9("16:9", 16f / 9f),
-  RATIO_9_16("9:16", 9f / 16f),
+  RATIO_9_16("9:16", 9f / 16f);
+
+  fun swapOrientation(): AspectRatioPreset = when (this) {
+    RATIO_4_3 -> RATIO_3_4
+    RATIO_3_4 -> RATIO_4_3
+    RATIO_16_9 -> RATIO_9_16
+    RATIO_9_16 -> RATIO_16_9
+    SQUARE -> SQUARE
+    FREE -> FREE
+  }
+}
+
+/**
+ * Checks whether the current crop or preset represents a vertical (portrait) aspect ratio.
+ */
+fun isVerticalAspectRatio(
+  preset: AspectRatioPreset,
+  cropRect: NormalizedRect,
+  imageWidth: Float,
+  imageHeight: Float,
+  squareIsVertical: Boolean = false,
+): Boolean {
+  return when (preset) {
+    AspectRatioPreset.RATIO_3_4, AspectRatioPreset.RATIO_9_16 -> true
+    AspectRatioPreset.RATIO_4_3, AspectRatioPreset.RATIO_16_9 -> false
+    AspectRatioPreset.SQUARE -> squareIsVertical
+    AspectRatioPreset.FREE -> {
+      val pxW = cropRect.width * imageWidth
+      val pxH = cropRect.height * imageHeight
+      pxW < pxH
+    }
+  }
+}
+
+/**
+ * Swaps between horizontal and vertical aspect ratios.
+ * If a preset with a counterpart is selected (e.g. 4:3 <-> 3:4 or 16:9 <-> 9:16), it toggles to that preset.
+ * If in FREE mode or custom crop, the current pixel aspect ratio is inverted.
+ */
+fun swapCropAspectRatio(
+  preset: AspectRatioPreset,
+  cropRect: NormalizedRect,
+  imageWidth: Float,
+  imageHeight: Float,
+): Pair<AspectRatioPreset, NormalizedRect> {
+  val swappedPreset = preset.swapOrientation()
+  val targetRatio = when {
+    swappedPreset.ratio != null -> swappedPreset.ratio
+    else -> {
+      val pxW = cropRect.width * imageWidth
+      val pxH = cropRect.height * imageHeight
+      if (pxW > 0f && pxH > 0f) pxH / pxW else 1f
+    }
+  }
+  val newCropRect = computeCropForAspectRatio(targetRatio, imageWidth, imageHeight)
+  return Pair(swappedPreset, newCropRect)
 }
 
 /**

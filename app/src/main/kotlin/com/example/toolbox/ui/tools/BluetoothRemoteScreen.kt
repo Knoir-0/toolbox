@@ -1090,10 +1090,10 @@ private fun DPad(actions: RemoteInputActions, modifier: Modifier = Modifier) {
       .testTag("bt_dpad"),
     contentAlignment = Alignment.Center,
   ) {
-    DPadArrow(Icons.Default.KeyboardArrowUp, "Up", HidKey.UP, actions, Alignment.TopCenter)
-    DPadArrow(Icons.Default.KeyboardArrowDown, "Down", HidKey.DOWN, actions, Alignment.BottomCenter)
-    DPadArrow(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left", HidKey.LEFT, actions, Alignment.CenterStart)
-    DPadArrow(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right", HidKey.RIGHT, actions, Alignment.CenterEnd)
+    DPadArrow(Icons.Default.KeyboardArrowUp, "Up", HidKey.UP, actions, Alignment.TopCenter, "bt_dpad_up")
+    DPadArrow(Icons.Default.KeyboardArrowDown, "Down", HidKey.DOWN, actions, Alignment.BottomCenter, "bt_dpad_down")
+    DPadArrow(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left", HidKey.LEFT, actions, Alignment.CenterStart, "bt_dpad_left")
+    DPadArrow(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right", HidKey.RIGHT, actions, Alignment.CenterEnd, "bt_dpad_right")
     PressableButton(
       onPress = { actions.keyDown(HidKey.ENTER) },
       onRelease = { actions.keyUp() },
@@ -1120,6 +1120,7 @@ private fun BoxScope.DPadArrow(
   keyCode: Int,
   actions: RemoteInputActions,
   alignment: Alignment,
+  tag: String,
 ) {
   PressableButton(
     onPress = { actions.keyDown(keyCode) },
@@ -1130,7 +1131,8 @@ private fun BoxScope.DPadArrow(
     contentColor = MaterialTheme.colorScheme.onSurface,
     modifier = Modifier
       .align(alignment)
-      .padding(4.dp),
+      .padding(4.dp)
+      .testTag(tag),
   ) {
     Icon(icon, contentDescription = null, modifier = Modifier.size(40.dp))
   }

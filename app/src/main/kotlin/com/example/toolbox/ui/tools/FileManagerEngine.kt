@@ -5,8 +5,14 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 /**
  * Data model representing a file or directory for display and management.
@@ -35,6 +41,25 @@ enum class FileSortOrder(val displayName: String) {
   SIZE_ASC("Size (Smallest first)"),
   TYPE_ASC("Type"),
 }
+
+/**
+ * Available grouping options for file presentation.
+ */
+enum class FileGroupOption(val displayName: String) {
+  TYPE("Type"),
+  DATE("Date Modified"),
+  SIZE("Size"),
+  NAME("Alphabetical"),
+  NONE("None"),
+}
+
+/**
+ * Represents a group of files under a common header/section.
+ */
+data class FileGroup(
+  val title: String,
+  val items: List<FileItem>,
+)
 
 /**
  * View presentation mode: List or Grid.
@@ -331,6 +356,148 @@ object FileManagerEngine {
     }
 
     return dirs.sortedWith(comparator) + regularFiles.sortedWith(comparator)
+  }
+
+  /**
+   * Groups and sorts a list of [FileItem]s according to [groupOption] and [sortOrder].
+   * Returns a list of [FileGroup]s, where empty groups are omitted.
+   */
+  fun groupAndSortFiles(
+    items: List<FileItem>,
+    groupOption: FileGroupOption,
+    sortOrder: FileSortOrder,
+  ): List<FileGroup> {
+    if (items.isEmpty()) return emptyList()
+
+    val comparator: Comparator<FileItem> = when (sortOrder) {
+      FileSortOrder.NAME_ASC -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+      FileSortOrder.NAME_DESC -> compareByDescending(String.CASE_INSENSITIVE_ORDER) { it.name }
+      FileSortOrder.DATE_DESC -> compareByDescending<FileItem> { it.lastModifiedMs }.thenBy { it.name }
+      FileSortOrder.DATE_ASC -> compareBy<FileItem> { it.lastModifiedMs }.thenBy { it.name }
+      FileSortOrder.SIZE_DESC -> compareByDescending<FileItem> { it.sizeBytes }.thenBy { it.name }
+      FileSortOrder.SIZE_ASC -> compareBy<FileItem> { it.sizeBytes }.thenBy { it.name }
+      FileSortOrder.TYPE_ASC -> compareBy<FileItem> { it.extension.lowercase(Locale.ROOT) }.thenBy { it.name }
+    }
+
+    return when (groupOption) {
+      FileGroupOption.NONE -> {
+        listOf(FileGroup(title = "", items = sortFiles(items, sortOrder)))
+      }
+      FileGroupOption.TYPE -> {
+        val groups = mutableListOf<FileGroup>()
+        val dirs = items.filter { it.isDirectory }.sortedWith(comparator)
+        if (dirs.isNotEmpty()) groups.add(FileGroup("Folders", dirs))
+
+        val regularFiles = items.filter { !it.isDirectory }
+        val images = regularFiles.filter { isImageFile(it.file) }.sortedWith(comparator)
+        if (images.isNotEmpty()) groups.add(FileGroup("Images", images))
+
+        val videos = regularFiles.filter { isVideoFile(it.file) }.sortedWith(comparator)
+        if (videos.isNotEmpty()) groups.add(FileGroup("Videos", videos))
+
+        val audio = regularFiles.filter { isAudioFile(it.file) }.sortedWith(comparator)
+        if (audio.isNotEmpty()) groups.add(FileGroup("Audio", audio))
+
+        val docs = regularFiles.filter { isTextFile(it.file) }.sortedWith(comparator)
+        if (docs.isNotEmpty()) groups.add(FileGroup("Documents", docs))
+
+        val archives = regularFiles.filter { isArchiveFile(it.file) }.sortedWith(comparator)
+        if (archives.isNotEmpty()) groups.add(FileGroup("Archives", archives))
+
+        val code = regularFiles.filter { isCodeFile(it.file) }.sortedWith(comparator)
+        if (code.isNotEmpty()) groups.add(FileGroup("Code", code))
+
+        val handled = (images + videos + audio + docs + archives + code).toSet()
+        val other = regularFiles.filter { it !in handled }.sortedWith(comparator)
+        if (other.isNotEmpty()) groups.add(FileGroup("Other", other))
+
+        groups
+      }
+      FileGroupOption.DATE -> {
+        val calendar = Calendar.getInstance()
+        calendar.set(Calendar.HOUR_OF_DAY, 0)
+        calendar.set(Calendar.MINUTE, 0)
+        calendar.set(Calendar.SECOND, 0)
+        calendar.set(Calendar.MILLISECOND, 0)
+        val todayStart = calendar.timeInMillis
+        val yesterdayStart = todayStart - 24L * 60 * 60 * 1000
+        val sevenDaysAgo = todayStart - 6L * 24 * 60 * 60 * 1000
+        calendar.set(Calendar.DAY_OF_MONTH, 1)
+        val monthStart = calendar.timeInMillis
+
+        val today = mutableListOf<FileItem>()
+        val yesterday = mutableListOf<FileItem>()
+        val last7Days = mutableListOf<FileItem>()
+        val thisMonth = mutableListOf<FileItem>()
+        val older = mutableListOf<FileItem>()
+
+        items.forEach { item ->
+          val time = item.lastModifiedMs
+          when {
+            time >= todayStart -> today.add(item)
+            time >= yesterdayStart -> yesterday.add(item)
+            time >= sevenDaysAgo -> last7Days.add(item)
+            time >= monthStart -> thisMonth.add(item)
+            else -> older.add(item)
+          }
+        }
+
+        val groups = mutableListOf<FileGroup>()
+        if (today.isNotEmpty()) groups.add(FileGroup("Today", today.sortedWith(comparator)))
+        if (yesterday.isNotEmpty()) groups.add(FileGroup("Yesterday", yesterday.sortedWith(comparator)))
+        if (last7Days.isNotEmpty()) groups.add(FileGroup("Last 7 Days", last7Days.sortedWith(comparator)))
+        if (thisMonth.isNotEmpty()) groups.add(FileGroup("This Month", thisMonth.sortedWith(comparator)))
+        if (older.isNotEmpty()) groups.add(FileGroup("Older", older.sortedWith(comparator)))
+        groups
+      }
+      FileGroupOption.SIZE -> {
+        val groups = mutableListOf<FileGroup>()
+        val dirs = items.filter { it.isDirectory }.sortedWith(comparator)
+        if (dirs.isNotEmpty()) groups.add(FileGroup("Folders", dirs))
+
+        val regularFiles = items.filter { !it.isDirectory }
+        val huge = regularFiles.filter { it.sizeBytes >= 100L * 1024 * 1024 }.sortedWith(comparator)
+        val large = regularFiles.filter { it.sizeBytes in (10L * 1024 * 1024) until (100L * 1024 * 1024) }.sortedWith(comparator)
+        val medium = regularFiles.filter { it.sizeBytes in (1024L * 1024) until (10L * 1024 * 1024) }.sortedWith(comparator)
+        val small = regularFiles.filter { it.sizeBytes < 1024L * 1024 }.sortedWith(comparator)
+
+        if (huge.isNotEmpty()) groups.add(FileGroup("Huge (> 100 MB)", huge))
+        if (large.isNotEmpty()) groups.add(FileGroup("Large (10 – 100 MB)", large))
+        if (medium.isNotEmpty()) groups.add(FileGroup("Medium (1 – 10 MB)", medium))
+        if (small.isNotEmpty()) groups.add(FileGroup("Small (< 1 MB)", small))
+        groups
+      }
+      FileGroupOption.NAME -> {
+        val groups = mutableListOf<FileGroup>()
+        val dirs = items.filter { it.isDirectory }.sortedWith(comparator)
+        if (dirs.isNotEmpty()) groups.add(FileGroup("Folders", dirs))
+
+        val regularFiles = items.filter { !it.isDirectory }
+        val aToF = mutableListOf<FileItem>()
+        val gToL = mutableListOf<FileItem>()
+        val mToR = mutableListOf<FileItem>()
+        val sToZ = mutableListOf<FileItem>()
+        val other = mutableListOf<FileItem>()
+
+        regularFiles.forEach { item ->
+          val firstChar = item.name.firstOrNull()?.uppercaseChar() ?: ' '
+          when (firstChar) {
+            in 'A'..'F' -> aToF.add(item)
+            in 'G'..'L' -> gToL.add(item)
+            in 'M'..'R' -> mToR.add(item)
+            in 'S'..'Z' -> sToZ.add(item)
+            else -> other.add(item)
+          }
+        }
+
+        if (aToF.isNotEmpty()) groups.add(FileGroup("A – F", aToF.sortedWith(comparator)))
+        if (gToL.isNotEmpty()) groups.add(FileGroup("G – L", gToL.sortedWith(comparator)))
+        if (mToR.isNotEmpty()) groups.add(FileGroup("M – R", mToR.sortedWith(comparator)))
+        if (sToZ.isNotEmpty()) groups.add(FileGroup("S – Z", sToZ.sortedWith(comparator)))
+        if (other.isNotEmpty()) groups.add(FileGroup("# (Other)", other.sortedWith(comparator)))
+        groups
+      }
+    }
   }
 
   /**
@@ -647,16 +814,51 @@ object FileManagerEngine {
 
   /**
    * Calculates total size and item count in [directory].
+   * Runs in [Dispatchers.IO] and supports cooperative cancellation when the coroutine is cancelled.
    */
-  fun getStorageSummary(directory: File): Pair<Long, Int> {
+  suspend fun getStorageSummary(directory: File): Pair<Long, Int> = withContext(Dispatchers.IO) {
+    if (!directory.exists() || !directory.isDirectory) return@withContext 0L to 0
+    var totalBytes = 0L
+    var count = 0
+    try {
+      directory.walkTopDown()
+        .onEnter { dir ->
+          coroutineContext.ensureActive()
+          dir.canRead()
+        }
+        .forEach { file ->
+          coroutineContext.ensureActive()
+          if (!file.isDirectory) {
+            totalBytes += file.length()
+            count++
+          }
+        }
+    } catch (e: CancellationException) {
+      throw e
+    } catch (_: Exception) {
+      // Ignore permission or IO errors during traversal
+    }
+    totalBytes to count
+  }
+
+  /**
+   * Synchronous / blocking version of [getStorageSummary] for testing or non-coroutine callers.
+   */
+  fun getStorageSummaryBlocking(directory: File): Pair<Long, Int> {
     if (!directory.exists() || !directory.isDirectory) return 0L to 0
     var totalBytes = 0L
     var count = 0
-    directory.walkTopDown().forEach { file ->
-      if (!file.isDirectory) {
-        totalBytes += file.length()
-        count++
-      }
+    try {
+      directory.walkTopDown()
+        .onEnter { dir -> dir.canRead() }
+        .forEach { file ->
+          if (!file.isDirectory) {
+            totalBytes += file.length()
+            count++
+          }
+        }
+    } catch (_: Exception) {
+      // Ignore permission or IO errors during traversal
     }
     return totalBytes to count
   }

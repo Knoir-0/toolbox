@@ -9,9 +9,14 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import com.example.toolbox.ui.main.MainScreen
+import com.example.toolbox.ui.main.Tool
+import java.io.File
 
 @Composable
-fun MainNavigation() {
+fun MainNavigation(
+  standaloneTool: Tool? = null,
+  initialDirectory: File? = null,
+) {
   val backStack = rememberNavBackStack(Main)
 
   NavDisplay(
@@ -20,7 +25,11 @@ fun MainNavigation() {
     entryProvider =
       entryProvider {
         entry<Main> {
-          MainScreen(onItemClick = { navKey -> backStack.add(navKey) })
+          MainScreen(
+            standaloneTool = standaloneTool,
+            initialDirectory = initialDirectory,
+            onItemClick = { navKey -> backStack.add(navKey) },
+          )
         }
       },
   )
