@@ -47,20 +47,20 @@ class NavigationPreferencesTest {
       Tool.GALLERY,
       Tool.FILES,
       Tool.UNIT_CONVERTER,
+      Tool.RULER,
+      Tool.COLOR_PICKER,
       Tool.AUDIO_RECORDER,
       Tool.BLUETOOTH_REMOTE,
-      Tool.IMAGE_EDITOR,
-      Tool.FILE_CONVERTER,
-      Tool.RULER,
-      Tool.VIDEO_EDITOR,
-      Tool.AUDIO_EDITOR,
-      Tool.COLOR_PICKER,
-      Tool.DICE_ROLLER,
+      Tool.BLUETOOTH_GAMEPAD,
       Tool.GUITAR_TUNER,
       Tool.METRONOME,
       Tool.CHORD_BOOK,
+      Tool.DICE_ROLLER,
       Tool.PLANT_SCHEDULE,
-      Tool.BLUETOOTH_GAMEPAD,
+      Tool.IMAGE_EDITOR,
+      Tool.VIDEO_EDITOR,
+      Tool.AUDIO_EDITOR,
+      Tool.FILE_CONVERTER,
       Tool.SETTINGS,
     )
     assertEquals(expectedDefaultOrder, Tool.entries)
@@ -319,13 +319,14 @@ class NavigationPreferencesTest {
   }
 
   @Test
-  fun hiddenTools_fileConverterImageEditorAndVideoEditorAreHiddenByDefault_andCanBeUnhidden() {
+  fun hiddenTools_fileConverterImageEditorVideoEditorAndAudioEditorAreHiddenByDefault_andCanBeUnhidden() {
     val expectedDefaultHidden = setOf(
       Tool.FILE_CONVERTER,
       Tool.IMAGE_EDITOR,
       Tool.VIDEO_EDITOR,
+      Tool.AUDIO_EDITOR,
     )
-    // Null rawString (no saved preference) returns DEFAULT_HIDDEN_TOOLS containing FILE_CONVERTER, IMAGE_EDITOR, VIDEO_EDITOR
+    // Null rawString (no saved preference) returns DEFAULT_HIDDEN_TOOLS containing FILE_CONVERTER, IMAGE_EDITOR, VIDEO_EDITOR, AUDIO_EDITOR
     assertEquals(expectedDefaultHidden, DEFAULT_HIDDEN_TOOLS)
     assertEquals(DEFAULT_HIDDEN_TOOLS, parseHiddenTools(null))
     // Explicit blank string (user unhid all tools) returns emptySet()

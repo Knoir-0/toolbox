@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -31,6 +32,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
@@ -48,6 +50,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Speed
@@ -140,18 +143,34 @@ import kotlinx.coroutines.withContext
 fun AudioEditorScreen(
   modifier: Modifier = Modifier,
   initialBuffer: AudioSampleBuffer? = null,
+  initialFile: File? = null,
+  initialDirectory: File? = null,
   initialFileName: String = "sample_audio.wav",
+  onNavigateBack: (() -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val haptic = LocalHapticFeedback.current
   val isInspectionMode = LocalInspectionMode.current
   val coroutineScope = rememberCoroutineScope()
 
-  val audioDirectory = remember {
-    if (isInspectionMode) {
-      File("/storage/emulated/0/Audio")
-    } else {
-      AudioRecorderEngine.getDefaultAudioDirectory(context)
+  val audioDirectory = remember(initialDirectory, initialFile, isInspectionMode) {
+    initialDirectory
+      ?: initialFile?.parentFile
+      ?: if (isInspectionMode) {
+        File("/storage/emulated/0/Audio")
+      } else {
+        AudioRecorderEngine.getDefaultAudioDirectory(context)
+      }
+  }
+
+  val resolvedInitialBuffer = remember(initialBuffer, initialFile) {
+    initialBuffer ?: initialFile?.let { file ->
+      AudioEditorEngine.readWavFile(file)
+        ?: if (file.exists()) {
+          AudioEditorEngine.createSampleAudioBuffer(durationMs = 2000L)
+        } else {
+          null
+        }
     }
   }
 
@@ -159,10 +178,12 @@ fun AudioEditorScreen(
   val history = remember { ImageEditorHistory<AudioEditSnapshot>(maxDepth = 15) }
   var historyVersion by remember { mutableIntStateOf(0) }
 
-  var originalBuffer by remember { mutableStateOf<AudioSampleBuffer?>(initialBuffer) }
-  var currentBuffer by remember { mutableStateOf<AudioSampleBuffer?>(initialBuffer) }
-  var sourceFile by remember { mutableStateOf<File?>(null) }
-  var sourceFileName by remember { mutableStateOf(initialFileName) }
+  var originalBuffer by remember(resolvedInitialBuffer) { mutableStateOf<AudioSampleBuffer?>(resolvedInitialBuffer) }
+  var currentBuffer by remember(resolvedInitialBuffer) { mutableStateOf<AudioSampleBuffer?>(resolvedInitialBuffer) }
+  var sourceFile by remember(initialFile) { mutableStateOf<File?>(initialFile) }
+  var sourceFileName by remember(initialFile, initialFileName) {
+    mutableStateOf(initialFile?.name ?: initialFileName)
+  }
   var statusBannerText by remember { mutableStateOf<String?>(null) }
   var isBusy by remember { mutableStateOf(false) }
 
@@ -304,6 +325,27 @@ fun AudioEditorScreen(
           Toast.LENGTH_SHORT,
         ).show()
       }
+    }
+  }
+
+  LaunchedEffect(initialFile) {
+    if (initialBuffer == null && initialFile != null && initialFile.exists()) {
+      val loaded = AudioEditorEngine.loadAudioFile(context, initialFile).getOrNull()
+      if (loaded != null) {
+        loadBufferIntoEditor(
+          buffer = loaded,
+          name = initialFile.name,
+          file = initialFile,
+          banner = "Loaded ${initialFile.name} (${AudioRecorderEngine.formatDurationMs(loaded.durationMs)})",
+        )
+      }
+    }
+  }
+
+  BackHandler(enabled = onNavigateBack != null) {
+    performWithDiscardCheck {
+      stopPlayback()
+      onNavigateBack?.invoke()
     }
   }
 
@@ -471,6 +513,14 @@ fun AudioEditorScreen(
           canUndo = canUndo && !isBusy,
           canRedo = canRedo && !isBusy,
           isBusy = isBusy,
+          onNavigateBack = onNavigateBack?.let { navigateBack ->
+            {
+              performWithDiscardCheck {
+                stopPlayback()
+                navigateBack()
+              }
+            }
+          },
           onUndo = {
             val active = currentBuffer ?: return@AudioEditorTopBar
             stopPlayback()
@@ -1045,6 +1095,7 @@ private fun AudioEditorTopBar(
   canUndo: Boolean,
   canRedo: Boolean,
   isBusy: Boolean,
+  onNavigateBack: (() -> Unit)? = null,
   onUndo: () -> Unit,
   onRedo: () -> Unit,
   onClose: () -> Unit,
@@ -1068,18 +1119,33 @@ private fun AudioEditorTopBar(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.weight(1f),
       ) {
-        Surface(
-          shape = CircleShape,
-          color = MaterialTheme.colorScheme.primaryContainer,
-          modifier = Modifier.size(36.dp),
-        ) {
-          Box(contentAlignment = Alignment.Center) {
+        if (onNavigateBack != null) {
+          IconButton(
+            onClick = onNavigateBack,
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("action_navigate_back"),
+          ) {
             Icon(
-              imageVector = Icons.Default.GraphicEq,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.onPrimaryContainer,
-              modifier = Modifier.size(20.dp),
+              imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+              contentDescription = "Back",
+              tint = MaterialTheme.colorScheme.onSurface,
             )
+          }
+        } else {
+          Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer,
+            modifier = Modifier.size(36.dp),
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.Default.GraphicEq,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(20.dp),
+              )
+            }
           }
         }
         Column(modifier = Modifier.weight(1f)) {
@@ -1148,25 +1214,18 @@ private fun AudioEditorTopBar(
           )
         }
         Spacer(modifier = Modifier.width(4.dp))
-        Button(
+        FilledIconButton(
           onClick = onExportClick,
           enabled = !isBusy,
-          shape = RoundedCornerShape(12.dp),
-          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+          shape = CircleShape,
           modifier = Modifier
-            .height(36.dp)
+            .size(36.dp)
             .testTag("audio_editor_export_button"),
         ) {
           Icon(
-            imageVector = Icons.Default.SaveAlt,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-          Spacer(modifier = Modifier.width(4.dp))
-          Text(
-            text = "Export",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
+            imageVector = Icons.Default.Save,
+            contentDescription = "Save audio",
+            modifier = Modifier.size(18.dp),
           )
         }
       }

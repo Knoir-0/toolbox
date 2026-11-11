@@ -564,5 +564,16 @@ class FileManagerEngineTest {
     assertTrue(FileManagerEngine.isVideoFile(mov))
     assertFalse(FileManagerEngine.isVideoFile(png))
     assertFalse(FileManagerEngine.isVideoFile(txt))
+
+    val m4a = File(tempFolder.root, "voice.m4a")
+    val wav = File(tempFolder.root, "sample.wav")
+    assertFalse(FileManagerEngine.isAudioFile(dir))
+    assertTrue(FileManagerEngine.isAudioFile(m4a))
+    assertTrue(FileManagerEngine.isAudioFile(wav))
+    assertTrue(AudioEditorEngine.isSupportedAudioFile(m4a))
+    assertTrue(AudioEditorEngine.isSupportedAudioFile(wav))
+    assertFalse(AudioEditorEngine.isSupportedAudioFile(dir))
+    assertFalse(AudioEditorEngine.isSupportedAudioFile(png))
+    assertFalse(AudioEditorEngine.isSupportedAudioFile(txt))
   }
 }

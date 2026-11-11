@@ -136,4 +136,34 @@ class AudioRecorderScreenTest {
 
     composeTestRule.onNodeWithText("/Recordings").assertIsDisplayed()
   }
+
+  @Test
+  fun recordingContextMenu_editOptionOpensAudioEditorDirectly_andNavigatesBack() {
+    val wavFile = File(testAudioDir, "Recording_Test.wav")
+    AudioEditorEngine.writeWavFile(
+      buffer = AudioEditorEngine.createSampleAudioBuffer(durationMs = 1500L),
+      outputFile = wavFile,
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        AudioRecorderScreen(initialDirectory = testAudioDir)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("recording_item_${wavFile.name}").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("recording_menu_${wavFile.name}").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("action_edit_audio").assertIsDisplayed().performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("audio_editor_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithText(wavFile.name, substring = true).assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("audio_recorder_screen").assertIsDisplayed()
+  }
 }

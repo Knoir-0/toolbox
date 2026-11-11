@@ -273,7 +273,7 @@ object FileManagerEngine {
   fun isAudioFile(file: File): Boolean {
     if (file.isDirectory) return false
     val ext = file.extension.lowercase(Locale.ROOT)
-    return ext in setOf("mp3", "wav", "ogg", "m4a", "flac", "aac")
+    return ext in AudioRecorderEngine.SUPPORTED_AUDIO_EXTENSIONS
   }
 
   fun isVideoFile(file: File): Boolean {

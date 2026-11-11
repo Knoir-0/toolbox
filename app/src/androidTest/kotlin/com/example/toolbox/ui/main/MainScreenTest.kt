@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -77,7 +78,7 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("ruler_unit_toggle").assertIsDisplayed()
     composeTestRule.onNodeWithTag("ruler_unit_toggle").performClick()
 
-    // Pull up and navigate to Page 1 for Colors (with 3 default hidden tools, Colors is on Page 1)
+    // Pull up and navigate to Page 1 for Colors
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
@@ -112,13 +113,16 @@ class MainScreenTest {
     // Row controls are hidden when collapsed like a native navigation bar
     composeTestRule.onNodeWithTag("tools_per_row_control").assertDoesNotExist()
     composeTestRule.onNodeWithTag("tools_per_row_slider").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("add_to_home_screen_button").assertDoesNotExist()
 
     // Pull up the navigation box
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    // Row controls and slider with dots (3 - 6) are now visible
+    // Row controls, add-to-home-screen button, and slider with dots (3 - 6) are now visible
     composeTestRule.onNodeWithTag("tools_per_row_control").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("add_to_home_screen_button").assertIsDisplayed()
+    composeTestRule.onNodeWithContentDescription("Tools per row").assertDoesNotExist()
     composeTestRule.onNodeWithTag("tools_per_row_slider").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tools_per_row_count").assertTextEquals("3")
     composeTestRule.onNodeWithTag("tools_grid_row_0").assertIsDisplayed()
@@ -153,6 +157,42 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("reorder_help_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("reorder_help_text").assertIsDisplayed()
+  }
+
+  @Test
+  fun pullUpPanel_addToHomeScreenButton_isLeftOfSliderAndTargetsSelectedTool() {
+    // Expand the pull-up panel
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+
+    val addButton = composeTestRule.onNodeWithTag("add_to_home_screen_button")
+    val slider = composeTestRule.onNodeWithTag("tools_per_row_slider")
+    addButton.assertIsDisplayed()
+    slider.assertIsDisplayed()
+
+    // Old GridView icon in that position is removed
+    composeTestRule.onNodeWithContentDescription("Tools per row").assertDoesNotExist()
+
+    // Button is positioned to the left of the tools-per-row slider
+    val addButtonBounds = addButton.fetchSemanticsNode().boundsInRoot
+    val sliderBounds = slider.fetchSemanticsNode().boundsInRoot
+    assertTrue(addButtonBounds.right <= sliderBounds.left)
+
+    // Initially Calculator is selected
+    composeTestRule.onNodeWithContentDescription("Add Calculator to Home screen").assertIsDisplayed()
+    addButton.performClick()
+    composeTestRule.waitForIdle()
+
+    // Switch to Notes and re-expand the panel
+    composeTestRule.onAllNodesWithText("Notes").onFirst().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+
+    // Button now targets the newly selected tool (Notes)
+    composeTestRule.onNodeWithContentDescription("Add Notes to Home screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("add_to_home_screen_button").performClick()
+    composeTestRule.waitForIdle()
   }
 
   @Test
@@ -321,7 +361,7 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("tool_item_AUDIO_RECORDER").assertIsDisplayed()
 
     // Navigate to last page via indicator dot where Settings is located
-    val lastPageIndex = (Tool.entries.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
+    val lastPageIndex = (Tool.entries.size - DEFAULT_HIDDEN_TOOLS.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$lastPageIndex").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").assertIsDisplayed()
@@ -420,15 +460,14 @@ class MainScreenTest {
     repo.setToolsPerRow(6)
     composeTestRule.waitForIdle()
 
-    // With 6 tools per row (and FILE_CONVERTER hidden by default):
+    // With 6 tools per row (and FILE_CONVERTER, IMAGE_EDITOR, VIDEO_EDITOR, AUDIO_EDITOR hidden by default):
     // Page 0: Math & Measurement (3 tools) + Productivity (2 tools) + Files & Storage (1 tool) = 6 tools
-    // Page 1: Photo & Video (4 tools) + Audio & Sound (2 tools) = 6 tools
-    // Page 2: Music & Instruments (3 tools) + Remotes & Devices (2 tools) = 5 tools
-    // Page 3: Miscellaneous (3 tools) + System (1 tool) = 4 tools on 1 row!
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_3").performClick()
+    // Page 1: Photo & Video (2 tools) + Audio & Sound (1 tool) + Music & Instruments (3 tools) = 6 tools
+    // Page 2: Remotes & Devices (2 tools) + Miscellaneous (3 tools) + System (1 tool) = 6 tools on 1 row!
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
     composeTestRule.waitForIdle()
 
-    // Miscellaneous and System fit on Page 3 as one row
+    // Miscellaneous and System fit on Page 2 as one row
     composeTestRule.onNodeWithText("Miscellaneous").assertIsDisplayed()
     composeTestRule.onNodeWithText("System").assertIsDisplayed()
     composeTestRule.onNodeWithText("Dice").assertIsDisplayed()
@@ -448,12 +487,11 @@ class MainScreenTest {
     repo.setToolsPerRow(6)
     composeTestRule.waitForIdle()
 
-    // With 6 tools per row:
-    // Page 0: Math & Measurement (3 tools) + Productivity (2 tools) = 5 tools
-    // Page 1: Files & Storage (2 tools) + Photo & Video (4 tools) = 6 tools
-    // Page 2: Audio & Sound (2 tools) + Music & Instruments (3 tools) = 5 tools
-    // Page 3: Remotes & Devices (2 tools) + Miscellaneous (3 tools) + System (1 tool: Settings) = 6 tools
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_3").performClick()
+    // With 6 tools per row (and 4 default hidden tools):
+    // Page 0: Math & Measurement (3 tools) + Productivity (2 tools) + Files & Storage (1 tool) = 6 tools
+    // Page 1: Photo & Video (2 tools) + Audio & Sound (1 tool) + Music & Instruments (3 tools) = 6 tools
+    // Page 2: Remotes & Devices (2 tools) + Miscellaneous (3 tools) + System (1 tool: Settings) = 6 tools
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
     composeTestRule.waitForIdle()
 
     // Verify Settings tool icon is displayed and has sufficient width
@@ -517,7 +555,7 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    val lastPageIndex = (Tool.entries.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
+    val lastPageIndex = (Tool.entries.size - DEFAULT_HIDDEN_TOOLS.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$lastPageIndex").performClick()
     composeTestRule.waitForIdle()
 
@@ -553,7 +591,7 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    val lastPageIndex = (Tool.entries.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
+    val lastPageIndex = (Tool.entries.size - DEFAULT_HIDDEN_TOOLS.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$lastPageIndex").performClick()
     composeTestRule.waitForIdle()
 
@@ -598,7 +636,7 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    val lastPageIndex = (Tool.entries.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
+    val lastPageIndex = (Tool.entries.size - DEFAULT_HIDDEN_TOOLS.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$lastPageIndex").performClick()
     composeTestRule.waitForIdle()
 
@@ -660,7 +698,7 @@ class MainScreenTest {
     // Navigate to Settings
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
-    val lastPageIndex = (Tool.entries.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
+    val lastPageIndex = (Tool.entries.size - DEFAULT_HIDDEN_TOOLS.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$lastPageIndex").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
@@ -757,6 +795,7 @@ class MainScreenTest {
       composeTestRule.onNodeWithTag("action_file_converter").assertDoesNotExist()
       composeTestRule.onNodeWithTag("action_edit_image").assertDoesNotExist()
       composeTestRule.onNodeWithTag("action_edit_video").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_edit_audio").assertDoesNotExist()
     } finally {
       tempDir.deleteRecursively()
     }
@@ -773,8 +812,12 @@ class MainScreenTest {
         outputFile = java.io.File(dcimDir, "photo.png"),
       )
       java.io.File(dcimDir, "clip.mp4").writeBytes(byteArrayOf(0, 0, 0, 24))
+      com.example.toolbox.ui.tools.AudioEditorEngine.writeWavFile(
+        buffer = com.example.toolbox.ui.tools.AudioEditorEngine.createSampleAudioBuffer(durationMs = 1000L),
+        outputFile = java.io.File(dcimDir, "track.wav"),
+      )
 
-      // 1. Test FilesScreen Edit button for Image & Video
+      // 1. Test FilesScreen Edit button for Image, Video & Audio
       composeTestRule.setContent {
         com.example.toolbox.ui.tools.FilesScreen(initialDirectory = dcimDir)
       }
@@ -785,6 +828,7 @@ class MainScreenTest {
       composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("action_edit_image").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_edit_video").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_edit_audio").assertDoesNotExist()
       composeTestRule.onNodeWithTag("action_edit_image").performClick()
       composeTestRule.waitForIdle()
 
@@ -798,10 +842,25 @@ class MainScreenTest {
       composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("action_edit_video").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_edit_image").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_edit_audio").assertDoesNotExist()
       composeTestRule.onNodeWithTag("action_edit_video").performClick()
       composeTestRule.waitForIdle()
 
       composeTestRule.onNodeWithTag("video_editor_screen").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()
+
+      // Audio file menu shows Edit button (action_edit_audio) and opens AudioEditorScreen
+      composeTestRule.onNodeWithTag("file_options_track.wav").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("action_edit_audio").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_edit_image").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_edit_video").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_edit_audio").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("audio_editor_screen").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_navigate_back").performClick()
       composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()

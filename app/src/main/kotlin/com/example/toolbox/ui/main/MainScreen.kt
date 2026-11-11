@@ -31,6 +31,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.AddToHomeScreen
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.QuestionMark
 import androidx.compose.material3.BottomSheetScaffold
@@ -71,6 +72,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
@@ -337,6 +339,8 @@ fun ToolboxScaffold(
     ?: remember { mutableStateOf(CategoryToolSortingOption.MANUAL) }
   val toolUsageCounts by preferencesRepository?.toolUsageCountsFlow?.collectAsState()
     ?: remember { mutableStateOf(emptyMap()) }
+  val themeColor by preferencesRepository?.themeColorFlow?.collectAsState()
+    ?: remember { mutableStateOf(DEFAULT_THEME_COLOR_SYSTEM) }
 
   val allOrderedTools = remember(initialTools, persistedToolOrder) {
     val base = initialTools ?: persistedToolOrder
@@ -400,6 +404,7 @@ fun ToolboxScaffold(
         categorySorting = categorySorting,
         categoryToolSorting = categoryToolSorting,
         usageCounts = toolUsageCounts,
+        themeColor = themeColor,
         isExpanded = isExpanded,
         onTogglePanel = {
           coroutineScope.launch {
@@ -467,9 +472,12 @@ fun ToolsPullUpPanelContent(
   categorySorting: CategorySortingOption = CategorySortingOption.MANUAL,
   categoryToolSorting: CategoryToolSortingOption = CategoryToolSortingOption.MANUAL,
   usageCounts: Map<Tool, Int> = emptyMap(),
+  themeColor: String? = null,
+  onAddToHomeScreen: ((Tool) -> Unit)? = null,
   onDraggingChanged: (Boolean) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
+  val context = LocalContext.current
   var showReorderHelp by rememberSaveable { mutableStateOf(false) }
 
   LaunchedEffect(isExpanded) {
@@ -525,7 +533,7 @@ fun ToolsPullUpPanelContent(
         .padding(horizontal = 8.dp, vertical = 4.dp),
     )
 
-    // Row controls (slider with dots 3-6 + ? help button) are hidden until pulled up
+    // Row controls (add to home screen button, slider with dots 3-6, + ? help button) are hidden until pulled up
     if (isExpanded) {
       HorizontalDivider(
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -537,6 +545,14 @@ fun ToolsPullUpPanelContent(
         showHelp = showReorderHelp,
         onToolsPerRowChange = onToolsPerRowChange,
         onToggleHelp = { showReorderHelp = !showReorderHelp },
+        selectedTool = selectedTool,
+        onAddToHomeScreen = {
+          if (onAddToHomeScreen != null) {
+            onAddToHomeScreen(selectedTool)
+          } else {
+            addToolToHomeScreen(context, selectedTool, themeColor = themeColor)
+          }
+        },
         toolSorting = toolSorting,
         categorySorting = categorySorting,
         modifier = Modifier
@@ -557,10 +573,13 @@ fun ToolsPerRowControl(
   showHelp: Boolean,
   onToolsPerRowChange: (Int) -> Unit,
   onToggleHelp: () -> Unit,
+  selectedTool: Tool = Tool.CALCULATOR,
+  onAddToHomeScreen: (() -> Unit)? = null,
   toolSorting: ToolSortingOption = ToolSortingOption.USER_CHOICE,
   categorySorting: CategorySortingOption = CategorySortingOption.MANUAL,
   modifier: Modifier = Modifier,
 ) {
+  val context = LocalContext.current
   val coercedValue = coerceToolsPerRow(toolsPerRow)
   val stops = (MIN_TOOLS_PER_ROW..MAX_TOOLS_PER_ROW).toList()
 
@@ -573,17 +592,33 @@ fun ToolsPerRowControl(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-      // Grid icon + current count (replaces "Per row" text)
+      // Add current tool to Home screen button + current count
       Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
-        Icon(
-          imageVector = Icons.Default.GridView,
-          contentDescription = "Tools per row",
-          tint = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.size(20.dp),
-        )
+        FilledTonalIconButton(
+          onClick = {
+            if (onAddToHomeScreen != null) {
+              onAddToHomeScreen()
+            } else {
+              addToolToHomeScreen(context, selectedTool)
+            }
+          },
+          modifier = Modifier
+            .size(32.dp)
+            .testTag("add_to_home_screen_button"),
+          colors = IconButtonDefaults.filledTonalIconButtonColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+          ),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.AddToHomeScreen,
+            contentDescription = "Add ${selectedTool.title} to Home screen",
+            modifier = Modifier.size(16.dp),
+          )
+        }
         Text(
           text = coercedValue.toString(),
           style = MaterialTheme.typography.titleSmall,
@@ -1578,11 +1613,13 @@ fun ToolContentView(
           onOpenFileConverter = { preferencesRepository?.incrementToolUsage(Tool.FILE_CONVERTER) },
           onOpenImageEditor = { preferencesRepository?.incrementToolUsage(Tool.IMAGE_EDITOR) },
           onOpenVideoEditor = { preferencesRepository?.incrementToolUsage(Tool.VIDEO_EDITOR) },
+          onOpenAudioEditor = { preferencesRepository?.incrementToolUsage(Tool.AUDIO_EDITOR) },
           modifier = Modifier.padding(bottom = bottomPadding),
         )
       }
       Tool.AUDIO_RECORDER -> AudioRecorderScreen(
         initialDirectory = initialDirectory,
+        onOpenAudioEditor = { preferencesRepository?.incrementToolUsage(Tool.AUDIO_EDITOR) },
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.FILE_CONVERTER -> FileConverterScreen(

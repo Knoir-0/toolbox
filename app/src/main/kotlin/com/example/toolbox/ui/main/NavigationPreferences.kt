@@ -32,6 +32,7 @@ val DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
   Tool.FILE_CONVERTER,
   Tool.IMAGE_EDITOR,
   Tool.VIDEO_EDITOR,
+  Tool.AUDIO_EDITOR,
 )
 
 /**

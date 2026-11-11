@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
@@ -137,6 +138,7 @@ fun AudioRecorderScreen(
   modifier: Modifier = Modifier,
   initialDirectory: File? = null,
   initialFormat: AudioRecordingFormat? = null,
+  onOpenAudioEditor: ((File) -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
@@ -293,6 +295,7 @@ fun AudioRecorderScreen(
   var activePlaybackRecording by remember { mutableStateOf<AudioRecordingItem?>(null) }
   var recordingToRename by remember { mutableStateOf<AudioRecordingItem?>(null) }
   var recordingToDelete by remember { mutableStateOf<AudioRecordingItem?>(null) }
+  var fileForAudioEditor by remember { mutableStateOf<File?>(null) }
 
   fun startRecording() {
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -321,6 +324,20 @@ fun AudioRecorderScreen(
     if (savedFile != null && !isInspection) {
       Toast.makeText(context, "Saved ${savedFile.name}", Toast.LENGTH_SHORT).show()
     }
+  }
+
+  val activeAudioEditorFile = fileForAudioEditor
+  if (activeAudioEditorFile != null) {
+    AudioEditorScreen(
+      modifier = modifier,
+      initialFile = activeAudioEditorFile,
+      initialDirectory = recordingsDirectory,
+      onNavigateBack = {
+        fileForAudioEditor = null
+        refreshTrigger++
+      },
+    )
+    return
   }
 
   Column(
@@ -860,6 +877,11 @@ fun AudioRecorderScreen(
               onClick = {
                 activePlaybackRecording = item
               },
+              onEdit = {
+                activePlaybackRecording = null
+                fileForAudioEditor = item.file
+                onOpenAudioEditor?.invoke(item.file)
+              },
               onRename = {
                 recordingToRename = item
               },
@@ -938,6 +960,7 @@ fun AudioRecorderScreen(
 private fun RecordingListItemCard(
   item: AudioRecordingItem,
   onClick: () -> Unit,
+  onEdit: () -> Unit = {},
   onRename: () -> Unit,
   onDelete: () -> Unit,
   modifier: Modifier = Modifier,
@@ -1042,6 +1065,16 @@ private fun RecordingListItemCard(
               menuExpanded = false
               onClick()
             },
+            modifier = Modifier.testTag("recording_play_${item.name}"),
+          )
+          DropdownMenuItem(
+            text = { Text("Edit") },
+            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+            onClick = {
+              menuExpanded = false
+              onEdit()
+            },
+            modifier = Modifier.testTag("action_edit_audio"),
           )
           DropdownMenuItem(
             text = { Text("Rename") },

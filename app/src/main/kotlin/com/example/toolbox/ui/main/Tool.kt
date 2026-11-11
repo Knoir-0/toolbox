@@ -86,6 +86,16 @@ enum class Tool(
     icon = Icons.Default.Straighten,
     category = ToolCategory.MATH_AND_MEASUREMENT,
   ),
+  RULER(
+    title = "Ruler",
+    icon = Icons.Default.SquareFoot,
+    category = ToolCategory.MATH_AND_MEASUREMENT,
+  ),
+  COLOR_PICKER(
+    title = "Colors",
+    icon = Icons.Default.Palette,
+    category = ToolCategory.MISCELLANEOUS,
+  ),
   AUDIO_RECORDER(
     title = "Recorder",
     icon = Icons.Default.Mic,
@@ -96,40 +106,10 @@ enum class Tool(
     icon = Icons.Default.SettingsRemote,
     category = ToolCategory.REMOTES_AND_DEVICES,
   ),
-  IMAGE_EDITOR(
-    title = "Image Editor",
-    icon = Icons.Default.Image,
-    category = ToolCategory.PHOTO_AND_VIDEO,
-  ),
-  FILE_CONVERTER(
-    title = "File Converter",
-    icon = Icons.Default.SwapHoriz,
-    category = ToolCategory.FILES_AND_STORAGE,
-  ),
-  RULER(
-    title = "Ruler",
-    icon = Icons.Default.SquareFoot,
-    category = ToolCategory.MATH_AND_MEASUREMENT,
-  ),
-  VIDEO_EDITOR(
-    title = "Video Editor",
-    icon = Icons.Default.Movie,
-    category = ToolCategory.PHOTO_AND_VIDEO,
-  ),
-  AUDIO_EDITOR(
-    title = "Audio Editor",
-    icon = Icons.Default.GraphicEq,
-    category = ToolCategory.AUDIO_AND_SOUND,
-  ),
-  COLOR_PICKER(
-    title = "Colors",
-    icon = Icons.Default.Palette,
-    category = ToolCategory.MISCELLANEOUS,
-  ),
-  DICE_ROLLER(
-    title = "Dice",
-    icon = Icons.Default.Casino,
-    category = ToolCategory.MISCELLANEOUS,
+  BLUETOOTH_GAMEPAD(
+    title = "Gamepad",
+    icon = Icons.Default.SportsEsports,
+    category = ToolCategory.REMOTES_AND_DEVICES,
   ),
   GUITAR_TUNER(
     title = "Tuner",
@@ -146,15 +126,35 @@ enum class Tool(
     icon = Icons.Default.LibraryMusic,
     category = ToolCategory.MUSIC_AND_INSTRUMENTS,
   ),
+  DICE_ROLLER(
+    title = "Dice",
+    icon = Icons.Default.Casino,
+    category = ToolCategory.MISCELLANEOUS,
+  ),
   PLANT_SCHEDULE(
     title = "Plants",
     icon = Icons.Default.Yard,
     category = ToolCategory.MISCELLANEOUS,
   ),
-  BLUETOOTH_GAMEPAD(
-    title = "Gamepad",
-    icon = Icons.Default.SportsEsports,
-    category = ToolCategory.REMOTES_AND_DEVICES,
+  IMAGE_EDITOR(
+    title = "Image Editor",
+    icon = Icons.Default.Image,
+    category = ToolCategory.PHOTO_AND_VIDEO,
+  ),
+  VIDEO_EDITOR(
+    title = "Video Editor",
+    icon = Icons.Default.Movie,
+    category = ToolCategory.PHOTO_AND_VIDEO,
+  ),
+  AUDIO_EDITOR(
+    title = "Audio Editor",
+    icon = Icons.Default.GraphicEq,
+    category = ToolCategory.AUDIO_AND_SOUND,
+  ),
+  FILE_CONVERTER(
+    title = "File Converter",
+    icon = Icons.Default.SwapHoriz,
+    category = ToolCategory.FILES_AND_STORAGE,
   ),
   SETTINGS(
     title = "Settings",

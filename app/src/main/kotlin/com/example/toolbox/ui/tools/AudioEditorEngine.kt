@@ -220,7 +220,7 @@ object AudioEditorEngine {
    * Returns `true` if [file] has a supported audio extension or is recognized as an audio format by [FileConverterEngine].
    */
   fun isSupportedAudioFile(file: File): Boolean {
-    if (!file.exists() || !file.isFile) return false
+    if (file.isDirectory) return false
     val ext = file.extension.lowercase(Locale.ROOT)
     if (ext in AudioRecorderEngine.SUPPORTED_AUDIO_EXTENSIONS) return true
     return FileConverterEngine.detectFormat(file)?.category == ConversionMediaCategory.AUDIO
