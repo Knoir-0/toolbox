@@ -267,7 +267,7 @@ object FileManagerEngine {
   fun isImageFile(file: File): Boolean {
     if (file.isDirectory) return false
     val ext = file.extension.lowercase(Locale.ROOT)
-    return ext in setOf("png", "jpg", "jpeg", "webp", "gif", "bmp")
+    return ext in setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "heic", "heif")
   }
 
   fun isAudioFile(file: File): Boolean {
@@ -279,7 +279,10 @@ object FileManagerEngine {
   fun isVideoFile(file: File): Boolean {
     if (file.isDirectory) return false
     val ext = file.extension.lowercase(Locale.ROOT)
-    return ext in setOf("mp4", "mkv", "webm", "avi", "mov")
+    return ext in setOf(
+      "mp4", "m4v", "mkv", "mov", "qt", "webm", "avi",
+      "3gp", "3gpp", "flv", "mpeg", "mpg", "ts", "mts", "m2ts",
+    )
   }
 
   fun isArchiveFile(file: File): Boolean {
@@ -295,6 +298,10 @@ object FileManagerEngine {
       "json", "xml", "html", "htm", "css", "js", "ts", "kt",
       "java", "py", "c", "cpp", "h", "sh", "sql", "kts", "gradle",
     )
+  }
+
+  fun isConvertibleFile(file: File): Boolean {
+    return FileConverterEngine.isSupportedFile(file)
   }
 
   /**

@@ -496,13 +496,15 @@ fun ToolsPullUpPanelContent(
         },
       contentAlignment = Alignment.Center,
     ) {
-      Surface(
+      Box(
         modifier = Modifier
           .width(32.dp)
-          .height(4.dp),
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-      ) {}
+          .height(4.dp)
+          .background(
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+            shape = CircleShape,
+          ),
+      )
     }
 
     // Native NavigationBar-style Reorderable Grid of Tool Icons
@@ -1573,6 +1575,9 @@ fun ToolContentView(
         FilesScreen(
           initialDirectory = initialDirectory,
           themeColor = activeThemeColor,
+          onOpenFileConverter = { preferencesRepository?.incrementToolUsage(Tool.FILE_CONVERTER) },
+          onOpenImageEditor = { preferencesRepository?.incrementToolUsage(Tool.IMAGE_EDITOR) },
+          onOpenVideoEditor = { preferencesRepository?.incrementToolUsage(Tool.VIDEO_EDITOR) },
           modifier = Modifier.padding(bottom = bottomPadding),
         )
       }
@@ -1586,6 +1591,8 @@ fun ToolContentView(
       )
       Tool.GALLERY -> GalleryScreen(
         rootDirectory = initialDirectory,
+        onOpenImageEditor = { preferencesRepository?.incrementToolUsage(Tool.IMAGE_EDITOR) },
+        onOpenVideoEditor = { preferencesRepository?.incrementToolUsage(Tool.VIDEO_EDITOR) },
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.NOTES -> NotesScreen(

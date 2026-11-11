@@ -101,6 +101,7 @@ import androidx.compose.material.icons.filled.SdCard
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.filled.VideoFile
@@ -179,6 +180,9 @@ fun FilesScreen(
   initialSearchActive: Boolean = false,
   themeColor: String? = null,
   onOpenFile: ((File, Boolean) -> Unit)? = null,
+  onOpenFileConverter: ((File) -> Unit)? = null,
+  onOpenImageEditor: ((File) -> Unit)? = null,
+  onOpenVideoEditor: ((File) -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
@@ -400,6 +404,9 @@ fun FilesScreen(
   var fileForDetails by remember { mutableStateOf<FileItem?>(null) }
   var fileForTextEdit by remember { mutableStateOf<FileItem?>(null) }
   var fileForImagePreview by remember { mutableStateOf<FileItem?>(null) }
+  var fileForConverter by remember { mutableStateOf<File?>(null) }
+  var fileForImageEditor by remember { mutableStateOf<File?>(null) }
+  var fileForVideoEditor by remember { mutableStateOf<File?>(null) }
   var showSortMenu by remember { mutableStateOf(false) }
 
   // Multi-selection state
@@ -484,6 +491,47 @@ fun FilesScreen(
     } catch (e: Exception) {
       Toast.makeText(context, "Could not share file: ${e.message}", Toast.LENGTH_SHORT).show()
     }
+  }
+
+  val activeConverterFile = fileForConverter
+  if (activeConverterFile != null) {
+    FileConverterScreen(
+      modifier = modifier,
+      initialFile = activeConverterFile,
+      initialDirectory = currentDirectory,
+      onNavigateBack = {
+        fileForConverter = null
+        refreshTrigger++
+      },
+    )
+    return
+  }
+
+  val activeImageEditorFile = fileForImageEditor
+  if (activeImageEditorFile != null) {
+    ImageEditorScreen(
+      modifier = modifier,
+      initialFile = activeImageEditorFile,
+      onNavigateBack = {
+        fileForImageEditor = null
+        refreshTrigger++
+      },
+    )
+    return
+  }
+
+  val activeVideoEditorFile = fileForVideoEditor
+  if (activeVideoEditorFile != null) {
+    VideoEditorScreen(
+      initialFile = activeVideoEditorFile,
+      initialDirectory = currentDirectory,
+      modifier = modifier,
+      onNavigateBack = {
+        fileForVideoEditor = null
+        refreshTrigger++
+      },
+    )
+    return
   }
 
   Box(
@@ -632,6 +680,24 @@ fun FilesScreen(
           selectedPaths = emptySet()
           openFile(file, chooseApp)
         },
+        onConvertSelectedFile = { file ->
+          isSelectionMode = false
+          selectedPaths = emptySet()
+          fileForConverter = file
+          onOpenFileConverter?.invoke(file)
+        },
+        onEditSelectedImage = { file ->
+          isSelectionMode = false
+          selectedPaths = emptySet()
+          fileForImageEditor = file
+          onOpenImageEditor?.invoke(file)
+        },
+        onEditSelectedVideo = { file ->
+          isSelectionMode = false
+          selectedPaths = emptySet()
+          fileForVideoEditor = file
+          onOpenVideoEditor?.invoke(file)
+        },
         onAddFolderToHomeScreen = { folder -> addFolderToHomeScreen(context, folder, themeColor) },
         onAddCurrentFolderToHomeScreen = { addFolderToHomeScreen(context, currentDirectory, themeColor) },
       )
@@ -751,8 +817,19 @@ fun FilesScreen(
                             }
                           }
                         },
-                        onOpen = { openFile(item.file, chooseApp = false) },
                         onOpenWith = { openFile(item.file, chooseApp = true) },
+                        onOpenConverter = {
+                          fileForConverter = item.file
+                          onOpenFileConverter?.invoke(item.file)
+                        },
+                        onEditImage = {
+                          fileForImageEditor = item.file
+                          onOpenImageEditor?.invoke(item.file)
+                        },
+                        onEditVideo = {
+                          fileForVideoEditor = item.file
+                          onOpenVideoEditor?.invoke(item.file)
+                        },
                         onOpenText = { fileForTextEdit = item },
                         onOpenImage = { fileForImagePreview = item },
                         onShare = { shareFile(item.file) },
@@ -846,8 +923,19 @@ fun FilesScreen(
                           }
                         }
                       },
-                      onOpen = { openFile(item.file, chooseApp = false) },
                       onOpenWith = { openFile(item.file, chooseApp = true) },
+                      onOpenConverter = {
+                        fileForConverter = item.file
+                        onOpenFileConverter?.invoke(item.file)
+                      },
+                      onEditImage = {
+                        fileForImageEditor = item.file
+                        onOpenImageEditor?.invoke(item.file)
+                      },
+                      onEditVideo = {
+                        fileForVideoEditor = item.file
+                        onOpenVideoEditor?.invoke(item.file)
+                      },
                       onOpenText = { fileForTextEdit = item },
                       onOpenImage = { fileForImagePreview = item },
                       onShare = { shareFile(item.file) },
@@ -1235,6 +1323,9 @@ private fun FilesHeader(
   singleSelectedFolder: File? = null,
   singleSelectedFile: File? = null,
   onOpenSelectedFile: ((File, Boolean) -> Unit)? = null,
+  onConvertSelectedFile: ((File) -> Unit)? = null,
+  onEditSelectedImage: ((File) -> Unit)? = null,
+  onEditSelectedVideo: ((File) -> Unit)? = null,
   onAddFolderToHomeScreen: ((File) -> Unit)? = null,
   onAddCurrentFolderToHomeScreen: (() -> Unit)? = null,
 ) {
@@ -1438,15 +1529,6 @@ private fun FilesHeader(
                 )
                 if (singleSelectedFile != null && onOpenSelectedFile != null) {
                   DropdownMenuItem(
-                    text = { Text("Open") },
-                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null) },
-                    onClick = {
-                      showOverflowMenu = false
-                      onOpenSelectedFile(singleSelectedFile, false)
-                    },
-                    modifier = Modifier.testTag("action_selection_open"),
-                  )
-                  DropdownMenuItem(
                     text = { Text("Open with…") },
                     leadingIcon = { Icon(Icons.Default.Apps, contentDescription = null) },
                     onClick = {
@@ -1454,6 +1536,39 @@ private fun FilesHeader(
                       onOpenSelectedFile(singleSelectedFile, true)
                     },
                     modifier = Modifier.testTag("action_selection_open_with"),
+                  )
+                }
+                if (singleSelectedFile != null && onConvertSelectedFile != null && FileConverterEngine.isSupportedFile(singleSelectedFile)) {
+                  DropdownMenuItem(
+                    text = { Text("File Converter") },
+                    leadingIcon = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
+                    onClick = {
+                      showOverflowMenu = false
+                      onConvertSelectedFile(singleSelectedFile)
+                    },
+                    modifier = Modifier.testTag("action_selection_file_converter"),
+                  )
+                }
+                if (singleSelectedFile != null && onEditSelectedImage != null && FileManagerEngine.isImageFile(singleSelectedFile)) {
+                  DropdownMenuItem(
+                    text = { Text("Edit") },
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    onClick = {
+                      showOverflowMenu = false
+                      onEditSelectedImage(singleSelectedFile)
+                    },
+                    modifier = Modifier.testTag("action_selection_edit_image"),
+                  )
+                }
+                if (singleSelectedFile != null && onEditSelectedVideo != null && VideoEditorEngine.isVideoFile(singleSelectedFile)) {
+                  DropdownMenuItem(
+                    text = { Text("Edit") },
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    onClick = {
+                      showOverflowMenu = false
+                      onEditSelectedVideo(singleSelectedFile)
+                    },
+                    modifier = Modifier.testTag("action_selection_edit_video"),
                   )
                 }
                 if (singleSelectedFolder != null && onAddFolderToHomeScreen != null) {
@@ -2087,8 +2202,10 @@ private fun FileListItem(
   onToggleSelect: () -> Unit = {},
   onClick: () -> Unit,
   onLongClick: () -> Unit = {},
-  onOpen: () -> Unit = {},
   onOpenWith: () -> Unit = {},
+  onOpenConverter: () -> Unit = {},
+  onEditImage: () -> Unit = {},
+  onEditVideo: () -> Unit = {},
   onOpenText: () -> Unit,
   onOpenImage: () -> Unit,
   onShare: () -> Unit,
@@ -2198,13 +2315,21 @@ private fun FileListItem(
             item = item,
             expanded = showMenu,
             onDismiss = { showMenu = false },
-            onOpen = {
-              showMenu = false
-              onOpen()
-            },
             onOpenWith = {
               showMenu = false
               onOpenWith()
+            },
+            onOpenConverter = {
+              showMenu = false
+              onOpenConverter()
+            },
+            onEditImage = {
+              showMenu = false
+              onEditImage()
+            },
+            onEditVideo = {
+              showMenu = false
+              onEditVideo()
             },
             onOpenText = {
               showMenu = false
@@ -2254,8 +2379,10 @@ private fun FileGridItem(
   onToggleSelect: () -> Unit = {},
   onClick: () -> Unit,
   onLongClick: () -> Unit = {},
-  onOpen: () -> Unit = {},
   onOpenWith: () -> Unit = {},
+  onOpenConverter: () -> Unit = {},
+  onEditImage: () -> Unit = {},
+  onEditVideo: () -> Unit = {},
   onOpenText: () -> Unit = {},
   onOpenImage: () -> Unit = {},
   onShare: () -> Unit,
@@ -2360,13 +2487,21 @@ private fun FileGridItem(
             item = item,
             expanded = showMenu,
             onDismiss = { showMenu = false },
-            onOpen = {
-              showMenu = false
-              onOpen()
-            },
             onOpenWith = {
               showMenu = false
               onOpenWith()
+            },
+            onOpenConverter = {
+              showMenu = false
+              onOpenConverter()
+            },
+            onEditImage = {
+              showMenu = false
+              onEditImage()
+            },
+            onEditVideo = {
+              showMenu = false
+              onEditVideo()
             },
             onOpenText = {
               showMenu = false
@@ -2440,8 +2575,10 @@ private fun FileActionMenu(
   item: FileItem,
   expanded: Boolean,
   onDismiss: () -> Unit,
-  onOpen: () -> Unit = {},
   onOpenWith: () -> Unit = {},
+  onOpenConverter: () -> Unit = {},
+  onEditImage: () -> Unit = {},
+  onEditVideo: () -> Unit = {},
   onOpenText: () -> Unit,
   onOpenImage: () -> Unit,
   onShare: () -> Unit,
@@ -2457,30 +2594,45 @@ private fun FileActionMenu(
   ) {
     if (!item.isDirectory) {
       DropdownMenuItem(
-        text = { Text("Open") },
-        leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null) },
-        onClick = onOpen,
-        modifier = Modifier.testTag("action_open_file"),
-      )
-      DropdownMenuItem(
         text = { Text("Open with…") },
         leadingIcon = { Icon(Icons.Default.Apps, contentDescription = null) },
         onClick = onOpenWith,
         modifier = Modifier.testTag("action_open_with"),
       )
-      if (FileManagerEngine.isTextFile(item.file)) {
+      if (FileConverterEngine.isSupportedFile(item.file)) {
         DropdownMenuItem(
-          text = { Text("Edit / View") },
-          leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-          onClick = onOpenText,
-          modifier = Modifier.testTag("action_edit_text"),
+          text = { Text("File Converter") },
+          leadingIcon = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
+          onClick = onOpenConverter,
+          modifier = Modifier.testTag("action_file_converter"),
         )
-      } else if (FileManagerEngine.isImageFile(item.file)) {
+      }
+      if (FileManagerEngine.isImageFile(item.file)) {
+        DropdownMenuItem(
+          text = { Text("Edit") },
+          leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+          onClick = onEditImage,
+          modifier = Modifier.testTag("action_edit_image"),
+        )
         DropdownMenuItem(
           text = { Text("Preview") },
           leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
           onClick = onOpenImage,
           modifier = Modifier.testTag("action_preview_image"),
+        )
+      } else if (VideoEditorEngine.isVideoFile(item.file)) {
+        DropdownMenuItem(
+          text = { Text("Edit") },
+          leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+          onClick = onEditVideo,
+          modifier = Modifier.testTag("action_edit_video"),
+        )
+      } else if (FileManagerEngine.isTextFile(item.file)) {
+        DropdownMenuItem(
+          text = { Text("Edit / View") },
+          leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+          onClick = onOpenText,
+          modifier = Modifier.testTag("action_edit_text"),
         )
       }
       DropdownMenuItem(

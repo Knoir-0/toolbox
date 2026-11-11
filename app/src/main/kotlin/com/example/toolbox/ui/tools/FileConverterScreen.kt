@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -39,6 +40,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AudioFile
@@ -108,14 +110,19 @@ fun FileConverterScreen(
   modifier: Modifier = Modifier,
   initialFile: File? = null,
   initialDirectory: File? = null,
+  onNavigateBack: (() -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
   val haptic = LocalHapticFeedback.current
   val coroutineScope = rememberCoroutineScope()
 
+  BackHandler(enabled = onNavigateBack != null) {
+    onNavigateBack?.invoke()
+  }
+
   // Selected source file & detected format
-  var selectedFile by remember { mutableStateOf(initialFile) }
+  var selectedFile by remember(initialFile) { mutableStateOf(initialFile) }
   var sourceFormat by remember(selectedFile) {
     mutableStateOf(FileConverterEngine.detectFormat(selectedFile))
   }
@@ -225,19 +232,30 @@ fun FileConverterScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
           ) {
-            Box(
-              modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Default.SwapHoriz,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-              )
+            if (onNavigateBack != null) {
+              IconButton(
+                onClick = onNavigateBack,
+                modifier = Modifier
+                  .size(36.dp)
+                  .testTag("action_navigate_back"),
+              ) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+              }
+            } else {
+              Box(
+                modifier = Modifier
+                  .size(36.dp)
+                  .clip(CircleShape)
+                  .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.Default.SwapHoriz,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(20.dp),
+                )
+              }
             }
 
             Column(modifier = Modifier.weight(1f)) {
@@ -1189,15 +1207,10 @@ private fun ConversionCapabilityMapDialog(
         }
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = "Conversion Capability Map",
+            text = "Supported Conversions",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
-          )
-          Text(
-            text = "Native preferred • FFmpeg automatic backup",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
       }

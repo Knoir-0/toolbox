@@ -308,4 +308,24 @@ class FileConverterEngineTest {
     assertTrue(capturedFfmpegArgs!!.contains("-i"))
     assertEquals("sample.jpg", result.outputFile?.name)
   }
+
+  @Test
+  fun isSupportedFile_returnsTrueForSupportedFiletypes_andFalseForDirectoriesOrUnsupported() {
+    assertFalse(FileConverterEngine.isSupportedFile(null))
+    assertFalse(FileConverterEngine.isSupportedFile(tempDir))
+
+    val pngFile = File(tempDir, "photo.png")
+    val mp4File = File(tempDir, "clip.mp4")
+    val jsonFile = File(tempDir, "config.json")
+    val tarGzFile = File(tempDir, "archive.tar.gz")
+    val unsupportedFile = File(tempDir, "binary.unknownext")
+    val noExtFile = File(tempDir, "README")
+
+    assertTrue(FileConverterEngine.isSupportedFile(pngFile))
+    assertTrue(FileConverterEngine.isSupportedFile(mp4File))
+    assertTrue(FileConverterEngine.isSupportedFile(jsonFile))
+    assertTrue(FileConverterEngine.isSupportedFile(tarGzFile))
+    assertFalse(FileConverterEngine.isSupportedFile(unsupportedFile))
+    assertFalse(FileConverterEngine.isSupportedFile(noExtFile))
+  }
 }

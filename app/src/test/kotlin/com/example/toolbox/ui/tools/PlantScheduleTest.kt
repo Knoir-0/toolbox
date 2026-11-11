@@ -9,9 +9,11 @@ class PlantScheduleTest {
 
   @Test
   fun builtInPlants_haveValidMonthsAndCategories() {
-    assertTrue(PlantScheduleEngine.BUILT_IN_PLANTS.size >= 30)
+    assertTrue(PlantScheduleEngine.BUILT_IN_PLANTS.size >= 80)
     val ids = PlantScheduleEngine.BUILT_IN_PLANTS.map { it.id }
     assertEquals(ids.size, ids.distinct().size)
+    assertTrue(ids.contains("peppers"))
+    assertTrue(ids.contains("sweet_peppers"))
 
     for (plant in PlantScheduleEngine.BUILT_IN_PLANTS) {
       assertTrue("Plant ${plant.id} should have a name", plant.name.isNotBlank())
@@ -37,6 +39,16 @@ class PlantScheduleTest {
     val tomatoResults = PlantScheduleEngine.searchPlants(query = "tomato")
     assertTrue(tomatoResults.isNotEmpty())
     assertEquals("Tomato", tomatoResults.first().name)
+
+    // Search for Peppers and Sweet Peppers
+    val peppersResults = PlantScheduleEngine.searchPlants(query = "peppers")
+    assertTrue(peppersResults.isNotEmpty())
+    assertEquals("Peppers", peppersResults.first().name)
+    assertTrue(peppersResults.any { it.id == "sweet_peppers" })
+
+    val sweetPeppersResults = PlantScheduleEngine.searchPlants(query = "sweet peppers")
+    assertTrue(sweetPeppersResults.isNotEmpty())
+    assertEquals("Sweet Peppers", sweetPeppersResults.first().name)
 
     // Search by scientific name
     val basilResults = PlantScheduleEngine.searchPlants(query = "Ocimum")

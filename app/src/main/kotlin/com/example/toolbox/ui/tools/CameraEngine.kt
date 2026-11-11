@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RadialGradient
 import android.graphics.Shader
@@ -16,6 +17,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.zip.CRC32
 import java.util.zip.Deflater
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -897,12 +899,193 @@ object CameraEngine {
     val isLandscape = availableWidth > availableHeight
     val targetRatio = if (isLandscape && baseRatio > 0f) 1f / baseRatio else baseRatio
     val screenRatio = availableWidth / availableHeight
-    return if (kotlin.math.abs(screenRatio - targetRatio) < 0.001f) {
+    return if (abs(screenRatio - targetRatio) < 0.001f) {
       Pair(availableWidth, availableHeight)
     } else if (screenRatio > targetRatio) {
       Pair(availableHeight * targetRatio, availableHeight)
     } else {
       Pair(availableWidth, availableWidth / targetRatio)
+    }
+  }
+
+  /**
+   * Selects the best Camera2 `SurfaceTexture` preview buffer size `(sensorWidth, sensorHeight)`
+   * from [supportedSensorSizes] for a `TextureView` of [viewWidth] by [viewHeight].
+   *
+   * Accounts for the rotation between [sensorOrientationDegrees] and [displayRotationDegrees]
+   * so portrait viewports match upright sensor ratios (e.g., `1920×1080` -> `1080×1920` upright),
+   * and caps the long edge at [maxLongEdge] when possible to avoid excessive preview latency.
+   */
+  fun selectOptimalSensorPreviewSize(
+    supportedSensorSizes: List<Pair<Int, Int>>,
+    viewWidth: Int,
+    viewHeight: Int,
+    sensorOrientationDegrees: Int = 90,
+    displayRotationDegrees: Int = 0,
+    maxLongEdge: Int = 1920,
+  ): Pair<Int, Int> {
+    val validSizes = supportedSensorSizes.filter { it.first > 0 && it.second > 0 }
+    if (validSizes.isEmpty()) {
+      return Pair(1440, 1080)
+    }
+
+    val totalRotation = ((sensorOrientationDegrees - displayRotationDegrees) % 360 + 360) % 360
+    val swappedDimensions = totalRotation == 90 || totalRotation == 270
+
+    val targetRatio = if (viewWidth > 0 && viewHeight > 0) {
+      viewWidth.toFloat() / viewHeight.toFloat()
+    } else {
+      if (swappedDimensions) 9f / 16f else 16f / 9f
+    }
+
+    val withinCap = validSizes.filter { maxOf(it.first, it.second) <= maxLongEdge }
+    val candidates = withinCap.ifEmpty { validSizes }
+
+    fun candidateRatioDiff(size: Pair<Int, Int>): Float {
+      val uprightW = if (swappedDimensions) minOf(size.first, size.second) else maxOf(size.first, size.second)
+      val uprightH = if (swappedDimensions) maxOf(size.first, size.second) else minOf(size.first, size.second)
+      val ratio = uprightW.toFloat() / uprightH.toFloat()
+      return abs(ratio - targetRatio)
+    }
+
+    val minDiff = candidates.minOf { candidateRatioDiff(it) }
+    val aspectTolerance = 0.08f
+    val bestAspectMatches = candidates.filter { candidateRatioDiff(it) <= minDiff + aspectTolerance }
+
+    return bestAspectMatches.maxByOrNull { it.first.toLong() * it.second.toLong() }
+      ?: candidates.maxByOrNull { it.first.toLong() * it.second.toLong() }
+      ?: validSizes.first()
+  }
+
+  /**
+   * Computes the `(scaleX, scaleY)` factors required around the center of a `TextureView`
+   * of size [viewWidth] × [viewHeight] to center-crop a camera stream of sensor dimensions
+   * [sensorPreviewWidth] × [sensorPreviewHeight] without vertical or horizontal stretching.
+   *
+   * By default, Android's `TextureView` stretches its `SurfaceTexture` buffer (which is rotated
+   * to natural device orientation `ROTATION_0` by `SurfaceTexture` according to [sensorOrientationDegrees])
+   * to fill `viewWidth × viewHeight`. Applying these scale factors restores a 1:1 pixel aspect ratio.
+   */
+  fun calculateTextureViewCenterCropScale(
+    viewWidth: Int,
+    viewHeight: Int,
+    sensorPreviewWidth: Int,
+    sensorPreviewHeight: Int,
+    sensorOrientationDegrees: Int = 90,
+  ): Pair<Float, Float> {
+    if (viewWidth <= 0 || viewHeight <= 0 || sensorPreviewWidth <= 0 || sensorPreviewHeight <= 0) {
+      return Pair(1f, 1f)
+    }
+    val normSensorRot = ((sensorOrientationDegrees % 360) + 360) % 360
+    val swapped = normSensorRot == 90 || normSensorRot == 270
+    val naturalBufferWidth = if (swapped) {
+      minOf(sensorPreviewWidth, sensorPreviewHeight)
+    } else {
+      maxOf(sensorPreviewWidth, sensorPreviewHeight)
+    }
+    val naturalBufferHeight = if (swapped) {
+      maxOf(sensorPreviewWidth, sensorPreviewHeight)
+    } else {
+      minOf(sensorPreviewWidth, sensorPreviewHeight)
+    }
+
+    val bufferRatio = naturalBufferWidth.toFloat() / naturalBufferHeight.toFloat()
+    val viewRatio = viewWidth.toFloat() / viewHeight.toFloat()
+
+    val scaleX = maxOf(1f, bufferRatio / viewRatio)
+    val scaleY = maxOf(1f, viewRatio / bufferRatio)
+    return Pair(scaleX, scaleY)
+  }
+
+  /**
+   * Builds the `android.graphics.Matrix` transform to apply via `TextureView.setTransform(matrix)`
+   * so that the live camera preview is center-cropped without distortion across portrait and landscape
+   * orientations.
+   */
+  fun buildTextureViewTransformMatrix(
+    viewWidth: Int,
+    viewHeight: Int,
+    sensorPreviewWidth: Int,
+    sensorPreviewHeight: Int,
+    sensorOrientationDegrees: Int = 90,
+    displayRotationDegrees: Int = 0,
+  ): Matrix {
+    val matrix = Matrix()
+    if (viewWidth <= 0 || viewHeight <= 0 || sensorPreviewWidth <= 0 || sensorPreviewHeight <= 0) {
+      return matrix
+    }
+
+    val centerX = viewWidth / 2f
+    val centerY = viewHeight / 2f
+    val normDisplayRot = ((displayRotationDegrees % 360) + 360) % 360
+    val normSensorRot = ((sensorOrientationDegrees % 360) + 360) % 360
+    val swapped = normSensorRot == 90 || normSensorRot == 270
+    val naturalBufferWidth = if (swapped) {
+      minOf(sensorPreviewWidth, sensorPreviewHeight)
+    } else {
+      maxOf(sensorPreviewWidth, sensorPreviewHeight)
+    }
+    val naturalBufferHeight = if (swapped) {
+      maxOf(sensorPreviewWidth, sensorPreviewHeight)
+    } else {
+      minOf(sensorPreviewWidth, sensorPreviewHeight)
+    }
+
+    if (normDisplayRot == 90 || normDisplayRot == 270) {
+      val scale = maxOf(
+        viewHeight.toFloat() / naturalBufferWidth.toFloat(),
+        viewWidth.toFloat() / naturalBufferHeight.toFloat(),
+      )
+      val preRotateScaleX = (naturalBufferWidth.toFloat() / viewWidth.toFloat()) * scale
+      val preRotateScaleY = (naturalBufferHeight.toFloat() / viewHeight.toFloat()) * scale
+      matrix.setScale(preRotateScaleX, preRotateScaleY, centerX, centerY)
+      val rotateDegrees = if (normDisplayRot == 90) -90f else 90f
+      matrix.postRotate(rotateDegrees, centerX, centerY)
+    } else {
+      val (scaleX, scaleY) = calculateTextureViewCenterCropScale(
+        viewWidth = viewWidth,
+        viewHeight = viewHeight,
+        sensorPreviewWidth = sensorPreviewWidth,
+        sensorPreviewHeight = sensorPreviewHeight,
+        sensorOrientationDegrees = sensorOrientationDegrees,
+      )
+      matrix.setScale(scaleX, scaleY, centerX, centerY)
+      if (normDisplayRot == 180) {
+        matrix.postRotate(180f, centerX, centerY)
+      }
+    }
+    return matrix
+  }
+
+  /**
+   * Applies the `TextureView` center-crop transform [textureTransformMatrix], [zoom], and front-camera
+   * horizontal [mirrorFront] onto a raw `TextureView.getBitmap()` frame so the saved image matches
+   * the un-stretched live viewfinder.
+   */
+  fun transformCapturedPreviewBitmap(
+    rawBitmap: Bitmap,
+    textureTransformMatrix: Matrix,
+    zoom: Float = 1.0f,
+    lensFacing: CameraLensFacing = CameraLensFacing.BACK,
+    mirrorFront: Boolean = true,
+  ): Bitmap {
+    if (rawBitmap.width <= 0 || rawBitmap.height <= 0) return rawBitmap
+    return try {
+      val outBitmap = Bitmap.createBitmap(rawBitmap.width, rawBitmap.height, Bitmap.Config.ARGB_8888)
+      val combinedMatrix = Matrix(textureTransformMatrix)
+      val cx = rawBitmap.width / 2f
+      val cy = rawBitmap.height / 2f
+      val clampedZoom = coerceZoom(zoom)
+      val flipX = if (lensFacing == CameraLensFacing.FRONT && mirrorFront) -1f else 1f
+      if (clampedZoom != 1f || flipX != 1f) {
+        combinedMatrix.postScale(clampedZoom * flipX, clampedZoom, cx, cy)
+      }
+      val canvas = Canvas(outBitmap)
+      val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+      canvas.drawBitmap(rawBitmap, combinedMatrix, paint)
+      outBitmap
+    } catch (_: Throwable) {
+      rawBitmap
     }
   }
 }

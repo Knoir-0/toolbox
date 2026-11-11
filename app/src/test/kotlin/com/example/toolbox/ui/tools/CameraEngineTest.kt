@@ -104,6 +104,60 @@ class CameraEngineTest {
       CameraEngine.calculateViewfinderDimensions(700f, 800f, CameraAspectRatio.RATIO_4_3),
     )
 
+    // Optimal sensor preview size selection & TextureView center-crop scale (prevents vertical stretching)
+    val supportedSensorSizes = listOf(
+      Pair(3840, 2160),
+      Pair(1920, 1440),
+      Pair(1920, 1080),
+      Pair(1440, 1080),
+      Pair(1280, 720),
+      Pair(640, 480),
+    )
+    assertEquals(
+      Pair(1920, 1080),
+      CameraEngine.selectOptimalSensorPreviewSize(
+        supportedSensorSizes = supportedSensorSizes,
+        viewWidth = 1080,
+        viewHeight = 2400,
+        sensorOrientationDegrees = 90,
+        displayRotationDegrees = 0,
+      ),
+    )
+    assertEquals(
+      Pair(1920, 1440),
+      CameraEngine.selectOptimalSensorPreviewSize(
+        supportedSensorSizes = supportedSensorSizes,
+        viewWidth = 1080,
+        viewHeight = 1440,
+        sensorOrientationDegrees = 90,
+        displayRotationDegrees = 0,
+      ),
+    )
+
+    // Full-screen 9:20 portrait view (1080x2400) with 16:9 sensor stream (1920x1080 rotated 90 deg -> 1080x1920)
+    // expands X by 1.25x and keeps Y at 1.0x so the camera feed is center-cropped instead of stretched vertically.
+    val (fullScaleX, fullScaleY) = CameraEngine.calculateTextureViewCenterCropScale(
+      viewWidth = 1080,
+      viewHeight = 2400,
+      sensorPreviewWidth = 1920,
+      sensorPreviewHeight = 1080,
+      sensorOrientationDegrees = 90,
+    )
+    assertEquals(1.25f, fullScaleX, 0.001f)
+    assertEquals(1.0f, fullScaleY, 0.001f)
+
+    // 1:1 square view (1080x1080) with 4:3 sensor stream (1440x1080 rotated 90 deg -> 1080x1440)
+    // keeps X at 1.0x and expands Y by 4/3 (1.333x) to center-crop top and bottom.
+    val (squareScaleX, squareScaleY) = CameraEngine.calculateTextureViewCenterCropScale(
+      viewWidth = 1080,
+      viewHeight = 1080,
+      sensorPreviewWidth = 1440,
+      sensorPreviewHeight = 1080,
+      sensorOrientationDegrees = 90,
+    )
+    assertEquals(1.0f, squareScaleX, 0.001f)
+    assertEquals(4f / 3f, squareScaleY, 0.001f)
+
     // Grid overlay
     assertEquals(CameraGridOverlay.RULE_OF_THIRDS, CameraGridOverlay.NONE.next())
     assertEquals(CameraGridOverlay.GOLDEN_RATIO, CameraGridOverlay.RULE_OF_THIRDS.next())

@@ -77,16 +77,17 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("ruler_unit_toggle").assertIsDisplayed()
     composeTestRule.onNodeWithTag("ruler_unit_toggle").performClick()
 
-    // Pull up and navigate to Page 2 for Colors, Dice Roller, Guitar Tuner, and Metronome
+    // Pull up and navigate to Page 1 for Colors (with 3 default hidden tools, Colors is on Page 1)
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onAllNodesWithText("Colors").onFirst().performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("2D Color Canvas").assertExists()
 
+    // Pull up and navigate to Page 2 for Guitar Tuner and Metronome
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
@@ -419,21 +420,18 @@ class MainScreenTest {
     repo.setToolsPerRow(6)
     composeTestRule.waitForIdle()
 
-    // With 6 tools per row:
-    // Page 0: Math & Measurement (3 tools) + Productivity (2 tools) = 5 tools
-    // Page 1: Files & Storage (2 tools) + Photo & Video (4 tools) = 6 tools
-    // Page 2: Audio & Sound (2 tools) + Music & Instruments (3 tools) = 5 tools
-    // Page 3: Remotes & Devices (2 tools) + Miscellaneous (3 tools) + System (1 tool) = 6 tools on 1 row!
+    // With 6 tools per row (and FILE_CONVERTER hidden by default):
+    // Page 0: Math & Measurement (3 tools) + Productivity (2 tools) + Files & Storage (1 tool) = 6 tools
+    // Page 1: Photo & Video (4 tools) + Audio & Sound (2 tools) = 6 tools
+    // Page 2: Music & Instruments (3 tools) + Remotes & Devices (2 tools) = 5 tools
+    // Page 3: Miscellaneous (3 tools) + System (1 tool) = 4 tools on 1 row!
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_3").performClick()
     composeTestRule.waitForIdle()
 
-    // Remotes & Devices, Miscellaneous, and System all fit on Page 3 as one row
-    composeTestRule.onNodeWithText("Remotes & Devices").assertIsDisplayed()
+    // Miscellaneous and System fit on Page 3 as one row
     composeTestRule.onNodeWithText("Miscellaneous").assertIsDisplayed()
     composeTestRule.onNodeWithText("System").assertIsDisplayed()
     composeTestRule.onNodeWithText("Dice").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Remote").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Gamepad").assertIsDisplayed()
     composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
 
     // Pull up the panel to reveal the tools per row slider
@@ -713,5 +711,129 @@ class MainScreenTest {
     // Navigation pull-up panel and drawer are completely hidden
     composeTestRule.onNodeWithTag("tools_pull_up_panel").assertDoesNotExist()
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").assertDoesNotExist()
+  }
+
+  @Test
+  fun filesTool_supportedFileMenuShowsFileConverter_omitsOpen_retainsOpenWith_andOpensConverterDirectly() {
+    val tempDir = java.io.File(composeTestRule.activity.cacheDir, "files_menu_test_${System.currentTimeMillis()}").apply {
+      mkdirs()
+    }
+    try {
+      java.io.File(tempDir, "sample.png").writeBytes(byteArrayOf(1, 2, 3, 4))
+      java.io.File(tempDir, "unknown.unrecognizedext").writeBytes(byteArrayOf(5, 6, 7, 8))
+
+      composeTestRule.setContent {
+        com.example.toolbox.ui.tools.FilesScreen(initialDirectory = tempDir)
+      }
+      composeTestRule.waitForIdle()
+
+      // Open options menu for supported file (sample.png)
+      composeTestRule.onNodeWithTag("file_options_sample.png").performClick()
+      composeTestRule.waitForIdle()
+
+      // "Open" option is removed, "Open with…" is retained, and "File Converter" is displayed
+      composeTestRule.onNodeWithTag("action_open_file").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_open_with").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_file_converter").assertIsDisplayed()
+
+      // Click "File Converter" -> opens FileConverterScreen directly with sample.png preselected
+      composeTestRule.onNodeWithTag("action_file_converter").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("file_converter_screen").assertIsDisplayed()
+      composeTestRule.onNodeWithText("sample.png").assertIsDisplayed()
+
+      // Navigate back to FilesScreen
+      composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()
+
+      // Open options menu for unsupported file (unknown.unrecognizedext)
+      composeTestRule.onNodeWithTag("file_options_unknown.unrecognizedext").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("action_open_file").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_open_with").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_file_converter").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_edit_image").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_edit_video").assertDoesNotExist()
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun filesAndGalleryTools_editButtonOpensImageEditorAndVideoEditorDirectly() {
+    val tempDir = java.io.File(composeTestRule.activity.cacheDir, "media_editor_test_${System.currentTimeMillis()}").apply {
+      mkdirs()
+    }
+    try {
+      val dcimDir = java.io.File(tempDir, "DCIM").apply { mkdirs() }
+      com.example.toolbox.ui.tools.GalleryEngine.writeSolidColorPng(
+        outputFile = java.io.File(dcimDir, "photo.png"),
+      )
+      java.io.File(dcimDir, "clip.mp4").writeBytes(byteArrayOf(0, 0, 0, 24))
+
+      // 1. Test FilesScreen Edit button for Image & Video
+      composeTestRule.setContent {
+        com.example.toolbox.ui.tools.FilesScreen(initialDirectory = dcimDir)
+      }
+      composeTestRule.waitForIdle()
+
+      // Image file menu shows Edit button (action_edit_image) and opens ImageEditorScreen
+      composeTestRule.onNodeWithTag("file_options_photo.png").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("action_edit_image").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_edit_video").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_edit_image").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("image_editor_screen").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()
+
+      // Video file menu shows Edit button (action_edit_video) and opens VideoEditorScreen
+      composeTestRule.onNodeWithTag("file_options_clip.mp4").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("action_edit_video").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_edit_image").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_edit_video").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("video_editor_screen").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()
+
+      // 2. Test GalleryScreen Edit button for Image & Video
+      composeTestRule.setContent {
+        com.example.toolbox.ui.tools.GalleryScreen(rootDirectory = tempDir)
+      }
+      composeTestRule.waitForIdle()
+
+      // Open photo viewer and click Edit button for photo.png -> opens ImageEditorScreen
+      composeTestRule.onNodeWithTag("photo_tile_item_photo.png").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("photo_viewer_edit_button").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("photo_viewer_edit_button").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("image_editor_screen").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("gallery_screen").assertIsDisplayed()
+
+      // Click tile Edit button for clip.mp4 -> opens VideoEditorScreen
+      composeTestRule.onNodeWithTag("photo_tile_edit_clip.mp4").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("video_editor_screen").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("gallery_screen").assertIsDisplayed()
+    } finally {
+      tempDir.deleteRecursively()
+    }
   }
 }

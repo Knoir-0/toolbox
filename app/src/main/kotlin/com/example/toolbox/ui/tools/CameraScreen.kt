@@ -466,7 +466,18 @@ fun CameraScreen(
     // Try capturing from live hardware TextureView if available and rendering frames
     val hwBitmap = try {
       val tv = activeTextureView
-      if (tv != null && tv.isAvailable) tv.bitmap else null
+      val raw = if (tv != null && tv.isAvailable) tv.bitmap else null
+      if (raw != null && tv != null) {
+        CameraEngine.transformCapturedPreviewBitmap(
+          rawBitmap = raw,
+          textureTransformMatrix = tv.getTransform(null),
+          zoom = zoomLevel,
+          lensFacing = lensFacing,
+          mirrorFront = mirrorFrontCamera,
+        )
+      } else {
+        null
+      }
     } catch (_: Throwable) {
       null
     }
@@ -648,6 +659,7 @@ fun CameraScreen(
         if (hasCameraPermission && !isInspection) {
           HardwareCamera2Preview(
             lensFacing = lensFacing,
+            aspectRatio = aspectRatio,
             zoomLevel = zoomLevel,
             exposureEv = exposureEv,
             flashMode = flashMode,
@@ -1933,6 +1945,7 @@ private fun ViewfinderGridOverlayCanvas(
 @Composable
 private fun HardwareCamera2Preview(
   lensFacing: CameraLensFacing,
+  aspectRatio: CameraAspectRatio,
   zoomLevel: Float,
   exposureEv: Float,
   flashMode: CameraFlashMode,
@@ -1945,8 +1958,50 @@ private fun HardwareCamera2Preview(
   var captureSession by remember { mutableStateOf<CameraCaptureSession?>(null) }
   var previewBuilder by remember { mutableStateOf<CaptureRequest.Builder?>(null) }
   var activeCharacteristics by remember { mutableStateOf<CameraCharacteristics?>(null) }
+  var activePreviewSize by remember { mutableStateOf(Pair(1440, 1080)) }
+  var activeSensorOrientation by remember { mutableIntStateOf(90) }
   var surfaceReadyTrigger by remember { mutableIntStateOf(0) }
   var textureViewInstance by remember { mutableStateOf<TextureView?>(null) }
+
+  fun getDisplayRotationDegrees(tv: TextureView): Int {
+    @Suppress("DEPRECATION")
+    val rotation = try {
+      tv.display?.rotation ?: Surface.ROTATION_0
+    } catch (_: Throwable) {
+      Surface.ROTATION_0
+    }
+    return when (rotation) {
+      Surface.ROTATION_90 -> 90
+      Surface.ROTATION_180 -> 180
+      Surface.ROTATION_270 -> 270
+      else -> 0
+    }
+  }
+
+  fun applyCenterCropTransform(
+    tv: TextureView,
+    viewWidth: Int = tv.width,
+    viewHeight: Int = tv.height,
+    previewSize: Pair<Int, Int> = activePreviewSize,
+    sensorOrientation: Int = activeSensorOrientation,
+  ) {
+    if (viewWidth <= 0 || viewHeight <= 0) return
+    val matrix = CameraEngine.buildTextureViewTransformMatrix(
+      viewWidth = viewWidth,
+      viewHeight = viewHeight,
+      sensorPreviewWidth = previewSize.first,
+      sensorPreviewHeight = previewSize.second,
+      sensorOrientationDegrees = sensorOrientation,
+      displayRotationDegrees = getDisplayRotationDegrees(tv),
+    )
+    tv.setTransform(matrix)
+  }
+
+  // Re-apply center-crop transform whenever aspect ratio or active preview stream size changes
+  LaunchedEffect(aspectRatio, activePreviewSize, activeSensorOrientation) {
+    val tv = textureViewInstance ?: return@LaunchedEffect
+    applyCenterCropTransform(tv)
+  }
 
   // Update repeating request when zoom, exposure, or flash changes
   LaunchedEffect(zoomLevel, exposureEv, flashMode, captureSession, previewBuilder) {
@@ -2025,7 +2080,30 @@ private fun HardwareCamera2Preview(
     var previewSurface: Surface? = null
 
     try {
-      activeCharacteristics = manager.getCameraCharacteristics(cameraId)
+      val chars = manager.getCameraCharacteristics(cameraId)
+      activeCharacteristics = chars
+      val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+      activeSensorOrientation = sensorOrientation
+      val supportedSizes = chars
+        .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        ?.getOutputSizes(SurfaceTexture::class.java)
+        ?.map { Pair(it.width, it.height) }
+        .orEmpty()
+
+      val initialPreviewSize = CameraEngine.selectOptimalSensorPreviewSize(
+        supportedSensorSizes = supportedSizes,
+        viewWidth = tv.width,
+        viewHeight = tv.height,
+        sensorOrientationDegrees = sensorOrientation,
+        displayRotationDegrees = getDisplayRotationDegrees(tv),
+      )
+      activePreviewSize = initialPreviewSize
+      applyCenterCropTransform(
+        tv = tv,
+        previewSize = initialPreviewSize,
+        sensorOrientation = sensorOrientation,
+      )
+
       manager.openCamera(
         cameraId,
         object : CameraDevice.StateCallback() {
@@ -2034,7 +2112,21 @@ private fun HardwareCamera2Preview(
             cameraDevice = device
             try {
               val st = tv.surfaceTexture ?: return
-              st.setDefaultBufferSize(tv.width.coerceAtLeast(640), tv.height.coerceAtLeast(480))
+              val chosenSize = CameraEngine.selectOptimalSensorPreviewSize(
+                supportedSensorSizes = supportedSizes,
+                viewWidth = tv.width,
+                viewHeight = tv.height,
+                sensorOrientationDegrees = sensorOrientation,
+                displayRotationDegrees = getDisplayRotationDegrees(tv),
+              )
+              activePreviewSize = chosenSize
+              st.setDefaultBufferSize(chosenSize.first, chosenSize.second)
+              applyCenterCropTransform(
+                tv = tv,
+                previewSize = chosenSize,
+                sensorOrientation = sensorOrientation,
+              )
+
               val surface = Surface(st)
               previewSurface = surface
               val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
@@ -2103,14 +2195,24 @@ private fun HardwareCamera2Preview(
     factory = { ctx ->
       TextureView(ctx).apply {
         isOpaque = false
+        addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+          val w = right - left
+          val h = bottom - top
+          if (w > 0 && h > 0 && (w != oldRight - oldLeft || h != oldBottom - oldTop)) {
+            applyCenterCropTransform(this@apply, viewWidth = w, viewHeight = h)
+          }
+        }
         surfaceTextureListener = object : TextureView.SurfaceTextureListener {
           override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
             textureViewInstance = this@apply
             onTextureViewReady(this@apply)
+            applyCenterCropTransform(this@apply, viewWidth = width, viewHeight = height)
             surfaceReadyTrigger++
           }
 
-          override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+          override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+            applyCenterCropTransform(this@apply, viewWidth = width, viewHeight = height)
+          }
 
           override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
             onTextureViewReady(null)
@@ -2121,6 +2223,9 @@ private fun HardwareCamera2Preview(
           override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
         }
       }
+    },
+    update = { tv ->
+      applyCenterCropTransform(tv)
     },
     modifier = modifier.graphicsLayer {
       val clampedZoom = CameraEngine.coerceZoom(zoomLevel)

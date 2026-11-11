@@ -2,6 +2,7 @@ package com.example.toolbox.ui.tools
 
 import androidx.compose.ui.graphics.Color
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
+import com.example.toolbox.ui.main.DEFAULT_HIDDEN_TOOLS
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
 import com.example.toolbox.ui.main.CategorySortingOption
 import com.example.toolbox.ui.main.CategoryToolSortingOption
@@ -125,7 +126,8 @@ class SettingsScreenTest {
     // Defaults
     assertEquals(ThemeMode.SYSTEM, repo.getThemeMode())
     assertEquals(DEFAULT_THEME_COLOR_SYSTEM, repo.getThemeColor())
-    assertTrue(repo.getHiddenTools().isEmpty())
+    assertEquals(DEFAULT_HIDDEN_TOOLS, repo.getHiddenTools())
+    assertTrue(repo.getHiddenTools().contains(Tool.FILE_CONVERTER))
 
     // Theme mode updates
     repo.setThemeMode(ThemeMode.DARK)
@@ -395,7 +397,7 @@ class SettingsScreenTest {
     assertEquals(ThemeMode.SYSTEM, repo.getThemeMode())
     assertEquals(DEFAULT_THEME_COLOR_SYSTEM, repo.getThemeColor())
     assertEquals(DEFAULT_ACCENT_COLOR_AUTO, repo.getAccentColor())
-    assertTrue(repo.getHiddenTools().isEmpty())
+    assertEquals(DEFAULT_HIDDEN_TOOLS, repo.getHiddenTools())
     assertEquals(ToolSortingOption.USER_CHOICE, repo.getToolSorting())
     assertEquals(ToolSortOrder.ASCENDING, repo.getToolSortOrder())
     assertEquals(CategorySortingOption.MANUAL, repo.getCategorySorting())

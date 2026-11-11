@@ -123,6 +123,14 @@ enum class ChordBookTab(val title: String) {
   SONGBOOK("Songbook"),
 }
 
+/**
+ * Search mode inside the Reverse tab (Reverse Chord Search vs Reverse Scale Search).
+ */
+enum class ReverseSearchMode(val title: String) {
+  CHORDS("Reverse Chord"),
+  SCALES("Reverse Scale"),
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChordBookScreen(
@@ -174,7 +182,11 @@ fun ChordBookScreen(
   var inspectedVoicing by remember { mutableStateOf<ChordVoicing?>(null) }
 
   // --- Tab 2: Reverse Finder State ---
+  var reverseSearchMode by rememberSaveable { mutableStateOf(ReverseSearchMode.CHORDS) }
   var reverseMultiNoteMode by rememberSaveable { mutableStateOf(false) }
+  var reverseScaleRootFilter by rememberSaveable { mutableStateOf<Int?>(null) }
+  var reverseScaleCategoryFilter by rememberSaveable { mutableStateOf<ScaleCategory?>(null) }
+  var reverseScaleRequireAllNotes by rememberSaveable { mutableStateOf(false) }
   // Store selected (stringIndex, fret) pairs as "stringIndex:fret" strings for saveable state
   val reverseSelections = remember {
     mutableStateListOf("0:0", "1:3", "2:2", "3:0", "4:1", "5:0") // Default C major shape on 6-string
@@ -198,7 +210,7 @@ fun ChordBookScreen(
     mutableStateOf(repository?.loadProgressions() ?: ChordBookEngine.defaultProgressions())
   }
   var activeProgressionId by rememberSaveable {
-    mutableStateOf(progressions.firstOrNull()?.id ?: "prog_pop_1564")
+    mutableStateOf(progressions.firstOrNull()?.id ?: "prog_axis")
   }
   val activeProgression = remember(progressions, activeProgressionId) {
     progressions.find { it.id == activeProgressionId } ?: progressions.firstOrNull()
@@ -491,6 +503,14 @@ fun ChordBookScreen(
           capoFret = capoFret,
           enharmonicPref = enharmonicPref,
           dotLabelMode = dotLabelMode,
+          searchMode = reverseSearchMode,
+          onSelectSearchMode = { mode ->
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            reverseSearchMode = mode
+            if (mode == ReverseSearchMode.SCALES) {
+              reverseMultiNoteMode = true
+            }
+          },
           multiNoteMode = reverseMultiNoteMode,
           onToggleMultiNoteMode = {
             reverseMultiNoteMode = !reverseMultiNoteMode
@@ -505,6 +525,21 @@ fun ChordBookScreen(
               reverseSelections.addAll(filtered)
             }
           },
+          scaleRootFilter = reverseScaleRootFilter,
+          onSelectScaleRootFilter = { rootFilter ->
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            reverseScaleRootFilter = rootFilter
+          },
+          scaleCategoryFilter = reverseScaleCategoryFilter,
+          onSelectScaleCategoryFilter = { catFilter ->
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            reverseScaleCategoryFilter = catFilter
+          },
+          requireAllScaleNotes = reverseScaleRequireAllNotes,
+          onToggleRequireAllScaleNotes = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            reverseScaleRequireAllNotes = !reverseScaleRequireAllNotes
+          },
           selections = reverseSelections,
           onToggleFret = { stringIdx, fret ->
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -512,10 +547,38 @@ fun ChordBookScreen(
             if (reverseSelections.contains(key)) {
               reverseSelections.remove(key)
             } else {
-              if (!reverseMultiNoteMode) {
+              if (!reverseMultiNoteMode && reverseSearchMode == ReverseSearchMode.CHORDS) {
                 reverseSelections.removeAll { it.startsWith("$stringIdx:") }
               }
               reverseSelections.add(key)
+            }
+          },
+          onTogglePitchClass = { targetPc ->
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            val targetNormalized = targetPc.mod(12)
+            val matchingKeys = reverseSelections.filter { entry ->
+              val parts = entry.split(":")
+              if (parts.size != 2) return@filter false
+              val s = parts[0].toIntOrNull() ?: return@filter false
+              val f = parts[1].toIntOrNull() ?: return@filter false
+              if (s !in 0 until activeTuning.stringCount) return@filter false
+              (activeTuning.effectiveMidi(s, capoFret) + f).mod(12) == targetNormalized
+            }
+            if (matchingKeys.isNotEmpty()) {
+              reverseSelections.removeAll(matchingKeys.toSet())
+            } else {
+              // Find a comfortable low fret (0..11) on the fretboard that produces targetNormalized
+              var bestString = 0
+              var bestFret = (targetNormalized - activeTuning.effectiveMidi(0, capoFret).mod(12)).mod(12)
+              for (s in 0 until activeTuning.stringCount) {
+                val openPc = activeTuning.effectiveMidi(s, capoFret).mod(12)
+                val f = (targetNormalized - openPc).mod(12)
+                if (f < bestFret) {
+                  bestFret = f
+                  bestString = s
+                }
+              }
+              reverseSelections.add("$bestString:$bestFret")
             }
           },
           onClearAll = {
@@ -574,6 +637,12 @@ fun ChordBookScreen(
           onSelectBoxNumber = { selectedBoxNumber = it },
           harmonizeAsSevenths = harmonizeAsSevenths,
           onToggleHarmonizeSevenths = { harmonizeAsSevenths = !harmonizeAsSevenths },
+          onOpenReverseScaleSearch = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            reverseSearchMode = ReverseSearchMode.SCALES
+            reverseMultiNoteMode = true
+            activeTab = ChordBookTab.REVERSE
+          },
           onJumpToDiatonicChord = { root, quality ->
             selectedRoot = root
             selectedChordCategory = quality.category
@@ -1209,10 +1278,19 @@ private fun ReverseFinderTabContent(
   capoFret: Int,
   enharmonicPref: EnharmonicPreference,
   dotLabelMode: DotLabelMode,
+  searchMode: ReverseSearchMode,
+  onSelectSearchMode: (ReverseSearchMode) -> Unit,
   multiNoteMode: Boolean,
   onToggleMultiNoteMode: () -> Unit,
+  scaleRootFilter: Int?,
+  onSelectScaleRootFilter: (Int?) -> Unit,
+  scaleCategoryFilter: ScaleCategory?,
+  onSelectScaleCategoryFilter: (ScaleCategory?) -> Unit,
+  requireAllScaleNotes: Boolean,
+  onToggleRequireAllScaleNotes: () -> Unit,
   selections: List<String>,
   onToggleFret: (stringIdx: Int, fret: Int) -> Unit,
+  onTogglePitchClass: (pitchClass: Int) -> Unit,
   onClearAll: () -> Unit,
   onJumpToChord: (ReverseChordMatch) -> Unit,
   onPinMatch: (ReverseChordMatch) -> Unit,
@@ -1242,8 +1320,21 @@ private fun ReverseFinderTabContent(
   val lowestPc = remember(selectedMidiNotes) {
     selectedMidiNotes.minOrNull()?.mod(12)
   }
-  val scaleMatches = remember(selectedPitchClasses, lowestPc) {
-    ChordBookEngine.reverseIdentifyScales(selectedPitchClasses, preferredRoot = lowestPc, maxResults = 12)
+  val scaleMatches = remember(
+    selectedPitchClasses,
+    lowestPc,
+    scaleRootFilter,
+    scaleCategoryFilter,
+    requireAllScaleNotes,
+  ) {
+    ChordBookEngine.reverseIdentifyScales(
+      selectedPitchClasses = selectedPitchClasses,
+      preferredRoot = scaleRootFilter ?: lowestPc,
+      filterRoot = scaleRootFilter,
+      filterCategory = scaleCategoryFilter,
+      requireAllNotesMatch = requireAllScaleNotes,
+      maxResults = 18,
+    )
   }
 
   LazyColumn(
@@ -1253,7 +1344,78 @@ private fun ReverseFinderTabContent(
     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
-    // 1. Controls & Instructions Card
+    // 0. Reverse Mode Switcher (Reverse Chord Search vs Reverse Scale Search)
+    item {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        ReverseSearchMode.entries.forEach { mode ->
+          val isSelected = searchMode == mode
+          Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = if (isSelected) {
+              MaterialTheme.colorScheme.primary
+            } else {
+              MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+            },
+            modifier = Modifier
+              .weight(1f)
+              .clip(RoundedCornerShape(20.dp))
+              .clickable { onSelectSearchMode(mode) }
+              .testTag(
+                if (mode == ReverseSearchMode.CHORDS) {
+                  "reverse_mode_chords"
+                } else {
+                  "reverse_mode_scales"
+                },
+              ),
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 10.dp, horizontal = 12.dp),
+              horizontalArrangement = Arrangement.Center,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Icon(
+                imageVector = if (mode == ReverseSearchMode.CHORDS) {
+                  Icons.Default.MusicNote
+                } else {
+                  Icons.Default.Search
+                },
+                contentDescription = null,
+                tint = if (isSelected) {
+                  MaterialTheme.colorScheme.onPrimary
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(16.dp),
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(
+                text = if (mode == ReverseSearchMode.CHORDS) {
+                  "Reverse Chord Search"
+                } else {
+                  "Reverse Scale Search"
+                },
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                color = if (isSelected) {
+                  MaterialTheme.colorScheme.onPrimary
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
+        }
+      }
+    }
+
+    // 1. Controls & Note Input Card
     item {
       Card(
         shape = RoundedCornerShape(14.dp),
@@ -1267,7 +1429,7 @@ private fun ReverseFinderTabContent(
           modifier = Modifier
             .fillMaxWidth()
             .padding(12.dp),
-          verticalArrangement = Arrangement.spacedBy(8.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
           Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1276,13 +1438,22 @@ private fun ReverseFinderTabContent(
           ) {
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "Interactive Fretboard Search",
+                text = if (searchMode == ReverseSearchMode.SCALES) {
+                  "Reverse Scale Search"
+                } else {
+                  "Interactive Fretboard Search"
+                },
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.testTag("reverse_search_mode_title"),
               )
               Text(
-                text = "Tap strings and frets below to identify chords, inversions, and compatible scales.",
+                text = if (searchMode == ReverseSearchMode.SCALES) {
+                  "Select notes below or tap frets on the neck to identify matching scales and modes."
+                } else {
+                  "Tap strings and frets below to identify chords, inversions, and compatible scales."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
@@ -1300,37 +1471,149 @@ private fun ReverseFinderTabContent(
             }
           }
 
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-              FilterChip(
-                selected = !multiNoteMode,
-                onClick = { if (multiNoteMode) onToggleMultiNoteMode() },
-                label = { Text("Chord Shape (1/string)", style = MaterialTheme.typography.labelSmall) },
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.testTag("reverse_single_mode_chip"),
+          if (searchMode == ReverseSearchMode.CHORDS) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                  selected = !multiNoteMode,
+                  onClick = { if (multiNoteMode) onToggleMultiNoteMode() },
+                  label = { Text("Chord Shape (1/string)", style = MaterialTheme.typography.labelSmall) },
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("reverse_single_mode_chip"),
+                )
+                FilterChip(
+                  selected = multiNoteMode,
+                  onClick = { if (!multiNoteMode) onToggleMultiNoteMode() },
+                  label = { Text("Multi-Note / Scale", style = MaterialTheme.typography.labelSmall) },
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("reverse_multi_mode_chip"),
+                )
+              }
+            }
+          } else {
+            // Reverse Scale Search: 12-Note Pitch Class Multi-Select Bar + Root & Category Filters
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Text(
+                text = "Tap Pitch Classes (${selectedPitchClasses.size} selected)",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
-              FilterChip(
-                selected = multiNoteMode,
-                onClick = { if (!multiNoteMode) onToggleMultiNoteMode() },
-                label = { Text("Multi-Note / Scale", style = MaterialTheme.typography.labelSmall) },
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.testTag("reverse_multi_mode_chip"),
-              )
+              if (scaleRootFilter != null || scaleCategoryFilter != null || requireAllScaleNotes) {
+                Text(
+                  text = "Reset Filters",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier
+                    .clickable {
+                      onSelectScaleRootFilter(null)
+                      onSelectScaleCategoryFilter(null)
+                      if (requireAllScaleNotes) onToggleRequireAllScaleNotes()
+                    }
+                    .testTag("reverse_scale_reset_filters"),
+                )
+              }
+            }
+
+            PitchClassMultiSelectorBar(
+              selectedPitchClasses = selectedPitchClasses,
+              highlightedRootPitchClass = scaleRootFilter ?: lowestPc,
+              enharmonicPref = enharmonicPref,
+              onTogglePitchClass = onTogglePitchClass,
+              tagPrefix = "reverse_scale_pitch",
+            )
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+            // Optional Root / Tonic Filter Row
+            Text(
+              text = "Root / Tonic Filter",
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+              item {
+                FilterChip(
+                  selected = scaleRootFilter == null,
+                  onClick = { onSelectScaleRootFilter(null) },
+                  label = { Text("Any Root", style = MaterialTheme.typography.labelSmall) },
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("reverse_scale_root_any"),
+                )
+              }
+              items(12) { pc ->
+                val rootLabel = ChordBookEngine.formatPitchClass(pc, enharmonicPref, pc)
+                FilterChip(
+                  selected = scaleRootFilter == pc,
+                  onClick = {
+                    onSelectScaleRootFilter(if (scaleRootFilter == pc) null else pc)
+                  },
+                  label = { Text("$rootLabel Root", style = MaterialTheme.typography.labelSmall) },
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("reverse_scale_root_filter_$pc"),
+                )
+              }
+            }
+
+            // Scale Category & Exactness Filter Row
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+              item {
+                FilterChip(
+                  selected = requireAllScaleNotes,
+                  onClick = onToggleRequireAllScaleNotes,
+                  label = { Text("100% Fit Only", style = MaterialTheme.typography.labelSmall) },
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("reverse_scale_exact_only_chip"),
+                )
+              }
+              item {
+                FilterChip(
+                  selected = scaleCategoryFilter == null,
+                  onClick = { onSelectScaleCategoryFilter(null) },
+                  label = { Text("All Categories", style = MaterialTheme.typography.labelSmall) },
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("reverse_scale_cat_all"),
+                )
+              }
+              items(ScaleCategory.entries) { cat ->
+                FilterChip(
+                  selected = scaleCategoryFilter == cat,
+                  onClick = {
+                    onSelectScaleCategoryFilter(if (scaleCategoryFilter == cat) null else cat)
+                  },
+                  label = { Text(cat.title, style = MaterialTheme.typography.labelSmall) },
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("reverse_scale_cat_${cat.name}"),
+                )
+              }
             }
           }
 
           // Active notes summary pills
           if (selectedPairs.isNotEmpty()) {
-            val notesSummary = selectedPairs
-              .sortedBy { it.first }
-              .joinToString(" • ") { (s, f) ->
-                val midi = activeTuning.effectiveMidi(s, capoFret) + f
-                "${ChordBookEngine.formatMidiNote(midi, enharmonicPref)} (Fret $f)"
+            val notesSummary = if (searchMode == ReverseSearchMode.SCALES) {
+              val sortedPcs = selectedPitchClasses.sorted()
+              sortedPcs.joinToString(" – ") { pc ->
+                ChordBookEngine.formatPitchClass(pc, enharmonicPref, scaleRootFilter ?: lowestPc ?: pc)
               }
+            } else {
+              selectedPairs
+                .sortedBy { it.first }
+                .joinToString(" • ") { (s, f) ->
+                  val midi = activeTuning.effectiveMidi(s, capoFret) + f
+                  "${ChordBookEngine.formatMidiNote(midi, enharmonicPref)} (Fret $f)"
+                }
+            }
             Text(
               text = "Selected: $notesSummary",
               style = MaterialTheme.typography.labelMedium,
@@ -1340,7 +1623,11 @@ private fun ReverseFinderTabContent(
             )
           } else {
             Text(
-              text = "No notes selected — tap any fret on the neck below",
+              text = if (searchMode == ReverseSearchMode.SCALES) {
+                "No notes selected — tap pitch classes above or frets on the neck below"
+              } else {
+                "No notes selected — tap any fret on the neck below"
+              },
               style = MaterialTheme.typography.labelMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1356,12 +1643,70 @@ private fun ReverseFinderTabContent(
         capoFret = capoFret,
         enharmonicPref = enharmonicPref,
         selectedPairs = selectedPairs.toSet(),
-        lowestPitchClass = lowestPc,
+        selectedPitchClasses = selectedPitchClasses,
+        highlightAllMatchingPitchClasses = searchMode == ReverseSearchMode.SCALES,
+        lowestPitchClass = scaleRootFilter ?: lowestPc,
         onToggleFret = onToggleFret,
       )
     }
 
-    // 3. Identified Chords Section
+    if (searchMode == ReverseSearchMode.SCALES) {
+      // 3A. Primary Results in Reverse Scale Search: Identified Scales & Modes
+      item {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = "Identified Scales & Modes (${scaleMatches.size})",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.testTag("reverse_scale_matches_header"),
+          )
+          Text(
+            text = "Tap any scale to open diagram & chords",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+
+      if (scaleMatches.isEmpty()) {
+        item {
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            ),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Text(
+              text = if (selectedPitchClasses.isEmpty()) {
+                "Select notes on the pitch selector or fretboard above to search matching scales and modes."
+              } else {
+                "No scale matches the active notes and filters. Try clearing Root / Category filters or disabling 100% Fit Only."
+              },
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.padding(16.dp),
+            )
+          }
+        }
+      } else {
+        itemsIndexed(scaleMatches) { idx, scaleMatch ->
+          ReverseScaleMatchCard(
+            idx = idx,
+            scaleMatch = scaleMatch,
+            enharmonicPref = enharmonicPref,
+            onJumpToScale = { onJumpToScale(scaleMatch) },
+          )
+        }
+      }
+    }
+
+    // 3B. Identified Chords Section (Primary in Chord mode, Secondary in Scale mode)
     item {
       Text(
         text = "Identified Chords (${chordMatches.size})",
@@ -1385,7 +1730,7 @@ private fun ReverseFinderTabContent(
             text = if (selectedPitchClasses.size < 2) {
               "Select at least 2 distinct notes on the fretboard to identify chords."
             } else {
-              "No standard chord matches all selected notes simultaneously. Try removing passing tones or switching to Compatible Scales below."
+              "No standard chord matches all selected notes simultaneously. Try removing passing tones or using Reverse Scale Search."
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1497,70 +1842,174 @@ private fun ReverseFinderTabContent(
       }
     }
 
-    // 4. Compatible Scales Section
-    item {
-      Text(
-        text = "Compatible Scales & Modes (${scaleMatches.size})",
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.onSurface,
-        modifier = Modifier.padding(top = 6.dp),
-      )
-    }
-
-    itemsIndexed(scaleMatches) { idx, scaleMatch ->
-      Card(
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(
-          containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        ),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-        modifier = Modifier
-          .fillMaxWidth()
-          .clickable { onJumpToScale(scaleMatch) }
-          .testTag("reverse_scale_match_$idx"),
-      ) {
+    if (searchMode == ReverseSearchMode.CHORDS) {
+      // 4. Compatible Scales Section (when in Chord Search mode)
+      item {
         Row(
           modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(top = 6.dp),
           horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically,
         ) {
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = scaleMatch.formatScaleName(enharmonicPref),
-              style = MaterialTheme.typography.bodyLarge,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-            val scaleNotes = scaleMatch.scaleType.intervals.joinToString(" – ") { iv ->
-              ChordBookEngine.formatPitchClass(
-                (scaleMatch.rootPitchClass + iv).mod(12),
-                enharmonicPref,
-                scaleMatch.rootPitchClass,
-              )
-            }
-            Text(
-              text = scaleNotes,
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
+          Text(
+            text = "Compatible Scales & Modes (${scaleMatches.size})",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.testTag("reverse_scale_matches_header"),
+          )
+          Text(
+            text = "Reverse Scale Search →",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+              .clickable { onSelectSearchMode(ReverseSearchMode.SCALES) }
+              .testTag("jump_to_reverse_scale_search"),
+          )
+        }
+      }
 
+      itemsIndexed(scaleMatches) { idx, scaleMatch ->
+        ReverseScaleMatchCard(
+          idx = idx,
+          scaleMatch = scaleMatch,
+          enharmonicPref = enharmonicPref,
+          onJumpToScale = { onJumpToScale(scaleMatch) },
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun ReverseScaleMatchCard(
+  idx: Int,
+  scaleMatch: ScaleMatch,
+  enharmonicPref: EnharmonicPreference,
+  onJumpToScale: () -> Unit,
+) {
+  Card(
+    shape = RoundedCornerShape(14.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = if (idx == 0 && scaleMatch.isFullCoverage) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+      } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+      },
+    ),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+    modifier = Modifier
+      .fillMaxWidth()
+      .clickable { onJumpToScale() }
+      .testTag("reverse_scale_match_$idx"),
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 14.dp, vertical = 10.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Column(
+        modifier = Modifier.weight(1f),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Text(
+            text = scaleMatch.formatScaleName(enharmonicPref),
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
           Surface(
             shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.secondaryContainer,
+            color = when {
+              scaleMatch.isExactScale -> MaterialTheme.colorScheme.primaryContainer
+              scaleMatch.isFullCoverage -> MaterialTheme.colorScheme.tertiaryContainer
+              else -> MaterialTheme.colorScheme.secondaryContainer
+            },
           ) {
+            val fitText = when {
+              scaleMatch.isExactScale -> "Exact Scale"
+              scaleMatch.isFullCoverage -> {
+                "100% Fit (${scaleMatch.matchedPitchClasses.size}/${scaleMatch.scaleType.intervals.size})"
+              }
+              else -> "${(scaleMatch.coverageRatio * 100).roundToInt()}% Fit"
+            }
             Text(
-              text = "${(scaleMatch.coverageRatio * 100).roundToInt()}% Fit",
+              text = fitText,
               style = MaterialTheme.typography.labelSmall,
               fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSecondaryContainer,
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+              color = when {
+                scaleMatch.isExactScale -> MaterialTheme.colorScheme.onPrimaryContainer
+                scaleMatch.isFullCoverage -> MaterialTheme.colorScheme.onTertiaryContainer
+                else -> MaterialTheme.colorScheme.onSecondaryContainer
+              },
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
             )
           }
         }
+
+        val scaleNotes = scaleMatch.scaleType.intervals.mapIndexed { degreeIdx, iv ->
+          val pc = (scaleMatch.rootPitchClass + iv).mod(12)
+          val noteName = ChordBookEngine.formatPitchClass(
+            pc,
+            enharmonicPref,
+            scaleMatch.rootPitchClass,
+          )
+          val degLabel = scaleMatch.scaleType.formulaLabels.getOrElse(degreeIdx) {
+            ChordBookEngine.intervalName(iv)
+          }
+          "$noteName ($degLabel)"
+        }.joinToString(" – ")
+
+        Text(
+          text = scaleNotes,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        val detailLine = when {
+          scaleMatch.isExactScale -> {
+            "${scaleMatch.scaleType.category.title} • All ${scaleMatch.scaleType.intervals.size} scale tones matched"
+          }
+          scaleMatch.extraScalePitchClasses.isNotEmpty() && scaleMatch.outsideInputPitchClasses.isEmpty() -> {
+            val extraStr = scaleMatch.scalePitchClasses
+              .filter { it in scaleMatch.extraScalePitchClasses }
+              .joinToString(", ") { pc ->
+                ChordBookEngine.formatPitchClass(pc, enharmonicPref, scaleMatch.rootPitchClass)
+              }
+            "${scaleMatch.scaleType.category.title} • Additional scale tones: $extraStr"
+          }
+          scaleMatch.outsideInputPitchClasses.isNotEmpty() -> {
+            val outsideStr = scaleMatch.outsideInputPitchClasses.sorted().joinToString(", ") { pc ->
+              ChordBookEngine.formatPitchClass(pc, enharmonicPref, scaleMatch.rootPitchClass)
+            }
+            "${scaleMatch.scaleType.category.title} • Outside notes: $outsideStr"
+          }
+          else -> scaleMatch.scaleType.category.title
+        }
+        Text(
+          text = detailLine,
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+        )
+      }
+
+      Spacer(modifier = Modifier.width(8.dp))
+
+      FilledTonalButton(
+        onClick = onJumpToScale,
+        shape = RoundedCornerShape(12.dp),
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.testTag("reverse_scale_view_button_$idx"),
+      ) {
+        Text("Scale", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
       }
     }
   }
@@ -1586,6 +2035,7 @@ private fun ScalesAndKeyTabContent(
   onSelectBoxNumber: (Int) -> Unit,
   harmonizeAsSevenths: Boolean,
   onToggleHarmonizeSevenths: () -> Unit,
+  onOpenReverseScaleSearch: () -> Unit,
   onJumpToDiatonicChord: (Int, ChordQuality) -> Unit,
   onPinDiatonicChord: (Int, ChordQuality) -> Unit,
   modifier: Modifier = Modifier,
@@ -1623,12 +2073,46 @@ private fun ScalesAndKeyTabContent(
             .padding(12.dp),
           verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-          Text(
-            text = "Key / Scale Root",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = "Key / Scale Root",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Surface(
+              shape = RoundedCornerShape(20.dp),
+              color = MaterialTheme.colorScheme.secondaryContainer,
+              modifier = Modifier
+                .clip(RoundedCornerShape(20.dp))
+                .clickable { onOpenReverseScaleSearch() }
+                .testTag("scales_reverse_search_button"),
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Search,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                  modifier = Modifier.size(14.dp),
+                )
+                Text(
+                  text = "Reverse Scale Search",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+              }
+            }
+          }
 
           PitchClassSelectorBar(
             selectedPitchClass = scaleRoot,
@@ -2344,6 +2828,60 @@ private fun PitchClassSelectorBar(
 }
 
 @Composable
+private fun PitchClassMultiSelectorBar(
+  selectedPitchClasses: Set<Int>,
+  highlightedRootPitchClass: Int?,
+  enharmonicPref: EnharmonicPreference,
+  onTogglePitchClass: (Int) -> Unit,
+  tagPrefix: String,
+) {
+  Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    for (row in 0..1) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        for (col in 0..5) {
+          val pc = row * 6 + col
+          val isSelected = pc in selectedPitchClasses
+          val isRoot = highlightedRootPitchClass != null && highlightedRootPitchClass.mod(12) == pc
+          val label = ChordBookEngine.formatPitchClass(pc, enharmonicPref, pc)
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = when {
+              isSelected && isRoot -> MaterialTheme.colorScheme.primary
+              isSelected -> MaterialTheme.colorScheme.secondary
+              else -> MaterialTheme.colorScheme.surfaceContainerHigh
+            },
+            modifier = Modifier
+              .weight(1f)
+              .clip(RoundedCornerShape(12.dp))
+              .clickable { onTogglePitchClass(pc) }
+              .testTag("${tagPrefix}_$pc"),
+          ) {
+            Box(
+              contentAlignment = Alignment.Center,
+              modifier = Modifier.padding(vertical = 8.dp),
+            ) {
+              Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                color = when {
+                  isSelected && isRoot -> MaterialTheme.colorScheme.onPrimary
+                  isSelected -> MaterialTheme.colorScheme.onSecondary
+                  else -> MaterialTheme.colorScheme.onSurface
+                },
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
 private fun VoicingDiagramCard(
   voicing: ChordVoicing,
   tuning: ChordTuning,
@@ -2631,6 +3169,8 @@ private fun InteractiveReverseFretboard(
   capoFret: Int,
   enharmonicPref: EnharmonicPreference,
   selectedPairs: Set<Pair<Int, Int>>,
+  selectedPitchClasses: Set<Int> = emptySet(),
+  highlightAllMatchingPitchClasses: Boolean = false,
   lowestPitchClass: Int?,
   onToggleFret: (stringIdx: Int, fret: Int) -> Unit,
 ) {
@@ -2778,19 +3318,25 @@ private fun InteractiveReverseFretboard(
             )
 
             for (f in 0..maxFret) {
-              if ((s to f) in selectedPairs) {
+              val isExplicitlySelected = (s to f) in selectedPairs
+              val midi = openMidi + f
+              val pc = midi.mod(12)
+              val isPitchClassMatch = highlightAllMatchingPitchClasses && pc in selectedPitchClasses
+
+              if (isExplicitlySelected || isPitchClassMatch) {
                 val centerX = leftPad + (f + 0.5f) * fretSlotWidth
-                val midi = openMidi + f
-                val pc = midi.mod(12)
                 val isBass = lowestPitchClass != null && pc == lowestPitchClass
                 val noteStr = ChordBookEngine.formatPitchClass(pc, enharmonicPref)
+                val alpha = if (isExplicitlySelected) 1f else 0.42f
 
                 drawCircle(
-                  color = if (isBass) primaryColor else secondaryColor,
-                  radius = 11.dp.toPx(),
+                  color = (if (isBass) primaryColor else secondaryColor).copy(alpha = alpha),
+                  radius = if (isExplicitlySelected) 11.dp.toPx() else 9.5.dp.toPx(),
                   center = Offset(centerX, y),
                 )
-                dotTextPaint.color = (if (isBass) onPrimaryColor else onSecondaryColor).toArgb()
+                dotTextPaint.color = (if (isBass) onPrimaryColor else onSecondaryColor)
+                  .copy(alpha = if (isExplicitlySelected) 1f else 0.9f)
+                  .toArgb()
                 val textY = y - (dotTextPaint.descent() + dotTextPaint.ascent()) / 2f
                 drawContext.canvas.nativeCanvas.drawText(noteStr, centerX, textY, dotTextPaint)
               }

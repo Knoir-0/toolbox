@@ -62,6 +62,7 @@ import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -1774,6 +1775,14 @@ private fun CompletedTasksSheet(
     onDismissRequest = onDismiss,
     sheetState = sheetState,
     containerColor = MaterialTheme.colorScheme.surface,
+    dragHandle = {
+      Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+      ) {
+        BottomSheetDefaults.DragHandle()
+      }
+    },
     modifier = Modifier.testTag("todo_completed_tasks_sheet"),
   ) {
     Column(
@@ -2146,6 +2155,14 @@ private fun SavedTasksSheet(
     onDismissRequest = onDismiss,
     sheetState = sheetState,
     containerColor = MaterialTheme.colorScheme.surface,
+    dragHandle = {
+      Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+      ) {
+        BottomSheetDefaults.DragHandle()
+      }
+    },
     modifier = Modifier.testTag("todo_saved_tasks_sheet"),
   ) {
     Column(

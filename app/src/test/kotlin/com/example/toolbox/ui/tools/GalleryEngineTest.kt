@@ -271,4 +271,25 @@ class GalleryEngineTest {
     assertEquals(newestPhoto.name, resolvedAlbum.mostRecentPhoto?.name)
     assertEquals(1, resolvedAlbum.totalPhotoCount)
   }
+
+  @Test
+  fun loadAlbumContents_includesSupportedImageAndVideoFiles_andSetsIsVideoFlag() {
+    val mediaDir = File(tempRootDir, "DCIM/Media").apply { mkdirs() }
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(mediaDir, "photo.png"),
+      lastModifiedMs = 3_000_000L,
+    )
+    val videoFile = File(mediaDir, "clip.mp4").apply {
+      writeBytes(byteArrayOf(0, 0, 0, 24))
+      setLastModified(4_000_000L)
+    }
+
+    val contents = GalleryEngine.loadAlbumContents(mediaDir)
+    assertEquals(2, contents.photos.size)
+    assertEquals("clip.mp4", contents.photos[0].name)
+    assertTrue(contents.photos[0].isVideo)
+    assertEquals(videoFile.absolutePath, contents.photos[0].path)
+    assertEquals("photo.png", contents.photos[1].name)
+    assertTrue(!contents.photos[1].isVideo)
+  }
 }

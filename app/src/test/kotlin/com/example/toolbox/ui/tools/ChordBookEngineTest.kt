@@ -168,6 +168,37 @@ class ChordBookEngineTest {
   }
 
   @Test
+  fun reverseIdentifyScales_identifiesExactPentatonicAndModesAndAppliesFilters() {
+    // C Major Pentatonic pitch classes: C(0), D(2), E(4), G(7), A(9)
+    val cPentatonicPcs = setOf(0, 2, 4, 7, 9)
+    val matches = ChordBookEngine.reverseIdentifyScales(
+      selectedPitchClasses = cPentatonicPcs,
+      preferredRoot = 0,
+    )
+    assertTrue(matches.isNotEmpty())
+    val top = matches.first()
+    assertEquals(0, top.rootPitchClass)
+    assertEquals(ScaleType.MAJOR_PENTATONIC, top.scaleType)
+    assertTrue(top.isExactScale)
+    assertTrue(top.extraScalePitchClasses.isEmpty())
+    assertTrue(top.outsideInputPitchClasses.isEmpty())
+
+    // C Major / D Dorian 7-note pitch classes filtered by D(2) root and MAJOR_AND_MODES category
+    val whiteKeyPcs = setOf(0, 2, 4, 5, 7, 9, 11)
+    val dRootMatches = ChordBookEngine.reverseIdentifyScales(
+      selectedPitchClasses = whiteKeyPcs,
+      filterRoot = 2,
+      filterCategory = ScaleCategory.MAJOR_AND_MODES,
+      requireAllNotesMatch = true,
+    )
+    assertTrue(dRootMatches.isNotEmpty())
+    assertTrue(dRootMatches.all { it.rootPitchClass == 2 })
+    val dorianMatch = dRootMatches.first()
+    assertEquals(ScaleType.DORIAN, dorianMatch.scaleType)
+    assertTrue(dorianMatch.isExactScale)
+  }
+
+  @Test
   fun harmonizeScale_generatesCorrectDiatonicDegreesInCMajor() {
     val harmonized = ChordBookEngine.harmonizeScale(0, ScaleType.MAJOR)
     assertEquals(7, harmonized.size)
@@ -204,6 +235,28 @@ class ChordBookEngineTest {
     assertEquals(0, top.rootPitchClass)
     assertEquals(ScaleType.MAJOR, top.scaleType)
     assertEquals(1.0f, top.coverageRatio, 0.001f)
+  }
+
+  @Test
+  fun defaultProgressions_containsAxisRoyalRoadAndFlamenco() {
+    val defaults = ChordBookEngine.defaultProgressions()
+    assertEquals(3, defaults.size)
+    assertEquals(
+      listOf("Axis Progression", "Royal Road Progression", "Flamenco Progression"),
+      defaults.map { it.name },
+    )
+    assertEquals(
+      listOf("C", "G", "Am", "F"),
+      defaults[0].chords.map { it.formatName() },
+    )
+    assertEquals(
+      listOf("Fmaj7", "G7", "Em7", "Am7"),
+      defaults[1].chords.map { it.formatName() },
+    )
+    assertEquals(
+      listOf("Am", "G", "F", "E"),
+      defaults[2].chords.map { it.formatName() },
+    )
   }
 
   @Test

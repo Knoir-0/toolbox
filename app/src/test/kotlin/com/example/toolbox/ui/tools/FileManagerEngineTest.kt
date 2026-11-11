@@ -526,4 +526,43 @@ class FileManagerEngineTest {
 
     FileManagerEngine.clearAllSortGroupConfigs()
   }
+
+  @Test
+  fun isConvertibleFile_detectsSupportedFilesAndRejectsUnsupportedOrDirectories() {
+    val dir = File(tempFolder.root, "SubFolder").apply { mkdirs() }
+    val png = File(tempFolder.root, "image.png")
+    val mp3 = File(tempFolder.root, "track.mp3")
+    val md = File(tempFolder.root, "notes.md")
+    val zip = File(tempFolder.root, "bundle.zip")
+    val apk = File(tempFolder.root, "installer.apk")
+
+    assertFalse(FileManagerEngine.isConvertibleFile(dir))
+    assertTrue(FileManagerEngine.isConvertibleFile(png))
+    assertTrue(FileManagerEngine.isConvertibleFile(mp3))
+    assertTrue(FileManagerEngine.isConvertibleFile(md))
+    assertTrue(FileManagerEngine.isConvertibleFile(zip))
+    assertFalse(FileManagerEngine.isConvertibleFile(apk))
+  }
+
+  @Test
+  fun isImageFile_andIsVideoFile_detectSupportedEditorFormats() {
+    val dir = File(tempFolder.root, "MediaFolder").apply { mkdirs() }
+    val png = File(tempFolder.root, "photo.png")
+    val heic = File(tempFolder.root, "photo.heic")
+    val mp4 = File(tempFolder.root, "clip.mp4")
+    val mov = File(tempFolder.root, "clip.mov")
+    val txt = File(tempFolder.root, "readme.txt")
+
+    assertFalse(FileManagerEngine.isImageFile(dir))
+    assertTrue(FileManagerEngine.isImageFile(png))
+    assertTrue(FileManagerEngine.isImageFile(heic))
+    assertFalse(FileManagerEngine.isImageFile(mp4))
+    assertFalse(FileManagerEngine.isImageFile(txt))
+
+    assertFalse(FileManagerEngine.isVideoFile(dir))
+    assertTrue(FileManagerEngine.isVideoFile(mp4))
+    assertTrue(FileManagerEngine.isVideoFile(mov))
+    assertFalse(FileManagerEngine.isVideoFile(png))
+    assertFalse(FileManagerEngine.isVideoFile(txt))
+  }
 }

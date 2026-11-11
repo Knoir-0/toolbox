@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -49,12 +50,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.res.painterResource
 import com.example.toolbox.R
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.RotateLeft
 import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
@@ -65,9 +66,7 @@ import androidx.compose.material.icons.filled.CropPortrait
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.TextFields
@@ -79,6 +78,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FilledTonalButton
@@ -158,12 +158,24 @@ enum class ImageEditorMode(val label: String) {
 fun ImageEditorScreen(
   modifier: Modifier = Modifier,
   initialBitmap: Bitmap? = null,
+  initialFile: File? = null,
+  onNavigateBack: (() -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val haptic = LocalHapticFeedback.current
 
-  var currentBitmap by remember { mutableStateOf<Bitmap?>(initialBitmap) }
-  var originalBitmap by remember { mutableStateOf<Bitmap?>(initialBitmap) }
+  val resolvedInitialBitmap = remember(initialBitmap, initialFile?.absolutePath) {
+    initialBitmap ?: initialFile?.let { file ->
+      decodeBitmapFromFile(file) ?: if (file.exists()) {
+        Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+      } else {
+        null
+      }
+    }
+  }
+
+  var currentBitmap by remember(resolvedInitialBitmap) { mutableStateOf<Bitmap?>(resolvedInitialBitmap) }
+  var originalBitmap by remember(resolvedInitialBitmap) { mutableStateOf<Bitmap?>(resolvedInitialBitmap) }
 
   val history = remember { ImageEditorHistory<Bitmap>() }
   var activeMode by rememberSaveable { mutableStateOf(ImageEditorMode.CROP) }
@@ -178,6 +190,12 @@ fun ImageEditorScreen(
       showDiscardDialog = true
     } else {
       action()
+    }
+  }
+
+  BackHandler(enabled = onNavigateBack != null) {
+    performActionWithDiscardCheck {
+      onNavigateBack?.invoke()
     }
   }
 
@@ -233,6 +251,49 @@ fun ImageEditorScreen(
     ImageEditorTopBar(
       bitmap = currentBitmap,
       activeMode = activeMode,
+      canUndo = history.canUndo,
+      canRedo = history.canRedo,
+      onUndo = {
+        currentBitmap?.let { bmp ->
+          history.undo(bmp)?.let { prev ->
+            currentBitmap = prev
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          }
+        }
+      },
+      onRedo = {
+        currentBitmap?.let { bmp ->
+          history.redo(bmp)?.let { next ->
+            currentBitmap = next
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          }
+        }
+      },
+      onCloseImage = {
+        performActionWithDiscardCheck {
+          currentBitmap = null
+          originalBitmap = null
+          history.clear()
+        }
+      },
+      onSave = {
+        currentBitmap?.let { bmp ->
+          val uri = saveBitmapToGallery(context, bmp)
+          if (uri != null) {
+            Toast.makeText(context, "Image saved to Photos!", Toast.LENGTH_SHORT).show()
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          } else {
+            Toast.makeText(context, "Saved image to storage", Toast.LENGTH_SHORT).show()
+          }
+        }
+      },
+      onNavigateBack = onNavigateBack?.let { navBack ->
+        {
+          performActionWithDiscardCheck {
+            navBack()
+          }
+        }
+      },
     )
 
     if (currentBitmap == null) {
@@ -254,54 +315,9 @@ fun ImageEditorScreen(
       ImageEditorContent(
         bitmap = bmp,
         activeMode = activeMode,
-        canUndo = history.canUndo,
-        canRedo = history.canRedo,
         onModeSelected = {
           activeMode = it
           haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-        },
-        onUndo = {
-          history.undo(bmp)?.let { prev ->
-            currentBitmap = prev
-            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-          }
-        },
-        onRedo = {
-          history.redo(bmp)?.let { next ->
-            currentBitmap = next
-            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-          }
-        },
-        onReset = {
-          originalBitmap?.let { orig ->
-            history.push(bmp)
-            currentBitmap = orig
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-          }
-        },
-        onSave = {
-          val uri = saveBitmapToGallery(context, bmp)
-          if (uri != null) {
-            Toast.makeText(context, "Image saved to Photos!", Toast.LENGTH_SHORT).show()
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-          } else {
-            Toast.makeText(context, "Saved image to storage", Toast.LENGTH_SHORT).show()
-          }
-        },
-        onShare = {
-          shareBitmap(context, bmp)
-        },
-        onNewImage = {
-          performActionWithDiscardCheck {
-            filePickerLauncher.launch("image/*")
-          }
-        },
-        onCloseImage = {
-          performActionWithDiscardCheck {
-            currentBitmap = null
-            originalBitmap = null
-            history.clear()
-          }
         },
         onApplyBitmapChange = { newBmp ->
           history.push(bmp)
@@ -318,6 +334,13 @@ fun ImageEditorScreen(
 private fun ImageEditorTopBar(
   bitmap: Bitmap?,
   activeMode: ImageEditorMode,
+  canUndo: Boolean,
+  canRedo: Boolean,
+  onUndo: () -> Unit,
+  onRedo: () -> Unit,
+  onCloseImage: () -> Unit,
+  onSave: () -> Unit,
+  onNavigateBack: (() -> Unit)? = null,
 ) {
   Surface(
     color = MaterialTheme.colorScheme.surface,
@@ -342,19 +365,30 @@ private fun ImageEditorTopBar(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-          Box(
-            modifier = Modifier
-              .size(36.dp)
-              .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center,
-          ) {
-            Icon(
-              imageVector = Icons.Default.Image,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(20.dp),
-            )
+          if (onNavigateBack != null) {
+            IconButton(
+              onClick = onNavigateBack,
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("action_navigate_back"),
+            ) {
+              Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+          } else {
+            Box(
+              modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Default.Image,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+              )
+            }
           }
 
           Column(modifier = Modifier.weight(1f)) {
@@ -377,6 +411,66 @@ private fun ImageEditorTopBar(
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
             )
+          }
+        }
+
+        if (bitmap != null) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+          ) {
+            IconButton(
+              onClick = onUndo,
+              enabled = canUndo,
+              modifier = Modifier
+                .size(38.dp)
+                .testTag("editor_undo_button"),
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.Undo,
+                contentDescription = "Undo",
+                modifier = Modifier.size(20.dp),
+              )
+            }
+            IconButton(
+              onClick = onRedo,
+              enabled = canRedo,
+              modifier = Modifier
+                .size(38.dp)
+                .testTag("editor_redo_button"),
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.Redo,
+                contentDescription = "Redo",
+                modifier = Modifier.size(20.dp),
+              )
+            }
+            IconButton(
+              onClick = onCloseImage,
+              modifier = Modifier
+                .size(38.dp)
+                .testTag("editor_close_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "Close image",
+                modifier = Modifier.size(20.dp),
+              )
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            FilledIconButton(
+              onClick = onSave,
+              shape = CircleShape,
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("editor_save_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Save,
+                contentDescription = "Save image",
+                modifier = Modifier.size(18.dp),
+              )
+            }
           }
         }
       }
@@ -467,22 +561,13 @@ fun OpenFileInitialView(
 }
 
 /**
- * Main editor content displaying the image canvas, controls, and toolbar.
+ * Main editor content displaying the image canvas and mode controls.
  */
 @Composable
 fun ImageEditorContent(
   bitmap: Bitmap,
   activeMode: ImageEditorMode,
-  canUndo: Boolean,
-  canRedo: Boolean,
   onModeSelected: (ImageEditorMode) -> Unit,
-  onUndo: () -> Unit,
-  onRedo: () -> Unit,
-  onReset: () -> Unit,
-  onSave: () -> Unit,
-  onShare: () -> Unit,
-  onNewImage: () -> Unit,
-  onCloseImage: () -> Unit,
   onApplyBitmapChange: (Bitmap) -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -527,65 +612,6 @@ fun ImageEditorContent(
       .fillMaxSize()
       .padding(horizontal = 4.dp),
   ) {
-    // Top Bar: Actions (Close, New photo, Undo, Redo, Reset, Share, Save)
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(vertical = 4.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(
-          onClick = onCloseImage,
-          modifier = Modifier.testTag("editor_close_button"),
-        ) {
-          Icon(Icons.Default.Close, contentDescription = "Close image")
-        }
-        IconButton(
-          onClick = onNewImage,
-          modifier = Modifier.testTag("editor_new_image_button"),
-        ) {
-          Icon(Icons.Default.AddPhotoAlternate, contentDescription = "Open another image")
-        }
-        IconButton(
-          onClick = onUndo,
-          enabled = canUndo,
-          modifier = Modifier.testTag("editor_undo_button"),
-        ) {
-          Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo")
-        }
-        IconButton(
-          onClick = onRedo,
-          enabled = canRedo,
-          modifier = Modifier.testTag("editor_redo_button"),
-        ) {
-          Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo")
-        }
-      }
-
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(
-          onClick = onReset,
-          modifier = Modifier.testTag("editor_reset_button"),
-        ) {
-          Icon(Icons.Default.RestartAlt, contentDescription = "Reset to original")
-        }
-        IconButton(
-          onClick = onShare,
-          modifier = Modifier.testTag("editor_share_button"),
-        ) {
-          Icon(Icons.Default.Share, contentDescription = "Share image")
-        }
-        FilledTonalIconButton(
-          onClick = onSave,
-          modifier = Modifier.testTag("editor_save_button"),
-        ) {
-          Icon(Icons.Default.Save, contentDescription = "Save image")
-        }
-      }
-    }
-
     // Center Image Viewport / Canvas
     BoxWithConstraints(
       modifier = Modifier
@@ -2101,6 +2127,52 @@ fun DrawControls(
 // -------------------------------------------------------------
 // Image Loading, Saving & Sharing Helpers
 // -------------------------------------------------------------
+
+fun decodeBitmapFromFile(file: File, maxDimension: Int = 2048): Bitmap? {
+  if (!file.exists() || !file.isFile) return null
+  return try {
+    val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(file.absolutePath, boundsOptions)
+
+    val sampleSize = calculateInSampleSize(
+      boundsOptions.outWidth,
+      boundsOptions.outHeight,
+      maxDimension,
+    )
+
+    val decodeOptions = BitmapFactory.Options().apply {
+      inSampleSize = sampleSize
+      inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+
+    val original = BitmapFactory.decodeFile(file.absolutePath, decodeOptions) ?: return null
+
+    var orientation = ExifInterface.ORIENTATION_NORMAL
+    try {
+      val exif = ExifInterface(file.absolutePath)
+      orientation = exif.getAttributeInt(
+        ExifInterface.TAG_ORIENTATION,
+        ExifInterface.ORIENTATION_NORMAL,
+      )
+    } catch (_: Exception) {}
+
+    val rotation = when (orientation) {
+      ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+      ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+      ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+      else -> 0f
+    }
+
+    if (rotation != 0f) {
+      val matrix = Matrix().apply { postRotate(rotation) }
+      Bitmap.createBitmap(original, 0, 0, original.width, original.height, matrix, true)
+    } else {
+      original
+    }
+  } catch (_: Exception) {
+    null
+  }
+}
 
 fun decodeBitmapFromUri(context: Context, uri: Uri, maxDimension: Int = 2048): Bitmap? {
   return try {

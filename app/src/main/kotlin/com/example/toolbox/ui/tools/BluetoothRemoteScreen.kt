@@ -88,6 +88,7 @@ import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -575,6 +576,14 @@ private fun ScanDeviceModal(
     onDismissRequest = onDismiss,
     sheetState = sheetState,
     containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    dragHandle = {
+      Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+      ) {
+        BottomSheetDefaults.DragHandle()
+      }
+    },
   ) {
     LazyColumn(
       modifier = Modifier

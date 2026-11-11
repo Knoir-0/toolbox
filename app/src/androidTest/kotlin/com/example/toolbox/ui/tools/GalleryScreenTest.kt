@@ -445,4 +445,45 @@ class GalleryScreenTest {
     val zoomPercent = zoomLabelText.removeSuffix("%").toInt()
     assertTrue("Expected zoom percent > 100% after pinch-out, got $zoomPercent%", zoomPercent > 100)
   }
+
+  @Test
+  fun editButton_opensImageEditorAndVideoEditorDirectlyFromGallery() {
+    val dcimDir = File(testRootDir, "DCIM").apply { mkdirs() }
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(dcimDir, "photo.png"),
+      lastModifiedMs = 2_000_000L,
+    )
+    File(dcimDir, "video.mp4").apply {
+      writeBytes(byteArrayOf(0, 0, 0, 24))
+      setLastModified(3_000_000L)
+    }
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        GalleryScreen(rootDirectory = testRootDir)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Open photo.png in viewer and click Edit button -> opens ImageEditorScreen
+    composeTestRule.onNodeWithTag("photo_tile_item_photo.png").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_edit_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_edit_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("image_editor_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_screen").assertIsDisplayed()
+
+    // Click Edit button on video.mp4 tile -> opens VideoEditorScreen
+    composeTestRule.onNodeWithTag("photo_tile_edit_video.mp4").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("video_editor_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_screen").assertIsDisplayed()
+  }
 }

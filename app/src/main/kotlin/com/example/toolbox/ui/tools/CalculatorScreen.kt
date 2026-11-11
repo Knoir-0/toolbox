@@ -579,16 +579,30 @@ fun CalculatorScreen(
           Box(
             modifier = Modifier
               .fillMaxWidth()
-              .padding(top = 12.dp, bottom = 4.dp),
+              .height(28.dp)
+              .clickable { showHistorySheet = false }
+              .pointerInput(Unit) {
+                detectVerticalDragGestures { _, dragAmount ->
+                  if (dragAmount > 10f) {
+                    showHistorySheet = false
+                  }
+                }
+              }
+              .testTag("calculator_history_drag_handle")
+              .semantics {
+                contentDescription = "Collapse calculation history"
+              },
             contentAlignment = Alignment.Center,
           ) {
-            Surface(
+            Box(
               modifier = Modifier
                 .width(36.dp)
-                .height(4.dp),
-              shape = CircleShape,
-              color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-            ) {}
+                .height(4.dp)
+                .background(
+                  color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                  shape = CircleShape,
+                ),
+            )
           }
 
           HistorySheetContent(

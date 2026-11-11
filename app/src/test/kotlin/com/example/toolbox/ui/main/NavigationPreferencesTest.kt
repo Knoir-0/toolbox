@@ -319,6 +319,34 @@ class NavigationPreferencesTest {
   }
 
   @Test
+  fun hiddenTools_fileConverterImageEditorAndVideoEditorAreHiddenByDefault_andCanBeUnhidden() {
+    val expectedDefaultHidden = setOf(
+      Tool.FILE_CONVERTER,
+      Tool.IMAGE_EDITOR,
+      Tool.VIDEO_EDITOR,
+    )
+    // Null rawString (no saved preference) returns DEFAULT_HIDDEN_TOOLS containing FILE_CONVERTER, IMAGE_EDITOR, VIDEO_EDITOR
+    assertEquals(expectedDefaultHidden, DEFAULT_HIDDEN_TOOLS)
+    assertEquals(DEFAULT_HIDDEN_TOOLS, parseHiddenTools(null))
+    // Explicit blank string (user unhid all tools) returns emptySet()
+    assertTrue(parseHiddenTools("").isEmpty())
+
+    val fakePrefs = FakeSharedPreferences()
+    val repo = DefaultNavigationPreferencesRepository(fakePrefs)
+    assertEquals(expectedDefaultHidden, repo.getHiddenTools())
+    assertEquals(expectedDefaultHidden, repo.hiddenToolsFlow.value)
+
+    // User unhides all tools
+    repo.setHiddenTools(emptySet())
+    assertTrue(repo.getHiddenTools().isEmpty())
+    assertTrue(repo.hiddenToolsFlow.value.isEmpty())
+
+    // Persisted empty set survives repository reload
+    val reloadedRepo = DefaultNavigationPreferencesRepository(fakePrefs)
+    assertTrue(reloadedRepo.getHiddenTools().isEmpty())
+  }
+
+  @Test
   fun themeMode_persistsCorrectly() {
     val fakePrefs = FakeSharedPreferences()
     val repo = DefaultNavigationPreferencesRepository(fakePrefs)

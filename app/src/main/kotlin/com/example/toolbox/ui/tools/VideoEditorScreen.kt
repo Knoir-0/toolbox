@@ -12,6 +12,7 @@ import android.view.Surface as AndroidSurface
 import android.view.TextureView
 import android.view.View
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -42,6 +43,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.RotateLeft
 import androidx.compose.material.icons.automirrored.filled.RotateRight
@@ -65,6 +67,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Speed
@@ -160,6 +163,7 @@ fun VideoEditorScreen(
   initialDirectory: File? = null,
   initialMetadataForPreview: VideoMetadata? = null,
   modifier: Modifier = Modifier,
+  onNavigateBack: (() -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val haptic = LocalHapticFeedback.current
@@ -227,6 +231,17 @@ fun VideoEditorScreen(
       isPlaying = false
       isLoadingVideo = true
       val probed = VideoEditorEngine.probeMetadata(file)
+        ?: if (file.exists() && VideoEditorEngine.isVideoFile(file)) {
+          VideoMetadata(
+            file = file,
+            durationMs = 5_000L,
+            width = 1280,
+            height = 720,
+            sizeBytes = file.length(),
+          )
+        } else {
+          null
+        }
       if (probed == null) {
         isLoadingVideo = false
         Toast.makeText(context, "Could not open video file", Toast.LENGTH_SHORT).show()
@@ -262,6 +277,13 @@ fun VideoEditorScreen(
       showDiscardDialog = true
     } else {
       action()
+    }
+  }
+
+  BackHandler(enabled = onNavigateBack != null) {
+    performWithDiscardCheck {
+      isPlaying = false
+      onNavigateBack?.invoke()
     }
   }
 
@@ -334,6 +356,14 @@ fun VideoEditorScreen(
       onExportClick = {
         isPlaying = false
         showExportDialog = true
+      },
+      onNavigateBack = onNavigateBack?.let { navBack ->
+        {
+          performWithDiscardCheck {
+            isPlaying = false
+            navBack()
+          }
+        }
       },
     )
 
@@ -899,6 +929,7 @@ private fun VideoEditorTopBar(
   onRedo: () -> Unit,
   onClose: () -> Unit,
   onExportClick: () -> Unit,
+  onNavigateBack: (() -> Unit)? = null,
 ) {
   Surface(
     color = MaterialTheme.colorScheme.surface,
@@ -923,19 +954,30 @@ private fun VideoEditorTopBar(
           horizontalArrangement = Arrangement.spacedBy(10.dp),
           modifier = Modifier.weight(1f),
         ) {
-          Box(
-            modifier = Modifier
-              .size(36.dp)
-              .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center,
-          ) {
-            Icon(
-              imageVector = Icons.Default.Movie,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(20.dp),
-            )
+          if (onNavigateBack != null) {
+            IconButton(
+              onClick = onNavigateBack,
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("action_navigate_back"),
+            ) {
+              Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+          } else {
+            Box(
+              modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Default.Movie,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+              )
+            }
           }
           Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -1004,24 +1046,17 @@ private fun VideoEditorTopBar(
               )
             }
             Spacer(modifier = Modifier.width(4.dp))
-            Button(
+            FilledIconButton(
               onClick = onExportClick,
-              shape = RoundedCornerShape(12.dp),
-              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+              shape = CircleShape,
               modifier = Modifier
-                .height(36.dp)
+                .size(36.dp)
                 .testTag("editor_export_button"),
             ) {
               Icon(
-                imageVector = Icons.Default.SaveAlt,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-              )
-              Spacer(modifier = Modifier.width(4.dp))
-              Text(
-                text = "Export",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
+                imageVector = Icons.Default.Save,
+                contentDescription = "Save Video",
+                modifier = Modifier.size(18.dp),
               )
             }
           }

@@ -66,7 +66,9 @@ class PlantScheduleScreenTest {
     composeTestRule.onNodeWithTag("year_cell_tomato_8")
       .assertContentDescriptionEquals("Tomato Aug: Harvesting")
 
-    // Remove Tomato from schedule
+    // Remove Tomato from schedule via the overflow menu
+    composeTestRule.onNodeWithTag("more_scheduled_plant_tomato").performClick()
+    composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("remove_scheduled_plant_tomato").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("schedule_empty_state").assertIsDisplayed()

@@ -592,55 +592,35 @@ private fun MinusPlusCluster(
     horizontalArrangement = Arrangement.spacedBy(12.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    Column(
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(2.dp),
+    PressableButton(
+      onPress = { actions.setButton(GamepadButton.MINUS, true) },
+      onRelease = { actions.setButton(GamepadButton.MINUS, false) },
+      contentDescription = "Minus",
+      size = 40.dp,
+      containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+      contentColor = MaterialTheme.colorScheme.onSurface,
+      modifier = Modifier.testTag("bt_gamepad_minus"),
     ) {
-      PressableButton(
-        onPress = { actions.setButton(GamepadButton.MINUS, true) },
-        onRelease = { actions.setButton(GamepadButton.MINUS, false) },
-        contentDescription = "Minus",
-        size = 40.dp,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        modifier = Modifier.testTag("bt_gamepad_minus"),
-      ) {
-        Icon(
-          imageVector = Icons.Default.Remove,
-          contentDescription = null,
-          modifier = Modifier.size(20.dp),
-        )
-      }
-      Text(
-        text = "− / SELECT",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      Icon(
+        imageVector = Icons.Default.Remove,
+        contentDescription = null,
+        modifier = Modifier.size(20.dp),
       )
     }
 
-    Column(
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(2.dp),
+    PressableButton(
+      onPress = { actions.setButton(GamepadButton.PLUS, true) },
+      onRelease = { actions.setButton(GamepadButton.PLUS, false) },
+      contentDescription = "Plus",
+      size = 40.dp,
+      containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+      contentColor = MaterialTheme.colorScheme.onSurface,
+      modifier = Modifier.testTag("bt_gamepad_plus"),
     ) {
-      PressableButton(
-        onPress = { actions.setButton(GamepadButton.PLUS, true) },
-        onRelease = { actions.setButton(GamepadButton.PLUS, false) },
-        contentDescription = "Plus",
-        size = 40.dp,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        modifier = Modifier.testTag("bt_gamepad_plus"),
-      ) {
-        Icon(
-          imageVector = Icons.Default.Add,
-          contentDescription = null,
-          modifier = Modifier.size(20.dp),
-        )
-      }
-      Text(
-        text = "+ / START",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      Icon(
+        imageVector = Icons.Default.Add,
+        contentDescription = null,
+        modifier = Modifier.size(20.dp),
       )
     }
   }

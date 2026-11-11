@@ -444,7 +444,20 @@ data class ScaleMatch(
   val totalInputPitchClasses: Int,
   val coverageRatio: Float,
   val score: Int,
+  val extraScalePitchClasses: Set<Int> = emptySet(),
+  val outsideInputPitchClasses: Set<Int> = emptySet(),
 ) {
+  val scalePitchClasses: List<Int>
+    get() = scaleType.intervals.map { (rootPitchClass + it).mod(12) }
+
+  val isExactScale: Boolean
+    get() = matchedPitchClasses.size == totalInputPitchClasses &&
+      extraScalePitchClasses.isEmpty() &&
+      outsideInputPitchClasses.isEmpty()
+
+  val isFullCoverage: Boolean
+    get() = matchedPitchClasses.size == totalInputPitchClasses && outsideInputPitchClasses.isEmpty()
+
   fun formatScaleName(preference: EnharmonicPreference = EnharmonicPreference.AUTO): String {
     val rootName = ChordBookEngine.formatPitchClass(rootPitchClass, preference, rootPitchClass)
     return "$rootName ${scaleType.displayName}"
@@ -612,23 +625,33 @@ object ChordBookEngine {
 
   fun defaultProgressions(): List<ChordProgression> = listOf(
     ChordProgression(
-      id = "prog_pop_1564",
-      name = "I – V – vi – IV in C",
+      id = "prog_axis",
+      name = "Axis Progression",
       chords = listOf(
-        SavedProgressionChord("c1", 0, ChordQuality.MAJOR),
-        SavedProgressionChord("c2", 7, ChordQuality.MAJOR),
-        SavedProgressionChord("c3", 9, ChordQuality.MINOR),
-        SavedProgressionChord("c4", 5, ChordQuality.MAJOR),
+        SavedProgressionChord("ax1", 0, ChordQuality.MAJOR),
+        SavedProgressionChord("ax2", 7, ChordQuality.MAJOR),
+        SavedProgressionChord("ax3", 9, ChordQuality.MINOR),
+        SavedProgressionChord("ax4", 5, ChordQuality.MAJOR),
       ),
     ),
     ChordProgression(
-      id = "prog_jazz_251",
-      name = "Jazz ii – V – I in C",
+      id = "prog_royal_road",
+      name = "Royal Road Progression",
       chords = listOf(
-        SavedProgressionChord("j1", 2, ChordQuality.MINOR_7),
-        SavedProgressionChord("j2", 7, ChordQuality.DOMINANT_7),
-        SavedProgressionChord("j3", 0, ChordQuality.MAJOR_7),
-        SavedProgressionChord("j4", 9, ChordQuality.DOMINANT_7_FLAT_9),
+        SavedProgressionChord("rr1", 5, ChordQuality.MAJOR_7),
+        SavedProgressionChord("rr2", 7, ChordQuality.DOMINANT_7),
+        SavedProgressionChord("rr3", 4, ChordQuality.MINOR_7),
+        SavedProgressionChord("rr4", 9, ChordQuality.MINOR_7),
+      ),
+    ),
+    ChordProgression(
+      id = "prog_flamenco",
+      name = "Flamenco Progression",
+      chords = listOf(
+        SavedProgressionChord("fl1", 9, ChordQuality.MINOR),
+        SavedProgressionChord("fl2", 7, ChordQuality.MAJOR),
+        SavedProgressionChord("fl3", 5, ChordQuality.MAJOR),
+        SavedProgressionChord("fl4", 4, ChordQuality.MAJOR),
       ),
     ),
   )
@@ -1174,22 +1197,35 @@ object ChordBookEngine {
   }
 
   /**
-   * Identifies scales and modes compatible with the notes selected on the fretboard.
+   * Identifies scales and modes compatible with the notes selected on the fretboard
+   * or pitch-class selector in Reverse Scale Search.
    */
   fun reverseIdentifyScales(
     selectedPitchClasses: Set<Int>,
     preferredRoot: Int? = null,
+    filterRoot: Int? = null,
+    filterCategory: ScaleCategory? = null,
+    requireAllNotesMatch: Boolean = false,
     maxResults: Int = 16,
   ): List<ScaleMatch> {
     val cleanInput = selectedPitchClasses.map { it.mod(12) }.toSet()
     if (cleanInput.isEmpty()) return emptyList()
 
+    val normalizedFilterRoot = filterRoot?.mod(12)
     val results = mutableListOf<ScaleMatch>()
     for (root in 0..11) {
+      if (normalizedFilterRoot != null && root != normalizedFilterRoot) continue
+
       for (scale in ScaleType.entries) {
+        if (filterCategory != null && scale.category != filterCategory) continue
+
         val scalePcs = scale.intervals.map { (root + it).mod(12) }.toSet()
         val matched = cleanInput.intersect(scalePcs)
+        val outsideInput = cleanInput - scalePcs
+        val extraScale = scalePcs - cleanInput
         val coverage = matched.size.toFloat() / cleanInput.size.toFloat()
+
+        if (requireAllNotesMatch && outsideInput.isNotEmpty()) continue
 
         // Require at least 80% coverage (or 100% when <= 4 notes are selected)
         if (cleanInput.size <= 4 && matched.size < cleanInput.size) continue
@@ -1197,7 +1233,15 @@ object ChordBookEngine {
 
         var score = (coverage * 100f).toInt()
         if (matched.size == cleanInput.size) score += 40
+        if (matched.size == cleanInput.size && extraScale.isEmpty()) {
+          // Exact 1-to-1 scale match (every scale note selected and no outside notes)
+          score += 35
+        } else {
+          // Prefer tighter-fitting scales with fewer unplayed scale degrees
+          score -= extraScale.size * 4
+        }
         if (preferredRoot != null && root == preferredRoot.mod(12)) score += 25
+        if (normalizedFilterRoot != null && root == normalizedFilterRoot) score += 30
         if (root in cleanInput) score += 15
 
         // Prefer core scales slightly over 8-note symmetric scales
@@ -1216,13 +1260,20 @@ object ChordBookEngine {
             totalInputPitchClasses = cleanInput.size,
             coverageRatio = coverage,
             score = score,
+            extraScalePitchClasses = extraScale,
+            outsideInputPitchClasses = outsideInput,
           ),
         )
       }
     }
 
     return results
-      .sortedByDescending { it.score }
+      .sortedWith(
+        compareByDescending<ScaleMatch> { it.score }
+          .thenByDescending { it.isExactScale }
+          .thenByDescending { it.coverageRatio }
+          .thenBy { it.extraScalePitchClasses.size },
+      )
       .take(maxResults)
   }
 
@@ -1253,6 +1304,8 @@ object ChordBookEngine {
       for (scale in ScaleType.entries) {
         val scalePcs = scale.intervals.map { (root + it).mod(12) }.toSet()
         val matched = allPitchClasses.intersect(scalePcs)
+        val outsideInput = allPitchClasses - scalePcs
+        val extraScale = scalePcs - allPitchClasses
         val coverage = matched.size.toFloat() / allPitchClasses.size.toFloat()
         if (coverage < 0.7f) continue
 
@@ -1275,6 +1328,8 @@ object ChordBookEngine {
             totalInputPitchClasses = allPitchClasses.size,
             coverageRatio = coverage,
             score = score,
+            extraScalePitchClasses = extraScale,
+            outsideInputPitchClasses = outsideInput,
           ),
         )
       }

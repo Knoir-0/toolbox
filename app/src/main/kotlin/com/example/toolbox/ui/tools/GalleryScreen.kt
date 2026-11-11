@@ -62,6 +62,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GridView
@@ -69,6 +70,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -142,6 +144,8 @@ fun GalleryScreen(
   initialFolders: List<File>? = null,
   initialAlbumsPerRow: Int? = null,
   initialViewMode: GalleryViewMode? = null,
+  onOpenImageEditor: ((File) -> Unit)? = null,
+  onOpenVideoEditor: ((File) -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
@@ -332,6 +336,46 @@ fun GalleryScreen(
 
   var selectedPhotoForViewer by remember { mutableStateOf<GalleryPhoto?>(null) }
   var showAddFolderDialog by remember { mutableStateOf(false) }
+  var fileForImageEditor by remember { mutableStateOf<File?>(null) }
+  var fileForVideoEditor by remember { mutableStateOf<File?>(null) }
+
+  fun openMediaInEditor(photo: GalleryPhoto) {
+    selectedPhotoForViewer = null
+    if (photo.isVideo) {
+      fileForVideoEditor = photo.file
+      onOpenVideoEditor?.invoke(photo.file)
+    } else {
+      fileForImageEditor = photo.file
+      onOpenImageEditor?.invoke(photo.file)
+    }
+  }
+
+  val activeImageEditorFile = fileForImageEditor
+  if (activeImageEditorFile != null) {
+    ImageEditorScreen(
+      modifier = modifier,
+      initialFile = activeImageEditorFile,
+      onNavigateBack = {
+        fileForImageEditor = null
+        refreshTrigger++
+      },
+    )
+    return
+  }
+
+  val activeVideoEditorFile = fileForVideoEditor
+  if (activeVideoEditorFile != null) {
+    VideoEditorScreen(
+      initialFile = activeVideoEditorFile,
+      initialDirectory = currentAlbum?.directory ?: effectiveRootDir,
+      modifier = modifier,
+      onNavigateBack = {
+        fileForVideoEditor = null
+        refreshTrigger++
+      },
+    )
+    return
+  }
 
   Column(
     modifier = modifier
@@ -479,6 +523,9 @@ fun GalleryScreen(
           onPhotoClick = { photo ->
             selectedPhotoForViewer = photo
           },
+          onPhotoEdit = { photo ->
+            openMediaInEditor(photo)
+          },
         )
       } else {
         GalleryListView(
@@ -491,6 +538,9 @@ fun GalleryScreen(
           onPhotoClick = { photo ->
             selectedPhotoForViewer = photo
           },
+          onPhotoEdit = { photo ->
+            openMediaInEditor(photo)
+          },
         )
       }
     }
@@ -502,6 +552,9 @@ fun GalleryScreen(
       photos = activePhotos,
       initialPhoto = photo,
       onDismiss = { selectedPhotoForViewer = null },
+      onEdit = { editedPhoto ->
+        openMediaInEditor(editedPhoto)
+      },
       onShare = { sharedPhoto ->
         sharePhotoFile(context, sharedPhoto.file)
       },
@@ -885,6 +938,7 @@ private fun GalleryTileGridView(
   albumsPerRow: Int,
   onAlbumClick: (GalleryAlbum) -> Unit,
   onPhotoClick: (GalleryPhoto) -> Unit,
+  onPhotoEdit: (GalleryPhoto) -> Unit = {},
 ) {
   val coercedColumns = GalleryEngine.coerceAlbumsPerRow(albumsPerRow)
   val isCompactTile = coercedColumns >= 5
@@ -935,6 +989,7 @@ private fun GalleryTileGridView(
         photo = photo,
         isCompact = isCompactTile,
         onClick = { onPhotoClick(photo) },
+        onEdit = { onPhotoEdit(photo) },
       )
     }
   }
@@ -1050,6 +1105,7 @@ private fun PhotoTileCard(
   photo: GalleryPhoto,
   isCompact: Boolean,
   onClick: () -> Unit,
+  onEdit: () -> Unit = {},
 ) {
   Column(
     modifier = Modifier
@@ -1071,12 +1127,34 @@ private fun PhotoTileCard(
         .aspectRatio(1f)
         .testTag("photo_tile_${photo.name}"),
     ) {
-      PhotoThumbnailBox(
-        photoFile = photo.file,
-        contentDescription = photo.name,
-        iconSize = if (isCompact) 22.dp else 32.dp,
-        modifier = Modifier.fillMaxSize(),
-      )
+      Box(modifier = Modifier.fillMaxSize()) {
+        PhotoThumbnailBox(
+          photoFile = photo.file,
+          contentDescription = photo.name,
+          iconSize = if (isCompact) 22.dp else 32.dp,
+          modifier = Modifier.fillMaxSize(),
+        )
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+          modifier = Modifier
+            .align(Alignment.TopEnd)
+            .padding(4.dp)
+            .size(26.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onEdit)
+            .testTag("photo_tile_edit_${photo.name}"),
+        ) {
+          Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+            Icon(
+              imageVector = Icons.Default.Edit,
+              contentDescription = "Edit ${photo.name}",
+              tint = MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier.size(14.dp),
+            )
+          }
+        }
+      }
     }
 
     Spacer(modifier = Modifier.height(4.dp))
@@ -1104,6 +1182,7 @@ private fun GalleryListView(
   photos: List<GalleryPhoto>,
   onAlbumClick: (GalleryAlbum) -> Unit,
   onPhotoClick: (GalleryPhoto) -> Unit,
+  onPhotoEdit: (GalleryPhoto) -> Unit = {},
 ) {
   LazyColumn(
     modifier = Modifier
@@ -1144,6 +1223,7 @@ private fun GalleryListView(
       PhotoListRow(
         photo = photo,
         onClick = { onPhotoClick(photo) },
+        onEdit = { onPhotoEdit(photo) },
       )
     }
   }
@@ -1227,6 +1307,7 @@ private fun AlbumListRow(
 private fun PhotoListRow(
   photo: GalleryPhoto,
   onClick: () -> Unit,
+  onEdit: () -> Unit = {},
 ) {
   Card(
     shape = RoundedCornerShape(14.dp),
@@ -1283,6 +1364,20 @@ private fun PhotoListRow(
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
+        )
+      }
+
+      IconButton(
+        onClick = onEdit,
+        modifier = Modifier
+          .size(36.dp)
+          .testTag("photo_list_edit_${photo.name}"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Edit,
+          contentDescription = "Edit ${photo.name}",
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(20.dp),
         )
       }
     }
@@ -1404,7 +1499,11 @@ private fun PhotoThumbnailBox(
         contentAlignment = Alignment.Center,
       ) {
         Icon(
-          imageVector = Icons.Default.Image,
+          imageVector = if (VideoEditorEngine.isVideoFile(photoFile)) {
+            Icons.Default.VideoFile
+          } else {
+            Icons.Default.Image
+          },
           contentDescription = contentDescription,
           tint = MaterialTheme.colorScheme.onTertiaryContainer,
           modifier = Modifier.size(iconSize),
@@ -1476,6 +1575,7 @@ private fun GalleryPhotoViewerDialog(
   photos: List<GalleryPhoto>,
   initialPhoto: GalleryPhoto,
   onDismiss: () -> Unit,
+  onEdit: (GalleryPhoto) -> Unit = {},
   onShare: (GalleryPhoto) -> Unit,
 ) {
   val viewerPhotos = remember(photos, initialPhoto) {
@@ -1621,6 +1721,24 @@ private fun GalleryPhotoViewerDialog(
         }
 
         Spacer(modifier = Modifier.width(4.dp))
+
+        TextButton(
+          onClick = { onEdit(currentPhoto) },
+          modifier = Modifier.testTag("photo_viewer_edit_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Edit,
+            contentDescription = "Edit",
+            tint = Color.White,
+            modifier = Modifier.size(18.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(
+            text = "Edit",
+            color = Color.White,
+            style = MaterialTheme.typography.labelLarge,
+          )
+        }
 
         IconButton(
           onClick = { onShare(currentPhoto) },

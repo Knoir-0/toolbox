@@ -757,6 +757,16 @@ object FileConverterEngine {
   }
 
   /**
+   * Returns `true` if [file] is a non-directory file with a recognized [ConvertibleFormat]
+   * that has at least one available conversion route.
+   */
+  fun isSupportedFile(file: File?): Boolean {
+    if (file == null || file.isDirectory) return false
+    val format = detectFormat(file) ?: return false
+    return getAvailableRoutes(format).isNotEmpty()
+  }
+
+  /**
    * Returns all available [ConversionRoute]s from [source].
    */
   fun getAvailableRoutes(source: ConvertibleFormat): List<ConversionRoute> {

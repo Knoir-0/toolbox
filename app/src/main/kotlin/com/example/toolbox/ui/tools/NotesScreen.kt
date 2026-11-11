@@ -4,10 +4,16 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -16,6 +22,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,6 +50,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.StickyNote2
@@ -72,6 +80,7 @@ import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -89,6 +98,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -108,7 +119,9 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -278,12 +291,12 @@ fun NotesScreen(
     }
   }
 
-  val filteredResult = remember(notes, activeFilter, searchQuery, selectedColorFilter) {
+  val filteredResult = remember(notes, activeFilter, isSearchActive, searchQuery, selectedColorFilter) {
     NotesEngine.filterNotes(
       notes = notes,
       filter = activeFilter,
       searchQuery = if (isSearchActive) searchQuery else "",
-      colorFilter = selectedColorFilter,
+      colorFilter = if (isSearchActive) selectedColorFilter else null,
     )
   }
 
@@ -373,6 +386,8 @@ fun NotesScreen(
         NotesHeaderTopBar(
           subtext = headerSubtext,
           isSearchActive = isSearchActive,
+          searchQuery = searchQuery,
+          onSearchQueryChange = { searchQuery = it },
           isGridView = isGridView,
           canUndo = canUndo,
           canRedo = canRedo,
@@ -382,6 +397,11 @@ fun NotesScreen(
               searchQuery = ""
               selectedColorFilter = null
             }
+          },
+          onCloseSearch = {
+            isSearchActive = false
+            searchQuery = ""
+            selectedColorFilter = null
           },
           onToggleViewMode = {
             val nextMode = !isGridView
@@ -394,23 +414,16 @@ fun NotesScreen(
         )
       }
 
-      // 2. Expandable Search & Color Filter Bar
+      // 2. Color Filter Bar (shown while searching)
       AnimatedVisibility(
         visible = isSearchActive && !isSelectionMode,
         enter = expandVertically() + fadeIn(),
         exit = shrinkVertically() + fadeOut(),
       ) {
-        NotesSearchAndColorFilterBar(
-          searchQuery = searchQuery,
-          onSearchQueryChange = { searchQuery = it },
+        NotesColorFilterBar(
           selectedColor = selectedColorFilter,
           onSelectColor = { color ->
             selectedColorFilter = if (selectedColorFilter == color) null else color
-          },
-          onCloseSearch = {
-            isSearchActive = false
-            searchQuery = ""
-            selectedColorFilter = null
           },
         )
       }
@@ -684,14 +697,6 @@ fun NotesScreen(
         }
         editingNote = null
       },
-      onDuplicateNote = { updatedDraft ->
-        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        val withSaved = NotesEngine.saveOrDiscardNote(notes, updatedDraft)
-        val duplicated = NotesEngine.duplicateNote(withSaved, updatedDraft.id)
-        applyStateChange(duplicated)
-        editingNote = null
-        Toast.makeText(context, "Note duplicated", Toast.LENGTH_SHORT).show()
-      },
       onCopyToClipboard = { draftToCopy ->
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         copyNoteToClipboard(context, draftToCopy)
@@ -760,19 +765,44 @@ private fun copyNoteToClipboard(context: Context, note: NoteItem) {
   Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NotesHeaderTopBar(
   subtext: String,
   isSearchActive: Boolean,
+  searchQuery: String,
+  onSearchQueryChange: (String) -> Unit,
   isGridView: Boolean,
   canUndo: Boolean,
   canRedo: Boolean,
   onToggleSearch: () -> Unit,
+  onCloseSearch: () -> Unit,
   onToggleViewMode: () -> Unit,
   onOpenLabelsDialog: () -> Unit,
   onUndo: () -> Unit,
   onRedo: () -> Unit,
 ) {
+  val searchFocusRequester = remember { FocusRequester() }
+  val keyboardController = LocalSoftwareKeyboardController.current
+  val focusManager = LocalFocusManager.current
+
+  LaunchedEffect(isSearchActive) {
+    if (isSearchActive) {
+      kotlinx.coroutines.delay(100)
+      try {
+        searchFocusRequester.requestFocus()
+        keyboardController?.show()
+      } catch (_: Exception) {}
+    } else {
+      keyboardController?.hide()
+    }
+  }
+
+  BackHandler(enabled = isSearchActive) {
+    focusManager.clearFocus()
+    onCloseSearch()
+  }
+
   Surface(
     color = MaterialTheme.colorScheme.surface,
     tonalElevation = 1.dp,
@@ -903,6 +933,103 @@ private fun NotesHeaderTopBar(
               imageVector = Icons.AutoMirrored.Filled.Label,
               contentDescription = "Manage labels",
               tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+      }
+
+      // Animated Expanding Search Bar integrated into the Toolbar
+      AnimatedVisibility(
+        visible = isSearchActive,
+        enter = fadeIn(animationSpec = tween(220)) + expandHorizontally(
+          animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+          ),
+          expandFrom = Alignment.End,
+        ),
+        exit = fadeOut(animationSpec = tween(180)) + shrinkHorizontally(
+          animationSpec = tween(200),
+          shrinkTowards = Alignment.End,
+        ),
+        modifier = Modifier.matchParentSize(),
+      ) {
+        Surface(
+          modifier = Modifier
+            .fillMaxSize()
+            .clickable(
+              interactionSource = remember { MutableInteractionSource() },
+              indication = null,
+              onClick = {},
+            )
+            .testTag("notes_toolbar_search_bar"),
+          color = MaterialTheme.colorScheme.surface,
+          tonalElevation = 2.dp,
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxSize()
+              .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            IconButton(
+              onClick = {
+                focusManager.clearFocus()
+                onCloseSearch()
+              },
+              modifier = Modifier.testTag("notes_search_close"),
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Close search",
+                tint = MaterialTheme.colorScheme.onSurface,
+              )
+            }
+
+            TextField(
+              value = searchQuery,
+              onValueChange = onSearchQueryChange,
+              placeholder = {
+                Text(
+                  text = "Search titles, notes, checklists, or #labels",
+                  style = MaterialTheme.typography.bodyLarge,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              },
+              singleLine = true,
+              textStyle = MaterialTheme.typography.bodyLarge.copy(
+                color = MaterialTheme.colorScheme.onSurface,
+              ),
+              colors = TextFieldDefaults.colors(
+                focusedContainerColor = Color.Transparent,
+                unfocusedContainerColor = Color.Transparent,
+                disabledContainerColor = Color.Transparent,
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+                disabledIndicatorColor = Color.Transparent,
+              ),
+              trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                  IconButton(
+                    onClick = { onSearchQueryChange("") },
+                    modifier = Modifier.testTag("notes_search_clear"),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.Clear,
+                      contentDescription = "Clear search text",
+                      tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                }
+              },
+              keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+              keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+              modifier = Modifier
+                .fillMaxWidth()
+                .focusRequester(searchFocusRequester)
+                .testTag("notes_search_input"),
             )
           }
         }
@@ -1042,116 +1169,66 @@ private fun NotesSelectionTopBar(
 }
 
 @Composable
-private fun NotesSearchAndColorFilterBar(
-  searchQuery: String,
-  onSearchQueryChange: (String) -> Unit,
+private fun NotesColorFilterBar(
   selectedColor: NoteColor?,
   onSelectColor: (NoteColor) -> Unit,
-  onCloseSearch: () -> Unit,
 ) {
   Surface(
     color = MaterialTheme.colorScheme.surface,
     tonalElevation = 1.dp,
-    modifier = Modifier.fillMaxWidth(),
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("notes_color_filter_bar"),
   ) {
-    Column(
+    Row(
       modifier = Modifier
         .fillMaxWidth()
+        .horizontalScroll(rememberScrollState())
         .padding(horizontal = 12.dp, vertical = 8.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
     ) {
-      OutlinedTextField(
-        value = searchQuery,
-        onValueChange = onSearchQueryChange,
-        placeholder = { Text("Search titles, notes, checklists, or #labels") },
-        singleLine = true,
-        shape = RoundedCornerShape(14.dp),
-        leadingIcon = {
-          Icon(
-            imageVector = Icons.Default.Search,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        },
-        trailingIcon = {
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            if (searchQuery.isNotEmpty()) {
-              IconButton(
-                onClick = { onSearchQueryChange("") },
-                modifier = Modifier.testTag("notes_search_clear"),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Clear,
-                  contentDescription = "Clear search text",
-                )
-              }
-            }
-            IconButton(
-              onClick = onCloseSearch,
-              modifier = Modifier.testTag("notes_search_close"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = "Close search",
-              )
-            }
-          }
-        },
-        modifier = Modifier
-          .fillMaxWidth()
-          .testTag("notes_search_input"),
+      Text(
+        text = "Color:",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(end = 2.dp),
       )
-
-      // Color filter strip
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Text(
-          text = "Color:",
-          style = MaterialTheme.typography.labelMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.padding(end = 2.dp),
-        )
-        NoteColor.entries.forEach { color ->
-          val isSelected = selectedColor == color
-          val swatchColor = resolveNoteSwatchColor(color)
-          Box(
-            modifier = Modifier
-              .size(28.dp)
-              .clip(CircleShape)
-              .background(swatchColor)
-              .border(
-                width = if (isSelected) 2.dp else 1.dp,
-                color = if (isSelected) {
-                  MaterialTheme.colorScheme.primary
-                } else {
-                  MaterialTheme.colorScheme.outlineVariant
-                },
-                shape = CircleShape,
-              )
-              .clickable { onSelectColor(color) }
-              .testTag("notes_color_filter_${color.name}"),
-            contentAlignment = Alignment.Center,
-          ) {
-            if (isSelected) {
-              Icon(
-                imageVector = Icons.Default.Check,
-                contentDescription = "${color.displayName} active",
-                tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(15.dp),
-              )
-            } else if (color == NoteColor.DEFAULT) {
-              Icon(
-                imageVector = Icons.Default.FormatColorReset,
-                contentDescription = color.displayName,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(14.dp),
-              )
-            }
+      NoteColor.entries.forEach { color ->
+        val isSelected = selectedColor == color
+        val swatchColor = resolveNoteSwatchColor(color)
+        Box(
+          modifier = Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .background(swatchColor)
+            .border(
+              width = if (isSelected) 2.dp else 1.dp,
+              color = if (isSelected) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.outlineVariant
+              },
+              shape = CircleShape,
+            )
+            .clickable { onSelectColor(color) }
+            .testTag("notes_color_filter_${color.name}"),
+          contentAlignment = Alignment.Center,
+        ) {
+          if (isSelected) {
+            Icon(
+              imageVector = Icons.Default.Check,
+              contentDescription = "${color.displayName} active",
+              tint = MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier.size(15.dp),
+            )
+          } else if (color == NoteColor.DEFAULT) {
+            Icon(
+              imageVector = Icons.Default.FormatColorReset,
+              contentDescription = color.displayName,
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(14.dp),
+            )
           }
         }
       }
@@ -1678,7 +1755,6 @@ private fun NoteEditorSheet(
   onMoveToTrash: (String) -> Unit,
   onDeletePermanently: (String) -> Unit,
   onRestoreFromTrash: (String) -> Unit,
-  onDuplicateNote: (NoteItem) -> Unit,
   onCopyToClipboard: (NoteItem) -> Unit,
 ) {
   var draft by remember(initialNote.id) { mutableStateOf(initialNote) }
@@ -1697,6 +1773,14 @@ private fun NoteEditorSheet(
     shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
     containerColor = sheetBackgroundColor,
     tonalElevation = 6.dp,
+    dragHandle = {
+      Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+      ) {
+        BottomSheetDefaults.DragHandle()
+      }
+    },
     modifier = Modifier.testTag("note_editor_sheet"),
   ) {
     Column(
@@ -1713,18 +1797,15 @@ private fun NoteEditorSheet(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Button(
+        IconButton(
           onClick = { onSaveAndDismiss(draft, newlyCreatedLabels) },
-          shape = RoundedCornerShape(12.dp),
           modifier = Modifier.testTag("editor_save_button"),
         ) {
           Icon(
             imageVector = Icons.Default.Check,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
+            contentDescription = "Done",
+            tint = MaterialTheme.colorScheme.primary,
           )
-          Spacer(modifier = Modifier.width(6.dp))
-          Text("Done")
         }
 
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1818,17 +1899,6 @@ private fun NoteEditorSheet(
               Icon(
                 imageVector = Icons.Default.ContentCopy,
                 contentDescription = "Copy note text",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-
-            IconButton(
-              onClick = { onDuplicateNote(draft) },
-              modifier = Modifier.testTag("editor_duplicate_button"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.StickyNote2,
-                contentDescription = "Duplicate note",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
               )
             }
@@ -1971,6 +2041,7 @@ private fun NoteEditorSheet(
               Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
+                  .weight(1f)
                   .clip(RoundedCornerShape(8.dp))
                   .clickable { isCheckedSectionExpanded = !isCheckedSectionExpanded }
                   .padding(vertical = 4.dp, horizontal = 4.dp),

@@ -28,6 +28,12 @@ const val FALLBACK_THEME_COLOR_HEX = "#8E66A6"
 const val DEFAULT_ACCENT_COLOR_AUTO = "AUTO"
 const val PREF_KEY_ACCENT_COLOR = "accent_color"
 
+val DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
+  Tool.FILE_CONVERTER,
+  Tool.IMAGE_EDITOR,
+  Tool.VIDEO_EDITOR,
+)
+
 /**
  * Options for the application theme mode.
  */
@@ -123,10 +129,14 @@ fun serializeToolOrder(tools: List<Tool>): String {
 
 /**
  * Parses a comma-separated list of tool names into a set of hidden [Tool] enums.
+ * When [rawString] is `null` (no saved preference), returns [DEFAULT_HIDDEN_TOOLS].
  * [Tool.SETTINGS] can never be hidden and is always removed.
  */
 fun parseHiddenTools(rawString: String?): Set<Tool> {
-  if (rawString.isNullOrBlank()) {
+  if (rawString == null) {
+    return DEFAULT_HIDDEN_TOOLS
+  }
+  if (rawString.isBlank()) {
     return emptySet()
   }
   val names = rawString.split(",").map { it.trim() }.filter { it.isNotEmpty() }
@@ -553,7 +563,7 @@ class InMemoryNavigationPreferencesRepository(
   initialThemeMode: ThemeMode = ThemeMode.SYSTEM,
   initialThemeColor: String = DEFAULT_THEME_COLOR_SYSTEM,
   initialAccentColor: String = DEFAULT_ACCENT_COLOR_AUTO,
-  initialHiddenTools: Set<Tool> = emptySet(),
+  initialHiddenTools: Set<Tool> = DEFAULT_HIDDEN_TOOLS,
   initialToolSorting: ToolSortingOption = ToolSortingOption.USER_CHOICE,
   initialToolSortOrder: ToolSortOrder = ToolSortOrder.ASCENDING,
   initialCategorySorting: CategorySortingOption = CategorySortingOption.MANUAL,
@@ -823,7 +833,7 @@ fun resetAllSettingsToDefaults(repository: NavigationPreferencesRepository) {
   repository.setThemeMode(ThemeMode.SYSTEM)
   repository.setThemeColor(DEFAULT_THEME_COLOR_SYSTEM)
   repository.setAccentColor(DEFAULT_ACCENT_COLOR_AUTO)
-  repository.setHiddenTools(emptySet())
+  repository.setHiddenTools(DEFAULT_HIDDEN_TOOLS)
   repository.setToolOrder(Tool.entries)
   repository.setToolSorting(ToolSortingOption.USER_CHOICE)
   repository.setToolSortOrder(ToolSortOrder.ASCENDING)

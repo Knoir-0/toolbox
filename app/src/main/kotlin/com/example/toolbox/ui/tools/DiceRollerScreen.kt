@@ -63,6 +63,7 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -467,7 +468,7 @@ internal fun DiceRollerScreen(
   val scaffoldState = rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
   val coroutineScope = rememberCoroutineScope()
 
-  val sheetPeekHeight = 44.dp
+  val sheetPeekHeight = 32.dp
   val isSheetExpanded = sheetState.currentValue == SheetValue.Expanded ||
     sheetState.targetValue == SheetValue.Expanded
 
@@ -475,7 +476,7 @@ internal fun DiceRollerScreen(
     modifier = modifier.fillMaxSize(),
     scaffoldState = scaffoldState,
     sheetPeekHeight = sheetPeekHeight,
-    sheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+    sheetShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
     sheetContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     sheetTonalElevation = 6.dp,
     sheetShadowElevation = 12.dp,
@@ -485,6 +486,7 @@ internal fun DiceRollerScreen(
       RollHistorySheetContent(
         history = history,
         isExpanded = isSheetExpanded,
+        peekHeight = sheetPeekHeight,
         onToggleSheet = {
           coroutineScope.launch {
             if (sheetState.currentValue == SheetValue.Expanded) {
@@ -508,7 +510,7 @@ internal fun DiceRollerScreen(
           modifier = Modifier
             .fillMaxWidth()
             .weight(1f)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 6.dp),
           contentAlignment = Alignment.Center,
         ) {
           val latestRoll = history.firstOrNull()
@@ -536,11 +538,11 @@ internal fun DiceRollerScreen(
               .padding(
                 start = 16.dp,
                 end = 16.dp,
-                top = 14.dp,
-                bottom = 14.dp + sheetPeekHeight,
+                top = 10.dp,
+                bottom = 10.dp + sheetPeekHeight,
               ),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
           ) {
             AnimatedVisibility(visible = selectedDie == DieType.D20 && diceCount == 1) {
               SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -593,6 +595,7 @@ internal fun DiceRollerScreen(
             ) {
               StepperCard(
                 label = "Dice Count",
+                inlinePrefix = "Count",
                 valueText = "${diceCount}${selectedDie.label}",
                 onDecrement = { if (diceCount > 1) diceCount-- },
                 onIncrement = { if (diceCount < 20) diceCount++ },
@@ -600,6 +603,7 @@ internal fun DiceRollerScreen(
               )
               StepperCard(
                 label = "Modifier",
+                inlinePrefix = "Mod",
                 valueText = if (modifierValue >= 0) "+$modifierValue" else "$modifierValue",
                 onDecrement = { if (modifierValue > -20) modifierValue-- },
                 onIncrement = { if (modifierValue < 20) modifierValue++ },
@@ -928,6 +932,14 @@ private fun SavedRollsSheet(
     sheetState = sheetState,
     containerColor = MaterialTheme.colorScheme.surface,
     shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+    dragHandle = {
+      Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+      ) {
+        BottomSheetDefaults.DragHandle()
+      }
+    },
     modifier = Modifier.testTag("saved_rolls_sheet"),
   ) {
     Column(
@@ -1195,7 +1207,7 @@ internal fun RollResultHero(
 
   Card(
     onClick = onTapToRoll,
-    modifier = modifier.padding(vertical = 4.dp),
+    modifier = modifier.padding(vertical = 2.dp),
     shape = RoundedCornerShape(28.dp),
     colors = CardDefaults.cardColors(containerColor = containerColor),
     border = BorderStroke(
@@ -1208,7 +1220,7 @@ internal fun RollResultHero(
     ),
     elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
   ) {
-    Box(
+    BoxWithConstraints(
       modifier = Modifier
         .fillMaxWidth()
         .background(
@@ -1220,12 +1232,31 @@ internal fun RollResultHero(
           ),
         ),
     ) {
+      val hasMiniDiceRow = latestRoll != null
+      val totalDiceShown = if (latestRoll != null) {
+        latestRoll.keptRolls.size + latestRoll.droppedRolls.size
+      } else {
+        0
+      }
+      val miniRowEstimate = when {
+        !hasMiniDiceRow -> 0.dp
+        totalDiceShown > 7 -> 66.dp
+        else -> 42.dp
+      }
+      val nonDieChromeEstimate = 112.dp + miniRowEstimate
+      val dieBoxSize = if (maxHeight != Dp.Infinity) {
+        (maxHeight - nonDieChromeEstimate).coerceIn(72.dp, 136.dp)
+      } else {
+        136.dp
+      }
+      val isCompactDie = dieBoxSize < 104.dp
+
       Column(
         modifier = Modifier
           .fillMaxWidth()
-          .padding(horizontal = 20.dp, vertical = 14.dp),
+          .padding(horizontal = 20.dp, vertical = if (isCompactDie) 10.dp else 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(if (isCompactDie) 6.dp else 8.dp),
       ) {
         // Top Header: Notation Pill + Mode / Crit Badges
         Row(
@@ -1312,7 +1343,7 @@ internal fun RollResultHero(
         val activeDie = latestRoll?.dieType ?: selectedDie
         Box(
           contentAlignment = Alignment.Center,
-          modifier = Modifier.size(136.dp),
+          modifier = Modifier.size(dieBoxSize),
         ) {
           CentralInscribedDieCanvas(
             dieType = activeDie,
@@ -1345,24 +1376,30 @@ internal fun RollResultHero(
             Column(
               horizontalAlignment = Alignment.CenterHorizontally,
               modifier = Modifier.offset(
-                y = if (activeDie == DieType.D4) 6.dp else 0.dp,
+                y = if (activeDie == DieType.D4) (dieBoxSize * 0.045f) else 0.dp,
               ),
             ) {
               if (roll == null) {
                 Text(
                   text = selectedDie.label.uppercase(),
-                  style = MaterialTheme.typography.headlineMedium,
+                  style = if (isCompactDie) {
+                    MaterialTheme.typography.headlineSmall
+                  } else {
+                    MaterialTheme.typography.headlineMedium
+                  },
                   fontWeight = FontWeight.Black,
                   color = inscribedTextColor,
                   textAlign = TextAlign.Center,
                 )
               } else {
+                val isWideNumber = roll.total >= 100 || roll.total <= -10
                 Text(
                   text = roll.total.toString(),
-                  style = if (roll.total >= 100 || roll.total <= -10) {
-                    MaterialTheme.typography.headlineLarge
-                  } else {
-                    MaterialTheme.typography.displayMedium
+                  style = when {
+                    isCompactDie && isWideNumber -> MaterialTheme.typography.headlineSmall
+                    isCompactDie -> MaterialTheme.typography.headlineLarge
+                    isWideNumber -> MaterialTheme.typography.headlineLarge
+                    else -> MaterialTheme.typography.displayMedium
                   },
                   fontWeight = FontWeight.Black,
                   color = inscribedTextColor,
@@ -1438,36 +1475,6 @@ private fun CentralInscribedDieCanvas(
       radius = size.minDimension * 0.50f,
       center = Offset(cx, cy),
     )
-
-    // Decorative outer crest ring & cardinal ticks
-    val ringRadius = size.minDimension * 0.47f
-    drawCircle(
-      color = strokeColor.copy(alpha = if (isCritical) 0.45f else 0.18f),
-      radius = ringRadius,
-      center = Offset(cx, cy),
-      style = Stroke(width = size.minDimension * 0.012f),
-    )
-    if (isCritical) {
-      val tickCount = 12
-      for (i in 0 until tickCount) {
-        val angle = 2.0 * Math.PI * i / tickCount
-        val rInner = ringRadius * 0.94f
-        val rOuter = ringRadius * 1.04f
-        drawLine(
-          color = strokeColor.copy(alpha = 0.65f),
-          start = Offset(
-            x = cx + (rInner * cos(angle)).toFloat(),
-            y = cy + (rInner * sin(angle)).toFloat(),
-          ),
-          end = Offset(
-            x = cx + (rOuter * cos(angle)).toFloat(),
-            y = cy + (rOuter * sin(angle)).toFloat(),
-          ),
-          strokeWidth = size.minDimension * 0.018f,
-          cap = StrokeCap.Round,
-        )
-      }
-    }
 
     val sides = dieType.polygonSides
     val rotationOffset = when (dieType) {
@@ -1555,14 +1562,6 @@ private fun CentralInscribedDieCanvas(
         radius = innerRadius * 1.15f,
       ),
       style = Fill,
-    )
-
-    // Subtle etched inner ring inside the central face
-    drawCircle(
-      color = strokeColor.copy(alpha = 0.22f),
-      radius = innerRadius * 0.78f,
-      center = Offset(cx, cy),
-      style = Stroke(width = size.minDimension * 0.01f),
     )
 
     // Inner table outline
@@ -1907,6 +1906,7 @@ private fun RollRangeIndicator(
 private fun RollHistorySheetContent(
   history: List<DiceRollResult>,
   isExpanded: Boolean,
+  peekHeight: Dp = 32.dp,
   onToggleSheet: () -> Unit,
   onClearHistory: () -> Unit,
 ) {
@@ -1943,26 +1943,36 @@ private fun RollHistorySheetContent(
   Column(
     modifier = Modifier
       .fillMaxWidth()
-      .fillMaxHeight(0.72f),
+      .fillMaxHeight(0.60f),
   ) {
     // Peek Header Bar (Drag or Tap to Pull Up Over the Roller)
     Column(
       modifier = Modifier
         .fillMaxWidth()
+        .height(peekHeight)
         .clickable(onClick = onToggleSheet)
-        .padding(horizontal = 20.dp, vertical = 6.dp),
+        .testTag("dice_history_panel_toggle")
+        .padding(horizontal = 20.dp, vertical = 3.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
     ) {
       // Drag handle pill
-      Surface(
-        modifier = Modifier
-          .width(32.dp)
-          .height(3.dp),
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-      ) {}
+      Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+      ) {
+        Box(
+          modifier = Modifier
+            .width(28.dp)
+            .height(2.5.dp)
+            .background(
+              color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+              shape = CircleShape,
+            ),
+        )
+      }
 
-      Spacer(modifier = Modifier.height(4.dp))
+      Spacer(modifier = Modifier.height(2.dp))
 
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1971,17 +1981,17 @@ private fun RollHistorySheetContent(
       ) {
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
           Icon(
             imageVector = Icons.Default.History,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(15.dp),
           )
           Text(
             text = "Roll History",
-            style = MaterialTheme.typography.titleSmall,
+            style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold,
           )
           if (history.isNotEmpty()) {
@@ -2004,14 +2014,16 @@ private fun RollHistorySheetContent(
           if (!isExpanded && history.isNotEmpty()) {
             Text(
               text = "Last: ${history.first().total}",
-              style = MaterialTheme.typography.labelMedium,
+              style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
           Icon(
             imageVector = Icons.Default.KeyboardArrowUp,
             contentDescription = "Toggle history panel",
-            modifier = Modifier.rotate(arrowRotation),
+            modifier = Modifier
+              .size(18.dp)
+              .rotate(arrowRotation),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
@@ -2280,6 +2292,7 @@ private fun RollHistorySheetContent(
 @Composable
 private fun StepperCard(
   label: String,
+  inlinePrefix: String,
   valueText: String,
   onDecrement: () -> Unit,
   onIncrement: () -> Unit,
@@ -2291,56 +2304,58 @@ private fun StepperCard(
     color = MaterialTheme.colorScheme.surfaceContainerHigh,
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
   ) {
-    Column(
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween,
       modifier = Modifier
         .fillMaxWidth()
-        .padding(horizontal = 10.dp, vertical = 8.dp),
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(4.dp),
+        .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
-      Text(
-        text = label,
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
+      FilledIconButton(
+        onClick = onDecrement,
+        modifier = Modifier.size(32.dp),
+        colors = IconButtonDefaults.filledIconButtonColors(
+          containerColor = MaterialTheme.colorScheme.secondaryContainer,
+          contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Remove,
+          contentDescription = "Decrease $label",
+          modifier = Modifier.size(16.dp),
+        )
+      }
       Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
       ) {
-        FilledIconButton(
-          onClick = onDecrement,
-          modifier = Modifier.size(34.dp),
-          colors = IconButtonDefaults.filledIconButtonColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-          ),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Remove,
-            contentDescription = "Decrease $label",
-            modifier = Modifier.size(18.dp),
-          )
-        }
+        Text(
+          text = inlinePrefix,
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 1,
+        )
         Text(
           text = valueText,
-          style = MaterialTheme.typography.titleMedium,
+          style = MaterialTheme.typography.titleSmall,
           fontWeight = FontWeight.ExtraBold,
+          color = MaterialTheme.colorScheme.onSurface,
+          maxLines = 1,
         )
-        FilledIconButton(
-          onClick = onIncrement,
-          modifier = Modifier.size(34.dp),
-          colors = IconButtonDefaults.filledIconButtonColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-          ),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Add,
-            contentDescription = "Increase $label",
-            modifier = Modifier.size(18.dp),
-          )
-        }
+      }
+      FilledIconButton(
+        onClick = onIncrement,
+        modifier = Modifier.size(32.dp),
+        colors = IconButtonDefaults.filledIconButtonColors(
+          containerColor = MaterialTheme.colorScheme.secondaryContainer,
+          contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Add,
+          contentDescription = "Increase $label",
+          modifier = Modifier.size(16.dp),
+        )
       }
     }
   }

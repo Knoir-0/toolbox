@@ -2,6 +2,7 @@ package com.example.toolbox.ui.tools
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -72,5 +73,63 @@ class NotesScreenTest {
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithText("+ 1 checked item").assertIsDisplayed()
+  }
+
+  @Test
+  fun notesScreen_toolbarIntegratedSearchAndColorFilterWork() {
+    val repo = InMemoryNotesRepository(
+      initialNotes = listOf(
+        NoteItem(
+          id = "n1",
+          title = "Camping Gear",
+          content = "Sleeping bag",
+          color = NoteColor.SAGE,
+        ),
+        NoteItem(
+          id = "n2",
+          title = "Coffee Recipe",
+          content = "Pour over ratio",
+          color = NoteColor.PEACH,
+        ),
+      ),
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        NotesScreen(repository = repo)
+      }
+    }
+
+    composeTestRule.onNodeWithText("Camping Gear").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Coffee Recipe").assertIsDisplayed()
+
+    // Open toolbar-integrated search
+    composeTestRule.onNodeWithTag("notes_search_toggle").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("notes_toolbar_search_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("notes_color_filter_bar").assertIsDisplayed()
+
+    // Filter by color PEACH while searching
+    composeTestRule.onNodeWithTag("notes_color_filter_PEACH").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithText("Coffee Recipe").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Camping Gear").assertIsNotDisplayed()
+
+    // Clear color filter and type query
+    composeTestRule.onNodeWithTag("notes_color_filter_PEACH").performClick()
+    composeTestRule.onNodeWithTag("notes_search_input").performTextInput("Camping")
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithText("Camping Gear").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Coffee Recipe").assertIsNotDisplayed()
+
+    // Close search
+    composeTestRule.onNodeWithTag("notes_search_close").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithText("Camping Gear").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Coffee Recipe").assertIsDisplayed()
   }
 }

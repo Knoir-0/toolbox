@@ -1145,30 +1145,32 @@ private fun CatalogPlantItemCard(
           horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
           if (isScheduled) {
-            FilledTonalButton(
+            IconButton(
               onClick = onRemove,
-              shape = RoundedCornerShape(12.dp),
-              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-              colors = ButtonDefaults.filledTonalButtonColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              ),
-              modifier = Modifier.testTag("added_plant_button_${plant.id}"),
+              modifier = Modifier
+                .size(32.dp)
+                .testTag("added_plant_button_${plant.id}"),
             ) {
-              Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-              Spacer(modifier = Modifier.width(4.dp))
-              Text("Added", style = MaterialTheme.typography.labelMedium)
+              Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = "Remove ${plant.name} from schedule",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+              )
             }
           } else {
-            Button(
+            IconButton(
               onClick = onAdd,
-              shape = RoundedCornerShape(12.dp),
-              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-              modifier = Modifier.testTag("add_plant_button_${plant.id}"),
+              modifier = Modifier
+                .size(32.dp)
+                .testTag("add_plant_button_${plant.id}"),
             ) {
-              Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-              Spacer(modifier = Modifier.width(4.dp))
-              Text("Add", style = MaterialTheme.typography.labelMedium)
+              Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = "Add ${plant.name} to schedule",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+              )
             }
           }
 
@@ -1453,7 +1455,7 @@ private fun YearScheduleLegendRow() {
   ) {
     // Theme Color = Planting
     LegendChip(
-      label = "Planting (Theme)",
+      label = "Plant",
       boxColor = MaterialTheme.colorScheme.primary,
       containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
       contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -1461,7 +1463,7 @@ private fun YearScheduleLegendRow() {
     )
     // Accent Color = Harvesting
     LegendChip(
-      label = "Harvesting (Accent)",
+      label = "Harvest",
       boxColor = MaterialTheme.colorScheme.tertiary,
       containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.65f),
       contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
@@ -1497,7 +1499,7 @@ private fun YearScheduleLegendRow() {
           )
         }
         Text(
-          text = "Plant & Harvest",
+          text = "Both",
           style = MaterialTheme.typography.labelSmall,
           fontWeight = FontWeight.Medium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1739,99 +1741,70 @@ private fun ScheduledPlantYearRow(
           }
         }
 
-        // Quick action icons + Section 5.4 MoreVert contextual menu
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
+        // Section 5.4 MoreVert contextual menu
+        Box {
           IconButton(
-            onClick = onEdit,
+            onClick = { showItemMenu = true },
             modifier = Modifier
               .size(32.dp)
-              .testTag("edit_scheduled_plant_${plant.id}"),
+              .testTag("more_scheduled_plant_${plant.id}"),
           ) {
             Icon(
-              imageVector = Icons.Default.Edit,
-              contentDescription = "Edit ${plant.name} schedule",
+              imageVector = Icons.Default.MoreVert,
+              contentDescription = "More options for ${plant.name}",
               tint = MaterialTheme.colorScheme.onSurfaceVariant,
               modifier = Modifier.size(18.dp),
             )
           }
-          IconButton(
-            onClick = onRemove,
-            modifier = Modifier
-              .size(32.dp)
-              .testTag("remove_scheduled_plant_${plant.id}"),
+          DropdownMenu(
+            expanded = showItemMenu,
+            onDismissRequest = { showItemMenu = false },
           ) {
-            Icon(
-              imageVector = Icons.Default.DeleteOutline,
-              contentDescription = "Remove ${plant.name} from schedule",
-              tint = MaterialTheme.colorScheme.error,
-              modifier = Modifier.size(18.dp),
+            DropdownMenuItem(
+              text = { Text("Info") },
+              leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+              onClick = {
+                showItemMenu = false
+                onInspect()
+              },
             )
-          }
-          Box {
-            IconButton(
-              onClick = { showItemMenu = true },
-              modifier = Modifier
-                .size(32.dp)
-                .testTag("more_scheduled_plant_${plant.id}"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.MoreVert,
-                contentDescription = "More options for ${plant.name}",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-              )
-            }
-            DropdownMenu(
-              expanded = showItemMenu,
-              onDismissRequest = { showItemMenu = false },
-            ) {
-              DropdownMenuItem(
-                text = { Text("Inspect Details") },
-                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
-                onClick = {
-                  showItemMenu = false
-                  onInspect()
-                },
-              )
-              DropdownMenuItem(
-                text = { Text("Customize Schedule") },
-                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                onClick = {
-                  showItemMenu = false
-                  onEdit()
-                },
-              )
-              DropdownMenuItem(
-                text = { Text("Duplicate as Custom") },
-                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-                onClick = {
-                  showItemMenu = false
-                  onDuplicate()
-                },
-              )
-              DropdownMenuItem(
-                text = {
-                  Text(
-                    text = "Remove from Schedule",
-                    color = MaterialTheme.colorScheme.error,
-                  )
-                },
-                leadingIcon = {
-                  Icon(
-                    imageVector = Icons.Default.DeleteOutline,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.error,
-                  )
-                },
-                onClick = {
-                  showItemMenu = false
-                  onRemove()
-                },
-              )
-            }
+            DropdownMenuItem(
+              text = { Text("Edit") },
+              leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+              onClick = {
+                showItemMenu = false
+                onEdit()
+              },
+              modifier = Modifier.testTag("edit_scheduled_plant_${plant.id}"),
+            )
+            DropdownMenuItem(
+              text = { Text("Copy") },
+              leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+              onClick = {
+                showItemMenu = false
+                onDuplicate()
+              },
+            )
+            DropdownMenuItem(
+              text = {
+                Text(
+                  text = "Delete",
+                  color = MaterialTheme.colorScheme.error,
+                )
+              },
+              leadingIcon = {
+                Icon(
+                  imageVector = Icons.Default.DeleteOutline,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.error,
+                )
+              },
+              onClick = {
+                showItemMenu = false
+                onRemove()
+              },
+              modifier = Modifier.testTag("remove_scheduled_plant_${plant.id}"),
+            )
           }
         }
       }

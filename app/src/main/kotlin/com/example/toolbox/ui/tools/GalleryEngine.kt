@@ -3,6 +3,7 @@ package com.example.toolbox.ui.tools
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -61,6 +62,7 @@ data class GalleryPhoto(
 ) {
   val sizeFormatted: String get() = FileManagerEngine.formatFileSize(sizeBytes)
   val timestampFormatted: String get() = FileManagerEngine.formatTimestamp(lastModifiedMs)
+  val isVideo: Boolean get() = VideoEditorEngine.isVideoFile(file)
 }
 
 /**
@@ -120,6 +122,8 @@ object GalleryEngine {
   val SUPPORTED_IMAGE_EXTENSIONS: Set<String> = setOf(
     "jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "heif",
   )
+
+  val SUPPORTED_VIDEO_EXTENSIONS: Set<String> = VideoEditorEngine.SUPPORTED_VIDEO_EXTENSIONS
 
   private const val MAX_THUMBNAIL_CACHE_ENTRIES = 96
 
@@ -194,13 +198,25 @@ object GalleryEngine {
   }
 
   /**
-   * Checks whether [file] is a supported photo/image file.
+   * Checks whether [file] is a supported photo/image or video media file in the gallery.
    */
   fun isPhotoFile(file: File): Boolean {
     if (!file.exists() || !file.isFile) return false
     if (file.name.startsWith(".")) return false
     val ext = file.extension.lowercase(Locale.ROOT)
-    return ext in SUPPORTED_IMAGE_EXTENSIONS || FileManagerEngine.isImageFile(file)
+    return ext in SUPPORTED_IMAGE_EXTENSIONS ||
+      ext in SUPPORTED_VIDEO_EXTENSIONS ||
+      FileManagerEngine.isImageFile(file) ||
+      VideoEditorEngine.isVideoFile(file)
+  }
+
+  /**
+   * Checks whether [file] is a supported video file in the gallery.
+   */
+  fun isVideoFile(file: File): Boolean {
+    if (!file.exists() || !file.isFile) return false
+    if (file.name.startsWith(".")) return false
+    return VideoEditorEngine.isVideoFile(file)
   }
 
   /**
@@ -617,6 +633,27 @@ object GalleryEngine {
   fun decodeThumbnailBitmap(file: File, reqSizePx: Int = 360): Bitmap? {
     if (!file.exists() || !file.isFile) return null
     getCachedThumbnailBitmap(file, reqSizePx)?.let { return it }
+
+    if (VideoEditorEngine.isVideoFile(file)) {
+      val retriever = MediaMetadataRetriever()
+      return try {
+        retriever.setDataSource(file.absolutePath)
+        val frame = retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        if (frame != null) {
+          val key = thumbnailCacheKey(file, reqSizePx)
+          synchronized(thumbnailCacheLock) {
+            thumbnailCache[key] = frame
+          }
+        }
+        frame
+      } catch (_: Throwable) {
+        null
+      } finally {
+        try {
+          retriever.release()
+        } catch (_: Throwable) {}
+      }
+    }
 
     return try {
       val boundsOptions = BitmapFactory.Options().apply {
