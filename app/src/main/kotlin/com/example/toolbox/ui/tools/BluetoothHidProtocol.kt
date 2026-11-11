@@ -19,10 +19,12 @@ object HidProtocol {
   const val REPORT_ID_KEYBOARD: Int = 1
   const val REPORT_ID_CONSUMER: Int = 2
   const val REPORT_ID_MOUSE: Int = 3
+  const val REPORT_ID_GAMEPAD: Int = 4
 
   const val KEYBOARD_REPORT_SIZE: Int = 8
   const val CONSUMER_REPORT_SIZE: Int = 2
   const val MOUSE_REPORT_SIZE: Int = 4
+  const val GAMEPAD_REPORT_SIZE: Int = 9
 
   const val MODIFIER_LEFT_SHIFT: Int = 0x02
 
@@ -30,7 +32,7 @@ object HidProtocol {
   const val MOUSE_BUTTON_RIGHT: Int = 0x02
   const val MOUSE_BUTTON_MIDDLE: Int = 0x04
 
-  /** Combined HID report descriptor: keyboard + consumer control + mouse. */
+  /** Combined HID report descriptor: keyboard + consumer control + mouse + gamepad. */
   val REPORT_DESCRIPTOR: ByteArray = intArrayOf(
     // ---- Keyboard (Report ID 1) ----
     0x05, 0x01, // Usage Page (Generic Desktop)
@@ -101,6 +103,50 @@ object HidProtocol {
     0x81, 0x06, //     Input (Data, Variable, Relative)
     0xC0, //   End Collection
     0xC0, // End Collection
+
+    // ---- Gamepad (Report ID 4) ----
+    0x05, 0x01, // Usage Page (Generic Desktop)
+    0x09, 0x05, // Usage (Game Pad)
+    0xA1, 0x01, // Collection (Application)
+    0x85, REPORT_ID_GAMEPAD, //   Report ID (4)
+    0x05, 0x09, //   Usage Page (Button)
+    0x19, 0x01, //   Usage Minimum (Button 1)
+    0x29, 0x10, //   Usage Maximum (Button 16)
+    0x15, 0x00, //   Logical Minimum (0)
+    0x25, 0x01, //   Logical Maximum (1)
+    0x75, 0x01, //   Report Size (1)
+    0x95, 0x10, //   Report Count (16)
+    0x81, 0x02, //   Input (Data, Variable, Absolute) -> 2 button bytes
+    0x05, 0x01, //   Usage Page (Generic Desktop)
+    0x09, 0x39, //   Usage (Hat switch)
+    0x15, 0x01, //   Logical Minimum (1)
+    0x25, 0x08, //   Logical Maximum (8)
+    0x35, 0x00, //   Physical Minimum (0)
+    0x46, 0x3B, 0x01, // Physical Maximum (315)
+    0x65, 0x14, //   Unit (Degrees)
+    0x75, 0x08, //   Report Size (8)
+    0x95, 0x01, //   Report Count (1)
+    0x81, 0x42, //   Input (Data, Variable, Absolute, Null State) -> 1 hat byte (0 = neutral)
+    0x65, 0x00, //   Unit (None)
+    0x05, 0x01, //   Usage Page (Generic Desktop)
+    0x09, 0x30, //   Usage (X) -> Left Stick X
+    0x09, 0x31, //   Usage (Y) -> Left Stick Y
+    0x09, 0x32, //   Usage (Z) -> Right Stick X
+    0x09, 0x35, //   Usage (Rz) -> Right Stick Y
+    0x15, 0x81, //   Logical Minimum (-127)
+    0x25, 0x7F, //   Logical Maximum (127)
+    0x75, 0x08, //   Report Size (8)
+    0x95, 0x04, //   Report Count (4)
+    0x81, 0x02, //   Input (Data, Variable, Absolute) -> 4 stick bytes
+    0x05, 0x02, //   Usage Page (Simulation Controls)
+    0x09, 0xC5, //   Usage (Brake) -> Left Trigger
+    0x09, 0xC4, //   Usage (Accelerator) -> Right Trigger
+    0x15, 0x00, //   Logical Minimum (0)
+    0x26, 0xFF, 0x00, // Logical Maximum (255)
+    0x75, 0x08, //   Report Size (8)
+    0x95, 0x02, //   Report Count (2)
+    0x81, 0x02, //   Input (Data, Variable, Absolute) -> 2 trigger bytes
+    0xC0, // End Collection
   ).map { it.toByte() }.toByteArray()
 
   fun keyboardReport(modifiers: Int, keyCode: Int): ByteArray =
@@ -122,6 +168,62 @@ object HidProtocol {
     dy.coerceIn(-127, 127).toByte(),
     wheel.coerceIn(-127, 127).toByte(),
   )
+
+  /**
+   * Computes the 8-way HID Hat Switch value (`1..8` for N, NE, E, SE, S, SW, W, NW, or `0` for neutral)
+   * from individual D-pad directional states.
+   */
+  fun hatSwitchForDpad(
+    up: Boolean,
+    down: Boolean,
+    left: Boolean,
+    right: Boolean,
+  ): Int {
+    val v = (if (up) 1 else 0) - (if (down) 1 else 0)
+    val h = (if (right) 1 else 0) - (if (left) 1 else 0)
+    return when {
+      v == 1 && h == 0 -> 1
+      v == 1 && h == 1 -> 2
+      v == 0 && h == 1 -> 3
+      v == -1 && h == 1 -> 4
+      v == -1 && h == 0 -> 5
+      v == -1 && h == -1 -> 6
+      v == 0 && h == -1 -> 7
+      v == 1 && h == -1 -> 8
+      else -> 0
+    }
+  }
+
+  /**
+   * Builds a 9-byte HID Gamepad input report (Report ID [REPORT_ID_GAMEPAD]).
+   */
+  fun gamepadReport(
+    buttons: Int = 0,
+    leftX: Int = 0,
+    leftY: Int = 0,
+    rightX: Int = 0,
+    rightY: Int = 0,
+    leftTrigger: Int = if ((buttons and GamepadButton.LEFT_TRIGGER.mask) != 0) 255 else 0,
+    rightTrigger: Int = if ((buttons and GamepadButton.RIGHT_TRIGGER.mask) != 0) 255 else 0,
+    hat: Int = hatSwitchForDpad(
+      up = (buttons and GamepadButton.DPAD_UP.mask) != 0,
+      down = (buttons and GamepadButton.DPAD_DOWN.mask) != 0,
+      left = (buttons and GamepadButton.DPAD_LEFT.mask) != 0,
+      right = (buttons and GamepadButton.DPAD_RIGHT.mask) != 0,
+    ),
+  ): ByteArray = byteArrayOf(
+    (buttons and 0xFF).toByte(),
+    ((buttons shr 8) and 0xFF).toByte(),
+    hat.coerceIn(0, 8).toByte(),
+    leftX.coerceIn(-127, 127).toByte(),
+    leftY.coerceIn(-127, 127).toByte(),
+    rightX.coerceIn(-127, 127).toByte(),
+    rightY.coerceIn(-127, 127).toByte(),
+    leftTrigger.coerceIn(0, 255).toByte(),
+    rightTrigger.coerceIn(0, 255).toByte(),
+  )
+
+  fun emptyGamepadReport(): ByteArray = ByteArray(GAMEPAD_REPORT_SIZE)
 
   /**
    * Splits an arbitrarily large relative movement into a list of (dx, dy) steps that each
@@ -181,6 +283,26 @@ enum class ConsumerKey(val usage: Int) {
   SEARCH(0x0221),
   HOME(0x0223),
   BACK(0x0224),
+}
+
+/** HID Button page (0x09) bit masks used by the Bluetooth Gamepad (Report ID 4). */
+enum class GamepadButton(val mask: Int) {
+  A(1 shl 0),
+  B(1 shl 1),
+  X(1 shl 2),
+  Y(1 shl 3),
+  LEFT_BUMPER(1 shl 4),
+  RIGHT_BUMPER(1 shl 5),
+  LEFT_TRIGGER(1 shl 6),
+  RIGHT_TRIGGER(1 shl 7),
+  MINUS(1 shl 8),
+  PLUS(1 shl 9),
+  LEFT_STICK(1 shl 10),
+  RIGHT_STICK(1 shl 11),
+  DPAD_UP(1 shl 12),
+  DPAD_DOWN(1 shl 13),
+  DPAD_LEFT(1 shl 14),
+  DPAD_RIGHT(1 shl 15),
 }
 
 /** A keyboard key press: HID usage + modifier mask. */

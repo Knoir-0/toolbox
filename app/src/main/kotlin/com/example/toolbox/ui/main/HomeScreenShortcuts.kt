@@ -190,6 +190,7 @@ fun resolveToolShortcutAliasClassName(tool: Tool): String {
     Tool.METRONOME -> "com.example.toolbox.MainActivityToolMetronome"
     Tool.CHORD_BOOK -> "com.example.toolbox.MainActivityToolChordBook"
     Tool.PLANT_SCHEDULE -> "com.example.toolbox.MainActivityToolPlantSchedule"
+    Tool.BLUETOOTH_GAMEPAD -> "com.example.toolbox.MainActivityToolBluetoothGamepad"
     Tool.SETTINGS -> "com.example.toolbox.MainActivityToolSettings"
   }
 }

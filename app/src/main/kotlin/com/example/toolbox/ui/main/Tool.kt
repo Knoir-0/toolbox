@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsRemote
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.SquareFoot
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -31,10 +32,13 @@ enum class ToolCategory(
   val title: String,
 ) {
   MATH_AND_MEASUREMENT(title = "Math & Measurement"),
-  AUDIO_AND_MUSIC(title = "Audio & Music"),
-  MEDIA_AND_CREATIVE(title = "Media & Creative"),
   PRODUCTIVITY(title = "Productivity"),
-  ENTERTAINMENT_AND_DEVICES(title = "Entertainment & Devices"),
+  FILES_AND_STORAGE(title = "Files & Storage"),
+  PHOTO_AND_VIDEO(title = "Photo & Video"),
+  AUDIO_AND_SOUND(title = "Audio & Sound"),
+  MUSIC_AND_INSTRUMENTS(title = "Music & Instruments"),
+  REMOTES_AND_DEVICES(title = "Remotes & Devices"),
+  MISCELLANEOUS(title = "Miscellaneous"),
   SYSTEM(title = "System"),
 }
 
@@ -58,49 +62,49 @@ enum class Tool(
     category = ToolCategory.PRODUCTIVITY,
   ),
   TODO_LIST(
-    title = "To-Do",
+    title = "To Do",
     icon = Icons.Default.Checklist,
     category = ToolCategory.PRODUCTIVITY,
   ),
   CAMERA(
     title = "Camera",
     icon = Icons.Default.PhotoCamera,
-    category = ToolCategory.MEDIA_AND_CREATIVE,
+    category = ToolCategory.PHOTO_AND_VIDEO,
   ),
   GALLERY(
     title = "Gallery",
     icon = Icons.Default.PhotoLibrary,
-    category = ToolCategory.MEDIA_AND_CREATIVE,
+    category = ToolCategory.PHOTO_AND_VIDEO,
   ),
   FILES(
     title = "Files",
     icon = Icons.Default.Folder,
-    category = ToolCategory.PRODUCTIVITY,
+    category = ToolCategory.FILES_AND_STORAGE,
   ),
   UNIT_CONVERTER(
-    title = "Unit Converter",
+    title = "Units",
     icon = Icons.Default.Straighten,
     category = ToolCategory.MATH_AND_MEASUREMENT,
   ),
   AUDIO_RECORDER(
-    title = "Audio Recorder",
+    title = "Recorder",
     icon = Icons.Default.Mic,
-    category = ToolCategory.AUDIO_AND_MUSIC,
+    category = ToolCategory.AUDIO_AND_SOUND,
   ),
   BLUETOOTH_REMOTE(
-    title = "TV Remote",
+    title = "Remote",
     icon = Icons.Default.SettingsRemote,
-    category = ToolCategory.ENTERTAINMENT_AND_DEVICES,
+    category = ToolCategory.REMOTES_AND_DEVICES,
   ),
   IMAGE_EDITOR(
     title = "Image Editor",
     icon = Icons.Default.Image,
-    category = ToolCategory.MEDIA_AND_CREATIVE,
+    category = ToolCategory.PHOTO_AND_VIDEO,
   ),
   FILE_CONVERTER(
     title = "File Converter",
     icon = Icons.Default.SwapHoriz,
-    category = ToolCategory.MEDIA_AND_CREATIVE,
+    category = ToolCategory.FILES_AND_STORAGE,
   ),
   RULER(
     title = "Ruler",
@@ -110,42 +114,47 @@ enum class Tool(
   VIDEO_EDITOR(
     title = "Video Editor",
     icon = Icons.Default.Movie,
-    category = ToolCategory.MEDIA_AND_CREATIVE,
+    category = ToolCategory.PHOTO_AND_VIDEO,
   ),
   AUDIO_EDITOR(
     title = "Audio Editor",
     icon = Icons.Default.GraphicEq,
-    category = ToolCategory.AUDIO_AND_MUSIC,
+    category = ToolCategory.AUDIO_AND_SOUND,
   ),
   COLOR_PICKER(
-    title = "Color Picker",
+    title = "Colors",
     icon = Icons.Default.Palette,
-    category = ToolCategory.MEDIA_AND_CREATIVE,
+    category = ToolCategory.MISCELLANEOUS,
   ),
   DICE_ROLLER(
-    title = "Dice Roller",
+    title = "Dice",
     icon = Icons.Default.Casino,
-    category = ToolCategory.ENTERTAINMENT_AND_DEVICES,
+    category = ToolCategory.MISCELLANEOUS,
   ),
   GUITAR_TUNER(
-    title = "Guitar Tuner",
+    title = "Tuner",
     icon = Icons.Default.MusicNote,
-    category = ToolCategory.AUDIO_AND_MUSIC,
+    category = ToolCategory.MUSIC_AND_INSTRUMENTS,
   ),
   METRONOME(
     title = "Metronome",
     icon = Icons.Default.Timer,
-    category = ToolCategory.AUDIO_AND_MUSIC,
+    category = ToolCategory.MUSIC_AND_INSTRUMENTS,
   ),
   CHORD_BOOK(
-    title = "Chord Book",
+    title = "Chords",
     icon = Icons.Default.LibraryMusic,
-    category = ToolCategory.AUDIO_AND_MUSIC,
+    category = ToolCategory.MUSIC_AND_INSTRUMENTS,
   ),
   PLANT_SCHEDULE(
-    title = "Plant Schedule",
+    title = "Plants",
     icon = Icons.Default.Yard,
-    category = ToolCategory.PRODUCTIVITY,
+    category = ToolCategory.MISCELLANEOUS,
+  ),
+  BLUETOOTH_GAMEPAD(
+    title = "Gamepad",
+    icon = Icons.Default.SportsEsports,
+    category = ToolCategory.REMOTES_AND_DEVICES,
   ),
   SETTINGS(
     title = "Settings",

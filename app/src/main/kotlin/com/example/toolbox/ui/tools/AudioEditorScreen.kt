@@ -30,7 +30,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
@@ -48,12 +47,13 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Replay
-import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -62,12 +62,12 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FilledTonalIconToggleButton
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -85,6 +85,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -107,7 +108,6 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -115,7 +115,6 @@ import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
@@ -128,15 +127,20 @@ import kotlinx.coroutines.withContext
 /**
  * Simple Audio Editor tool screen.
  *
- * Shares audio, file, and UI infrastructure across the application:
- * - [AudioEditorEngine] / [AudioRecorderEngine] / [FileConverterEngine] for decoding, editing, and multi-format export.
- * - [StorageFilePickerDialog], [copyUriToTempSourceFile], and [shareConvertedFile] from [FileConverterScreen].
- * - [ImageEditorHistory] from [ImageEditorEngine] for multi-step undo/redo state management.
- * - [SlimDotSlider] from [ImageEditorScreen] for tactile range and parameter adjustments.
+ * Shares audio, file, and UI infrastructure across the application and aligns its control layout
+ * with [ImageEditorScreen] and [VideoEditorScreen]:
+ * - Top bar with Undo, Redo, Close, and Export action.
+ * - Full-height interactive waveform viewport (`weight(1f)`) with floating metadata/selection pills.
+ * - Compact playback transport & quick-actions row (Play/Pause, Stop, Loop, Timecode, Share, Open, Reset).
+ * - Mode-specific control surface (`RoundedCornerShape(16.dp)`) with single-row inline [SlimDotSlider]s
+ *   and compact `CircleShape` action buttons.
+ * - Bottom [SingleChoiceSegmentedButtonRow] mode selector (`Trim`, `Volume`, `Speed`).
  */
 @Composable
 fun AudioEditorScreen(
   modifier: Modifier = Modifier,
+  initialBuffer: AudioSampleBuffer? = null,
+  initialFileName: String = "sample_audio.wav",
 ) {
   val context = LocalContext.current
   val haptic = LocalHapticFeedback.current
@@ -155,15 +159,15 @@ fun AudioEditorScreen(
   val history = remember { ImageEditorHistory<AudioEditSnapshot>(maxDepth = 15) }
   var historyVersion by remember { mutableIntStateOf(0) }
 
-  var originalBuffer by remember { mutableStateOf<AudioSampleBuffer?>(null) }
-  var currentBuffer by remember { mutableStateOf<AudioSampleBuffer?>(null) }
+  var originalBuffer by remember { mutableStateOf<AudioSampleBuffer?>(initialBuffer) }
+  var currentBuffer by remember { mutableStateOf<AudioSampleBuffer?>(initialBuffer) }
   var sourceFile by remember { mutableStateOf<File?>(null) }
-  var sourceFileName by remember { mutableStateOf("sample_audio.wav") }
+  var sourceFileName by remember { mutableStateOf(initialFileName) }
   var statusBannerText by remember { mutableStateOf<String?>(null) }
   var isBusy by remember { mutableStateOf(false) }
 
-  // Selection & mode state
-  var activeMode by remember { mutableStateOf(AudioEditorMode.VOLUME_FADE) }
+  // Selection & mode state aligned with ImageEditorScreen / VideoEditorScreen
+  var activeMode by rememberSaveable { mutableStateOf(AudioEditorMode.TRIM) }
   var trimStartFraction by remember { mutableFloatStateOf(0f) }
   var trimEndFraction by remember { mutableFloatStateOf(1f) }
 
@@ -177,7 +181,7 @@ fun AudioEditorScreen(
 
   // Playback state
   var isPlaying by remember { mutableStateOf(false) }
-  var loopPlayback by remember { mutableStateOf(false) }
+  var loopPlayback by rememberSaveable { mutableStateOf(false) }
   var playheadFraction by remember { mutableFloatStateOf(0f) }
   var playbackJob by remember { mutableStateOf<Job?>(null) }
   var activeAudioTrack by remember { mutableStateOf<AudioTrack?>(null) }
@@ -185,6 +189,8 @@ fun AudioEditorScreen(
   // Dialog states
   var showFilePickerDialog by remember { mutableStateOf(false) }
   var showExportDialog by remember { mutableStateOf(false) }
+  var showDiscardDialog by remember { mutableStateOf(false) }
+  var pendingDiscardAction by remember { mutableStateOf<(() -> Unit)?>(null) }
 
   fun stopPlayback() {
     playbackJob?.cancel()
@@ -201,6 +207,29 @@ fun AudioEditorScreen(
   DisposableEffect(Unit) {
     onDispose {
       stopPlayback()
+    }
+  }
+
+  val canUndo = remember(historyVersion) { history.canUndo }
+  val canRedo = remember(historyVersion) { history.canRedo }
+
+  val hasTrimChanges = trimStartFraction > 0.005f || trimEndFraction < 0.995f
+  val hasVolumeFadeChanges =
+    abs(volumeGainPercent - 100f) > 0.5f || fadeInSeconds > 0.05f || fadeOutSeconds > 0.05f
+  val hasSpeedChanges = abs(speedMultiplier - 1f) >= 0.02f
+  val hasAnyChanges =
+    canUndo ||
+      currentBuffer != originalBuffer ||
+      hasTrimChanges ||
+      hasVolumeFadeChanges ||
+      hasSpeedChanges
+
+  fun performWithDiscardCheck(action: () -> Unit) {
+    if (currentBuffer != null && hasAnyChanges) {
+      pendingDiscardAction = action
+      showDiscardDialog = true
+    } else {
+      action()
     }
   }
 
@@ -227,7 +256,11 @@ fun AudioEditorScreen(
     historyVersion++
   }
 
-  fun commitEdit(newBuffer: AudioSampleBuffer, actionDescription: String, resetSelection: Boolean = true) {
+  fun commitEdit(
+    newBuffer: AudioSampleBuffer,
+    actionDescription: String,
+    resetSelection: Boolean = true,
+  ) {
     val prev = currentBuffer ?: return
     stopPlayback()
     history.push(
@@ -399,9 +432,6 @@ fun AudioEditorScreen(
     currentBuffer?.let { AudioEditorEngine.extractWaveformPeaks(it, bucketCount = 96) } ?: emptyList()
   }
 
-  val canUndo = remember(historyVersion) { history.canUndo }
-  val canRedo = remember(historyVersion) { history.canRedo }
-
   Box(
     modifier = modifier
       .fillMaxSize()
@@ -434,433 +464,391 @@ fun AudioEditorScreen(
       Column(
         modifier = Modifier.fillMaxSize(),
       ) {
-        // 1. Standard Tool Header / Top Bar (DESIGN_LANGUAGE.md Section 5.1)
-        Surface(
-          color = MaterialTheme.colorScheme.surface,
-          tonalElevation = 1.dp,
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Box(
-            modifier = Modifier
-              .fillMaxWidth()
-              .heightIn(min = 68.dp),
-            contentAlignment = Alignment.CenterStart,
-          ) {
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 12.dp),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-              ) {
-                Box(
-                  modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                  contentAlignment = Alignment.Center,
-                ) {
-                  Icon(
-                    imageVector = Icons.Default.GraphicEq,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp),
-                  )
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                  Text(
-                    text = "Audio Editor",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                  )
-                  val chLabel = if (activeBuf.safeChannels == 2) "Stereo" else "Mono"
-                  val subtitleText =
-                    "$sourceFileName • ${AudioRecorderEngine.formatDurationMs(activeBuf.durationMs)} • ${activeBuf.sampleRate / 1000.0}kHz $chLabel"
-                  Text(
-                    text = subtitleText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                  )
-                }
-              }
-
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                IconButton(
-                  onClick = {
-                    val active = currentBuffer ?: return@IconButton
-                    stopPlayback()
-                    val prev = history.undo(
-                      AudioEditSnapshot(
-                        buffer = active,
-                        trimStartFraction = trimStartFraction,
-                        trimEndFraction = trimEndFraction,
-                      )
-                    )
-                    if (prev != null) {
-                      currentBuffer = prev.buffer
-                      trimStartFraction = prev.trimStartFraction
-                      trimEndFraction = prev.trimEndFraction
-                      playheadFraction = prev.trimStartFraction
-                      statusBannerText = "Undid edit"
-                      historyVersion++
-                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    }
-                  },
-                  enabled = canUndo && !isBusy,
-                  modifier = Modifier.testTag("audio_editor_undo_button"),
-                ) {
-                  Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo")
-                }
-
-                IconButton(
-                  onClick = {
-                    val active = currentBuffer ?: return@IconButton
-                    stopPlayback()
-                    val next = history.redo(
-                      AudioEditSnapshot(
-                        buffer = active,
-                        trimStartFraction = trimStartFraction,
-                        trimEndFraction = trimEndFraction,
-                      )
-                    )
-                    if (next != null) {
-                      currentBuffer = next.buffer
-                      trimStartFraction = next.trimStartFraction
-                      trimEndFraction = next.trimEndFraction
-                      playheadFraction = next.trimStartFraction
-                      statusBannerText = "Redid edit"
-                      historyVersion++
-                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    }
-                  },
-                  enabled = canRedo && !isBusy,
-                  modifier = Modifier.testTag("audio_editor_redo_button"),
-                ) {
-                  Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo")
-                }
-
-                IconButton(
-                  onClick = {
-                    val orig = originalBuffer ?: return@IconButton
-                    volumeGainPercent = 100f
-                    fadeInSeconds = 0f
-                    fadeOutSeconds = 0f
-                    speedMultiplier = 1.0f
-                    commitEdit(orig, "Reset to original audio")
-                  },
-                  enabled = !isBusy && (
-                    currentBuffer != originalBuffer ||
-                      trimStartFraction > 0.005f ||
-                      trimEndFraction < 0.995f ||
-                      abs(volumeGainPercent - 100f) > 0.5f ||
-                      fadeInSeconds > 0.05f ||
-                      fadeOutSeconds > 0.05f ||
-                      abs(speedMultiplier - 1f) >= 0.02f
-                    ),
-                  modifier = Modifier.testTag("audio_editor_reset_button"),
-                ) {
-                  Icon(Icons.Default.Restore, contentDescription = "Reset to original")
-                }
-
-                IconButton(
-                  onClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    stopPlayback()
-                    currentBuffer = null
-                    originalBuffer = null
-                    sourceFile = null
-                    history.clear()
-                    statusBannerText = null
-                    historyVersion++
-                  },
-                  enabled = !isBusy,
-                  modifier = Modifier.testTag("audio_editor_close_button"),
-                ) {
-                  Icon(Icons.Default.Close, contentDescription = "Close audio")
-                }
-              }
-            }
-          }
-        }
-
-        // 2. Active Editor Content
-        Column(
-          modifier = Modifier
-            .fillMaxSize()
-            .weight(1f)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-          verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-        // Waveform & Selection Stage Card (handles trimming & cutting directly at the top)
-        WaveformStageCard(
+        // 1. Top Header Bar aligned with VideoEditorTopBar & DESIGN_LANGUAGE.md Section 5.1
+        AudioEditorTopBar(
           buffer = activeBuf,
-          peaks = waveformPeaks,
-          trimStartFraction = trimStartFraction,
-          trimEndFraction = trimEndFraction,
-          playheadFraction = playheadFraction,
-          isPlaying = isPlaying,
-          statusBannerText = statusBannerText,
-          onSelectionChange = { newStart, newEnd ->
-            val startMoved = abs(newStart - trimStartFraction) > 1e-4f
-            val (updatedStart, updatedEnd) = AudioEditorEngine.updateSelectionFromHandles(
-              currentStart = trimStartFraction,
-              currentEnd = trimEndFraction,
-              draggedStart = newStart,
-              draggedEnd = newEnd,
-            )
-            trimStartFraction = updatedStart
-            trimEndFraction = updatedEnd
-            if (!isPlaying) {
-              playheadFraction = if (startMoved) {
-                updatedStart
-              } else {
-                playheadFraction.coerceIn(updatedStart, updatedEnd)
-              }
-            }
-          },
-          onScrub = { fraction ->
-            playheadFraction = fraction.coerceIn(trimStartFraction, trimEndFraction)
-          },
-          onResetSelection = {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            trimStartFraction = 0f
-            trimEndFraction = 1f
-            playheadFraction = 0f
-          },
-          onTrimKeepSelection = {
-            val trimmed = AudioEditorEngine.trim(activeBuf, trimStartFraction, trimEndFraction)
-            commitEdit(
-              newBuffer = trimmed,
-              actionDescription = "Trimmed to ${AudioRecorderEngine.formatDurationMs(trimmed.durationMs)}",
-            )
-          },
-          onCutRemoveSelection = {
-            val cut = AudioEditorEngine.cutSelection(activeBuf, trimStartFraction, trimEndFraction)
-            commitEdit(
-              newBuffer = cut,
-              actionDescription = "Cut selection (${AudioRecorderEngine.formatDurationMs(cut.durationMs)} remaining)",
-            )
-          },
-        )
-
-        // Transport & Scrubber Card
-        PlaybackTransportCard(
-          buffer = activeBuf,
-          isPlaying = isPlaying,
-          loopPlayback = loopPlayback,
-          playheadFraction = playheadFraction,
-          trimStartFraction = trimStartFraction,
-          trimEndFraction = trimEndFraction,
-          onTogglePlayPause = {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            if (isPlaying) stopPlayback() else startPlayback()
-          },
-          onStopRewind = {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          sourceFileName = sourceFileName,
+          canUndo = canUndo && !isBusy,
+          canRedo = canRedo && !isBusy,
+          isBusy = isBusy,
+          onUndo = {
+            val active = currentBuffer ?: return@AudioEditorTopBar
             stopPlayback()
-            playheadFraction = trimStartFraction
-          },
-          onToggleLoop = {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            loopPlayback = !loopPlayback
-          },
-          onScrub = { frac ->
-            if (isPlaying) stopPlayback()
-            playheadFraction = frac.coerceIn(0f, 1f)
-          },
-        )
-
-        // Mode Controls Panel (Volume & Fade, Speed & Reverse)
-        Card(
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-          ),
-          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-          ) {
-            // Segmented Mode Selector
-            AudioEditorModeSelector(
-              activeMode = activeMode,
-              onSelectMode = { mode ->
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                activeMode = mode
-              },
-            )
-
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-            when (activeMode) {
-              AudioEditorMode.VOLUME_FADE -> {
-                VolumeAndFadeControls(
-                  buffer = activeBuf,
-                  trimStartFraction = trimStartFraction,
-                  trimEndFraction = trimEndFraction,
-                  volumeGainPercent = volumeGainPercent,
-                  fadeInSeconds = fadeInSeconds,
-                  fadeOutSeconds = fadeOutSeconds,
-                  onVolumeGainChange = { volumeGainPercent = it },
-                  onFadeInChange = { fadeInSeconds = it },
-                  onFadeOutChange = { fadeOutSeconds = it },
-                  onApplyVolumeAndFade = {
-                    var updated = activeBuf
-                    val gainMultiplier = volumeGainPercent / 100f
-                    if (abs(gainMultiplier - 1f) > 0.01f) {
-                      updated = AudioEditorEngine.adjustVolume(
-                        buffer = updated,
-                        gainMultiplier = gainMultiplier,
-                        startFraction = trimStartFraction,
-                        endFraction = trimEndFraction,
-                      )
-                    }
-                    val fadeInMs = (fadeInSeconds * 1000f).roundToInt().toLong()
-                    val fadeOutMs = (fadeOutSeconds * 1000f).roundToInt().toLong()
-                    if (fadeInMs > 0L || fadeOutMs > 0L) {
-                      updated = AudioEditorEngine.applyFade(
-                        buffer = updated,
-                        fadeInMs = fadeInMs,
-                        fadeOutMs = fadeOutMs,
-                        startFraction = trimStartFraction,
-                        endFraction = trimEndFraction,
-                      )
-                    }
-                    volumeGainPercent = 100f
-                    fadeInSeconds = 0f
-                    fadeOutSeconds = 0f
-                    commitEdit(
-                      newBuffer = updated,
-                      actionDescription = "Applied volume & fade adjustments",
-                      resetSelection = false,
-                    )
-                  },
-                  onNormalize = {
-                    val normalized = AudioEditorEngine.normalize(
-                      buffer = activeBuf,
-                      targetPeakFraction = 0.95f,
-                      startFraction = trimStartFraction,
-                      endFraction = trimEndFraction,
-                    )
-                    commitEdit(
-                      newBuffer = normalized,
-                      actionDescription = "Normalized peak amplitude to 95%",
-                      resetSelection = false,
-                    )
-                  },
-                  onMuteSelection = {
-                    val muted = AudioEditorEngine.adjustVolume(
-                      buffer = activeBuf,
-                      gainMultiplier = 0f,
-                      startFraction = trimStartFraction,
-                      endFraction = trimEndFraction,
-                    )
-                    commitEdit(
-                      newBuffer = muted,
-                      actionDescription = "Muted selected range",
-                      resetSelection = false,
-                    )
-                  },
-                )
-              }
-
-              AudioEditorMode.SPEED_EFFECTS -> {
-                SpeedAndReverseControls(
-                  speedMultiplier = speedMultiplier,
-                  onSpeedChange = { speedMultiplier = it },
-                  onApplySpeed = {
-                    val resampled = AudioEditorEngine.changeSpeed(activeBuf, speedMultiplier)
-                    val formattedSpeed = String.format(Locale.US, "%.2fx", speedMultiplier)
-                    commitEdit(
-                      newBuffer = resampled,
-                      actionDescription = "Changed speed to $formattedSpeed (${AudioRecorderEngine.formatDurationMs(resampled.durationMs)})",
-                    )
-                    speedMultiplier = 1.0f
-                  },
-                  onReverseSelection = {
-                    val reversed = AudioEditorEngine.reverse(
-                      buffer = activeBuf,
-                      startFraction = trimStartFraction,
-                      endFraction = trimEndFraction,
-                    )
-                    val scopeLabel = if (trimStartFraction <= 0.01f && trimEndFraction >= 0.99f) {
-                      "Reversed full track"
-                    } else {
-                      "Reversed selected range"
-                    }
-                    commitEdit(
-                      newBuffer = reversed,
-                      actionDescription = scopeLabel,
-                      resetSelection = false,
-                    )
-                  },
-                )
-              }
-            }
-          }
-        }
-      }
-
-      // 3. Dedicated Bottom Save & Share Action Bar
-      AudioEditorSaveBar(
-        buffer = activeBuf,
-        hasHistoryEdits = canUndo || activeBuf != originalBuffer,
-        trimStartFraction = trimStartFraction,
-        trimEndFraction = trimEndFraction,
-        volumeGainPercent = volumeGainPercent,
-        fadeInSeconds = fadeInSeconds,
-        fadeOutSeconds = fadeOutSeconds,
-        speedMultiplier = speedMultiplier,
-        isBusy = isBusy,
-        onShare = {
-          stopPlayback()
-          coroutineScope.launch {
-            isBusy = true
-            val effectiveBuf = withContext(Dispatchers.Default) {
-              AudioEditorEngine.buildEffectiveOutputBuffer(
-                buffer = activeBuf,
+            val prev = history.undo(
+              AudioEditSnapshot(
+                buffer = active,
                 trimStartFraction = trimStartFraction,
                 trimEndFraction = trimEndFraction,
-                volumeGainPercent = volumeGainPercent,
-                fadeInSeconds = fadeInSeconds,
-                fadeOutSeconds = fadeOutSeconds,
-                speedMultiplier = speedMultiplier,
               )
+            )
+            if (prev != null) {
+              currentBuffer = prev.buffer
+              trimStartFraction = prev.trimStartFraction
+              trimEndFraction = prev.trimEndFraction
+              playheadFraction = prev.trimStartFraction
+              statusBannerText = "Undid edit"
+              historyVersion++
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
             }
-            val tempShareFile = File(context.cacheDir, "${FileConverterEngine.extractFileStem(sourceFileName)}_edited.wav")
-            val ok = withContext(Dispatchers.IO) {
-              AudioEditorEngine.writeWavFile(effectiveBuf, tempShareFile)
+          },
+          onRedo = {
+            val active = currentBuffer ?: return@AudioEditorTopBar
+            stopPlayback()
+            val next = history.redo(
+              AudioEditSnapshot(
+                buffer = active,
+                trimStartFraction = trimStartFraction,
+                trimEndFraction = trimEndFraction,
+              )
+            )
+            if (next != null) {
+              currentBuffer = next.buffer
+              trimStartFraction = next.trimStartFraction
+              trimEndFraction = next.trimEndFraction
+              playheadFraction = next.trimStartFraction
+              statusBannerText = "Redid edit"
+              historyVersion++
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
             }
-            isBusy = false
-            if (ok) {
-              shareConvertedFile(context, tempShareFile, "audio/wav")
-            } else {
-              Toast.makeText(context, "Could not prepare audio for sharing", Toast.LENGTH_SHORT).show()
+          },
+          onClose = {
+            performWithDiscardCheck {
+              stopPlayback()
+              currentBuffer = null
+              originalBuffer = null
+              sourceFile = null
+              history.clear()
+              statusBannerText = null
+              historyVersion++
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            }
+          },
+          onExportClick = {
+            stopPlayback()
+            showExportDialog = true
+          },
+        )
+
+        // 2. Main Non-Scrolling Editor Workspace (aligned with ImageEditorScreen & VideoEditorScreen)
+        Column(
+          modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+          // 2a. Interactive Waveform Preview Viewport (takes weight(1f) like VideoPreviewViewport & ImageCanvas)
+          WaveformPreviewViewport(
+            buffer = activeBuf,
+            peaks = waveformPeaks,
+            trimStartFraction = trimStartFraction,
+            trimEndFraction = trimEndFraction,
+            playheadFraction = playheadFraction,
+            volumeGainPercent = volumeGainPercent,
+            fadeInSeconds = fadeInSeconds,
+            fadeOutSeconds = fadeOutSeconds,
+            statusBannerText = statusBannerText,
+            onSelectionChange = { newStart, newEnd ->
+              val startMoved = abs(newStart - trimStartFraction) > 1e-4f
+              val (updatedStart, updatedEnd) = AudioEditorEngine.updateSelectionFromHandles(
+                currentStart = trimStartFraction,
+                currentEnd = trimEndFraction,
+                draggedStart = newStart,
+                draggedEnd = newEnd,
+              )
+              trimStartFraction = updatedStart
+              trimEndFraction = updatedEnd
+              if (!isPlaying) {
+                playheadFraction = if (startMoved) {
+                  updatedStart
+                } else {
+                  playheadFraction.coerceIn(updatedStart, updatedEnd)
+                }
+              }
+            },
+            onScrub = { fraction ->
+              if (isPlaying) stopPlayback()
+              playheadFraction = fraction.coerceIn(0f, 1f)
+            },
+            onResetSelection = {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              trimStartFraction = 0f
+              trimEndFraction = 1f
+              playheadFraction = 0f
+            },
+            modifier = Modifier
+              .weight(1f)
+              .fillMaxWidth(),
+          )
+
+          Spacer(modifier = Modifier.height(6.dp))
+
+          // 2b. Compact Playback Transport & Quick Actions Row (aligned with VideoTransportRow)
+          AudioTransportRow(
+            buffer = activeBuf,
+            isPlaying = isPlaying,
+            loopPlayback = loopPlayback,
+            playheadFraction = playheadFraction,
+            trimStartFraction = trimStartFraction,
+            trimEndFraction = trimEndFraction,
+            speedMultiplier = speedMultiplier,
+            hasAnyChanges = hasAnyChanges,
+            isBusy = isBusy,
+            onTogglePlayPause = {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              if (isPlaying) stopPlayback() else startPlayback()
+            },
+            onStopRewind = {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              stopPlayback()
+              playheadFraction = trimStartFraction
+            },
+            onToggleLoop = {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              loopPlayback = !loopPlayback
+            },
+            onShareAudio = {
+              stopPlayback()
+              coroutineScope.launch {
+                isBusy = true
+                val effectiveBuf = withContext(Dispatchers.Default) {
+                  AudioEditorEngine.buildEffectiveOutputBuffer(
+                    buffer = activeBuf,
+                    trimStartFraction = trimStartFraction,
+                    trimEndFraction = trimEndFraction,
+                    volumeGainPercent = volumeGainPercent,
+                    fadeInSeconds = fadeInSeconds,
+                    fadeOutSeconds = fadeOutSeconds,
+                    speedMultiplier = speedMultiplier,
+                  )
+                }
+                val tempShareFile = File(
+                  context.cacheDir,
+                  "${FileConverterEngine.extractFileStem(sourceFileName)}_edited.wav",
+                )
+                val ok = withContext(Dispatchers.IO) {
+                  AudioEditorEngine.writeWavFile(effectiveBuf, tempShareFile)
+                }
+                isBusy = false
+                if (ok) {
+                  shareConvertedFile(context, tempShareFile, "audio/wav")
+                } else {
+                  Toast.makeText(context, "Could not prepare audio for sharing", Toast.LENGTH_SHORT).show()
+                }
+              }
+            },
+            onOpenAudio = {
+              performWithDiscardCheck {
+                stopPlayback()
+                showFilePickerDialog = true
+              }
+            },
+            onResetAll = {
+              val orig = originalBuffer ?: return@AudioTransportRow
+              volumeGainPercent = 100f
+              fadeInSeconds = 0f
+              fadeOutSeconds = 0f
+              speedMultiplier = 1.0f
+              commitEdit(orig, "Reset to original audio")
+            },
+          )
+
+          Spacer(modifier = Modifier.height(6.dp))
+
+          // 2c. Mode-Specific Controls Card (aligned with ImageEditorScreen & VideoEditorScreen)
+          Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+          ) {
+            Box(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+              when (activeMode) {
+                AudioEditorMode.TRIM -> {
+                  AudioTrimControls(
+                    buffer = activeBuf,
+                    trimStartFraction = trimStartFraction,
+                    trimEndFraction = trimEndFraction,
+                    playheadFraction = playheadFraction,
+                    onTrimChange = { newStart, newEnd ->
+                      if (isPlaying) stopPlayback()
+                      val (updatedStart, updatedEnd) = AudioEditorEngine.updateSelectionFromHandles(
+                        currentStart = trimStartFraction,
+                        currentEnd = trimEndFraction,
+                        draggedStart = newStart,
+                        draggedEnd = newEnd,
+                      )
+                      trimStartFraction = updatedStart
+                      trimEndFraction = updatedEnd
+                      playheadFraction = playheadFraction.coerceIn(updatedStart, updatedEnd)
+                    },
+                    onSetStartAtPlayhead = {
+                      val maxStart = (trimEndFraction - AudioEditorEngine.MIN_TRIM_SPAN_FRACTION).coerceAtLeast(0f)
+                      trimStartFraction = playheadFraction.coerceIn(0f, maxStart)
+                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    },
+                    onSetEndAtPlayhead = {
+                      val minEnd = (trimStartFraction + AudioEditorEngine.MIN_TRIM_SPAN_FRACTION).coerceAtMost(1f)
+                      trimEndFraction = playheadFraction.coerceIn(minEnd, 1f)
+                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    },
+                    onResetSelection = {
+                      trimStartFraction = 0f
+                      trimEndFraction = 1f
+                      playheadFraction = 0f
+                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    },
+                    onTrimKeepSelection = {
+                      val trimmed = AudioEditorEngine.trim(activeBuf, trimStartFraction, trimEndFraction)
+                      commitEdit(
+                        newBuffer = trimmed,
+                        actionDescription = "Trimmed to ${AudioRecorderEngine.formatDurationMs(trimmed.durationMs)}",
+                      )
+                    },
+                    onCutRemoveSelection = {
+                      val cut = AudioEditorEngine.cutSelection(activeBuf, trimStartFraction, trimEndFraction)
+                      commitEdit(
+                        newBuffer = cut,
+                        actionDescription = "Cut selection (${AudioRecorderEngine.formatDurationMs(cut.durationMs)} remaining)",
+                      )
+                    },
+                  )
+                }
+
+                AudioEditorMode.VOLUME_FADE -> {
+                  VolumeAndFadeControls(
+                    buffer = activeBuf,
+                    trimStartFraction = trimStartFraction,
+                    trimEndFraction = trimEndFraction,
+                    volumeGainPercent = volumeGainPercent,
+                    fadeInSeconds = fadeInSeconds,
+                    fadeOutSeconds = fadeOutSeconds,
+                    onVolumeGainChange = { volumeGainPercent = it },
+                    onFadeInChange = { fadeInSeconds = it },
+                    onFadeOutChange = { fadeOutSeconds = it },
+                    onResetVolumeAndFade = {
+                      volumeGainPercent = 100f
+                      fadeInSeconds = 0f
+                      fadeOutSeconds = 0f
+                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    },
+                    onApplyVolumeAndFade = {
+                      var updated = activeBuf
+                      val gainMultiplier = volumeGainPercent / 100f
+                      if (abs(gainMultiplier - 1f) > 0.01f) {
+                        updated = AudioEditorEngine.adjustVolume(
+                          buffer = updated,
+                          gainMultiplier = gainMultiplier,
+                          startFraction = trimStartFraction,
+                          endFraction = trimEndFraction,
+                        )
+                      }
+                      val fadeInMs = (fadeInSeconds * 1000f).roundToInt().toLong()
+                      val fadeOutMs = (fadeOutSeconds * 1000f).roundToInt().toLong()
+                      if (fadeInMs > 0L || fadeOutMs > 0L) {
+                        updated = AudioEditorEngine.applyFade(
+                          buffer = updated,
+                          fadeInMs = fadeInMs,
+                          fadeOutMs = fadeOutMs,
+                          startFraction = trimStartFraction,
+                          endFraction = trimEndFraction,
+                        )
+                      }
+                      volumeGainPercent = 100f
+                      fadeInSeconds = 0f
+                      fadeOutSeconds = 0f
+                      commitEdit(
+                        newBuffer = updated,
+                        actionDescription = "Applied volume & fade adjustments",
+                        resetSelection = false,
+                      )
+                    },
+                    onNormalize = {
+                      val normalized = AudioEditorEngine.normalize(
+                        buffer = activeBuf,
+                        targetPeakFraction = 0.95f,
+                        startFraction = trimStartFraction,
+                        endFraction = trimEndFraction,
+                      )
+                      commitEdit(
+                        newBuffer = normalized,
+                        actionDescription = "Normalized peak amplitude to 95%",
+                        resetSelection = false,
+                      )
+                    },
+                    onMuteSelection = {
+                      val muted = AudioEditorEngine.adjustVolume(
+                        buffer = activeBuf,
+                        gainMultiplier = 0f,
+                        startFraction = trimStartFraction,
+                        endFraction = trimEndFraction,
+                      )
+                      commitEdit(
+                        newBuffer = muted,
+                        actionDescription = "Muted selected range",
+                        resetSelection = false,
+                      )
+                    },
+                  )
+                }
+
+                AudioEditorMode.SPEED_EFFECTS -> {
+                  SpeedAndReverseControls(
+                    speedMultiplier = speedMultiplier,
+                    onSpeedChange = { speedMultiplier = it },
+                    onResetSpeed = {
+                      speedMultiplier = 1.0f
+                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    },
+                    onApplySpeed = {
+                      val resampled = AudioEditorEngine.changeSpeed(activeBuf, speedMultiplier)
+                      val formattedSpeed = String.format(Locale.US, "%.2fx", speedMultiplier)
+                      commitEdit(
+                        newBuffer = resampled,
+                        actionDescription = "Changed speed to $formattedSpeed (${AudioRecorderEngine.formatDurationMs(resampled.durationMs)})",
+                      )
+                      speedMultiplier = 1.0f
+                    },
+                    onReverseSelection = {
+                      val reversed = AudioEditorEngine.reverse(
+                        buffer = activeBuf,
+                        startFraction = trimStartFraction,
+                        endFraction = trimEndFraction,
+                      )
+                      val scopeLabel = if (trimStartFraction <= 0.01f && trimEndFraction >= 0.99f) {
+                        "Reversed full track"
+                      } else {
+                        "Reversed selected range"
+                      }
+                      commitEdit(
+                        newBuffer = reversed,
+                        actionDescription = scopeLabel,
+                        resetSelection = false,
+                      )
+                    },
+                  )
+                }
+              }
             }
           }
-        },
-        onSaveEdits = {
-          stopPlayback()
-          showExportDialog = true
-        },
-      )
+
+          Spacer(modifier = Modifier.height(6.dp))
+
+          // 2d. Bottom Mode Selector Row (aligned with ModeSelectorRow & VideoModeSelectorRow)
+          AudioEditorModeSelector(
+            activeMode = activeMode,
+            hasTrimEdits = hasTrimChanges,
+            hasVolumeFadeEdits = hasVolumeFadeChanges,
+            hasSpeedEdits = hasSpeedChanges,
+            onSelectMode = { mode ->
+              activeMode = mode
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            },
+          )
+        }
       }
     }
   }
@@ -879,6 +867,70 @@ fun AudioEditorScreen(
       onFileSelected = { selectedFile ->
         showFilePickerDialog = false
         openAudioFile(selectedFile)
+      },
+    )
+  }
+
+  // Unsaved Changes Confirmation Dialog (aligned with ImageEditorScreen & VideoEditorScreen)
+  if (showDiscardDialog) {
+    AlertDialog(
+      onDismissRequest = { showDiscardDialog = false },
+      shape = RoundedCornerShape(28.dp),
+      containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+      tonalElevation = 6.dp,
+      icon = {
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.errorContainer,
+          modifier = Modifier.size(44.dp),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = Icons.Default.Warning,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.onErrorContainer,
+              modifier = Modifier.size(22.dp),
+            )
+          }
+        }
+      },
+      title = {
+        Text(
+          text = "Discard Audio Edits?",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold,
+        )
+      },
+      text = {
+        Text(
+          text = "You have unsaved edits on this audio track. Are you sure you want to discard them?",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      },
+      confirmButton = {
+        Button(
+          onClick = {
+            showDiscardDialog = false
+            pendingDiscardAction?.invoke()
+            pendingDiscardAction = null
+          },
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier.testTag("confirm_discard_button"),
+        ) {
+          Text("Discard")
+        }
+      },
+      dismissButton = {
+        TextButton(
+          onClick = {
+            showDiscardDialog = false
+            pendingDiscardAction = null
+          },
+          shape = RoundedCornerShape(12.dp),
+        ) {
+          Text("Keep Editing")
+        }
       },
     )
   }
@@ -982,27 +1034,172 @@ fun AudioEditorScreen(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Top Header Bar (aligned with VideoEditorTopBar)
+// ---------------------------------------------------------------------------
+
 @Composable
-private fun WaveformStageCard(
+private fun AudioEditorTopBar(
+  buffer: AudioSampleBuffer,
+  sourceFileName: String,
+  canUndo: Boolean,
+  canRedo: Boolean,
+  isBusy: Boolean,
+  onUndo: () -> Unit,
+  onRedo: () -> Unit,
+  onClose: () -> Unit,
+  onExportClick: () -> Unit,
+) {
+  Surface(
+    color = MaterialTheme.colorScheme.surface,
+    tonalElevation = 1.dp,
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(min = 68.dp)
+        .padding(horizontal = 16.dp, vertical = 10.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.weight(1f),
+      ) {
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.primaryContainer,
+          modifier = Modifier.size(36.dp),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = Icons.Default.GraphicEq,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.onPrimaryContainer,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+        }
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = "Audio Editor",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          val chLabel = if (buffer.safeChannels == 2) "Stereo" else "Mono"
+          val subtitleText =
+            "$sourceFileName • ${AudioRecorderEngine.formatDurationMs(buffer.durationMs)} • ${buffer.sampleRate / 1000.0}kHz $chLabel"
+          Text(
+            text = subtitleText,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+      ) {
+        IconButton(
+          onClick = onUndo,
+          enabled = canUndo,
+          modifier = Modifier
+            .size(38.dp)
+            .testTag("audio_editor_undo_button"),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Undo,
+            contentDescription = "Undo",
+            modifier = Modifier.size(20.dp),
+          )
+        }
+        IconButton(
+          onClick = onRedo,
+          enabled = canRedo,
+          modifier = Modifier
+            .size(38.dp)
+            .testTag("audio_editor_redo_button"),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Redo,
+            contentDescription = "Redo",
+            modifier = Modifier.size(20.dp),
+          )
+        }
+        IconButton(
+          onClick = onClose,
+          enabled = !isBusy,
+          modifier = Modifier
+            .size(38.dp)
+            .testTag("audio_editor_close_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = "Close audio",
+            modifier = Modifier.size(20.dp),
+          )
+        }
+        Spacer(modifier = Modifier.width(4.dp))
+        Button(
+          onClick = onExportClick,
+          enabled = !isBusy,
+          shape = RoundedCornerShape(12.dp),
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+          modifier = Modifier
+            .height(36.dp)
+            .testTag("audio_editor_export_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.SaveAlt,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(
+            text = "Export",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Interactive Waveform Stage Viewport (aligned with VideoPreviewViewport)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun WaveformPreviewViewport(
   buffer: AudioSampleBuffer,
   peaks: List<Float>,
   trimStartFraction: Float,
   trimEndFraction: Float,
   playheadFraction: Float,
-  isPlaying: Boolean,
+  volumeGainPercent: Float,
+  fadeInSeconds: Float,
+  fadeOutSeconds: Float,
   statusBannerText: String?,
   onSelectionChange: (Float, Float) -> Unit,
   onScrub: (Float) -> Unit,
   onResetSelection: () -> Unit,
-  onTrimKeepSelection: () -> Unit,
-  onCutRemoveSelection: () -> Unit,
+  modifier: Modifier = Modifier,
 ) {
   val primaryColor = MaterialTheme.colorScheme.primary
   val onPrimaryColor = MaterialTheme.colorScheme.onPrimary
   val tertiaryColor = MaterialTheme.colorScheme.tertiary
   val inactiveBarColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.28f)
-  val selectionTint = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f)
-  val dimMaskColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+  val selectionTint = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.24f)
+  val dimMaskColor = MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f)
   val outlineColor = MaterialTheme.colorScheme.outlineVariant
 
   val startMs = (trimStartFraction * buffer.durationMs).roundToInt().toLong()
@@ -1013,71 +1210,31 @@ private fun WaveformStageCard(
     (AudioEditorEngine.calculatePeakAmplitude(buffer, trimStartFraction, trimEndFraction) * 100f).roundToInt()
   }
 
-  Card(
-    shape = RoundedCornerShape(14.dp),
-    colors = CardDefaults.cardColors(
-      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-    ),
+  val currentTrimStart by rememberUpdatedState(trimStartFraction)
+  val currentTrimEnd by rememberUpdatedState(trimEndFraction)
+  val currentOnSelectionChange by rememberUpdatedState(onSelectionChange)
+  val currentOnScrub by rememberUpdatedState(onScrub)
+
+  var isDraggingStartHandle by remember { mutableStateOf(false) }
+  var isDraggingEndHandle by remember { mutableStateOf(false) }
+
+  Surface(
+    modifier = modifier.testTag("audio_waveform_viewport"),
+    shape = RoundedCornerShape(16.dp),
+    color = MaterialTheme.colorScheme.surfaceContainerLowest,
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-    modifier = Modifier.fillMaxWidth(),
   ) {
-    Column(
+    Box(
       modifier = Modifier
-        .fillMaxWidth()
-        .padding(14.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
+        .fillMaxSize()
+        .padding(8.dp),
     ) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-      ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = "Selection: ${AudioRecorderEngine.formatDurationMs(startMs)} – ${AudioRecorderEngine.formatDurationMs(endMs)}",
-            style = MaterialTheme.typography.bodyMedium,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
-          Text(
-            text = "Length: ${AudioRecorderEngine.formatDurationMs(selectedDurationMs)} • Peak: $peakLevel%",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-
-        if (hasSubSelection) {
-          FilterChip(
-            selected = false,
-            onClick = onResetSelection,
-            label = {
-              Text(
-                text = "Select All",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Medium,
-              )
-            },
-            shape = RoundedCornerShape(20.dp),
-          )
-        }
-      }
-
       // Interactive Waveform Canvas supporting simultaneous multi-touch start & end handle dragging
-      val currentTrimStart by rememberUpdatedState(trimStartFraction)
-      val currentTrimEnd by rememberUpdatedState(trimEndFraction)
-      val currentOnSelectionChange by rememberUpdatedState(onSelectionChange)
-      val currentOnScrub by rememberUpdatedState(onScrub)
-
-      var isDraggingStartHandle by remember { mutableStateOf(false) }
-      var isDraggingEndHandle by remember { mutableStateOf(false) }
-
       Box(
         modifier = Modifier
-          .fillMaxWidth()
-          .height(148.dp)
-          .clip(RoundedCornerShape(14.dp))
-          .background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.45f))
+          .fillMaxSize()
+          .clip(RoundedCornerShape(10.dp))
+          .background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.35f))
           .testTag("audio_editor_waveform_canvas")
           .pointerInput(Unit) {
             awaitEachGesture {
@@ -1107,7 +1264,6 @@ private fun WaveformStageCard(
                 val hitRadius = (32.dp.toPx() / w).coerceIn(0.06f, 0.16f)
                 val activeChanges = event.changes.filter { it.pressed }
 
-                // Bind any newly pressed pointers (e.g. second finger placed on the other handle)
                 for (change in activeChanges) {
                   if (!pointerTargets.containsKey(change.id)) {
                     val touchFrac = (change.position.x / w).coerceIn(0f, 1f)
@@ -1121,8 +1277,6 @@ private fun WaveformStageCard(
                       else -> WaveformDragTarget.NONE
                     }
 
-                    // If first finger started on playhead and a second finger touches down,
-                    // promote the two fingers into simultaneous start (left) and end (right) handles.
                     if (alreadyClaimed == WaveformDragTarget.NONE &&
                       pointerTargets.values.any { it == WaveformDragTarget.PLAYHEAD } &&
                       activeChanges.size >= 2
@@ -1189,6 +1343,11 @@ private fun WaveformStageCard(
             }
           },
       ) {
+        val totalDurationSec = (buffer.durationMs / 1000f).coerceAtLeast(0.01f)
+        val fadeInSpanFrac = (fadeInSeconds / totalDurationSec).coerceAtLeast(0f)
+        val fadeOutSpanFrac = (fadeOutSeconds / totalDurationSec).coerceAtLeast(0f)
+        val gainMultiplier = (volumeGainPercent / 100f).coerceIn(0f, 2.5f)
+
         Canvas(modifier = Modifier.fillMaxSize()) {
           val w = size.width
           val h = size.height
@@ -1213,18 +1372,32 @@ private fun WaveformStageCard(
             pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)),
           )
 
-          // Waveform amplitude bars
+          // Waveform amplitude bars with live preview of gain & fade envelope
           if (peaks.isNotEmpty()) {
             val count = peaks.size
             val slotWidth = w / count
             val barWidth = (slotWidth * 0.62f).coerceAtLeast(2.dp.toPx())
-            val maxHalfHeight = (h * 0.42f)
+            val maxHalfHeight = (h * 0.40f)
 
             for (i in 0 until count) {
               val barCenterX = (i + 0.5f) * slotWidth
               val barFrac = barCenterX / w
               val inSelection = barFrac in trimStartFraction..trimEndFraction
-              val peak = peaks[i].coerceIn(0.04f, 1f)
+
+              var envelope = 1f
+              if (inSelection) {
+                envelope *= gainMultiplier
+                if (fadeInSpanFrac > 0.001f && barFrac < trimStartFraction + fadeInSpanFrac) {
+                  val f = ((barFrac - trimStartFraction) / fadeInSpanFrac).coerceIn(0f, 1f)
+                  envelope *= f
+                }
+                if (fadeOutSpanFrac > 0.001f && barFrac > trimEndFraction - fadeOutSpanFrac) {
+                  val f = ((trimEndFraction - barFrac) / fadeOutSpanFrac).coerceIn(0f, 1f)
+                  envelope *= f
+                }
+              }
+
+              val peak = (peaks[i] * envelope).coerceIn(0.03f, 1f)
               val halfBar = (peak * maxHalfHeight).coerceAtLeast(2.dp.toPx())
 
               drawRoundRect(
@@ -1252,7 +1425,7 @@ private fun WaveformStageCard(
             )
           }
 
-          // Trim Start & End vertical marker lines + vertically centered bar handles
+          // Trim window border & side handles
           val startStroke = if (isDraggingStartHandle) 3.5.dp.toPx() else 2.5.dp.toPx()
           val endStroke = if (isDraggingEndHandle) 3.5.dp.toPx() else 2.5.dp.toPx()
           val startBarWidth = if (isDraggingStartHandle) 10.dp.toPx() else 8.dp.toPx()
@@ -1266,7 +1439,7 @@ private fun WaveformStageCard(
           val gripHalfHeight = 7.dp.toPx()
           val gripStroke = 1.5.dp.toPx()
 
-          // Start vertical boundary line & centered bar handle
+          // Start boundary & grip handle
           drawLine(
             color = primaryColor,
             start = Offset(startX, 0f),
@@ -1296,7 +1469,7 @@ private fun WaveformStageCard(
             strokeWidth = gripStroke,
           )
 
-          // End vertical boundary line & centered bar handle
+          // End boundary & grip handle
           drawLine(
             color = primaryColor,
             start = Offset(endX, 0f),
@@ -1326,12 +1499,12 @@ private fun WaveformStageCard(
             strokeWidth = gripStroke,
           )
 
-          // Playhead cursor line
+          // Playhead vertical line + top pill indicator (matching VideoFilmstripTimeline)
           drawLine(
             color = tertiaryColor,
             start = Offset(playheadX, 0f),
             end = Offset(playheadX, h),
-            strokeWidth = 2.dp.toPx(),
+            strokeWidth = 2.5.dp.toPx(),
           )
           drawCircle(
             color = tertiaryColor,
@@ -1342,201 +1515,745 @@ private fun WaveformStageCard(
         }
       }
 
-      // Direct inline Trim & Cut action bar right below the waveform canvas
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+      // Top-left selection & peak badge (aligned with VideoPreviewViewport's strategy_badge)
+      Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.88f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        modifier = Modifier
+          .align(Alignment.TopStart)
+          .padding(6.dp),
       ) {
-        Button(
-          onClick = onTrimKeepSelection,
-          enabled = hasSubSelection,
-          shape = RoundedCornerShape(12.dp),
-          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-          modifier = Modifier
-            .weight(1f)
-            .height(44.dp)
-            .testTag("audio_editor_trim_button"),
+        Row(
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
           Icon(
-            imageVector = Icons.Default.ContentCut,
+            imageVector = Icons.Default.GraphicEq,
             contentDescription = null,
-            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(13.dp),
           )
-          Spacer(modifier = Modifier.width(6.dp))
           Text(
-            text = "Trim (Keep)",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-
-        FilledTonalButton(
-          onClick = onCutRemoveSelection,
-          enabled = hasSubSelection,
-          shape = RoundedCornerShape(12.dp),
-          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-          modifier = Modifier
-            .weight(1f)
-            .height(44.dp)
-            .testTag("audio_editor_cut_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.SwapHoriz,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-          )
-          Spacer(modifier = Modifier.width(6.dp))
-          Text(
-            text = "Cut (Remove)",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            text = "${AudioRecorderEngine.formatDurationMs(startMs)} – ${AudioRecorderEngine.formatDurationMs(endMs)} (${AudioRecorderEngine.formatDurationMs(selectedDurationMs)}) • Peak $peakLevel%",
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurface,
           )
         }
       }
 
+      // Top-right Select All reset pill when a sub-range is selected (aligned with ImageEditorScreen's zoom reset pill)
+      if (hasSubSelection) {
+        Surface(
+          modifier = Modifier
+            .align(Alignment.TopEnd)
+            .padding(6.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onResetSelection),
+          color = MaterialTheme.colorScheme.primaryContainer,
+          contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+          shadowElevation = 2.dp,
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = "Select All",
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.Bold,
+            )
+          }
+        }
+      }
+
+      // Bottom status toast pill inside viewport when an edit is applied
       if (!statusBannerText.isNullOrBlank()) {
-        Text(
-          text = statusBannerText,
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.primary,
-          fontWeight = FontWeight.Medium,
-          modifier = Modifier.testTag("audio_editor_status_banner"),
-        )
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.90f),
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+          modifier = Modifier
+            .align(Alignment.BottomStart)
+            .padding(6.dp)
+            .testTag("audio_editor_status_banner"),
+        ) {
+          Text(
+            text = statusBannerText,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+          )
+        }
       }
     }
   }
 }
 
+// ---------------------------------------------------------------------------
+// Playback Transport & Quick Actions Row (aligned with VideoTransportRow)
+// ---------------------------------------------------------------------------
+
 @Composable
-private fun PlaybackTransportCard(
+private fun AudioTransportRow(
   buffer: AudioSampleBuffer,
   isPlaying: Boolean,
   loopPlayback: Boolean,
   playheadFraction: Float,
   trimStartFraction: Float,
   trimEndFraction: Float,
+  speedMultiplier: Float,
+  hasAnyChanges: Boolean,
+  isBusy: Boolean,
   onTogglePlayPause: () -> Unit,
   onStopRewind: () -> Unit,
   onToggleLoop: () -> Unit,
-  onScrub: (Float) -> Unit,
+  onShareAudio: () -> Unit,
+  onOpenAudio: () -> Unit,
+  onResetAll: () -> Unit,
 ) {
   val currentMs = (playheadFraction * buffer.durationMs).roundToInt().toLong()
-  val totalMs = buffer.durationMs
-
-  Card(
-    shape = RoundedCornerShape(14.dp),
-    colors = CardDefaults.cardColors(
-      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-    ),
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-    modifier = Modifier.fillMaxWidth(),
+  val endMs = (trimEndFraction * buffer.durationMs).roundToInt().toLong()
+  val effectiveDurationMs = remember(
+    buffer.durationMs,
+    trimStartFraction,
+    trimEndFraction,
+    speedMultiplier,
   ) {
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(horizontal = 14.dp, vertical = 10.dp),
-      verticalArrangement = Arrangement.spacedBy(6.dp),
+    val selectedMs = ((trimEndFraction - trimStartFraction).coerceIn(0f, 1f) * buffer.durationMs)
+    (selectedMs / speedMultiplier.coerceIn(0.25f, 4.0f)).roundToInt().toLong().coerceAtLeast(0L)
+  }
+
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.SpaceBetween,
+  ) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+      FilledIconButton(
+        onClick = onTogglePlayPause,
+        modifier = Modifier
+          .size(38.dp)
+          .testTag("audio_editor_play_pause_button"),
       ) {
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          FilledIconButton(
-            onClick = onTogglePlayPause,
-            shape = CircleShape,
-            modifier = Modifier
-              .size(44.dp)
-              .testTag("audio_editor_play_pause_button"),
-          ) {
-            Icon(
-              imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-              contentDescription = if (isPlaying) "Pause" else "Play",
-              modifier = Modifier.size(20.dp),
-            )
-          }
-
-          FilledTonalIconButton(
-            onClick = onStopRewind,
-            shape = CircleShape,
-            modifier = Modifier
-              .size(44.dp)
-              .testTag("audio_editor_stop_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Stop,
-              contentDescription = "Stop and rewind to selection start",
-              modifier = Modifier.size(20.dp),
-            )
-          }
-
-          FilledTonalIconButton(
-            onClick = onToggleLoop,
-            shape = CircleShape,
-            colors = IconButtonDefaults.filledTonalIconButtonColors(
-              containerColor = if (loopPlayback) {
-                MaterialTheme.colorScheme.primaryContainer
-              } else {
-                MaterialTheme.colorScheme.surfaceVariant
-              },
-            ),
-            modifier = Modifier
-              .size(44.dp)
-              .testTag("audio_editor_loop_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Repeat,
-              contentDescription = "Loop selection",
-              tint = if (loopPlayback) {
-                MaterialTheme.colorScheme.onPrimaryContainer
-              } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-              },
-              modifier = Modifier.size(20.dp),
-            )
-          }
-        }
-
-        Text(
-          text = "${AudioRecorderEngine.formatDurationMs(currentMs)} / ${AudioRecorderEngine.formatDurationMs(totalMs)}",
-          style = MaterialTheme.typography.bodyMedium,
-          fontFamily = FontFamily.Monospace,
-          fontWeight = FontWeight.Bold,
-          color = MaterialTheme.colorScheme.onSurface,
+        Icon(
+          imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+          contentDescription = if (isPlaying) "Pause" else "Play",
+          modifier = Modifier.size(20.dp),
         )
       }
 
-      SlimDotSlider(
-        value = playheadFraction,
-        onValueChange = onScrub,
-        valueRange = 0f..1f,
-        modifier = Modifier.fillMaxWidth(),
+      FilledTonalIconButton(
+        onClick = onStopRewind,
+        modifier = Modifier
+          .size(34.dp)
+          .testTag("audio_editor_stop_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Stop,
+          contentDescription = "Stop and rewind to selection start",
+          modifier = Modifier.size(17.dp),
+        )
+      }
+
+      FilledTonalIconToggleButton(
+        checked = loopPlayback,
+        onCheckedChange = { onToggleLoop() },
+        modifier = Modifier
+          .size(34.dp)
+          .testTag("audio_editor_loop_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Repeat,
+          contentDescription = "Loop selection",
+          modifier = Modifier.size(17.dp),
+        )
+      }
+
+      Column {
+        Text(
+          text = "${AudioRecorderEngine.formatDurationMs(currentMs)} / ${AudioRecorderEngine.formatDurationMs(endMs)}",
+          style = MaterialTheme.typography.labelMedium,
+          fontFamily = FontFamily.Monospace,
+          fontWeight = FontWeight.SemiBold,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+          text = "Out ${AudioRecorderEngine.formatDurationMs(effectiveDurationMs)} • ${String.format(Locale.US, "%.2g×", speedMultiplier)}",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+      IconButton(
+        onClick = onShareAudio,
+        enabled = !isBusy,
+        modifier = Modifier
+          .size(36.dp)
+          .testTag("audio_editor_share_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Share,
+          contentDescription = "Share edited audio",
+          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.size(19.dp),
+        )
+      }
+      IconButton(
+        onClick = onOpenAudio,
+        enabled = !isBusy,
+        modifier = Modifier
+          .size(36.dp)
+          .testTag("audio_editor_open_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.FolderOpen,
+          contentDescription = "Open another audio file",
+          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.size(19.dp),
+        )
+      }
+      IconButton(
+        onClick = onResetAll,
+        enabled = hasAnyChanges && !isBusy,
+        modifier = Modifier
+          .size(36.dp)
+          .testTag("audio_editor_reset_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.RestartAlt,
+          contentDescription = "Reset to original",
+          modifier = Modifier.size(19.dp),
+        )
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mode Control Panels (Trim, Volume & Fade, Speed & Reverse)
+// Aligned with ImageEditorScreen & VideoEditorScreen controls
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun AudioTrimControls(
+  buffer: AudioSampleBuffer,
+  trimStartFraction: Float,
+  trimEndFraction: Float,
+  playheadFraction: Float,
+  onTrimChange: (Float?, Float?) -> Unit,
+  onSetStartAtPlayhead: () -> Unit,
+  onSetEndAtPlayhead: () -> Unit,
+  onResetSelection: () -> Unit,
+  onTrimKeepSelection: () -> Unit,
+  onCutRemoveSelection: () -> Unit,
+) {
+  val startMs = (trimStartFraction * buffer.durationMs).roundToInt().toLong()
+  val endMs = (trimEndFraction * buffer.durationMs).roundToInt().toLong()
+  val playheadMs = (playheadFraction * buffer.durationMs).roundToInt().toLong()
+  val hasSubSelection = trimStartFraction > 0.005f || trimEndFraction < 0.995f
+
+  Column(modifier = Modifier.fillMaxWidth()) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = "Start ${AudioRecorderEngine.formatDurationMs(startMs)}",
+        style = MaterialTheme.typography.bodySmall,
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier.width(98.dp),
       )
+      SlimDotSlider(
+        value = trimStartFraction,
+        onValueChange = { raw -> onTrimChange(raw, null) },
+        valueRange = 0f..1f,
+        modifier = Modifier
+          .weight(1f)
+          .testTag("trim_start_slider"),
+      )
+    }
+
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = "End   ${AudioRecorderEngine.formatDurationMs(endMs)}",
+        style = MaterialTheme.typography.bodySmall,
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier.width(98.dp),
+      )
+      SlimDotSlider(
+        value = trimEndFraction,
+        onValueChange = { raw -> onTrimChange(null, raw) },
+        valueRange = 0f..1f,
+        modifier = Modifier
+          .weight(1f)
+          .testTag("trim_end_slider"),
+      )
+    }
+
+    Spacer(modifier = Modifier.height(4.dp))
+
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        FilledTonalButton(
+          onClick = onSetStartAtPlayhead,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("trim_set_start_button"),
+        ) {
+          Text(
+            text = "Set Start (${AudioRecorderEngine.formatDurationMs(playheadMs)})",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+
+        FilledTonalButton(
+          onClick = onSetEndAtPlayhead,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("trim_set_end_button"),
+        ) {
+          Text(
+            text = "Set End",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+
+        OutlinedButton(
+          onClick = onResetSelection,
+          enabled = hasSubSelection,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("trim_reset_button"),
+        ) {
+          Text(
+            text = "Reset",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+      }
+
+      Spacer(modifier = Modifier.width(8.dp))
+
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        FilledTonalButton(
+          onClick = onCutRemoveSelection,
+          enabled = hasSubSelection,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("audio_editor_cut_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.SwapHoriz,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(
+            text = "Cut (Remove)",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+
+        Button(
+          onClick = onTrimKeepSelection,
+          enabled = hasSubSelection,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("audio_editor_trim_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.ContentCut,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(
+            text = "Trim (Keep)",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+      }
     }
   }
 }
 
 @Composable
+private fun VolumeAndFadeControls(
+  buffer: AudioSampleBuffer,
+  trimStartFraction: Float,
+  trimEndFraction: Float,
+  volumeGainPercent: Float,
+  fadeInSeconds: Float,
+  fadeOutSeconds: Float,
+  onVolumeGainChange: (Float) -> Unit,
+  onFadeInChange: (Float) -> Unit,
+  onFadeOutChange: (Float) -> Unit,
+  onResetVolumeAndFade: () -> Unit,
+  onApplyVolumeAndFade: () -> Unit,
+  onNormalize: () -> Unit,
+  onMuteSelection: () -> Unit,
+) {
+  val maxFadeSec = ((buffer.durationMs / 1000f) * (trimEndFraction - trimStartFraction)).coerceIn(0.5f, 5.0f)
+  val hasPendingVolumeOrFade =
+    abs(volumeGainPercent - 100f) > 0.5f || fadeInSeconds > 0.05f || fadeOutSeconds > 0.05f
+
+  Column(modifier = Modifier.fillMaxWidth()) {
+    // 1. Volume Gain (inline label + SlimDotSlider matching ImageEditor / VideoEditor)
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = "Gain ${volumeGainPercent.roundToInt()}%",
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier.width(98.dp),
+      )
+      SlimDotSlider(
+        value = volumeGainPercent,
+        onValueChange = onVolumeGainChange,
+        valueRange = 0f..250f,
+        modifier = Modifier
+          .weight(1f)
+          .testTag("audio_editor_gain_slider"),
+      )
+    }
+
+    // 2. Fade In
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = "Fade In ${String.format(Locale.US, "%.1fs", fadeInSeconds)}",
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier.width(98.dp),
+      )
+      SlimDotSlider(
+        value = fadeInSeconds.coerceIn(0f, maxFadeSec),
+        onValueChange = onFadeInChange,
+        valueRange = 0f..maxFadeSec,
+        modifier = Modifier
+          .weight(1f)
+          .testTag("audio_editor_fade_in_slider"),
+      )
+    }
+
+    // 3. Fade Out
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = "Fade Out ${String.format(Locale.US, "%.1fs", fadeOutSeconds)}",
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier.width(98.dp),
+      )
+      SlimDotSlider(
+        value = fadeOutSeconds.coerceIn(0f, maxFadeSec),
+        onValueChange = onFadeOutChange,
+        valueRange = 0f..maxFadeSec,
+        modifier = Modifier
+          .weight(1f)
+          .testTag("audio_editor_fade_out_slider"),
+      )
+    }
+
+    Spacer(modifier = Modifier.height(4.dp))
+
+    // 4. Compact CircleShape action row (Normalize, Mute on left; Reset, Apply on right)
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        FilledTonalButton(
+          onClick = onNormalize,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("audio_editor_normalize_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.AutoFixHigh,
+            contentDescription = null,
+            modifier = Modifier.size(15.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(
+            text = "Normalize",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+
+        FilledTonalButton(
+          onClick = onMuteSelection,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("audio_editor_mute_button"),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.VolumeOff,
+            contentDescription = null,
+            modifier = Modifier.size(15.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(
+            text = "Mute",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+      }
+
+      Spacer(modifier = Modifier.width(8.dp))
+
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        OutlinedButton(
+          onClick = onResetVolumeAndFade,
+          enabled = hasPendingVolumeOrFade,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("volume_fade_reset_button"),
+        ) {
+          Text(
+            text = "Reset",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+
+        Button(
+          onClick = onApplyVolumeAndFade,
+          enabled = hasPendingVolumeOrFade,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("audio_editor_apply_volume_fade_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(
+            text = "Apply",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun SpeedAndReverseControls(
+  speedMultiplier: Float,
+  onSpeedChange: (Float) -> Unit,
+  onResetSpeed: () -> Unit,
+  onApplySpeed: () -> Unit,
+  onReverseSelection: () -> Unit,
+) {
+  val speedPresets = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
+  val hasSpeedDelta = abs(speedMultiplier - 1.0f) >= 0.02f
+
+  Column(modifier = Modifier.fillMaxWidth()) {
+    // 1. Speed Preset Chips Row at top (matching VideoSpeedAndAudioControls & AdjustControls)
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      for (preset in speedPresets) {
+        val label = if (preset == 1.0f) "1×" else "${preset}×"
+        FilterChip(
+          selected = abs(speedMultiplier - preset) < 0.02f,
+          onClick = { onSpeedChange(preset) },
+          label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+          shape = CircleShape,
+          modifier = Modifier.testTag("speed_chip_${preset}"),
+        )
+      }
+    }
+
+    // 2. Inline Speed Slider Row
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = "Speed ${String.format(Locale.US, "%.2f×", speedMultiplier)}",
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier.width(98.dp),
+      )
+      SlimDotSlider(
+        value = speedMultiplier,
+        onValueChange = onSpeedChange,
+        valueRange = 0.5f..2.0f,
+        modifier = Modifier
+          .weight(1f)
+          .testTag("audio_editor_speed_slider"),
+      )
+    }
+
+    Spacer(modifier = Modifier.height(4.dp))
+
+    // 3. Compact CircleShape Action Row (Reverse on left; Reset & Apply Speed on right)
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      FilledTonalButton(
+        onClick = onReverseSelection,
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+        modifier = Modifier
+          .height(34.dp)
+          .testTag("audio_editor_reverse_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Replay,
+          contentDescription = null,
+          modifier = Modifier.size(16.dp),
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+          text = "Reverse",
+          style = MaterialTheme.typography.labelSmall,
+        )
+      }
+
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        OutlinedButton(
+          onClick = onResetSpeed,
+          enabled = hasSpeedDelta,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("speed_reset_button"),
+        ) {
+          Text(
+            text = "Reset",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+
+        Button(
+          onClick = onApplySpeed,
+          enabled = hasSpeedDelta,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("audio_editor_apply_speed_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(
+            text = "Apply Speed",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bottom Mode Selector Row (aligned with ModeSelectorRow & VideoModeSelectorRow)
+// ---------------------------------------------------------------------------
+
+@Composable
 private fun AudioEditorModeSelector(
   activeMode: AudioEditorMode,
+  hasTrimEdits: Boolean,
+  hasVolumeFadeEdits: Boolean,
+  hasSpeedEdits: Boolean,
   onSelectMode: (AudioEditorMode) -> Unit,
+  modifier: Modifier = Modifier,
 ) {
   val modes = AudioEditorMode.entries
   SingleChoiceSegmentedButtonRow(
-    modifier = Modifier.fillMaxWidth(),
+    modifier = modifier
+      .fillMaxWidth()
+      .padding(bottom = 4.dp)
+      .testTag("mode_selector_row"),
   ) {
     modes.forEachIndexed { index, mode ->
       val selected = mode == activeMode
+      val hasActiveEdits = when (mode) {
+        AudioEditorMode.TRIM -> hasTrimEdits
+        AudioEditorMode.VOLUME_FADE -> hasVolumeFadeEdits
+        AudioEditorMode.SPEED_EFFECTS -> hasSpeedEdits
+      }
       val icon = when (mode) {
+        AudioEditorMode.TRIM -> Icons.Default.ContentCut
         AudioEditorMode.VOLUME_FADE -> Icons.AutoMirrored.Filled.VolumeUp
         AudioEditorMode.SPEED_EFFECTS -> Icons.Default.Speed
       }
@@ -1554,13 +2271,12 @@ private fun AudioEditorModeSelector(
             Icon(
               imageVector = icon,
               contentDescription = null,
-              modifier = Modifier.size(16.dp),
+              modifier = Modifier.size(15.dp),
             )
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(3.dp))
             Text(
-              text = mode.displayName,
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+              text = if (hasActiveEdits) "${mode.displayName}•" else mode.displayName,
+              style = MaterialTheme.typography.labelSmall,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
             )
@@ -1571,443 +2287,10 @@ private fun AudioEditorModeSelector(
   }
 }
 
-@Composable
-private fun VolumeAndFadeControls(
-  buffer: AudioSampleBuffer,
-  trimStartFraction: Float,
-  trimEndFraction: Float,
-  volumeGainPercent: Float,
-  fadeInSeconds: Float,
-  fadeOutSeconds: Float,
-  onVolumeGainChange: (Float) -> Unit,
-  onFadeInChange: (Float) -> Unit,
-  onFadeOutChange: (Float) -> Unit,
-  onApplyVolumeAndFade: () -> Unit,
-  onNormalize: () -> Unit,
-  onMuteSelection: () -> Unit,
-) {
-  val maxFadeSec = ((buffer.durationMs / 1000f) * (trimEndFraction - trimStartFraction)).coerceIn(0.5f, 5.0f)
+// ---------------------------------------------------------------------------
+// Save / Export Audio Dialog (DESIGN_LANGUAGE.md Section 5.2)
+// ---------------------------------------------------------------------------
 
-  Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-    // Gain slider
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-      ) {
-        Text(
-          text = "Volume Gain",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-          text = "${volumeGainPercent.roundToInt()}%",
-          style = MaterialTheme.typography.bodyMedium,
-          fontFamily = FontFamily.Monospace,
-          fontWeight = FontWeight.SemiBold,
-          color = MaterialTheme.colorScheme.onSurface,
-        )
-      }
-      SlimDotSlider(
-        value = volumeGainPercent,
-        onValueChange = onVolumeGainChange,
-        valueRange = 0f..250f,
-        modifier = Modifier.fillMaxWidth(),
-      )
-    }
-
-    // Fade In slider
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-      ) {
-        Text(
-          text = "Fade In",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-          text = String.format(Locale.US, "%.1fs", fadeInSeconds),
-          style = MaterialTheme.typography.bodyMedium,
-          fontFamily = FontFamily.Monospace,
-          fontWeight = FontWeight.SemiBold,
-          color = MaterialTheme.colorScheme.onSurface,
-        )
-      }
-      SlimDotSlider(
-        value = fadeInSeconds.coerceIn(0f, maxFadeSec),
-        onValueChange = onFadeInChange,
-        valueRange = 0f..maxFadeSec,
-        modifier = Modifier.fillMaxWidth(),
-      )
-    }
-
-    // Fade Out slider
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-      ) {
-        Text(
-          text = "Fade Out",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-          text = String.format(Locale.US, "%.1fs", fadeOutSeconds),
-          style = MaterialTheme.typography.bodyMedium,
-          fontFamily = FontFamily.Monospace,
-          fontWeight = FontWeight.SemiBold,
-          color = MaterialTheme.colorScheme.onSurface,
-        )
-      }
-      SlimDotSlider(
-        value = fadeOutSeconds.coerceIn(0f, maxFadeSec),
-        onValueChange = onFadeOutChange,
-        valueRange = 0f..maxFadeSec,
-        modifier = Modifier.fillMaxWidth(),
-      )
-    }
-
-    // Uniform 44.dp aligned action row (Normalize, Mute, Apply)
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      FilledTonalButton(
-        onClick = onNormalize,
-        shape = RoundedCornerShape(12.dp),
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-        modifier = Modifier
-          .weight(1f)
-          .height(44.dp)
-          .testTag("audio_editor_normalize_button"),
-      ) {
-        Icon(
-          imageVector = Icons.Default.AutoFixHigh,
-          contentDescription = null,
-          modifier = Modifier.size(16.dp),
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(
-          text = "Normalize",
-          style = MaterialTheme.typography.labelLarge,
-          fontWeight = FontWeight.SemiBold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
-
-      FilledTonalButton(
-        onClick = onMuteSelection,
-        shape = RoundedCornerShape(12.dp),
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-        modifier = Modifier
-          .weight(1f)
-          .height(44.dp)
-          .testTag("audio_editor_mute_button"),
-      ) {
-        Icon(
-          imageVector = Icons.AutoMirrored.Filled.VolumeOff,
-          contentDescription = null,
-          modifier = Modifier.size(16.dp),
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(
-          text = "Mute",
-          style = MaterialTheme.typography.labelLarge,
-          fontWeight = FontWeight.SemiBold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
-
-      Button(
-        onClick = onApplyVolumeAndFade,
-        shape = RoundedCornerShape(12.dp),
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-        modifier = Modifier
-          .weight(1f)
-          .height(44.dp)
-          .testTag("audio_editor_apply_volume_fade_button"),
-      ) {
-        Icon(
-          imageVector = Icons.Default.Check,
-          contentDescription = null,
-          modifier = Modifier.size(16.dp),
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(
-          text = "Apply",
-          style = MaterialTheme.typography.labelLarge,
-          fontWeight = FontWeight.SemiBold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
-    }
-  }
-}
-
-@Composable
-private fun SpeedAndReverseControls(
-  speedMultiplier: Float,
-  onSpeedChange: (Float) -> Unit,
-  onApplySpeed: () -> Unit,
-  onReverseSelection: () -> Unit,
-) {
-  val speedPresets = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
-
-  Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-      ) {
-        Text(
-          text = "Speed & Pitch Factor",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-          text = String.format(Locale.US, "%.2fx", speedMultiplier),
-          style = MaterialTheme.typography.bodyMedium,
-          fontFamily = FontFamily.Monospace,
-          fontWeight = FontWeight.SemiBold,
-          color = MaterialTheme.colorScheme.onSurface,
-        )
-      }
-      SlimDotSlider(
-        value = speedMultiplier,
-        onValueChange = onSpeedChange,
-        valueRange = 0.5f..2.0f,
-        modifier = Modifier.fillMaxWidth(),
-      )
-    }
-
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .horizontalScroll(rememberScrollState()),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      for (preset in speedPresets) {
-        FilterChip(
-          selected = abs(speedMultiplier - preset) < 0.02f,
-          onClick = { onSpeedChange(preset) },
-          label = { Text("${preset}x", style = MaterialTheme.typography.labelMedium) },
-          shape = RoundedCornerShape(20.dp),
-        )
-      }
-    }
-
-    // Uniform 44.dp aligned action row (Reverse, Apply Speed)
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      FilledTonalButton(
-        onClick = onReverseSelection,
-        shape = RoundedCornerShape(12.dp),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-        modifier = Modifier
-          .weight(1f)
-          .height(44.dp)
-          .testTag("audio_editor_reverse_button"),
-      ) {
-        Icon(
-          imageVector = Icons.Default.Replay,
-          contentDescription = null,
-          modifier = Modifier.size(18.dp),
-        )
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(
-          text = "Reverse",
-          style = MaterialTheme.typography.labelLarge,
-          fontWeight = FontWeight.SemiBold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
-
-      Button(
-        onClick = onApplySpeed,
-        enabled = abs(speedMultiplier - 1.0f) >= 0.02f,
-        shape = RoundedCornerShape(12.dp),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-        modifier = Modifier
-          .weight(1f)
-          .height(44.dp)
-          .testTag("audio_editor_apply_speed_button"),
-      ) {
-        Icon(
-          imageVector = Icons.Default.Check,
-          contentDescription = null,
-          modifier = Modifier.size(18.dp),
-        )
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(
-          text = "Apply Speed",
-          style = MaterialTheme.typography.labelLarge,
-          fontWeight = FontWeight.SemiBold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
-    }
-  }
-}
-
-/**
- * Dedicated bottom action bar for saving and sharing edits without hunting for small header icons.
- * Automatically summarizes applied or pending adjustments (clip handles, volume/fade, speed).
- */
-@Composable
-private fun AudioEditorSaveBar(
-  buffer: AudioSampleBuffer,
-  hasHistoryEdits: Boolean,
-  trimStartFraction: Float,
-  trimEndFraction: Float,
-  volumeGainPercent: Float,
-  fadeInSeconds: Float,
-  fadeOutSeconds: Float,
-  speedMultiplier: Float,
-  isBusy: Boolean,
-  onShare: () -> Unit,
-  onSaveEdits: () -> Unit,
-) {
-  val pendingTags = remember(
-    trimStartFraction,
-    trimEndFraction,
-    volumeGainPercent,
-    fadeInSeconds,
-    fadeOutSeconds,
-    speedMultiplier,
-  ) {
-    buildList {
-      if (trimStartFraction > 0.005f || trimEndFraction < 0.995f) {
-        add("Clip range")
-      }
-      if (abs(volumeGainPercent - 100f) > 1f || fadeInSeconds > 0.05f || fadeOutSeconds > 0.05f) {
-        add("Gain/Fade")
-      }
-      if (abs(speedMultiplier - 1.0f) >= 0.02f) {
-        add(String.format(Locale.US, "%.2fx speed", speedMultiplier))
-      }
-    }
-  }
-
-  val effectiveDurationMs = remember(
-    buffer.durationMs,
-    trimStartFraction,
-    trimEndFraction,
-    speedMultiplier,
-  ) {
-    val selectedMs = ((trimEndFraction - trimStartFraction).coerceIn(0f, 1f) * buffer.durationMs)
-    (selectedMs / speedMultiplier.coerceIn(0.25f, 4.0f)).roundToInt().toLong().coerceAtLeast(0L)
-  }
-
-  val summarySubtitle = when {
-    pendingTags.isNotEmpty() -> "Includes: ${pendingTags.joinToString(" • ")}"
-    hasHistoryEdits -> "Edits ready • ${AudioRecorderEngine.formatDurationMs(effectiveDurationMs)}"
-    else -> "Output: ${AudioRecorderEngine.formatDurationMs(effectiveDurationMs)}"
-  }
-
-  Surface(
-    color = MaterialTheme.colorScheme.surfaceContainer,
-    tonalElevation = 3.dp,
-    modifier = Modifier
-      .fillMaxWidth()
-      .testTag("audio_editor_save_bar"),
-  ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = if (hasHistoryEdits || pendingTags.isNotEmpty()) "Unsaved Edits" else "Ready to Save",
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          Text(
-            text = summarySubtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (pendingTags.isNotEmpty()) {
-              MaterialTheme.colorScheme.primary
-            } else {
-              MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-
-        FilledTonalButton(
-          onClick = onShare,
-          enabled = !isBusy,
-          shape = RoundedCornerShape(12.dp),
-          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-          modifier = Modifier
-            .height(44.dp)
-            .testTag("audio_editor_share_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Share,
-            contentDescription = "Share edited audio",
-            modifier = Modifier.size(18.dp),
-          )
-          Spacer(modifier = Modifier.width(6.dp))
-          Text(
-            text = "Share",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-          )
-        }
-
-        Button(
-          onClick = onSaveEdits,
-          enabled = !isBusy,
-          shape = RoundedCornerShape(12.dp),
-          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-          modifier = Modifier
-            .height(44.dp)
-            .testTag("audio_editor_export_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Check,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-          )
-          Spacer(modifier = Modifier.width(6.dp))
-          Text(
-            text = "Save Edits",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-          )
-        }
-      }
-    }
-  }
-}
-
-/**
- * Save / Export Audio dialog adhering to DESIGN_LANGUAGE.md Section 5.2.
- * Supports both saving as a new copy and overwriting the original audio file directly.
- */
 @Composable
 private fun AudioExportDialog(
   buffer: AudioSampleBuffer,
@@ -2246,8 +2529,8 @@ private fun AudioExportDialog(
               FilterChip(
                 selected = selectedFormat == fmt,
                 onClick = { selectedFormat = fmt },
-                label = { Text(fmt.label) },
-                shape = RoundedCornerShape(20.dp),
+                label = { Text(fmt.label, style = MaterialTheme.typography.labelSmall) },
+                shape = CircleShape,
               )
             }
           }
@@ -2324,10 +2607,25 @@ private fun AudioExportDialog(
   )
 }
 
+// ---------------------------------------------------------------------------
+// Previews
+// ---------------------------------------------------------------------------
+
 @Preview(showBackground = true, showSystemUi = true)
 @Composable
 private fun AudioEditorScreenEmptyPreview() {
   ToolboxTheme {
     AudioEditorScreen()
+  }
+}
+
+@Preview(showBackground = true, showSystemUi = true)
+@Composable
+private fun AudioEditorScreenLoadedPreview() {
+  ToolboxTheme {
+    AudioEditorScreen(
+      initialBuffer = AudioEditorEngine.createSampleAudioBuffer(),
+      initialFileName = "sample_chord_arpeggio.wav",
+    )
   }
 }

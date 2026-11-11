@@ -104,4 +104,60 @@ class BluetoothHidProtocolTest {
     assertEquals(BtDeviceKind.TV, BluetoothRemoteViewModel.classifyDevice("SHIELD", null, null))
     assertEquals(BtDeviceKind.OTHER, BluetoothRemoteViewModel.classifyDevice("Thing", null, null))
   }
+
+  @Test
+  fun gamepadReport_encodesButtonsDpadJoysticksAndTriggers() {
+    val empty = HidProtocol.emptyGamepadReport()
+    assertEquals(HidProtocol.GAMEPAD_REPORT_SIZE, empty.size)
+    assertTrue(empty.all { it == 0.toByte() })
+
+    val buttons = GamepadButton.A.mask or
+      GamepadButton.B.mask or
+      GamepadButton.X.mask or
+      GamepadButton.Y.mask or
+      GamepadButton.LEFT_BUMPER.mask or
+      GamepadButton.RIGHT_BUMPER.mask or
+      GamepadButton.LEFT_TRIGGER.mask or
+      GamepadButton.RIGHT_TRIGGER.mask or
+      GamepadButton.MINUS.mask or
+      GamepadButton.PLUS.mask or
+      GamepadButton.DPAD_UP.mask or
+      GamepadButton.DPAD_RIGHT.mask
+
+    val report = HidProtocol.gamepadReport(
+      buttons = buttons,
+      leftX = -100,
+      leftY = 50,
+      rightX = 127,
+      rightY = -127,
+    )
+    assertEquals(HidProtocol.GAMEPAD_REPORT_SIZE, report.size)
+    // Low byte: A, B, X, Y, LB, RB, LT, RT = 0xFF
+    assertEquals(0xFF.toByte(), report[0])
+    // High byte: MINUS (bit 0), PLUS (bit 1), DPAD_UP (bit 4), DPAD_RIGHT (bit 7) = 0x93
+    assertEquals(0x93.toByte(), report[1])
+    // Hat switch: Up + Right -> North-East (2)
+    assertEquals(2.toByte(), report[2])
+    // Left & right joystick axes
+    assertEquals((-100).toByte(), report[3])
+    assertEquals(50.toByte(), report[4])
+    assertEquals(127.toByte(), report[5])
+    assertEquals((-127).toByte(), report[6])
+    // Analog triggers driven by LEFT_TRIGGER / RIGHT_TRIGGER button bits
+    assertEquals(255.toByte(), report[7])
+    assertEquals(255.toByte(), report[8])
+  }
+
+  @Test
+  fun hatSwitchForDpad_mapsAllCardinalAndDiagonalDirections() {
+    assertEquals(0, HidProtocol.hatSwitchForDpad(up = false, down = false, left = false, right = false))
+    assertEquals(1, HidProtocol.hatSwitchForDpad(up = true, down = false, left = false, right = false))
+    assertEquals(2, HidProtocol.hatSwitchForDpad(up = true, down = false, left = false, right = true))
+    assertEquals(3, HidProtocol.hatSwitchForDpad(up = false, down = false, left = false, right = true))
+    assertEquals(4, HidProtocol.hatSwitchForDpad(up = false, down = true, left = false, right = true))
+    assertEquals(5, HidProtocol.hatSwitchForDpad(up = false, down = true, left = false, right = false))
+    assertEquals(6, HidProtocol.hatSwitchForDpad(up = false, down = true, left = true, right = false))
+    assertEquals(7, HidProtocol.hatSwitchForDpad(up = false, down = false, left = true, right = false))
+    assertEquals(8, HidProtocol.hatSwitchForDpad(up = true, down = false, left = true, right = false))
+  }
 }

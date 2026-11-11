@@ -76,6 +76,8 @@ class CameraEngineTest {
     assertEquals(CameraTimerDuration.FIVE_SEC, CameraTimerDuration.fromNameOrDefault("5s"))
 
     // Aspect ratio
+    assertEquals(CameraAspectRatio.FULL, CameraAspectRatio.DEFAULT)
+    assertEquals(CameraAspectRatio.FULL, CameraAspectRatio.fromNameOrDefault(null))
     assertEquals(CameraAspectRatio.RATIO_16_9, CameraAspectRatio.RATIO_4_3.next())
     assertEquals(CameraAspectRatio.RATIO_1_1, CameraAspectRatio.RATIO_16_9.next())
     assertEquals(CameraAspectRatio.FULL, CameraAspectRatio.RATIO_1_1.next())
@@ -83,6 +85,24 @@ class CameraEngineTest {
     assertEquals(Pair(1080, 1440), CameraAspectRatio.RATIO_4_3.resolveDimensions(1440))
     assertEquals(Pair(810, 1440), CameraAspectRatio.RATIO_16_9.resolveDimensions(1440))
     assertEquals(Pair(1440, 1440), CameraAspectRatio.RATIO_1_1.resolveDimensions(1440))
+
+    // Viewfinder dimensions (full viewport by default, shrinks when aspect ratio does not match screen)
+    assertEquals(
+      Pair(400f, 800f),
+      CameraEngine.calculateViewfinderDimensions(400f, 800f, CameraAspectRatio.FULL),
+    )
+    assertEquals(
+      Pair(300f, 400f),
+      CameraEngine.calculateViewfinderDimensions(300f, 800f, CameraAspectRatio.RATIO_4_3),
+    )
+    assertEquals(
+      Pair(400f, 400f),
+      CameraEngine.calculateViewfinderDimensions(400f, 800f, CameraAspectRatio.RATIO_1_1),
+    )
+    assertEquals(
+      Pair(600f, 800f),
+      CameraEngine.calculateViewfinderDimensions(700f, 800f, CameraAspectRatio.RATIO_4_3),
+    )
 
     // Grid overlay
     assertEquals(CameraGridOverlay.RULE_OF_THIRDS, CameraGridOverlay.NONE.next())

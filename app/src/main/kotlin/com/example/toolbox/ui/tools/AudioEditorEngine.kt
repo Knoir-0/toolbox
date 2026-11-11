@@ -18,12 +18,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Bottom tool panel modes in the Audio Editor.
- * Trimming and cutting are performed directly on the top waveform stage.
+ * Bottom tool panel modes in the Audio Editor, aligned with [ImageEditorMode] and [VideoEditorMode].
  */
 enum class AudioEditorMode(val displayName: String) {
-  VOLUME_FADE("Volume & Fade"),
-  SPEED_EFFECTS("Speed & Reverse"),
+  TRIM("Trim"),
+  VOLUME_FADE("Volume"),
+  SPEED_EFFECTS("Speed"),
 }
 
 /**

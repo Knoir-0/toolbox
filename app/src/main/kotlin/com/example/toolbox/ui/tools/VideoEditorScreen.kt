@@ -292,12 +292,51 @@ fun VideoEditorScreen(
   val canRedo = remember(historyRevision) { history.canRedo }
   val currentMetadata = metadata
 
-  Box(
+  Column(
     modifier = modifier
       .fillMaxSize()
       .background(MaterialTheme.colorScheme.background)
       .testTag("video_editor_screen"),
   ) {
+    // Top Header Bar following DESIGN_LANGUAGE.md
+    VideoEditorTopBar(
+      metadata = currentMetadata,
+      canUndo = canUndo,
+      canRedo = canRedo,
+      onUndo = {
+        val prev = history.undo(editState)
+        if (prev != null) {
+          editState = prev
+          historyRevision++
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        }
+      },
+      onRedo = {
+        val next = history.redo(editState)
+        if (next != null) {
+          editState = next
+          historyRevision++
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        }
+      },
+      onClose = {
+        performWithDiscardCheck {
+          isPlaying = false
+          metadata = null
+          editState = VideoEditState()
+          filmstripFrames = emptyList()
+          history.clear()
+          historyRevision++
+          lastExportResult = null
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        }
+      },
+      onExportClick = {
+        isPlaying = false
+        showExportDialog = true
+      },
+    )
+
     if (currentMetadata == null) {
       OpenFileInitialView(
         onOpenFile = { showFilePickerDialog = true },
@@ -320,60 +359,19 @@ fun VideoEditorScreen(
         sampleButtonTestTag = "open_sample_video_button",
         openButtonTestTag = "open_video_button",
         isLoading = isLoadingVideo || isGeneratingSample,
+        modifier = Modifier.weight(1f),
       )
     } else {
+      val activeStrategy = remember(currentMetadata, editState, exportOptions) {
+        VideoEditorEngine.determineStrategy(currentMetadata, editState, exportOptions)
+      }
+
       Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+          .weight(1f)
+          .fillMaxWidth()
+          .padding(horizontal = 12.dp, vertical = 6.dp),
       ) {
-        // Top Header Bar following DESIGN_LANGUAGE.md
-        VideoEditorTopBar(
-          metadata = currentMetadata,
-          canUndo = canUndo,
-          canRedo = canRedo,
-          onUndo = {
-            val prev = history.undo(editState)
-            if (prev != null) {
-              editState = prev
-              historyRevision++
-              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            }
-          },
-          onRedo = {
-            val next = history.redo(editState)
-            if (next != null) {
-              editState = next
-              historyRevision++
-              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            }
-          },
-          onClose = {
-            performWithDiscardCheck {
-              isPlaying = false
-              metadata = null
-              editState = VideoEditState()
-              filmstripFrames = emptyList()
-              history.clear()
-              historyRevision++
-              lastExportResult = null
-              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            }
-          },
-          onExportClick = {
-            isPlaying = false
-            showExportDialog = true
-          },
-        )
-
-        val activeStrategy = remember(currentMetadata, editState, exportOptions) {
-          VideoEditorEngine.determineStrategy(currentMetadata, editState, exportOptions)
-        }
-
-        Column(
-          modifier = Modifier
-            .weight(1f)
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        ) {
         // Optional completed export banner
         val completedExport = lastExportResult
         AnimatedVisibility(visible = completedExport?.success == true && completedExport.outputFile != null) {
@@ -738,7 +736,6 @@ fun VideoEditorScreen(
             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
           },
         )
-        }
       }
     }
   }
@@ -908,119 +905,125 @@ private fun VideoEditorTopBar(
     tonalElevation = 1.dp,
     modifier = Modifier.fillMaxWidth(),
   ) {
-    Row(
+    Box(
       modifier = Modifier
         .fillMaxWidth()
-        .heightIn(min = 68.dp)
-        .padding(horizontal = 16.dp, vertical = 10.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
+        .heightIn(min = 68.dp),
+      contentAlignment = Alignment.CenterStart,
     ) {
       Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.weight(1f),
+        horizontalArrangement = Arrangement.SpaceBetween,
       ) {
-        Surface(
-          shape = CircleShape,
-          color = MaterialTheme.colorScheme.primaryContainer,
-          modifier = Modifier.size(36.dp),
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+          modifier = Modifier.weight(1f),
         ) {
-          Box(contentAlignment = Alignment.Center) {
+          Box(
+            modifier = Modifier
+              .size(36.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+          ) {
             Icon(
               imageVector = Icons.Default.Movie,
               contentDescription = null,
-              tint = MaterialTheme.colorScheme.onPrimaryContainer,
+              tint = MaterialTheme.colorScheme.primary,
               modifier = Modifier.size(20.dp),
             )
           }
-        }
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = "Video Editor",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          Text(
-            text = if (metadata != null) {
-              "${metadata.file.name} • ${metadata.resolutionLabel} • ${metadata.durationFormatted}"
-            } else {
-              "Fast FFmpeg video trimmer & editor"
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-      }
-
-      if (metadata != null) {
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-          IconButton(
-            onClick = onUndo,
-            enabled = canUndo,
-            modifier = Modifier
-              .size(38.dp)
-              .testTag("editor_undo_button"),
-          ) {
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.Undo,
-              contentDescription = "Undo",
-              modifier = Modifier.size(20.dp),
-            )
-          }
-          IconButton(
-            onClick = onRedo,
-            enabled = canRedo,
-            modifier = Modifier
-              .size(38.dp)
-              .testTag("editor_redo_button"),
-          ) {
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.Redo,
-              contentDescription = "Redo",
-              modifier = Modifier.size(20.dp),
-            )
-          }
-          IconButton(
-            onClick = onClose,
-            modifier = Modifier
-              .size(38.dp)
-              .testTag("editor_close_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Close,
-              contentDescription = "Close Video",
-              modifier = Modifier.size(20.dp),
-            )
-          }
-          Spacer(modifier = Modifier.width(4.dp))
-          Button(
-            onClick = onExportClick,
-            shape = RoundedCornerShape(12.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-            modifier = Modifier
-              .height(36.dp)
-              .testTag("editor_export_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.SaveAlt,
-              contentDescription = null,
-              modifier = Modifier.size(16.dp),
-            )
-            Spacer(modifier = Modifier.width(4.dp))
+          Column(modifier = Modifier.weight(1f)) {
             Text(
-              text = "Export",
-              style = MaterialTheme.typography.labelLarge,
-              fontWeight = FontWeight.SemiBold,
+              text = "Video Editor",
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
             )
+            Text(
+              text = if (metadata != null) {
+                "${metadata.file.name} • ${metadata.resolutionLabel} • ${metadata.durationFormatted}"
+              } else {
+                "Fast FFmpeg video trimmer & editor"
+              },
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+        }
+
+        if (metadata != null) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+          ) {
+            IconButton(
+              onClick = onUndo,
+              enabled = canUndo,
+              modifier = Modifier
+                .size(38.dp)
+                .testTag("editor_undo_button"),
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.Undo,
+                contentDescription = "Undo",
+                modifier = Modifier.size(20.dp),
+              )
+            }
+            IconButton(
+              onClick = onRedo,
+              enabled = canRedo,
+              modifier = Modifier
+                .size(38.dp)
+                .testTag("editor_redo_button"),
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.Redo,
+                contentDescription = "Redo",
+                modifier = Modifier.size(20.dp),
+              )
+            }
+            IconButton(
+              onClick = onClose,
+              modifier = Modifier
+                .size(38.dp)
+                .testTag("editor_close_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "Close Video",
+                modifier = Modifier.size(20.dp),
+              )
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            Button(
+              onClick = onExportClick,
+              shape = RoundedCornerShape(12.dp),
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+              modifier = Modifier
+                .height(36.dp)
+                .testTag("editor_export_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.SaveAlt,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+              )
+              Spacer(modifier = Modifier.width(4.dp))
+              Text(
+                text = "Export",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+              )
+            }
           }
         }
       }

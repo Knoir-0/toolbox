@@ -1,9 +1,15 @@
 package com.example.toolbox.ui.tools
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -11,6 +17,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,22 +44,21 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.Yard
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -76,6 +82,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -95,6 +103,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -148,7 +157,7 @@ fun PlantScheduleScreen(
   }
 
   var searchQuery by rememberSaveable { mutableStateOf("") }
-  var showSearchBar by rememberSaveable { mutableStateOf(true) }
+  var isSearchActive by rememberSaveable { mutableStateOf(false) }
   var selectedCategoryName by rememberSaveable { mutableStateOf<String?>(null) }
   val selectedCategory = remember(selectedCategoryName) {
     selectedCategoryName?.let { name ->
@@ -156,7 +165,6 @@ fun PlantScheduleScreen(
     }
   }
 
-  var isCatalogExpanded by rememberSaveable { mutableStateOf(false) }
   var selectedMonth by rememberSaveable { mutableIntStateOf(CalendarMonth.currentMonthNumber()) }
 
   // Multi-selection state (Section 5.5 of DESIGN_LANGUAGE.md)
@@ -184,10 +192,31 @@ fun PlantScheduleScreen(
     scheduledPlants.map { it.id }.toSet()
   }
 
-  val showCatalogResults = searchQuery.isNotBlank() ||
-    selectedCategory != null ||
-    isCatalogExpanded ||
-    scheduledPlants.isEmpty()
+  val searchFocusRequester = remember { FocusRequester() }
+  val keyboardController = LocalSoftwareKeyboardController.current
+
+  fun closeSearch() {
+    isSearchActive = false
+    searchQuery = ""
+    selectedCategoryName = null
+    focusManager.clearFocus()
+  }
+
+  LaunchedEffect(isSearchActive) {
+    if (isSearchActive) {
+      kotlinx.coroutines.delay(100)
+      try {
+        searchFocusRequester.requestFocus()
+        keyboardController?.show()
+      } catch (_: Exception) {}
+    } else {
+      keyboardController?.hide()
+    }
+  }
+
+  BackHandler(enabled = isSearchActive) {
+    closeSearch()
+  }
 
   fun exitSelectionMode() {
     isSelectionMode = false
@@ -267,410 +296,365 @@ fun PlantScheduleScreen(
       .testTag("plant_schedule_screen"),
   ) {
     Column(modifier = Modifier.fillMaxSize()) {
-      // Section 5.1 & 5.5: Standard Tool Header Bar / Multi-Selection Toolbar Transformation
+      // Section 5.1 & 5.5: Standard Tool Header Bar / Multi-Selection / Integrated Search Toolbar
       Surface(
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 1.dp,
         modifier = Modifier.fillMaxWidth(),
       ) {
-        if (isSelectionMode) {
-          val selectedCount = selectedPlantIds.size
-          val allSelected = scheduledPlants.isNotEmpty() && selectedCount == scheduledPlants.size
-          val selectedItems = remember(scheduledPlants, selectedPlantIds) {
-            scheduledPlants.filter { it.id in selectedPlantIds }
-          }
-
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 8.dp, vertical = 10.dp)
-              .testTag("multi_select_toolbar"),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            IconButton(
-              onClick = { exitSelectionMode() },
-              modifier = Modifier.testTag("exit_selection_mode_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = "Exit selection",
-                tint = MaterialTheme.colorScheme.onSurface,
-              )
+        Box(
+          modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 68.dp),
+          contentAlignment = Alignment.CenterStart,
+        ) {
+          if (isSelectionMode) {
+            val selectedCount = selectedPlantIds.size
+            val allSelected = scheduledPlants.isNotEmpty() && selectedCount == scheduledPlants.size
+            val selectedItems = remember(scheduledPlants, selectedPlantIds) {
+              scheduledPlants.filter { it.id in selectedPlantIds }
             }
 
-            Checkbox(
-              checked = allSelected,
-              onCheckedChange = { checked ->
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                selectedPlantIds = if (checked) {
-                  scheduledPlants.map { it.id }.toSet()
-                } else {
-                  emptySet()
-                }
-              },
-              modifier = Modifier.testTag("select_all_plants_checkbox"),
-            )
-
-            Text(
-              text = "$selectedCount selected",
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
+            Row(
               modifier = Modifier
-                .weight(1f)
-                .padding(start = 4.dp),
-            )
-
-            IconButton(
-              onClick = { inspectingPlants = selectedItems },
-              enabled = selectedCount > 0,
-              modifier = Modifier.testTag("bulk_info_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Info,
-                contentDescription = "Inspect selected plants",
-                tint = if (selectedCount > 0) {
-                  MaterialTheme.colorScheme.onSurface
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                },
-              )
-            }
-
-            IconButton(
-              onClick = { pendingDeletePlants = selectedItems },
-              enabled = selectedCount > 0,
-              modifier = Modifier.testTag("bulk_delete_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Delete,
-                contentDescription = "Delete selected plants",
-                tint = if (selectedCount > 0) {
-                  MaterialTheme.colorScheme.error
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                },
-              )
-            }
-
-            Box {
-              IconButton(
-                onClick = { showSelectionOverflowMenu = true },
-                enabled = selectedCount > 0,
-                modifier = Modifier.testTag("bulk_overflow_menu_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.MoreVert,
-                  contentDescription = "More bulk actions",
-                )
-              }
-              DropdownMenu(
-                expanded = showSelectionOverflowMenu,
-                onDismissRequest = { showSelectionOverflowMenu = false },
-              ) {
-                if (selectedCount == 1) {
-                  DropdownMenuItem(
-                    text = { Text("Customize Schedule") },
-                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                    onClick = {
-                      showSelectionOverflowMenu = false
-                      editingPlant = selectedItems.firstOrNull()
-                      initialCustomName = ""
-                      exitSelectionMode()
-                      showEditorDialog = true
-                    },
-                  )
-                }
-                DropdownMenuItem(
-                  text = { Text("Duplicate Selected") },
-                  leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-                  onClick = {
-                    showSelectionOverflowMenu = false
-                    duplicatePlantsAsCustom(selectedItems)
-                    exitSelectionMode()
-                  },
-                )
-                DropdownMenuItem(
-                  text = {
-                    Text(
-                      text = "Remove Selected",
-                      color = MaterialTheme.colorScheme.error,
-                    )
-                  },
-                  leadingIcon = {
-                    Icon(
-                      imageVector = Icons.Default.Delete,
-                      contentDescription = null,
-                      tint = MaterialTheme.colorScheme.error,
-                    )
-                  },
-                  onClick = {
-                    showSelectionOverflowMenu = false
-                    pendingDeletePlants = selectedItems
-                  },
-                )
-              }
-            }
-          }
-        } else {
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-          ) {
-            Row(
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 10.dp)
+                .testTag("multi_select_toolbar"),
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(12.dp),
-              modifier = Modifier.weight(1f),
-            ) {
-              Box(
-                modifier = Modifier
-                  .size(36.dp)
-                  .clip(CircleShape)
-                  .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center,
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Yard,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.size(20.dp),
-                )
-              }
-              Column {
-                Text(
-                  text = "Planting & Harvest",
-                  style = MaterialTheme.typography.titleLarge,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                  text = "${scheduledPlants.size} scheduled • ${CalendarMonth.fromNumber(selectedMonth).fullName} focus",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-            }
-
-            // Trailing IconButton actions per Section 5.1
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
               IconButton(
-                onClick = {
-                  showSearchBar = !showSearchBar
-                  if (!showSearchBar) {
-                    searchQuery = ""
-                    focusManager.clearFocus()
+                onClick = { exitSelectionMode() },
+                modifier = Modifier.testTag("exit_selection_mode_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Close,
+                  contentDescription = "Exit selection",
+                  tint = MaterialTheme.colorScheme.onSurface,
+                )
+              }
+
+              Checkbox(
+                checked = allSelected,
+                onCheckedChange = { checked ->
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  selectedPlantIds = if (checked) {
+                    scheduledPlants.map { it.id }.toSet()
+                  } else {
+                    emptySet()
                   }
                 },
-                modifier = Modifier.testTag("toggle_search_bar_button"),
+                modifier = Modifier.testTag("select_all_plants_checkbox"),
+              )
+
+              Text(
+                text = "$selectedCount selected",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                  .weight(1f)
+                  .padding(start = 4.dp),
+              )
+
+              IconButton(
+                onClick = { inspectingPlants = selectedItems },
+                enabled = selectedCount > 0,
+                modifier = Modifier.testTag("bulk_info_button"),
               ) {
                 Icon(
-                  imageVector = Icons.Default.Search,
-                  contentDescription = "Toggle search bar",
-                  tint = if (showSearchBar || searchQuery.isNotBlank()) {
-                    MaterialTheme.colorScheme.primary
+                  imageVector = Icons.Default.Info,
+                  contentDescription = "Inspect selected plants",
+                  tint = if (selectedCount > 0) {
+                    MaterialTheme.colorScheme.onSurface
                   } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                   },
                 )
               }
 
               IconButton(
-                onClick = { isCatalogExpanded = !isCatalogExpanded },
-                modifier = Modifier.testTag("toggle_catalog_filter_button"),
+                onClick = { pendingDeletePlants = selectedItems },
+                enabled = selectedCount > 0,
+                modifier = Modifier.testTag("bulk_delete_button"),
               ) {
                 Icon(
-                  imageVector = Icons.Default.FilterList,
-                  contentDescription = "Toggle plant catalog",
-                  tint = if (isCatalogExpanded || selectedCategory != null) {
-                    MaterialTheme.colorScheme.primary
+                  imageVector = Icons.Default.Delete,
+                  contentDescription = "Delete selected plants",
+                  tint = if (selectedCount > 0) {
+                    MaterialTheme.colorScheme.error
                   } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                   },
                 )
               }
 
               Box {
                 IconButton(
-                  onClick = { showTopOverflowMenu = true },
-                  modifier = Modifier.testTag("header_overflow_menu_button"),
+                  onClick = { showSelectionOverflowMenu = true },
+                  enabled = selectedCount > 0,
+                  modifier = Modifier.testTag("bulk_overflow_menu_button"),
                 ) {
                   Icon(
                     imageVector = Icons.Default.MoreVert,
-                    contentDescription = "More options",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    contentDescription = "More bulk actions",
                   )
                 }
                 DropdownMenu(
-                  expanded = showTopOverflowMenu,
-                  onDismissRequest = { showTopOverflowMenu = false },
+                  expanded = showSelectionOverflowMenu,
+                  onDismissRequest = { showSelectionOverflowMenu = false },
                 ) {
+                  if (selectedCount == 1) {
+                    DropdownMenuItem(
+                      text = { Text("Customize Schedule") },
+                      leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                      onClick = {
+                        showSelectionOverflowMenu = false
+                        editingPlant = selectedItems.firstOrNull()
+                        initialCustomName = ""
+                        exitSelectionMode()
+                        showEditorDialog = true
+                      },
+                    )
+                  }
                   DropdownMenuItem(
-                    text = { Text("Add Custom Plant") },
-                    leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    text = { Text("Duplicate Selected") },
+                    leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                     onClick = {
-                      showTopOverflowMenu = false
-                      editingPlant = null
-                      initialCustomName = searchQuery.trim()
-                      showEditorDialog = true
+                      showSelectionOverflowMenu = false
+                      duplicatePlantsAsCustom(selectedItems)
+                      exitSelectionMode()
                     },
                   )
-                  if (scheduledPlants.isNotEmpty()) {
+                  DropdownMenuItem(
+                    text = {
+                      Text(
+                        text = "Remove Selected",
+                        color = MaterialTheme.colorScheme.error,
+                      )
+                    },
+                    leadingIcon = {
+                      Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                      )
+                    },
+                    onClick = {
+                      showSelectionOverflowMenu = false
+                      pendingDeletePlants = selectedItems
+                    },
+                  )
+                }
+              }
+            }
+          } else {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.weight(1f),
+              ) {
+                Box(
+                  modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Yard,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                  )
+                }
+                Column {
+                  Text(
+                    text = "Planting & Harvest",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                  )
+                  Text(
+                    text = "${scheduledPlants.size} scheduled • ${CalendarMonth.fromNumber(selectedMonth).fullName} focus",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+              }
+
+              // Trailing IconButton actions per Section 5.1
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+              ) {
+                IconButton(
+                  onClick = { isSearchActive = true },
+                  modifier = Modifier.testTag("toggle_search_bar_button"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Search plants",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+
+                Box {
+                  IconButton(
+                    onClick = { showTopOverflowMenu = true },
+                    modifier = Modifier.testTag("header_overflow_menu_button"),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.MoreVert,
+                      contentDescription = "More options",
+                      tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                  DropdownMenu(
+                    expanded = showTopOverflowMenu,
+                    onDismissRequest = { showTopOverflowMenu = false },
+                  ) {
                     DropdownMenuItem(
-                      text = { Text("Select Plants") },
-                      leadingIcon = { Icon(Icons.Default.Check, contentDescription = null) },
+                      text = { Text("Add Custom Plant") },
+                      leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
                       onClick = {
                         showTopOverflowMenu = false
-                        isSelectionMode = true
-                        selectedPlantIds = scheduledPlants.firstOrNull()?.let { setOf(it.id) } ?: emptySet()
+                        editingPlant = null
+                        initialCustomName = searchQuery.trim()
+                        showEditorDialog = true
                       },
                     )
-                    DropdownMenuItem(
-                      text = {
-                        Text(
-                          text = "Clear Schedule",
-                          color = MaterialTheme.colorScheme.error,
-                        )
-                      },
-                      leadingIcon = {
-                        Icon(
-                          imageVector = Icons.Default.DeleteOutline,
-                          contentDescription = null,
-                          tint = MaterialTheme.colorScheme.error,
-                        )
-                      },
-                      onClick = {
-                        showTopOverflowMenu = false
-                        pendingDeletePlants = scheduledPlants
-                      },
-                    )
+                    if (scheduledPlants.isNotEmpty()) {
+                      DropdownMenuItem(
+                        text = { Text("Select Plants") },
+                        leadingIcon = { Icon(Icons.Default.Check, contentDescription = null) },
+                        onClick = {
+                          showTopOverflowMenu = false
+                          isSelectionMode = true
+                          selectedPlantIds = scheduledPlants.firstOrNull()?.let { setOf(it.id) } ?: emptySet()
+                        },
+                      )
+                      DropdownMenuItem(
+                        text = {
+                          Text(
+                            text = "Clear Schedule",
+                            color = MaterialTheme.colorScheme.error,
+                          )
+                        },
+                        leadingIcon = {
+                          Icon(
+                            imageVector = Icons.Default.DeleteOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                          )
+                        },
+                        onClick = {
+                          showTopOverflowMenu = false
+                          pendingDeletePlants = scheduledPlants
+                        },
+                      )
+                    }
                   }
                 }
               }
             }
           }
-        }
-      }
 
-      // Secondary Toolbar: Search & Category Filters (Section 2: tonalElevation = 0.5.dp)
-      AnimatedVisibility(
-        visible = showSearchBar,
-        enter = expandVertically() + fadeIn(),
-        exit = shrinkVertically() + fadeOut(),
-      ) {
-        Surface(
-          color = MaterialTheme.colorScheme.surface,
-          tonalElevation = 0.5.dp,
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+          // Animated Expanding Search Bar integrated into the Toolbar
+          androidx.compose.animation.AnimatedVisibility(
+            visible = isSearchActive && !isSelectionMode,
+            enter = fadeIn(animationSpec = tween(220)) + expandHorizontally(
+              animationSpec = spring(
+                dampingRatio = Spring.DampingRatioNoBouncy,
+                stiffness = Spring.StiffnessMediumLow,
+              ),
+              expandFrom = Alignment.End,
+            ),
+            exit = fadeOut(animationSpec = tween(180)) + shrinkHorizontally(
+              animationSpec = tween(200),
+              shrinkTowards = Alignment.End,
+            ),
+            modifier = Modifier.matchParentSize(),
           ) {
-            OutlinedTextField(
-              value = searchQuery,
-              onValueChange = { searchQuery = it },
-              placeholder = {
-                Text("Search plants to add (e.g. Tomato, Basil, Berry, May)...")
-              },
-              singleLine = true,
-              shape = RoundedCornerShape(14.dp),
-              leadingIcon = {
-                Icon(
-                  imageVector = Icons.Default.Search,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              },
-              trailingIcon = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                  if (searchQuery.isNotEmpty()) {
-                    IconButton(
-                      onClick = {
-                        searchQuery = ""
-                        focusManager.clearFocus()
-                      },
-                      modifier = Modifier.testTag("plant_search_clear"),
-                    ) {
-                      Icon(
-                        imageVector = Icons.Default.Clear,
-                        contentDescription = "Clear search",
-                      )
-                    }
-                  }
-                  TextButton(
-                    onClick = { isCatalogExpanded = !isCatalogExpanded },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.testTag("toggle_catalog_button"),
-                  ) {
-                    Text(
-                      text = if (showCatalogResults) "Hide Catalog" else "Browse (${allCatalogPlants.size})",
-                      style = MaterialTheme.typography.labelMedium,
-                      fontWeight = FontWeight.Medium,
-                    )
-                    Icon(
-                      imageVector = if (showCatalogResults) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                      contentDescription = null,
-                      modifier = Modifier.size(18.dp),
-                    )
-                  }
-                }
-              },
-              keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-              keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+            Surface(
               modifier = Modifier
-                .fillMaxWidth()
-                .testTag("plant_search_input"),
-            )
-
-            // Category Filter Chips (Section 4: RoundedCornerShape(20.dp))
-            LazyRow(
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-              contentPadding = PaddingValues(vertical = 2.dp),
-              modifier = Modifier.fillMaxWidth(),
-            ) {
-              item {
-                FilterChip(
-                  selected = selectedCategory == null,
-                  onClick = { selectedCategoryName = null },
-                  label = {
-                    Text(
-                      text = "All (${allCatalogPlants.size})",
-                      style = MaterialTheme.typography.labelMedium,
-                      fontWeight = FontWeight.Medium,
-                    )
-                  },
-                  shape = RoundedCornerShape(20.dp),
-                  modifier = Modifier.testTag("category_chip_ALL"),
+                .fillMaxSize()
+                .clickable(
+                  interactionSource = remember { MutableInteractionSource() },
+                  indication = null,
+                  onClick = {},
                 )
-              }
-              items(PlantCategory.entries) { category ->
-                val isSelected = selectedCategory == category
-                FilterChip(
-                  selected = isSelected,
-                  onClick = {
-                    selectedCategoryName = if (isSelected) null else category.name
-                  },
-                  label = {
+                .testTag("toolbar_search_bar"),
+              color = MaterialTheme.colorScheme.surface,
+              tonalElevation = 2.dp,
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxSize()
+                  .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                IconButton(
+                  onClick = { closeSearch() },
+                  modifier = Modifier.testTag("close_search_button"),
+                ) {
+                  Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Close search",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                  )
+                }
+
+                TextField(
+                  value = searchQuery,
+                  onValueChange = { searchQuery = it },
+                  placeholder = {
                     Text(
-                      text = category.displayName,
-                      style = MaterialTheme.typography.labelMedium,
-                      fontWeight = FontWeight.Medium,
+                      text = "Search plants to add (e.g. Tomato, Basil, May)...",
+                      style = MaterialTheme.typography.bodyLarge,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
                     )
                   },
-                  shape = RoundedCornerShape(20.dp),
-                  colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                  singleLine = true,
+                  textStyle = MaterialTheme.typography.bodyLarge.copy(
+                    color = MaterialTheme.colorScheme.onSurface,
                   ),
-                  modifier = Modifier.testTag("category_chip_${category.name}"),
+                  colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent,
+                  ),
+                  trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                      IconButton(
+                        onClick = { searchQuery = "" },
+                        modifier = Modifier.testTag("plant_search_clear"),
+                      ) {
+                        Icon(
+                          imageVector = Icons.Default.Clear,
+                          contentDescription = "Clear search",
+                          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                      }
+                    }
+                  },
+                  keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                  keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(searchFocusRequester)
+                    .testTag("plant_search_input"),
                 )
               }
             }
@@ -680,83 +664,91 @@ fun PlantScheduleScreen(
 
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
-      // Main Scrollable Content
-      LazyColumn(
+      // Tool Content Area + Search Catalog Overlay
+      Box(
         modifier = Modifier
           .fillMaxSize()
           .weight(1f),
-        contentPadding = PaddingValues(
-          start = 16.dp,
-          top = 14.dp,
-          end = 16.dp,
-          bottom = 88.dp, // Extra bottom padding for FAB
-        ),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
       ) {
-        // 1. Search / Catalog Results Section
-        item {
-          AnimatedVisibility(
-            visible = showCatalogResults,
-            enter = expandVertically() + fadeIn(),
-            exit = shrinkVertically() + fadeOut(),
-          ) {
-            CatalogSearchResultsSection(
-              query = searchQuery,
-              selectedCategory = selectedCategory,
-              matchingPlants = matchingCatalogPlants,
-              scheduledPlantIds = scheduledPlantIds,
-              onAddPlant = ::addPlant,
-              onRemovePlant = ::removePlant,
-              onTogglePlant = ::togglePlant,
-              onInspectPlant = { plant -> inspectingPlants = listOf(plant) },
-              onCreateCustomWithQuery = {
-                editingPlant = null
-                initialCustomName = searchQuery.trim()
+        // Main Scrollable Tool Content
+        LazyColumn(
+          modifier = Modifier.fillMaxSize(),
+          contentPadding = PaddingValues(
+            start = 16.dp,
+            top = 14.dp,
+            end = 16.dp,
+            bottom = 88.dp, // Extra bottom padding for FAB
+          ),
+          verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+          // 1. Monthly Focus Breakdown / Garden Checklist Card (at the top)
+          item {
+            MonthActivitySummaryCard(
+              monthNumber = selectedMonth,
+              scheduledPlants = scheduledPlants,
+              onSelectMonth = { selectedMonth = it },
+            )
+          }
+
+          // 2. Year View Card (12-Month Matrix with Theme & Accent Colors)
+          item {
+            YearViewScheduleCard(
+              scheduledPlants = scheduledPlants,
+              selectedMonth = selectedMonth,
+              isSelectionMode = isSelectionMode,
+              selectedPlantIds = selectedPlantIds,
+              onSelectMonth = { monthNum ->
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                selectedMonth = monthNum
+              },
+              onEditPlant = { plant ->
+                editingPlant = plant
+                initialCustomName = ""
                 showEditorDialog = true
               },
+              onInspectPlant = { plant ->
+                inspectingPlants = listOf(plant)
+              },
+              onDuplicatePlant = { plant ->
+                duplicatePlantsAsCustom(listOf(plant))
+              },
+              onRemovePlant = ::removePlant,
+              onEnterSelectionMode = { plantId ->
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                isSelectionMode = true
+                selectedPlantIds = selectedPlantIds + plantId
+              },
+              onToggleSelectPlant = ::togglePlantSelection,
+              onBrowseCatalog = { isSearchActive = true },
             )
           }
         }
 
-        // 2. Year View Card (12-Month Matrix with Theme & Accent Colors)
-        item {
-          YearViewScheduleCard(
-            scheduledPlants = scheduledPlants,
-            selectedMonth = selectedMonth,
-            isSelectionMode = isSelectionMode,
-            selectedPlantIds = selectedPlantIds,
-            onSelectMonth = { monthNum ->
-              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-              selectedMonth = monthNum
+        // Plant List & Pill Filters Overlay shown over the tool when search is active
+        androidx.compose.animation.AnimatedVisibility(
+          visible = isSearchActive && !isSelectionMode,
+          enter = fadeIn(animationSpec = tween(200)) + expandVertically(expandFrom = Alignment.Top),
+          exit = fadeOut(animationSpec = tween(180)) + shrinkVertically(shrinkTowards = Alignment.Top),
+          modifier = Modifier.fillMaxSize(),
+        ) {
+          CatalogSearchOverlay(
+            allCatalogCount = allCatalogPlants.size,
+            query = searchQuery,
+            selectedCategory = selectedCategory,
+            onSelectCategory = { category ->
+              selectedCategoryName = category?.name
             },
-            onEditPlant = { plant ->
-              editingPlant = plant
-              initialCustomName = ""
+            matchingPlants = matchingCatalogPlants,
+            scheduledPlantIds = scheduledPlantIds,
+            onAddPlant = ::addPlant,
+            onRemovePlant = ::removePlant,
+            onTogglePlant = ::togglePlant,
+            onInspectPlant = { plant -> inspectingPlants = listOf(plant) },
+            onCreateCustomWithQuery = {
+              editingPlant = null
+              initialCustomName = searchQuery.trim()
               showEditorDialog = true
             },
-            onInspectPlant = { plant ->
-              inspectingPlants = listOf(plant)
-            },
-            onDuplicatePlant = { plant ->
-              duplicatePlantsAsCustom(listOf(plant))
-            },
-            onRemovePlant = ::removePlant,
-            onEnterSelectionMode = { plantId ->
-              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-              isSelectionMode = true
-              selectedPlantIds = selectedPlantIds + plantId
-            },
-            onToggleSelectPlant = ::togglePlantSelection,
-            onBrowseCatalog = { isCatalogExpanded = true },
-          )
-        }
-
-        // 3. Monthly Focus Breakdown Card (What to Plant & Harvest in Selected Month)
-        item {
-          MonthActivitySummaryCard(
-            monthNumber = selectedMonth,
-            scheduledPlants = scheduledPlants,
-            onSelectMonth = { selectedMonth = it },
           )
         }
       }
@@ -842,9 +834,11 @@ fun PlantScheduleScreen(
 }
 
 @Composable
-private fun CatalogSearchResultsSection(
+private fun CatalogSearchOverlay(
+  allCatalogCount: Int,
   query: String,
   selectedCategory: PlantCategory?,
+  onSelectCategory: (PlantCategory?) -> Unit,
   matchingPlants: List<PlantItem>,
   scheduledPlantIds: Set<String>,
   onAddPlant: (PlantItem) -> Unit,
@@ -853,87 +847,165 @@ private fun CatalogSearchResultsSection(
   onInspectPlant: (PlantItem) -> Unit,
   onCreateCustomWithQuery: () -> Unit,
 ) {
-  Card(
-    shape = RoundedCornerShape(14.dp),
-    colors = CardDefaults.cardColors(
-      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-    ),
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+  Surface(
+    color = MaterialTheme.colorScheme.background,
     modifier = Modifier
-      .fillMaxWidth()
-      .testTag("catalog_results_section"),
+      .fillMaxSize()
+      .clickable(
+        interactionSource = remember { MutableInteractionSource() },
+        indication = null,
+        onClick = {},
+      )
+      .testTag("catalog_search_overlay"),
   ) {
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(14.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-      Row(
+    Column(modifier = Modifier.fillMaxSize()) {
+      // Category Filter Chips Bar (Section 4: RoundedCornerShape(20.dp))
+      Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
       ) {
-        Column {
-          Text(
-            text = if (query.isNotBlank()) {
-              "Search Results (${matchingPlants.size})"
-            } else if (selectedCategory != null) {
-              "${selectedCategory.displayName} (${matchingPlants.size})"
-            } else {
-              "Plant Catalog (${matchingPlants.size})"
-            },
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
-          Text(
-            text = "Tap + to add plants to your yearly planting & harvest schedule",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
+        LazyRow(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("catalog_category_pills"),
+        ) {
+          item {
+            FilterChip(
+              selected = selectedCategory == null,
+              onClick = { onSelectCategory(null) },
+              label = {
+                Text(
+                  text = "All ($allCatalogCount)",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.Medium,
+                )
+              },
+              shape = RoundedCornerShape(20.dp),
+              colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+              ),
+              modifier = Modifier.testTag("category_chip_ALL"),
+            )
+          }
+          items(PlantCategory.entries) { category ->
+            val isSelected = selectedCategory == category
+            FilterChip(
+              selected = isSelected,
+              onClick = {
+                onSelectCategory(if (isSelected) null else category)
+              },
+              label = {
+                Text(
+                  text = category.displayName,
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.Medium,
+                )
+              },
+              shape = RoundedCornerShape(20.dp),
+              colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+              ),
+              modifier = Modifier.testTag("category_chip_${category.name}"),
+            )
+          }
         }
       }
 
-      if (matchingPlants.isEmpty()) {
-        Column(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 12.dp),
-          horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          Text(
-            text = "No plants found matching \"$query\"",
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
-          Text(
-            text = "Create a custom plant entry with your own planting and harvesting months.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-          )
-          FilledTonalButton(
-            onClick = onCreateCustomWithQuery,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.testTag("create_custom_from_search_button"),
+      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+      // Plant List
+      LazyColumn(
+        modifier = Modifier
+          .fillMaxSize()
+          .weight(1f)
+          .testTag("catalog_results_section"),
+        contentPadding = PaddingValues(
+          start = 16.dp,
+          top = 12.dp,
+          end = 16.dp,
+          bottom = 88.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        item(key = "catalog_header") {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
           ) {
-            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Create \"${query.trim()}\"")
+            Column {
+              Text(
+                text = if (query.isNotBlank()) {
+                  "Search Results (${matchingPlants.size})"
+                } else if (selectedCategory != null) {
+                  "${selectedCategory.displayName} (${matchingPlants.size})"
+                } else {
+                  "Plant Catalog (${matchingPlants.size})"
+                },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Text(
+                text = "Tap + to add plants to your yearly planting & harvest schedule",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
           }
         }
-      } else {
-        val displayedPlants = remember(matchingPlants, query) {
-          if (query.isBlank()) matchingPlants.take(12) else matchingPlants
-        }
-        Column(
-          verticalArrangement = Arrangement.spacedBy(8.dp),
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          displayedPlants.forEach { plant ->
+
+        if (matchingPlants.isEmpty()) {
+          item(key = "catalog_empty") {
+            Card(
+              shape = RoundedCornerShape(14.dp),
+              colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+              ),
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+              modifier = Modifier.fillMaxWidth(),
+            ) {
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Text(
+                  text = "No plants found matching \"$query\"",
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                  text = "Create a custom plant entry with your own planting and harvesting months.",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  textAlign = TextAlign.Center,
+                )
+                FilledTonalButton(
+                  onClick = onCreateCustomWithQuery,
+                  shape = RoundedCornerShape(12.dp),
+                  modifier = Modifier.testTag("create_custom_from_search_button"),
+                ) {
+                  Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text("Create \"${query.trim()}\"")
+                }
+              }
+            }
+          }
+        } else {
+          items(
+            items = matchingPlants,
+            key = { it.id },
+          ) { plant ->
             val isScheduled = plant.id in scheduledPlantIds
             CatalogPlantItemCard(
               plant = plant,
@@ -942,17 +1014,6 @@ private fun CatalogSearchResultsSection(
               onRemove = { onRemovePlant(plant.id) },
               onToggle = { onTogglePlant(plant) },
               onInspect = { onInspectPlant(plant) },
-            )
-          }
-          if (query.isBlank() && matchingPlants.size > displayedPlants.size) {
-            Text(
-              text = "Showing ${displayedPlants.size} of ${matchingPlants.size} plants • Search above to filter all varieties",
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 4.dp),
-              textAlign = TextAlign.Center,
             )
           }
         }
@@ -1980,61 +2041,55 @@ private fun MonthActivitySummaryCard(
         .padding(14.dp),
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+      val prevMonth = if (monthNumber == 1) 12 else monthNumber - 1
+      val nextMonth = if (monthNumber == 12) 1 else monthNumber + 1
+
       Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
       ) {
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        IconButton(
+          onClick = { onSelectMonth(prevMonth) },
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("prev_month_button"),
         ) {
-          Box(
-            modifier = Modifier
-              .size(36.dp)
-              .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center,
-          ) {
-            Icon(
-              imageVector = Icons.Default.WbSunny,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(20.dp),
-            )
-          }
-          Column {
-            Text(
-              text = "${month.fullName} Garden Checklist",
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-              text = "${plantingThisMonth.size} to plant • ${harvestingThisMonth.size} to harvest",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
+          Icon(
+            imageVector = Icons.Default.ChevronLeft,
+            contentDescription = "Previous month (${CalendarMonth.fromNumber(prevMonth).fullName})",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-          val prevMonth = if (monthNumber == 1) 12 else monthNumber - 1
-          val nextMonth = if (monthNumber == 12) 1 else monthNumber + 1
-          TextButton(
-            onClick = { onSelectMonth(prevMonth) },
-            shape = RoundedCornerShape(12.dp),
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-          ) {
-            Text(CalendarMonth.fromNumber(prevMonth).shortName)
-          }
-          TextButton(
-            onClick = { onSelectMonth(nextMonth) },
-            shape = RoundedCornerShape(12.dp),
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-          ) {
-            Text(CalendarMonth.fromNumber(nextMonth).shortName)
-          }
+        Column(
+          horizontalAlignment = Alignment.CenterHorizontally,
+          modifier = Modifier.weight(1f),
+        ) {
+          Text(
+            text = month.fullName,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "${plantingThisMonth.size} to plant • ${harvestingThisMonth.size} to harvest",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+
+        IconButton(
+          onClick = { onSelectMonth(nextMonth) },
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("next_month_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.ChevronRight,
+            contentDescription = "Next month (${CalendarMonth.fromNumber(nextMonth).fullName})",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
         }
       }
 
@@ -2066,7 +2121,7 @@ private fun MonthActivitySummaryCard(
                   .background(MaterialTheme.colorScheme.primary),
               )
               Text(
-                text = "Plant in ${month.shortName}",
+                text = "Plant",
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -2115,7 +2170,7 @@ private fun MonthActivitySummaryCard(
                   .background(MaterialTheme.colorScheme.tertiary),
               )
               Text(
-                text = "Harvest in ${month.shortName}",
+                text = "Harvest",
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onTertiaryContainer,

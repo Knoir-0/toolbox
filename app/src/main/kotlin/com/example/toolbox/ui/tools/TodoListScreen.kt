@@ -509,7 +509,7 @@ fun TodoListScreen(
             }
             Column {
               Text(
-                text = "To-Do",
+                text = "To Do",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,

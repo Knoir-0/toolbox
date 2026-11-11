@@ -201,7 +201,7 @@ enum class CameraAspectRatio(
   }
 
   companion object {
-    val DEFAULT: CameraAspectRatio = RATIO_4_3
+    val DEFAULT: CameraAspectRatio = FULL
 
     fun fromNameOrDefault(name: String?): CameraAspectRatio {
       if (name.isNullOrBlank()) return DEFAULT
@@ -872,6 +872,37 @@ object CameraEngine {
       CameraGridOverlay.RULE_OF_THIRDS -> listOf(1f / 3f, 2f / 3f)
       CameraGridOverlay.GOLDEN_RATIO -> listOf(0.381966f, 0.618034f)
       CameraGridOverlay.CROSSHAIR -> listOf(0.5f)
+    }
+  }
+
+  /**
+   * Computes the fitted viewfinder dimensions `(width, height)` inside an available
+   * viewport of [availableWidth] by [availableHeight] for the given [aspectRatio].
+   *
+   * When [aspectRatio] is [CameraAspectRatio.FULL] or matches the available viewport's
+   * aspect ratio, the returned dimensions fill the entire available viewport.
+   * When the camera's aspect ratio does not match the screen's aspect ratio, the
+   * viewport shrinks along one axis to preserve [aspectRatio], leaving black bars
+   * along the remaining axis.
+   */
+  fun calculateViewfinderDimensions(
+    availableWidth: Float,
+    availableHeight: Float,
+    aspectRatio: CameraAspectRatio,
+  ): Pair<Float, Float> {
+    if (availableWidth <= 0f || availableHeight <= 0f) {
+      return Pair(availableWidth.coerceAtLeast(0f), availableHeight.coerceAtLeast(0f))
+    }
+    val baseRatio = aspectRatio.portraitWidthToHeightRatio ?: return Pair(availableWidth, availableHeight)
+    val isLandscape = availableWidth > availableHeight
+    val targetRatio = if (isLandscape && baseRatio > 0f) 1f / baseRatio else baseRatio
+    val screenRatio = availableWidth / availableHeight
+    return if (kotlin.math.abs(screenRatio - targetRatio) < 0.001f) {
+      Pair(availableWidth, availableHeight)
+    } else if (screenRatio > targetRatio) {
+      Pair(availableHeight * targetRatio, availableHeight)
+    } else {
+      Pair(availableWidth, availableWidth / targetRatio)
     }
   }
 }

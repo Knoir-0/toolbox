@@ -91,6 +91,7 @@ import androidx.navigation3.runtime.NavKey
 import com.example.toolbox.ui.theme.ToolboxTheme
 import com.example.toolbox.ui.tools.AudioEditorScreen
 import com.example.toolbox.ui.tools.AudioRecorderScreen
+import com.example.toolbox.ui.tools.BluetoothGamepadScreen
 import com.example.toolbox.ui.tools.BluetoothRemoteScreen
 import com.example.toolbox.ui.tools.CalculatorScreen
 import com.example.toolbox.ui.tools.CameraScreen
@@ -1605,6 +1606,9 @@ fun ToolContentView(
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.PLANT_SCHEDULE -> PlantScheduleScreen(
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.BLUETOOTH_GAMEPAD -> BluetoothGamepadScreen(
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.SETTINGS -> SettingsScreen(

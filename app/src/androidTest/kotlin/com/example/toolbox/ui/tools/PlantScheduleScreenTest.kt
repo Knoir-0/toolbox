@@ -29,12 +29,21 @@ class PlantScheduleScreenTest {
       }
     }
 
-    // Initially schedule is empty and catalog + year view legend are displayed
+    // Initially checklist and year view are displayed, and schedule is empty
     composeTestRule.onNodeWithTag("plant_schedule_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("month_summary_card").assertIsDisplayed()
     composeTestRule.onNodeWithTag("year_view_card").assertIsDisplayed()
     composeTestRule.onNodeWithTag("legend_planting_theme").assertIsDisplayed()
     composeTestRule.onNodeWithTag("legend_harvesting_accent").assertIsDisplayed()
     composeTestRule.onNodeWithTag("schedule_empty_state").assertIsDisplayed()
+
+    // Click search button in toolbar -> toolbar transitions into search bar and overlay is shown
+    composeTestRule.onNodeWithTag("toggle_search_bar_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("toolbar_search_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("catalog_search_overlay").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("catalog_category_pills").assertIsDisplayed()
 
     // Search for "Tomato"
     composeTestRule.onNodeWithTag("plant_search_input").performTextInput("Tomato")
@@ -45,8 +54,8 @@ class PlantScheduleScreenTest {
     composeTestRule.onNodeWithTag("add_plant_button_tomato").performClick()
     composeTestRule.waitForIdle()
 
-    // Clear search and verify Tomato is in the Year View schedule with Planting (Mar-May) and Harvesting (Jul-Oct)
-    composeTestRule.onNodeWithTag("plant_search_clear").performClick()
+    // Close search overlay and verify Tomato is in the Year View schedule with Planting (Mar-May) and Harvesting (Jul-Oct)
+    composeTestRule.onNodeWithTag("close_search_button").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("scheduled_plant_item_tomato").assertIsDisplayed()

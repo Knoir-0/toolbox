@@ -60,6 +60,7 @@ class NavigationPreferencesTest {
       Tool.METRONOME,
       Tool.CHORD_BOOK,
       Tool.PLANT_SCHEDULE,
+      Tool.BLUETOOTH_GAMEPAD,
       Tool.SETTINGS,
     )
     assertEquals(expectedDefaultOrder, Tool.entries)
@@ -70,7 +71,7 @@ class NavigationPreferencesTest {
 
   @Test
   fun parseToolOrder_validSavedOrder_preservesOrder() {
-    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,NOTES,CHORD_BOOK,PLANT_SCHEDULE,CAMERA,AUDIO_EDITOR,VIDEO_EDITOR,SETTINGS"
+    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,NOTES,CHORD_BOOK,PLANT_SCHEDULE,CAMERA,AUDIO_EDITOR,VIDEO_EDITOR,BLUETOOTH_GAMEPAD,SETTINGS"
     val result = parseToolOrder(raw)
     val expected = listOf(
       Tool.IMAGE_EDITOR,
@@ -93,6 +94,7 @@ class NavigationPreferencesTest {
       Tool.CAMERA,
       Tool.AUDIO_EDITOR,
       Tool.VIDEO_EDITOR,
+      Tool.BLUETOOTH_GAMEPAD,
       Tool.SETTINGS,
     )
     assertEquals(expected, result)
@@ -177,6 +179,7 @@ class NavigationPreferencesTest {
       Tool.CAMERA,
       Tool.AUDIO_EDITOR,
       Tool.VIDEO_EDITOR,
+      Tool.BLUETOOTH_GAMEPAD,
       Tool.SETTINGS,
     )
     repo.setToolOrder(customOrder)
@@ -219,6 +222,7 @@ class NavigationPreferencesTest {
       Tool.CAMERA,
       Tool.AUDIO_EDITOR,
       Tool.VIDEO_EDITOR,
+      Tool.BLUETOOTH_GAMEPAD,
       Tool.SETTINGS,
     )
     repo.setToolOrder(customOrder)
@@ -453,14 +457,14 @@ class NavigationPreferencesTest {
     val mathTools = listOf(
       Tool.RULER, // "Ruler"
       Tool.CALCULATOR, // "Calculator"
-      Tool.UNIT_CONVERTER, // "Unit Converter"
+      Tool.UNIT_CONVERTER, // "Units"
     )
 
     // Manual preserves order
     val manual = sortToolsWithinCategory(mathTools, CategoryToolSortingOption.MANUAL)
     assertEquals(listOf(Tool.RULER, Tool.CALCULATOR, Tool.UNIT_CONVERTER), manual)
 
-    // Alpha sorts by title: Calculator < Ruler < Unit Converter
+    // Alpha sorts by title: Calculator < Ruler < Units
     val alpha = sortToolsWithinCategory(mathTools, CategoryToolSortingOption.ALPHABETICAL)
     assertEquals(listOf(Tool.CALCULATOR, Tool.RULER, Tool.UNIT_CONVERTER), alpha)
 
@@ -504,10 +508,10 @@ class NavigationPreferencesTest {
   @Test
   fun sortCategoryGroups_manualAlphaAndUsage_keepsSystemLast() {
     val groups = listOf(
-      CategoryGroup(ToolCategory.ENTERTAINMENT_AND_DEVICES, listOf(Tool.DICE_ROLLER, Tool.BLUETOOTH_REMOTE)),
+      CategoryGroup(ToolCategory.MISCELLANEOUS, listOf(Tool.PLANT_SCHEDULE, Tool.DICE_ROLLER)),
       CategoryGroup(ToolCategory.SYSTEM, listOf(Tool.SETTINGS)),
       CategoryGroup(ToolCategory.MATH_AND_MEASUREMENT, listOf(Tool.CALCULATOR, Tool.RULER)),
-      CategoryGroup(ToolCategory.AUDIO_AND_MUSIC, listOf(Tool.GUITAR_TUNER)),
+      CategoryGroup(ToolCategory.MUSIC_AND_INSTRUMENTS, listOf(Tool.GUITAR_TUNER)),
       CategoryGroup(ToolCategory.PRODUCTIVITY, listOf(Tool.TODO_LIST)),
     )
 
@@ -516,9 +520,9 @@ class NavigationPreferencesTest {
     assertEquals(
       listOf(
         ToolCategory.MATH_AND_MEASUREMENT,
-        ToolCategory.AUDIO_AND_MUSIC,
         ToolCategory.PRODUCTIVITY,
-        ToolCategory.ENTERTAINMENT_AND_DEVICES,
+        ToolCategory.MUSIC_AND_INSTRUMENTS,
+        ToolCategory.MISCELLANEOUS,
         ToolCategory.SYSTEM,
       ),
       manualSorted.map { it.category },
@@ -528,9 +532,9 @@ class NavigationPreferencesTest {
     val alphaSorted = sortCategoryGroups(groups, CategorySortingOption.ALPHABETICAL)
     assertEquals(
       listOf(
-        ToolCategory.AUDIO_AND_MUSIC, // "Audio & Music"
-        ToolCategory.ENTERTAINMENT_AND_DEVICES, // "Entertainment & Devices"
         ToolCategory.MATH_AND_MEASUREMENT, // "Math & Measurement"
+        ToolCategory.MISCELLANEOUS, // "Miscellaneous"
+        ToolCategory.MUSIC_AND_INSTRUMENTS, // "Music & Instruments"
         ToolCategory.PRODUCTIVITY, // "Productivity"
         ToolCategory.SYSTEM, // "System" always last
       ),
@@ -540,9 +544,9 @@ class NavigationPreferencesTest {
     // 3. USAGE sorts by total usage of tools in group, SYSTEM last
     val usageCounts = mapOf(
       Tool.TODO_LIST to 50, // Productivity = 50
-      Tool.GUITAR_TUNER to 10, // Audio & Music = 10
-      Tool.DICE_ROLLER to 5, // Entertainment = 5 + 20 = 25
-      Tool.BLUETOOTH_REMOTE to 20,
+      Tool.GUITAR_TUNER to 10, // Music & Instruments = 10
+      Tool.DICE_ROLLER to 5, // Miscellaneous = 5 + 20 = 25
+      Tool.PLANT_SCHEDULE to 20,
       Tool.CALCULATOR to 100, // Math = 100 + 0 = 100
       Tool.SETTINGS to 999, // System should still be last!
     )
@@ -551,8 +555,8 @@ class NavigationPreferencesTest {
       listOf(
         ToolCategory.MATH_AND_MEASUREMENT, // 100
         ToolCategory.PRODUCTIVITY, // 50
-        ToolCategory.ENTERTAINMENT_AND_DEVICES, // 25
-        ToolCategory.AUDIO_AND_MUSIC, // 10
+        ToolCategory.MISCELLANEOUS, // 25
+        ToolCategory.MUSIC_AND_INSTRUMENTS, // 10
         ToolCategory.SYSTEM, // always last
       ),
       usageSorted.map { it.category },
@@ -564,9 +568,9 @@ class NavigationPreferencesTest {
       categorySorting = CategorySortingOption.ALPHABETICAL,
       categoryToolSorting = CategoryToolSortingOption.ALPHABETICAL,
     )
-    val entertainmentGroup = combinedSorted.first { it.category == ToolCategory.ENTERTAINMENT_AND_DEVICES }
-    // Dice Roller ("Dice Roller") < TV Remote ("TV Remote")
-    assertEquals(listOf(Tool.DICE_ROLLER, Tool.BLUETOOTH_REMOTE), entertainmentGroup.tools)
+    val miscGroup = combinedSorted.first { it.category == ToolCategory.MISCELLANEOUS }
+    // Dice ("Dice") < Plants ("Plants")
+    assertEquals(listOf(Tool.DICE_ROLLER, Tool.PLANT_SCHEDULE), miscGroup.tools)
   }
 
   @Test
@@ -602,22 +606,22 @@ class NavigationPreferencesTest {
   @Test
   fun sortToolsAlphabetically_ascendingAndDescending_keepsSettingsLast() {
     val tools = listOf(
-      Tool.DICE_ROLLER, // Dice Roller
+      Tool.DICE_ROLLER, // Dice
       Tool.CALCULATOR, // Calculator
       Tool.SETTINGS, // Settings
-      Tool.TODO_LIST, // To-Do
-      Tool.BLUETOOTH_REMOTE, // TV Remote
-      Tool.UNIT_CONVERTER, // Unit Converter
+      Tool.TODO_LIST, // To Do
+      Tool.BLUETOOTH_REMOTE, // Remote
+      Tool.UNIT_CONVERTER, // Units
     )
 
     val ascending = sortToolsAlphabetically(tools, ToolSortOrder.ASCENDING)
     assertEquals(
       listOf(
         Tool.CALCULATOR, // "Calculator"
-        Tool.DICE_ROLLER, // "Dice Roller"
-        Tool.TODO_LIST, // "To-Do"
-        Tool.BLUETOOTH_REMOTE, // "TV Remote"
-        Tool.UNIT_CONVERTER, // "Unit Converter"
+        Tool.DICE_ROLLER, // "Dice"
+        Tool.BLUETOOTH_REMOTE, // "Remote"
+        Tool.TODO_LIST, // "To Do"
+        Tool.UNIT_CONVERTER, // "Units"
         Tool.SETTINGS, // "Settings" always last
       ),
       ascending,
@@ -626,10 +630,10 @@ class NavigationPreferencesTest {
     val descending = sortToolsAlphabetically(tools, ToolSortOrder.DESCENDING)
     assertEquals(
       listOf(
-        Tool.UNIT_CONVERTER, // "Unit Converter"
-        Tool.BLUETOOTH_REMOTE, // "TV Remote"
-        Tool.TODO_LIST, // "To-Do"
-        Tool.DICE_ROLLER, // "Dice Roller"
+        Tool.UNIT_CONVERTER, // "Units"
+        Tool.TODO_LIST, // "To Do"
+        Tool.BLUETOOTH_REMOTE, // "Remote"
+        Tool.DICE_ROLLER, // "Dice"
         Tool.CALCULATOR, // "Calculator"
         Tool.SETTINGS, // "Settings" always last
       ),

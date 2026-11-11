@@ -226,7 +226,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_todo_list"
             android:roundIcon="@mipmap/ic_tool_todo_list"
-            android:label="To-Do">
+            android:label="To Do">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -282,7 +282,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_unit_converter"
             android:roundIcon="@mipmap/ic_tool_unit_converter"
-            android:label="Unit Converter">
+            android:label="Units">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -296,7 +296,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_audio_recorder"
             android:roundIcon="@mipmap/ic_tool_audio_recorder"
-            android:label="Audio Recorder">
+            android:label="Recorder">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -310,7 +310,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_bluetooth_remote"
             android:roundIcon="@mipmap/ic_tool_bluetooth_remote"
-            android:label="TV Remote">
+            android:label="Remote">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -394,7 +394,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_color_picker"
             android:roundIcon="@mipmap/ic_tool_color_picker"
-            android:label="Color Picker">
+            android:label="Colors">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -408,7 +408,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_dice_roller"
             android:roundIcon="@mipmap/ic_tool_dice_roller"
-            android:label="Dice Roller">
+            android:label="Dice">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -422,7 +422,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_guitar_tuner"
             android:roundIcon="@mipmap/ic_tool_guitar_tuner"
-            android:label="Guitar Tuner">
+            android:label="Tuner">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -450,7 +450,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_chord_book"
             android:roundIcon="@mipmap/ic_tool_chord_book"
-            android:label="Chord Book">
+            android:label="Chords">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -464,7 +464,21 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_plant_schedule"
             android:roundIcon="@mipmap/ic_tool_plant_schedule"
-            android:label="Plant Schedule">
+            android:label="Plants">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".MainActivityToolBluetoothGamepad"
+            android:targetActivity=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_bluetooth_gamepad"
+            android:roundIcon="@mipmap/ic_tool_bluetooth_gamepad"
+            android:label="Gamepad">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

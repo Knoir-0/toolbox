@@ -211,7 +211,7 @@ private object NoOpRemoteActions : RemoteInputActions {
 }
 
 /** Runtime permissions needed for discovery, pairing and acting as a HID device. */
-private fun requiredBluetoothPermissions(): Array<String> =
+internal fun requiredBluetoothPermissions(): Array<String> =
   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
     arrayOf(
       Manifest.permission.BLUETOOTH_CONNECT,
@@ -222,7 +222,7 @@ private fun requiredBluetoothPermissions(): Array<String> =
     arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
   }
 
-private fun hasAllPermissions(context: Context): Boolean =
+internal fun hasAllPermissions(context: Context): Boolean =
   requiredBluetoothPermissions().all {
     ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
   }
@@ -339,6 +339,8 @@ internal fun DeviceListContent(
   onCancelConnect: () -> Unit,
   onDismissMessage: () -> Unit,
   modifier: Modifier = Modifier,
+  title: String = "Bluetooth Remote",
+  icon: ImageVector = Icons.Default.SettingsRemote,
 ) {
   var showScanModal by rememberSaveable { mutableStateOf(false) }
   val connecting = state.connection as? RemoteConnection.Connecting
@@ -358,14 +360,14 @@ internal fun DeviceListContent(
       item {
         Row(verticalAlignment = Alignment.CenterVertically) {
           Icon(
-            imageVector = Icons.Default.SettingsRemote,
+            imageVector = icon,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(32.dp),
           )
           Spacer(Modifier.width(12.dp))
           Column(Modifier.weight(1f)) {
-            Text("Bluetooth Remote", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text(
               "Select a paired device or tap + to add a new one",
               style = MaterialTheme.typography.bodySmall,
@@ -1828,7 +1830,7 @@ private fun ConsumerButton(
 }
 
 @Composable
-private fun PressableButton(
+internal fun PressableButton(
   onPress: () -> Unit,
   onRelease: () -> Unit,
   contentDescription: String,
@@ -1857,7 +1859,7 @@ private fun PressableButton(
  * safe touch consumption (preventing scroll interference), and minimum assertion duration.
  */
 @Composable
-private fun PressableSurface(
+internal fun PressableSurface(
   onPress: () -> Unit,
   onRelease: () -> Unit,
   contentDescription: String,
@@ -1976,7 +1978,7 @@ private const val SCROLL_PX_PER_STEP = 40f
 // Previews
 // =================================================================================================
 
-private val previewDevices = listOf(
+internal val previewDevices = listOf(
   BtDeviceInfo("AA:BB:CC:DD:EE:01", "Living Room TV", isBonded = true, kind = BtDeviceKind.TV),
   BtDeviceInfo("AA:BB:CC:DD:EE:02", "Pixel Buds Pro", isBonded = true, kind = BtDeviceKind.AUDIO),
   BtDeviceInfo("AA:BB:CC:DD:EE:03", "SHIELD", isBonded = false, kind = BtDeviceKind.TV, rssi = -58),

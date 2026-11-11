@@ -140,6 +140,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
@@ -582,302 +583,37 @@ fun CameraScreen(
     }
   }
 
-  Column(
+  Box(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background)
+      .background(Color.Black)
       .testTag("camera_screen"),
   ) {
-    // 1. Standard Tool Header / Top Bar (DESIGN_LANGUAGE.md 5.1)
-    Surface(
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 1.dp,
-      modifier = Modifier.fillMaxWidth(),
-    ) {
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .heightIn(min = 68.dp),
-        contentAlignment = Alignment.CenterStart,
-      ) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            Box(
-              modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(
-                  if (isRecordingVideo) MaterialTheme.colorScheme.errorContainer
-                  else MaterialTheme.colorScheme.primaryContainer
-                ),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = if (captureMode == CameraCaptureMode.VIDEO) {
-                  Icons.Default.Videocam
-                } else {
-                  Icons.Default.PhotoCamera
-                },
-                contentDescription = null,
-                tint = if (isRecordingVideo) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-              )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = "Camera",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              Text(
-                text = if (isRecordingVideo) {
-                  "Recording (${CameraEngine.formatTimerDurationMs(elapsedVideoMs)}) • $directoryDisplayPath"
-                } else {
-                  val countLabel = if (capturedMedia.size == 1) "1 capture" else "${capturedMedia.size} captures"
-                  "$countLabel • ${aspectRatio.displayName} • $directoryDisplayPath"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = if (isRecordingVideo) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-          }
-
-          // Top Bar Quick Camera Controls: Flash, Timer, Aspect Ratio, Grid, Settings
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-          ) {
-            // Flash Mode Cycle Button
-            IconButton(
-              onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                updateFlashMode(flashMode.next())
-              },
-              modifier = Modifier.testTag("camera_flash_button"),
-            ) {
-              Icon(
-                imageVector = when (flashMode) {
-                  CameraFlashMode.OFF -> Icons.Default.FlashOff
-                  CameraFlashMode.AUTO -> Icons.Default.FlashAuto
-                  CameraFlashMode.ON -> Icons.Default.FlashOn
-                  CameraFlashMode.TORCH -> Icons.Default.Highlight
-                },
-                contentDescription = flashMode.displayName,
-                tint = if (flashMode != CameraFlashMode.OFF) {
-                  MaterialTheme.colorScheme.tertiary
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant
-                },
-              )
-            }
-
-            // Self-Timer Cycle Button
-            IconButton(
-              onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                updateTimerDuration(timerDuration.next())
-              },
-              enabled = !isRecordingVideo && !isCountingDown,
-              modifier = Modifier.testTag("camera_timer_button"),
-            ) {
-              Box(contentAlignment = Alignment.Center) {
-                Icon(
-                  imageVector = if (timerDuration == CameraTimerDuration.OFF) {
-                    Icons.Default.TimerOff
-                  } else {
-                    Icons.Default.Timer
-                  },
-                  contentDescription = timerDuration.displayName,
-                  tint = if (timerDuration != CameraTimerDuration.OFF) {
-                    MaterialTheme.colorScheme.primary
-                  } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                  },
-                )
-                if (timerDuration != CameraTimerDuration.OFF) {
-                  Text(
-                    text = timerDuration.shortLabel,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                      .align(Alignment.BottomEnd)
-                      .offset(x = 4.dp, y = 4.dp)
-                      .testTag("camera_timer_badge"),
-                  )
-                }
-              }
-            }
-
-            // Aspect Ratio Pill Button
-            Surface(
-              shape = RoundedCornerShape(16.dp),
-              color = MaterialTheme.colorScheme.secondaryContainer,
-              modifier = Modifier
-                .clip(RoundedCornerShape(16.dp))
-                .clickable(enabled = !isRecordingVideo) {
-                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                  updateAspectRatio(aspectRatio.next())
-                }
-                .testTag("camera_aspect_ratio_button"),
-            ) {
-              Text(
-                text = aspectRatio.displayName,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-              )
-            }
-
-            // Grid Overlay Cycle Button
-            IconButton(
-              onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                updateGridOverlay(gridOverlay.next())
-              },
-              modifier = Modifier.testTag("camera_grid_button"),
-            ) {
-              Icon(
-                imageVector = if (gridOverlay == CameraGridOverlay.NONE) {
-                  Icons.Default.GridOff
-                } else {
-                  Icons.Default.GridOn
-                },
-                contentDescription = gridOverlay.displayName,
-                tint = if (gridOverlay != CameraGridOverlay.NONE) {
-                  MaterialTheme.colorScheme.primary
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant
-                },
-              )
-            }
-
-            // Camera Folder & Format Settings Button
-            IconButton(
-              onClick = { showFolderSettingsDialog = true },
-              enabled = !isRecordingVideo,
-              modifier = Modifier.testTag("camera_settings_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.FolderOpen,
-                contentDescription = "Camera storage and format settings",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-          }
-        }
-      }
-    }
-
-    // Optional Camera Permission Banner
-    if (!hasCameraPermission) {
-      Card(
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(
-          containerColor = MaterialTheme.colorScheme.secondaryContainer,
-        ),
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 16.dp, vertical = 6.dp)
-          .testTag("camera_permission_banner"),
-      ) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            Icon(
-              imageVector = Icons.Default.PhotoCamera,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
-            Text(
-              text = "Grant camera access for live optical viewfinder capture.",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
-          }
-          Button(
-            onClick = {
-              permissionLauncher.launch(
-                arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
-              )
-            },
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier
-              .padding(start = 8.dp)
-              .testTag("allow_camera_permission_button"),
-          ) {
-            Text("Allow")
-          }
-        }
-      }
-    }
-
-    // 2. Center Viewfinder Stage
+    // 1. Full-Viewport Camera Stage (shrinks with black bars when aspect ratio does not match screen)
     BoxWithConstraints(
       modifier = Modifier
-        .fillMaxWidth()
-        .weight(1f)
-        .padding(horizontal = 12.dp, vertical = 6.dp)
+        .fillMaxSize()
+        .background(Color.Black)
         .testTag("camera_viewfinder_stage"),
       contentAlignment = Alignment.Center,
     ) {
       val containerW = maxWidth
       val containerH = maxHeight
-      val targetRatio = aspectRatio.portraitWidthToHeightRatio
 
-      val (frameW, frameH) = remember(containerW, containerH, targetRatio) {
-        if (targetRatio == null || containerW <= 0.dp || containerH <= 0.dp) {
-          Pair(containerW, containerH)
-        } else {
-          val currentRatio = containerW.value / containerH.value
-          if (currentRatio > targetRatio) {
-            val h = containerH
-            val w = h * targetRatio
-            Pair(w, h)
-          } else {
-            val w = containerW
-            val h = w / targetRatio
-            Pair(w, h)
-          }
-        }
+      val (frameW, frameH) = remember(containerW, containerH, aspectRatio) {
+        val (w, h) = CameraEngine.calculateViewfinderDimensions(
+          availableWidth = containerW.value,
+          availableHeight = containerH.value,
+          aspectRatio = aspectRatio,
+        )
+        Pair(w.dp, h.dp)
       }
 
       Box(
         modifier = Modifier
           .size(width = frameW, height = frameH)
-          .clip(RoundedCornerShape(22.dp))
-          .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-          .border(
-            width = 1.dp,
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-            shape = RoundedCornerShape(22.dp),
-          )
+          .clipToBounds()
+          .background(Color.Black)
           .pointerInput(Unit) {
             detectTransformGestures { _, _, zoomChange, _ ->
               if (zoomChange != 1f) {
@@ -934,7 +670,6 @@ fun CameraScreen(
         // Tap-to-Focus Reticle Indicator
         val activeFocusPoint = focusPointNormalized
         if (activeFocusPoint != null) {
-          val density = LocalDensity.current
           val focusRingColor = MaterialTheme.colorScheme.tertiary
           Box(
             modifier = Modifier
@@ -956,141 +691,6 @@ fun CameraScreen(
                 radius = 4.dp.toPx(),
                 center = Offset(cx, cy),
               )
-            }
-          }
-        }
-
-        // Top-Left & Top-Right Status Badges inside Viewfinder
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .align(Alignment.TopCenter)
-            .padding(12.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          // Left: Recording indicator OR Lens + Filter pill
-          if (isRecordingVideo) {
-            Surface(
-              shape = RoundedCornerShape(20.dp),
-              color = MaterialTheme.colorScheme.errorContainer,
-              modifier = Modifier.testTag("video_recording_badge"),
-            ) {
-              Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-              ) {
-                Box(
-                  modifier = Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.error),
-                )
-                Text(
-                  text = "REC ${CameraEngine.formatTimerDurationMs(elapsedVideoMs)}",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontFamily = FontFamily.Monospace,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.onErrorContainer,
-                  modifier = Modifier.testTag("video_recording_timer_text"),
-                )
-              }
-            }
-          } else {
-            Surface(
-              shape = RoundedCornerShape(20.dp),
-              color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.82f),
-              modifier = Modifier.testTag("viewfinder_status_pill"),
-            ) {
-              Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-              ) {
-                Text(
-                  text = buildString {
-                    append(lensFacing.shortLabel)
-                    if (colorFilter != CameraColorFilter.NONE) {
-                      append(" • ")
-                      append(colorFilter.displayName)
-                    }
-                    if (gridOverlay != CameraGridOverlay.NONE) {
-                      append(" • ")
-                      append(gridOverlay.shortLabel)
-                    }
-                  },
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.onSurface,
-                )
-              }
-            }
-          }
-
-          // Right: Zoom & EV readout pill
-          Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.82f),
-            modifier = Modifier
-              .clip(RoundedCornerShape(20.dp))
-              .clickable { showAdjustmentsPanel = !showAdjustmentsPanel }
-              .testTag("viewfinder_telemetry_pill"),
-          ) {
-            Text(
-              text = "${CameraEngine.formatZoomLabel(zoomLevel)} • ${CameraEngine.formatExposureEvLabel(exposureEv)}",
-              style = MaterialTheme.typography.labelSmall,
-              fontFamily = FontFamily.Monospace,
-              fontWeight = FontWeight.Medium,
-              color = MaterialTheme.colorScheme.onSurface,
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-            )
-          }
-        }
-
-        // Bottom Zoom Preset Pills inside Viewfinder (1x, 2x, 3x, 5x)
-        Row(
-          modifier = Modifier
-            .align(Alignment.BottomCenter)
-            .padding(bottom = 12.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.82f))
-            .padding(horizontal = 6.dp, vertical = 4.dp)
-            .testTag("zoom_presets_row"),
-          horizontalArrangement = Arrangement.spacedBy(4.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          CAMERA_ZOOM_PRESETS.forEach { preset ->
-            val isSelected = kotlin.math.abs(zoomLevel - preset) < 0.15f
-            val presetLabel = "${preset.toInt()}x"
-            Surface(
-              shape = CircleShape,
-              color = if (isSelected) {
-                MaterialTheme.colorScheme.primaryContainer
-              } else {
-                Color.Transparent
-              },
-              modifier = Modifier
-                .size(34.dp)
-                .clip(CircleShape)
-                .clickable {
-                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                  zoomLevel = preset
-                }
-                .testTag("zoom_preset_${preset.toInt()}x"),
-            ) {
-              Box(contentAlignment = Alignment.Center) {
-                Text(
-                  text = presetLabel,
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
-                  color = if (isSelected) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                  } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                  },
-                )
-              }
             }
           }
         }
@@ -1128,502 +728,900 @@ fun CameraScreen(
       }
     }
 
-    // 3. Expandable Pro Sliders Panel (Fine Zoom & Exposure Compensation with SlimDotSlider)
-    AnimatedVisibility(
-      visible = showAdjustmentsPanel,
-      enter = expandVertically() + fadeIn(),
-      exit = shrinkVertically() + fadeOut(),
+    // 2. Top Controls Overlay (Translucent Header + Permission Banner + Status/Telemetry Pills)
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .align(Alignment.TopCenter)
+        .testTag("camera_top_overlay"),
     ) {
-      Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-          containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        ),
+      Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
         modifier = Modifier
           .fillMaxWidth()
-          .padding(horizontal = 16.dp, vertical = 4.dp)
-          .testTag("camera_adjustments_panel"),
+          .testTag("camera_top_bar"),
+      ) {
+        Box(
+          modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 68.dp),
+          contentAlignment = Alignment.CenterStart,
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 12.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Row(
+              modifier = Modifier.weight(1f),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+              Box(
+                modifier = Modifier
+                  .size(36.dp)
+                  .clip(CircleShape)
+                  .background(
+                    if (isRecordingVideo) MaterialTheme.colorScheme.errorContainer
+                    else MaterialTheme.colorScheme.primaryContainer
+                  ),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = if (captureMode == CameraCaptureMode.VIDEO) {
+                    Icons.Default.Videocam
+                  } else {
+                    Icons.Default.PhotoCamera
+                  },
+                  contentDescription = null,
+                  tint = if (isRecordingVideo) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = "Camera",
+                  style = MaterialTheme.typography.titleLarge,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                  text = if (isRecordingVideo) {
+                    "Recording (${CameraEngine.formatTimerDurationMs(elapsedVideoMs)}) • $directoryDisplayPath"
+                  } else {
+                    val countLabel = if (capturedMedia.size == 1) "1 capture" else "${capturedMedia.size} captures"
+                    "$countLabel • ${aspectRatio.displayName} • $directoryDisplayPath"
+                  },
+                  style = MaterialTheme.typography.bodySmall,
+                  color = if (isRecordingVideo) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+            }
+
+            // Top Bar Quick Camera Controls: Flash, Timer, Aspect Ratio, Grid, Settings
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+              // Flash Mode Cycle Button
+              IconButton(
+                onClick = {
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  updateFlashMode(flashMode.next())
+                },
+                modifier = Modifier.testTag("camera_flash_button"),
+              ) {
+                Icon(
+                  imageVector = when (flashMode) {
+                    CameraFlashMode.OFF -> Icons.Default.FlashOff
+                    CameraFlashMode.AUTO -> Icons.Default.FlashAuto
+                    CameraFlashMode.ON -> Icons.Default.FlashOn
+                    CameraFlashMode.TORCH -> Icons.Default.Highlight
+                  },
+                  contentDescription = flashMode.displayName,
+                  tint = if (flashMode != CameraFlashMode.OFF) {
+                    MaterialTheme.colorScheme.tertiary
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                )
+              }
+
+              // Self-Timer Cycle Button
+              IconButton(
+                onClick = {
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  updateTimerDuration(timerDuration.next())
+                },
+                enabled = !isRecordingVideo && !isCountingDown,
+                modifier = Modifier.testTag("camera_timer_button"),
+              ) {
+                Box(contentAlignment = Alignment.Center) {
+                  Icon(
+                    imageVector = if (timerDuration == CameraTimerDuration.OFF) {
+                      Icons.Default.TimerOff
+                    } else {
+                      Icons.Default.Timer
+                    },
+                    contentDescription = timerDuration.displayName,
+                    tint = if (timerDuration != CameraTimerDuration.OFF) {
+                      MaterialTheme.colorScheme.primary
+                    } else {
+                      MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                  )
+                  if (timerDuration != CameraTimerDuration.OFF) {
+                    Text(
+                      text = timerDuration.shortLabel,
+                      style = MaterialTheme.typography.labelSmall,
+                      fontWeight = FontWeight.ExtraBold,
+                      color = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .offset(x = 4.dp, y = 4.dp)
+                        .testTag("camera_timer_badge"),
+                    )
+                  }
+                }
+              }
+
+              // Aspect Ratio Pill Button
+              Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f),
+                modifier = Modifier
+                  .clip(RoundedCornerShape(16.dp))
+                  .clickable(enabled = !isRecordingVideo) {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    updateAspectRatio(aspectRatio.next())
+                  }
+                  .testTag("camera_aspect_ratio_button"),
+              ) {
+                Text(
+                  text = aspectRatio.displayName,
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.onSecondaryContainer,
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+              }
+
+              // Grid Overlay Cycle Button
+              IconButton(
+                onClick = {
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  updateGridOverlay(gridOverlay.next())
+                },
+                modifier = Modifier.testTag("camera_grid_button"),
+              ) {
+                Icon(
+                  imageVector = if (gridOverlay == CameraGridOverlay.NONE) {
+                    Icons.Default.GridOff
+                  } else {
+                    Icons.Default.GridOn
+                  },
+                  contentDescription = gridOverlay.displayName,
+                  tint = if (gridOverlay != CameraGridOverlay.NONE) {
+                    MaterialTheme.colorScheme.primary
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                )
+              }
+
+              // Camera Folder & Format Settings Button
+              IconButton(
+                onClick = { showFolderSettingsDialog = true },
+                enabled = !isRecordingVideo,
+                modifier = Modifier.testTag("camera_settings_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.FolderOpen,
+                  contentDescription = "Camera storage and format settings",
+                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+            }
+          }
+        }
+      }
+
+      // Optional Camera Permission Banner
+      if (!hasCameraPermission) {
+        Card(
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f),
+          ),
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .testTag("camera_permission_banner"),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Row(
+              modifier = Modifier.weight(1f),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Default.PhotoCamera,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+              )
+              Text(
+                text = "Grant camera access for live optical viewfinder capture.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+              )
+            }
+            Button(
+              onClick = {
+                permissionLauncher.launch(
+                  arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+                )
+              },
+              shape = RoundedCornerShape(12.dp),
+              modifier = Modifier
+                .padding(start = 8.dp)
+                .testTag("allow_camera_permission_button"),
+            ) {
+              Text("Allow")
+            }
+          }
+        }
+      }
+
+      // Top-Left & Top-Right Status Badges Overlay Row
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        // Left: Recording indicator OR Lens + Filter pill
+        if (isRecordingVideo) {
+          Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.88f),
+            modifier = Modifier.testTag("video_recording_badge"),
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Box(
+                modifier = Modifier
+                  .size(8.dp)
+                  .clip(CircleShape)
+                  .background(MaterialTheme.colorScheme.error),
+              )
+              Text(
+                text = "REC ${CameraEngine.formatTimerDurationMs(elapsedVideoMs)}",
+                style = MaterialTheme.typography.labelMedium,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.testTag("video_recording_timer_text"),
+              )
+            }
+          }
+        } else {
+          Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f),
+            modifier = Modifier.testTag("viewfinder_status_pill"),
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Text(
+                text = buildString {
+                  append(lensFacing.shortLabel)
+                  if (colorFilter != CameraColorFilter.NONE) {
+                    append(" • ")
+                    append(colorFilter.displayName)
+                  }
+                  if (gridOverlay != CameraGridOverlay.NONE) {
+                    append(" • ")
+                    append(gridOverlay.shortLabel)
+                  }
+                },
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+            }
+          }
+        }
+
+        // Right: Zoom & EV readout pill
+        Surface(
+          shape = RoundedCornerShape(20.dp),
+          color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f),
+          modifier = Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .clickable { showAdjustmentsPanel = !showAdjustmentsPanel }
+            .testTag("viewfinder_telemetry_pill"),
+        ) {
+          Text(
+            text = "${CameraEngine.formatZoomLabel(zoomLevel)} • ${CameraEngine.formatExposureEvLabel(exposureEv)}",
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+          )
+        }
+      }
+    }
+
+    // 3. Bottom Controls Overlay (Zoom Presets + Expandable Sliders/Filters + Translucent Control Deck)
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .align(Alignment.BottomCenter)
+        .testTag("camera_bottom_overlay"),
+      horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+      // Zoom Preset Pills (1x, 2x, 3x, 5x)
+      Row(
+        modifier = Modifier
+          .padding(bottom = 8.dp)
+          .clip(RoundedCornerShape(24.dp))
+          .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f))
+          .padding(horizontal = 6.dp, vertical = 4.dp)
+          .testTag("zoom_presets_row"),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        CAMERA_ZOOM_PRESETS.forEach { preset ->
+          val isSelected = kotlin.math.abs(zoomLevel - preset) < 0.15f
+          val presetLabel = "${preset.toInt()}x"
+          Surface(
+            shape = CircleShape,
+            color = if (isSelected) {
+              MaterialTheme.colorScheme.primaryContainer
+            } else {
+              Color.Transparent
+            },
+            modifier = Modifier
+              .size(34.dp)
+              .clip(CircleShape)
+              .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                zoomLevel = preset
+              }
+              .testTag("zoom_preset_${preset.toInt()}x"),
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Text(
+                text = presetLabel,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                color = if (isSelected) {
+                  MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+              )
+            }
+          }
+        }
+      }
+
+      // Translucent Bottom Control Deck (Expandable Panels + Mode Tabs + Shutter Row)
+      Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("camera_bottom_controls"),
       ) {
         Column(
           modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-          verticalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+          horizontalAlignment = Alignment.CenterHorizontally,
+          verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-          // Fine Zoom Slider
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          // Expandable Pro Sliders Panel (Fine Zoom & Exposure Compensation with SlimDotSlider)
+          AnimatedVisibility(
+            visible = showAdjustmentsPanel,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
           ) {
-            Icon(
-              imageVector = Icons.Default.ZoomIn,
-              contentDescription = "Zoom",
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(18.dp),
-            )
-            Text(
-              text = "Zoom",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-              modifier = Modifier.width(64.dp),
-            )
-            CameraSlimDotSlider(
-              value = zoomLevel,
-              onValueChange = { zoomLevel = CameraEngine.coerceZoom(it) },
-              valueRange = MIN_CAMERA_ZOOM..MAX_CAMERA_ZOOM,
+            Card(
+              shape = RoundedCornerShape(16.dp),
+              colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+              ),
               modifier = Modifier
-                .weight(1f)
-                .testTag("camera_zoom_slider"),
-            )
-            Text(
-              text = CameraEngine.formatZoomLabel(zoomLevel),
-              style = MaterialTheme.typography.labelSmall,
-              fontFamily = FontFamily.Monospace,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              textAlign = TextAlign.End,
-              modifier = Modifier
-                .width(44.dp)
-                .testTag("camera_zoom_value_text"),
-            )
-          }
+                .fillMaxWidth()
+                .testTag("camera_adjustments_panel"),
+            ) {
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                // Fine Zoom Slider
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.ZoomIn,
+                    contentDescription = "Zoom",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                  )
+                  Text(
+                    text = "Zoom",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.width(64.dp),
+                  )
+                  CameraSlimDotSlider(
+                    value = zoomLevel,
+                    onValueChange = { zoomLevel = CameraEngine.coerceZoom(it) },
+                    valueRange = MIN_CAMERA_ZOOM..MAX_CAMERA_ZOOM,
+                    modifier = Modifier
+                      .weight(1f)
+                      .testTag("camera_zoom_slider"),
+                  )
+                  Text(
+                    text = CameraEngine.formatZoomLabel(zoomLevel),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier
+                      .width(44.dp)
+                      .testTag("camera_zoom_value_text"),
+                  )
+                }
 
-          // Exposure Compensation Slider
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Exposure,
-              contentDescription = "Exposure",
-              tint = MaterialTheme.colorScheme.tertiary,
-              modifier = Modifier.size(18.dp),
-            )
-            Text(
-              text = "Exposure",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-              modifier = Modifier.width(64.dp),
-            )
-            CameraSlimDotSlider(
-              value = exposureEv,
-              onValueChange = { exposureEv = CameraEngine.coerceExposureEv(it) },
-              valueRange = MIN_CAMERA_EXPOSURE_EV..MAX_CAMERA_EXPOSURE_EV,
-              accentColor = MaterialTheme.colorScheme.tertiary,
-              modifier = Modifier
-                .weight(1f)
-                .testTag("camera_exposure_slider"),
-            )
-            Text(
-              text = CameraEngine.formatExposureEvLabel(exposureEv),
-              style = MaterialTheme.typography.labelSmall,
-              fontFamily = FontFamily.Monospace,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              textAlign = TextAlign.End,
-              modifier = Modifier
-                .width(52.dp)
-                .testTag("camera_exposure_value_text"),
-            )
-          }
-        }
-      }
-    }
-
-    // 4. Expandable Color Filters Row
-    AnimatedVisibility(
-      visible = showFiltersBar,
-      enter = expandVertically() + fadeIn(),
-      exit = shrinkVertically() + fadeOut(),
-    ) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .horizontalScroll(rememberScrollState())
-          .padding(horizontal = 16.dp, vertical = 4.dp)
-          .testTag("camera_filters_row"),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        CameraColorFilter.entries.forEach { filter ->
-          val isSelected = filter == colorFilter
-          FilterChip(
-            selected = isSelected,
-            onClick = {
-              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-              updateColorFilter(filter)
-            },
-            label = {
-              Text(
-                text = filter.displayName,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-              )
-            },
-            leadingIcon = if (isSelected) {
-              {
-                Icon(
-                  imageVector = Icons.Default.Check,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
+                // Exposure Compensation Slider
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Exposure,
+                    contentDescription = "Exposure",
+                    tint = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.size(18.dp),
+                  )
+                  Text(
+                    text = "Exposure",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.width(64.dp),
+                  )
+                  CameraSlimDotSlider(
+                    value = exposureEv,
+                    onValueChange = { exposureEv = CameraEngine.coerceExposureEv(it) },
+                    valueRange = MIN_CAMERA_EXPOSURE_EV..MAX_CAMERA_EXPOSURE_EV,
+                    accentColor = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier
+                      .weight(1f)
+                      .testTag("camera_exposure_slider"),
+                  )
+                  Text(
+                    text = CameraEngine.formatExposureEvLabel(exposureEv),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier
+                      .width(52.dp)
+                      .testTag("camera_exposure_value_text"),
+                  )
+                }
               }
-            } else null,
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.testTag("filter_chip_${filter.name}"),
-          )
-        }
-      }
-    }
-
-    // 5. Bottom Camera Control Deck (Mode Tabs + Shutter Row)
-    Surface(
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 2.dp,
-      modifier = Modifier
-        .fillMaxWidth()
-        .testTag("camera_bottom_controls"),
-    ) {
-      Column(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 16.dp, vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        // Mode Selector & Quick Tool Toggles Row
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          // Left: Pro Adjustments Toggle Button
-          IconButton(
-            onClick = { showAdjustmentsPanel = !showAdjustmentsPanel },
-            colors = IconButtonDefaults.iconButtonColors(
-              containerColor = if (showAdjustmentsPanel) {
-                MaterialTheme.colorScheme.primaryContainer
-              } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-              },
-            ),
-            modifier = Modifier
-              .size(38.dp)
-              .testTag("toggle_adjustments_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Tune,
-              contentDescription = "Toggle zoom and exposure sliders",
-              tint = if (showAdjustmentsPanel) {
-                MaterialTheme.colorScheme.onPrimaryContainer
-              } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-              },
-              modifier = Modifier.size(18.dp),
-            )
+            }
           }
 
-          // Center: Photo / Video Mode Switcher Pill
-          Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-            modifier = Modifier.testTag("capture_mode_selector"),
+          // Expandable Color Filters Row
+          AnimatedVisibility(
+            visible = showFiltersBar,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
           ) {
             Row(
-              modifier = Modifier.padding(4.dp),
-              horizontalArrangement = Arrangement.spacedBy(4.dp),
+              modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(vertical = 2.dp)
+                .testTag("camera_filters_row"),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
               verticalAlignment = Alignment.CenterVertically,
             ) {
-              CameraCaptureMode.entries.forEach { mode ->
-                val selected = mode == captureMode
-                Surface(
-                  shape = RoundedCornerShape(20.dp),
-                  color = if (selected) {
-                    MaterialTheme.colorScheme.primaryContainer
-                  } else {
-                    Color.Transparent
+              CameraColorFilter.entries.forEach { filter ->
+                val isSelected = filter == colorFilter
+                FilterChip(
+                  selected = isSelected,
+                  onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    updateColorFilter(filter)
                   },
-                  modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .clickable(enabled = !isRecordingVideo && !isCountingDown) {
-                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                      captureMode = mode
-                    }
-                    .testTag("mode_tab_${mode.name}"),
-                ) {
-                  Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                  ) {
-                    Icon(
-                      imageVector = if (mode == CameraCaptureMode.VIDEO) {
-                        Icons.Default.Videocam
-                      } else {
-                        Icons.Default.PhotoCamera
-                      },
-                      contentDescription = null,
-                      tint = if (selected) {
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                      } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                      },
-                      modifier = Modifier.size(16.dp),
-                    )
+                  label = {
                     Text(
-                      text = mode.displayName,
-                      style = MaterialTheme.typography.labelLarge,
-                      fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                      color = if (selected) {
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                      } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                      },
+                      text = filter.displayName,
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                     )
-                  }
-                }
-              }
-            }
-          }
-
-          // Right: Color Filters Toggle Button
-          IconButton(
-            onClick = { showFiltersBar = !showFiltersBar },
-            colors = IconButtonDefaults.iconButtonColors(
-              containerColor = if (showFiltersBar || colorFilter != CameraColorFilter.NONE) {
-                MaterialTheme.colorScheme.tertiaryContainer
-              } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-              },
-            ),
-            modifier = Modifier
-              .size(38.dp)
-              .testTag("toggle_filters_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.AutoAwesome,
-              contentDescription = "Toggle color filters",
-              tint = if (showFiltersBar || colorFilter != CameraColorFilter.NONE) {
-                MaterialTheme.colorScheme.onTertiaryContainer
-              } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-              },
-              modifier = Modifier.size(18.dp),
-            )
-          }
-        }
-
-        // Primary Shutter Row: [Recent Captures Well] — [Shutter FAB] — [Flip Camera / Video Snapshot]
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-          horizontalArrangement = Arrangement.SpaceEvenly,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          // Left: Recent Captures Thumbnail Button
-          Box(contentAlignment = Alignment.TopEnd) {
-            val latestItem = capturedMedia.firstOrNull()
-            Surface(
-              shape = RoundedCornerShape(14.dp),
-              color = MaterialTheme.colorScheme.surfaceVariant,
-              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-              modifier = Modifier
-                .size(52.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .clickable(enabled = !isRecordingVideo) {
-                  showRecentCapturesDialog = true
-                }
-                .testTag("recent_captures_button"),
-            ) {
-              Box(contentAlignment = Alignment.Center) {
-                val thumbBitmap = remember(latestItem?.path, latestItem?.lastModifiedMs, isInspection) {
-                  if (isInspection || latestItem == null || latestItem.isVideo) {
-                    null
-                  } else {
-                    GalleryEngine.decodeThumbnailBitmap(latestItem.file, reqSizePx = 160)
-                  }
-                }
-                if (thumbBitmap != null) {
-                  Image(
-                    bitmap = thumbBitmap.asImageBitmap(),
-                    contentDescription = "Recent capture ${latestItem?.name}",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                  )
-                } else {
-                  Icon(
-                    imageVector = if (latestItem?.isVideo == true) {
-                      Icons.Default.Videocam
-                    } else {
-                      Icons.Default.PhotoLibrary
-                    },
-                    contentDescription = "Open recent captures",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(24.dp),
-                  )
-                }
-              }
-            }
-
-            if (capturedMedia.isNotEmpty()) {
-              Badge(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier
-                  .offset(x = 4.dp, y = (-4).dp)
-                  .testTag("recent_captures_count_badge"),
-              ) {
-                Text(
-                  text = capturedMedia.size.toString(),
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.Bold,
+                  },
+                  leadingIcon = if (isSelected) {
+                    {
+                      Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                      )
+                    }
+                  } else null,
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("filter_chip_${filter.name}"),
                 )
               }
             }
           }
 
-          // Center: Main Shutter / Record Button
-          val infinitePulse = rememberInfiniteTransition(label = "CameraRecordPulse")
-          val recordPulseScale by infinitePulse.animateFloat(
-            initialValue = 1.0f,
-            targetValue = 1.12f,
-            animationSpec = infiniteRepeatable(
-              animation = tween(durationMillis = 700, easing = FastOutSlowInEasing),
-              repeatMode = RepeatMode.Reverse,
-            ),
-            label = "RecordPulseScale",
-          )
-
-          val outerRingColor by animateColorAsState(
-            targetValue = when {
-              isRecordingVideo -> MaterialTheme.colorScheme.error
-              captureMode == CameraCaptureMode.VIDEO -> MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
-              else -> MaterialTheme.colorScheme.primary
-            },
-            label = "OuterShutterRingColor",
-          )
-
-          val innerCircleColor by animateColorAsState(
-            targetValue = when {
-              isRecordingVideo -> MaterialTheme.colorScheme.error
-              captureMode == CameraCaptureMode.VIDEO -> MaterialTheme.colorScheme.error
-              isCountingDown -> MaterialTheme.colorScheme.tertiaryContainer
-              else -> MaterialTheme.colorScheme.primaryContainer
-            },
-            label = "InnerShutterColor",
-          )
-
-          Box(
-            modifier = Modifier
-              .size(76.dp)
-              .scale(if (isRecordingVideo) recordPulseScale else 1f)
-              .clip(CircleShape)
-              .border(3.dp, outerRingColor, CircleShape)
-              .clickable { triggerShutterAction() }
-              .padding(6.dp)
-              .testTag("camera_shutter_button")
-              .semantics {
-                contentDescription = when {
-                  isCountingDown -> "Cancel timer"
-                  captureMode == CameraCaptureMode.VIDEO && isRecordingVideo -> "Stop video recording"
-                  captureMode == CameraCaptureMode.VIDEO -> "Start video recording"
-                  else -> "Take photo"
-                }
-              },
-            contentAlignment = Alignment.Center,
+          // Mode Selector & Quick Tool Toggles Row
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
           ) {
-            Surface(
-              shape = if (isRecordingVideo) RoundedCornerShape(10.dp) else CircleShape,
-              color = innerCircleColor,
-              modifier = Modifier.size(if (isRecordingVideo) 32.dp else 60.dp),
-            ) {
-              Box(contentAlignment = Alignment.Center) {
-                AnimatedContent(
-                  targetState = Triple(captureMode, isRecordingVideo, isCountingDown),
-                  transitionSpec = { (fadeIn() + scaleIn()).togetherWith(fadeOut() + scaleOut()) },
-                  label = "ShutterIconAnim",
-                ) { (mode, recording, counting) ->
-                  when {
-                    counting -> Icon(
-                      imageVector = Icons.Default.Close,
-                      contentDescription = null,
-                      tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                      modifier = Modifier.size(26.dp),
-                    )
-                    recording -> Icon(
-                      imageVector = Icons.Default.Stop,
-                      contentDescription = null,
-                      tint = MaterialTheme.colorScheme.onError,
-                      modifier = Modifier.size(20.dp),
-                    )
-                    mode == CameraCaptureMode.VIDEO -> Icon(
-                      imageVector = Icons.Default.Videocam,
-                      contentDescription = null,
-                      tint = MaterialTheme.colorScheme.onError,
-                      modifier = Modifier.size(26.dp),
-                    )
-                    else -> Icon(
-                      imageVector = Icons.Default.CameraAlt,
-                      contentDescription = null,
-                      tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                      modifier = Modifier.size(26.dp),
-                    )
-                  }
-                }
-              }
-            }
-          }
-
-          // Right: Flip Camera (or Video Snapshot while recording video)
-          if (isRecordingVideo) {
-            SmallFloatingActionButton(
-              onClick = { performPhotoCapture() },
-              shape = CircleShape,
-              containerColor = MaterialTheme.colorScheme.secondaryContainer,
-              contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            // Left: Pro Adjustments Toggle Button
+            IconButton(
+              onClick = { showAdjustmentsPanel = !showAdjustmentsPanel },
+              colors = IconButtonDefaults.iconButtonColors(
+                containerColor = if (showAdjustmentsPanel) {
+                  MaterialTheme.colorScheme.primaryContainer
+                } else {
+                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                },
+              ),
               modifier = Modifier
-                .size(52.dp)
-                .testTag("video_snapshot_button"),
+                .size(38.dp)
+                .testTag("toggle_adjustments_button"),
             ) {
               Icon(
-                imageVector = Icons.Default.PhotoCamera,
-                contentDescription = "Take snapshot while recording",
-                modifier = Modifier.size(22.dp),
+                imageVector = Icons.Default.Tune,
+                contentDescription = "Toggle zoom and exposure sliders",
+                tint = if (showAdjustmentsPanel) {
+                  MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(18.dp),
               )
             }
-          } else {
-            val lensRotation by animateFloatAsState(
-              targetValue = if (lensFacing == CameraLensFacing.FRONT) 180f else 0f,
-              animationSpec = tween(durationMillis = 300),
-              label = "LensFlipRotation",
-            )
+
+            // Center: Photo / Video Mode Switcher Pill
             Surface(
-              shape = CircleShape,
-              color = MaterialTheme.colorScheme.secondaryContainer,
-              modifier = Modifier
-                .size(52.dp)
-                .clip(CircleShape)
-                .clickable(enabled = !isCountingDown) {
-                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                  updateLensFacing(lensFacing.toggle())
-                }
-                .testTag("camera_flip_lens_button")
-                .semantics {
-                  contentDescription = "Switch camera lens (${lensFacing.displayName})"
-                },
+              shape = RoundedCornerShape(24.dp),
+              color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+              modifier = Modifier.testTag("capture_mode_selector"),
             ) {
-              Box(contentAlignment = Alignment.Center) {
-                Icon(
-                  imageVector = Icons.Default.Cameraswitch,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.onSecondaryContainer,
+              Row(
+                modifier = Modifier.padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                CameraCaptureMode.entries.forEach { mode ->
+                  val selected = mode == captureMode
+                  Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = if (selected) {
+                      MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                      Color.Transparent
+                    },
+                    modifier = Modifier
+                      .clip(RoundedCornerShape(20.dp))
+                      .clickable(enabled = !isRecordingVideo && !isCountingDown) {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        captureMode = mode
+                      }
+                      .testTag("mode_tab_${mode.name}"),
+                  ) {
+                    Row(
+                      modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                      Icon(
+                        imageVector = if (mode == CameraCaptureMode.VIDEO) {
+                          Icons.Default.Videocam
+                        } else {
+                          Icons.Default.PhotoCamera
+                        },
+                        contentDescription = null,
+                        tint = if (selected) {
+                          MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                          MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.size(16.dp),
+                      )
+                      Text(
+                        text = mode.displayName,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        color = if (selected) {
+                          MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                          MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                      )
+                    }
+                  }
+                }
+              }
+            }
+
+            // Right: Color Filters Toggle Button
+            IconButton(
+              onClick = { showFiltersBar = !showFiltersBar },
+              colors = IconButtonDefaults.iconButtonColors(
+                containerColor = if (showFiltersBar || colorFilter != CameraColorFilter.NONE) {
+                  MaterialTheme.colorScheme.tertiaryContainer
+                } else {
+                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                },
+              ),
+              modifier = Modifier
+                .size(38.dp)
+                .testTag("toggle_filters_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.AutoAwesome,
+                contentDescription = "Toggle color filters",
+                tint = if (showFiltersBar || colorFilter != CameraColorFilter.NONE) {
+                  MaterialTheme.colorScheme.onTertiaryContainer
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(18.dp),
+              )
+            }
+          }
+
+          // Primary Shutter Row: [Recent Captures Well] — [Shutter FAB] — [Flip Camera / Video Snapshot]
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            // Left: Recent Captures Thumbnail Button
+            Box(contentAlignment = Alignment.TopEnd) {
+              val latestItem = capturedMedia.firstOrNull()
+              Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier
+                  .size(52.dp)
+                  .clip(RoundedCornerShape(14.dp))
+                  .clickable(enabled = !isRecordingVideo) {
+                    showRecentCapturesDialog = true
+                  }
+                  .testTag("recent_captures_button"),
+              ) {
+                Box(contentAlignment = Alignment.Center) {
+                  val thumbBitmap = remember(latestItem?.path, latestItem?.lastModifiedMs, isInspection) {
+                    if (isInspection || latestItem == null || latestItem.isVideo) {
+                      null
+                    } else {
+                      GalleryEngine.decodeThumbnailBitmap(latestItem.file, reqSizePx = 160)
+                    }
+                  }
+                  if (thumbBitmap != null) {
+                    Image(
+                      bitmap = thumbBitmap.asImageBitmap(),
+                      contentDescription = "Recent capture ${latestItem?.name}",
+                      contentScale = ContentScale.Crop,
+                      modifier = Modifier.fillMaxSize(),
+                    )
+                  } else {
+                    Icon(
+                      imageVector = if (latestItem?.isVideo == true) {
+                        Icons.Default.Videocam
+                      } else {
+                        Icons.Default.PhotoLibrary
+                      },
+                      contentDescription = "Open recent captures",
+                      tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                      modifier = Modifier.size(24.dp),
+                    )
+                  }
+                }
+              }
+
+              if (capturedMedia.isNotEmpty()) {
+                Badge(
+                  containerColor = MaterialTheme.colorScheme.primary,
+                  contentColor = MaterialTheme.colorScheme.onPrimary,
                   modifier = Modifier
-                    .size(24.dp)
-                    .graphicsLayer { rotationZ = lensRotation },
+                    .offset(x = 4.dp, y = (-4).dp)
+                    .testTag("recent_captures_count_badge"),
+                ) {
+                  Text(
+                    text = capturedMedia.size.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                  )
+                }
+              }
+            }
+
+            // Center: Main Shutter / Record Button
+            val infinitePulse = rememberInfiniteTransition(label = "CameraRecordPulse")
+            val recordPulseScale by infinitePulse.animateFloat(
+              initialValue = 1.0f,
+              targetValue = 1.12f,
+              animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 700, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse,
+              ),
+              label = "RecordPulseScale",
+            )
+
+            val outerRingColor by animateColorAsState(
+              targetValue = when {
+                isRecordingVideo -> MaterialTheme.colorScheme.error
+                captureMode == CameraCaptureMode.VIDEO -> MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
+                else -> MaterialTheme.colorScheme.primary
+              },
+              label = "OuterShutterRingColor",
+            )
+
+            val innerCircleColor by animateColorAsState(
+              targetValue = when {
+                isRecordingVideo -> MaterialTheme.colorScheme.error
+                captureMode == CameraCaptureMode.VIDEO -> MaterialTheme.colorScheme.error
+                isCountingDown -> MaterialTheme.colorScheme.tertiaryContainer
+                else -> MaterialTheme.colorScheme.primaryContainer
+              },
+              label = "InnerShutterColor",
+            )
+
+            Box(
+              modifier = Modifier
+                .size(76.dp)
+                .scale(if (isRecordingVideo) recordPulseScale else 1f)
+                .clip(CircleShape)
+                .border(3.dp, outerRingColor, CircleShape)
+                .clickable { triggerShutterAction() }
+                .padding(6.dp)
+                .testTag("camera_shutter_button")
+                .semantics {
+                  contentDescription = when {
+                    isCountingDown -> "Cancel timer"
+                    captureMode == CameraCaptureMode.VIDEO && isRecordingVideo -> "Stop video recording"
+                    captureMode == CameraCaptureMode.VIDEO -> "Start video recording"
+                    else -> "Take photo"
+                  }
+                },
+              contentAlignment = Alignment.Center,
+            ) {
+              Surface(
+                shape = if (isRecordingVideo) RoundedCornerShape(10.dp) else CircleShape,
+                color = innerCircleColor,
+                modifier = Modifier.size(if (isRecordingVideo) 32.dp else 60.dp),
+              ) {
+                Box(contentAlignment = Alignment.Center) {
+                  AnimatedContent(
+                    targetState = Triple(captureMode, isRecordingVideo, isCountingDown),
+                    transitionSpec = { (fadeIn() + scaleIn()).togetherWith(fadeOut() + scaleOut()) },
+                    label = "ShutterIconAnim",
+                  ) { (mode, recording, counting) ->
+                    when {
+                      counting -> Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.size(26.dp),
+                      )
+                      recording -> Icon(
+                        imageVector = Icons.Default.Stop,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onError,
+                        modifier = Modifier.size(20.dp),
+                      )
+                      mode == CameraCaptureMode.VIDEO -> Icon(
+                        imageVector = Icons.Default.Videocam,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onError,
+                        modifier = Modifier.size(26.dp),
+                      )
+                      else -> Icon(
+                        imageVector = Icons.Default.CameraAlt,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(26.dp),
+                      )
+                    }
+                  }
+                }
+              }
+            }
+
+            // Right: Flip Camera (or Video Snapshot while recording video)
+            if (isRecordingVideo) {
+              SmallFloatingActionButton(
+                onClick = { performPhotoCapture() },
+                shape = CircleShape,
+                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f),
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier
+                  .size(52.dp)
+                  .testTag("video_snapshot_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.PhotoCamera,
+                  contentDescription = "Take snapshot while recording",
+                  modifier = Modifier.size(22.dp),
                 )
+              }
+            } else {
+              val lensRotation by animateFloatAsState(
+                targetValue = if (lensFacing == CameraLensFacing.FRONT) 180f else 0f,
+                animationSpec = tween(durationMillis = 300),
+                label = "LensFlipRotation",
+              )
+              Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f),
+                modifier = Modifier
+                  .size(52.dp)
+                  .clip(CircleShape)
+                  .clickable(enabled = !isCountingDown) {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    updateLensFacing(lensFacing.toggle())
+                  }
+                  .testTag("camera_flip_lens_button")
+                  .semantics {
+                    contentDescription = "Switch camera lens (${lensFacing.displayName})"
+                  },
+              ) {
+                Box(contentAlignment = Alignment.Center) {
+                  Icon(
+                    imageVector = Icons.Default.Cameraswitch,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier
+                      .size(24.dp)
+                      .graphicsLayer { rotationZ = lensRotation },
+                  )
+                }
               }
             }
           }

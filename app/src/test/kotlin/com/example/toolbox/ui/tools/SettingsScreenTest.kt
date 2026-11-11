@@ -188,23 +188,24 @@ class SettingsScreenTest {
     assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.CALCULATOR.category)
     assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.UNIT_CONVERTER.category)
     assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.RULER.category)
-    assertEquals(ToolCategory.AUDIO_AND_MUSIC, Tool.GUITAR_TUNER.category)
-    assertEquals(ToolCategory.AUDIO_AND_MUSIC, Tool.METRONOME.category)
-    assertEquals(ToolCategory.AUDIO_AND_MUSIC, Tool.AUDIO_RECORDER.category)
-    assertEquals(ToolCategory.AUDIO_AND_MUSIC, Tool.CHORD_BOOK.category)
-    assertEquals(ToolCategory.AUDIO_AND_MUSIC, Tool.AUDIO_EDITOR.category)
-    assertEquals(ToolCategory.MEDIA_AND_CREATIVE, Tool.COLOR_PICKER.category)
-    assertEquals(ToolCategory.MEDIA_AND_CREATIVE, Tool.IMAGE_EDITOR.category)
-    assertEquals(ToolCategory.MEDIA_AND_CREATIVE, Tool.FILE_CONVERTER.category)
-    assertEquals(ToolCategory.MEDIA_AND_CREATIVE, Tool.GALLERY.category)
-    assertEquals(ToolCategory.MEDIA_AND_CREATIVE, Tool.CAMERA.category)
-    assertEquals(ToolCategory.MEDIA_AND_CREATIVE, Tool.VIDEO_EDITOR.category)
+    assertEquals(ToolCategory.MUSIC_AND_INSTRUMENTS, Tool.GUITAR_TUNER.category)
+    assertEquals(ToolCategory.MUSIC_AND_INSTRUMENTS, Tool.METRONOME.category)
+    assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.AUDIO_RECORDER.category)
+    assertEquals(ToolCategory.MUSIC_AND_INSTRUMENTS, Tool.CHORD_BOOK.category)
+    assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.AUDIO_EDITOR.category)
+    assertEquals(ToolCategory.MISCELLANEOUS, Tool.COLOR_PICKER.category)
+    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.IMAGE_EDITOR.category)
+    assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.FILE_CONVERTER.category)
+    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.GALLERY.category)
+    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.CAMERA.category)
+    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.VIDEO_EDITOR.category)
     assertEquals(ToolCategory.PRODUCTIVITY, Tool.TODO_LIST.category)
-    assertEquals(ToolCategory.PRODUCTIVITY, Tool.FILES.category)
+    assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.FILES.category)
     assertEquals(ToolCategory.PRODUCTIVITY, Tool.NOTES.category)
-    assertEquals(ToolCategory.PRODUCTIVITY, Tool.PLANT_SCHEDULE.category)
-    assertEquals(ToolCategory.ENTERTAINMENT_AND_DEVICES, Tool.DICE_ROLLER.category)
-    assertEquals(ToolCategory.ENTERTAINMENT_AND_DEVICES, Tool.BLUETOOTH_REMOTE.category)
+    assertEquals(ToolCategory.MISCELLANEOUS, Tool.PLANT_SCHEDULE.category)
+    assertEquals(ToolCategory.MISCELLANEOUS, Tool.DICE_ROLLER.category)
+    assertEquals(ToolCategory.REMOTES_AND_DEVICES, Tool.BLUETOOTH_REMOTE.category)
+    assertEquals(ToolCategory.REMOTES_AND_DEVICES, Tool.BLUETOOTH_GAMEPAD.category)
     assertEquals(ToolCategory.SYSTEM, Tool.SETTINGS.category)
   }
 
@@ -272,11 +273,14 @@ class SettingsScreenTest {
     val titles = sorted.map { it.title }
     assertEquals(
       listOf(
-        "Audio & Music",
-        "Entertainment & Devices",
+        "Audio & Sound",
+        "Files & Storage",
         "Math & Measurement",
-        "Media & Creative",
+        "Miscellaneous",
+        "Music & Instruments",
+        "Photo & Video",
         "Productivity",
+        "Remotes & Devices",
         "System",
       ),
       titles,

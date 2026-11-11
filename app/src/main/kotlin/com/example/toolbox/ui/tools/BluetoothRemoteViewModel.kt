@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.math.roundToInt
 
 enum class BtDeviceKind { TV, COMPUTER, PHONE, AUDIO, OTHER }
 
@@ -93,6 +94,12 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
   private var mouseRemainderX = 0f
   private var mouseRemainderY = 0f
   private var scrollRemainder = 0f
+
+  private var gamepadButtons = 0
+  private var leftStickX = 0
+  private var leftStickY = 0
+  private var rightStickX = 0
+  private var rightStickY = 0
 
   private var lastKeyDownTime = 0L
   private var pendingKeyUpJob: Job? = null
@@ -365,6 +372,11 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
         connectTimeoutJob?.cancel()
         connectedDevice = null
         mouseButtons = 0
+        gamepadButtons = 0
+        leftStickX = 0
+        leftStickY = 0
+        rightStickX = 0
+        rightStickY = 0
         val msg = if (current is RemoteConnection.Connecting) {
           "${device.safeName()} refused the connection. On the TV, open Settings → Remotes & Accessories → Add accessory while this phone is discoverable."
         } else {
@@ -508,6 +520,42 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
     }
   }
 
+  fun setGamepadButton(button: GamepadButton, pressed: Boolean) {
+    gamepadButtons = if (pressed) gamepadButtons or button.mask else gamepadButtons and button.mask.inv()
+    sendGamepadReport()
+  }
+
+  fun setLeftJoystick(x: Float, y: Float) {
+    val ix = (x.coerceIn(-1f, 1f) * 127f).roundToInt().coerceIn(-127, 127)
+    val iy = (y.coerceIn(-1f, 1f) * 127f).roundToInt().coerceIn(-127, 127)
+    if (ix == leftStickX && iy == leftStickY) return
+    leftStickX = ix
+    leftStickY = iy
+    sendGamepadReport()
+  }
+
+  fun setRightJoystick(x: Float, y: Float) {
+    val ix = (x.coerceIn(-1f, 1f) * 127f).roundToInt().coerceIn(-127, 127)
+    val iy = (y.coerceIn(-1f, 1f) * 127f).roundToInt().coerceIn(-127, 127)
+    if (ix == rightStickX && iy == rightStickY) return
+    rightStickX = ix
+    rightStickY = iy
+    sendGamepadReport()
+  }
+
+  private fun sendGamepadReport() {
+    send(
+      HidProtocol.REPORT_ID_GAMEPAD,
+      HidProtocol.gamepadReport(
+        buttons = gamepadButtons,
+        leftX = leftStickX,
+        leftY = leftStickY,
+        rightX = rightStickX,
+        rightY = rightStickY,
+      ),
+    )
+  }
+
   private fun releaseAllInput() {
     if (connectedDevice == null) return
     pendingKeyUpJob?.cancel()
@@ -516,6 +564,12 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
     send(HidProtocol.REPORT_ID_CONSUMER, HidProtocol.consumerReport(0))
     mouseButtons = 0
     send(HidProtocol.REPORT_ID_MOUSE, HidProtocol.mouseReport(0, 0, 0))
+    gamepadButtons = 0
+    leftStickX = 0
+    leftStickY = 0
+    rightStickX = 0
+    rightStickY = 0
+    send(HidProtocol.REPORT_ID_GAMEPAD, HidProtocol.emptyGamepadReport())
   }
 
   // ---------------------------------------------------------------------------------------------

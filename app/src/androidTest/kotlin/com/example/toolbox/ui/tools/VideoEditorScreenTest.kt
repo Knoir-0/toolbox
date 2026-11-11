@@ -30,6 +30,8 @@ class VideoEditorScreenTest {
     }
 
     composeTestRule.onNodeWithTag("video_editor_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Video Editor").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Fast FFmpeg video trimmer & editor").assertIsDisplayed()
     composeTestRule.onNodeWithTag("open_video_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tap_to_open_file_text").assertIsDisplayed()
     composeTestRule.onNodeWithText("tap to open file").assertIsDisplayed()

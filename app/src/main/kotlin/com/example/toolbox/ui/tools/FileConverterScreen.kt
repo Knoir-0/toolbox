@@ -2,6 +2,7 @@ package com.example.toolbox.ui.tools
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.widget.Toast
@@ -55,7 +56,6 @@ import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -282,66 +282,28 @@ fun FileConverterScreen(
     val currentFile = selectedFile
     if (currentFile == null) {
       // ======================================================================
-      // EMPTY STATE: Clean centered hero file selector card
+      // EMPTY STATE: Aligned with Image & Video Editors (OpenFileInitialView)
       // ======================================================================
-      Box(
-        modifier = Modifier
-          .fillMaxSize()
-          .weight(1f)
-          .padding(24.dp),
-        contentAlignment = Alignment.Center,
-      ) {
-        Card(
-          shape = RoundedCornerShape(24.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-          ),
-          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-          modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .clickable { showFileBrowserDialog = true }
-            .testTag("browse_storage_files_button"),
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 24.dp, vertical = 36.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-          ) {
-            Box(
-              modifier = Modifier
-                .size(64.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Default.UploadFile,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(32.dp),
-              )
-            }
-
-            Text(
-              text = "Select a File to Convert",
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurface,
-              textAlign = TextAlign.Center,
-            )
-
-            Text(
-              text = "Tap to browse images, audio, video, documents, or archives",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              textAlign = TextAlign.Center,
-            )
+      OpenFileInitialView(
+        onOpenFile = { showFileBrowserDialog = true },
+        onUseSample = {
+          val sampleBmp = BitmapOperations.createSampleBitmap()
+          val sampleDir = File(context.cacheDir, "converter_samples").apply { mkdirs() }
+          val sampleFile = File(sampleDir, "sample_image.png")
+          FileOutputStream(sampleFile).use { out ->
+            sampleBmp.compress(Bitmap.CompressFormat.PNG, 100, out)
           }
-        }
-      }
+          selectedFile = sampleFile
+          sourceFormat = FileConverterEngine.detectFormat(sampleFile)
+          lastResult = null
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        },
+        sampleButtonText = "or try sample file",
+        sampleButtonIcon = Icons.Default.SwapHoriz,
+        sampleButtonTestTag = "open_sample_file_button",
+        openButtonTestTag = "browse_storage_files_button",
+        modifier = Modifier.weight(1f),
+      )
     } else {
       // ======================================================================
       // ACTIVE STATE: Selected File Card + Target Format Grid + Convert Action

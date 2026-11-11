@@ -40,7 +40,7 @@ class MainScreenTest {
   fun collapsedPanel_firstRowToolLabelsAreDisplayed() {
     composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
     composeTestRule.onNodeWithText("Notes").assertIsDisplayed()
-    composeTestRule.onNodeWithText("To-Do").assertIsDisplayed()
+    composeTestRule.onNodeWithText("To Do").assertIsDisplayed()
   }
 
   @Test
@@ -55,13 +55,13 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("notes_empty_state").assertExists()
 
-    // Panel auto-collapsed back to one row; pull up and navigate to Page 1 for Unit Converter and Ruler
+    // Panel auto-collapsed back to one row; pull up and navigate to Page 1 for Units and Ruler
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
     composeTestRule.waitForIdle()
 
-    composeTestRule.onAllNodesWithText("Unit Converter").onFirst().performClick()
+    composeTestRule.onAllNodesWithText("Units").onFirst().performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("From Unit (Meter)").assertExists()
 
@@ -77,13 +77,13 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("ruler_unit_toggle").assertIsDisplayed()
     composeTestRule.onNodeWithTag("ruler_unit_toggle").performClick()
 
-    // Pull up and navigate to Page 2 for Color Picker, Dice Roller, Guitar Tuner, and Metronome
+    // Pull up and navigate to Page 2 for Colors, Dice Roller, Guitar Tuner, and Metronome
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
     composeTestRule.waitForIdle()
 
-    composeTestRule.onAllNodesWithText("Color Picker").onFirst().performClick()
+    composeTestRule.onAllNodesWithText("Colors").onFirst().performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("2D Color Canvas").assertExists()
 
@@ -92,7 +92,7 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
     composeTestRule.waitForIdle()
 
-    composeTestRule.onAllNodesWithText("Guitar Tuner").onFirst().performClick()
+    composeTestRule.onAllNodesWithText("Tuner").onFirst().performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("TARGET").assertExists()
 
@@ -269,7 +269,7 @@ class MainScreenTest {
     // Initially on Row 0
     composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
     composeTestRule.onNodeWithText("Notes").assertIsDisplayed()
-    composeTestRule.onNodeWithText("To-Do").assertIsDisplayed()
+    composeTestRule.onNodeWithText("To Do").assertIsDisplayed()
     composeTestRule.onNodeWithText("Camera").assertDoesNotExist()
 
     // Row indicator dots exist
@@ -361,11 +361,15 @@ class MainScreenTest {
 
     // With 3 tools per row:
     // Page 0: Math & Measurement (3 tools)
-    // Page 1: Audio & Music (2 tools)
-    // Page 2: Media & Creative (2 tools)
-    // Page 3: Productivity (2 tools)
-    // Page 4: Entertainment & Devices (2 tools) + System (1 tool) = 3 tools fit on 1 row!
-    val systemPageIndex = 4
+    // Page 1: Productivity (2 tools)
+    // Page 2: Files & Storage (2 tools)
+    // Page 3: Photo & Video (4 tools)
+    // Page 4: Audio & Sound (2 tools)
+    // Page 5: Music & Instruments (3 tools)
+    // Page 6: Remotes & Devices (2 tools)
+    // Page 7: Miscellaneous (3 tools)
+    // Page 8: System (1 tool)
+    val systemPageIndex = 8
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$systemPageIndex").performClick()
     composeTestRule.waitForIdle()
 
@@ -396,15 +400,15 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("Math & Measurement").assertIsDisplayed()
     composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Unit Converter").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Units").assertIsDisplayed()
     composeTestRule.onNodeWithText("Ruler").assertIsDisplayed()
 
-    // Check Audio & Music category (Page 1)
-    val musicIndex = 1
+    // Check Music & Instruments category (Page 5)
+    val musicIndex = 5
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$musicIndex").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("Audio & Music").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Guitar Tuner").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Music & Instruments").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Tuner").assertIsDisplayed()
     composeTestRule.onNodeWithText("Metronome").assertIsDisplayed()
   }
 
@@ -416,23 +420,21 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
 
     // With 6 tools per row:
-    // Page 0: Math & Measurement (3 tools)
-    // Page 1: Audio & Music (5 tools)
-    // Page 2: Media & Creative (6 tools)
-    // Page 3: Productivity (4 tools) + Entertainment & Devices (2 tools) = 6 tools on 1 row!
-    // Page 4: System (1 tool)
+    // Page 0: Math & Measurement (3 tools) + Productivity (2 tools) = 5 tools
+    // Page 1: Files & Storage (2 tools) + Photo & Video (4 tools) = 6 tools
+    // Page 2: Audio & Sound (2 tools) + Music & Instruments (3 tools) = 5 tools
+    // Page 3: Remotes & Devices (2 tools) + Miscellaneous (3 tools) + System (1 tool) = 6 tools on 1 row!
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_3").performClick()
     composeTestRule.waitForIdle()
 
-    // Both Productivity and Entertainment & Devices fit on Page 3 as one row
-    composeTestRule.onNodeWithText("Productivity").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Entertainment & Devices").assertIsDisplayed()
-    composeTestRule.onNodeWithText("To-Do").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Files").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Notes").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Plant Schedule").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Dice Roller").assertIsDisplayed()
-    composeTestRule.onNodeWithText("TV Remote").assertIsDisplayed()
+    // Remotes & Devices, Miscellaneous, and System all fit on Page 3 as one row
+    composeTestRule.onNodeWithText("Remotes & Devices").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Miscellaneous").assertIsDisplayed()
+    composeTestRule.onNodeWithText("System").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Dice").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Remote").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Gamepad").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
 
     // Pull up the panel to reveal the tools per row slider
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
@@ -449,12 +451,11 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
 
     // With 6 tools per row:
-    // Page 0: Math & Measurement (3 tools)
-    // Page 1: Audio & Music (5 tools)
-    // Page 2: Media & Creative (6 tools)
-    // Page 3: Productivity (4 tools) + Entertainment & Devices (2 tools) = 6 tools
-    // Page 4: System (1 tool: Settings)
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_4").performClick()
+    // Page 0: Math & Measurement (3 tools) + Productivity (2 tools) = 5 tools
+    // Page 1: Files & Storage (2 tools) + Photo & Video (4 tools) = 6 tools
+    // Page 2: Audio & Sound (2 tools) + Music & Instruments (3 tools) = 5 tools
+    // Page 3: Remotes & Devices (2 tools) + Miscellaneous (3 tools) + System (1 tool: Settings) = 6 tools
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_3").performClick()
     composeTestRule.waitForIdle()
 
     // Verify Settings tool icon is displayed and has sufficient width
@@ -677,7 +678,7 @@ class MainScreenTest {
 
     // Category headers should exist
     composeTestRule.onNodeWithTag("category_header_math_and_measurement").assertExists()
-    composeTestRule.onNodeWithTag("category_header_audio_and_music").assertExists()
+    composeTestRule.onNodeWithTag("category_header_music_and_instruments").assertExists()
     composeTestRule.onNodeWithTag("category_header_system").assertExists()
 
     // Categories are collapsed by default, so Calculator tool row should not exist yet

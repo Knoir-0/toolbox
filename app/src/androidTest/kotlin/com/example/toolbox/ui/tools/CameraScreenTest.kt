@@ -47,10 +47,28 @@ class CameraScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // Verify main camera screen and viewfinder exist
+    // Verify main camera screen, full-viewport viewfinder, and translucent overlay controls exist
     composeTestRule.onNodeWithTag("camera_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_viewfinder_stage").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_viewfinder_box").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_top_overlay").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_bottom_overlay").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_shutter_button").assertIsDisplayed()
+
+    // Verify viewfinder fills the entire stage viewport by default (Full aspect ratio)
+    val stageBounds = composeTestRule.onNodeWithTag("camera_viewfinder_stage").fetchSemanticsNode().boundsInRoot
+    val fullBoxBounds = composeTestRule.onNodeWithTag("camera_viewfinder_box").fetchSemanticsNode().boundsInRoot
+    assertEquals(stageBounds.width, fullBoxBounds.width, 1f)
+    assertEquals(stageBounds.height, fullBoxBounds.height, 1f)
+
+    // Cycle aspect ratio (Full -> 4:3) and verify the viewport shrinks to create black bars
+    composeTestRule.onNodeWithTag("camera_aspect_ratio_button").performClick()
+    composeTestRule.waitForIdle()
+    val shrunkBoxBounds = composeTestRule.onNodeWithTag("camera_viewfinder_box").fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      shrunkBoxBounds.height < stageBounds.height - 1f ||
+        shrunkBoxBounds.width < stageBounds.width - 1f
+    )
 
     // Take a photo
     composeTestRule.onNodeWithTag("camera_shutter_button").performClick()

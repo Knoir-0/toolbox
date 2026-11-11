@@ -42,7 +42,7 @@ class BluetoothHidSession(
 
   private val sdpSettings = BluetoothHidDeviceAppSdpSettings(
     "Toolbox Remote",
-    "Toolbox Bluetooth TV remote, keyboard and mouse",
+    "Toolbox Bluetooth TV remote, keyboard, mouse and gamepad",
     "Toolbox",
     BluetoothHidDevice.SUBCLASS1_COMBO,
     HidProtocol.REPORT_DESCRIPTOR,
@@ -64,6 +64,7 @@ class BluetoothHidSession(
         HidProtocol.REPORT_ID_KEYBOARD -> HidProtocol.KEYBOARD_REPORT_SIZE
         HidProtocol.REPORT_ID_CONSUMER -> HidProtocol.CONSUMER_REPORT_SIZE
         HidProtocol.REPORT_ID_MOUSE -> HidProtocol.MOUSE_REPORT_SIZE
+        HidProtocol.REPORT_ID_GAMEPAD -> HidProtocol.GAMEPAD_REPORT_SIZE
         else -> null
       }
       if (type == BluetoothHidDevice.REPORT_TYPE_INPUT && size != null) {

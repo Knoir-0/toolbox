@@ -15,9 +15,9 @@ import org.junit.Test
 class VideoEditorEngineTest {
 
   @Test
-  fun videoEditorTool_isRegisteredInMediaAndCreativeBeforeSettings() {
+  fun videoEditorTool_isRegisteredInPhotoAndVideoBeforeSettings() {
     assertEquals("Video Editor", Tool.VIDEO_EDITOR.title)
-    assertEquals(ToolCategory.MEDIA_AND_CREATIVE, Tool.VIDEO_EDITOR.category)
+    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.VIDEO_EDITOR.category)
     assertEquals(Tool.SETTINGS, Tool.entries.last())
     assertTrue(Tool.entries.indexOf(Tool.VIDEO_EDITOR) < Tool.entries.indexOf(Tool.SETTINGS))
   }
