@@ -205,23 +205,23 @@ class MainScreenViewModelTest {
   @Test
   fun reorderTools_acrossPages_shiftsItemsAndMaintainsSettingsLast() {
     val initial = Tool.entries.toList()
-    val dice = Tool.DICE_ROLLER
-    val bluetooth = Tool.BLUETOOTH_REMOTE // Initially index 6 (first item on Page 1 with 3/row, 2 rows/page)
+    val firstTool = Tool.CALCULATOR
+    val page1FirstTool = Tool.UNIT_CONVERTER // Initially index 6 (first item on Page 1 with 3/row, 2 rows/page)
 
-    assertEquals(0, initial.indexOf(dice))
-    assertEquals(6, initial.indexOf(bluetooth))
+    assertEquals(0, initial.indexOf(firstTool))
+    assertEquals(6, initial.indexOf(page1FirstTool))
     assertEquals(Tool.SETTINGS, initial.last())
 
-    // Move Dice Roller from Page 0 (index 0) to Page 1 (index 6)
+    // Move Calculator from Page 0 (index 0) to Page 1 (index 6)
     val movedToPage1 = reorderTools(initial, fromIndex = 0, toIndex = 6)
-    assertEquals(6, movedToPage1.indexOf(dice))
-    assertEquals(5, movedToPage1.indexOf(bluetooth)) // Bluetooth Remote shifted to Page 0
+    assertEquals(6, movedToPage1.indexOf(firstTool))
+    assertEquals(5, movedToPage1.indexOf(page1FirstTool)) // Unit Converter shifted to Page 0
     assertEquals(Tool.SETTINGS, movedToPage1.last())
 
-    // Move Dice Roller back from Page 1 (index 6) to Page 0 (index 0)
+    // Move Calculator back from Page 1 (index 6) to Page 0 (index 0)
     val movedBackToPage0 = reorderTools(movedToPage1, fromIndex = 6, toIndex = 0)
-    assertEquals(0, movedBackToPage0.indexOf(dice))
-    assertEquals(6, movedBackToPage0.indexOf(bluetooth))
+    assertEquals(0, movedBackToPage0.indexOf(firstTool))
+    assertEquals(6, movedBackToPage0.indexOf(page1FirstTool))
     assertEquals(initial, movedBackToPage0)
   }
 }

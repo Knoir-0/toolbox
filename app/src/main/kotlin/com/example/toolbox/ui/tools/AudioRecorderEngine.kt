@@ -108,6 +108,8 @@ data class AudioRecordingItem(
  */
 object AudioRecorderEngine {
 
+  const val WAV_SAMPLE_RATE = 44100
+
   val SUPPORTED_AUDIO_EXTENSIONS = setOf(
     "m4a", "wav", "aac", "ogg", "3gp", "amr", "mp3", "flac", "opus",
   )

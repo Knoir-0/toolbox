@@ -89,9 +89,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.navigation3.runtime.NavKey
 import com.example.toolbox.ui.theme.ToolboxTheme
+import com.example.toolbox.ui.tools.AudioEditorScreen
 import com.example.toolbox.ui.tools.AudioRecorderScreen
 import com.example.toolbox.ui.tools.BluetoothRemoteScreen
 import com.example.toolbox.ui.tools.CalculatorScreen
+import com.example.toolbox.ui.tools.CameraScreen
+import com.example.toolbox.ui.tools.ChordBookScreen
 import com.example.toolbox.ui.tools.ColorPickerScreen
 import com.example.toolbox.ui.tools.DiceRollerScreen
 import com.example.toolbox.ui.tools.FileConverterScreen
@@ -101,10 +104,13 @@ import java.io.File
 import com.example.toolbox.ui.tools.GuitarTunerScreen
 import com.example.toolbox.ui.tools.ImageEditorScreen
 import com.example.toolbox.ui.tools.MetronomeScreen
+import com.example.toolbox.ui.tools.NotesScreen
+import com.example.toolbox.ui.tools.PlantScheduleScreen
 import com.example.toolbox.ui.tools.RulerScreen
 import com.example.toolbox.ui.tools.SettingsScreen
 import com.example.toolbox.ui.tools.TodoListScreen
 import com.example.toolbox.ui.tools.UnitConverterScreen
+import com.example.toolbox.ui.tools.VideoEditorScreen
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -1581,6 +1587,26 @@ fun ToolContentView(
         rootDirectory = initialDirectory,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
+      Tool.NOTES -> NotesScreen(
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.CHORD_BOOK -> ChordBookScreen(
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.CAMERA -> CameraScreen(
+        initialDirectory = initialDirectory,
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.AUDIO_EDITOR -> AudioEditorScreen(
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.VIDEO_EDITOR -> VideoEditorScreen(
+        initialDirectory = initialDirectory,
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.PLANT_SCHEDULE -> PlantScheduleScreen(
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
       Tool.SETTINGS -> SettingsScreen(
         preferencesRepository = preferencesRepository ?: rememberNavigationPreferencesRepository(),
         modifier = Modifier.padding(bottom = bottomPadding),
@@ -1595,7 +1621,7 @@ fun ToolContentView(
 fun MainScreenPreview() {
   ToolboxTheme {
     ToolboxScaffold(
-      selectedTool = Tool.DICE_ROLLER,
+      selectedTool = Tool.CALCULATOR,
       onSelectTool = {},
       initialSheetValue = SheetValue.Expanded,
     )
@@ -1608,7 +1634,7 @@ fun MainScreenPreview() {
 fun MainScreenCollapsedPreview() {
   ToolboxTheme {
     ToolboxScaffold(
-      selectedTool = Tool.DICE_ROLLER,
+      selectedTool = Tool.CALCULATOR,
       onSelectTool = {},
       initialSheetValue = SheetValue.PartiallyExpanded,
     )

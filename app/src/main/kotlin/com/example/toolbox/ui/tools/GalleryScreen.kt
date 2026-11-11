@@ -10,11 +10,18 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -32,11 +39,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -74,21 +86,27 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -111,6 +129,10 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
+import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -301,6 +323,13 @@ fun GalleryScreen(
     currentAlbumContents?.photos.orEmpty()
   }
 
+  // Defer album art pre-decoding to a background coroutine on Dispatchers.IO
+  LaunchedEffect(activeAlbums, isInspection) {
+    if (!isInspection && activeAlbums.isNotEmpty()) {
+      GalleryEngine.prefetchAlbumArt(activeAlbums)
+    }
+  }
+
   var selectedPhotoForViewer by remember { mutableStateOf<GalleryPhoto?>(null) }
   var showAddFolderDialog by remember { mutableStateOf(false) }
 
@@ -470,10 +499,11 @@ fun GalleryScreen(
   // Full-screen photo preview dialog
   selectedPhotoForViewer?.let { photo ->
     GalleryPhotoViewerDialog(
-      photo = photo,
+      photos = activePhotos,
+      initialPhoto = photo,
       onDismiss = { selectedPhotoForViewer = null },
-      onShare = {
-        sharePhotoFile(context, photo.file)
+      onShare = { sharedPhoto ->
+        sharePhotoFile(context, sharedPhoto.file)
       },
     )
   }
@@ -1266,8 +1296,17 @@ private fun AlbumCoverPhotoContent(
   iconSize: Dp,
   modifier: Modifier = Modifier,
 ) {
-  val bitmap = remember(photoFile?.absolutePath, photoFile?.lastModified()) {
-    photoFile?.let { GalleryEngine.decodeThumbnailBitmap(it) }
+  val filePath = photoFile?.absolutePath
+  val fileLastMod = photoFile?.lastModified()
+  var bitmap by remember(filePath, fileLastMod) {
+    mutableStateOf(photoFile?.let { GalleryEngine.getCachedThumbnailBitmap(it) })
+  }
+
+  // Defer decoding album art to a background coroutine on Dispatchers.IO when not yet cached
+  LaunchedEffect(filePath, fileLastMod) {
+    if (bitmap == null && photoFile != null) {
+      bitmap = GalleryEngine.loadThumbnailBitmapAsync(photoFile)
+    }
   }
 
   val coverDescription = if (photoFile != null) {
@@ -1286,7 +1325,7 @@ private fun AlbumCoverPhotoContent(
   ) {
     if (bitmap != null) {
       Image(
-        bitmap = bitmap.asImageBitmap(),
+        bitmap = bitmap!!.asImageBitmap(),
         contentDescription = coverDescription,
         contentScale = ContentScale.Crop,
         modifier = Modifier
@@ -1294,7 +1333,7 @@ private fun AlbumCoverPhotoContent(
           .testTag("album_cover_photo_${albumName}"),
       )
     } else if (photoFile != null) {
-      // Fallback visual tile when a test creates a placeholder image file without bitmap headers
+      // Placeholder tile displayed while background process loads album art (or if file has no bitmap headers)
       Box(
         modifier = Modifier
           .fillMaxSize()
@@ -1334,8 +1373,16 @@ private fun PhotoThumbnailBox(
   iconSize: Dp,
   modifier: Modifier = Modifier,
 ) {
-  val bitmap = remember(photoFile.absolutePath, photoFile.lastModified()) {
-    GalleryEngine.decodeThumbnailBitmap(photoFile)
+  val filePath = photoFile.absolutePath
+  val fileLastMod = photoFile.lastModified()
+  var bitmap by remember(filePath, fileLastMod) {
+    mutableStateOf(GalleryEngine.getCachedThumbnailBitmap(photoFile))
+  }
+
+  LaunchedEffect(filePath, fileLastMod) {
+    if (bitmap == null) {
+      bitmap = GalleryEngine.loadThumbnailBitmapAsync(photoFile)
+    }
   }
 
   Box(
@@ -1344,7 +1391,7 @@ private fun PhotoThumbnailBox(
   ) {
     if (bitmap != null) {
       Image(
-        bitmap = bitmap.asImageBitmap(),
+        bitmap = bitmap!!.asImageBitmap(),
         contentDescription = contentDescription,
         contentScale = ContentScale.Crop,
         modifier = Modifier.fillMaxSize(),
@@ -1426,120 +1473,376 @@ private fun EmptyAlbumStateView(
 
 @Composable
 private fun GalleryPhotoViewerDialog(
-  photo: GalleryPhoto,
+  photos: List<GalleryPhoto>,
+  initialPhoto: GalleryPhoto,
   onDismiss: () -> Unit,
-  onShare: () -> Unit,
+  onShare: (GalleryPhoto) -> Unit,
 ) {
-  val bitmap = remember(photo.path, photo.lastModifiedMs) {
-    try {
-      BitmapFactory.decodeFile(photo.file.absolutePath)
-    } catch (_: Throwable) {
-      null
+  val viewerPhotos = remember(photos, initialPhoto) {
+    if (photos.isNotEmpty() && photos.any { it.path == initialPhoto.path }) {
+      photos
+    } else if (photos.isNotEmpty()) {
+      listOf(initialPhoto) + photos
+    } else {
+      listOf(initialPhoto)
+    }
+  }
+  val initialPage = remember(viewerPhotos, initialPhoto.path) {
+    viewerPhotos.indexOfFirst { it.path == initialPhoto.path }.coerceAtLeast(0)
+  }
+  val pagerState = rememberPagerState(
+    initialPage = initialPage,
+    pageCount = { viewerPhotos.size },
+  )
+  val coroutineScope = rememberCoroutineScope()
+  val previewListState = rememberLazyListState()
+
+  // Controls whether the bottom preview scroll bar is visible (dismissed/restored with a tap on the image)
+  var showPreviewBar by rememberSaveable { mutableStateOf(true) }
+
+  // Current active page's zoom scale (1f..5f)
+  var currentZoomScale by remember { mutableFloatStateOf(MIN_PHOTO_ZOOM) }
+
+  // Reset zoom when swiping to a different photo and keep the bottom preview scroll bar synced
+  LaunchedEffect(pagerState.currentPage) {
+    currentZoomScale = MIN_PHOTO_ZOOM
+    if (viewerPhotos.isNotEmpty() && pagerState.currentPage in viewerPhotos.indices) {
+      previewListState.animateScrollToItem(pagerState.currentPage)
     }
   }
 
+  val currentPhoto = viewerPhotos.getOrElse(pagerState.currentPage) { initialPhoto }
+
   Dialog(
     onDismissRequest = onDismiss,
-    properties = DialogProperties(usePlatformDefaultWidth = false),
+    properties = DialogProperties(
+      usePlatformDefaultWidth = false,
+      decorFitsSystemWindows = false,
+    ),
   ) {
-    Surface(
+    // Full black background with the image rendered directly on top
+    Box(
       modifier = Modifier
         .fillMaxSize()
-        .padding(16.dp)
-        .testTag("gallery_photo_viewer_dialog"),
-      shape = RoundedCornerShape(28.dp),
-      color = MaterialTheme.colorScheme.surfaceContainerHigh,
-      tonalElevation = 6.dp,
+        .background(Color.Black)
+        .testTag("gallery_photo_viewer_dialog")
+        .semantics {
+          contentDescription = "Full black background photo viewer"
+        },
     ) {
-      Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-          verticalAlignment = Alignment.CenterVertically,
+      // Swipeable horizontal pager over all photos in the album
+      HorizontalPager(
+        state = pagerState,
+        userScrollEnabled = currentZoomScale <= 1.02f,
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag("photo_viewer_pager"),
+      ) { pageIndex ->
+        val pagePhoto = viewerPhotos[pageIndex]
+        val isCurrentPage = pageIndex == pagerState.currentPage
+        PhotoViewerPageContent(
+          photo = pagePhoto,
+          isCurrentPage = isCurrentPage,
+          zoomScale = if (isCurrentPage) currentZoomScale else MIN_PHOTO_ZOOM,
+          onZoomScaleChange = { updatedZoom ->
+            if (isCurrentPage) {
+              currentZoomScale = updatedZoom
+            }
+          },
+          onTapImage = {
+            showPreviewBar = !showPreviewBar
+          },
+        )
+      }
+
+      // Top overlay bar with Close, current photo title & index, zoom indicator, and Share
+      Row(
+        modifier = Modifier
+          .align(Alignment.TopCenter)
+          .fillMaxWidth()
+          .background(Color.Black.copy(alpha = 0.65f))
+          .padding(horizontal = 12.dp, vertical = 10.dp)
+          .testTag("photo_viewer_top_bar"),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        IconButton(
+          onClick = onDismiss,
+          modifier = Modifier.testTag("photo_viewer_close_button"),
         ) {
-          IconButton(
-            onClick = onDismiss,
-            modifier = Modifier.testTag("photo_viewer_close_button"),
-          ) {
-            Icon(Icons.Default.Close, contentDescription = "Close")
-          }
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = photo.name,
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurface,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-              text = photo.timestampFormatted,
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-          }
-          IconButton(
-            onClick = onShare,
-            modifier = Modifier.testTag("photo_viewer_share_button"),
-          ) {
-            Icon(Icons.Default.Share, contentDescription = "Share")
-          }
+          Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = "Close",
+            tint = Color.White,
+          )
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-        Box(
+        Column(
           modifier = Modifier
             .weight(1f)
-            .fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.05f))
-            .padding(12.dp),
-          contentAlignment = Alignment.Center,
+            .padding(horizontal = 4.dp),
         ) {
-          if (bitmap != null) {
-            Image(
-              bitmap = bitmap.asImageBitmap(),
-              contentDescription = photo.name,
-              modifier = Modifier.fillMaxSize(),
-            )
-          } else {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-              Icon(
-                imageVector = Icons.Default.Image,
-                contentDescription = photo.name,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(64.dp),
-              )
-              Spacer(modifier = Modifier.height(8.dp))
-              Text(
-                text = photo.name,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-              )
+          Text(
+            text = currentPhoto.name,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.testTag("photo_viewer_current_title"),
+          )
+          Text(
+            text = "${pagerState.currentPage + 1} / ${viewerPhotos.size} • ${currentPhoto.sizeFormatted}",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.78f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.testTag("photo_viewer_page_indicator"),
+          )
+        }
+
+        // Zoom scale badge (tap to reset zoom to 100%)
+        Surface(
+          shape = RoundedCornerShape(14.dp),
+          color = Color.White.copy(alpha = 0.16f),
+          modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .clickable { currentZoomScale = MIN_PHOTO_ZOOM }
+            .testTag("photo_viewer_zoom_badge"),
+        ) {
+          Text(
+            text = "${(currentZoomScale * 100).roundToInt()}%",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            modifier = Modifier
+              .padding(horizontal = 10.dp, vertical = 5.dp)
+              .testTag("photo_viewer_zoom_label"),
+          )
+        }
+
+        Spacer(modifier = Modifier.width(4.dp))
+
+        IconButton(
+          onClick = { onShare(currentPhoto) },
+          modifier = Modifier.testTag("photo_viewer_share_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Share,
+            contentDescription = "Share",
+            tint = Color.White,
+          )
+        }
+      }
+
+      // Bottom preview scroll bar with images in the same album, dismissible with a tap on the image
+      AnimatedVisibility(
+        visible = showPreviewBar,
+        enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
+        exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 }),
+        modifier = Modifier.align(Alignment.BottomCenter),
+      ) {
+        Surface(
+          color = Color.Black.copy(alpha = 0.76f),
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("photo_viewer_preview_bar"),
+        ) {
+          LazyRow(
+            state = previewListState,
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("photo_viewer_preview_scroll_bar"),
+          ) {
+            itemsIndexed(
+              items = viewerPhotos,
+              key = { _, item -> "preview_${item.path}" },
+            ) { index, itemPhoto ->
+              val isSelected = index == pagerState.currentPage
+              Box(
+                modifier = Modifier
+                  .size(if (isSelected) 64.dp else 54.dp)
+                  .clip(RoundedCornerShape(10.dp))
+                  .border(
+                    width = if (isSelected) 2.5.dp else 1.dp,
+                    color = if (isSelected) Color.White else Color.White.copy(alpha = 0.3f),
+                    shape = RoundedCornerShape(10.dp),
+                  )
+                  .alpha(if (isSelected) 1f else 0.65f)
+                  .clickable {
+                    coroutineScope.launch {
+                      pagerState.animateScrollToPage(index)
+                    }
+                  }
+                  .testTag("photo_viewer_preview_thumb_${itemPhoto.name}"),
+                contentAlignment = Alignment.Center,
+              ) {
+                PhotoThumbnailBox(
+                  photoFile = itemPhoto.file,
+                  contentDescription = "Preview ${itemPhoto.name}",
+                  iconSize = 22.dp,
+                  modifier = Modifier.fillMaxSize(),
+                )
+              }
             }
           }
         }
+      }
+    }
+  }
+}
 
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-          Text(
-            text = if (bitmap != null) "${bitmap.width} × ${bitmap.height} px" else photo.extension.uppercase(),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          Text(
-            text = photo.sizeFormatted,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
+@Composable
+private fun PhotoViewerPageContent(
+  photo: GalleryPhoto,
+  isCurrentPage: Boolean,
+  zoomScale: Float,
+  onZoomScaleChange: (Float) -> Unit,
+  onTapImage: () -> Unit,
+) {
+  var bitmap by remember(photo.path, photo.lastModifiedMs) {
+    mutableStateOf(GalleryEngine.getCachedThumbnailBitmap(photo.file))
+  }
+
+  LaunchedEffect(photo.path, photo.lastModifiedMs) {
+    val fullBitmap = withContext(Dispatchers.IO) {
+      try {
+        BitmapFactory.decodeFile(photo.file.absolutePath)
+      } catch (_: Throwable) {
+        null
+      }
+    }
+    if (fullBitmap != null) {
+      bitmap = fullBitmap
+    }
+  }
+
+  var panOffsetX by remember(photo.path) { mutableFloatStateOf(0f) }
+  var panOffsetY by remember(photo.path) { mutableFloatStateOf(0f) }
+
+  LaunchedEffect(zoomScale, isCurrentPage) {
+    if (zoomScale <= 1.02f || !isCurrentPage) {
+      panOffsetX = 0f
+      panOffsetY = 0f
+    }
+  }
+
+  val currentZoomState by rememberUpdatedState(zoomScale)
+  val currentOnZoomChange by rememberUpdatedState(onZoomScaleChange)
+  val currentOnTapImage by rememberUpdatedState(onTapImage)
+
+  val currentBitmap = bitmap
+
+  Box(
+    modifier = Modifier
+      .fillMaxSize()
+      .background(Color.Black)
+      .then(
+        if (isCurrentPage) {
+          Modifier.testTag("photo_viewer_active_page")
+        } else {
+          Modifier
         }
+      )
+      .testTag("photo_viewer_page_${photo.name}")
+      .pointerInput(photo.path) {
+        awaitEachGesture {
+          var downPosition: Offset? = null
+          var maxPointers = 0
+          var movedBeyondSlop = false
+          var liveZoom = currentZoomState
+
+          do {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            val pressedChanges = event.changes.filter { it.pressed }
+            val pressedCount = pressedChanges.size
+            if (pressedCount > maxPointers) {
+              maxPointers = pressedCount
+            }
+
+            if (pressedCount >= 2) {
+              movedBeyondSlop = true
+              val zoomChange = event.calculateZoom()
+              val panChange = event.calculatePan()
+              if (zoomChange != 1f && zoomChange > 0f && !zoomChange.isNaN()) {
+                liveZoom = GalleryEngine.calculatePhotoZoom(liveZoom, zoomChange)
+                currentOnZoomChange(liveZoom)
+              }
+              if (liveZoom > 1.02f) {
+                panOffsetX += panChange.x
+                panOffsetY += panChange.y
+              } else {
+                panOffsetX = 0f
+                panOffsetY = 0f
+              }
+              event.changes.forEach { it.consume() }
+            } else if (pressedCount == 1) {
+              val change = pressedChanges.first()
+              if (downPosition == null) {
+                downPosition = change.position
+              } else if ((change.position - downPosition).getDistance() > viewConfiguration.touchSlop) {
+                movedBeyondSlop = true
+              }
+
+              if (liveZoom > 1.02f && maxPointers == 1) {
+                val panChange = event.calculatePan()
+                if (panChange != Offset.Zero) {
+                  panOffsetX += panChange.x
+                  panOffsetY += panChange.y
+                  event.changes.forEach { it.consume() }
+                }
+              }
+            }
+          } while (event.changes.any { it.pressed })
+
+          if (maxPointers == 1 && !movedBeyondSlop) {
+            currentOnTapImage()
+          }
+        }
+      },
+    contentAlignment = Alignment.Center,
+  ) {
+    if (currentBitmap != null) {
+      Image(
+        bitmap = currentBitmap.asImageBitmap(),
+        contentDescription = photo.name,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier
+          .fillMaxSize()
+          .graphicsLayer {
+            scaleX = zoomScale
+            scaleY = zoomScale
+            translationX = panOffsetX
+            translationY = panOffsetY
+          }
+          .testTag("photo_viewer_image_${photo.name}"),
+      )
+    } else {
+      Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+          .graphicsLayer {
+            scaleX = zoomScale
+            scaleY = zoomScale
+            translationX = panOffsetX
+            translationY = panOffsetY
+          }
+          .testTag("photo_viewer_image_${photo.name}"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Image,
+          contentDescription = photo.name,
+          tint = Color.White,
+          modifier = Modifier.size(64.dp),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+          text = photo.name,
+          style = MaterialTheme.typography.bodyMedium,
+          color = Color.White,
+        )
       }
     }
   }

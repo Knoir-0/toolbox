@@ -38,46 +38,36 @@ class MainScreenTest {
 
   @Test
   fun collapsedPanel_firstRowToolLabelsAreDisplayed() {
-    composeTestRule.onNodeWithText("Dice Roller").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Unit Converter").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Guitar Tuner").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Notes").assertIsDisplayed()
+    composeTestRule.onNodeWithText("To-Do").assertIsDisplayed()
   }
 
   @Test
   fun pullUpPanel_switchesSelectedTool() {
-    composeTestRule.onNodeWithText("Roll 1d20").assertExists()
+    composeTestRule.onNodeWithTag("calculator_screen").assertExists()
 
-    // Expand the pull-up panel so all rows of tools are visible
+    // Expand the pull-up panel so Page 0 rows (Row 0 and Row 1) are visible
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onAllNodesWithText("Notes").onFirst().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("notes_empty_state").assertExists()
+
+    // Panel auto-collapsed back to one row; pull up and navigate to Page 1 for Unit Converter and Ruler
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onAllNodesWithText("Unit Converter").onFirst().performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("From Unit (Meter)").assertExists()
 
-    // Panel auto-collapsed back to one row; pull up to select next tool
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
-
-    composeTestRule.onAllNodesWithText("Guitar Tuner").onFirst().performClick()
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("TARGET").assertExists()
-
-    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
-    composeTestRule.waitForIdle()
-
-    composeTestRule.onAllNodesWithText("Metronome").onFirst().performClick()
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("Play").assertExists()
-
-    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
-    composeTestRule.waitForIdle()
-
-    composeTestRule.onAllNodesWithText("Color Picker").onFirst().performClick()
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("2D Color Canvas").assertExists()
-
-    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onAllNodesWithText("Ruler").onFirst().performClick()
@@ -87,15 +77,33 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("ruler_unit_toggle").assertIsDisplayed()
     composeTestRule.onNodeWithTag("ruler_unit_toggle").performClick()
 
-    // Pull up and navigate to Page 1: Calculator is in Row 2 on Page 1
+    // Pull up and navigate to Page 2 for Color Picker, Dice Roller, Guitar Tuner, and Metronome
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
     composeTestRule.waitForIdle()
 
-    composeTestRule.onAllNodesWithText("Calculator").onFirst().performClick()
+    composeTestRule.onAllNodesWithText("Color Picker").onFirst().performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("calculator_screen").assertExists()
+    composeTestRule.onNodeWithText("2D Color Canvas").assertExists()
+
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onAllNodesWithText("Guitar Tuner").onFirst().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("TARGET").assertExists()
+
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onAllNodesWithText("Metronome").onFirst().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Play").assertExists()
   }
 
   @Test
@@ -151,15 +159,15 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    val diceNode = composeTestRule.onNodeWithTag("tool_item_DICE_ROLLER")
-    val converterNode = composeTestRule.onNodeWithTag("tool_item_UNIT_CONVERTER")
+    val calcNode = composeTestRule.onNodeWithTag("tool_item_CALCULATOR")
+    val notesNode = composeTestRule.onNodeWithTag("tool_item_NOTES")
 
-    val initialDiceLeft = diceNode.fetchSemanticsNode().boundsInRoot.left
-    val initialConverterLeft = converterNode.fetchSemanticsNode().boundsInRoot.left
-    assertTrue(initialDiceLeft < initialConverterLeft)
+    val initialCalcLeft = calcNode.fetchSemanticsNode().boundsInRoot.left
+    val initialNotesLeft = notesNode.fetchSemanticsNode().boundsInRoot.left
+    assertTrue(initialCalcLeft < initialNotesLeft)
 
-    val dragDeltaX = converterNode.fetchSemanticsNode().boundsInRoot.center.x -
-      diceNode.fetchSemanticsNode().boundsInRoot.center.x
+    val dragDeltaX = notesNode.fetchSemanticsNode().boundsInRoot.center.x -
+      calcNode.fetchSemanticsNode().boundsInRoot.center.x
 
     composeTestRule.onNodeWithTag("tools_grid").performTouchInput {
       val start = Offset(width / 6f, height / 6f)
@@ -171,9 +179,9 @@ class MainScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    val newDiceLeft = diceNode.fetchSemanticsNode().boundsInRoot.left
-    val newConverterLeft = converterNode.fetchSemanticsNode().boundsInRoot.left
-    assertTrue(newConverterLeft < newDiceLeft)
+    val newCalcLeft = calcNode.fetchSemanticsNode().boundsInRoot.left
+    val newNotesLeft = notesNode.fetchSemanticsNode().boundsInRoot.left
+    assertTrue(newNotesLeft < newCalcLeft)
   }
 
   @Test
@@ -196,11 +204,11 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    val diceNode = composeTestRule.onNodeWithTag("tool_item_DICE_ROLLER")
-    val converterNode = composeTestRule.onNodeWithTag("tool_item_UNIT_CONVERTER")
+    val calcNode = composeTestRule.onNodeWithTag("tool_item_CALCULATOR")
+    val notesNode = composeTestRule.onNodeWithTag("tool_item_NOTES")
 
-    val dragDeltaX = converterNode.fetchSemanticsNode().boundsInRoot.center.x -
-      diceNode.fetchSemanticsNode().boundsInRoot.center.x
+    val dragDeltaX = notesNode.fetchSemanticsNode().boundsInRoot.center.x -
+      calcNode.fetchSemanticsNode().boundsInRoot.center.x
 
     composeTestRule.onNodeWithTag("tools_grid").performTouchInput {
       val start = Offset(width / 6f, height / 6f)
@@ -214,9 +222,9 @@ class MainScreenTest {
 
     val repo = DefaultNavigationPreferencesRepository(composeTestRule.activity)
     val savedOrder = repo.getToolOrder()
-    val diceIndex = savedOrder.indexOf(Tool.DICE_ROLLER)
-    val converterIndex = savedOrder.indexOf(Tool.UNIT_CONVERTER)
-    assertTrue(converterIndex < diceIndex)
+    val calcIndex = savedOrder.indexOf(Tool.CALCULATOR)
+    val notesIndex = savedOrder.indexOf(Tool.NOTES)
+    assertTrue(notesIndex < calcIndex)
   }
 
   @Test
@@ -225,11 +233,11 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    // Page 0 initially shows Dice Roller; Page 1 rows (row 2 and row 3) do not exist on Page 0
-    composeTestRule.onNodeWithTag("tool_item_DICE_ROLLER").assertIsDisplayed()
+    // Page 0 initially shows Calculator; Page 1 rows (row 2 and row 3) do not exist on Page 0
+    composeTestRule.onNodeWithTag("tool_item_CALCULATOR").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tools_grid_row_2").assertDoesNotExist()
 
-    // Drag Dice Roller (col 0, row 0) to the far right edge of tools_grid and hold to trigger page switch
+    // Drag Calculator (col 0, row 0) to the far right edge of tools_grid and hold to trigger page switch
     composeTestRule.onNodeWithTag("tools_grid").performTouchInput {
       val start = Offset(width / 6f, height / 6f)
       down(start)
@@ -245,24 +253,24 @@ class MainScreenTest {
     // Pager has switched to Page 1! Row 2 and Row 3 are now displayed
     composeTestRule.onNodeWithTag("tools_grid_row_2").assertIsDisplayed()
 
-    // Dice Roller was moved to Page 1 and is displayed on Page 1!
-    composeTestRule.onNodeWithTag("tool_item_DICE_ROLLER").assertIsDisplayed()
+    // Calculator was moved to Page 1 and is displayed on Page 1!
+    composeTestRule.onNodeWithTag("tool_item_CALCULATOR").assertIsDisplayed()
 
     // Preference was updated and persisted
     val repo = DefaultNavigationPreferencesRepository(composeTestRule.activity)
     val savedOrder = repo.getToolOrder()
-    val diceIndex = savedOrder.indexOf(Tool.DICE_ROLLER)
+    val calcIndex = savedOrder.indexOf(Tool.CALCULATOR)
     // On Page 1 with 3/row and 2 rows/page, Page 1 indices start at index 6
-    assertTrue("Dice Roller should be on Page 1 (index >= 6), but was at $diceIndex", diceIndex >= 6)
+    assertTrue("Calculator should be on Page 1 (index >= 6), but was at $calcIndex", calcIndex >= 6)
   }
 
   @Test
   fun collapsedPanel_swipeBetweenRows_allowsNavigatingAndSelectingTools() {
     // Initially on Row 0
-    composeTestRule.onNodeWithText("Dice Roller").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Unit Converter").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Guitar Tuner").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Metronome").assertDoesNotExist()
+    composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Notes").assertIsDisplayed()
+    composeTestRule.onNodeWithText("To-Do").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Camera").assertDoesNotExist()
 
     // Row indicator dots exist
     composeTestRule.onNodeWithTag("tools_panel_row_indicator").assertIsDisplayed()
@@ -271,21 +279,21 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("tools_grid").performTouchInput { swipeLeft() }
     composeTestRule.waitForIdle()
 
-    // Now on Row 1: Metronome, Color Picker, Ruler are displayed
-    composeTestRule.onNodeWithText("Metronome").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Color Picker").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Ruler").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Dice Roller").assertDoesNotExist()
+    // Now on Row 1: Camera, Gallery, Files are displayed
+    composeTestRule.onNodeWithText("Camera").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Gallery").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Files").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Calculator").assertDoesNotExist()
 
     // Selecting a tool on Row 1 switches to that tool
-    composeTestRule.onNodeWithText("Metronome").performClick()
+    composeTestRule.onNodeWithText("Camera").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("Play").assertExists()
+    composeTestRule.onNodeWithTag("camera_screen").assertExists()
 
     // Tapping dot 0 in the row indicator jumps back to Row 0
     composeTestRule.onNodeWithTag("tools_panel_row_indicator_dot_0").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("Dice Roller").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
   }
 
   @Test
@@ -311,16 +319,17 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("tools_grid_row_3").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tool_item_AUDIO_RECORDER").assertIsDisplayed()
 
-    // Navigate to Page 2 via indicator dot where Settings is located
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
+    // Navigate to last page via indicator dot where Settings is located
+    val lastPageIndex = (Tool.entries.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$lastPageIndex").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").assertIsDisplayed()
 
-    // Select Settings on Page 2 (automatically collapses back to one row)
+    // Select Settings on last page (automatically collapses back to one row)
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
     composeTestRule.waitForIdle()
 
-    // Since Settings (Row 4) was selected, collapsed panel shows Row 4
+    // Since Settings was selected, collapsed panel shows Settings row
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").assertIsDisplayed()
   }
 
@@ -332,12 +341,12 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("tools_per_row_control").assertIsDisplayed()
 
     // Click on a tool
-    composeTestRule.onAllNodesWithText("Unit Converter").onFirst().performClick()
+    composeTestRule.onAllNodesWithText("Notes").onFirst().performClick()
     composeTestRule.waitForIdle()
 
     // Panel has automatically collapsed back to one row (row controls are hidden)
     composeTestRule.onNodeWithTag("tools_per_row_control").assertDoesNotExist()
-    composeTestRule.onNodeWithText("From Unit (Meter)").assertExists()
+    composeTestRule.onNodeWithTag("notes_empty_state").assertExists()
   }
 
   @Test
@@ -403,14 +412,14 @@ class MainScreenTest {
   fun categorySorting_multipleCategoriesFitOnOnePageAsOneRow_whenToolsPerRowIncreases() {
     val repo = DefaultNavigationPreferencesRepository(composeTestRule.activity)
     repo.setToolSorting(ToolSortingOption.TOOL_CATEGORIES)
-    repo.setToolsPerRow(4)
+    repo.setToolsPerRow(6)
     composeTestRule.waitForIdle()
 
-    // With 4 tools per row:
+    // With 6 tools per row:
     // Page 0: Math & Measurement (3 tools)
-    // Page 1: Audio & Music (3 tools)
-    // Page 2: Media & Creative (3 tools)
-    // Page 3: Productivity (2 tools) + Entertainment & Devices (2 tools) = 4 tools on 1 row!
+    // Page 1: Audio & Music (5 tools)
+    // Page 2: Media & Creative (6 tools)
+    // Page 3: Productivity (4 tools) + Entertainment & Devices (2 tools) = 6 tools on 1 row!
     // Page 4: System (1 tool)
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_3").performClick()
     composeTestRule.waitForIdle()
@@ -420,6 +429,8 @@ class MainScreenTest {
     composeTestRule.onNodeWithText("Entertainment & Devices").assertIsDisplayed()
     composeTestRule.onNodeWithText("To-Do").assertIsDisplayed()
     composeTestRule.onNodeWithText("Files").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Notes").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Plant Schedule").assertIsDisplayed()
     composeTestRule.onNodeWithText("Dice Roller").assertIsDisplayed()
     composeTestRule.onNodeWithText("TV Remote").assertIsDisplayed()
 
@@ -427,7 +438,7 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tools_per_row_slider").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("tools_per_row_count").assertTextEquals("4")
+    composeTestRule.onNodeWithTag("tools_per_row_count").assertTextEquals("6")
   }
 
   @Test
@@ -438,10 +449,12 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
 
     // With 6 tools per row:
-    // Page 0: Math & Measurement (3 tools) + Audio & Music (2 tools) = 5 tools
-    // Page 1: Media & Creative (2 tools) + Productivity (2 tools) + Entertainment & Devices (2 tools) = 6 tools
-    // Page 2: System (1 tool: Settings)
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
+    // Page 0: Math & Measurement (3 tools)
+    // Page 1: Audio & Music (5 tools)
+    // Page 2: Media & Creative (6 tools)
+    // Page 3: Productivity (4 tools) + Entertainment & Devices (2 tools) = 6 tools
+    // Page 4: System (1 tool: Settings)
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_4").performClick()
     composeTestRule.waitForIdle()
 
     // Verify Settings tool icon is displayed and has sufficient width
@@ -488,8 +501,8 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    // Page 1 contains less used tools
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
+    // Page 2 contains Dice Roller
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("tool_item_DICE_ROLLER").performClick()
@@ -505,8 +518,8 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    // Page 2 contains Settings in manual mode
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
+    val lastPageIndex = (Tool.entries.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$lastPageIndex").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
@@ -541,8 +554,8 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    // Page 2 contains Settings in manual mode
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
+    val lastPageIndex = (Tool.entries.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$lastPageIndex").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
@@ -586,8 +599,8 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    // Page 2 contains Settings in manual mode
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
+    val lastPageIndex = (Tool.entries.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$lastPageIndex").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
@@ -648,7 +661,8 @@ class MainScreenTest {
     // Navigate to Settings
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
+    val lastPageIndex = (Tool.entries.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$lastPageIndex").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
     composeTestRule.waitForIdle()

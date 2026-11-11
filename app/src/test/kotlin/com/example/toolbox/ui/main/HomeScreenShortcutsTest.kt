@@ -106,4 +106,45 @@ class HomeScreenShortcutsTest {
     assertEquals(Color(0xFF386A20), resolveShortcutBackgroundColor("#386A20"))
     assertEquals(Color(0xFFE65100), resolveShortcutBackgroundColor("#E65100"))
   }
+
+  @Test
+  fun resolveToolShortcutAliasClassName_distinctAndRoundTripsForAllTools() {
+    val aliases = Tool.entries.map { resolveToolShortcutAliasClassName(it) }
+    assertEquals(Tool.entries.size, aliases.distinct().size)
+
+    for (tool in Tool.entries) {
+      val alias = resolveToolShortcutAliasClassName(tool)
+      assertTrue(alias.startsWith("com.example.toolbox.MainActivityTool"))
+      assertEquals(tool, parseStandaloneToolFromComponent(alias))
+      val shortAlias = ".${alias.substringAfterLast('.')}"
+      assertEquals(tool, parseStandaloneToolFromComponent(shortAlias))
+    }
+
+    assertNull(parseStandaloneToolFromComponent(null))
+    assertNull(parseStandaloneToolFromComponent(""))
+    assertNull(parseStandaloneToolFromComponent("com.example.toolbox.MainActivity"))
+  }
+
+  @Test
+  fun resolveStandaloneTaskMetadata_matchesToolAndFolderShortcuts() {
+    // Main app launch (not a shortcut) returns null so default app task description is preserved
+    assertNull(resolveStandaloneTaskLabel(standaloneTool = null, initialFolder = null))
+    assertNull(resolveStandaloneTaskIconVector(standaloneTool = null, initialFolder = null))
+
+    // Each standalone tool uses its own title and icon vector for Recent Apps
+    for (tool in Tool.entries) {
+      assertEquals(tool.title, resolveStandaloneTaskLabel(standaloneTool = tool, initialFolder = null))
+      assertEquals(tool.icon, resolveStandaloneTaskIconVector(standaloneTool = tool, initialFolder = null))
+    }
+
+    // Folder shortcut uses the folder name and folder icon vector
+    assertEquals(
+      "Downloads",
+      resolveStandaloneTaskLabel(standaloneTool = Tool.FILES, initialFolder = "/storage/emulated/0/Downloads"),
+    )
+    assertEquals(
+      FOLDER_SHORTCUT_ICON,
+      resolveStandaloneTaskIconVector(standaloneTool = Tool.FILES, initialFolder = "/storage/emulated/0/Downloads"),
+    )
+  }
 }

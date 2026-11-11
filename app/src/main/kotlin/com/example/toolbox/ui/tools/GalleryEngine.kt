@@ -10,6 +10,9 @@ import java.nio.ByteBuffer
 import java.util.Locale
 import java.util.zip.CRC32
 import java.util.zip.Deflater
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 const val GALLERY_PREFS_NAME = "gallery_tool_preferences"
 const val PREF_KEY_GALLERY_FOLDERS = "gallery_loaded_folders"
@@ -19,6 +22,9 @@ const val PREF_KEY_GALLERY_ALBUMS_PER_ROW = "gallery_albums_per_row"
 const val MIN_ALBUMS_PER_ROW = 3
 const val MAX_ALBUMS_PER_ROW = 6
 const val DEFAULT_ALBUMS_PER_ROW = 3
+
+const val MIN_PHOTO_ZOOM = 1f
+const val MAX_PHOTO_ZOOM = 5f
 
 val DEFAULT_GALLERY_FOLDER_NAMES: List<String> = listOf("DCIM", "Photos")
 
@@ -115,11 +121,54 @@ object GalleryEngine {
     "jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "heif",
   )
 
+  private const val MAX_THUMBNAIL_CACHE_ENTRIES = 96
+
+  private val thumbnailCacheLock = Any()
+  private val thumbnailCache = object : LinkedHashMap<String, Bitmap>(64, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
+      return size > MAX_THUMBNAIL_CACHE_ENTRIES
+    }
+  }
+
+  private fun thumbnailCacheKey(file: File, reqSizePx: Int): String {
+    return "${file.absolutePath}:${file.lastModified()}:$reqSizePx"
+  }
+
+  /**
+   * Returns a previously decoded thumbnail [Bitmap] from the in-memory LRU cache if available,
+   * or `null` if it has not been decoded yet. Safe to call on the main UI thread without blocking.
+   */
+  fun getCachedThumbnailBitmap(file: File, reqSizePx: Int = 360): Bitmap? {
+    val key = thumbnailCacheKey(file, reqSizePx)
+    synchronized(thumbnailCacheLock) {
+      return thumbnailCache[key]
+    }
+  }
+
+  /**
+   * Clears the in-memory album art / thumbnail cache.
+   */
+  fun clearThumbnailCache() {
+    synchronized(thumbnailCacheLock) {
+      thumbnailCache.clear()
+    }
+  }
+
   /**
    * Coerces an albums-per-row count into the valid range [MIN_ALBUMS_PER_ROW]..[MAX_ALBUMS_PER_ROW] (3..6).
    */
   fun coerceAlbumsPerRow(count: Int): Int {
     return count.coerceIn(MIN_ALBUMS_PER_ROW, MAX_ALBUMS_PER_ROW)
+  }
+
+  /**
+   * Calculates the updated zoom scale (`1f..5f`) for an individual photo in the viewer from a pinch
+   * gesture [zoomChange].
+   */
+  fun calculatePhotoZoom(currentZoom: Float, zoomChange: Float): Float {
+    val base = currentZoom.coerceIn(MIN_PHOTO_ZOOM, MAX_PHOTO_ZOOM)
+    if (zoomChange <= 0f || zoomChange.isNaN()) return base
+    return (base * zoomChange).coerceIn(MIN_PHOTO_ZOOM, MAX_PHOTO_ZOOM)
   }
 
   /**
@@ -300,16 +349,32 @@ object GalleryEngine {
   /**
    * Builds a [GalleryAlbum] model for [directory], resolving its most recent photo, direct photo count,
    * total photo count (including nested folders), and nested folder count.
+   *
+   * When [deferAlbumArt] is `true`, deep recursive scanning for [GalleryAlbum.mostRecentPhoto] is
+   * skipped during initial folder listing so it can be resolved asynchronously in the background via
+   * [resolveAlbumArtAsync].
    */
-  fun buildAlbum(directory: File, maxDepth: Int = 8): GalleryAlbum {
-    return buildMergedAlbum(listOf(directory), maxDepth = maxDepth)
+  fun buildAlbum(
+    directory: File,
+    maxDepth: Int = 8,
+    deferAlbumArt: Boolean = false,
+  ): GalleryAlbum {
+    return buildMergedAlbum(
+      directories = listOf(directory),
+      maxDepth = maxDepth,
+      deferAlbumArt = deferAlbumArt,
+    )
   }
 
   /**
    * Builds a unified [GalleryAlbum] model across one or more [directories] (e.g. when same-named
    * subfolders in `DCIM` and `Photos` are merged as if they were in the same folder).
    */
-  fun buildMergedAlbum(directories: List<File>, maxDepth: Int = 8): GalleryAlbum {
+  fun buildMergedAlbum(
+    directories: List<File>,
+    maxDepth: Int = 8,
+    deferAlbumArt: Boolean = false,
+  ): GalleryAlbum {
     val distinctDirs = mutableListOf<File>()
     for (dir in directories) {
       if (distinctDirs.none { it.absolutePath.equals(dir.absolutePath, ignoreCase = true) }) {
@@ -330,17 +395,33 @@ object GalleryEngine {
       }
     }
 
-    val directPhotos = children
+    val directPhotoFiles = children
       .filter { isPhotoFile(it) }
       .distinctBy { it.absolutePath }
-      .size
+    val directPhotos = directPhotoFiles.size
     val subAlbums = children
       .filter { isAlbumDirectory(it) }
       .map { it.name.lowercase(Locale.ROOT) }
       .distinct()
       .size
-    val mostRecent = findMostRecentPhoto(distinctDirs, maxDepth = maxDepth)
-    val totalPhotos = if (subAlbums == 0) directPhotos else countTotalPhotos(distinctDirs, maxDepth = maxDepth)
+
+    val mostRecent = when {
+      deferAlbumArt -> null
+      subAlbums == 0 -> {
+        directPhotoFiles.maxWithOrNull(
+          compareBy<File> { it.lastModified() }
+            .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+        )
+      }
+      else -> findMostRecentPhoto(distinctDirs, maxDepth = maxDepth)
+    }
+
+    val totalPhotos = if (subAlbums == 0 || deferAlbumArt) {
+      directPhotos
+    } else {
+      countTotalPhotos(distinctDirs, maxDepth = maxDepth)
+    }
+
     val lastMod = mostRecent?.lastModified()
       ?: distinctDirs.maxOfOrNull { if (it.exists()) it.lastModified() else 0L }
       ?: 0L
@@ -356,6 +437,51 @@ object GalleryEngine {
       lastModifiedMs = lastMod,
       directories = distinctDirs,
     )
+  }
+
+  /**
+   * Resolves an album's cover photo ([GalleryAlbum.mostRecentPhoto]), total photo count, and
+   * pre-decodes its thumbnail bitmap on a background I/O thread ([Dispatchers.IO]).
+   */
+  suspend fun resolveAlbumArtAsync(
+    album: GalleryAlbum,
+    maxDepth: Int = 8,
+    reqSizePx: Int = 360,
+  ): GalleryAlbum = withContext(Dispatchers.IO) {
+    ensureActive()
+    val mostRecent = album.mostRecentPhoto ?: findMostRecentPhoto(album.directories, maxDepth = maxDepth)
+    val totalPhotos = if (album.subAlbumCount == 0) {
+      album.directPhotoCount
+    } else if (album.totalPhotoCount > album.directPhotoCount) {
+      album.totalPhotoCount
+    } else {
+      countTotalPhotos(album.directories, maxDepth = maxDepth)
+    }
+    ensureActive()
+    if (mostRecent != null) {
+      decodeThumbnailBitmap(mostRecent, reqSizePx = reqSizePx)
+    }
+    album.copy(
+      mostRecentPhoto = mostRecent,
+      totalPhotoCount = totalPhotos,
+      lastModifiedMs = mostRecent?.lastModified() ?: album.lastModifiedMs,
+    )
+  }
+
+  /**
+   * Pre-decodes and caches album cover thumbnails in the background on [Dispatchers.IO] for [albums].
+   */
+  suspend fun prefetchAlbumArt(
+    albums: List<GalleryAlbum>,
+    reqSizePx: Int = 360,
+  ) = withContext(Dispatchers.IO) {
+    for (album in albums) {
+      ensureActive()
+      val coverFile = album.mostRecentPhoto ?: continue
+      if (getCachedThumbnailBitmap(coverFile, reqSizePx) == null) {
+        decodeThumbnailBitmap(coverFile, reqSizePx = reqSizePx)
+      }
+    }
   }
 
   /**
@@ -473,10 +599,25 @@ object GalleryEngine {
   }
 
   /**
-   * Decodes a thumbnail [Bitmap] from [file] with downsampling to prevent OOM on large camera photos.
+   * Asynchronously decodes a downsampled thumbnail [Bitmap] from [file] on a background thread
+   * ([Dispatchers.IO]), caching the result in memory for subsequent UI lookups.
+   */
+  suspend fun loadThumbnailBitmapAsync(file: File, reqSizePx: Int = 360): Bitmap? {
+    getCachedThumbnailBitmap(file, reqSizePx)?.let { return it }
+    return withContext(Dispatchers.IO) {
+      ensureActive()
+      decodeThumbnailBitmap(file, reqSizePx)
+    }
+  }
+
+  /**
+   * Decodes a thumbnail [Bitmap] from [file] with downsampling to prevent OOM on large camera photos,
+   * storing the decoded bitmap in the in-memory LRU cache.
    */
   fun decodeThumbnailBitmap(file: File, reqSizePx: Int = 360): Bitmap? {
     if (!file.exists() || !file.isFile) return null
+    getCachedThumbnailBitmap(file, reqSizePx)?.let { return it }
+
     return try {
       val boundsOptions = BitmapFactory.Options().apply {
         inJustDecodeBounds = true
@@ -484,21 +625,29 @@ object GalleryEngine {
       BitmapFactory.decodeFile(file.absolutePath, boundsOptions)
       val width = boundsOptions.outWidth
       val height = boundsOptions.outHeight
-      if (width <= 0 || height <= 0) {
-        return BitmapFactory.decodeFile(file.absolutePath)
+      val decoded = if (width <= 0 || height <= 0) {
+        BitmapFactory.decodeFile(file.absolutePath)
+      } else {
+        var inSampleSize = 1
+        if (height > reqSizePx || width > reqSizePx) {
+          val halfHeight = height / 2
+          val halfWidth = width / 2
+          while ((halfHeight / inSampleSize) >= reqSizePx && (halfWidth / inSampleSize) >= reqSizePx) {
+            inSampleSize *= 2
+          }
+        }
+        val decodeOptions = BitmapFactory.Options().apply {
+          this.inSampleSize = inSampleSize
+        }
+        BitmapFactory.decodeFile(file.absolutePath, decodeOptions)
       }
-      var inSampleSize = 1
-      if (height > reqSizePx || width > reqSizePx) {
-        val halfHeight = height / 2
-        val halfWidth = width / 2
-        while ((halfHeight / inSampleSize) >= reqSizePx && (halfWidth / inSampleSize) >= reqSizePx) {
-          inSampleSize *= 2
+      if (decoded != null) {
+        val key = thumbnailCacheKey(file, reqSizePx)
+        synchronized(thumbnailCacheLock) {
+          thumbnailCache[key] = decoded
         }
       }
-      val decodeOptions = BitmapFactory.Options().apply {
-        this.inSampleSize = inSampleSize
-      }
-      BitmapFactory.decodeFile(file.absolutePath, decodeOptions)
+      decoded
     } catch (_: Throwable) {
       null
     }

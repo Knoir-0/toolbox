@@ -31,10 +31,38 @@ class NavigationPreferencesTest {
     // 19 tools at 3 per row -> 7 rows -> 4 pages
     assertEquals(7, calculateRowCount(19, 3))
     assertEquals(4, calculateExpandedPageCount(7))
+
+    // 20 tools at 3 per row -> 7 rows -> 4 pages
+    assertEquals(7, calculateRowCount(20, 3))
+    assertEquals(4, calculateExpandedPageCount(7))
   }
 
   @Test
   fun parseToolOrder_nullOrBlank_returnsAllToolEntriesInDefaultOrder() {
+    val expectedDefaultOrder = listOf(
+      Tool.CALCULATOR,
+      Tool.NOTES,
+      Tool.TODO_LIST,
+      Tool.CAMERA,
+      Tool.GALLERY,
+      Tool.FILES,
+      Tool.UNIT_CONVERTER,
+      Tool.AUDIO_RECORDER,
+      Tool.BLUETOOTH_REMOTE,
+      Tool.IMAGE_EDITOR,
+      Tool.FILE_CONVERTER,
+      Tool.RULER,
+      Tool.VIDEO_EDITOR,
+      Tool.AUDIO_EDITOR,
+      Tool.COLOR_PICKER,
+      Tool.DICE_ROLLER,
+      Tool.GUITAR_TUNER,
+      Tool.METRONOME,
+      Tool.CHORD_BOOK,
+      Tool.PLANT_SCHEDULE,
+      Tool.SETTINGS,
+    )
+    assertEquals(expectedDefaultOrder, Tool.entries)
     assertEquals(Tool.entries, parseToolOrder(null))
     assertEquals(Tool.entries, parseToolOrder(""))
     assertEquals(Tool.entries, parseToolOrder("   "))
@@ -42,7 +70,7 @@ class NavigationPreferencesTest {
 
   @Test
   fun parseToolOrder_validSavedOrder_preservesOrder() {
-    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,SETTINGS"
+    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,NOTES,CHORD_BOOK,PLANT_SCHEDULE,CAMERA,AUDIO_EDITOR,VIDEO_EDITOR,SETTINGS"
     val result = parseToolOrder(raw)
     val expected = listOf(
       Tool.IMAGE_EDITOR,
@@ -59,6 +87,12 @@ class NavigationPreferencesTest {
       Tool.AUDIO_RECORDER,
       Tool.FILE_CONVERTER,
       Tool.GALLERY,
+      Tool.NOTES,
+      Tool.CHORD_BOOK,
+      Tool.PLANT_SCHEDULE,
+      Tool.CAMERA,
+      Tool.AUDIO_EDITOR,
+      Tool.VIDEO_EDITOR,
       Tool.SETTINGS,
     )
     assertEquals(expected, result)
@@ -137,6 +171,12 @@ class NavigationPreferencesTest {
       Tool.AUDIO_RECORDER,
       Tool.FILE_CONVERTER,
       Tool.GALLERY,
+      Tool.NOTES,
+      Tool.CHORD_BOOK,
+      Tool.PLANT_SCHEDULE,
+      Tool.CAMERA,
+      Tool.AUDIO_EDITOR,
+      Tool.VIDEO_EDITOR,
       Tool.SETTINGS,
     )
     repo.setToolOrder(customOrder)
@@ -173,6 +213,12 @@ class NavigationPreferencesTest {
       Tool.AUDIO_RECORDER,
       Tool.FILE_CONVERTER,
       Tool.GALLERY,
+      Tool.NOTES,
+      Tool.CHORD_BOOK,
+      Tool.PLANT_SCHEDULE,
+      Tool.CAMERA,
+      Tool.AUDIO_EDITOR,
+      Tool.VIDEO_EDITOR,
       Tool.SETTINGS,
     )
     repo.setToolOrder(customOrder)

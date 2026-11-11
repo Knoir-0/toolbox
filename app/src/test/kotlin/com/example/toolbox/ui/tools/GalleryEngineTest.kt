@@ -6,6 +6,7 @@ import junit.framework.TestCase.assertEquals
 import junit.framework.TestCase.assertNotNull
 import junit.framework.TestCase.assertNull
 import junit.framework.TestCase.assertTrue
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -149,6 +150,11 @@ class GalleryEngineTest {
     assertEquals(5, GalleryEngine.calculatePinchAlbumsPerRow(6, 1.30f))
     assertEquals(4, GalleryEngine.calculatePinchAlbumsPerRow(6, 1.60f))
     assertEquals(3, GalleryEngine.calculatePinchAlbumsPerRow(6, 2.00f))
+
+    // Individual photo viewer pinch-to-zoom clamps between 1f and 5f
+    assertEquals(1f, GalleryEngine.calculatePhotoZoom(1f, 0.5f))
+    assertEquals(2.5f, GalleryEngine.calculatePhotoZoom(1f, 2.5f))
+    assertEquals(5f, GalleryEngine.calculatePhotoZoom(2f, 4f))
   }
 
   @Test
@@ -242,5 +248,27 @@ class GalleryEngineTest {
     assertTrue(hawaiiContents.nestedAlbums.isEmpty())
     assertEquals(1, hawaiiContents.photos.size)
     assertEquals("beach_sunset.png", hawaiiContents.photos[0].name)
+  }
+
+  @Test
+  fun deferredAlbumArt_resolvesCoverPhotoInBackground() = runBlocking {
+    GalleryEngine.clearThumbnailCache()
+    val albumDir = File(tempRootDir, "DCIM/Trips").apply { mkdirs() }
+    val nestedDir = File(albumDir, "Alps").apply { mkdirs() }
+    val newestPhoto = GalleryEngine.writeSolidColorPng(
+      outputFile = File(nestedDir, "alps_peak.png"),
+      lastModifiedMs = 7_500_000L,
+    )
+
+    // Initial deferred build skips deep recursive cover scan
+    val deferredAlbum = GalleryEngine.buildAlbum(albumDir, deferAlbumArt = true)
+    assertNull(deferredAlbum.mostRecentPhoto)
+    assertEquals(1, deferredAlbum.subAlbumCount)
+
+    // Background resolution populates mostRecentPhoto and totalPhotoCount on Dispatchers.IO
+    val resolvedAlbum = GalleryEngine.resolveAlbumArtAsync(deferredAlbum)
+    assertNotNull(resolvedAlbum.mostRecentPhoto)
+    assertEquals(newestPhoto.name, resolvedAlbum.mostRecentPhoto?.name)
+    assertEquals(1, resolvedAlbum.totalPhotoCount)
   }
 }

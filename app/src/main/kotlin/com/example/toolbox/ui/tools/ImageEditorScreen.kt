@@ -76,6 +76,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -124,6 +125,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -302,20 +304,25 @@ fun ImageEditorScreen(
 }
 
 /**
- * The initial view displayed before an image is opened:
- * simply a + icon with the text "tap to open file".
+ * The initial view displayed before a media file is opened:
+ * simply a + icon with the text "tap to open file" and a bottom sample button.
  */
 @Composable
 fun OpenFileInitialView(
   onOpenFile: () -> Unit,
   onUseSample: () -> Unit,
   modifier: Modifier = Modifier,
+  sampleButtonText: String = "or try sample image",
+  sampleButtonIcon: ImageVector = Icons.Default.Image,
+  sampleButtonTestTag: String = "open_sample_image_button",
+  openButtonTestTag: String = "open_file_button",
+  isLoading: Boolean = false,
 ) {
   Box(
     modifier = modifier
       .fillMaxSize()
-      .clickable(onClick = onOpenFile)
-      .testTag("open_file_button")
+      .clickable(enabled = !isLoading, onClick = onOpenFile)
+      .testTag(openButtonTestTag)
       .padding(24.dp),
     contentAlignment = Alignment.Center,
   ) {
@@ -332,11 +339,19 @@ fun OpenFileInitialView(
         shadowElevation = 4.dp,
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.Default.Add,
-            contentDescription = "Open file",
-            modifier = Modifier.size(40.dp),
-          )
+          if (isLoading) {
+            CircularProgressIndicator(
+              modifier = Modifier.size(32.dp),
+              strokeWidth = 3.dp,
+              color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+          } else {
+            Icon(
+              imageVector = Icons.Default.Add,
+              contentDescription = "Open file",
+              modifier = Modifier.size(40.dp),
+            )
+          }
         }
       }
       Spacer(modifier = Modifier.height(20.dp))
@@ -350,21 +365,22 @@ fun OpenFileInitialView(
       )
     }
 
-    // Convenient sample option for testing without requiring local images
+    // Convenient sample option for testing without requiring local files
     TextButton(
       onClick = onUseSample,
+      enabled = !isLoading,
       modifier = Modifier
         .align(Alignment.BottomCenter)
         .padding(bottom = 16.dp)
-        .testTag("open_sample_image_button"),
+        .testTag(sampleButtonTestTag),
     ) {
       Icon(
-        imageVector = Icons.Default.Image,
+        imageVector = sampleButtonIcon,
         contentDescription = null,
         modifier = Modifier.size(18.dp),
       )
       Spacer(modifier = Modifier.width(6.dp))
-      Text("or try sample image")
+      Text(sampleButtonText)
     }
   }
 }

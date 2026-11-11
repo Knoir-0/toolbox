@@ -441,7 +441,10 @@ data class ConversionResult(
   val usedFallback: Boolean,
   val durationMs: Long,
   val message: String,
-)
+) {
+  val errorMessage: String?
+    get() = if (success) null else message
+}
 
 /**
  * Record of a completed conversion displayed in the recent conversions list.
@@ -974,6 +977,27 @@ object FileConverterEngine {
    * and automatically falls back to [ConversionRoute.fallbackBackend] (FFmpeg or Native) if
    * the primary engine encounters an error.
    */
+  suspend fun convertFile(
+    context: Context?,
+    sourceFile: File,
+    outputFile: File,
+    targetFormat: ConvertibleFormat,
+  ): ConversionResult {
+    val result = convertFile(
+      context = context,
+      sourceFile = sourceFile,
+      targetFormat = targetFormat,
+      outputDir = outputFile.parentFile ?: File("."),
+      desiredStem = extractFileStem(outputFile.name),
+    )
+    if (result.success && result.outputFile != null && result.outputFile.absolutePath != outputFile.absolutePath) {
+      result.outputFile.copyTo(outputFile, overwrite = true)
+      result.outputFile.delete()
+      return result.copy(outputFile = outputFile)
+    }
+    return result
+  }
+
   suspend fun convertFile(
     context: Context?,
     sourceFile: File,
@@ -1651,7 +1675,7 @@ object FileConverterEngine {
    * Native Audio/Video -> WAV conversion using Android [MediaExtractor] + [MediaCodec]
    * to decode the audio track into 16-bit PCM and write a RIFF WAV container.
    */
-  private fun convertMediaToWavNative(
+  internal fun convertMediaToWavNative(
     sourceFile: File,
     outputFile: File,
   ): Boolean {
@@ -1778,30 +1802,18 @@ object FileConverterEngine {
     }
   }
 
-  private fun buildWavHeader(
+  internal fun buildWavHeader(
     pcmDataLength: Long,
     sampleRate: Int,
     channels: Int,
     bitsPerSample: Int,
   ): ByteArray {
-    val byteRate = sampleRate * channels * (bitsPerSample / 8)
-    val blockAlign = channels * (bitsPerSample / 8)
-    val totalDataLen = pcmDataLength + 36L
-    val buf = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
-    buf.put("RIFF".toByteArray(Charsets.US_ASCII))
-    buf.putInt(totalDataLen.toInt())
-    buf.put("WAVE".toByteArray(Charsets.US_ASCII))
-    buf.put("fmt ".toByteArray(Charsets.US_ASCII))
-    buf.putInt(16) // PCM chunk size
-    buf.putShort(1) // AudioFormat = 1 (PCM)
-    buf.putShort(channels.toShort())
-    buf.putInt(sampleRate)
-    buf.putInt(byteRate)
-    buf.putShort(blockAlign.toShort())
-    buf.putShort(bitsPerSample.toShort())
-    buf.put("data".toByteArray(Charsets.US_ASCII))
-    buf.putInt(pcmDataLength.toInt())
-    return buf.array()
+    return AudioRecorderEngine.createWavHeader(
+      pcmDataLength = pcmDataLength,
+      sampleRate = sampleRate,
+      channels = channels,
+      bitsPerSample = bitsPerSample,
+    )
   }
 
   /**
@@ -1874,7 +1886,7 @@ object FileConverterEngine {
     }
   }
 
-  private fun encodeWavToAacOrM4aNative(
+  internal fun encodeWavToAacOrM4aNative(
     wavFile: File,
     outputFile: File,
     targetFormat: ConvertibleFormat,

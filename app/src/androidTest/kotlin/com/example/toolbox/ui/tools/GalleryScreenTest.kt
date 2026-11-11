@@ -12,6 +12,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pinch
+import androidx.compose.ui.test.swipeLeft
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
 import junit.framework.TestCase.assertTrue
@@ -344,5 +345,104 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("gallery_empty_album_state").assertIsDisplayed()
     composeTestRule.onNodeWithText("No photos or albums found").assertIsDisplayed()
     composeTestRule.onNodeWithText("Create Album").assertIsDisplayed()
+  }
+
+  @Test
+  fun individualPhotoViewer_hasBlackBackground_supportsSwiping_previewBarTapDismiss_andPinchToZoom() {
+    val cameraDir = File(testRootDir, "DCIM/Camera").apply { mkdirs() }
+
+    // Create 3 photos in the same album (sorted newest first: photo_3.png, photo_2.png, photo_1.png)
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(cameraDir, "photo_1.png"),
+      red = 200,
+      green = 60,
+      blue = 60,
+      lastModifiedMs = 1_000_000L,
+    )
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(cameraDir, "photo_2.png"),
+      red = 60,
+      green = 200,
+      blue = 60,
+      lastModifiedMs = 2_000_000L,
+    )
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(cameraDir, "photo_3.png"),
+      red = 60,
+      green = 60,
+      blue = 200,
+      lastModifiedMs = 3_000_000L,
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        GalleryScreen(rootDirectory = testRootDir)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Open Camera album and tap the first photo (photo_3.png)
+    composeTestRule.onNodeWithTag("album_tile_item_Camera").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_tile_item_photo_3.png").performClick()
+    composeTestRule.waitForIdle()
+
+    // 1. Full black background viewer with the image on top
+    composeTestRule.onNodeWithTag("gallery_photo_viewer_dialog")
+      .assertIsDisplayed()
+      .assertContentDescriptionEquals("Full black background photo viewer")
+    composeTestRule.onNodeWithTag("photo_viewer_current_title").assertTextEquals("photo_3.png")
+    composeTestRule.onNodeWithTag("photo_viewer_image_photo_3.png", useUnmergedTree = true).assertIsDisplayed()
+
+    // 2. Preview scroll bar at the bottom shows all images in the same album
+    composeTestRule.onNodeWithTag("photo_viewer_preview_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_preview_scroll_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_preview_thumb_photo_3.png").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_preview_thumb_photo_2.png").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_preview_thumb_photo_1.png").assertIsDisplayed()
+
+    // 3. Swipe left to move to the next photo in the album (photo_2.png)
+    composeTestRule.onNodeWithTag("photo_viewer_pager").performTouchInput {
+      swipeLeft()
+    }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_current_title").assertTextEquals("photo_2.png")
+
+    // Tap a thumbnail in the bottom preview scroll bar to jump to photo_1.png
+    composeTestRule.onNodeWithTag("photo_viewer_preview_thumb_photo_1.png").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_current_title").assertTextEquals("photo_1.png")
+
+    // 4. Tap on the image to dismiss the bottom preview scroll bar, and tap again to bring it back
+    composeTestRule.onNodeWithTag("photo_viewer_active_page").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_preview_bar").assertDoesNotExist()
+
+    composeTestRule.onNodeWithTag("photo_viewer_active_page").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_preview_bar").assertIsDisplayed()
+
+    // 5. Pinch to zoom on the photo
+    composeTestRule.onNodeWithTag("photo_viewer_zoom_label", useUnmergedTree = true).assertTextEquals("100%")
+    composeTestRule.onNodeWithTag("photo_viewer_active_page").performTouchInput {
+      val center = this.center
+      pinch(
+        start0 = Offset(center.x - 60f, center.y),
+        end0 = Offset(center.x - 240f, center.y),
+        start1 = Offset(center.x + 60f, center.y),
+        end1 = Offset(center.x + 240f, center.y),
+        durationMillis = 300L,
+      )
+    }
+    composeTestRule.waitForIdle()
+
+    val zoomLabelText = composeTestRule
+      .onNodeWithTag("photo_viewer_zoom_label", useUnmergedTree = true)
+      .fetchSemanticsNode()
+      .config[androidx.compose.ui.semantics.SemanticsProperties.Text]
+      .first()
+      .text
+    val zoomPercent = zoomLabelText.removeSuffix("%").toInt()
+    assertTrue("Expected zoom percent > 100% after pinch-out, got $zoomPercent%", zoomPercent > 100)
   }
 }

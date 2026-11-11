@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.main
 
+import android.app.Activity
+import android.app.ActivityManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -17,6 +19,7 @@ import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.PaintingStyle
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.VectorGroup
 import androidx.compose.ui.graphics.vector.VectorPath
@@ -162,6 +165,48 @@ fun syncAppLauncherIcon(
 }
 
 /**
+ * Resolves the manifest `<activity-alias>` class name dedicated to launching [tool] as a standalone
+ * shortcut so the Recent Apps switcher displays the tool's icon and title.
+ */
+fun resolveToolShortcutAliasClassName(tool: Tool): String {
+  return when (tool) {
+    Tool.CALCULATOR -> "com.example.toolbox.MainActivityToolCalculator"
+    Tool.NOTES -> "com.example.toolbox.MainActivityToolNotes"
+    Tool.TODO_LIST -> "com.example.toolbox.MainActivityToolTodoList"
+    Tool.CAMERA -> "com.example.toolbox.MainActivityToolCamera"
+    Tool.GALLERY -> "com.example.toolbox.MainActivityToolGallery"
+    Tool.FILES -> "com.example.toolbox.MainActivityToolFiles"
+    Tool.UNIT_CONVERTER -> "com.example.toolbox.MainActivityToolUnitConverter"
+    Tool.AUDIO_RECORDER -> "com.example.toolbox.MainActivityToolAudioRecorder"
+    Tool.BLUETOOTH_REMOTE -> "com.example.toolbox.MainActivityToolBluetoothRemote"
+    Tool.IMAGE_EDITOR -> "com.example.toolbox.MainActivityToolImageEditor"
+    Tool.FILE_CONVERTER -> "com.example.toolbox.MainActivityToolFileConverter"
+    Tool.RULER -> "com.example.toolbox.MainActivityToolRuler"
+    Tool.VIDEO_EDITOR -> "com.example.toolbox.MainActivityToolVideoEditor"
+    Tool.AUDIO_EDITOR -> "com.example.toolbox.MainActivityToolAudioEditor"
+    Tool.COLOR_PICKER -> "com.example.toolbox.MainActivityToolColorPicker"
+    Tool.DICE_ROLLER -> "com.example.toolbox.MainActivityToolDiceRoller"
+    Tool.GUITAR_TUNER -> "com.example.toolbox.MainActivityToolGuitarTuner"
+    Tool.METRONOME -> "com.example.toolbox.MainActivityToolMetronome"
+    Tool.CHORD_BOOK -> "com.example.toolbox.MainActivityToolChordBook"
+    Tool.PLANT_SCHEDULE -> "com.example.toolbox.MainActivityToolPlantSchedule"
+    Tool.SETTINGS -> "com.example.toolbox.MainActivityToolSettings"
+  }
+}
+
+/**
+ * Parses a [Tool] from the target `<activity-alias>` component class name, or `null` if it does not
+ * match a tool shortcut alias.
+ */
+fun parseStandaloneToolFromComponent(className: String?): Tool? {
+  if (className.isNullOrBlank()) return null
+  return Tool.entries.find { tool ->
+    val alias = resolveToolShortcutAliasClassName(tool)
+    className == alias || className.endsWith(".${alias.substringAfterLast('.')}")
+  }
+}
+
+/**
  * Parses the standalone tool enum value from a raw string name.
  */
 fun parseStandaloneToolName(name: String?): Tool? {
@@ -182,6 +227,7 @@ fun parseStandaloneTool(intent: Intent?): Tool? {
     ?: intent?.data?.getQueryParameter("tool")
     ?: intent?.data?.lastPathSegment
   return parseStandaloneToolName(name)
+    ?: parseStandaloneToolFromComponent(intent?.component?.className)
 }
 
 /**
@@ -193,10 +239,72 @@ fun parseFolderShortcut(intent: Intent?): String? {
 }
 
 /**
+ * Resolves the label to display in the Recent Apps switcher for a standalone tool or folder shortcut,
+ * or `null` when running the main Toolbox application.
+ */
+fun resolveStandaloneTaskLabel(
+  standaloneTool: Tool?,
+  initialFolder: String? = null,
+): String? {
+  if (initialFolder != null) {
+    val folderName = File(initialFolder).name
+    return folderName.ifBlank { standaloneTool?.title ?: Tool.FILES.title }
+  }
+  return standaloneTool?.title
+}
+
+/**
+ * Resolves the [ImageVector] icon to display in the Recent Apps switcher for a standalone tool or
+ * folder shortcut, or `null` when running the main Toolbox application.
+ */
+fun resolveStandaloneTaskIconVector(
+  standaloneTool: Tool?,
+  initialFolder: String? = null,
+): ImageVector? {
+  if (initialFolder != null) {
+    return FOLDER_SHORTCUT_ICON
+  }
+  return standaloneTool?.icon
+}
+
+/**
+ * Updates [activity]'s [ActivityManager.TaskDescription] so the Recent Apps switcher displays the
+ * matching tool (or folder) icon, title, and themed background color when opened from a shortcut.
+ */
+fun syncStandaloneTaskDescription(
+  activity: Activity,
+  standaloneTool: Tool?,
+  initialFolder: String? = null,
+  themeColor: String? = null,
+) {
+  val label = resolveStandaloneTaskLabel(standaloneTool, initialFolder) ?: return
+  val iconVector = resolveStandaloneTaskIconVector(standaloneTool, initialFolder) ?: return
+  try {
+    val backgroundColor = resolveShortcutBackgroundColor(themeColor = themeColor, context = activity)
+    val foregroundColor = resolveShortcutForegroundColor(backgroundColor)
+    val iconBitmap = createToolShortcutBitmap(
+      imageVector = iconVector,
+      backgroundColor = backgroundColor,
+      foregroundColor = foregroundColor,
+    )
+    @Suppress("DEPRECATION")
+    val taskDescription = ActivityManager.TaskDescription(
+      label,
+      iconBitmap,
+      backgroundColor.toArgb(),
+    )
+    activity.setTaskDescription(taskDescription)
+  } catch (_: Exception) {
+    // Ignore when Bitmap/TaskDescription is unavailable in unit tests
+  }
+}
+
+/**
  * Creates the [Intent] used to launch [tool] in a standalone instance without navigation.
  */
 fun createStandaloneToolIntent(context: Context, tool: Tool): Intent {
   return Intent(context, MainActivity::class.java).apply {
+    component = ComponentName(context, resolveToolShortcutAliasClassName(tool))
     action = Intent.ACTION_VIEW
     putExtra(EXTRA_STANDALONE_TOOL, tool.name)
     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
@@ -208,6 +316,7 @@ fun createStandaloneToolIntent(context: Context, tool: Tool): Intent {
  */
 fun createFolderShortcutIntent(context: Context, folder: File): Intent {
   return Intent(context, MainActivity::class.java).apply {
+    component = ComponentName(context, resolveToolShortcutAliasClassName(Tool.FILES))
     action = Intent.ACTION_VIEW
     putExtra(EXTRA_STANDALONE_TOOL, Tool.FILES.name)
     putExtra(EXTRA_FOLDER_PATH, folder.absolutePath)

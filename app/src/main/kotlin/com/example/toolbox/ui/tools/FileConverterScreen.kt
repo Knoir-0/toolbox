@@ -927,13 +927,16 @@ fun FileConverterScreen(
 /**
  * In-app storage file browser dialog adhering to DESIGN_LANGUAGE.md Section 5.2,
  * with a secondary action to launch the Android System Picker.
+ * Shared across FileConverterScreen and AudioEditorScreen.
  */
 @Composable
-private fun StorageFilePickerDialog(
+internal fun StorageFilePickerDialog(
   initialDirectory: File,
   onDismiss: () -> Unit,
   onLaunchSystemPicker: () -> Unit,
   onFileSelected: (File) -> Unit,
+  title: String = "Select File to Convert",
+  fileFilter: ((File) -> Boolean)? = null,
 ) {
   val rootDir = remember { FileManagerEngine.getUserRootDirectory() }
   var currentDir by remember {
@@ -941,10 +944,11 @@ private fun StorageFilePickerDialog(
   }
   var searchQuery by remember { mutableStateOf("") }
 
-  val entries = remember(currentDir, searchQuery) {
+  val entries = remember(currentDir, searchQuery, fileFilter) {
     val rawList = currentDir.listFiles()?.toList() ?: emptyList()
     rawList
       .filter { !it.name.startsWith(".") }
+      .filter { it.isDirectory || fileFilter == null || fileFilter(it) }
       .filter {
         searchQuery.isBlank() || it.name.contains(searchQuery.trim(), ignoreCase = true)
       }
@@ -992,7 +996,7 @@ private fun StorageFilePickerDialog(
         }
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = "Select File to Convert",
+            text = title,
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
@@ -1349,7 +1353,7 @@ private fun categoryIcon(category: ConversionMediaCategory?): ImageVector {
   }
 }
 
-private fun copyUriToTempSourceFile(context: Context, uri: Uri): File? {
+internal fun copyUriToTempSourceFile(context: Context, uri: Uri): File? {
   return try {
     val contentResolver = context.contentResolver
     var displayName: String? = null
@@ -1375,7 +1379,7 @@ private fun copyUriToTempSourceFile(context: Context, uri: Uri): File? {
   }
 }
 
-private fun shareConvertedFile(context: Context, file: File, mimeType: String) {
+internal fun shareConvertedFile(context: Context, file: File, mimeType: String) {
   try {
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val intent = Intent(Intent.ACTION_SEND).apply {

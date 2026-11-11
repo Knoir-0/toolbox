@@ -18,6 +18,7 @@ import com.example.toolbox.ui.main.parseFolderShortcut
 import com.example.toolbox.ui.main.parseStandaloneTool
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
 import com.example.toolbox.ui.main.syncAppLauncherIcon
+import com.example.toolbox.ui.main.syncStandaloneTaskDescription
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
 
@@ -29,8 +30,14 @@ class MainActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     val parsedTool = parseStandaloneTool(intent)
     val parsedFolder = parseFolderShortcut(intent)
-    standaloneToolState.value = if (parsedFolder != null) (parsedTool ?: Tool.FILES) else parsedTool
+    val resolvedTool = if (parsedFolder != null) (parsedTool ?: Tool.FILES) else parsedTool
+    standaloneToolState.value = resolvedTool
     initialFolderState.value = parsedFolder
+    syncStandaloneTaskDescription(
+      activity = this,
+      standaloneTool = resolvedTool,
+      initialFolder = parsedFolder,
+    )
 
     enableEdgeToEdge()
     setContent {
@@ -43,6 +50,15 @@ class MainActivity : ComponentActivity() {
 
       LaunchedEffect(themeColor) {
         syncAppLauncherIcon(this@MainActivity, themeColor)
+      }
+
+      LaunchedEffect(standaloneTool, initialFolder, themeColor) {
+        syncStandaloneTaskDescription(
+          activity = this@MainActivity,
+          standaloneTool = standaloneTool,
+          initialFolder = initialFolder,
+          themeColor = themeColor,
+        )
       }
 
       ToolboxTheme(
@@ -71,5 +87,10 @@ class MainActivity : ComponentActivity() {
     } else if (parsedTool != null) {
       standaloneToolState.value = parsedTool
     }
+    syncStandaloneTaskDescription(
+      activity = this,
+      standaloneTool = standaloneToolState.value,
+      initialFolder = initialFolderState.value,
+    )
   }
 }
