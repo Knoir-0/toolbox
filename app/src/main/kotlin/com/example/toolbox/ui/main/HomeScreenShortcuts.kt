@@ -7,11 +7,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.os.Build
 import android.widget.Toast
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
@@ -334,8 +332,8 @@ fun createFolderShortcutIntent(context: Context, folder: File): Intent {
  * Resolves the background [Color] for a home screen shortcut icon according to [themeColor].
  *
  * When [themeColor] is a valid hex string (preset or custom), returns the parsed color.
- * When [themeColor] is [DEFAULT_THEME_COLOR_SYSTEM] (or null/invalid), uses the Android 12+
- * dynamic primary color when [context] is available, falling back to Toolbox Purple (`#8E66A6`).
+ * When [themeColor] is [DEFAULT_THEME_COLOR_SYSTEM] (or null/invalid), falls back to
+ * Toolbox Purple (`#8E66A6`).
  */
 fun resolveShortcutBackgroundColor(
   themeColor: String?,
@@ -355,14 +353,6 @@ fun resolveShortcutBackgroundColor(
 
   if (!effectiveThemeColor.equals(DEFAULT_THEME_COLOR_SYSTEM, ignoreCase = true)) {
     parseHexColor(effectiveThemeColor)?.let { return it }
-  }
-
-  if (context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-    try {
-      return dynamicLightColorScheme(context).primary
-    } catch (_: Exception) {
-      // Fall back to default theme color below
-    }
   }
 
   return parseHexColor(FALLBACK_THEME_COLOR_HEX) ?: Color(0xFF8E66A6)
