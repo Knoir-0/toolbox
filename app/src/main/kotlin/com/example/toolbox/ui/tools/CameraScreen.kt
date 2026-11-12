@@ -21,6 +21,7 @@ import android.util.Range
 import android.view.Surface
 import android.view.TextureView
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -71,15 +72,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Camera
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Exposure
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.FlashAuto
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
@@ -180,6 +185,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -198,12 +206,22 @@ fun CameraScreen(
   initialDirectory: File? = null,
   initialCaptureMode: CameraCaptureMode? = null,
   initialFormat: CameraPhotoFormat? = null,
+  notesRepository: NotesRepository? = null,
   onOpenGallery: ((File) -> Unit)? = null,
+  onOpenNotes: (() -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
   val haptic = LocalHapticFeedback.current
   val coroutineScope = rememberCoroutineScope()
+
+  val effectiveNotesRepo = remember(context, notesRepository, isInspection) {
+    notesRepository ?: if (isInspection) {
+      InMemoryNotesRepository()
+    } else {
+      SharedPreferencesNotesRepository(context)
+    }
+  }
 
   val prefs = remember(context, isInspection) {
     if (isInspection) null
@@ -325,6 +343,29 @@ fun CameraScreen(
     }
   }
 
+  // Document OCR & Note Scanner states
+  var notePreset by rememberSaveable {
+    val saved = prefs?.getString(PREF_KEY_CAMERA_NOTE_PRESET, null)
+    mutableStateOf(CameraNoteSamplePreset.fromNameOrDefault(saved))
+  }
+
+  fun updateNotePreset(preset: CameraNoteSamplePreset) {
+    notePreset = preset
+    prefs?.edit()?.putString(PREF_KEY_CAMERA_NOTE_PRESET, preset.name)?.apply()
+  }
+
+  var latestScannedDocument by remember {
+    mutableStateOf<CameraScannedDocument?>(null)
+  }
+
+  var liveOcrDetectedDocument by remember {
+    mutableStateOf<CameraScannedDocument?>(null)
+  }
+
+  var showInlineNotesScreen by remember {
+    mutableStateOf(false)
+  }
+
   // Output directory (defaults to /DCIM/Camera)
   var cameraDirectory by remember {
     val initialDir = initialDirectory ?: run {
@@ -406,6 +447,25 @@ fun CameraScreen(
   // Self-timer countdown state
   var countdownSecondsRemaining by remember { mutableIntStateOf(0) }
   val isCountingDown = countdownSecondsRemaining > 0
+
+  val lifecycleOwner = LocalLifecycleOwner.current
+  DisposableEffect(lifecycleOwner) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_RESUME) {
+        hasCameraPermission = isInspection ||
+          ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA,
+          ) == PackageManager.PERMISSION_GRANTED
+      } else if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
+        countdownSecondsRemaining = 0
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+    }
+  }
 
   // Shutter flash animation state
   var showShutterFlash by remember { mutableStateOf(false) }
@@ -562,6 +622,79 @@ fun CameraScreen(
     recordScannedCode(resultCode, showToast = true)
   }
 
+  // Continuous live frame OCR document scanning when in NOTE mode and hardware TextureView is rendering
+  LaunchedEffect(captureMode, activeTextureView) {
+    if (captureMode != CameraCaptureMode.NOTE || isInspection) {
+      return@LaunchedEffect
+    }
+    while (isActive && captureMode == CameraCaptureMode.NOTE) {
+      val tv = activeTextureView
+      if (tv != null && tv.isAvailable) {
+        val rawFrame = try {
+          tv.getBitmap(640, 640)
+        } catch (_: Throwable) {
+          null
+        }
+        if (rawFrame != null && rawFrame.width > 32 && rawFrame.height > 32) {
+          val recognized = withContext(Dispatchers.Default) {
+            CameraEngine.recognizeTextFromBitmapWithMlKit(rawFrame)
+          }
+          if (recognized != null && recognized.rawText.isNotBlank()) {
+            liveOcrDetectedDocument = recognized
+          }
+        }
+      }
+      delay(500L)
+    }
+  }
+
+  fun performNoteDocumentScan() {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    showShutterFlash = true
+
+    val initialDoc = liveOcrDetectedDocument?.takeIf { it.rawText.isNotBlank() }
+      ?: CameraEngine.analyzeScannedDocumentText(
+        rawText = notePreset.sampleText,
+        fallbackTitle = notePreset.defaultTitle,
+      )
+
+    val (savedDoc, savedNote) = CameraEngine.saveScannedDocumentToNotes(
+      repository = effectiveNotesRepo,
+      document = initialDoc,
+      color = notePreset.noteColor,
+    )
+    latestScannedDocument = savedDoc
+
+    if (!isInspection) {
+      Toast.makeText(context, "Added note: ${savedNote.title}", Toast.LENGTH_SHORT).show()
+    }
+
+    // Also run on-device ML Kit OCR on the live hardware frame (if available) to refine the note if a live document is in view
+    val tv = activeTextureView
+    val rawHardwareBitmap = try {
+      if (tv != null && tv.isAvailable) tv.bitmap else null
+    } catch (_: Throwable) {
+      null
+    }
+    if (rawHardwareBitmap != null && rawHardwareBitmap.width > 32 && rawHardwareBitmap.height > 32 && liveOcrDetectedDocument == null) {
+      coroutineScope.launch {
+        val mlKitDoc = withContext(Dispatchers.Default) {
+          CameraEngine.recognizeTextFromBitmapWithMlKit(rawHardwareBitmap)
+        }
+        if (mlKitDoc != null && mlKitDoc.rawText.isNotBlank()) {
+          val updatedNote = savedNote.copy(
+            title = mlKitDoc.title,
+            content = mlKitDoc.body.ifBlank { mlKitDoc.rawText },
+            updatedAt = System.currentTimeMillis(),
+          )
+          val updatedList = NotesEngine.saveOrDiscardNote(effectiveNotesRepo.loadNotes(), updatedNote)
+          effectiveNotesRepo.saveNotes(updatedList)
+          latestScannedDocument = mlKitDoc.copy(savedNoteId = savedNote.id)
+        }
+      }
+    }
+  }
+
   fun performPhotoCapture() {
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     showShutterFlash = true
@@ -668,6 +801,11 @@ fun CameraScreen(
       return
     }
 
+    if (captureMode == CameraCaptureMode.NOTE) {
+      performNoteDocumentScan()
+      return
+    }
+
     if (captureMode == CameraCaptureMode.VIDEO) {
       if (isRecordingVideo) {
         stopVideoRecording()
@@ -724,6 +862,17 @@ fun CameraScreen(
         directoryForGallery = null
         refreshTrigger++
       },
+    )
+    return
+  }
+
+  if (showInlineNotesScreen) {
+    BackHandler {
+      showInlineNotesScreen = false
+    }
+    NotesScreen(
+      modifier = modifier,
+      repository = effectiveNotesRepo,
     )
     return
   }
@@ -809,6 +958,20 @@ fun CameraScreen(
             modifier = Modifier
               .fillMaxSize()
               .testTag("camera_scanner_reticle_overlay"),
+          )
+        }
+
+        // Document OCR Note Scanner Viewfinder Reticle Overlay
+        if (captureMode == CameraCaptureMode.NOTE) {
+          val frameTopInScreen = (containerH - frameH) / 2
+          val topOverlayHeight = with(density) { topOverlayHeightPx.toDp() }
+          val reticleTopInset = (topOverlayHeight + 24.dp - frameTopInScreen).coerceAtLeast(24.dp)
+          DocumentNoteReticleOverlayCanvas(
+            hasScannedDocument = latestScannedDocument != null,
+            topInset = reticleTopInset,
+            modifier = Modifier
+              .fillMaxSize()
+              .testTag("camera_note_reticle_overlay"),
           )
         }
 
@@ -1512,46 +1675,120 @@ fun CameraScreen(
             }
           }
 
-          // Mode Selector & Quick Tool Toggles Row
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+          // Live Scanned Document OCR Note Result Card
+          val activeScannedDocument = latestScannedDocument
+          AnimatedVisibility(
+            visible = activeScannedDocument != null && captureMode == CameraCaptureMode.NOTE,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
           ) {
-            // Left: Pro Adjustments Toggle Button
-            IconButton(
-              onClick = { showAdjustmentsPanel = !showAdjustmentsPanel },
-              colors = IconButtonDefaults.iconButtonColors(
-                containerColor = if (showAdjustmentsPanel) {
-                  MaterialTheme.colorScheme.primaryContainer
-                } else {
-                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+            if (activeScannedDocument != null) {
+              ScannedNoteResultCard(
+                document = activeScannedDocument,
+                onCopy = {
+                  copyTextToClipboard(
+                    context = context,
+                    label = activeScannedDocument.title,
+                    text = activeScannedDocument.rawText,
+                    isInspection = isInspection,
+                  )
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 },
-              ),
-              modifier = Modifier
-                .size(38.dp)
-                .testTag("toggle_adjustments_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Tune,
-                contentDescription = "Toggle zoom and exposure sliders",
-                tint = if (showAdjustmentsPanel) {
-                  MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant
+                onOpenNotes = {
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                  showInlineNotesScreen = true
+                  onOpenNotes?.invoke()
                 },
-                modifier = Modifier.size(18.dp),
+                onDismiss = { latestScannedDocument = null },
               )
             }
+          }
 
-            // Center: Photo / Video / Scan Mode Switcher Pill
+          // Document OCR Note Scanner Preset & Quick Actions Row
+          AnimatedVisibility(
+            visible = captureMode == CameraCaptureMode.NOTE,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .testTag("note_scanner_controls_bar"),
+              horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              CameraNoteSamplePreset.entries.forEach { preset ->
+                val selected = preset == notePreset
+                FilterChip(
+                  selected = selected,
+                  onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    updateNotePreset(preset)
+                  },
+                  label = {
+                    Text(
+                      text = preset.label,
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    )
+                  },
+                  leadingIcon = {
+                    Icon(
+                      imageVector = Icons.Default.DocumentScanner,
+                      contentDescription = null,
+                      modifier = Modifier.size(16.dp),
+                    )
+                  },
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("note_preset_${preset.name}"),
+                )
+              }
+
+              FilterChip(
+                selected = false,
+                onClick = {
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  showInlineNotesScreen = true
+                  onOpenNotes?.invoke()
+                },
+                label = {
+                  Text(
+                    text = "Open Notes",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                  )
+                },
+                leadingIcon = {
+                  Icon(
+                    imageVector = Icons.AutoMirrored.Filled.StickyNote2,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                  )
+                },
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.testTag("open_notes_tool_chip"),
+              )
+            }
+          }
+
+          // Mode Selector Row: Photo / Video / Scan / Note Mode Switcher Pill
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("capture_mode_selector_row"),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
             Surface(
               shape = RoundedCornerShape(24.dp),
               color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
               modifier = Modifier.testTag("capture_mode_selector"),
             ) {
               Row(
-                modifier = Modifier.padding(4.dp),
+                modifier = Modifier
+                  .horizontalScroll(rememberScrollState())
+                  .padding(4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
               ) {
@@ -1573,14 +1810,15 @@ fun CameraScreen(
                       .testTag("mode_tab_${mode.name}"),
                   ) {
                     Row(
-                      modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                       verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(5.dp),
+                      horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                       Icon(
                         imageVector = when (mode) {
                           CameraCaptureMode.VIDEO -> Icons.Default.Videocam
                           CameraCaptureMode.SCANNER -> Icons.Default.QrCodeScanner
+                          CameraCaptureMode.NOTE -> Icons.AutoMirrored.Filled.StickyNote2
                           CameraCaptureMode.PHOTO -> Icons.Default.PhotoCamera
                         },
                         contentDescription = null,
@@ -1589,7 +1827,7 @@ fun CameraScreen(
                         } else {
                           MaterialTheme.colorScheme.onSurfaceVariant
                         },
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(15.dp),
                       )
                       Text(
                         text = mode.displayName,
@@ -1606,43 +1844,44 @@ fun CameraScreen(
                 }
               }
             }
+          }
 
-            // Right: Color Filters Toggle Button
+          // Primary Shutter Row: [Pro Adjustments] — [Recent Captures Well] — [Shutter FAB] — [Flip Camera / Video Snapshot] — [Color Filters]
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(vertical = 4.dp)
+              .testTag("camera_shutter_row"),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            // Far Left: Pro Adjustments Toggle Button (moved down from selector row)
             IconButton(
-              onClick = { showFiltersBar = !showFiltersBar },
+              onClick = { showAdjustmentsPanel = !showAdjustmentsPanel },
               colors = IconButtonDefaults.iconButtonColors(
-                containerColor = if (showFiltersBar || colorFilter != CameraColorFilter.NONE) {
-                  MaterialTheme.colorScheme.tertiaryContainer
+                containerColor = if (showAdjustmentsPanel) {
+                  MaterialTheme.colorScheme.primaryContainer
                 } else {
                   MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
                 },
               ),
               modifier = Modifier
-                .size(38.dp)
-                .testTag("toggle_filters_button"),
+                .size(42.dp)
+                .testTag("toggle_adjustments_button"),
             ) {
               Icon(
-                imageVector = Icons.Default.AutoAwesome,
-                contentDescription = "Toggle color filters",
-                tint = if (showFiltersBar || colorFilter != CameraColorFilter.NONE) {
-                  MaterialTheme.colorScheme.onTertiaryContainer
+                imageVector = Icons.Default.Tune,
+                contentDescription = "Toggle zoom and exposure sliders",
+                tint = if (showAdjustmentsPanel) {
+                  MaterialTheme.colorScheme.onPrimaryContainer
                 } else {
                   MaterialTheme.colorScheme.onSurfaceVariant
                 },
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(20.dp),
               )
             }
-          }
 
-          // Primary Shutter Row: [Recent Captures Well] — [Shutter FAB] — [Flip Camera / Video Snapshot]
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            // Left: Open Camera Folder in Gallery Tool Button
+            // Inner Left: Open Camera Folder in Gallery Tool Button
             Box(
               contentAlignment = Alignment.TopEnd,
               modifier = Modifier.testTag("camera_gallery_button"),
@@ -1709,7 +1948,7 @@ fun CameraScreen(
               }
             }
 
-            // Center: Main Shutter / Record / Scan Button
+            // Center: Main Shutter / Record / Scan / Note OCR Button
             val infinitePulse = rememberInfiniteTransition(label = "CameraRecordPulse")
             val recordPulseScale by infinitePulse.animateFloat(
               initialValue = 1.0f,
@@ -1725,7 +1964,8 @@ fun CameraScreen(
               targetValue = when {
                 isRecordingVideo -> MaterialTheme.colorScheme.error
                 captureMode == CameraCaptureMode.VIDEO -> MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
-                captureMode == CameraCaptureMode.SCANNER -> MaterialTheme.colorScheme.tertiary
+                captureMode == CameraCaptureMode.SCANNER || captureMode == CameraCaptureMode.NOTE ->
+                  MaterialTheme.colorScheme.tertiary
                 else -> MaterialTheme.colorScheme.primary
               },
               label = "OuterShutterRingColor",
@@ -1735,7 +1975,8 @@ fun CameraScreen(
               targetValue = when {
                 isRecordingVideo -> MaterialTheme.colorScheme.error
                 captureMode == CameraCaptureMode.VIDEO -> MaterialTheme.colorScheme.error
-                captureMode == CameraCaptureMode.SCANNER -> MaterialTheme.colorScheme.tertiaryContainer
+                captureMode == CameraCaptureMode.SCANNER || captureMode == CameraCaptureMode.NOTE ->
+                  MaterialTheme.colorScheme.tertiaryContainer
                 isCountingDown -> MaterialTheme.colorScheme.tertiaryContainer
                 else -> MaterialTheme.colorScheme.primaryContainer
               },
@@ -1757,6 +1998,7 @@ fun CameraScreen(
                     captureMode == CameraCaptureMode.VIDEO && isRecordingVideo -> "Stop video recording"
                     captureMode == CameraCaptureMode.VIDEO -> "Start video recording"
                     captureMode == CameraCaptureMode.SCANNER -> "Scan QR code or barcode"
+                    captureMode == CameraCaptureMode.NOTE -> "Scan document to note"
                     else -> "Take photo"
                   }
                 },
@@ -1787,10 +2029,12 @@ fun CameraScreen(
                         modifier = Modifier.size(20.dp),
                       )
                       mode == CameraCaptureMode.VIDEO -> Icon(
-                        imageVector = Icons.Default.Videocam,
+                        imageVector = Icons.Default.FiberManualRecord,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onError,
-                        modifier = Modifier.size(26.dp),
+                        modifier = Modifier
+                          .size(26.dp)
+                          .testTag("camera_shutter_video_dot_icon"),
                       )
                       mode == CameraCaptureMode.SCANNER -> Icon(
                         imageVector = Icons.Default.QrCodeScanner,
@@ -1798,11 +2042,19 @@ fun CameraScreen(
                         tint = MaterialTheme.colorScheme.onTertiaryContainer,
                         modifier = Modifier.size(26.dp),
                       )
+                      mode == CameraCaptureMode.NOTE -> Icon(
+                        imageVector = Icons.Default.DocumentScanner,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.size(26.dp),
+                      )
                       else -> Icon(
-                        imageVector = Icons.Default.CameraAlt,
+                        imageVector = Icons.Default.Camera,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(26.dp),
+                        modifier = Modifier
+                          .size(26.dp)
+                          .testTag("camera_shutter_photo_icon"),
                       )
                     }
                   }
@@ -1810,7 +2062,7 @@ fun CameraScreen(
               }
             }
 
-            // Right: Flip Camera (or Video Snapshot while recording video)
+            // Inner Right: Flip Camera (or Video Snapshot while recording video)
             if (isRecordingVideo) {
               SmallFloatingActionButton(
                 onClick = { performPhotoCapture() },
@@ -1822,7 +2074,7 @@ fun CameraScreen(
                   .testTag("video_snapshot_button"),
               ) {
                 Icon(
-                  imageVector = Icons.Default.PhotoCamera,
+                  imageVector = Icons.Default.Camera,
                   contentDescription = "Take snapshot while recording",
                   modifier = Modifier.size(22.dp),
                 )
@@ -1859,6 +2111,32 @@ fun CameraScreen(
                   )
                 }
               }
+            }
+
+            // Far Right: Color Filters Toggle Button (moved down from selector row)
+            IconButton(
+              onClick = { showFiltersBar = !showFiltersBar },
+              colors = IconButtonDefaults.iconButtonColors(
+                containerColor = if (showFiltersBar || colorFilter != CameraColorFilter.NONE) {
+                  MaterialTheme.colorScheme.tertiaryContainer
+                } else {
+                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                },
+              ),
+              modifier = Modifier
+                .size(42.dp)
+                .testTag("toggle_filters_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.AutoAwesome,
+                contentDescription = "Toggle color filters",
+                tint = if (showFiltersBar || colorFilter != CameraColorFilter.NONE) {
+                  MaterialTheme.colorScheme.onTertiaryContainer
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(20.dp),
+              )
             }
           }
         }
@@ -2073,6 +2351,7 @@ private fun HardwareCamera2Preview(
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
   var cameraDevice by remember { mutableStateOf<CameraDevice?>(null) }
   var captureSession by remember { mutableStateOf<CameraCaptureSession?>(null) }
   var previewBuilder by remember { mutableStateOf<CaptureRequest.Builder?>(null) }
@@ -2080,7 +2359,32 @@ private fun HardwareCamera2Preview(
   var activePreviewSize by remember { mutableStateOf(Pair(1440, 1080)) }
   var activeSensorOrientation by remember { mutableIntStateOf(90) }
   var surfaceReadyTrigger by remember { mutableIntStateOf(0) }
+  var isLifecycleResumed by remember {
+    mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+  }
+  var lifecycleResumeTrigger by remember { mutableIntStateOf(0) }
+  var cameraRetryTrigger by remember { mutableIntStateOf(0) }
   var textureViewInstance by remember { mutableStateOf<TextureView?>(null) }
+
+  DisposableEffect(lifecycleOwner) {
+    val observer = LifecycleEventObserver { _, event ->
+      when (event) {
+        Lifecycle.Event.ON_RESUME -> {
+          isLifecycleResumed = true
+          lifecycleResumeTrigger++
+        }
+        Lifecycle.Event.ON_PAUSE,
+        Lifecycle.Event.ON_STOP -> {
+          isLifecycleResumed = false
+        }
+        else -> {}
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+    }
+  }
 
   fun getDisplayRotationDegrees(tv: TextureView): Int {
     @Suppress("DEPRECATION")
@@ -2166,9 +2470,15 @@ private fun HardwareCamera2Preview(
     }
   }
 
-  DisposableEffect(lensFacing, surfaceReadyTrigger) {
+  DisposableEffect(
+    lensFacing,
+    surfaceReadyTrigger,
+    isLifecycleResumed,
+    lifecycleResumeTrigger,
+    cameraRetryTrigger,
+  ) {
     val tv = textureViewInstance
-    if (tv == null || !tv.isAvailable) {
+    if (!isLifecycleResumed || tv == null || !tv.isAvailable) {
       return@DisposableEffect onDispose {}
     }
 
@@ -2194,9 +2504,30 @@ private fun HardwareCamera2Preview(
     }
 
     val mainHandler = Handler(Looper.getMainLooper())
+    var isDisposed = false
+    var isOpeningOrOpened = false
     var openedDevice: CameraDevice? = null
     var openedSession: CameraCaptureSession? = null
     var previewSurface: Surface? = null
+
+    val retryRunnable = Runnable {
+      if (!isDisposed && isLifecycleResumed && openedDevice == null) {
+        cameraRetryTrigger++
+      }
+    }
+
+    val availabilityCallback = object : CameraManager.AvailabilityCallback() {
+      override fun onCameraAvailable(id: String) {
+        if (!isDisposed && id == cameraId && isLifecycleResumed && openedDevice == null && !isOpeningOrOpened) {
+          mainHandler.removeCallbacks(retryRunnable)
+          mainHandler.post(retryRunnable)
+        }
+      }
+    }
+
+    try {
+      manager.registerAvailabilityCallback(availabilityCallback, mainHandler)
+    } catch (_: Throwable) {}
 
     try {
       val chars = manager.getCameraCharacteristics(cameraId)
@@ -2223,12 +2554,20 @@ private fun HardwareCamera2Preview(
         sensorOrientation = sensorOrientation,
       )
 
+      isOpeningOrOpened = true
       manager.openCamera(
         cameraId,
         object : CameraDevice.StateCallback() {
           override fun onOpened(device: CameraDevice) {
+            if (isDisposed || !isLifecycleResumed) {
+              try {
+                device.close()
+              } catch (_: Throwable) {}
+              return
+            }
             openedDevice = device
             cameraDevice = device
+            onTextureViewReady(tv)
             try {
               val st = tv.surfaceTexture ?: return
               val chosenSize = CameraEngine.selectOptimalSensorPreviewSize(
@@ -2261,6 +2600,12 @@ private fun HardwareCamera2Preview(
                 listOf(surface),
                 object : CameraCaptureSession.StateCallback() {
                   override fun onConfigured(session: CameraCaptureSession) {
+                    if (isDisposed || !isLifecycleResumed) {
+                      try {
+                        session.close()
+                      } catch (_: Throwable) {}
+                      return
+                    }
                     openedSession = session
                     captureSession = session
                     try {
@@ -2276,25 +2621,50 @@ private fun HardwareCamera2Preview(
           }
 
           override fun onDisconnected(device: CameraDevice) {
+            isOpeningOrOpened = false
             try {
               device.close()
             } catch (_: Throwable) {}
+            openedDevice = null
             cameraDevice = null
+            captureSession = null
+            if (!isDisposed && isLifecycleResumed) {
+              mainHandler.removeCallbacks(retryRunnable)
+              mainHandler.postDelayed(retryRunnable, 350L)
+            }
           }
 
           override fun onError(device: CameraDevice, error: Int) {
+            isOpeningOrOpened = false
             try {
               device.close()
             } catch (_: Throwable) {}
+            openedDevice = null
             cameraDevice = null
+            captureSession = null
+            if (!isDisposed && isLifecycleResumed) {
+              mainHandler.removeCallbacks(retryRunnable)
+              mainHandler.postDelayed(retryRunnable, 350L)
+            }
           }
         },
         mainHandler,
       )
-    } catch (_: Throwable) {}
+    } catch (_: Throwable) {
+      isOpeningOrOpened = false
+      if (!isDisposed && isLifecycleResumed) {
+        mainHandler.removeCallbacks(retryRunnable)
+        mainHandler.postDelayed(retryRunnable, 350L)
+      }
+    }
 
     onDispose {
-      onTextureViewReady(null)
+      isDisposed = true
+      isOpeningOrOpened = false
+      mainHandler.removeCallbacks(retryRunnable)
+      try {
+        manager.unregisterAvailabilityCallback(availabilityCallback)
+      } catch (_: Throwable) {}
       try {
         openedSession?.close()
       } catch (_: Throwable) {}
@@ -2798,6 +3168,283 @@ private fun ScannerReticleOverlayCanvas(
         strokeWidth = strokePx,
         cap = StrokeCap.Round,
       )
+    }
+  }
+}
+
+/**
+ * Viewfinder document reticle overlay rendered when [CameraCaptureMode.NOTE] is active.
+ */
+@Composable
+private fun DocumentNoteReticleOverlayCanvas(
+  hasScannedDocument: Boolean,
+  modifier: Modifier = Modifier,
+  topInset: Dp = 24.dp,
+) {
+  val bracketColor = if (hasScannedDocument) {
+    MaterialTheme.colorScheme.tertiary
+  } else {
+    MaterialTheme.colorScheme.primary
+  }
+  val guideLineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)
+  val borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+
+  Box(
+    modifier = modifier.padding(top = topInset + 40.dp, bottom = 190.dp, start = 28.dp, end = 28.dp),
+    contentAlignment = Alignment.Center,
+  ) {
+    Canvas(
+      modifier = Modifier
+        .fillMaxSize()
+        .testTag("camera_note_reticle_overlay"),
+    ) {
+      val docW = (size.width * 0.84f).coerceAtMost(size.height * 0.78f)
+      val docH = (docW * 1.25f).coerceAtMost(size.height * 0.92f)
+      val left = (size.width - docW) / 2f
+      val top = (size.height - docH) / 2f
+      val right = left + docW
+      val bottom = top + docH
+      val armLen = minOf(docW, docH) * 0.14f
+      val strokePx = 3.5.dp.toPx()
+
+      // Subtle document frame border
+      drawRoundRect(
+        color = borderColor,
+        topLeft = Offset(left, top),
+        size = Size(docW, docH),
+        cornerRadius = CornerRadius(12.dp.toPx(), 12.dp.toPx()),
+        style = Stroke(width = 1.dp.toPx()),
+      )
+
+      // Subtle horizontal text line guides inside the document frame
+      val lineStartX = left + docW * 0.12f
+      val lineEndX = right - docW * 0.12f
+      for (i in 1..4) {
+        val lineY = top + (docH * (0.22f + i * 0.14f))
+        val endX = if (i == 4) left + docW * 0.62f else lineEndX
+        drawLine(
+          color = guideLineColor,
+          start = Offset(lineStartX, lineY),
+          end = Offset(endX, lineY),
+          strokeWidth = 1.5.dp.toPx(),
+          cap = StrokeCap.Round,
+        )
+      }
+
+      // Corner brackets
+      drawLine(
+        color = bracketColor,
+        start = Offset(left, top + armLen),
+        end = Offset(left, top),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+      drawLine(
+        color = bracketColor,
+        start = Offset(left, top),
+        end = Offset(left + armLen, top),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+
+      drawLine(
+        color = bracketColor,
+        start = Offset(right - armLen, top),
+        end = Offset(right, top),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+      drawLine(
+        color = bracketColor,
+        start = Offset(right, top),
+        end = Offset(right, top + armLen),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+
+      drawLine(
+        color = bracketColor,
+        start = Offset(left, bottom - armLen),
+        end = Offset(left, bottom),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+      drawLine(
+        color = bracketColor,
+        start = Offset(left, bottom),
+        end = Offset(left + armLen, bottom),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+
+      drawLine(
+        color = bracketColor,
+        start = Offset(right - armLen, bottom),
+        end = Offset(right, bottom),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+      drawLine(
+        color = bracketColor,
+        start = Offset(right, bottom - armLen),
+        end = Offset(right, bottom),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+    }
+  }
+}
+
+/**
+ * Floating card displayed above the bottom controls when a document is scanned via OCR in Note mode
+ * and saved to the Notes tool.
+ */
+@Composable
+private fun ScannedNoteResultCard(
+  document: CameraScannedDocument,
+  onCopy: () -> Unit,
+  onOpenNotes: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  Card(
+    shape = RoundedCornerShape(18.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.95f),
+    ),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.6f)),
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("note_scanner_detected_card"),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 14.dp, vertical = 10.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Row(
+          modifier = Modifier.weight(1f),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Box(
+            modifier = Modifier
+              .size(38.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.tertiaryContainer),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Default.DocumentScanner,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.onTertiaryContainer,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          Column(modifier = Modifier.weight(1f)) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+              ) {
+                Text(
+                  text = "SAVED TO NOTES",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.onPrimaryContainer,
+                  modifier = Modifier
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .testTag("note_scanner_saved_badge"),
+                )
+              }
+              Text(
+                text = "${document.wordCount} words · ${document.lineCount} lines",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+            Text(
+              text = document.title,
+              style = MaterialTheme.typography.bodyMedium,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.testTag("note_scanner_detected_title"),
+            )
+            Text(
+              text = document.bodyContent.ifBlank { document.rawText },
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 2,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.testTag("note_scanner_detected_content"),
+            )
+          }
+        }
+
+        IconButton(
+          onClick = onDismiss,
+          modifier = Modifier
+            .size(32.dp)
+            .testTag("note_scanner_dismiss_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = "Dismiss scanned note result",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
+
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Button(
+          onClick = onOpenNotes,
+          shape = RoundedCornerShape(12.dp),
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("note_scanner_open_notes_button"),
+        ) {
+          Icon(Icons.AutoMirrored.Filled.StickyNote2, contentDescription = null, modifier = Modifier.size(15.dp))
+          Spacer(modifier = Modifier.width(5.dp))
+          Text(
+            text = "Open Notes",
+            style = MaterialTheme.typography.labelMedium,
+          )
+        }
+
+        TextButton(
+          onClick = onCopy,
+          shape = RoundedCornerShape(12.dp),
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("note_scanner_copy_button"),
+        ) {
+          Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("Copy Text", style = MaterialTheme.typography.labelMedium)
+        }
+      }
     }
   }
 }

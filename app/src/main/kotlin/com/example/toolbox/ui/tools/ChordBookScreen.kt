@@ -1,9 +1,15 @@
 package com.example.toolbox.ui.tools
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -12,6 +18,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,6 +57,8 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -57,6 +66,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
@@ -70,6 +80,8 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -96,8 +108,10 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
@@ -112,14 +126,15 @@ import androidx.compose.ui.unit.sp
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.util.UUID
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 
 /**
  * Primary navigation tabs inside the Chord Book tool.
  */
 enum class ChordBookTab(val title: String) {
   CHORDS("Chords"),
+  SCALES("Scales"),
   REVERSE("Reverse"),
-  SCALES("Scales & Key"),
   SONGBOOK("Songbook"),
 }
 
@@ -135,13 +150,30 @@ enum class ReverseSearchMode(val title: String) {
 @Composable
 fun ChordBookScreen(
   modifier: Modifier = Modifier,
+  tuningRepository: GuitarTunerRepository? = null,
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
   val haptic = LocalHapticFeedback.current
+  val focusManager = LocalFocusManager.current
+  val keyboardController = LocalSoftwareKeyboardController.current
 
   val repository = remember(context, isInspection) {
     if (isInspection) null else ChordBookPreferencesRepository(context)
+  }
+
+  val tuningRepo = remember(tuningRepository, context, isInspection) {
+    tuningRepository ?: if (isInspection) {
+      InMemoryGuitarTunerRepository(
+        initialFavorites = setOf(GuitarTuningPreset.STANDARD, GuitarTuningPreset.DROP_D),
+      )
+    } else {
+      SharedPreferencesGuitarTunerRepository(context)
+    }
+  }
+
+  var favoriteTuningIds by remember {
+    mutableStateOf(tuningRepo.loadFavoriteTuningIds())
   }
 
   var customTunings by remember {
@@ -166,6 +198,80 @@ fun ChordBookScreen(
   }
   var dotLabelMode by rememberSaveable {
     mutableStateOf(repository?.getDotLabelMode() ?: DotLabelMode.INTERVALS)
+  }
+
+  // Integrated toolbar tuning search state (Section 5.7 of DESIGN_LANGUAGE.md)
+  var isSearchActive by rememberSaveable { mutableStateOf(false) }
+  var searchQuery by rememberSaveable { mutableStateOf("") }
+  var selectedSearchCategoryName by rememberSaveable { mutableStateOf<String?>(null) }
+  var selectedSearchInstrumentName by rememberSaveable { mutableStateOf<String?>(null) }
+  var searchFavoritesOnly by rememberSaveable { mutableStateOf(false) }
+  val selectedSearchCategory = remember(selectedSearchCategoryName) {
+    selectedSearchCategoryName?.let { name ->
+      GuitarTuningCategory.entries.firstOrNull { it.name == name }
+    }
+  }
+  val selectedSearchInstrument = remember(selectedSearchInstrumentName) {
+    selectedSearchInstrumentName?.let { name ->
+      InstrumentFamily.entries.firstOrNull { it.name == name }
+    }
+  }
+  val searchFocusRequester = remember { FocusRequester() }
+
+  fun closeSearch() {
+    isSearchActive = false
+    searchQuery = ""
+    selectedSearchCategoryName = null
+    selectedSearchInstrumentName = null
+    searchFavoritesOnly = false
+    focusManager.clearFocus()
+  }
+
+  LaunchedEffect(isSearchActive) {
+    if (isSearchActive) {
+      delay(100)
+      try {
+        searchFocusRequester.requestFocus()
+        keyboardController?.show()
+      } catch (_: Exception) {}
+    } else {
+      keyboardController?.hide()
+    }
+  }
+
+  BackHandler(enabled = isSearchActive) {
+    closeSearch()
+  }
+
+  fun toggleFavoriteTuning(tuning: ChordTuning) {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    val updated = ChordBookEngine.toggleFavoriteTuning(favoriteTuningIds, tuning)
+    favoriteTuningIds = updated
+    tuningRepo.saveFavoriteTuningIds(updated)
+  }
+
+  val matchingSearchTunings = remember(
+    allTunings,
+    searchQuery,
+    selectedSearchInstrument,
+    selectedSearchCategory,
+    searchFavoritesOnly,
+    favoriteTuningIds,
+    enharmonicPref,
+  ) {
+    ChordBookEngine.searchTunings(
+      catalog = allTunings,
+      query = searchQuery,
+      instrument = selectedSearchInstrument,
+      category = selectedSearchCategory,
+      favoritesOnly = searchFavoritesOnly,
+      favoriteIds = favoriteTuningIds,
+      preference = enharmonicPref,
+    )
+  }
+
+  val favoriteTuningsCount = remember(allTunings, favoriteTuningIds) {
+    allTunings.count { ChordBookEngine.isTuningFavorite(it, favoriteTuningIds) }
   }
 
   var activeTab by rememberSaveable { mutableStateOf(ChordBookTab.CHORDS) }
@@ -217,7 +323,6 @@ fun ChordBookScreen(
   }
 
   // Dialog states
-  var showTuningDialog by rememberSaveable { mutableStateOf(false) }
   var showNewProgressionDialog by rememberSaveable { mutableStateOf(false) }
   var showRenameProgressionDialog by rememberSaveable { mutableStateOf(false) }
 
@@ -253,7 +358,7 @@ fun ChordBookScreen(
       .background(MaterialTheme.colorScheme.background)
       .testTag("chord_book_screen"),
   ) {
-    // 1. Standard Tool Header
+    // 1. Standard Tool Header with Integrated Tuning Search Bar (Section 5.1 & 5.7)
     Surface(
       color = MaterialTheme.colorScheme.surface,
       tonalElevation = 1.dp,
@@ -273,7 +378,13 @@ fun ChordBookScreen(
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Row(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+              .weight(1f)
+              .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                isSearchActive = true
+              }
+              .testTag("chord_book_tuning_button"),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
           ) {
@@ -302,8 +413,13 @@ fun ChordBookScreen(
                 overflow = TextOverflow.Ellipsis,
               )
               val capoText = if (capoFret > 0) " • Capo $capoFret" else ""
+              val favText = if (favoriteTuningsCount > 0) {
+                " • $favoriteTuningsCount favorite${if (favoriteTuningsCount == 1) "" else "s"}"
+              } else {
+                ""
+              }
               Text(
-                text = "${activeTuning.instrument.shortName} • ${activeTuning.formattedNotes(capoFret, enharmonicPref)}$capoText",
+                text = "${activeTuning.instrument.shortName} • ${activeTuning.displayLabel} (${activeTuning.formattedNotes(capoFret, enharmonicPref)})$capoText$favText",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -375,73 +491,112 @@ fun ChordBookScreen(
               )
             }
 
-            // Instrument, Tuning & Capo configuration button
-            FilledTonalIconButton(
-              onClick = { showTuningDialog = true },
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("chord_book_tuning_button"),
+            // Tuning Search button (similar to Guitar Tuner, Plants & Recipes)
+            IconButton(
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                isSearchActive = true
+              },
+              modifier = Modifier.testTag("toggle_search_bar_button"),
             ) {
               Icon(
-                imageVector = Icons.Default.Tune,
-                contentDescription = "Instrument, Tuning & Capo",
-                modifier = Modifier.size(18.dp),
+                imageVector = Icons.Default.Search,
+                contentDescription = "Search tunings",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
               )
             }
           }
         }
-      }
-    }
 
-    // 2. Mode Switcher Pill Bar
-    Surface(
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 1.dp,
-      modifier = Modifier.fillMaxWidth(),
-    ) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        ChordBookTab.entries.forEach { tab ->
-          val isSelected = activeTab == tab
+        // Animated Expanding Search Bar integrated into the Toolbar (Section 5.7)
+        androidx.compose.animation.AnimatedVisibility(
+          visible = isSearchActive,
+          enter = fadeIn(animationSpec = tween(220)) + expandHorizontally(
+            animationSpec = spring(
+              dampingRatio = Spring.DampingRatioNoBouncy,
+              stiffness = Spring.StiffnessMediumLow,
+            ),
+            expandFrom = Alignment.End,
+          ),
+          exit = fadeOut(animationSpec = tween(180)) + shrinkHorizontally(
+            animationSpec = tween(200),
+            shrinkTowards = Alignment.End,
+          ),
+          modifier = Modifier.matchParentSize(),
+        ) {
           Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = if (isSelected) {
-              MaterialTheme.colorScheme.primaryContainer
-            } else {
-              MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-            },
             modifier = Modifier
-              .weight(1f)
-              .clip(RoundedCornerShape(20.dp))
-              .clickable {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                activeTab = tab
-              }
-              .testTag("chord_book_tab_${tab.name}"),
+              .fillMaxSize()
+              .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {},
+              )
+              .testTag("toolbar_search_bar"),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 2.dp,
           ) {
-            Box(
-              contentAlignment = Alignment.Center,
-              modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+            Row(
+              modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp),
+              verticalAlignment = Alignment.CenterVertically,
             ) {
-              Text(
-                text = if (tab == ChordBookTab.SONGBOOK && activeProgression != null) {
-                  "Songbook (${activeProgression.chords.size})"
-                } else {
-                  tab.title
+              IconButton(
+                onClick = { closeSearch() },
+                modifier = Modifier.testTag("close_search_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                  contentDescription = "Close search",
+                  tint = MaterialTheme.colorScheme.onSurface,
+                )
+              }
+
+              TextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = {
+                  Text(
+                    text = "Search tunings or notes (e.g. Drop D, DADGAD)...",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
                 },
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                color = if (isSelected) {
-                  MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                  color = MaterialTheme.colorScheme.onSurface,
+                ),
+                colors = TextFieldDefaults.colors(
+                  focusedContainerColor = Color.Transparent,
+                  unfocusedContainerColor = Color.Transparent,
+                  disabledContainerColor = Color.Transparent,
+                  focusedIndicatorColor = Color.Transparent,
+                  unfocusedIndicatorColor = Color.Transparent,
+                  disabledIndicatorColor = Color.Transparent,
+                ),
+                trailingIcon = {
+                  if (searchQuery.isNotEmpty()) {
+                    IconButton(
+                      onClick = { searchQuery = "" },
+                      modifier = Modifier.testTag("tuning_search_clear"),
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.Clear,
+                        contentDescription = "Clear search",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                      )
+                    }
+                  }
                 },
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .focusRequester(searchFocusRequester)
+                  .testTag("tuning_search_input"),
               )
             }
           }
@@ -449,10 +604,75 @@ fun ChordBookScreen(
       }
     }
 
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
-    // 3. Active Tab Content
-    when (activeTab) {
+    // Content Area + Tuning Search Overlay
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .weight(1f),
+    ) {
+      Column(modifier = Modifier.fillMaxSize()) {
+        // 2. Mode Switcher Pill Bar
+        Surface(
+          color = MaterialTheme.colorScheme.surface,
+          tonalElevation = 1.dp,
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            ChordBookTab.entries.forEach { tab ->
+              val isSelected = activeTab == tab
+              Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = if (isSelected) {
+                  MaterialTheme.colorScheme.primaryContainer
+                } else {
+                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                },
+                modifier = Modifier
+                  .weight(1f)
+                  .clip(RoundedCornerShape(20.dp))
+                  .clickable {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    activeTab = tab
+                  }
+                  .testTag("chord_book_tab_${tab.name}"),
+              ) {
+                Box(
+                  contentAlignment = Alignment.Center,
+                  modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                ) {
+                  Text(
+                    text = if (tab == ChordBookTab.SONGBOOK && activeProgression != null) {
+                      "Songbook (${activeProgression.chords.size})"
+                    } else {
+                      tab.title
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isSelected) {
+                      MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                      MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+              }
+            }
+          }
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        // 3. Active Tab Content
+        when (activeTab) {
       ChordBookTab.CHORDS -> {
         ChordsExplorerTabContent(
           activeTuning = activeTuning,
@@ -492,6 +712,49 @@ fun ChordBookScreen(
               bass = slashBassPitchClass ?: selectedRoot,
               preferredFrets = preferredFrets,
             )
+          },
+          modifier = Modifier.weight(1f),
+        )
+      }
+
+      ChordBookTab.SCALES -> {
+        ScalesAndKeyTabContent(
+          activeTuning = activeTuning,
+          capoFret = capoFret,
+          enharmonicPref = enharmonicPref,
+          dotLabelMode = dotLabelMode,
+          scaleRoot = scaleRoot,
+          onSelectScaleRoot = { scaleRoot = it },
+          selectedScaleCategory = selectedScaleCategory,
+          onSelectScaleCategory = { cat ->
+            selectedScaleCategory = cat
+            val firstInCat = ScaleType.entries.firstOrNull { it.category == cat }
+            if (firstInCat != null && selectedScaleType.category != cat) {
+              selectedScaleType = firstInCat
+            }
+          },
+          selectedScaleType = selectedScaleType,
+          onSelectScaleType = { selectedScaleType = it },
+          selectedBoxNumber = selectedBoxNumber,
+          onSelectBoxNumber = { selectedBoxNumber = it },
+          harmonizeAsSevenths = harmonizeAsSevenths,
+          onToggleHarmonizeSevenths = { harmonizeAsSevenths = !harmonizeAsSevenths },
+          onOpenReverseScaleSearch = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            reverseSearchMode = ReverseSearchMode.SCALES
+            reverseMultiNoteMode = true
+            activeTab = ChordBookTab.REVERSE
+          },
+          onJumpToDiatonicChord = { root, quality ->
+            selectedRoot = root
+            selectedChordCategory = quality.category
+            selectedQuality = quality
+            slashBassPitchClass = null
+            showSlashBassRow = false
+            activeTab = ChordBookTab.CHORDS
+          },
+          onPinDiatonicChord = { root, quality ->
+            pinChordToActiveProgression(root = root, quality = quality)
           },
           modifier = Modifier.weight(1f),
         )
@@ -615,49 +878,6 @@ fun ChordBookScreen(
         )
       }
 
-      ChordBookTab.SCALES -> {
-        ScalesAndKeyTabContent(
-          activeTuning = activeTuning,
-          capoFret = capoFret,
-          enharmonicPref = enharmonicPref,
-          dotLabelMode = dotLabelMode,
-          scaleRoot = scaleRoot,
-          onSelectScaleRoot = { scaleRoot = it },
-          selectedScaleCategory = selectedScaleCategory,
-          onSelectScaleCategory = { cat ->
-            selectedScaleCategory = cat
-            val firstInCat = ScaleType.entries.firstOrNull { it.category == cat }
-            if (firstInCat != null && selectedScaleType.category != cat) {
-              selectedScaleType = firstInCat
-            }
-          },
-          selectedScaleType = selectedScaleType,
-          onSelectScaleType = { selectedScaleType = it },
-          selectedBoxNumber = selectedBoxNumber,
-          onSelectBoxNumber = { selectedBoxNumber = it },
-          harmonizeAsSevenths = harmonizeAsSevenths,
-          onToggleHarmonizeSevenths = { harmonizeAsSevenths = !harmonizeAsSevenths },
-          onOpenReverseScaleSearch = {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            reverseSearchMode = ReverseSearchMode.SCALES
-            reverseMultiNoteMode = true
-            activeTab = ChordBookTab.REVERSE
-          },
-          onJumpToDiatonicChord = { root, quality ->
-            selectedRoot = root
-            selectedChordCategory = quality.category
-            selectedQuality = quality
-            slashBassPitchClass = null
-            showSlashBassRow = false
-            activeTab = ChordBookTab.CHORDS
-          },
-          onPinDiatonicChord = { root, quality ->
-            pinChordToActiveProgression(root = root, quality = quality)
-          },
-          modifier = Modifier.weight(1f),
-        )
-      }
-
       ChordBookTab.SONGBOOK -> {
         SongbookTabContent(
           activeTuning = activeTuning,
@@ -724,44 +944,74 @@ fun ChordBookScreen(
           modifier = Modifier.weight(1f),
         )
       }
+        }
+      }
+
+      // Top-Expanding Tuning Search Overlay (matches GuitarTunerScreen, PlantScheduleScreen & RecipeBookScreen)
+      androidx.compose.animation.AnimatedVisibility(
+        visible = isSearchActive,
+        enter = fadeIn(animationSpec = tween(200)) + expandVertically(expandFrom = Alignment.Top),
+        exit = fadeOut(animationSpec = tween(180)) + shrinkVertically(shrinkTowards = Alignment.Top),
+        modifier = Modifier.fillMaxSize(),
+      ) {
+        ChordTuningCatalogSearchOverlay(
+          allTunings = allTunings,
+          activeTuning = activeTuning,
+          capoFret = capoFret,
+          enharmonicPref = enharmonicPref,
+          query = searchQuery,
+          selectedCategory = selectedSearchCategory,
+          selectedInstrument = selectedSearchInstrument,
+          favoritesOnly = searchFavoritesOnly,
+          favoriteTuningIds = favoriteTuningIds,
+          favoriteCount = favoriteTuningsCount,
+          matchingTunings = matchingSearchTunings,
+          onSelectCategory = { category ->
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            selectedSearchCategoryName = category?.name
+          },
+          onSelectInstrument = { instrument ->
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            selectedSearchInstrumentName = instrument?.name
+          },
+          onToggleFavoritesOnly = {
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            searchFavoritesOnly = !searchFavoritesOnly
+          },
+          onSelectTuning = { tuning ->
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            selectedTuningId = tuning.id
+            repository?.setSelectedTuningId(tuning.id)
+            closeSearch()
+          },
+          onToggleFavorite = ::toggleFavoriteTuning,
+          onCapoChange = { newCapo ->
+            capoFret = newCapo
+            repository?.setCapoFret(newCapo)
+          },
+          onSaveCustomTuning = { newCustom ->
+            val updatedCustom = customTunings.filter { it.id != newCustom.id } + newCustom
+            customTunings = updatedCustom
+            repository?.saveCustomTunings(updatedCustom)
+            selectedTuningId = newCustom.id
+            repository?.setSelectedTuningId(newCustom.id)
+            closeSearch()
+          },
+          onDeleteCustomTuning = { toDelete ->
+            val updatedCustom = customTunings.filter { it.id != toDelete.id }
+            customTunings = updatedCustom
+            repository?.saveCustomTunings(updatedCustom)
+            if (selectedTuningId == toDelete.id) {
+              selectedTuningId = ChordBookEngine.BUILT_IN_TUNINGS.first().id
+              repository?.setSelectedTuningId(selectedTuningId)
+            }
+          },
+        )
+      }
     }
   }
 
   // --- Dialogs ---
-
-  if (showTuningDialog) {
-    InstrumentAndTuningDialog(
-      allTunings = allTunings,
-      activeTuning = activeTuning,
-      capoFret = capoFret,
-      enharmonicPref = enharmonicPref,
-      onSelectTuning = { tuning ->
-        selectedTuningId = tuning.id
-        repository?.setSelectedTuningId(tuning.id)
-      },
-      onCapoChange = { newCapo ->
-        capoFret = newCapo
-        repository?.setCapoFret(newCapo)
-      },
-      onSaveCustomTuning = { newCustom ->
-        val updatedCustom = customTunings.filter { it.id != newCustom.id } + newCustom
-        customTunings = updatedCustom
-        repository?.saveCustomTunings(updatedCustom)
-        selectedTuningId = newCustom.id
-        repository?.setSelectedTuningId(newCustom.id)
-      },
-      onDeleteCustomTuning = { toDelete ->
-        val updatedCustom = customTunings.filter { it.id != toDelete.id }
-        customTunings = updatedCustom
-        repository?.saveCustomTunings(updatedCustom)
-        if (selectedTuningId == toDelete.id) {
-          selectedTuningId = ChordBookEngine.BUILT_IN_TUNINGS.first().id
-          repository?.setSelectedTuningId(selectedTuningId)
-        }
-      },
-      onDismiss = { showTuningDialog = false },
-    )
-  }
 
   inspectedVoicing?.let { voicing ->
     VoicingInspectorDialog(
@@ -3531,364 +3781,620 @@ private fun ScaleFretboardDiagram(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun InstrumentAndTuningDialog(
+private fun ChordTuningCatalogSearchOverlay(
   allTunings: List<ChordTuning>,
   activeTuning: ChordTuning,
   capoFret: Int,
   enharmonicPref: EnharmonicPreference,
+  query: String,
+  selectedCategory: GuitarTuningCategory?,
+  selectedInstrument: InstrumentFamily?,
+  favoritesOnly: Boolean,
+  favoriteTuningIds: Set<String>,
+  favoriteCount: Int,
+  matchingTunings: List<ChordTuning>,
+  onSelectCategory: (GuitarTuningCategory?) -> Unit,
+  onSelectInstrument: (InstrumentFamily?) -> Unit,
+  onToggleFavoritesOnly: () -> Unit,
   onSelectTuning: (ChordTuning) -> Unit,
+  onToggleFavorite: (ChordTuning) -> Unit,
   onCapoChange: (Int) -> Unit,
   onSaveCustomTuning: (ChordTuning) -> Unit,
   onDeleteCustomTuning: (ChordTuning) -> Unit,
-  onDismiss: () -> Unit,
 ) {
-  var selectedInstrument by remember { mutableStateOf(activeTuning.instrument) }
   var editingCustom by remember { mutableStateOf(false) }
-  var customName by remember { mutableStateOf("${activeTuning.instrument.shortName} Custom") }
+  var customInstrument by remember(activeTuning) { mutableStateOf(activeTuning.instrument) }
+  var customName by remember(activeTuning) { mutableStateOf("${activeTuning.instrument.shortName} Custom") }
   val customMidi = remember(activeTuning) {
     mutableStateListOf<Int>().apply { addAll(activeTuning.openStringMidi) }
   }
 
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    shape = RoundedCornerShape(28.dp),
-    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-    tonalElevation = 6.dp,
-    title = {
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+  Surface(
+    color = MaterialTheme.colorScheme.background,
+    modifier = Modifier
+      .fillMaxSize()
+      .clickable(
+        interactionSource = remember { MutableInteractionSource() },
+        indication = null,
+        onClick = {},
+      )
+      .testTag("catalog_search_overlay"),
+  ) {
+    Column(modifier = Modifier.fillMaxSize()) {
+      // Category, Favorites & Instrument Filter Chips Bar (Section 4 & 5.7: RoundedCornerShape(20.dp))
+      Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
         modifier = Modifier.fillMaxWidth(),
       ) {
-        Box(
+        LazyRow(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
           modifier = Modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primaryContainer),
-          contentAlignment = Alignment.Center,
+            .fillMaxWidth()
+            .testTag("catalog_category_pills"),
         ) {
-          Icon(
-            imageVector = Icons.Default.Tune,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(24.dp),
-          )
-        }
-        Column {
-          Text(
-            text = "Instrument, Tuning & Capo",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
-          Text(
-            text = "Configure strings, alternate tunings, and capo position",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-      }
-    },
-    text = {
-      Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-      ) {
-        // Context Preview Card
-        Card(
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-          ),
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-          ) {
-            Text(
-              text = "${activeTuning.instrument.displayName} • ${activeTuning.name}",
-              style = MaterialTheme.typography.bodyMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-            val notesOctaves = activeTuning.formattedNotesWithOctaves(capoFret, enharmonicPref)
-              .joinToString(" – ")
-            Text(
-              text = "Effective Pitch: $notesOctaves" + if (capoFret > 0) " (Capo $capoFret)" else "",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-        }
-
-        // Capo SlimDotSlider (0..12)
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Text(
-              text = if (capoFret == 0) "Capo: None (Open Nut)" else "Capo: Fret $capoFret",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-            if (capoFret > 0) {
-              Text(
-                text = "Reset",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.clickable { onCapoChange(0) },
-              )
-            }
-          }
-
-          val sliderColors = SliderDefaults.colors(
-            thumbColor = MaterialTheme.colorScheme.primary,
-            activeTrackColor = MaterialTheme.colorScheme.primary,
-            inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
-          )
-          Slider(
-            value = capoFret.toFloat(),
-            onValueChange = { onCapoChange(it.roundToInt().coerceIn(0, 12)) },
-            valueRange = 0f..12f,
-            steps = 11,
-            colors = sliderColors,
-            modifier = Modifier.testTag("capo_fret_slider"),
-            thumb = {
-              Box(
-                modifier = Modifier
-                  .size(16.dp)
-                  .shadow(2.dp, CircleShape)
-                  .background(MaterialTheme.colorScheme.primary, CircleShape),
-              )
-            },
-            track = { sliderState ->
-              SliderDefaults.Track(
-                sliderState = sliderState,
-                modifier = Modifier.height(4.dp),
-                colors = sliderColors,
-              )
-            },
-          )
-        }
-
-        // Instrument Family Chips
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-          items(InstrumentFamily.entries) { family ->
+          item {
             FilterChip(
-              selected = selectedInstrument == family,
+              selected = selectedCategory == null && selectedInstrument == null && !favoritesOnly,
               onClick = {
-                selectedInstrument = family
-                val firstForInst = allTunings.firstOrNull { it.instrument == family }
-                if (firstForInst != null) {
-                  onSelectTuning(firstForInst)
-                  customMidi.clear()
-                  customMidi.addAll(firstForInst.openStringMidi)
-                }
+                if (favoritesOnly) onToggleFavoritesOnly()
+                onSelectCategory(null)
+                onSelectInstrument(null)
               },
-              label = { Text(family.shortName) },
+              label = {
+                Text(
+                  text = "All (${allTunings.size})",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.Medium,
+                )
+              },
               shape = RoundedCornerShape(20.dp),
+              colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+              ),
+              modifier = Modifier.testTag("category_chip_ALL"),
+            )
+          }
+          item {
+            FilterChip(
+              selected = favoritesOnly,
+              onClick = onToggleFavoritesOnly,
+              leadingIcon = {
+                Icon(
+                  imageVector = if (favoritesOnly) Icons.Default.Star else Icons.Default.StarBorder,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+              },
+              label = {
+                Text(
+                  text = "Favorites ($favoriteCount)",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.Medium,
+                )
+              },
+              shape = RoundedCornerShape(20.dp),
+              colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+              ),
+              modifier = Modifier.testTag("category_chip_FAVORITES"),
+            )
+          }
+          items(GuitarTuningCategory.entries) { category ->
+            val isSelected = selectedCategory == category
+            FilterChip(
+              selected = isSelected,
+              onClick = {
+                onSelectCategory(if (isSelected) null else category)
+              },
+              leadingIcon = {
+                Icon(
+                  imageVector = Icons.Default.MusicNote,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+              },
+              label = {
+                Text(
+                  text = category.displayName,
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.Medium,
+                )
+              },
+              shape = RoundedCornerShape(20.dp),
+              colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+              ),
+              modifier = Modifier.testTag("category_chip_${category.name}"),
+            )
+          }
+          items(InstrumentFamily.entries) { family ->
+            val isSelected = selectedInstrument == family
+            FilterChip(
+              selected = isSelected,
+              onClick = {
+                onSelectInstrument(if (isSelected) null else family)
+              },
+              leadingIcon = {
+                Icon(
+                  imageVector = Icons.Default.Tune,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+              },
+              label = {
+                Text(
+                  text = family.shortName,
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.Medium,
+                )
+              },
+              shape = RoundedCornerShape(20.dp),
+              colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+              ),
               modifier = Modifier.testTag("instrument_family_${family.name}"),
             )
           }
         }
+      }
 
-        // Toggle between Preset List and Custom Tuning Builder
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Text(
-            text = if (editingCustom) "Custom String Pitches" else "Tunings for ${selectedInstrument.shortName}",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          TextButton(
-            onClick = {
-              editingCustom = !editingCustom
-              if (editingCustom) {
-                customMidi.clear()
-                customMidi.addAll(activeTuning.openStringMidi)
-                customName = "${activeTuning.instrument.shortName} Custom"
-              }
-            },
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.testTag("toggle_custom_tuning_editor"),
-          ) {
-            Text(if (editingCustom) "Back to Presets" else "+ Custom Tuning")
-          }
-        }
+      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
-        if (editingCustom) {
-          OutlinedTextField(
-            value = customName,
-            onValueChange = { customName = it },
-            label = { Text("Custom tuning name") },
-            singleLine = true,
+      LazyColumn(
+        modifier = Modifier
+          .fillMaxSize()
+          .weight(1f)
+          .testTag("catalog_results_section"),
+        contentPadding = PaddingValues(
+          start = 16.dp,
+          top = 12.dp,
+          end = 16.dp,
+          bottom = 24.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        // Capo & Custom Tuning Quick Configuration Card
+        item(key = "capo_and_custom_tuning_card") {
+          Card(
             shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            ),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
             modifier = Modifier.fillMaxWidth(),
-          )
-          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            customMidi.indices.forEach { sIdx ->
-              val midiVal = customMidi[sIdx]
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
               Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
               ) {
-                Text(
-                  text = "String ${customMidi.size - sIdx}",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 Row(
                   verticalAlignment = Alignment.CenterVertically,
                   horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                  FilledTonalIconButton(
-                    onClick = { customMidi[sIdx] = (midiVal - 1).coerceAtLeast(20) },
-                    modifier = Modifier.size(28.dp),
-                  ) {
-                    Icon(Icons.Default.Remove, contentDescription = "Lower semitone", modifier = Modifier.size(14.dp))
-                  }
                   Text(
-                    text = ChordBookEngine.formatMidiNote(midiVal, enharmonicPref),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
+                    text = if (capoFret == 0) "Capo: None (Open Nut)" else "Capo: Fret $capoFret",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                   )
-                  FilledTonalIconButton(
-                    onClick = { customMidi[sIdx] = (midiVal + 1).coerceAtMost(88) },
-                    modifier = Modifier.size(28.dp),
-                  ) {
-                    Icon(Icons.Default.Add, contentDescription = "Raise semitone", modifier = Modifier.size(14.dp))
+                  if (capoFret > 0) {
+                    Text(
+                      text = "Reset",
+                      style = MaterialTheme.typography.labelSmall,
+                      fontWeight = FontWeight.Bold,
+                      color = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.clickable { onCapoChange(0) },
+                    )
                   }
                 }
-              }
-            }
-          }
-          Button(
-            onClick = {
-              val created = ChordTuning(
-                id = "custom_${UUID.randomUUID().toString().take(8)}",
-                name = customName.trim().ifBlank { "Custom Tuning" },
-                instrument = selectedInstrument,
-                openStringMidi = customMidi.toList(),
-                isCustom = true,
-              )
-              onSaveCustomTuning(created)
-              editingCustom = false
-            },
-            enabled = customName.isNotBlank(),
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth(),
-          ) {
-            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Save & Activate Custom Tuning")
-          }
-        } else {
-          val filteredTunings = remember(allTunings, selectedInstrument) {
-            allTunings.filter { it.instrument == selectedInstrument }
-          }
-          LazyColumn(
-            modifier = Modifier
-              .fillMaxWidth()
-              .heightIn(max = 210.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-          ) {
-            items(filteredTunings) { tuning ->
-              val isSelected = tuning.id == activeTuning.id
-              Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(
-                  containerColor = if (isSelected) {
-                    MaterialTheme.colorScheme.primaryContainer
-                  } else {
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-                  },
-                ),
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .clip(RoundedCornerShape(12.dp))
-                  .clickable { onSelectTuning(tuning) }
-                  .testTag("tuning_option_${tuning.id}"),
-              ) {
-                Row(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                  verticalAlignment = Alignment.CenterVertically,
-                ) {
-                  Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                      text = tuning.name,
-                      style = MaterialTheme.typography.bodyMedium,
-                      fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
-                      color = if (isSelected) {
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                      } else {
-                        MaterialTheme.colorScheme.onSurface
-                      },
-                    )
-                    Text(
-                      text = tuning.formattedNotesWithOctaves(0, enharmonicPref).joinToString(" "),
-                      style = MaterialTheme.typography.labelSmall,
-                      color = if (isSelected) {
-                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                      } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                      },
-                    )
-                  }
-                  if (tuning.isCustom) {
-                    IconButton(
-                      onClick = { onDeleteCustomTuning(tuning) },
-                      modifier = Modifier.size(28.dp),
-                    ) {
-                      Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete custom tuning",
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(16.dp),
-                      )
+                TextButton(
+                  onClick = {
+                    editingCustom = !editingCustom
+                    if (editingCustom) {
+                      customInstrument = activeTuning.instrument
+                      customMidi.clear()
+                      customMidi.addAll(activeTuning.openStringMidi)
+                      customName = "${activeTuning.instrument.shortName} Custom"
                     }
-                  } else if (isSelected) {
-                    Icon(
-                      imageVector = Icons.Default.Check,
-                      contentDescription = null,
-                      tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                      modifier = Modifier.size(18.dp),
-                    )
+                  },
+                  shape = RoundedCornerShape(12.dp),
+                  contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                  modifier = Modifier.testTag("toggle_custom_tuning_editor"),
+                ) {
+                  Text(
+                    text = if (editingCustom) "Close Custom Builder" else "+ Custom Tuning",
+                    style = MaterialTheme.typography.labelMedium,
+                  )
+                }
+              }
+
+              val sliderColors = SliderDefaults.colors(
+                thumbColor = MaterialTheme.colorScheme.primary,
+                activeTrackColor = MaterialTheme.colorScheme.primary,
+                inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+              )
+              Slider(
+                value = capoFret.toFloat(),
+                onValueChange = { onCapoChange(it.roundToInt().coerceIn(0, 12)) },
+                valueRange = 0f..12f,
+                steps = 11,
+                colors = sliderColors,
+                modifier = Modifier.testTag("capo_fret_slider"),
+                thumb = {
+                  Box(
+                    modifier = Modifier
+                      .size(16.dp)
+                      .shadow(2.dp, CircleShape)
+                      .background(MaterialTheme.colorScheme.primary, CircleShape),
+                  )
+                },
+                track = { sliderState ->
+                  SliderDefaults.Track(
+                    sliderState = sliderState,
+                    modifier = Modifier.height(4.dp),
+                    colors = sliderColors,
+                  )
+                },
+              )
+
+              AnimatedVisibility(
+                visible = editingCustom,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
+              ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                  HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                  OutlinedTextField(
+                    value = customName,
+                    onValueChange = { customName = it },
+                    label = { Text("Custom tuning name") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                  )
+                  Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    customMidi.indices.forEach { sIdx ->
+                      val midiVal = customMidi[sIdx]
+                      Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                      ) {
+                        Text(
+                          text = "String ${customMidi.size - sIdx}",
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Row(
+                          verticalAlignment = Alignment.CenterVertically,
+                          horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                          FilledTonalIconButton(
+                            onClick = { customMidi[sIdx] = (midiVal - 1).coerceAtLeast(20) },
+                            modifier = Modifier.size(28.dp),
+                          ) {
+                            Icon(Icons.Default.Remove, contentDescription = "Lower semitone", modifier = Modifier.size(14.dp))
+                          }
+                          Text(
+                            text = ChordBookEngine.formatMidiNote(midiVal, enharmonicPref),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                          )
+                          FilledTonalIconButton(
+                            onClick = { customMidi[sIdx] = (midiVal + 1).coerceAtMost(88) },
+                            modifier = Modifier.size(28.dp),
+                          ) {
+                            Icon(Icons.Default.Add, contentDescription = "Raise semitone", modifier = Modifier.size(14.dp))
+                          }
+                        }
+                      }
+                    }
+                  }
+                  Button(
+                    onClick = {
+                      val created = ChordTuning(
+                        id = "custom_${UUID.randomUUID().toString().take(8)}",
+                        name = customName.trim().ifBlank { "Custom Tuning" },
+                        instrument = customInstrument,
+                        openStringMidi = customMidi.toList(),
+                        isCustom = true,
+                      )
+                      onSaveCustomTuning(created)
+                      editingCustom = false
+                    },
+                    enabled = customName.isNotBlank(),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                  ) {
+                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Save & Activate Custom Tuning")
                   }
                 }
               }
             }
           }
         }
+
+        // Catalog Header Row
+        item(key = "catalog_header") {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+          ) {
+            Column {
+              Text(
+                text = when {
+                  query.isNotBlank() -> "Search Results (${matchingTunings.size})"
+                  favoritesOnly -> "Favorite Tunings (${matchingTunings.size})"
+                  selectedCategory != null -> "${selectedCategory.displayName} (${matchingTunings.size})"
+                  selectedInstrument != null -> "${selectedInstrument.displayName} (${matchingTunings.size})"
+                  else -> "Tuning Catalog (${matchingTunings.size})"
+                },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Text(
+                text = "Tap a tuning to switch • Tap ★ to favorite (shared with Guitar Tuner)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
+
+        if (matchingTunings.isEmpty()) {
+          item(key = "catalog_empty") {
+            Card(
+              shape = RoundedCornerShape(14.dp),
+              colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+              ),
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("catalog_empty_card"),
+            ) {
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Text(
+                  text = if (query.isNotBlank()) {
+                    "No tunings found matching \"$query\""
+                  } else {
+                    "No matching tunings"
+                  },
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                  text = "Try searching by tuning name (e.g. Drop D, Open G, DADGAD), instrument, or string notes.",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  textAlign = TextAlign.Center,
+                )
+              }
+            }
+          }
+        } else {
+          items(
+            items = matchingTunings,
+            key = { "catalog_${it.id}" },
+          ) { tuning ->
+            val isFavorite = ChordBookEngine.isTuningFavorite(tuning, favoriteTuningIds)
+            val tagKey = tuning.matchingTunerPreset?.name ?: tuning.id
+            ChordTuningSearchCard(
+              tuning = tuning,
+              isSelected = tuning.id == activeTuning.id,
+              isFavorite = isFavorite,
+              enharmonicPref = enharmonicPref,
+              onSelect = { onSelectTuning(tuning) },
+              onToggleFavorite = { onToggleFavorite(tuning) },
+              onDeleteCustom = if (tuning.isCustom) {
+                { onDeleteCustomTuning(tuning) }
+              } else {
+                null
+              },
+              cardTestTag = "catalog_tuning_card_$tagKey",
+              optionTestTag = "tuning_option_${tuning.id}",
+              favoriteButtonTestTag = "catalog_favorite_button_$tagKey",
+            )
+          }
+        }
       }
-    },
-    confirmButton = {
-      Button(
-        onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+    }
+  }
+}
+
+@Composable
+private fun ChordTuningSearchCard(
+  tuning: ChordTuning,
+  isSelected: Boolean,
+  isFavorite: Boolean,
+  enharmonicPref: EnharmonicPreference,
+  onSelect: () -> Unit,
+  onToggleFavorite: () -> Unit,
+  onDeleteCustom: (() -> Unit)?,
+  cardTestTag: String,
+  optionTestTag: String,
+  favoriteButtonTestTag: String,
+) {
+  Card(
+    shape = RoundedCornerShape(14.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = if (isSelected) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+      } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+      },
+    ),
+    border = BorderStroke(
+      width = if (isSelected) 2.dp else 1.dp,
+      color = if (isSelected) {
+        MaterialTheme.colorScheme.primary
+      } else {
+        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+      },
+    ),
+    modifier = Modifier
+      .fillMaxWidth()
+      .clip(RoundedCornerShape(14.dp))
+      .clickable(onClick = onSelect)
+      .testTag(cardTestTag),
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 14.dp, vertical = 12.dp)
+        .testTag(optionTestTag),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.weight(1f),
       ) {
-        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
-        Text("Done")
+        Box(
+          modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(
+              if (isSelected) {
+                MaterialTheme.colorScheme.primaryContainer
+              } else {
+                MaterialTheme.colorScheme.secondaryContainer
+              },
+            ),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = if (isSelected) Icons.Default.Check else Icons.Default.MusicNote,
+            contentDescription = null,
+            tint = if (isSelected) {
+              MaterialTheme.colorScheme.primary
+            } else {
+              MaterialTheme.colorScheme.onSecondaryContainer
+            },
+            modifier = Modifier.size(20.dp),
+          )
+        }
+
+        Column(modifier = Modifier.weight(1f)) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Text(
+              text = tuning.displayLabel,
+              style = MaterialTheme.typography.bodyLarge,
+              fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurface,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+            Surface(
+              shape = RoundedCornerShape(20.dp),
+              color = MaterialTheme.colorScheme.secondaryContainer,
+            ) {
+              Text(
+                text = tuning.tuningCategory?.displayName ?: tuning.instrument.shortName,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+              )
+            }
+            if (isSelected) {
+              Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+              ) {
+                Text(
+                  text = "Active",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.onPrimaryContainer,
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                )
+              }
+            }
+          }
+
+          val subtitle = tuning.matchingTunerPreset?.subtitle
+            ?: tuning.formattedNotes(0, enharmonicPref)
+          Text(
+            text = "${tuning.instrument.shortName} • $subtitle",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
       }
-    },
-  )
+
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        if (onDeleteCustom != null) {
+          IconButton(
+            onClick = onDeleteCustom,
+            modifier = Modifier.size(32.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Delete,
+              contentDescription = "Delete custom tuning",
+              tint = MaterialTheme.colorScheme.error,
+              modifier = Modifier.size(18.dp),
+            )
+          }
+        }
+        IconButton(
+          onClick = onToggleFavorite,
+          modifier = Modifier
+            .size(36.dp)
+            .testTag(favoriteButtonTestTag),
+        ) {
+          Icon(
+            imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+            contentDescription = if (isFavorite) {
+              "Remove ${tuning.displayLabel} from favorites"
+            } else {
+              "Add ${tuning.displayLabel} to favorites"
+            },
+            tint = if (isFavorite) {
+              MaterialTheme.colorScheme.primary
+            } else {
+              MaterialTheme.colorScheme.onSurfaceVariant
+            },
+          )
+        }
+      }
+    }
+  }
 }
 
 @Composable

@@ -105,6 +105,39 @@ class ToolsUnitTest {
   }
 
   @Test
+  fun guitarTunerEngine_searchesByQueryCategoryAndFavoritesAndSortsFavoritesFirst() {
+    // Search by query
+    val dropResults = GuitarTunerEngine.searchTunings(query = "Drop D")
+    assertTrue(dropResults.contains(GuitarTuningPreset.DROP_D))
+    assertTrue(dropResults.contains(GuitarTuningPreset.DOUBLE_DROP_D))
+
+    // Search by category
+    val openResults = GuitarTunerEngine.searchTunings(category = GuitarTuningCategory.OPEN)
+    assertEquals(6, openResults.size)
+    assertTrue(openResults.all { it.category == GuitarTuningCategory.OPEN })
+
+    // Toggle favorites and sort favorites to top of list
+    var favs = emptySet<GuitarTuningPreset>()
+    favs = GuitarTunerEngine.toggleFavorite(favs, GuitarTuningPreset.DADGAD)
+    favs = GuitarTunerEngine.toggleFavorite(favs, GuitarTuningPreset.DROP_C)
+    assertEquals(setOf(GuitarTuningPreset.DADGAD, GuitarTuningPreset.DROP_C), favs)
+
+    val sortedList = GuitarTunerEngine.filterTuningsForList(favorites = favs)
+    assertEquals(GuitarTuningPreset.DROP_C, sortedList[0])
+    assertEquals(GuitarTuningPreset.DADGAD, sortedList[1])
+
+    val favoritesOnlyList = GuitarTunerEngine.filterTuningsForList(
+      favorites = favs,
+      favoritesOnly = true,
+    )
+    assertEquals(listOf(GuitarTuningPreset.DROP_C, GuitarTuningPreset.DADGAD), favoritesOnlyList)
+
+    // Unfavorite
+    favs = GuitarTunerEngine.toggleFavorite(favs, GuitarTuningPreset.DROP_C)
+    assertEquals(setOf(GuitarTuningPreset.DADGAD), favs)
+  }
+
+  @Test
   fun colorMath_convertsHexAndRgbAndHsvCorrectly() {
     val parsed = ColorMath.parseHex("#23759B")
     assertEquals(Triple(35, 117, 155), parsed)

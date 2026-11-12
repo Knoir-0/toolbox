@@ -12,6 +12,10 @@ import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SPLIT_COMPLEMENTARY_210
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_TINT_LIGHT
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_TRIADIC
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_TRIADIC_240
+import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_ACCENT
+import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_DOMINANT
+import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_PLAYER
+import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_SECONDARY
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
 import com.example.toolbox.ui.main.DEFAULT_HIDDEN_TOOLS
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
@@ -25,13 +29,18 @@ import com.example.toolbox.ui.main.ToolCategory
 import com.example.toolbox.ui.main.ToolSortOrder
 import com.example.toolbox.ui.main.ToolSortingOption
 import com.example.toolbox.ui.theme.AccentHarmonyOption
+import com.example.toolbox.ui.theme.MusicPlayerColorOption
+import com.example.toolbox.ui.theme.buildMusicPlayerAccentPrefValue
 import com.example.toolbox.ui.theme.calculateAccentHarmonyColor
 import com.example.toolbox.ui.theme.calculateComplementaryColor
+import com.example.toolbox.ui.theme.calculateMusicPlayerBackgroundColor
 import com.example.toolbox.ui.theme.createCustomColorScheme
 import com.example.toolbox.ui.theme.createTertiaryTokens
 import com.example.toolbox.ui.theme.isAutoAccentColorSetting
+import com.example.toolbox.ui.theme.isMusicPlayerAccentColorSetting
 import com.example.toolbox.ui.theme.parseHexColor
 import com.example.toolbox.ui.theme.resolveEffectiveAccentColor
+import com.example.toolbox.ui.theme.resolveMusicPlayerHarmonyOption
 import junit.framework.TestCase.assertEquals
 import junit.framework.TestCase.assertFalse
 import junit.framework.TestCase.assertNotNull
@@ -500,5 +509,91 @@ class SettingsScreenTest {
     assertEquals(expectedUrl, GITHUB_NEW_ISSUE_URL)
     assertEquals(expectedUrl, GITHUB_REPORT_BUG_URL)
     assertEquals(expectedUrl, GITHUB_REQUEST_FEATURE_URL)
+  }
+
+  @Test
+  fun isMusicPlayerAccentColorSetting_recognizesAllMusicPlayerOptions() {
+    assertTrue(isMusicPlayerAccentColorSetting(ACCENT_COLOR_MUSIC_PLAYER))
+    assertTrue(isMusicPlayerAccentColorSetting(ACCENT_COLOR_MUSIC_DOMINANT))
+    assertTrue(isMusicPlayerAccentColorSetting(ACCENT_COLOR_MUSIC_SECONDARY))
+    assertTrue(isMusicPlayerAccentColorSetting(ACCENT_COLOR_MUSIC_ACCENT))
+    val triadicMusicPref = buildMusicPlayerAccentPrefValue(
+      MusicPlayerColorOption.DOMINANT,
+      AccentHarmonyOption.TRIADIC,
+    )
+    assertTrue(isMusicPlayerAccentColorSetting(triadicMusicPref))
+    assertEquals(MusicPlayerColorOption.DOMINANT, MusicPlayerColorOption.fromPrefValue(triadicMusicPref))
+    assertEquals(AccentHarmonyOption.TRIADIC, resolveMusicPlayerHarmonyOption(triadicMusicPref))
+    assertEquals(MusicPlayerColorOption.DOMINANT, MusicPlayerColorOption.fromPrefValue(ACCENT_COLOR_MUSIC_PLAYER))
+    assertEquals(MusicPlayerColorOption.DOMINANT, MusicPlayerColorOption.fromPrefValue(ACCENT_COLOR_MUSIC_DOMINANT))
+    assertEquals(MusicPlayerColorOption.SECONDARY, MusicPlayerColorOption.fromPrefValue(ACCENT_COLOR_MUSIC_SECONDARY))
+    assertEquals(MusicPlayerColorOption.ACCENT, MusicPlayerColorOption.fromPrefValue(ACCENT_COLOR_MUSIC_ACCENT))
+    assertFalse(isMusicPlayerAccentColorSetting(DEFAULT_ACCENT_COLOR_AUTO))
+    assertFalse(isMusicPlayerAccentColorSetting("#E65100"))
+    assertFalse(isMusicPlayerAccentColorSetting(null))
+  }
+
+  @Test
+  fun resolveEffectiveAccentColor_followsMusicPlayerPaletteAndCalculatesHarmony() {
+    val track1 = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS[0]
+    val track2 = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS[1]
+    val palette1 = MusicPlayerEngine.resolveTrackPalette(track1)
+    val palette2 = MusicPlayerEngine.resolveTrackPalette(track2)
+    val baseBg = Color(0xFFFFF8FF)
+
+    val session = MusicPlaybackSession(
+      initialTracks = listOf(track1, track2),
+      isInspection = true,
+    )
+    try {
+      assertEquals(track1.id, MusicPlayerEngine.activeTrack?.id)
+      assertEquals(
+        calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.COMPLEMENTARY),
+        resolveEffectiveAccentColor("#8E66A6", ACCENT_COLOR_MUSIC_PLAYER),
+      )
+      assertEquals(
+        calculateAccentHarmonyColor(palette1.secondaryColor, AccentHarmonyOption.COMPLEMENTARY),
+        resolveEffectiveAccentColor("#8E66A6", ACCENT_COLOR_MUSIC_SECONDARY),
+      )
+      assertEquals(
+        calculateAccentHarmonyColor(palette1.accentColor, AccentHarmonyOption.COMPLEMENTARY),
+        resolveEffectiveAccentColor("#8E66A6", ACCENT_COLOR_MUSIC_ACCENT),
+      )
+      val triadicMusicPref = buildMusicPlayerAccentPrefValue(
+        MusicPlayerColorOption.DOMINANT,
+        AccentHarmonyOption.TRIADIC,
+      )
+      assertEquals(
+        calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.TRIADIC),
+        resolveEffectiveAccentColor("#8E66A6", triadicMusicPref),
+      )
+      assertEquals(
+        androidx.compose.ui.graphics.lerp(baseBg, palette1.dominantColor, 0.22f),
+        calculateMusicPlayerBackgroundColor(baseBg, palette1, MusicPlayerColorOption.DOMINANT),
+      )
+
+      // Advance to the next track and verify the effective accent color updates automatically
+      session.skipToNext(userInitiated = true)
+      assertEquals(track2.id, MusicPlayerEngine.activeTrack?.id)
+      assertEquals(
+        calculateAccentHarmonyColor(palette2.dominantColor, AccentHarmonyOption.COMPLEMENTARY),
+        resolveEffectiveAccentColor("#8E66A6", ACCENT_COLOR_MUSIC_PLAYER),
+      )
+      assertEquals(
+        calculateAccentHarmonyColor(palette2.secondaryColor, AccentHarmonyOption.COMPLEMENTARY),
+        resolveEffectiveAccentColor("#8E66A6", ACCENT_COLOR_MUSIC_SECONDARY),
+      )
+      assertEquals(
+        calculateAccentHarmonyColor(palette2.accentColor, AccentHarmonyOption.COMPLEMENTARY),
+        resolveEffectiveAccentColor("#8E66A6", ACCENT_COLOR_MUSIC_ACCENT),
+      )
+      assertEquals(
+        calculateAccentHarmonyColor(palette2.dominantColor, AccentHarmonyOption.TRIADIC),
+        resolveEffectiveAccentColor("#8E66A6", triadicMusicPref),
+      )
+    } finally {
+      session.release()
+      MusicPlayerEngine.resetPlaybackSession()
+    }
   }
 }

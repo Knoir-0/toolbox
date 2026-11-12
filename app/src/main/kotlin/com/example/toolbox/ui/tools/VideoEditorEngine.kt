@@ -1447,9 +1447,11 @@ object VideoEditorEngine {
    * Generates a real, playable 4-second 640×360 30fps sample MP4 video with animated test patterns
    * and a gentle audio tone using FFmpeg's built-in `lavfi` `testsrc2` + `sine` generators.
    */
-  suspend fun generateSampleVideo(context: Context): File? = withContext(Dispatchers.IO) {
-    val sampleDir = File(context.cacheDir, "video_editor_samples").apply { mkdirs() }
-    val sampleFile = File(sampleDir, "sample_clip.mp4")
+  suspend fun generateSampleVideo(
+    context: Context,
+    samplesRoot: File = FileManagerEngine.getSamplesDirectory(context),
+  ): File? = withContext(Dispatchers.IO) {
+    val sampleFile = FileManagerEngine.getSampleVideoFile(context = context, samplesRoot = samplesRoot)
     if (sampleFile.exists() && sampleFile.length() > 1024L) {
       return@withContext sampleFile
     }

@@ -412,6 +412,35 @@ object RecipeBookEngine {
             tags = setOf("Vegetarian", "Gluten-Free", "High-Protein", "Quick"),
             notes = "Use an 8-inch nonstick pan for the ideal thickness and clean fold."
         ),
+        RecipeItem(
+            id = "chilaquiles_rojos",
+            name = "Chilaquiles Rojos with Fried Eggs",
+            subtitle = "Crisp Tortillas in Guajillo Tomato Salsa",
+            category = RecipeCategory.BREAKFAST,
+            prepTimeMinutes = 10,
+            cookTimeMinutes = 15,
+            servings = 4,
+            difficulty = RecipeDifficulty.EASY,
+            ingredients = listOf(
+                "8 cups thick-cut corn tortilla chips",
+                "2 cups red enchilada or guajillo tomato salsa",
+                "4 large eggs",
+                "1/2 cup queso fresco or cotija cheese, crumbled",
+                "1/3 cup Mexican crema or sour cream",
+                "1/4 cup red onion, finely sliced",
+                "1 ripe avocado, sliced",
+                "1/4 cup fresh cilantro leaves"
+            ),
+            instructions = listOf(
+                "Simmer the red salsa in a wide skillet over medium-low heat for 3-4 minutes until fragrant and slightly thickened.",
+                "In a separate nonstick skillet, fry the eggs sunny-side up or over-easy in a drizzle of oil until edges are crisp.",
+                "Add the corn tortilla chips directly into the simmering salsa and fold gently for 1 minute so every chip is coated while staying crisp.",
+                "Divide the saucy tortillas onto warm plates and top each serving with a fried egg.",
+                "Garnish generously with crumbled queso fresco, drizzled crema, sliced avocado, red onion, and fresh cilantro."
+            ),
+            tags = setOf("Mexican", "Hispanic", "Vegetarian", "Gluten-Free", "Brunch"),
+            notes = "Toss the tortilla chips in the warm salsa right before serving so they keep a satisfying crunch underneath the sauce."
+        ),
 
         // ==================== MAINS & DINNER ====================
         RecipeItem(
@@ -661,6 +690,334 @@ object RecipeBookEngine {
             tags = setOf("Poultry", "One-Pan", "Mexican", "Healthy", "Quick"),
             notes = "Slicing the chicken and peppers to similar thicknesses ensures everything finishes roasting at the same time."
         ),
+        RecipeItem(
+            id = "homemade_sushi_rolls",
+            name = "Salmon Avocado & California Sushi Rolls",
+            subtitle = "Homemade Seasoned Sushi Rice & Nori Maki",
+            category = RecipeCategory.MAINS,
+            prepTimeMinutes = 30,
+            cookTimeMinutes = 20,
+            servings = 4,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "2 cups Japanese short-grain sushi rice, rinsed until water runs clear",
+                "2.25 cups water",
+                "1/4 cup seasoned rice vinegar (or 3 tbsp rice vinegar + 1 tbsp sugar + 1 tsp salt)",
+                "6 sheets roasted nori (seaweed)",
+                "8 oz sushi-grade fresh salmon or imitation crab sticks, sliced into strips",
+                "1 ripe Hass avocado, thinly sliced",
+                "1 English cucumber, julienned into thin matchsticks",
+                "2 tbsp toasted sesame seeds",
+                "Soy sauce, pickled ginger, and wasabi for serving"
+            ),
+            instructions = listOf(
+                "Cook rinsed sushi rice with water in a rice cooker or covered pot (simmer 15 minutes on low, then steam 10 minutes off heat).",
+                "Transfer hot rice to a wide bowl, gently fold in the seasoned rice vinegar with a spatula using slicing motions, and fan until room temperature.",
+                "Wrap a bamboo sushi mat (makisu) in plastic wrap and place a half or full sheet of nori shiny-side down on the mat.",
+                "With damp hands, spread a thin, even layer of sushi rice over the nori and sprinkle with toasted sesame seeds.",
+                "Arrange strips of salmon (or crab), avocado, and cucumber horizontally across the lower third of the sheet.",
+                "Lift the edge of the bamboo mat and roll forward firmly into a tight cylinder, then slice with a wet, sharp knife into 8 pieces."
+            ),
+            tags = setOf("Japanese", "Sushi", "Seafood", "Healthy", "Dairy-Free"),
+            notes = "Wipe your knife blade with a damp towel between every cut so the sushi rice slices cleanly without sticking."
+        ),
+        RecipeItem(
+            id = "spicy_tuna_sushi_rolls",
+            name = "Spicy Tuna Crispy Cucumber Sushi Rolls",
+            subtitle = "Inside-Out Uramaki with Sriracha Mayo",
+            category = RecipeCategory.MAINS,
+            prepTimeMinutes = 25,
+            cookTimeMinutes = 20,
+            servings = 4,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "2 cups cooked and seasoned sushi rice",
+                "8 oz sushi-grade ahi tuna, finely diced",
+                "2 tbsp Japanese mayonnaise (Kewpie)",
+                "1 tbsp sriracha chili sauce",
+                "1 tsp toasted sesame oil",
+                "2 green onions, finely chopped",
+                "4 sheets roasted nori",
+                "1/2 English cucumber, julienned",
+                "2 tbsp toasted white and black sesame seeds"
+            ),
+            instructions = listOf(
+                "Gently fold diced sushi-grade tuna with Japanese mayo, sriracha, toasted sesame oil, and chopped green onions in a chilled bowl.",
+                "Place a sheet of nori on a plastic-wrapped bamboo rolling mat and spread a thin layer of seasoned sushi rice evenly across the surface.",
+                "Sprinkle sesame seeds over the rice, then flip the sheet over so the rice faces down against the plastic wrap (for an inside-out roll).",
+                "Spoon a line of the spicy tuna mixture and cucumber matchsticks across the center of the bare nori.",
+                "Roll tightly using the bamboo mat to shape and compress the roll, then slice into 8 bite-size pieces and drizzle with extra spicy mayo."
+            ),
+            tags = setOf("Japanese", "Sushi", "Seafood", "Spicy", "Dairy-Free"),
+            notes = "Keep the diced tuna cold in the refrigerator right up until assembling the rolls."
+        ),
+        RecipeItem(
+            id = "chicken_katsu_curry",
+            name = "Japanese Chicken Katsu Curry",
+            subtitle = "Crispy Panko Cutlet & Savory Golden Curry",
+            category = RecipeCategory.MAINS,
+            prepTimeMinutes = 20,
+            cookTimeMinutes = 25,
+            servings = 4,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "2 large boneless skinless chicken breasts, butterflied into 4 cutlets",
+                "1/2 cup all-purpose flour",
+                "2 large eggs, beaten",
+                "1.5 cups Japanese panko breadcrumbs",
+                "1 large yellow onion, thinly sliced",
+                "2 carrots and 1 Yukon Gold potato, diced into bite-size pieces",
+                "3 cups chicken broth",
+                "4 oz Japanese curry roux blocks (or 2 tbsp curry powder + 2 tbsp butter + 2 tbsp flour)",
+                "1 tbsp soy sauce and 1 tsp honey",
+                "4 cups steamed short-grain Japanese rice",
+                "1/2 cup vegetable oil for shallow frying"
+            ),
+            instructions = listOf(
+                "Sauté sliced onion, carrots, and diced potato in 1 tbsp oil in a pot for 5 minutes until softened, then pour in chicken broth and simmer covered for 12 minutes until tender.",
+                "Turn heat to low, stir in the Japanese curry roux blocks, soy sauce, and honey until melted into a thick, glossy gravy.",
+                "Season chicken cutlets with salt and pepper, dredge in flour, dip in beaten egg, and press firmly into panko breadcrumbs.",
+                "Shallow-fry the breaded cutlets in 350°F vegetable oil for 3-4 minutes per side until deep golden brown and crisp; drain on a wire rack.",
+                "Slice the crispy chicken katsu into strips, arrange over warm steamed rice, and ladle the hot Japanese curry alongside."
+            ),
+            tags = setOf("Japanese", "Poultry", "Curry", "Comfort-Food"),
+            notes = "Mist the panko breadcrumbs lightly with water before frying for an even lighter, flakier crunch."
+        ),
+        RecipeItem(
+            id = "chicken_teriyaki",
+            name = "Glazed Skillet Chicken Teriyaki",
+            subtitle = "Authentic Soy, Mirin & Ginger Tare Glaze",
+            category = RecipeCategory.MAINS,
+            prepTimeMinutes = 10,
+            cookTimeMinutes = 15,
+            servings = 4,
+            difficulty = RecipeDifficulty.EASY,
+            ingredients = listOf(
+                "1.5 lb boneless skinless chicken thighs",
+                "1/3 cup soy sauce",
+                "1/3 cup mirin (Japanese sweet rice wine)",
+                "2 tbsp sake or water",
+                "2 tbsp granulated sugar",
+                "1 tsp fresh ginger, grated",
+                "1 tbsp vegetable oil",
+                "2 green onions, thinly sliced, and 1 tsp toasted sesame seeds"
+            ),
+            instructions = listOf(
+                "Whisk soy sauce, mirin, sake, sugar, and grated ginger together in a small bowl until sugar dissolves.",
+                "Pat chicken thighs dry and sear smooth-side down in a lightly oiled skillet over medium-high heat for 6 minutes until golden.",
+                "Flip the chicken thighs and cook for 3 minutes more, then blot any excess oil from the pan with a paper towel.",
+                "Pour in the teriyaki sauce mixture and simmer briskly for 3-4 minutes, spooning the bubbling glaze over the chicken until thick and lacquered.",
+                "Rest for 3 minutes, slice into strips, spoon pan glaze on top, and garnish with sesame seeds and scallions."
+            ),
+            tags = setOf("Japanese", "Poultry", "Quick", "One-Pan", "Dairy-Free"),
+            notes = "Wiping excess fat from the skillet before pouring in the sauce helps the glaze cling evenly to the chicken."
+        ),
+        RecipeItem(
+            id = "chicken_enchiladas_verdes",
+            name = "Chicken Enchiladas Verdes",
+            subtitle = "Baked Tortillas in Tangy Tomatillo Green Salsa",
+            category = RecipeCategory.MAINS,
+            prepTimeMinutes = 20,
+            cookTimeMinutes = 25,
+            servings = 6,
+            difficulty = RecipeDifficulty.EASY,
+            ingredients = listOf(
+                "3 cups cooked shredded chicken",
+                "3 cups salsa verde (roasted tomatillo green salsa)",
+                "1/2 cup sour cream or Mexican crema",
+                "2.5 cups Monterey Jack or Oaxaca cheese, shredded, divided",
+                "12 corn tortillas, warmed",
+                "1/2 white onion, finely diced",
+                "1/3 cup fresh cilantro, chopped"
+            ),
+            instructions = listOf(
+                "Preheat oven to 375°F (190°C). Whisk salsa verde and sour cream together in a bowl until creamy.",
+                "Toss shredded chicken with 3/4 cup of the creamy salsa verde and 1 cup of shredded cheese.",
+                "Spread 1/2 cup of the sauce across the bottom of a 9x13-inch baking dish.",
+                "Warm corn tortillas briefly so they roll without cracking, fill each with the chicken mixture, and arrange seam-side down in the dish.",
+                "Pour remaining sauce over the tortillas, scatter remaining cheese on top, and bake for 20-25 minutes until bubbly and lightly browned.",
+                "Top with diced white onion and fresh cilantro before serving."
+            ),
+            tags = setOf("Mexican", "Hispanic", "Poultry", "Gluten-Free", "Comfort-Food"),
+            notes = "Warming the corn tortillas in a dry skillet for 15 seconds per side keeps them pliable and prevents tearing."
+        ),
+        RecipeItem(
+            id = "pork_carnitas",
+            name = "Crispy Slow-Braised Pork Carnitas",
+            subtitle = "Citrus, Garlic & Oregano Mexican Pulled Pork",
+            category = RecipeCategory.MAINS,
+            prepTimeMinutes = 15,
+            cookTimeMinutes = 150,
+            servings = 6,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "3 lb boneless pork shoulder (pork butt), cut into 2-inch chunks",
+                "1 large orange, juiced (plus spent halves)",
+                "2 limes, juiced",
+                "1 white onion, quartered",
+                "6 cloves garlic, smashed",
+                "2 tsp ground cumin",
+                "2 tsp dried Mexican oregano",
+                "1.5 tsp kosher salt and 1 tsp black pepper",
+                "1/2 cup water or chicken broth"
+            ),
+            instructions = listOf(
+                "Season pork chunks generously with salt, pepper, cumin, and oregano and place in a heavy Dutch oven.",
+                "Tuck in the quartered onion, smashed garlic, orange juice, spent orange halves, lime juice, and water.",
+                "Bring to a simmer, cover tightly, and braise on low heat (or in a 300°F oven) for 2 hours until fork-tender.",
+                "Uncover and simmer over medium-high heat for 15 minutes until the braising liquid reduces into a rich glaze.",
+                "Shred the pork into large chunks, spread onto a baking sheet, ladle reduced juices over top, and broil for 4-5 minutes until the edges are crisp and caramelized."
+            ),
+            tags = setOf("Mexican", "Hispanic", "Pork", "Gluten-Free", "Dairy-Free"),
+            notes = "Crisping the shredded pork under the broiler right before serving gives carnitas their signature contrast of tender meat and crunchy edges."
+        ),
+        RecipeItem(
+            id = "arroz_con_pollo",
+            name = "Classic Arroz con Pollo",
+            subtitle = "One-Pot Latin Saffron & Sofrito Chicken Rice",
+            category = RecipeCategory.MAINS,
+            prepTimeMinutes = 15,
+            cookTimeMinutes = 35,
+            servings = 6,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "6 bone-in or boneless chicken thighs",
+                "1.5 cups long-grain white rice",
+                "2 tbsp olive oil",
+                "1 yellow onion and 1 red bell pepper, finely diced",
+                "4 cloves garlic, minced",
+                "1/2 cup tomato sauce",
+                "2.5 cups warm chicken broth",
+                "1 tsp ground cumin, 1 tsp smoked paprika, and 1 pinch saffron or sazon",
+                "1 cup frozen peas and 1/3 cup sliced pimiento-stuffed green olives",
+                "1/4 cup fresh cilantro, chopped"
+            ),
+            instructions = listOf(
+                "Season chicken thighs with salt, pepper, cumin, and paprika. Sear in hot olive oil in a wide Dutch oven for 5 minutes per side until golden; transfer to a plate.",
+                "Sauté diced onion and bell pepper in the pot for 5 minutes until softened, then stir in garlic and tomato sauce for 1 minute.",
+                "Add the rice and toast for 2 minutes, stirring to coat the grains in the savory sofrito oil.",
+                "Pour in warm chicken broth and saffron, nestle the chicken thighs back on top, cover tightly, and simmer on low for 20 minutes.",
+                "Scatter peas and green olives over the rice, cover off the heat for 5 minutes, and garnish with fresh cilantro."
+            ),
+            tags = setOf("Hispanic", "Poultry", "Rice", "One-Pot", "Gluten-Free"),
+            notes = "Toasting the dry rice in the sofrito before adding broth keeps the grains separate and deeply flavorful."
+        ),
+        RecipeItem(
+            id = "chicken_parmigiana",
+            name = "Classic Italian Chicken Parmigiana",
+            subtitle = "Crispy Breaded Cutlets with Marinara & Mozzarella",
+            category = RecipeCategory.MAINS,
+            prepTimeMinutes = 20,
+            cookTimeMinutes = 20,
+            servings = 4,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "2 large chicken breasts, halved horizontally into 4 thin cutlets",
+                "1/2 cup all-purpose flour",
+                "2 large eggs, beaten",
+                "1 cup Italian seasoned breadcrumbs mixed with 1/2 cup grated Parmesan",
+                "2 cups marinara sauce",
+                "8 oz fresh mozzarella cheese, sliced or shredded",
+                "1/3 cup olive oil for pan-frying",
+                "1/4 cup fresh basil leaves, torn"
+            ),
+            instructions = listOf(
+                "Preheat oven or broiler to 425°F (220°C). Pound chicken cutlets to an even 1/3-inch thickness and season with salt and pepper.",
+                "Dredge each cutlet in flour, dip in beaten egg, and press into the Parmesan-breadcrumb mixture.",
+                "Pan-fry cutlets in shimmering olive oil in a large skillet over medium-high heat for 3 minutes per side until golden and crisp.",
+                "Arrange crispy cutlets in a baking dish, spoon marinara sauce over each, and top with mozzarella and extra Parmesan.",
+                "Bake for 8-10 minutes until the cheese is melted, bubbling, and lightly browned, then scatter with fresh basil."
+            ),
+            tags = setOf("Italian", "Poultry", "Classic", "Comfort-Food"),
+            notes = "Spoon marinara over the center of each cutlet leaving the edges uncovered so the breadcrumb crust stays crisp."
+        ),
+        RecipeItem(
+            id = "layered_meat_lasagna",
+            name = "Traditional Bolognese & Herbed Ricotta Lasagna",
+            subtitle = "Baked Italian Layered Pasta",
+            category = RecipeCategory.MAINS,
+            prepTimeMinutes = 30,
+            cookTimeMinutes = 50,
+            servings = 8,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "12 lasagna noodles, boiled until al dente",
+                "4 cups rich meat marinara or Bolognese sauce",
+                "15 oz whole-milk ricotta cheese",
+                "1 large egg, lightly beaten",
+                "3 cups low-moisture mozzarella cheese, shredded",
+                "1 cup freshly grated Parmesan cheese",
+                "1/4 cup fresh parsley and basil, finely chopped"
+            ),
+            instructions = listOf(
+                "Preheat oven to 375°F (190°C). Stir ricotta, beaten egg, half the Parmesan, chopped herbs, salt, and black pepper together in a bowl.",
+                "Spread 1 cup of meat sauce evenly across the bottom of a deep 9x13-inch baking dish.",
+                "Arrange 4 lasagna noodles over the sauce, spread with one-third of the ricotta mixture, 1 cup meat sauce, and 1 cup shredded mozzarella.",
+                "Repeat the layers twice more, finishing the top layer with remaining sauce, mozzarella, and Parmesan.",
+                "Bake covered with foil for 30 minutes, then uncover and bake 20 minutes more until golden and bubbling. Rest 15 minutes before slicing."
+            ),
+            tags = setOf("Italian", "Pasta", "Beef", "Comfort-Food", "Make-Ahead"),
+            notes = "Letting the baked lasagna rest for 15 minutes before cutting ensures clean, structured slices."
+        ),
+        RecipeItem(
+            id = "chicken_souvlaki_tzatziki",
+            name = "Greek Chicken Souvlaki with Tzatziki",
+            subtitle = "Lemon Oregano Skewers & Cool Cucumber Yogurt",
+            category = RecipeCategory.MAINS,
+            prepTimeMinutes = 20,
+            cookTimeMinutes = 12,
+            servings = 4,
+            difficulty = RecipeDifficulty.EASY,
+            ingredients = listOf(
+                "1.5 lb boneless skinless chicken breast or thighs, cubed",
+                "3 tbsp extra-virgin olive oil",
+                "1 large lemon, juiced",
+                "4 cloves garlic, minced, divided",
+                "1 tbsp dried Greek oregano",
+                "1 cup thick Greek yogurt",
+                "1/2 English cucumber, grated and squeezed dry",
+                "2 tbsp fresh dill, chopped",
+                "4 warm pita breads, sliced tomatoes, and red onion for serving"
+            ),
+            instructions = listOf(
+                "Whisk olive oil, lemon juice, 3 cloves minced garlic, oregano, 1 tsp salt, and black pepper; toss with cubed chicken and marinate for 15-30 minutes.",
+                "Meanwhile, stir Greek yogurt, squeezed grated cucumber, remaining 1 clove garlic, fresh dill, and a pinch of salt to make the tzatziki sauce.",
+                "Thread marinated chicken onto skewers and sear on a hot grill pan or cast-iron skillet for 10-12 minutes, turning until charred and cooked through.",
+                "Serve the hot skewers over warm pita bread with generous spoonfuls of cool tzatziki, tomatoes, and red onion."
+            ),
+            tags = setOf("Greek", "Mediterranean", "Poultry", "High-Protein", "Healthy"),
+            notes = "Squeezing excess water from the grated cucumber in a clean kitchen towel keeps the tzatziki thick and creamy."
+        ),
+        RecipeItem(
+            id = "traditional_greek_moussaka",
+            name = "Traditional Greek Moussaka",
+            subtitle = "Roasted Eggplant, Cinnamon Spiced Meat & Béchamel",
+            category = RecipeCategory.MAINS,
+            prepTimeMinutes = 35,
+            cookTimeMinutes = 45,
+            servings = 6,
+            difficulty = RecipeDifficulty.HARD,
+            ingredients = listOf(
+                "2 medium eggplants, sliced into 1/3-inch rounds",
+                "1 lb ground lamb or beef",
+                "1 medium yellow onion, finely diced, and 3 cloves garlic, minced",
+                "1 can (15 oz) crushed tomatoes",
+                "1/2 tsp ground cinnamon and 1 tsp dried oregano",
+                "4 tbsp unsalted butter and 1/4 cup all-purpose flour",
+                "2 cups warm whole milk",
+                "1/2 cup grated Parmesan or Kefalotyri cheese",
+                "1 egg yolk and 1 pinch freshly grated nutmeg"
+            ),
+            instructions = listOf(
+                "Preheat oven to 400°F (200°C). Brush eggplant slices with olive oil, season with salt, and roast on baking sheets for 20 minutes until tender.",
+                "Brown ground meat and onion in a skillet for 8 minutes, then stir in garlic, crushed tomatoes, cinnamon, oregano, salt, and pepper; simmer 15 minutes.",
+                "For the béchamel, melt butter in a saucepan, whisk in flour for 1 minute, gradually whisk in warm milk until thick, then stir in cheese, nutmeg, and egg yolk off the heat.",
+                "Layer half the roasted eggplant in a 9x13-inch baking dish, spread the spiced meat sauce on top, add remaining eggplant, and pour the creamy béchamel over the top.",
+                "Bake for 35-40 minutes until the béchamel crust is puffed and deep golden brown. Rest 20 minutes before serving."
+            ),
+            tags = setOf("Greek", "Mediterranean", "Beef", "Comfort-Food", "Dinner"),
+            notes = "A warm touch of cinnamon in the tomato meat sauce gives Greek moussaka its unmistakable aromatic depth."
+        ),
 
         // ==================== PASTA & GRAINS ====================
         RecipeItem(
@@ -870,6 +1227,92 @@ object RecipeBookEngine {
             tags = setOf("Rice", "Vegetarian", "Gluten-Free", "Italian"),
             notes = "Keep your pot of stock warm on a back burner so each ladle doesn't interrupt the simmer of the rice."
         ),
+        RecipeItem(
+            id = "penne_alla_vodka",
+            name = "Creamy Penne alla Vodka",
+            subtitle = "Tomato, Garlic & Calabrian Chili Cream Sauce",
+            category = RecipeCategory.PASTA_AND_GRAINS,
+            prepTimeMinutes = 10,
+            cookTimeMinutes = 20,
+            servings = 4,
+            difficulty = RecipeDifficulty.EASY,
+            ingredients = listOf(
+                "1 lb penne rigate or rigatoni",
+                "2 tbsp extra-virgin olive oil and 2 tbsp unsalted butter",
+                "1 small shallot, finely minced, and 4 cloves garlic, minced",
+                "1/2 cup double-concentrated tomato paste",
+                "1/4 cup vodka (or chicken/vegetable broth with a squeeze of lemon)",
+                "3/4 cup heavy cream",
+                "1/2 tsp crushed red pepper flakes",
+                "3/4 cup freshly grated Parmesan cheese",
+                "1/4 cup fresh basil leaves, torn"
+            ),
+            instructions = listOf(
+                "Heat olive oil and 1 tbsp butter in a wide skillet over medium heat. Cook minced shallot and garlic for 3 minutes until soft.",
+                "Add tomato paste and crushed red pepper flakes; caramelize for 4-5 minutes, stirring constantly until darkened to a deep brick red.",
+                "Deglaze with vodka and simmer for 2 minutes until mostly reduced, then reduce heat to low and whisk in heavy cream until smooth.",
+                "Meanwhile, boil penne in generously salted water until al dente, reserving 1 cup of starchy pasta water.",
+                "Transfer hot pasta directly into the sauce with remaining 1 tbsp butter, grated Parmesan, and a splash of pasta water, tossing until glossy."
+            ),
+            tags = setOf("Pasta", "Italian", "Vegetarian", "Comfort-Food", "Quick"),
+            notes = "Caramelizing the tomato paste thoroughly before adding the cream gives penne alla vodka its signature rich, savory-sweet depth."
+        ),
+        RecipeItem(
+            id = "cacio_e_pepe",
+            name = "Roman Tonnarelli Cacio e Pepe",
+            subtitle = "Pecorino Romano & Toasted Black Pepper",
+            category = RecipeCategory.PASTA_AND_GRAINS,
+            prepTimeMinutes = 5,
+            cookTimeMinutes = 15,
+            servings = 4,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "12 oz spaghetti, tonnarelli, or bucatini",
+                "2 tsp whole black peppercorns, coarsely crushed",
+                "1.5 cups finely grated aged Pecorino Romano cheese",
+                "1/2 cup finely grated Parmigiano-Reggiano",
+                "1 tbsp unsalted butter (optional for extra gloss)"
+            ),
+            instructions = listOf(
+                "Boil pasta in a pot with half the usual amount of salted water (so the water becomes extra starchy) until 2 minutes shy of al dente.",
+                "Toast crushed black peppercorns in a wide dry skillet over medium-low heat for 1 minute until aromatic, then ladle in 1/2 cup starchy pasta water and simmer.",
+                "Whisk the finely grated Pecorino and Parmigiano with 1/4 cup warm (not boiling) pasta water in a bowl into a smooth, thick paste.",
+                "Transfer pasta into the pepper skillet and toss for 1 minute until al dente, then remove the pan from the heat for 30 seconds.",
+                "Add the cheese paste and toss vigorously, splashing in extra pasta water as needed, until a creamy emulsion coats the noodles."
+            ),
+            tags = setOf("Pasta", "Italian", "Vegetarian", "Classic", "Quick"),
+            notes = "Grating the Pecorino on the finest microplane side prevents clumping when emulsified with warm pasta water."
+        ),
+        RecipeItem(
+            id = "tonkotsu_shoyu_ramen",
+            name = "Japanese Chashu & Ajitama Shoyu Ramen",
+            subtitle = "Savory Garlic Soy Broth, Noodles & Jammy Egg",
+            category = RecipeCategory.PASTA_AND_GRAINS,
+            prepTimeMinutes = 15,
+            cookTimeMinutes = 20,
+            servings = 4,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "4 packs fresh or dried Japanese ramen noodles",
+                "6 cups rich pork or chicken bone broth",
+                "2 cups dashi stock (or water steep with kombu and dried shiitake)",
+                "1/3 cup soy sauce and 2 tbsp mirin",
+                "1 tbsp toasted sesame oil",
+                "4 cloves garlic, grated, and 1 tbsp fresh ginger, grated",
+                "8 slices braised pork belly chashu or seared pork tenderloin",
+                "4 soft-boiled marinated eggs (ajitama), halved",
+                "4 green onions, thinly sliced, plus nori sheets and bamboo shoots"
+            ),
+            instructions = listOf(
+                "Warm sesame oil in a soup pot over medium heat and sauté grated garlic and ginger for 1 minute until fragrant.",
+                "Pour in the bone broth, dashi stock, soy sauce, and mirin; simmer gently for 12-15 minutes to meld the flavors.",
+                "Meanwhile, boil the ramen noodles in a separate pot of unsalted water for 2-3 minutes until springy, then drain well.",
+                "Divide the hot noodles among 4 deep warmed ramen bowls and ladle the steaming aromatic broth over top.",
+                "Arrange seared chashu slices, halved jammy eggs, sliced scallions, bamboo shoots, and crisp nori around each bowl."
+            ),
+            tags = setOf("Japanese", "Noodles", "Soup", "Comfort-Food"),
+            notes = "Always cook ramen noodles in a separate pot of water rather than directly in the broth so excess starch doesn't cloud the soup."
+        ),
 
         // ==================== SOUPS & SALADS ====================
         RecipeItem(
@@ -1053,6 +1496,204 @@ object RecipeBookEngine {
             tags = setOf("Soup", "Vegetarian", "Italian", "Healthy", "One-Pot"),
             notes = "Toss a leftover Parmesan rind into the pot while simmering for extra savory depth."
         ),
+        RecipeItem(
+            id = "chicken_tortilla_soup",
+            name = "Mexican Chicken Tortilla Soup",
+            subtitle = "Smoky Tomato Chili Broth, Avocado & Crisp Strips",
+            category = RecipeCategory.SOUPS_AND_SALADS,
+            prepTimeMinutes = 15,
+            cookTimeMinutes = 25,
+            servings = 6,
+            difficulty = RecipeDifficulty.EASY,
+            ingredients = listOf(
+                "2.5 cups cooked shredded chicken",
+                "1 medium yellow onion, diced, and 1 jalapeño, seeded and minced",
+                "3 cloves garlic, minced",
+                "1.5 tsp ground cumin and 1 tsp chili powder",
+                "1 can (15 oz) fire-roasted crushed tomatoes",
+                "6 cups chicken broth",
+                "1 can (15 oz) black beans, rinsed, and 1 cup sweet corn kernels",
+                "1 lime, juiced, and 1/3 cup fresh cilantro, chopped",
+                "Crisp corn tortilla strips, diced avocado, and queso fresco for topping"
+            ),
+            instructions = listOf(
+                "Heat 1 tbsp oil in a Dutch oven over medium heat and sauté diced onion and jalapeño for 5 minutes until softened.",
+                "Stir in garlic, cumin, and chili powder; cook for 1 minute until toasted and fragrant.",
+                "Pour in fire-roasted tomatoes, chicken broth, black beans, and corn; bring to a gentle boil and simmer for 15 minutes.",
+                "Stir in shredded chicken, fresh lime juice, and chopped cilantro; heat through for 3 minutes.",
+                "Ladle into warm bowls and pile high with crisp tortilla strips, diced avocado, and crumbled queso fresco."
+            ),
+            tags = setOf("Soup", "Mexican", "Hispanic", "Poultry", "Gluten-Free", "One-Pot"),
+            notes = "Fry thin strips of corn tortillas in a splash of oil with a pinch of salt for fresh, shatteringly crisp soup toppers."
+        ),
+        RecipeItem(
+            id = "avgolemono_soup",
+            name = "Greek Lemon Chicken Soup (Avgolemono)",
+            subtitle = "Velvety Egg-Lemon Broth with Orzo & Fresh Dill",
+            category = RecipeCategory.SOUPS_AND_SALADS,
+            prepTimeMinutes = 10,
+            cookTimeMinutes = 20,
+            servings = 6,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "8 cups rich chicken broth",
+                "3/4 cup orzo pasta (or arborio rice)",
+                "2.5 cups cooked shredded chicken breast",
+                "3 large eggs, at room temperature",
+                "1/2 cup fresh lemon juice (about 2-3 juicy lemons)",
+                "1/4 cup fresh dill, finely chopped",
+                "1 tsp kosher salt and freshly ground black pepper"
+            ),
+            instructions = listOf(
+                "Bring chicken broth to a boil in a large pot, stir in the orzo, and simmer for 8-9 minutes until tender.",
+                "Reduce heat to low and stir in the shredded chicken.",
+                "In a medium bowl, whisk the whole eggs and fresh lemon juice vigorously for 1 minute until pale and frothy.",
+                "Slowly ladle 1.5 cups of the hot soup broth in a thin stream into the egg-lemon mixture while whisking constantly to temper the eggs.",
+                "Turn off the burner, pour the tempered egg-lemon mixture back into the pot while stirring, and garnish with fresh dill and black pepper."
+            ),
+            tags = setOf("Soup", "Greek", "Mediterranean", "Poultry", "Comfort-Food"),
+            notes = "Tempering the eggs slowly and keeping the soup below a boil after adding them creates a silky, cream-free velvet broth."
+        ),
+        RecipeItem(
+            id = "japanese_miso_soup",
+            name = "Traditional Japanese Dashi Miso Soup",
+            subtitle = "Silken Tofu, Wakame Seaweed & Scallions",
+            category = RecipeCategory.SOUPS_AND_SALADS,
+            prepTimeMinutes = 5,
+            cookTimeMinutes = 10,
+            servings = 4,
+            difficulty = RecipeDifficulty.EASY,
+            ingredients = listOf(
+                "4 cups Japanese dashi stock (4 cups water + 1 piece kombu + 1 cup bonito flakes, or 2 tsp dashi granules)",
+                "3 to 4 tbsp white or red miso paste",
+                "6 oz silken or soft tofu, cut into 1/2-inch cubes",
+                "1 tbsp dried wakame seaweed",
+                "2 green onions, thinly sliced"
+            ),
+            instructions = listOf(
+                "Bring dashi stock to a gentle simmer in a saucepan over medium heat.",
+                "Add the cubed silken tofu and dried wakame seaweed; warm gently for 2 minutes until the wakame expands and softens.",
+                "Turn off the heat completely so the delicate aroma of the miso is preserved.",
+                "Place miso paste in a fine-mesh strainer or ladle submerged in the hot broth and stir until smoothly dissolved into the soup.",
+                "Ladle immediately into bowls and scatter thinly sliced green onions on top."
+            ),
+            tags = setOf("Soup", "Japanese", "Quick", "Healthy", "Gluten-Free"),
+            notes = "Never boil miso soup after whisking in the miso paste—high heat drives off its savory fermented aroma and causes it to separate."
+        ),
+        RecipeItem(
+            id = "french_onion_soup",
+            name = "Caramelized French Onion Soup",
+            subtitle = "Slow-Sweetened Onions & Toasted Gruyère Crouton",
+            category = RecipeCategory.SOUPS_AND_SALADS,
+            prepTimeMinutes = 15,
+            cookTimeMinutes = 50,
+            servings = 4,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "4 large yellow onions, thinly sliced",
+                "4 tbsp unsalted butter and 1 tbsp olive oil",
+                "1/2 tsp sugar and 1 tsp kosher salt",
+                "2 cloves garlic, minced",
+                "1 tbsp all-purpose flour",
+                "1/2 cup dry white wine or dry sherry",
+                "6 cups rich beef broth",
+                "4 sprigs fresh thyme and 1 bay leaf",
+                "8 slices toasted French baguette and 2 cups shredded Gruyère cheese"
+            ),
+            instructions = listOf(
+                "Melt butter with olive oil in a Dutch oven over medium-low heat. Add sliced onions, salt, and sugar; cook slowly for 35-40 minutes, stirring often until deep mahogany brown.",
+                "Stir in minced garlic and flour and cook for 1 minute.",
+                "Pour in white wine, scraping up the browned fond from the bottom of the pot, and simmer until reduced by half.",
+                "Add beef broth, thyme sprigs, and bay leaf; simmer partially covered for 15 minutes, then discard herbs.",
+                "Ladle soup into oven-safe crocks, float toasted baguette slices on top, pile generously with shredded Gruyère, and broil for 2-3 minutes until bubbling and golden."
+            ),
+            tags = setOf("Soup", "Comfort-Food", "Classic", "Dinner"),
+            notes = "Patience while caramelizing the onions is everything—their natural sugars turn deep golden and savory-sweet."
+        ),
+        RecipeItem(
+            id = "broccoli_cheddar_soup",
+            name = "Velvety Broccoli Cheddar Soup",
+            subtitle = "Sharp Cheddar, Tender Broccoli Florets & Carrots",
+            category = RecipeCategory.SOUPS_AND_SALADS,
+            prepTimeMinutes = 10,
+            cookTimeMinutes = 25,
+            servings = 6,
+            difficulty = RecipeDifficulty.EASY,
+            ingredients = listOf(
+                "4 cups fresh broccoli florets and peeled stems, chopped small",
+                "1 large carrot, julienned or coarsely grated",
+                "1 small yellow onion, finely diced, and 2 cloves garlic, minced",
+                "4 tbsp unsalted butter",
+                "1/4 cup all-purpose flour",
+                "3 cups chicken or vegetable broth",
+                "1.5 cups half-and-half or whole milk",
+                "2.5 cups sharp cheddar cheese, freshly shredded",
+                "1/2 tsp Dijon mustard and 1 pinch nutmeg"
+            ),
+            instructions = listOf(
+                "Melt butter in a Dutch oven over medium heat and sauté diced onion and garlic for 4 minutes until translucent.",
+                "Whisk in flour and cook for 1 minute, then slowly whisk in broth and half-and-half until smooth.",
+                "Add chopped broccoli, grated carrot, Dijon mustard, nutmeg, salt, and black pepper; simmer on medium-low for 15 minutes until broccoli is tender.",
+                "Remove the pot from the heat and stir in freshly shredded sharp cheddar one handful at a time until velvety and melted.",
+                "Ladle into warm bowls or crusty sourdough bread bowls."
+            ),
+            tags = setOf("Soup", "Vegetarian", "Comfort-Food", "One-Pot", "Kid-Friendly"),
+            notes = "Take the pot off the burner before stirring in the cheddar so the cheese melts into a smooth cream without turning grainy."
+        ),
+        RecipeItem(
+            id = "potato_leek_soup",
+            name = "Creamy Potato Leek Soup",
+            subtitle = "Silky Yukon Golds, Buttery Leeks & Fresh Chives",
+            category = RecipeCategory.SOUPS_AND_SALADS,
+            prepTimeMinutes = 15,
+            cookTimeMinutes = 25,
+            servings = 6,
+            difficulty = RecipeDifficulty.EASY,
+            ingredients = listOf(
+                "3 large leeks (white and light green parts only), washed and thinly sliced",
+                "2 lb Yukon Gold potatoes, peeled and diced",
+                "3 tbsp unsalted butter",
+                "3 cloves garlic, smashed",
+                "4.5 cups chicken or vegetable broth",
+                "1 bay leaf and 3 sprigs fresh thyme",
+                "1/2 cup heavy cream",
+                "2 tbsp fresh chives, finely chopped"
+            ),
+            instructions = listOf(
+                "Melt butter in a heavy soup pot over medium-low heat. Add sliced leeks, garlic, and a pinch of salt; sweat gently for 8-10 minutes without browning.",
+                "Add diced potatoes, broth, bay leaf, and thyme sprigs; bring to a boil, then simmer covered for 15 minutes until potatoes are fork-tender.",
+                "Remove bay leaf and thyme stems, then puree the soup until velvety smooth using an immersion blender.",
+                "Stir in heavy cream, adjust salt and white or black pepper to taste, and serve topped with fresh chopped chives."
+            ),
+            tags = setOf("Soup", "Vegetarian", "Gluten-Free", "Comfort-Food", "One-Pot"),
+            notes = "Rinse sliced leeks in a bowl of cold water and lift them out so any hidden sand sinks to the bottom."
+        ),
+        RecipeItem(
+            id = "insalata_caprese",
+            name = "Classic Italian Insalata Caprese",
+            subtitle = "Vine-Ripened Tomatoes, Fresh Mozzarella & Basil",
+            category = RecipeCategory.SOUPS_AND_SALADS,
+            prepTimeMinutes = 10,
+            cookTimeMinutes = 0,
+            servings = 4,
+            difficulty = RecipeDifficulty.EASY,
+            ingredients = listOf(
+                "3 large ripe heirloom or vine tomatoes, sliced 1/4-inch thick",
+                "12 oz fresh mozzarella di bufala or fior di latte, sliced",
+                "1/2 cup fresh sweet basil leaves",
+                "3 tbsp extra-virgin olive oil",
+                "1 tbsp aged balsamic glaze (optional)",
+                "1/2 tsp flaky sea salt and freshly cracked black pepper"
+            ),
+            instructions = listOf(
+                "Arrange alternating overlapping slices of ripe tomato and fresh mozzarella on a wide serving platter.",
+                "Tuck whole fresh basil leaves between the tomato and mozzarella slices.",
+                "Drizzle generously with fruity extra-virgin olive oil and aged balsamic glaze if desired.",
+                "Season right before serving with flaky sea salt and freshly cracked black pepper."
+            ),
+            tags = setOf("Salad", "Italian", "Vegetarian", "Gluten-Free", "No-Cook", "Quick"),
+            notes = "Serve tomatoes and fresh mozzarella at room temperature rather than straight from the fridge for peak flavor."
+        ),
 
         // ==================== SIDES & SNACKS ====================
         RecipeItem(
@@ -1220,6 +1861,89 @@ object RecipeBookEngine {
             tags = setOf("Vegan", "Appetizer", "Italian", "Quick"),
             notes = "Rubbing a raw garlic clove over warm toast infuses gentle garlic aroma without overpowering the fresh tomatoes."
         ),
+        RecipeItem(
+            id = "crispy_spanakopita",
+            name = "Greek Spinach & Feta Spanakopita",
+            subtitle = "Flaky Golden Phyllo Triangles with Fresh Herbs",
+            category = RecipeCategory.SIDES_AND_SNACKS,
+            prepTimeMinutes = 25,
+            cookTimeMinutes = 25,
+            servings = 8,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "1 lb fresh baby spinach, wilted and squeezed bone-dry, chopped",
+                "8 oz Greek feta cheese, crumbled",
+                "1/2 cup ricotta or cottage cheese",
+                "4 green onions, finely chopped, and 1/3 cup fresh dill and parsley",
+                "2 large eggs, lightly beaten",
+                "12 sheets thawed phyllo pastry",
+                "1/2 cup melted unsalted butter mixed with 2 tbsp olive oil"
+            ),
+            instructions = listOf(
+                "Preheat oven to 375°F (190°C) and line two baking sheets with parchment paper.",
+                "Mix squeezed chopped spinach, crumbled feta, ricotta, green onions, fresh dill, parsley, beaten eggs, and black pepper in a bowl.",
+                "Lay 1 sheet of phyllo on a work surface, brush lightly with the butter-oil mixture, top with a second sheet, brush again, and cut lengthwise into 3 strips.",
+                "Spoon 1 heaping tablespoon of filling at the bottom of each strip and fold diagonally like a flag into a neat triangle; repeat with remaining phyllo.",
+                "Brush the tops with melted butter and bake for 22-25 minutes until puffed, flaky, and golden brown."
+            ),
+            tags = setOf("Greek", "Mediterranean", "Vegetarian", "Appetizer", "Baking"),
+            notes = "Keep unused phyllo sheets covered with a slightly damp kitchen towel while assembling so they don't dry out."
+        ),
+        RecipeItem(
+            id = "mexican_street_corn_elote",
+            name = "Mexican Street Corn (Elote)",
+            subtitle = "Charred Sweet Corn with Crema, Cotija, Lime & Chili",
+            category = RecipeCategory.SIDES_AND_SNACKS,
+            prepTimeMinutes = 10,
+            cookTimeMinutes = 10,
+            servings = 4,
+            difficulty = RecipeDifficulty.EASY,
+            ingredients = listOf(
+                "4 ears fresh sweet corn, husked (or 4 cups corn kernels for esquites)",
+                "1/4 cup mayonnaise",
+                "1/4 cup Mexican crema or sour cream",
+                "1/2 cup cotija or queso fresco cheese, finely crumbled",
+                "1/2 cup fresh cilantro, finely chopped",
+                "1 clove garlic, finely grated",
+                "1 lime, cut into wedges, and 1 tsp chili powder or Tajín"
+            ),
+            instructions = listOf(
+                "Whisk mayonnaise, Mexican crema, grated garlic, and a squeeze of lime juice together in a small bowl.",
+                "Grill the husked corn over high heat (or char kernels in a dry hot cast-iron skillet) for 8-10 minutes, turning until blistered and golden.",
+                "Brush the hot charred corn generously all over with the creamy garlic-lime sauce.",
+                "Sprinkle heavily with crumbled cotija cheese, chopped cilantro, and chili powder or Tajín, and serve warm with lime wedges."
+            ),
+            tags = setOf("Mexican", "Hispanic", "Vegetarian", "Gluten-Free", "Side", "Quick"),
+            notes = "For easy bowl-style serving (esquites), slice the charred kernels off the cob and toss everything together in a warm bowl."
+        ),
+        RecipeItem(
+            id = "pan_fried_pork_gyoza",
+            name = "Crispy Pan-Fried Japanese Pork Gyoza",
+            subtitle = "Lacy Bottom Dumplings with Soy-Vinegar Dip",
+            category = RecipeCategory.SIDES_AND_SNACKS,
+            prepTimeMinutes = 25,
+            cookTimeMinutes = 10,
+            servings = 4,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "24 round gyoza or wonton wrappers",
+                "1/2 lb ground pork",
+                "1.5 cups napa cabbage, finely minced and squeezed dry",
+                "3 green onions, minced, plus 2 cloves garlic and 1 tsp ginger, grated",
+                "1 tbsp soy sauce and 1 tbsp toasted sesame oil",
+                "1 tbsp vegetable oil and 1/3 cup water for steaming",
+                "Dipping sauce: 2 tbsp soy sauce, 2 tbsp rice vinegar, and 1 tsp chili oil"
+            ),
+            instructions = listOf(
+                "Mix ground pork, squeezed napa cabbage, green onions, garlic, ginger, soy sauce, and sesame oil thoroughly in a bowl.",
+                "Place 1 rounded teaspoon of filling in the center of each gyoza wrapper, moisten the edge with water, and fold in half, pleating one side to seal.",
+                "Heat vegetable oil in a large nonstick skillet over medium-high heat, arrange gyoza flat-side down, and sear for 2-3 minutes until golden brown on the bottoms.",
+                "Carefully pour in 1/3 cup water, cover immediately with a tight lid, and steam for 4 minutes until wrappers are translucent and pork is cooked through.",
+                "Uncover and cook 1 minute more until all water evaporates and bottoms are crisp again. Serve with soy-vinegar dipping sauce."
+            ),
+            tags = setOf("Japanese", "Pork", "Appetizer", "Dairy-Free"),
+            notes = "Squeezing the salted minced cabbage dry keeps the gyoza filling juicy without making the wrappers soggy."
+        ),
 
         // ==================== BAKING & DESSERTS ====================
         RecipeItem(
@@ -1369,6 +2093,64 @@ object RecipeBookEngine {
             ),
             tags = setOf("Dessert", "No-Cook", "Italian", "Make-Ahead"),
             notes = "Dip ladyfingers for just a quick second—they soften further as the tiramisu chills."
+        ),
+        RecipeItem(
+            id = "cinnamon_churros",
+            name = "Crispy Cinnamon Sugar Churros",
+            subtitle = "Piped Choux Pastry with Warm Chocolate Sauce",
+            category = RecipeCategory.BAKING_AND_DESSERTS,
+            prepTimeMinutes = 15,
+            cookTimeMinutes = 15,
+            servings = 6,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "1 cup water",
+                "2.5 tbsp unsalted butter",
+                "2 tbsp granulated sugar plus 1/2 cup for coating",
+                "1/4 tsp kosher salt",
+                "1 cup all-purpose flour",
+                "1 large egg and 1 tsp vanilla extract",
+                "1.5 tsp ground cinnamon",
+                "4 oz dark chocolate melted with 1/2 cup warm heavy cream",
+                "Vegetable oil for frying"
+            ),
+            instructions = listOf(
+                "Combine 1/2 cup sugar and ground cinnamon in a shallow dish and set aside.",
+                "Bring water, butter, 2 tbsp sugar, and salt to a rolling boil in a saucepan, then remove from heat and stir in flour all at once until a smooth dough ball forms.",
+                "Cool dough for 5 minutes, then beat in the egg and vanilla until glossy and pipeable; transfer to a piping bag fitted with a large star tip.",
+                "Pipe 5-inch strips into 360°F vegetable oil, snipping the ends with kitchen shears, and fry for 2 minutes per side until deep golden and crisp.",
+                "Drain briefly on paper towels, roll immediately in cinnamon sugar, and serve warm with dark chocolate dipping sauce."
+            ),
+            tags = setOf("Dessert", "Hispanic", "Mexican", "Sweet"),
+            notes = "Using a star piping tip creates ridges that maximize crispy surface area and prevent steam pockets while frying."
+        ),
+        RecipeItem(
+            id = "honey_walnut_baklava",
+            name = "Greek Honey & Walnut Baklava",
+            subtitle = "Crisp Layered Phyllo with Lemon Cinnamon Syrup",
+            category = RecipeCategory.BAKING_AND_DESSERTS,
+            prepTimeMinutes = 30,
+            cookTimeMinutes = 45,
+            servings = 12,
+            difficulty = RecipeDifficulty.MEDIUM,
+            ingredients = listOf(
+                "16 oz thawed phyllo dough sheets",
+                "3 cups walnuts and pistachios, finely chopped",
+                "1.5 tsp ground cinnamon",
+                "1 cup (2 sticks) unsalted butter, melted",
+                "1 cup granulated sugar and 3/4 cup water",
+                "3/4 cup Greek wildflower honey",
+                "1 tbsp fresh lemon juice and 1 strip lemon peel"
+            ),
+            instructions = listOf(
+                "Simmer sugar, water, honey, lemon juice, and lemon peel in a small saucepan for 10 minutes, then cool the syrup completely to room temperature.",
+                "Preheat oven to 350°F (175°C). Toss finely chopped nuts with ground cinnamon.",
+                "Layer 8 buttered sheets of phyllo in the bottom of a buttered 9x13-inch pan, scatter a third of the spiced nuts on top, and repeat with 6 sheets and nuts twice more.",
+                "Top with 8 final buttered phyllo sheets and use a sharp knife to score the pastry into diamond shapes all the way through.",
+                "Bake for 45-50 minutes until crisp and golden, then immediately ladle the cooled honey syrup over the hot baklava so it sizzles and absorbs without getting soggy."
+            ),
+            tags = setOf("Dessert", "Greek", "Mediterranean", "Baking", "Sweet"),
+            notes = "Always pour cold syrup over hot-from-the-oven baklava so the phyllo layers stay shatteringly crisp."
         ),
 
         // ==================== SAUCES & DRINKS ====================

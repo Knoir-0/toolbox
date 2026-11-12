@@ -267,14 +267,19 @@ fun RecipeBookScreen(
                             )
                         }
 
-                        val allSelected = savedRecipes.isNotEmpty() &&
-                            selectedIds.size == savedRecipes.size
+                        val selectableRecipes = if (savedRecipes.isNotEmpty()) {
+                            savedRecipes
+                        } else {
+                            allCatalog.take(6)
+                        }
+                        val allSelected = selectableRecipes.isNotEmpty() &&
+                            selectableRecipes.all { it.id in selectedIds }
                         Checkbox(
                             checked = allSelected,
                             onCheckedChange = { checked ->
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 selectedIds = if (checked) {
-                                    savedRecipes.map { it.id }.toSet()
+                                    selectableRecipes.map { it.id }.toSet()
                                 } else {
                                     emptySet()
                                 }
@@ -295,7 +300,8 @@ fun RecipeBookScreen(
 
                         IconButton(
                             onClick = {
-                                val selectedRecipe = savedRecipes.firstOrNull { it.id in selectedIds }
+                                val selectedRecipe = (savedRecipes + allCatalog)
+                                    .firstOrNull { it.id in selectedIds }
                                 if (selectedRecipe != null) {
                                     inspectingRecipe = selectedRecipe
                                 }
@@ -309,20 +315,20 @@ fun RecipeBookScreen(
                             )
                         }
 
+                        val deletableSelected = savedRecipes.filter { it.id in selectedIds }
                         IconButton(
                             onClick = {
-                                val toDelete = savedRecipes.filter { it.id in selectedIds }
-                                if (toDelete.isNotEmpty()) {
-                                    pendingDeleteRecipes = toDelete
+                                if (deletableSelected.isNotEmpty()) {
+                                    pendingDeleteRecipes = deletableSelected
                                 }
                             },
-                            enabled = selectedIds.isNotEmpty(),
+                            enabled = deletableSelected.isNotEmpty(),
                             modifier = Modifier.testTag("multi_select_delete_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Delete,
                                 contentDescription = "Remove Selected Recipes",
-                                tint = if (selectedIds.isNotEmpty()) {
+                                tint = if (deletableSelected.isNotEmpty()) {
                                     MaterialTheme.colorScheme.error
                                 } else {
                                     MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
@@ -354,7 +360,8 @@ fun RecipeBookScreen(
                                         },
                                         onClick = {
                                             showMultiSelectOverflow = false
-                                            val target = savedRecipes.firstOrNull { it.id in selectedIds }
+                                            val target = (savedRecipes + allCatalog)
+                                                .firstOrNull { it.id in selectedIds }
                                             if (target != null) {
                                                 editingRecipe = target
                                                 exitSelectionMode()
@@ -372,7 +379,17 @@ fun RecipeBookScreen(
                                         showMultiSelectOverflow = false
                                         var updated = savedRecipes
                                         selectedIds.forEach { id ->
-                                            updated = RecipeBookEngine.toggleFavoriteRecipe(updated, id)
+                                            if (updated.any { it.id == id }) {
+                                                updated = RecipeBookEngine.toggleFavoriteRecipe(updated, id)
+                                            } else {
+                                                val catalogRecipe = allCatalog.firstOrNull { it.id == id }
+                                                if (catalogRecipe != null) {
+                                                    updated = RecipeBookEngine.addRecipeToBook(
+                                                        updated,
+                                                        catalogRecipe.copy(isFavorite = true)
+                                                    )
+                                                }
+                                            }
                                         }
                                         persistSaved(updated)
                                         exitSelectionMode()
@@ -391,12 +408,11 @@ fun RecipeBookScreen(
                                         textColor = MaterialTheme.colorScheme.error,
                                         leadingIconColor = MaterialTheme.colorScheme.error
                                     ),
-                                    enabled = selectedIds.isNotEmpty(),
+                                    enabled = deletableSelected.isNotEmpty(),
                                     onClick = {
                                         showMultiSelectOverflow = false
-                                        val toDelete = savedRecipes.filter { it.id in selectedIds }
-                                        if (toDelete.isNotEmpty()) {
-                                            pendingDeleteRecipes = toDelete
+                                        if (deletableSelected.isNotEmpty()) {
+                                            pendingDeleteRecipes = deletableSelected
                                         }
                                     }
                                 )
@@ -609,7 +625,12 @@ fun RecipeBookScreen(
                     },
                     onQuickAddStarterRecipe = { recipe ->
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        persistSaved(RecipeBookEngine.toggleRecipeInBook(savedRecipes, recipe))
+                        persistSaved(
+                            RecipeBookEngine.toggleRecipeInBook(
+                                savedRecipes,
+                                recipe.copy(isFavorite = true)
+                            )
+                        )
                     },
                     onClickRecipe = { recipe ->
                         if (isSelectionMode) {
@@ -676,7 +697,12 @@ fun RecipeBookScreen(
                         savedRecipeIds = savedRecipeIds,
                         onToggleRecipe = { recipe ->
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            persistSaved(RecipeBookEngine.toggleRecipeInBook(savedRecipes, recipe))
+                            persistSaved(
+                                RecipeBookEngine.toggleRecipeInBook(
+                                    savedRecipes,
+                                    recipe.copy(isFavorite = true)
+                                )
+                            )
                         },
                         onInspectRecipe = { recipe ->
                             inspectingRecipe = recipe
@@ -748,20 +774,18 @@ fun RecipeBookScreen(
                                 isCreatingCustom = true
                             }
                         )
-                        if (savedRecipes.isNotEmpty()) {
-                            RecipeMiniFab(
-                                label = "Select Recipes",
-                                icon = Icons.Default.Check,
-                                testTag = "select_recipes_fab_button",
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    isFabExpanded = false
-                                    isSearchActive = false
-                                    isSelectionMode = true
-                                    selectedIds = emptySet()
-                                }
-                            )
-                        }
+                        RecipeMiniFab(
+                            label = "Select Recipes",
+                            icon = Icons.Default.Check,
+                            testTag = "select_recipes_fab_button",
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                isFabExpanded = false
+                                isSearchActive = false
+                                isSelectionMode = true
+                                selectedIds = emptySet()
+                            }
+                        )
                     }
                 }
 
@@ -808,7 +832,12 @@ fun RecipeBookScreen(
             onDismiss = { inspectingRecipe = null },
             onToggleSaved = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                persistSaved(RecipeBookEngine.toggleRecipeInBook(savedRecipes, currentSavedVersion))
+                persistSaved(
+                    RecipeBookEngine.toggleRecipeInBook(
+                        savedRecipes,
+                        currentSavedVersion.copy(isFavorite = true)
+                    )
+                )
             },
             onToggleFavorite = {
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -1077,7 +1106,7 @@ private fun RecipeCatalogSearchOverlay(
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = "Tap + to add to your recipes",
+                        text = "Tap ★ to save to your recipes",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1142,30 +1171,42 @@ private fun RecipeCatalogSearchOverlay(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CatalogRecipeResultCard(
     recipe: RecipeItem,
     isAlreadyAdded: Boolean,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
     onToggle: () -> Unit,
-    onInspect: () -> Unit
+    onInspect: () -> Unit,
+    onLongClick: (() -> Unit)? = null
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onInspect() }
+            .clip(RoundedCornerShape(14.dp))
+            .combinedClickable(
+                onClick = onInspect,
+                onLongClick = onLongClick
+            )
             .testTag("catalog_recipe_card_${recipe.id}"),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            containerColor = if (isSelected) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            }
         ),
         border = BorderStroke(
-            width = 1.dp,
-            color = if (isAlreadyAdded) {
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-            } else {
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+            width = if (isSelected) 2.dp else 1.dp,
+            color = when {
+                isSelected -> MaterialTheme.colorScheme.primary
+                isAlreadyAdded -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
             }
         )
     ) {
@@ -1176,19 +1217,27 @@ private fun CatalogRecipeResultCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.secondaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = recipe.category.icon(),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.size(24.dp)
+            if (isSelectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onInspect() },
+                    modifier = Modifier.testTag("select_checkbox_${recipe.id}")
                 )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.secondaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = recipe.category.icon(),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
 
             Column(modifier = Modifier.weight(1f)) {
@@ -1237,85 +1286,80 @@ private fun CatalogRecipeResultCard(
                 )
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                    onClick = onToggle,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (isAlreadyAdded) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.primary
-                            }
-                        )
-                        .testTag(
+            if (!isSelectionMode) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = onToggle,
+                        modifier = Modifier.testTag(
                             if (isAlreadyAdded) {
                                 "added_recipe_button_${recipe.id}"
                             } else {
                                 "add_recipe_button_${recipe.id}"
                             }
                         )
-                ) {
-                    Icon(
-                        imageVector = if (isAlreadyAdded) Icons.Default.Check else Icons.Default.Add,
-                        contentDescription = if (isAlreadyAdded) {
-                            "Remove ${recipe.name} from Recipe Book"
-                        } else {
-                            "Add ${recipe.name} to Recipe Book"
-                        },
-                        tint = if (isAlreadyAdded) {
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onPrimary
-                        },
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
-                Box {
-                    IconButton(
-                        onClick = { showMenu = true },
-                        modifier = Modifier.testTag("catalog_overflow_${recipe.id}")
                     ) {
                         Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "Recipe Options",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            imageVector = if (isAlreadyAdded) {
+                                Icons.Default.Star
+                            } else {
+                                Icons.Default.StarBorder
+                            },
+                            contentDescription = if (isAlreadyAdded) {
+                                "Remove ${recipe.name} from Recipe Book"
+                            } else {
+                                "Add ${recipe.name} to Recipe Book"
+                            },
+                            tint = if (isAlreadyAdded) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
                         )
                     }
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false },
-                        shape = RoundedCornerShape(16.dp),
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Inspect Recipe") },
-                            leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
-                            onClick = {
-                                showMenu = false
-                                onInspect()
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    if (isAlreadyAdded) "Remove from Recipes" else "Add to Recipes"
-                                )
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    if (isAlreadyAdded) Icons.Default.Delete else Icons.Default.Add,
-                                    contentDescription = null
-                                )
-                            },
-                            onClick = {
-                                showMenu = false
-                                onToggle()
-                            }
-                        )
+
+                    Box {
+                        IconButton(
+                            onClick = { showMenu = true },
+                            modifier = Modifier.testTag("catalog_overflow_${recipe.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "Recipe Options",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false },
+                            shape = RoundedCornerShape(16.dp),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Inspect Recipe") },
+                                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                                onClick = {
+                                    showMenu = false
+                                    onInspect()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (isAlreadyAdded) "Remove from Recipes" else "Add to Recipes"
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        if (isAlreadyAdded) Icons.Default.Star else Icons.Default.StarBorder,
+                                        contentDescription = null
+                                    )
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onToggle()
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -1363,93 +1407,6 @@ private fun MainRecipeBookContent(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    ),
-                    border = BorderStroke(
-                        1.dp,
-                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                    )
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(64.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primaryContainer),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.RestaurantMenu,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.size(32.dp)
-                            )
-                        }
-
-                        Text(
-                            text = "Save Your Favorite Recipes",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-
-                        Text(
-                            text = "Search the preloaded catalog of ${allCatalog.size} common recipes by name, ingredient, or category—or create your own family recipes.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Button(
-                                onClick = onOpenSearchCatalog,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("empty_browse_catalog_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Search,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Search Catalog", fontWeight = FontWeight.Bold)
-                            }
-
-                            FilledTonalButton(
-                                onClick = onOpenCustomCreator,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("empty_create_custom_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Add,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Custom Recipe", fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-            }
-
-            item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1471,8 +1428,11 @@ private fun MainRecipeBookContent(
                 CatalogRecipeResultCard(
                     recipe = recipe,
                     isAlreadyAdded = recipe.id in savedRecipeIds,
+                    isSelectionMode = isSelectionMode,
+                    isSelected = recipe.id in selectedIds,
                     onToggle = { onQuickAddStarterRecipe(recipe) },
-                    onInspect = { onClickRecipe(recipe) }
+                    onInspect = { onClickRecipe(recipe) },
+                    onLongClick = { onLongClickRecipe(recipe) }
                 )
             }
         }
@@ -1830,14 +1790,14 @@ private fun SavedRecipeCard(
                     label = "${recipe.servings} servings"
                 )
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
+                    shape = CircleShape,
                     color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.7f)
                 ) {
                     Text(
                         text = "${recipe.ingredients.size} ingredients • ${recipe.instructions.size} steps • ${recipe.difficulty.displayName}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onTertiaryContainer,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
             }
@@ -1851,11 +1811,11 @@ private fun RecipeMetricPill(
     label: String
 ) {
     Surface(
-        shape = RoundedCornerShape(8.dp),
+        shape = CircleShape,
         color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
@@ -2319,7 +2279,7 @@ private fun RecipeDetailDialog(
                     modifier = Modifier.testTag("detail_toggle_saved_button")
                 ) {
                     Icon(
-                        imageVector = if (isSavedInBook) Icons.Default.Check else Icons.Default.Add,
+                        imageVector = if (isSavedInBook) Icons.Default.Star else Icons.Default.StarBorder,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp)
                     )

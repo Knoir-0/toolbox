@@ -222,8 +222,12 @@ fun FilesScreen(
   // Hot-plug storage revision token
   var storageRevision by remember { mutableIntStateOf(0) }
 
-  // Discovered storage volumes (Primary root + any connected external storage devices)
-  val storageVolumes = remember(storageRevision, isInspection, userRoot) {
+  val samplesRoot = remember(context, isInspection) {
+    if (isInspection) File("/storage/emulated/0/Samples") else FileManagerEngine.getSamplesDirectory(context)
+  }
+
+  // Discovered storage volumes (Primary root + Samples folder + any connected external storage devices)
+  val storageVolumes = remember(storageRevision, isInspection, userRoot, samplesRoot) {
     if (isInspection) {
       listOf(
         StorageVolumeInfo(
@@ -231,6 +235,13 @@ fun FilesScreen(
           name = "Home",
           file = userRoot,
           isPrimary = true,
+          isRemovable = false,
+        ),
+        StorageVolumeInfo(
+          id = FileManagerEngine.SAMPLES_VOLUME_ID,
+          name = FileManagerEngine.SAMPLES_FOLDER_NAME,
+          file = samplesRoot,
+          isPrimary = false,
           isRemovable = false,
         ),
         StorageVolumeInfo(
@@ -250,9 +261,10 @@ fun FilesScreen(
 
   // Resolve the currently active volume based on currentDirectory
   val activeVolume = remember(currentDirectory, storageVolumes) {
-    storageVolumes.firstOrNull { vol ->
-      FileManagerEngine.isSameOrDescendant(currentDirectory, vol.file)
-    } ?: storageVolumes.firstOrNull()
+    storageVolumes
+      .filter { vol -> FileManagerEngine.isSameOrDescendant(currentDirectory, vol.file) }
+      .maxByOrNull { vol -> vol.file.absolutePath.length }
+      ?: storageVolumes.firstOrNull()
   }
 
   // Listen for storage device connection and disconnection events
@@ -367,11 +379,27 @@ fun FilesScreen(
   // Directory content revision token to trigger recomposition on modifications
   var refreshTrigger by remember { mutableIntStateOf(0) }
 
+  // Ensure the Samples directory and sample video are populated in the background
+  LaunchedEffect(samplesRoot, isInspection) {
+    if (!isInspection) {
+      kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        FileManagerEngine.populateDefaultSampleFiles(samplesRoot, context)
+        VideoEditorEngine.generateSampleVideo(context, samplesRoot)
+      }
+      if (FileManagerEngine.isSameOrDescendant(currentDirectory, samplesRoot)) {
+        refreshTrigger++
+      }
+    }
+  }
+
   // Items in current directory
-  val items = remember(currentDirectory, refreshTrigger, storageRevision, hasPermission, isInspection) {
+  val items = remember(currentDirectory, refreshTrigger, storageRevision, hasPermission, isInspection, samplesRoot) {
     if (isInspection) {
       getPreviewSampleFiles()
     } else {
+      if (FileManagerEngine.isSameOrDescendant(currentDirectory, samplesRoot)) {
+        FileManagerEngine.populateDefaultSampleFiles(samplesRoot, context)
+      }
       FileManagerEngine.listDirectoryContents(currentDirectory)
     }
   }
@@ -804,8 +832,10 @@ fun FilesScreen(
         },
       )
 
+      val isBrowsingSamples = activeVolume?.id == FileManagerEngine.SAMPLES_VOLUME_ID
+
       // Permission Request Banner (if access to storage/emulated/0 is restricted)
-      if (!hasPermission && !isInspection) {
+      if (!hasPermission && !isBrowsingSamples && !isInspection) {
         StoragePermissionBanner(
           onRequestPermission = { requestStoragePermission() },
         )
@@ -831,7 +861,7 @@ fun FilesScreen(
           EmptyFilesView(
             isSearching = searchQuery.isNotEmpty(),
             searchQuery = searchQuery,
-            hasPermission = hasPermission,
+            hasPermission = hasPermission || isBrowsingSamples,
             onRequestPermission = { requestStoragePermission() },
             onCreateFolder = { showCreateFolderDialog = true },
             onCreateFile = { showCreateFileDialog = true },
@@ -1654,7 +1684,7 @@ private fun FilesHeader(
                 }
                 if (singleSelectedFile != null && onConvertSelectedFile != null && FileConverterEngine.isSupportedFile(singleSelectedFile)) {
                   DropdownMenuItem(
-                    text = { Text("File Converter") },
+                    text = { Text("Convert") },
                     leadingIcon = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
                     onClick = {
                       showOverflowMenu = false
@@ -2125,6 +2155,8 @@ private fun StorageDevicePillRow(
       val isSelected = activeVolume?.id == volume.id
       val icon = when {
         volume.isPrimary -> Icons.Default.Home
+        volume.id == FileManagerEngine.SAMPLES_VOLUME_ID ||
+          volume.name.equals(FileManagerEngine.SAMPLES_FOLDER_NAME, ignoreCase = true) -> Icons.Default.Folder
         volume.name.contains("usb", ignoreCase = true) -> Icons.Default.Usb
         else -> Icons.Default.SdCard
       }
@@ -2133,6 +2165,7 @@ private fun StorageDevicePillRow(
         selected = isSelected,
         onClick = { onSelectVolume(volume) },
         shape = RoundedCornerShape(20.dp),
+        modifier = Modifier.testTag("storage_pill_${volume.id}"),
         leadingIcon = {
           Icon(
             imageVector = icon,
@@ -2785,7 +2818,7 @@ private fun FileActionMenu(
       )
       if (FileConverterEngine.isSupportedFile(item.file)) {
         DropdownMenuItem(
-          text = { Text("File Converter") },
+          text = { Text("Convert") },
           leadingIcon = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
           onClick = onOpenConverter,
           modifier = Modifier.testTag("action_file_converter"),
@@ -2856,7 +2889,7 @@ private fun FileActionMenu(
     )
     DropdownMenuItem(
       text = { Text("Rename") },
-      leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+      leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null) },
       onClick = onRename,
     )
     DropdownMenuItem(

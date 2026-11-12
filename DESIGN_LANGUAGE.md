@@ -146,9 +146,17 @@ Surface(
 
       // Action Icon Buttons (Search, Sort, ViewMode, etc.)
       Row(verticalAlignment = Alignment.CenterVertically) {
-        // Trailing icon buttons
+        IconButton(onClick = { isSearchActive = true }) {
+          Icon(
+            imageVector = Icons.Default.Search,
+            contentDescription = "Search",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
       }
     }
+
+    // Optional: Integrated Expanding Search Bar (see Section 5.7)
   }
 }
 ```
@@ -337,16 +345,85 @@ fun SlimDotSlider(
 
 ---
 
+### 5.7 Integrated Search Toolbar & Catalog Overlay Pattern
+Tools with searchable catalogs, presets, or collections (such as **Planting & Harvest**, **Recipes**, **Guitar Tuner**, and **Chord Book**) must use an **integrated toolbar search bar** paired with a **top-expanding catalog overlay** rather than standalone dropdown selectors or modal picker dialogs:
+
+1. **Toolbar Search Trigger**: Place a trailing `IconButton` (`Icons.Default.Search`) inside the standard `68.dp` tool header (`Section 5.1`) that activates search mode (`isSearchActive = true`).
+2. **Animated Horizontal Search Bar**: Inside the header `Box`, layer an `AnimatedVisibility` container (`enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End)`, `exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End)`) with `Surface(tonalElevation = 2.dp)`:
+   - Leading back button (`Icons.AutoMirrored.Filled.ArrowBack`) to exit search and reset filters.
+   - Borderless `TextField` (`Color.Transparent` containers and indicators) that auto-focuses via `FocusRequester` and opens the software keyboard on entry.
+   - Trailing clear button (`Icons.Default.Clear`) visible when the query is non-empty.
+   - `BackHandler(enabled = isSearchActive)` to dismiss search cleanly on system back navigation.
+3. **Top-Expanding Search Overlay & Filter Pills**: Below the header `HorizontalDivider`, layer an `AnimatedVisibility` overlay (`expandVertically(expandFrom = Alignment.Top) + fadeIn()`) over the main content `Box`:
+   - **Category & Favorites Filter Row**: A `Surface(tonalElevation = 1.dp)` containing a `LazyRow` of `RoundedCornerShape(20.dp)` `FilterChip` pills (`All`, `Favorites`, and domain categories).
+   - **Search Results List**: A `LazyColumn` of `RoundedCornerShape(14.dp)` cards (`surfaceVariant.copy(alpha = 0.45f)`) showing matching items, result counts, and an empty-state card when no items match.
+4. **Favoriting & Quick-Switch Lists**:
+   - Provide a trailing star toggle (`Icons.Default.Star` tinted with `colorScheme.primary` when favorited; `Icons.Default.StarBorder` tinted with `colorScheme.onSurfaceVariant` when unfavorited) on both catalog search cards and in-tool item/preset lists.
+   - Related tools that operate on the same preset catalog (such as **Guitar Tuner** and **Chord Book**) share a unified favorite tunings repository so favoriting a tuning in one tool immediately surfaces it in the other.
+   - In tools with an active preset or instrument configuration (e.g., **Guitar Tuner**), place the browsable/filterable preset list below the primary interactive display so quick-tapping any item immediately switches the active preset with haptic feedback, while favorited items can be filtered or surfaced at the top.
+
+```kotlin
+AnimatedVisibility(
+  visible = isSearchActive,
+  enter = fadeIn(tween(220)) + expandHorizontally(expandFrom = Alignment.End),
+  exit = fadeOut(tween(180)) + shrinkHorizontally(shrinkTowards = Alignment.End),
+  modifier = Modifier.matchParentSize(),
+) {
+  Surface(
+    color = MaterialTheme.colorScheme.surface,
+    tonalElevation = 2.dp,
+    modifier = Modifier.fillMaxSize(),
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(horizontal = 8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      IconButton(onClick = { closeSearch() }) {
+        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search")
+      }
+      TextField(
+        value = searchQuery,
+        onValueChange = { searchQuery = it },
+        placeholder = { Text("Search...") },
+        singleLine = true,
+        colors = TextFieldDefaults.colors(
+          focusedContainerColor = Color.Transparent,
+          unfocusedContainerColor = Color.Transparent,
+          focusedIndicatorColor = Color.Transparent,
+          unfocusedIndicatorColor = Color.Transparent,
+        ),
+        trailingIcon = {
+          if (searchQuery.isNotEmpty()) {
+            IconButton(onClick = { searchQuery = "" }) {
+              Icon(Icons.Default.Clear, contentDescription = "Clear search")
+            }
+          }
+        },
+        modifier = Modifier
+          .fillMaxWidth()
+          .focusRequester(searchFocusRequester),
+      )
+    }
+  }
+}
+```
+
+---
+
 ## 6. Dos and Don'ts Checklist for AI Agents
 
 - [x] **DO** use `MaterialTheme.colorScheme.*` for all colors; verify dark and light mode contrast.
 - [x] **DO** use standard corner radii: `28.dp` for dialogs/sheets, `14.dp` for fields/cards, `CircleShape` for FABs, icon badges, and slider dot handles.
 - [x] **DO** use `SlimDotSlider` (slim `4.dp`–`6.dp` track with `16.dp`–`20.dp` circular dot thumb) for all sliders and trackbars.
-- [x] **DO** provide immediate haptic feedback (`LocalHapticFeedback`) on meaningful actions (duplicate/copy, create, delete).
-- [x] **DO** support autofocus with `FocusRequester` and pre-select meaningful text in editing dialogs.
+- [x] **DO** use the integrated expanding toolbar search & catalog overlay pattern (`Section 5.7`) with `RoundedCornerShape(20.dp)` filter chips and star favoriting for searchable tool catalogs and presets.
+- [x] **DO** provide immediate haptic feedback (`LocalHapticFeedback`) on meaningful actions (duplicate/copy, create, delete, favorite, quick-switch).
+- [x] **DO** support autofocus with `FocusRequester` and pre-select meaningful text in editing dialogs and expanding search bars.
 - [x] **DO** provide clear inline error messages and disable confirm buttons when inputs are invalid or unchanged.
 - [ ] **DON'T** use raw drop shadows; use Material 3 `tonalElevation`.
 - [ ] **DON'T** use default thick Material 3 sliders with tall vertical bar handles.
+- [ ] **DON'T** use standalone dropdowns for large searchable preset catalogs when an integrated search toolbar and quick-switch list fits the tool workflow.
 - [ ] **DON'T** use rectangular square buttons (`RectangleShape`) in dialogs or controls.
 - [ ] **DON'T** hardcode raw string dimensions or colors in `@Composable` code.
 - [ ] **DON'T** leave dialogs as bare text fields without an icon badge, explanatory subtitle, and item context.

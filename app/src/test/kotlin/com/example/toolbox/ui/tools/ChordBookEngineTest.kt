@@ -287,6 +287,8 @@ class ChordBookEngineTest {
     assertEquals(tunerPresets.size, guitar6Tunings.size)
 
     tunerPresets.zip(guitar6Tunings).forEach { (preset, chordTuning) ->
+      assertEquals(preset.chordTuningId, chordTuning.id)
+      assertEquals(preset, chordTuning.matchingTunerPreset)
       assertTrue(
         "Chord tuning '${chordTuning.name}' should start with preset label '${preset.label}'",
         chordTuning.name.startsWith("${preset.label} ("),
@@ -297,5 +299,54 @@ class ChordBookEngineTest {
         assertEquals(expectedFreq, stringSpec.frequencyHz, 0.02)
       }
     }
+  }
+
+  @Test
+  fun chordBookTunings_searchAndShareFavoritesWithGuitarTuner() {
+    val sharedRepo = InMemoryGuitarTunerRepository(
+      initialFavorites = setOf(GuitarTuningPreset.DROP_D),
+    )
+
+    // Favorite set in Guitar Tuner is immediately recognized in Chord Book
+    val initialFavIds = sharedRepo.loadFavoriteTuningIds()
+    val dropDChordTuning = ChordBookEngine.BUILT_IN_TUNINGS.first { it.id == "guitar_drop_d" }
+    assertTrue(ChordBookEngine.isTuningFavorite(dropDChordTuning, initialFavIds))
+
+    // Favoriting DADGAD in Chord Book updates shared repository for Guitar Tuner
+    val dadgadChordTuning = ChordBookEngine.BUILT_IN_TUNINGS.first { it.id == "guitar_dadgad" }
+    val updatedFavIds = ChordBookEngine.toggleFavoriteTuning(initialFavIds, dadgadChordTuning)
+    sharedRepo.saveFavoriteTuningIds(updatedFavIds)
+
+    assertEquals(
+      setOf(GuitarTuningPreset.DROP_D, GuitarTuningPreset.DADGAD),
+      sharedRepo.loadFavoritePresets(),
+    )
+
+    // Search filters by query, category, and favorites and sorts favorites first
+    val favResults = ChordBookEngine.searchTunings(
+      favoritesOnly = true,
+      favoriteIds = sharedRepo.loadFavoriteTuningIds(),
+    )
+    assertEquals(listOf(dropDChordTuning, dadgadChordTuning), favResults)
+
+    val queryResults = ChordBookEngine.searchTunings(query = "DADGAD")
+    assertEquals(listOf(dadgadChordTuning), queryResults)
+  }
+
+  @Test
+  fun chordBookTab_orderAndTitles_matchChordsScalesReverseSongbook() {
+    assertEquals(
+      listOf(
+        ChordBookTab.CHORDS,
+        ChordBookTab.SCALES,
+        ChordBookTab.REVERSE,
+        ChordBookTab.SONGBOOK,
+      ),
+      ChordBookTab.entries,
+    )
+    assertEquals(
+      listOf("Chords", "Scales", "Reverse", "Songbook"),
+      ChordBookTab.entries.map { it.title },
+    )
   }
 }

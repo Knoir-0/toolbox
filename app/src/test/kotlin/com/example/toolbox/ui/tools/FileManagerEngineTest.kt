@@ -246,6 +246,17 @@ class FileManagerEngineTest {
     assertTrue(created.any { it.name == "Welcome.txt" })
     assertTrue(created.any { it.name == "Documents" && it.isDirectory })
     assertTrue(created.any { it.name == "Notes" && it.isDirectory })
+    assertTrue(created.any { it.name == "Images" && it.isDirectory })
+    assertTrue(created.any { it.name == "Audio" && it.isDirectory })
+    assertTrue(created.any { it.name == "Music" && it.isDirectory })
+    assertTrue(created.any { it.name == "Archives" && it.isDirectory })
+    assertTrue(created.any { it.name == "Videos" && it.isDirectory })
+
+    assertTrue(java.io.File(root, "Documents/sample_document.pdf").exists())
+    assertTrue(java.io.File(root, "Images/sample_image.png").exists())
+    assertTrue(java.io.File(root, "Audio/sample_chord_arpeggio.wav").exists())
+    assertTrue(java.io.File(root, "Archives/sample_project_bundle.zip").exists())
+    assertTrue(java.io.File(root, "Music").listFiles()!!.isNotEmpty())
   }
 
   @Test
@@ -255,12 +266,18 @@ class FileManagerEngineTest {
     assertEquals("storage/emulated/0", rootDir.path.trimStart('/'))
 
     val volumes = FileManagerEngine.getStorageVolumes(null)
-    assertTrue(volumes.isNotEmpty())
+    assertTrue(volumes.size >= 2)
     val primary = volumes.first()
     assertEquals("primary_root", primary.id)
     assertEquals("Home", primary.name)
     assertTrue(primary.isPrimary)
     assertFalse(primary.isRemovable)
+
+    val samples = volumes[1]
+    assertEquals(FileManagerEngine.SAMPLES_VOLUME_ID, samples.id)
+    assertEquals(FileManagerEngine.SAMPLES_FOLDER_NAME, samples.name)
+    assertFalse(samples.isPrimary)
+    assertFalse(samples.isRemovable)
   }
 
   @Test

@@ -489,10 +489,12 @@ fun AudioEditorScreen(
         },
         onUseSample = {
           haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-          val sample = AudioEditorEngine.createSampleAudioBuffer()
+          val sampleFile = FileManagerEngine.getOrCreateSampleAudioFile(context)
+          val sample = AudioEditorEngine.readWavFile(sampleFile) ?: AudioEditorEngine.createSampleAudioBuffer()
           loadBufferIntoEditor(
             buffer = sample,
-            name = "sample_chord_arpeggio.wav",
+            name = sampleFile.name,
+            file = sampleFile,
             banner = "Loaded synthesized C-Major arpeggio sample",
           )
         },

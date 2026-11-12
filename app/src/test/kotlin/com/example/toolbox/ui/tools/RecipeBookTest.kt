@@ -73,6 +73,26 @@ class RecipeBookTest {
         )
         assertTrue(pastaGarlic.isNotEmpty())
         assertTrue(pastaGarlic.all { it.category == RecipeCategory.PASTA_AND_GRAINS })
+
+        // Verify Sushi, Japanese, Greek, Italian, Hispanic, and Soup additions
+        val sushiResults = RecipeBookEngine.searchRecipes(catalog, query = "Sushi")
+        assertTrue(sushiResults.any { it.id == "homemade_sushi_rolls" })
+        assertTrue(sushiResults.any { it.id == "spicy_tuna_sushi_rolls" })
+
+        val japaneseResults = RecipeBookEngine.searchRecipes(catalog, query = "Japanese")
+        assertTrue(japaneseResults.size >= 5)
+
+        val greekResults = RecipeBookEngine.searchRecipes(catalog, query = "Greek")
+        assertTrue(greekResults.size >= 5)
+
+        val hispanicResults = RecipeBookEngine.searchRecipes(catalog, query = "Hispanic")
+        assertTrue(hispanicResults.size >= 5)
+
+        val italianResults = RecipeBookEngine.searchRecipes(catalog, query = "Italian")
+        assertTrue(italianResults.size >= 8)
+
+        val soupResults = RecipeBookEngine.searchRecipes(catalog, query = "Soup")
+        assertTrue(soupResults.size >= 9)
     }
 
     @Test

@@ -1,7 +1,11 @@
 package com.example.toolbox.ui.tools
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.graphics.Bitmap
+import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.PlaybackParams
 import android.os.Build
@@ -25,6 +29,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -65,19 +70,17 @@ import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.ViewList
-import androidx.compose.material.icons.automirrored.filled.VolumeOff
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
-import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Headphones
@@ -90,7 +93,6 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
-import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
@@ -138,6 +140,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -151,11 +154,14 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
@@ -168,6 +174,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.toolbox.ui.theme.ToolboxTheme
@@ -191,160 +198,112 @@ fun MusicPlayerScreen(
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
   val haptic = LocalHapticFeedback.current
+  val activity = remember(context) { context.findActivity() }
 
-  val prefs = remember(context, isInspection) {
-    if (isInspection) null
-    else context.getSharedPreferences(MUSIC_PLAYER_PREFS_NAME, Context.MODE_PRIVATE)
+  val session = remember(
+    context,
+    activity,
+    initialDirectory,
+    initialTracks,
+    initialTab,
+    initialViewMode,
+    initialPlayerExpanded,
+    initialQueueExpanded,
+    isInspection,
+  ) {
+    MusicPlayerEngine.getOrCreatePlaybackSession(
+      context = context,
+      activity = activity,
+      initialDirectory = initialDirectory,
+      initialTracks = initialTracks,
+      initialTab = initialTab,
+      initialViewMode = initialViewMode,
+      initialPlayerExpanded = initialPlayerExpanded,
+      initialQueueExpanded = initialQueueExpanded,
+      isInspection = isInspection,
+    )
   }
 
-  // Library Tab: Artists, Albums, Songs, Genres
-  var selectedTab by rememberSaveable {
-    val saved = prefs?.getString(PREF_KEY_MUSIC_TAB, null)
-    mutableStateOf(initialTab ?: MusicLibraryTab.fromNameOrDefault(saved))
-  }
+  // Library Tab: Artists, Albums, Songs, Genres, Playlists
+  val selectedTab = session.selectedTab
 
   fun updateTab(tab: MusicLibraryTab) {
-    selectedTab = tab
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_TAB, tab.name)?.apply()
+    session.updateTab(tab)
   }
 
   // View Mode: List vs Card
-  var viewMode by rememberSaveable {
-    val saved = prefs?.getString(PREF_KEY_MUSIC_VIEW_MODE, null)
-    mutableStateOf(initialViewMode ?: MusicViewMode.fromNameOrDefault(saved))
-  }
+  val viewMode = session.viewMode
 
   fun updateViewMode(mode: MusicViewMode) {
-    viewMode = mode
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_VIEW_MODE, mode.name)?.apply()
+    session.updateViewMode(mode)
   }
 
   // Sort Order
-  var sortOrder by rememberSaveable {
-    val saved = prefs?.getString(PREF_KEY_MUSIC_SORT_ORDER, null)
-    mutableStateOf(MusicSortOrder.fromNameOrDefault(saved))
-  }
+  val sortOrder = session.sortOrder
 
   fun updateSortOrder(order: MusicSortOrder) {
-    sortOrder = order
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_SORT_ORDER, order.name)?.apply()
+    session.updateSortOrder(order)
   }
 
   // Shuffle & Repeat
-  var isShuffleEnabled by rememberSaveable {
-    val saved = prefs?.getBoolean(PREF_KEY_MUSIC_SHUFFLE, false) ?: false
-    mutableStateOf(saved)
-  }
+  val isShuffleEnabled = session.isShuffleEnabled
 
   fun toggleShuffle() {
-    isShuffleEnabled = !isShuffleEnabled
-    prefs?.edit()?.putBoolean(PREF_KEY_MUSIC_SHUFFLE, isShuffleEnabled)?.apply()
+    session.toggleShuffle()
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
   }
 
-  var repeatMode by rememberSaveable {
-    val saved = prefs?.getString(PREF_KEY_MUSIC_REPEAT, null)
-    mutableStateOf(MusicRepeatMode.fromNameOrDefault(saved))
-  }
+  val repeatMode = session.repeatMode
 
   fun cycleRepeatMode() {
-    repeatMode = repeatMode.next()
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_REPEAT, repeatMode.name)?.apply()
+    session.cycleRepeatMode()
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
   }
 
   // Favorites
-  var favoriteIds by rememberSaveable {
-    val saved = prefs?.getString(PREF_KEY_MUSIC_FAVORITES, "").orEmpty()
-    val set = saved.split("|").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-    mutableStateOf(set)
-  }
+  val favoriteIds = session.favoriteIds
 
   fun toggleFavorite(trackId: String) {
-    val next = if (trackId in favoriteIds) favoriteIds - trackId else favoriteIds + trackId
-    favoriteIds = next
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITES, next.joinToString("|"))?.apply()
+    session.toggleFavorite(trackId)
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
   }
 
-  var showFavoritesOnly by rememberSaveable { mutableStateOf(false) }
+  var showFavoritesOnly by session::showFavoritesOnly
 
-  // Playlists (persisted in SharedPreferences; the built-in Favorites playlist is derived from favoriteIds)
-  var savedPlaylistEntries by remember {
-    val initialEntries = MusicPlayerEngine.deserializePlaylists(prefs?.getString(PREF_KEY_MUSIC_PLAYLISTS, ""))
-      .filterNot { it.id in MusicPlayerEngine.LEGACY_SAMPLE_PLAYLIST_IDS || it.id == MusicPlayerEngine.FAVORITES_PLAYLIST_ID }
-    mutableStateOf(initialEntries)
-  }
+  // Play Statistics (persisted in SharedPreferences: play count + total playtime per track)
+  val playStats = session.playStats
 
-  fun updateSavedPlaylists(next: List<SavedPlaylistEntry>) {
-    savedPlaylistEntries = next
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_PLAYLISTS, MusicPlayerEngine.serializePlaylists(next))?.apply()
-  }
+  // Playlists (persisted in SharedPreferences; Favorites & Most Played are built-in dynamic playlists)
+  val savedPlaylistEntries = session.savedPlaylistEntries
 
   fun saveQueueAsPlaylist(name: String, tracksToSave: List<MusicTrack>) {
-    val trimmedName = name.trim().ifEmpty { "Playlist ${savedPlaylistEntries.size + 1}" }
-    val trackIds = tracksToSave.map { it.id }
-    if (trackIds.isEmpty()) return
-    val newEntry = SavedPlaylistEntry(
-      id = "playlist_${System.currentTimeMillis()}_${savedPlaylistEntries.size + 1}",
-      name = trimmedName,
-      trackIds = trackIds,
-      createdAtMs = System.currentTimeMillis(),
-    )
-    updateSavedPlaylists(listOf(newEntry) + savedPlaylistEntries)
+    session.saveQueueAsPlaylist(name, tracksToSave)
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
   }
 
   fun deletePlaylist(playlistId: String) {
-    if (playlistId == MusicPlayerEngine.FAVORITES_PLAYLIST_ID) return
-    updateSavedPlaylists(savedPlaylistEntries.filterNot { it.id == playlistId })
+    if (playlistId in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS) return
+    session.deletePlaylist(playlistId)
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
   }
 
   // Search state
-  var isSearchActive by rememberSaveable { mutableStateOf(false) }
-  var searchQuery by rememberSaveable { mutableStateOf("") }
+  var isSearchActive by session::isSearchActive
+  var searchQuery by session::searchQuery
 
   // Drill-down selection state (Artist detail, Album detail, Genre detail, Playlist detail)
-  var selectedArtistName by rememberSaveable { mutableStateOf<String?>(null) }
-  var selectedAlbumKey by rememberSaveable { mutableStateOf<String?>(null) }
-  var selectedGenreName by rememberSaveable { mutableStateOf<String?>(null) }
-  var selectedPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+  var selectedArtistName by session::selectedArtistName
+  var selectedAlbumKey by session::selectedAlbumKey
+  var selectedGenreName by session::selectedGenreName
+  var selectedPlaylistId by session::selectedPlaylistId
 
   fun clearDrillDown() {
-    selectedArtistName = null
-    selectedAlbumKey = null
-    selectedGenreName = null
-    selectedPlaylistId = null
+    session.clearDrillDown()
   }
 
-  // Configure persistent album art disk cache
-  LaunchedEffect(context, isInspection) {
-    if (!isInspection) {
-      MusicPlayerEngine.configureDiskCache(context.cacheDir)
-    }
-  }
+  val allTracks = session.allTracks
 
-  // Load library tracks (fast non-blocking initial state + background metadata & artwork resolution)
-  var allTracks by remember(initialTracks, initialDirectory, isInspection) {
-    mutableStateOf(
-      when {
-        initialTracks != null -> initialTracks
-        isInspection -> MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
-        else -> MusicPlayerEngine.getCachedLibraryTracks(
-          initialDirectory = initialDirectory,
-          includeSamples = false,
-        ) ?: MusicPlayerEngine.loadLibraryTracks(
-          initialDirectory = initialDirectory,
-          includeSamples = false,
-          inspectMetadataRetriever = false,
-          deferAlbumArt = true,
-        )
-      }
-    )
-  }
-
-  val sortedTracks = remember(allTracks, sortOrder, showFavoritesOnly, favoriteIds, searchQuery, selectedTab, selectedArtistName, selectedAlbumKey, selectedGenreName, selectedPlaylistId) {
+  val sortedTracks = remember(allTracks, sortOrder, playStats, showFavoritesOnly, favoriteIds, searchQuery, selectedTab, selectedArtistName, selectedAlbumKey, selectedGenreName, selectedPlaylistId) {
     val base = if (showFavoritesOnly) {
       allTracks.filter { it.id in favoriteIds }
     } else {
@@ -353,7 +312,7 @@ fun MusicPlayerScreen(
     val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
     val activeQuery = if (!hasDrill && selectedTab == MusicLibraryTab.SONGS) searchQuery else ""
     val filtered = MusicPlayerEngine.filterTracks(base, activeQuery)
-    MusicPlayerEngine.sortTracks(filtered, sortOrder)
+    MusicPlayerEngine.sortTracks(filtered, sortOrder, playStats)
   }
 
   val baseArtists = remember(allTracks) {
@@ -383,9 +342,11 @@ fun MusicPlayerScreen(
     MusicPlayerEngine.filterGenres(baseGenres, activeQuery)
   }
 
-  val basePlaylists = remember(savedPlaylistEntries, allTracks, favoriteIds) {
-    listOf(MusicPlayerEngine.buildFavoritesPlaylist(favoriteIds, allTracks)) +
-      MusicPlayerEngine.buildPlaylists(savedPlaylistEntries, allTracks)
+  val basePlaylists = remember(savedPlaylistEntries, allTracks, favoriteIds, playStats) {
+    listOf(
+      MusicPlayerEngine.buildFavoritesPlaylist(favoriteIds, allTracks),
+      MusicPlayerEngine.buildMostPlayedPlaylist(playStats, allTracks),
+    ) + MusicPlayerEngine.buildPlaylists(savedPlaylistEntries, allTracks)
   }
   val allPlaylists = remember(basePlaylists, searchQuery, selectedTab, selectedArtistName, selectedAlbumKey, selectedGenreName, selectedPlaylistId) {
     val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
@@ -393,72 +354,23 @@ fun MusicPlayerScreen(
     MusicPlayerEngine.filterPlaylists(basePlaylists, activeQuery)
   }
 
-  // Playback Queue & Active Track State
-  var playbackQueue by remember(initialTracks, initialDirectory, isInspection) {
-    mutableStateOf(allTracks)
-  }
-  var currentQueueIndex by rememberSaveable {
-    mutableIntStateOf(0)
-  }
+  // Playback Queue & Active Track State (managed by MusicPlaybackSession so playback continues across tool switches)
+  val playbackQueue = session.playbackQueue
+  val currentQueueIndex = session.currentQueueIndex
+  val currentTrack: MusicTrack? = session.currentTrack
 
-  // Defer full ID3 metadata inspection to background thread when opening local library
-  LaunchedEffect(initialTracks, initialDirectory, isInspection) {
-    if (initialTracks == null && !isInspection) {
-      val loaded = MusicPlayerEngine.loadLibraryTracksAsync(
-        initialDirectory = initialDirectory,
-        includeSamples = false,
-        inspectMetadataRetriever = true,
-        deferAlbumArt = true,
-      )
-      val activeId = playbackQueue.getOrNull(currentQueueIndex)?.id
-      allTracks = loaded
-      val byId = loaded.associateBy { it.id }
-      val updatedQueue = if (playbackQueue.isEmpty()) {
-        loaded
-      } else {
-        playbackQueue.map { existing -> byId[existing.id] ?: existing }
-      }
-      playbackQueue = if (updatedQueue.size == loaded.size && updatedQueue.zip(loaded).all { (a, b) -> a.id == b.id }) {
-        loaded
-      } else {
-        updatedQueue
-      }
-      if (activeId != null) {
-        val newIdx = playbackQueue.indexOfFirst { it.id == activeId }
-        if (newIdx >= 0) {
-          currentQueueIndex = newIdx
-        }
-      }
-    }
-  }
+  val isPlaying = session.isPlaying
+  var isPlayerExpanded by session::isPlayerExpanded
+  val currentPositionMs = session.currentPositionMs
+  val trackDurationMs = session.trackDurationMs
+  val isDraggingSeek = session.isDraggingSeek
+  val dragSeekFraction = session.dragSeekFraction
 
-  // Defer album art prefetching to the background on Dispatchers.IO
-  LaunchedEffect(allTracks, isInspection) {
-    if (!isInspection && allTracks.isNotEmpty()) {
-      MusicPlayerEngine.prefetchAlbumArt(allTracks, sizePx = 240)
-    }
-  }
-
-  val currentTrack: MusicTrack? = playbackQueue.getOrNull(
-    currentQueueIndex.coerceIn(0, maxOf(0, playbackQueue.size - 1))
-  ) ?: allTracks.firstOrNull()
-
-  var isPlaying by rememberSaveable { mutableStateOf(false) }
-  var isPlayerExpanded by rememberSaveable { mutableStateOf(initialPlayerExpanded) }
-  var currentPositionMs by rememberSaveable { mutableLongStateOf(0L) }
-  var trackDurationMs by remember(currentTrack) {
-    mutableLongStateOf(currentTrack?.durationMs?.coerceAtLeast(1000L) ?: 15_000L)
-  }
-  var isDraggingSeek by remember { mutableStateOf(false) }
-  var dragSeekFraction by remember { mutableFloatStateOf(0f) }
-
-  // Volume & Speed & Sleep Timer & Modals
-  var volume by rememberSaveable { mutableFloatStateOf(0.85f) }
-  var isMuted by rememberSaveable { mutableStateOf(false) }
-  var playbackSpeed by rememberSaveable { mutableFloatStateOf(1.0f) }
-  var sleepTimerPreset by rememberSaveable { mutableStateOf(SleepTimerPreset.OFF) }
-  var sleepRemainingMs by rememberSaveable { mutableLongStateOf(0L) }
-  var showQueueSheet by rememberSaveable { mutableStateOf(false) }
+  // Speed & Sleep Timer & Modals (volume is left to the system media volume)
+  val playbackSpeed = session.playbackSpeed
+  val sleepTimerPreset = session.sleepTimerPreset
+  val sleepRemainingMs = session.sleepRemainingMs
+  var showQueueSheet by session::showQueueSheet
   var showSavePlaylistDialog by rememberSaveable { mutableStateOf(false) }
   var showTrackInfoDialog by rememberSaveable { mutableStateOf(false) }
   var inlineColorPickerHex by rememberSaveable { mutableStateOf<String?>(null) }
@@ -474,217 +386,65 @@ fun MusicPlayerScreen(
     }
   }
 
-  // MediaPlayer lifecycle management
-  val mediaPlayerRef = remember { mutableStateOf<MediaPlayer?>(null) }
-
-  fun releaseMediaPlayer() {
-    val mp = mediaPlayerRef.value
-    mediaPlayerRef.value = null
-    if (mp != null) {
-      try {
-        if (mp.isPlaying) mp.stop()
-      } catch (_: Throwable) {}
-      try {
-        mp.release()
-      } catch (_: Throwable) {}
-    }
-  }
-
-  fun applyPlayerVolumeAndSpeed(mp: MediaPlayer?) {
-    if (mp == null) return
-    val effectiveVol = if (isMuted) 0f else volume.coerceIn(0f, 1f)
-    try {
-      mp.setVolume(effectiveVol, effectiveVol)
-    } catch (_: Throwable) {}
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && isPlaying) {
-      try {
-        mp.playbackParams = PlaybackParams().setSpeed(playbackSpeed.coerceIn(0.5f, 2.0f))
-      } catch (_: Throwable) {}
-    }
-  }
-
   fun stepToTrack(
     newIndex: Int,
     autoPlay: Boolean = isPlaying,
   ) {
-    if (playbackQueue.isEmpty()) return
-    val clamped = newIndex.coerceIn(0, playbackQueue.lastIndex)
-    currentQueueIndex = clamped
-    currentPositionMs = 0L
-    val target = playbackQueue[clamped]
-    trackDurationMs = target.durationMs.coerceAtLeast(1000L)
-    isPlaying = autoPlay
+    session.stepToTrack(newIndex, autoPlay = autoPlay)
   }
 
   fun playTrackInContext(
     track: MusicTrack,
     contextTracks: List<MusicTrack>,
   ) {
-    val queueList = if (contextTracks.isNotEmpty()) contextTracks else listOf(track)
-    playbackQueue = queueList
-    val idx = queueList.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
-    currentQueueIndex = idx
-    currentPositionMs = 0L
-    trackDurationMs = track.durationMs.coerceAtLeast(1000L)
-    isPlaying = true
+    session.playTrackInContext(track, contextTracks)
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
   }
 
   fun skipToNext(userInitiated: Boolean = true) {
-    val nextIdx = MusicPlayerEngine.resolveNextTrackIndex(
-      currentIndex = currentQueueIndex,
-      queueSize = playbackQueue.size,
-      repeatMode = repeatMode,
-      shuffleEnabled = isShuffleEnabled,
-      userInitiated = userInitiated,
-    )
-    if (nextIdx != null) {
-      stepToTrack(nextIdx, autoPlay = if (userInitiated) isPlaying else true)
-    } else {
-      isPlaying = false
-      currentPositionMs = 0L
-    }
+    session.skipToNext(userInitiated = userInitiated)
   }
 
   fun skipToPrevious() {
-    val prevIdx = MusicPlayerEngine.resolvePreviousTrackIndex(
-      currentIndex = currentQueueIndex,
-      queueSize = playbackQueue.size,
-      currentPositionMs = currentPositionMs,
-    ) ?: return
-    if (prevIdx == currentQueueIndex) {
-      currentPositionMs = 0L
-      try {
-        mediaPlayerRef.value?.seekTo(0)
-      } catch (_: Throwable) {}
-    } else {
-      stepToTrack(prevIdx, autoPlay = isPlaying)
+    session.skipToPrevious()
+  }
+
+  fun moveQueueItem(fromIndex: Int, toIndex: Int) {
+    if (session.moveQueueItem(fromIndex, toIndex)) {
+      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
   }
 
-  fun seekRelativeMs(deltaMs: Long) {
-    val targetMs = (currentPositionMs + deltaMs).coerceIn(0L, trackDurationMs)
-    currentPositionMs = targetMs
-    try {
-      mediaPlayerRef.value?.seekTo(targetMs.toInt())
-    } catch (_: Throwable) {}
-  }
-
-  // Prepare MediaPlayer when currentTrack changes
-  LaunchedEffect(currentTrack?.id, isInspection) {
-    releaseMediaPlayer()
-    val track = currentTrack ?: return@LaunchedEffect
-    trackDurationMs = track.durationMs.coerceAtLeast(1000L)
-    if (isInspection) return@LaunchedEffect
-
-    try {
-      val playableFile = if (track.isSampleTrack || track.file == null || !track.file.exists()) {
-        MusicPlayerEngine.ensurePlayableSampleWavFile(context.cacheDir, track)
-      } else {
-        track.file
-      }
-      if (playableFile.exists()) {
-        val mp = MediaPlayer()
-        mp.setDataSource(playableFile.absolutePath)
-        mp.prepare()
-        val actualDur = mp.duration.toLong()
-        if (actualDur > 0L) {
-          trackDurationMs = actualDur
-        }
-        mp.setOnCompletionListener {
-          skipToNext(userInitiated = false)
-        }
-        mediaPlayerRef.value = mp
-        applyPlayerVolumeAndSpeed(mp)
-        if (currentPositionMs > 0L && currentPositionMs < trackDurationMs) {
-          mp.seekTo(currentPositionMs.toInt())
-        }
-        if (isPlaying) {
-          mp.start()
-        }
-      }
-    } catch (_: Throwable) {
-      // Fallback simulated timer loop below handles progression if hardware codec is unavailable
-    }
-  }
-
-  // Sync play/pause state with MediaPlayer
-  LaunchedEffect(isPlaying) {
-    val mp = mediaPlayerRef.value ?: return@LaunchedEffect
-    try {
-      if (isPlaying && !mp.isPlaying) {
-        mp.start()
-        applyPlayerVolumeAndSpeed(mp)
-      } else if (!isPlaying && mp.isPlaying) {
-        mp.pause()
-      }
-    } catch (_: Throwable) {}
-  }
-
-  // Sync volume, mute, and speed
-  LaunchedEffect(volume, isMuted, playbackSpeed) {
-    applyPlayerVolumeAndSpeed(mediaPlayerRef.value)
-  }
-
-  // Progress ticker loop
-  LaunchedEffect(isPlaying, currentTrack?.id, playbackSpeed) {
-    if (!isPlaying) return@LaunchedEffect
-    val tickMs = 200L
-    while (isActive && isPlaying) {
-      delay(tickMs)
-      if (!isDraggingSeek) {
-        val mp = mediaPlayerRef.value
-        val hardwarePos = try {
-          if (mp != null && mp.isPlaying) mp.currentPosition.toLong() else null
-        } catch (_: Throwable) {
-          null
-        }
-        if (hardwarePos != null && hardwarePos > 0L) {
-          currentPositionMs = hardwarePos.coerceAtMost(trackDurationMs)
-        } else {
-          val delta = (tickMs * playbackSpeed).toLong().coerceAtLeast(50L)
-          val nextPos = currentPositionMs + delta
-          if (nextPos >= trackDurationMs) {
-            skipToNext(userInitiated = false)
-          } else {
-            currentPositionMs = nextPos
-          }
-        }
-      }
-    }
-  }
-
-  // Sleep timer countdown
-  LaunchedEffect(sleepTimerPreset, isPlaying) {
-    if (sleepTimerPreset == SleepTimerPreset.OFF || sleepRemainingMs <= 0L) return@LaunchedEffect
-    while (isActive && sleepRemainingMs > 0L) {
-      delay(1000L)
-      sleepRemainingMs = (sleepRemainingMs - 1000L).coerceAtLeast(0L)
-      if (sleepRemainingMs == 0L) {
-        isPlaying = false
-        sleepTimerPreset = SleepTimerPreset.OFF
-      }
-    }
-  }
-
-  DisposableEffect(Unit) {
+  // Hardware volume keys control the system media volume while the Music tool is open or playing in the background
+  DisposableEffect(context, session) {
+    val previousStream = activity?.volumeControlStream
+    activity?.volumeControlStream = AudioManager.STREAM_MUSIC
     onDispose {
-      releaseMediaPlayer()
+      session.flushPlayStats()
+      if (activity != null && previousStream != null && !session.isPlaying) {
+        activity.volumeControlStream = previousStream
+      }
     }
   }
 
   // Dynamic Album Art Palette for the active track
-  var activePalette by remember(currentTrack?.id, currentTrack?.artworkPrimaryRgb) {
-    mutableStateOf(MusicPlayerEngine.resolveTrackPalette(currentTrack))
+  var activePalette by remember(currentTrack?.id, currentTrack?.artworkPrimaryRgb, session.activePalette) {
+    mutableStateOf(
+      if (session.currentTrack?.id == currentTrack?.id) session.activePalette
+      else MusicPlayerEngine.resolveTrackPalette(currentTrack)
+    )
   }
 
   LaunchedEffect(currentTrack?.id, currentTrack?.album, currentTrack?.artist, isInspection) {
     val track = currentTrack ?: return@LaunchedEffect
-    if (isInspection || track.isSampleTrack) {
-      activePalette = MusicPlayerEngine.resolveTrackPalette(track)
+    val resolved = if (isInspection || track.isSampleTrack) {
+      MusicPlayerEngine.resolveTrackPalette(track)
     } else {
-      activePalette = MusicPlayerEngine.loadTrackPaletteAsync(track, sizePx = 360)
+      MusicPlayerEngine.loadTrackPaletteAsync(track, sizePx = 360)
     }
+    activePalette = resolved
+    session.activePalette = resolved
+    MusicPlayerEngine.updateActiveTrackPalette(track, resolved)
   }
 
   val animatedDominant by animateColorAsState(
@@ -956,6 +716,7 @@ fun MusicPlayerScreen(
               currentTrackId = currentTrack?.id,
               isPlaying = isPlaying,
               favoriteIds = favoriteIds,
+              playStats = playStats,
               onPlayPlaylist = { shuffle ->
                 if (shuffle && !isShuffleEnabled) toggleShuffle()
                 val tracks = if (shuffle) activePlaylist.tracks.shuffled() else activePlaylist.tracks
@@ -1173,7 +934,7 @@ fun MusicPlayerScreen(
           onToggleFavorite = { toggleFavorite(currentTrack.id) },
           onPrevious = { skipToPrevious() },
           onPlayPause = {
-            isPlaying = !isPlaying
+            session.togglePlayPause()
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
           },
           onNext = { skipToNext(userInitiated = true) },
@@ -1205,14 +966,12 @@ fun MusicPlayerScreen(
           seekFraction = seekFraction,
           currentPositionMs = if (isDraggingSeek) (dragSeekFraction * trackDurationMs).toLong() else currentPositionMs,
           durationMs = trackDurationMs,
-          volume = if (isMuted) 0f else volume,
-          isMuted = isMuted,
           playbackSpeed = playbackSpeed,
           sleepTimerPreset = sleepTimerPreset,
           sleepRemainingMs = sleepRemainingMs,
           queue = playbackQueue,
           currentQueueIndex = currentQueueIndex,
-          initialQueueSheetValue = if (initialQueueExpanded) SheetValue.Expanded else SheetValue.PartiallyExpanded,
+          initialQueueSheetValue = if (session.initialQueueExpandedState) SheetValue.Expanded else SheetValue.PartiallyExpanded,
           dominantColor = animatedDominant,
           secondaryColor = animatedSecondary,
           accentColor = animatedAccent,
@@ -1223,39 +982,27 @@ fun MusicPlayerScreen(
           onCollapse = { isPlayerExpanded = false },
           onToggleFavorite = { toggleFavorite(currentTrack.id) },
           onSeekChange = { fraction ->
-            isDraggingSeek = true
-            dragSeekFraction = fraction.coerceIn(0f, 1f)
+            session.updateSeekDrag(fraction)
           },
           onSeekFinished = {
-            val targetMs = (dragSeekFraction * trackDurationMs).toLong().coerceIn(0L, trackDurationMs)
-            currentPositionMs = targetMs
-            isDraggingSeek = false
-            try {
-              mediaPlayerRef.value?.seekTo(targetMs.toInt())
-            } catch (_: Throwable) {}
+            session.finishSeekDrag()
           },
           onToggleShuffle = { toggleShuffle() },
           onPrevious = { skipToPrevious() },
-          onRewind10s = { seekRelativeMs(-10_000L) },
           onPlayPause = {
-            isPlaying = !isPlaying
+            session.togglePlayPause()
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
           },
-          onForward10s = { seekRelativeMs(10_000L) },
           onNext = { skipToNext(userInitiated = true) },
           onCycleRepeat = { cycleRepeatMode() },
-          onVolumeChange = { newVol ->
-            volume = newVol.coerceIn(0f, 1f)
-            if (volume > 0f && isMuted) isMuted = false
-          },
-          onToggleMute = { isMuted = !isMuted },
           onCycleSpeed = {
-            val idx = MusicPlayerEngine.PLAYBACK_SPEED_OPTIONS.indexOfFirst { it == playbackSpeed }
-            val nextIdx = if (idx >= 0) (idx + 1) % MusicPlayerEngine.PLAYBACK_SPEED_OPTIONS.size else 2
-            playbackSpeed = MusicPlayerEngine.PLAYBACK_SPEED_OPTIONS[nextIdx]
+            session.cyclePlaybackSpeed()
           },
           onSelectQueueIndex = { index ->
             stepToTrack(index, autoPlay = true)
+          },
+          onMoveQueueItem = { fromIndex, toIndex ->
+            moveQueueItem(fromIndex, toIndex)
           },
           onSaveQueueAsPlaylist = {
             showSavePlaylistDialog = true
@@ -1264,8 +1011,7 @@ fun MusicPlayerScreen(
           onOpenSleepTimerMenu = { showSleepTimerMenu = true },
           onDismissSleepTimerMenu = { showSleepTimerMenu = false },
           onSelectSleepTimer = { preset ->
-            sleepTimerPreset = preset
-            sleepRemainingMs = preset.durationMs
+            session.selectSleepTimer(preset)
             showSleepTimerMenu = false
           },
           onNavigateToArtist = {
@@ -1294,6 +1040,9 @@ fun MusicPlayerScreen(
         onSelectQueueIndex = { index ->
           stepToTrack(index, autoPlay = true)
         },
+        onMoveQueueItem = { fromIndex, toIndex ->
+          moveQueueItem(fromIndex, toIndex)
+        },
         onSaveQueueAsPlaylist = {
           showSavePlaylistDialog = true
         },
@@ -1320,6 +1069,7 @@ fun MusicPlayerScreen(
       TrackDetailsDialog(
         track = currentTrack,
         palette = activePalette,
+        playStat = playStats[currentTrack.id] ?: TrackPlayStats(),
         onSelectColor = { hex ->
           showTrackInfoDialog = false
           openColorInColorsTool(hex)
@@ -2601,7 +2351,7 @@ private fun PlaylistsTabContent(
                   overflow = TextOverflow.Ellipsis,
                 )
               }
-              if (!playlist.isFavorites) {
+              if (!playlist.isBuiltIn) {
                 IconButton(
                   onClick = { onDeletePlaylist(playlist) },
                   modifier = Modifier
@@ -2690,7 +2440,11 @@ private fun PlaylistsTabContent(
                   .padding(10.dp),
               ) {
                 Icon(
-                  imageVector = if (playlist.isFavorites) Icons.Default.Star else Icons.AutoMirrored.Filled.PlaylistPlay,
+                  imageVector = when {
+                    playlist.isFavorites -> Icons.Default.Star
+                    playlist.isMostPlayed -> Icons.Default.GraphicEq
+                    else -> Icons.AutoMirrored.Filled.PlaylistPlay
+                  },
                   contentDescription = null,
                   tint = Color.White.copy(alpha = 0.85f),
                   modifier = Modifier
@@ -3129,6 +2883,7 @@ private fun PlaylistDetailContent(
   currentTrackId: String?,
   isPlaying: Boolean,
   favoriteIds: Set<String>,
+  playStats: Map<String, TrackPlayStats> = emptyMap(),
   onPlayPlaylist: (shuffle: Boolean) -> Unit,
   onDeletePlaylist: () -> Unit,
   onSelectTrack: (MusicTrack) -> Unit,
@@ -3194,7 +2949,7 @@ private fun PlaylistDetailContent(
             }
           }
         }
-        if (!playlist.isFavorites) {
+        if (!playlist.isBuiltIn) {
           IconButton(
             onClick = onDeletePlaylist,
             modifier = Modifier.size(36.dp),
@@ -3214,6 +2969,11 @@ private fun PlaylistDetailContent(
       return@Column
     }
 
+    if (playlist.isMostPlayed && playlist.tracks.isEmpty()) {
+      EmptyMusicState(message = "No songs in library yet")
+      return@Column
+    }
+
     if (viewMode == MusicViewMode.LIST) {
       LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -3221,11 +2981,23 @@ private fun PlaylistDetailContent(
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         items(playlist.tracks, key = { it.id }) { track ->
+          val statBadge = if (playlist.isMostPlayed) {
+            val s = playStats[track.id]
+            if (s != null && s.hasBeenPlayed) {
+              val playsLabel = if (s.playCount == 1) "1 play" else "${s.playCount} plays"
+              "$playsLabel • ${s.totalPlayTimeFormatted}"
+            } else {
+              null
+            }
+          } else {
+            null
+          }
           SongListItemCard(
             track = track,
             isCurrent = track.id == currentTrackId,
             isPlaying = isPlaying && track.id == currentTrackId,
             isFavorite = track.id in favoriteIds,
+            playStatSummary = statBadge,
             onClick = { onSelectTrack(track) },
             onToggleFavorite = { onToggleFavorite(track) },
           )
@@ -3240,11 +3012,23 @@ private fun PlaylistDetailContent(
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
         items(playlist.tracks, key = { it.id }) { track ->
+          val statBadge = if (playlist.isMostPlayed) {
+            val s = playStats[track.id]
+            if (s != null && s.hasBeenPlayed) {
+              val playsLabel = if (s.playCount == 1) "1 play" else "${s.playCount} plays"
+              "$playsLabel • ${s.totalPlayTimeFormatted}"
+            } else {
+              null
+            }
+          } else {
+            null
+          }
           SongGridItemCard(
             track = track,
             isCurrent = track.id == currentTrackId,
             isPlaying = isPlaying && track.id == currentTrackId,
             isFavorite = track.id in favoriteIds,
+            playStatSummary = statBadge,
             onClick = { onSelectTrack(track) },
             onToggleFavorite = { onToggleFavorite(track) },
           )
@@ -3260,6 +3044,7 @@ private fun SongListItemCard(
   isCurrent: Boolean,
   isPlaying: Boolean,
   isFavorite: Boolean,
+  playStatSummary: String? = null,
   onClick: () -> Unit,
   onToggleFavorite: () -> Unit,
 ) {
@@ -3323,7 +3108,11 @@ private fun SongListItemCard(
           overflow = TextOverflow.Ellipsis,
         )
         Text(
-          text = "${track.artist} • ${track.album}",
+          text = if (playStatSummary != null) {
+            "${track.artist} • $playStatSummary"
+          } else {
+            "${track.artist} • ${track.album}"
+          },
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           maxLines = 1,
@@ -3361,6 +3150,7 @@ private fun SongGridItemCard(
   isCurrent: Boolean,
   isPlaying: Boolean,
   isFavorite: Boolean,
+  playStatSummary: String? = null,
   onClick: () -> Unit,
   onToggleFavorite: () -> Unit,
 ) {
@@ -3456,7 +3246,11 @@ private fun SongGridItemCard(
         overflow = TextOverflow.Ellipsis,
       )
       Text(
-        text = "${track.artist} • ${track.album}",
+        text = if (playStatSummary != null) {
+          "${track.artist} • $playStatSummary"
+        } else {
+          "${track.artist} • ${track.album}"
+        },
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
@@ -3649,8 +3443,6 @@ private fun ExpandedMusicPlayerOverlay(
   seekFraction: Float,
   currentPositionMs: Long,
   durationMs: Long,
-  volume: Float,
-  isMuted: Boolean,
   playbackSpeed: Float,
   sleepTimerPreset: SleepTimerPreset,
   sleepRemainingMs: Long,
@@ -3670,15 +3462,12 @@ private fun ExpandedMusicPlayerOverlay(
   onSeekFinished: () -> Unit,
   onToggleShuffle: () -> Unit,
   onPrevious: () -> Unit,
-  onRewind10s: () -> Unit,
   onPlayPause: () -> Unit,
-  onForward10s: () -> Unit,
   onNext: () -> Unit,
   onCycleRepeat: () -> Unit,
-  onVolumeChange: (Float) -> Unit,
-  onToggleMute: () -> Unit,
   onCycleSpeed: () -> Unit,
   onSelectQueueIndex: (Int) -> Unit,
+  onMoveQueueItem: (fromIndex: Int, toIndex: Int) -> Unit,
   onSaveQueueAsPlaylist: () -> Unit,
   onOpenTrackInfo: () -> Unit,
   onOpenSleepTimerMenu: () -> Unit,
@@ -3755,6 +3544,7 @@ private fun ExpandedMusicPlayerOverlay(
             }
           },
           onSelectQueueIndex = onSelectQueueIndex,
+          onMoveQueueItem = onMoveQueueItem,
           onSaveQueueAsPlaylist = onSaveQueueAsPlaylist,
         )
       },
@@ -3957,7 +3747,7 @@ private fun ExpandedMusicPlayerOverlay(
             }
           }
 
-          // 5. Primary Transport Controls (Shuffle, Previous, Rewind 10s, Play/Pause, Forward 10s, Next, Repeat)
+          // 5. Primary Transport Controls (Shuffle, Previous, Play/Pause, Next, Repeat)
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -3993,20 +3783,6 @@ private fun ExpandedMusicPlayerOverlay(
               )
             }
 
-            IconButton(
-              onClick = onRewind10s,
-              modifier = Modifier
-                .size(40.dp)
-                .testTag("expanded_player_rewind_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Replay10,
-                contentDescription = "Rewind 10 seconds",
-                tint = Color.White.copy(alpha = 0.9f),
-                modifier = Modifier.size(24.dp),
-              )
-            }
-
             FilledIconButton(
               onClick = onPlayPause,
               modifier = Modifier
@@ -4026,20 +3802,6 @@ private fun ExpandedMusicPlayerOverlay(
                 imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                 contentDescription = if (isPlaying) "Pause" else "Play",
                 modifier = Modifier.size(34.dp),
-              )
-            }
-
-            IconButton(
-              onClick = onForward10s,
-              modifier = Modifier
-                .size(40.dp)
-                .testTag("expanded_player_forward_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Forward10,
-                contentDescription = "Fast-forward 10 seconds",
-                tint = Color.White.copy(alpha = 0.9f),
-                modifier = Modifier.size(24.dp),
               )
             }
 
@@ -4074,47 +3836,7 @@ private fun ExpandedMusicPlayerOverlay(
             }
           }
 
-          // 6. Volume Control Row
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            IconButton(
-              onClick = onToggleMute,
-              modifier = Modifier
-                .size(32.dp)
-                .testTag("expanded_player_mute_button"),
-            ) {
-              Icon(
-                imageVector = if (isMuted || volume == 0f) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
-                contentDescription = if (isMuted) "Unmute" else "Mute",
-                tint = Color.White.copy(alpha = 0.85f),
-                modifier = Modifier.size(20.dp),
-              )
-            }
-
-            MusicSlimDotSlider(
-              value = volume,
-              onValueChange = onVolumeChange,
-              accentColor = accentColor,
-              inactiveColor = Color.White.copy(alpha = 0.22f),
-              modifier = Modifier
-                .weight(1f)
-                .testTag("expanded_player_volume_slider"),
-            )
-
-            Text(
-              text = "${(volume * 100).toInt()}%",
-              style = MaterialTheme.typography.labelSmall,
-              fontFamily = FontFamily.Monospace,
-              color = Color.White.copy(alpha = 0.8f),
-              modifier = Modifier.width(36.dp),
-              textAlign = TextAlign.End,
-            )
-          }
-
-          // 7. Secondary Utility Bar: Speed & Sleep Timer (Queue is a bottom slide-up panel right below)
+          // 6. Secondary Utility Bar: Speed & Sleep Timer (Queue is a bottom slide-up panel right below)
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
@@ -4239,12 +3961,22 @@ private fun PlaybackQueueSheetContent(
   peekHeight: Dp = 32.dp,
   onToggleSheet: () -> Unit,
   onSelectQueueIndex: (Int) -> Unit,
+  onMoveQueueItem: (fromIndex: Int, toIndex: Int) -> Unit,
   onSaveQueueAsPlaylist: () -> Unit,
 ) {
   val arrowRotation by animateFloatAsState(
     targetValue = if (isExpanded) 180f else 0f,
     label = "QueueChevronRotation",
   )
+
+  val density = LocalDensity.current
+  val defaultItemHeightPx = with(density) { 64.dp.toPx() }
+  val itemSpacingPx = with(density) { 8.dp.toPx() }
+  var draggedIndex by remember { mutableStateOf<Int?>(null) }
+  var dragOffsetY by remember { mutableFloatStateOf(0f) }
+  val itemHeightsPx = remember { mutableMapOf<Int, Float>() }
+  val currentQueue by rememberUpdatedState(queue)
+  val currentOnMoveQueueItem by rememberUpdatedState(onMoveQueueItem)
 
   Column(
     modifier = Modifier
@@ -4299,7 +4031,7 @@ private fun PlaybackQueueSheetContent(
             modifier = Modifier.size(15.dp),
           )
           Text(
-            text = "Playback Queue",
+            text = "Queue",
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold,
           )
@@ -4402,6 +4134,7 @@ private fun PlaybackQueueSheetContent(
       }
     } else {
       LazyColumn(
+        userScrollEnabled = draggedIndex == null,
         modifier = Modifier
           .fillMaxWidth()
           .weight(1f)
@@ -4411,32 +4144,101 @@ private fun PlaybackQueueSheetContent(
       ) {
         itemsIndexed(queue, key = { idx, t -> "${idx}_${t.id}" }) { index, item ->
           val isCurrent = index == currentQueueIndex
+          val isDragging = draggedIndex == index
           Surface(
             shape = RoundedCornerShape(14.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
-            border = if (isCurrent) {
+            shadowElevation = if (isDragging) 8.dp else 0.dp,
+            border = if (isCurrent || isDragging) {
               BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
             } else {
               null
             },
             modifier = Modifier
               .fillMaxWidth()
+              .zIndex(if (isDragging) 1f else 0f)
+              .onSizeChanged { size ->
+                if (size.height > 0) {
+                  itemHeightsPx[index] = size.height.toFloat()
+                }
+              }
+              .graphicsLayer {
+                translationY = if (isDragging) dragOffsetY else 0f
+                scaleX = if (isDragging) 1.02f else 1f
+                scaleY = if (isDragging) 1.02f else 1f
+              }
               .clip(RoundedCornerShape(14.dp))
-              .clickable { onSelectQueueIndex(index) }
+              .clickable(enabled = draggedIndex == null) { onSelectQueueIndex(index) }
               .testTag("music_queue_item_$index"),
           ) {
             Row(
               modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(start = 8.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
               horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically,
             ) {
               Row(
                 modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
               ) {
+                Box(
+                  modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .pointerInput(index, queue.size) {
+                      detectDragGestures(
+                        onDragStart = {
+                          draggedIndex = index
+                          dragOffsetY = 0f
+                        },
+                        onDrag = { change, dragAmount ->
+                          change.consume()
+                          val activeIdx = draggedIndex ?: return@detectDragGestures
+                          var offset = dragOffsetY + dragAmount.y
+                          var curIdx = activeIdx
+                          val size = currentQueue.size
+                          while (true) {
+                            val stepPx = (itemHeightsPx[curIdx] ?: defaultItemHeightPx) + itemSpacingPx
+                            val threshold = stepPx * 0.55f
+                            if (offset > threshold && curIdx < size - 1) {
+                              currentOnMoveQueueItem(curIdx, curIdx + 1)
+                              curIdx += 1
+                              draggedIndex = curIdx
+                              offset -= stepPx
+                            } else if (offset < -threshold && curIdx > 0) {
+                              currentOnMoveQueueItem(curIdx, curIdx - 1)
+                              curIdx -= 1
+                              draggedIndex = curIdx
+                              offset += stepPx
+                            } else {
+                              break
+                            }
+                          }
+                          dragOffsetY = offset
+                        },
+                        onDragEnd = {
+                          draggedIndex = null
+                          dragOffsetY = 0f
+                        },
+                        onDragCancel = {
+                          draggedIndex = null
+                          dragOffsetY = 0f
+                        },
+                      )
+                    }
+                    .testTag("music_queue_drag_handle_$index"),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.DragHandle,
+                    contentDescription = "Drag to reorder",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                  )
+                }
+
                 Box(contentAlignment = Alignment.Center) {
                   TrackArtworkThumbnail(
                     track = item,
@@ -4489,11 +4291,6 @@ private fun PlaybackQueueSheetContent(
                       overflow = TextOverflow.Ellipsis,
                       modifier = Modifier.weight(1f, fill = false),
                     )
-                    if (isCurrent) {
-                      Badge(containerColor = MaterialTheme.colorScheme.primary) {
-                        Text(if (isPlaying) "PLAYING" else "NOW")
-                      }
-                    }
                   }
                   Text(
                     text = "${item.artist} • ${item.album}",
@@ -4570,7 +4367,7 @@ private fun MusicSlimDotSlider(
 }
 
 @Composable
-private fun TrackArtworkThumbnail(
+internal fun TrackArtworkThumbnail(
   track: MusicTrack?,
   size: Dp,
   shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(12.dp),
@@ -4681,9 +4478,19 @@ private fun PlaybackQueueDialog(
   isPlaying: Boolean,
   accentColor: Color,
   onSelectQueueIndex: (Int) -> Unit,
+  onMoveQueueItem: (fromIndex: Int, toIndex: Int) -> Unit,
   onSaveQueueAsPlaylist: () -> Unit,
   onDismiss: () -> Unit,
 ) {
+  val density = LocalDensity.current
+  val defaultItemHeightPx = with(density) { 56.dp.toPx() }
+  val itemSpacingPx = with(density) { 6.dp.toPx() }
+  var draggedIndex by remember { mutableStateOf<Int?>(null) }
+  var dragOffsetY by remember { mutableFloatStateOf(0f) }
+  val itemHeightsPx = remember { mutableMapOf<Int, Float>() }
+  val currentQueue by rememberUpdatedState(queue)
+  val currentOnMoveQueueItem by rememberUpdatedState(onMoveQueueItem)
+
   AlertDialog(
     onDismissRequest = onDismiss,
     shape = RoundedCornerShape(28.dp),
@@ -4711,7 +4518,7 @@ private fun PlaybackQueueDialog(
         }
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = "Playback Queue",
+            text = "Queue",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
@@ -4749,6 +4556,7 @@ private fun PlaybackQueueDialog(
         }
 
         LazyColumn(
+          userScrollEnabled = draggedIndex == null,
           modifier = Modifier
             .fillMaxWidth()
             .heightIn(max = 320.dp)
@@ -4757,6 +4565,7 @@ private fun PlaybackQueueDialog(
         ) {
           itemsIndexed(queue, key = { idx, t -> "${idx}_${t.id}" }) { index, item ->
             val isCurrent = index == currentQueueIndex
+            val isDragging = draggedIndex == index
             Card(
               shape = RoundedCornerShape(12.dp),
               colors = CardDefaults.cardColors(
@@ -4768,15 +4577,81 @@ private fun PlaybackQueueDialog(
               ),
               modifier = Modifier
                 .fillMaxWidth()
-                .clickable { onSelectQueueIndex(index) },
+                .zIndex(if (isDragging) 1f else 0f)
+                .onSizeChanged { size ->
+                  if (size.height > 0) {
+                    itemHeightsPx[index] = size.height.toFloat()
+                  }
+                }
+                .graphicsLayer {
+                  translationY = if (isDragging) dragOffsetY else 0f
+                  scaleX = if (isDragging) 1.02f else 1f
+                  scaleY = if (isDragging) 1.02f else 1f
+                }
+                .clickable(enabled = draggedIndex == null) { onSelectQueueIndex(index) },
             ) {
               Row(
                 modifier = Modifier
                   .fillMaxWidth()
-                  .padding(horizontal = 10.dp, vertical = 8.dp),
+                  .padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
               ) {
+                Box(
+                  modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .pointerInput(index, queue.size) {
+                      detectDragGestures(
+                        onDragStart = {
+                          draggedIndex = index
+                          dragOffsetY = 0f
+                        },
+                        onDrag = { change, dragAmount ->
+                          change.consume()
+                          val activeIdx = draggedIndex ?: return@detectDragGestures
+                          var offset = dragOffsetY + dragAmount.y
+                          var curIdx = activeIdx
+                          val size = currentQueue.size
+                          while (true) {
+                            val stepPx = (itemHeightsPx[curIdx] ?: defaultItemHeightPx) + itemSpacingPx
+                            val threshold = stepPx * 0.55f
+                            if (offset > threshold && curIdx < size - 1) {
+                              currentOnMoveQueueItem(curIdx, curIdx + 1)
+                              curIdx += 1
+                              draggedIndex = curIdx
+                              offset -= stepPx
+                            } else if (offset < -threshold && curIdx > 0) {
+                              currentOnMoveQueueItem(curIdx, curIdx - 1)
+                              curIdx -= 1
+                              draggedIndex = curIdx
+                              offset += stepPx
+                            } else {
+                              break
+                            }
+                          }
+                          dragOffsetY = offset
+                        },
+                        onDragEnd = {
+                          draggedIndex = null
+                          dragOffsetY = 0f
+                        },
+                        onDragCancel = {
+                          draggedIndex = null
+                          dragOffsetY = 0f
+                        },
+                      )
+                    }
+                    .testTag("music_queue_dialog_drag_handle_$index"),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.DragHandle,
+                    contentDescription = "Drag to reorder",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                  )
+                }
                 TrackArtworkThumbnail(
                   track = item,
                   size = 38.dp,
@@ -4928,6 +4803,7 @@ private fun SaveQueueAsPlaylistDialog(
 private fun TrackDetailsDialog(
   track: MusicTrack,
   palette: AlbumArtPalette,
+  playStat: TrackPlayStats = TrackPlayStats(),
   onSelectColor: (String) -> Unit,
   onDismiss: () -> Unit,
 ) {
@@ -5082,6 +4958,8 @@ private fun TrackDetailsDialog(
         DetailRow(label = "Genre", value = track.genre)
         DetailRow(label = "Year", value = track.year.toString(), isMono = true)
         DetailRow(label = "Duration", value = track.durationFormatted, isMono = true)
+        DetailRow(label = "Plays", value = playStat.playCount.toString(), isMono = true)
+        DetailRow(label = "Playtime", value = playStat.totalPlayTimeFormatted, isMono = true)
         DetailRow(label = "Format", value = track.formatLabel, isMono = true)
         DetailRow(label = "Bitrate", value = track.bitrateFormatted, isMono = true)
         DetailRow(label = "Sample Rate", value = track.sampleRateFormatted, isMono = true)
@@ -5187,4 +5065,10 @@ private fun MusicPlayerQueueExpandedPreview() {
       initialQueueExpanded = true,
     )
   }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+  is Activity -> this
+  is ContextWrapper -> baseContext.findActivity()
+  else -> null
 }

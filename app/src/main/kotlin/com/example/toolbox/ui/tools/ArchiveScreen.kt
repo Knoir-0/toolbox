@@ -413,8 +413,7 @@ fun ArchiveScreen(
             coroutineScope.launch {
               isBusy = true
               val sampleFile = withContext(Dispatchers.IO) {
-                val sampleDir = File(context.cacheDir, "sample_archives").apply { mkdirs() }
-                ArchiveEngine.generateSampleArchive(sampleDir)
+                FileManagerEngine.getOrCreateSampleArchiveFile(context)
               }
               isBusy = false
               activeArchiveFile = sampleFile

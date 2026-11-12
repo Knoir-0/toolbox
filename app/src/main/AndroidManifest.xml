@@ -343,7 +343,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_file_converter"
             android:roundIcon="@mipmap/ic_tool_file_converter"
-            android:label="File Converter">
+            android:label="Converter">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

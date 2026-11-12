@@ -260,7 +260,7 @@ fun FileConverterScreen(
 
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "File Converter",
+                text = "Converter",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -305,12 +305,7 @@ fun FileConverterScreen(
       OpenFileInitialView(
         onOpenFile = { showFileBrowserDialog = true },
         onUseSample = {
-          val sampleBmp = BitmapOperations.createSampleBitmap()
-          val sampleDir = File(context.cacheDir, "converter_samples").apply { mkdirs() }
-          val sampleFile = File(sampleDir, "sample_image.png")
-          FileOutputStream(sampleFile).use { out ->
-            sampleBmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-          }
+          val sampleFile = FileManagerEngine.getOrCreateSampleImageFile(context)
           selectedFile = sampleFile
           sourceFormat = FileConverterEngine.detectFormat(sampleFile)
           lastResult = null

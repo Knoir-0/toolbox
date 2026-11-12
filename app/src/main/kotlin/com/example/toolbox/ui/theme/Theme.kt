@@ -40,11 +40,17 @@ import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SPLIT_COMPLEMENTARY_210
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_TINT_LIGHT
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_TRIADIC
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_TRIADIC_240
+import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_ACCENT
+import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_DOMINANT
+import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_PLAYER
+import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_SECONDARY
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
 import com.example.toolbox.ui.main.FALLBACK_THEME_COLOR_HEX
 import com.example.toolbox.ui.main.ThemeMode
+import com.example.toolbox.ui.tools.AlbumArtPalette
 import com.example.toolbox.ui.tools.HarmonyMode
+import com.example.toolbox.ui.tools.MusicPlayerEngine
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -357,8 +363,94 @@ enum class AccentHarmonyOption(
     }
 }
 
+enum class MusicPlayerColorOption(
+    val prefValue: String,
+    val label: String,
+    val swatchLabel: String,
+    val description: String,
+) {
+    DOMINANT(
+        prefValue = ACCENT_COLOR_MUSIC_PLAYER,
+        label = "Music Player (Dominant)",
+        swatchLabel = "Dominant",
+        description = "Matches the music player's dominant album art color",
+    ),
+    SECONDARY(
+        prefValue = ACCENT_COLOR_MUSIC_SECONDARY,
+        label = "Music Player (Secondary)",
+        swatchLabel = "Secondary",
+        description = "Matches the music player's secondary album art color",
+    ),
+    ACCENT(
+        prefValue = ACCENT_COLOR_MUSIC_ACCENT,
+        label = "Music Player (Accent)",
+        swatchLabel = "Accent",
+        description = "Matches the music player's vibrant album art accent color",
+    ),
+    ;
+
+    fun resolveColor(palette: AlbumArtPalette): Color = when (this) {
+        DOMINANT -> palette.dominantColor
+        SECONDARY -> palette.secondaryColor
+        ACCENT -> palette.accentColor
+    }
+
+    fun resolveHex(palette: AlbumArtPalette): String = when (this) {
+        DOMINANT -> palette.dominantHex
+        SECONDARY -> palette.secondaryHex
+        ACCENT -> palette.accentHex
+    }
+
+    companion object {
+        fun fromPrefValue(value: String?): MusicPlayerColorOption? {
+            if (value.isNullOrBlank()) return null
+            val prefix = value.trim().substringBefore(':').trim()
+            if (
+                prefix.equals(ACCENT_COLOR_MUSIC_PLAYER, ignoreCase = true) ||
+                prefix.equals(ACCENT_COLOR_MUSIC_DOMINANT, ignoreCase = true)
+            ) {
+                return DOMINANT
+            }
+            return entries.find { it.prefValue.equals(prefix, ignoreCase = true) }
+        }
+    }
+}
+
+fun resolveMusicPlayerHarmonyOption(accentColorSetting: String?): AccentHarmonyOption {
+    if (accentColorSetting.isNullOrBlank()) return AccentHarmonyOption.COMPLEMENTARY
+    val trimmed = accentColorSetting.trim()
+    if (':' in trimmed) {
+        val suffix = trimmed.substringAfter(':').trim()
+        AccentHarmonyOption.fromPrefValue(suffix)?.let { return it }
+    }
+    return AccentHarmonyOption.COMPLEMENTARY
+}
+
+fun buildMusicPlayerAccentPrefValue(
+    musicOption: MusicPlayerColorOption = MusicPlayerColorOption.DOMINANT,
+    harmonyOption: AccentHarmonyOption = AccentHarmonyOption.COMPLEMENTARY,
+): String {
+    return if (harmonyOption == AccentHarmonyOption.COMPLEMENTARY) {
+        musicOption.prefValue
+    } else {
+        "${musicOption.prefValue}:${harmonyOption.prefValue}"
+    }
+}
+
+fun calculateMusicPlayerBackgroundColor(
+    baseBackground: Color,
+    musicPalette: AlbumArtPalette = MusicPlayerEngine.activeTrackPalette,
+    musicOption: MusicPlayerColorOption = MusicPlayerColorOption.DOMINANT,
+): Color {
+    return lerp(baseBackground, musicOption.resolveColor(musicPalette), 0.22f)
+}
+
 fun isAutoAccentColorSetting(accentColorSetting: String?): Boolean {
     return AccentHarmonyOption.fromPrefValue(accentColorSetting) != null
+}
+
+fun isMusicPlayerAccentColorSetting(accentColorSetting: String?): Boolean {
+    return MusicPlayerColorOption.fromPrefValue(accentColorSetting) != null
 }
 
 fun colorToHexString(color: Color): String {
@@ -537,11 +629,17 @@ fun resolveEffectiveAccentColor(
     themeColorHex: String,
     accentColorSetting: String,
     fallbackPrimary: Color = Color(0xFF8E66A6),
+    musicPalette: AlbumArtPalette = MusicPlayerEngine.activeTrackPalette,
 ): Color {
     val primary = parseHexColor(themeColorHex) ?: fallbackPrimary
     val harmonyOption = AccentHarmonyOption.fromPrefValue(accentColorSetting)
     if (harmonyOption != null) {
         return calculateAccentHarmonyColor(primary, harmonyOption)
+    }
+    val musicOption = MusicPlayerColorOption.fromPrefValue(accentColorSetting)
+    if (musicOption != null) {
+        val musicHarmony = resolveMusicPlayerHarmonyOption(accentColorSetting)
+        return calculateAccentHarmonyColor(musicOption.resolveColor(musicPalette), musicHarmony)
     }
     val parsed = parseHexColor(accentColorSetting)
     if (parsed != null) return parsed
@@ -640,19 +738,42 @@ fun ToolboxTheme(
     }
 
     val harmonyOption = AccentHarmonyOption.fromPrefValue(accentColor)
-    val resolvedAccentColor = if (harmonyOption != null) {
-        calculateAccentHarmonyColor(baseColorScheme.primary, harmonyOption)
-    } else {
-        parseHexColor(accentColor) ?: calculateComplementaryColor(baseColorScheme.primary)
+    val musicOption = MusicPlayerColorOption.fromPrefValue(accentColor)
+    val musicPalette = MusicPlayerEngine.activeTrackPalette
+    val resolvedAccentColor = when {
+        harmonyOption != null -> calculateAccentHarmonyColor(baseColorScheme.primary, harmonyOption)
+        musicOption != null -> {
+            val musicHarmony = resolveMusicPlayerHarmonyOption(accentColor)
+            calculateAccentHarmonyColor(musicOption.resolveColor(musicPalette), musicHarmony)
+        }
+        else -> parseHexColor(accentColor) ?: calculateComplementaryColor(baseColorScheme.primary)
     }
 
     val tertiaryTokens = createTertiaryTokens(resolvedAccentColor, darkTheme)
-    val colorScheme = baseColorScheme.copy(
-        tertiary = tertiaryTokens.tertiary,
-        onTertiary = tertiaryTokens.onTertiary,
-        tertiaryContainer = tertiaryTokens.tertiaryContainer,
-        onTertiaryContainer = tertiaryTokens.onTertiaryContainer,
-    )
+    val colorScheme = if (musicOption != null) {
+        val musicBaseColor = musicOption.resolveColor(musicPalette)
+        val musicBg = calculateMusicPlayerBackgroundColor(baseColorScheme.background, musicPalette, musicOption)
+        baseColorScheme.copy(
+            background = musicBg,
+            surface = musicBg,
+            surfaceContainerLowest = lerp(baseColorScheme.surfaceContainerLowest, musicBaseColor, 0.18f),
+            surfaceContainerLow = lerp(baseColorScheme.surfaceContainerLow, musicBaseColor, 0.16f),
+            surfaceContainer = lerp(baseColorScheme.surfaceContainer, musicBaseColor, 0.20f),
+            surfaceContainerHigh = lerp(baseColorScheme.surfaceContainerHigh, musicBaseColor, 0.18f),
+            surfaceVariant = lerp(baseColorScheme.surfaceVariant, musicBaseColor, 0.20f),
+            tertiary = tertiaryTokens.tertiary,
+            onTertiary = tertiaryTokens.onTertiary,
+            tertiaryContainer = tertiaryTokens.tertiaryContainer,
+            onTertiaryContainer = tertiaryTokens.onTertiaryContainer,
+        )
+    } else {
+        baseColorScheme.copy(
+            tertiary = tertiaryTokens.tertiary,
+            onTertiary = tertiaryTokens.onTertiary,
+            tertiaryContainer = tertiaryTokens.tertiaryContainer,
+            onTertiaryContainer = tertiaryTokens.onTertiaryContainer,
+        )
+    }
 
     MaterialTheme(
         colorScheme = colorScheme,

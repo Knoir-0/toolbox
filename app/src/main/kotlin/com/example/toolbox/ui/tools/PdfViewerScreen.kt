@@ -429,8 +429,7 @@ fun PdfViewerScreen(
             isLoadingPage = true
             val sampleFile =
               withContext(Dispatchers.IO) {
-                val target = File(context.cacheDir, "sample_document.pdf")
-                PdfViewerEngine.generateSamplePdfFile(target)
+                FileManagerEngine.getOrCreateSamplePdfFile(context)
               }
             currentFile = sampleFile
           }

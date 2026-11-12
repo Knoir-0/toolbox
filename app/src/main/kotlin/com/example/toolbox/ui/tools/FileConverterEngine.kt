@@ -592,9 +592,20 @@ object FileConverterEngine {
         fallback = if (src in NATIVE_DECODABLE_IMAGES) ConverterBackend.FFMPEG else null,
         description = "Render image into a single-page PDF document",
       )
+
+      // Every image format can convert to Text/Markup (TXT, MD, HTML) and Structured Data (CSV, TSV, JSON, XML) via ML Kit OCR
+      for (docDst in TEXT_MARKUP_FORMATS + STRUCTURED_DATA_FORMATS) {
+        register(
+          source = src,
+          target = docDst,
+          preferred = if (src in NATIVE_DECODABLE_IMAGES) ConverterBackend.NATIVE else ConverterBackend.FFMPEG,
+          fallback = if (src in NATIVE_DECODABLE_IMAGES) ConverterBackend.FFMPEG else null,
+          description = "On-device ML Kit OCR text & document extraction (${src.displayName} → ${docDst.displayName})",
+        )
+      }
     }
 
-    // 2. PDF -> IMAGE & PDF -> TXT/HTML/MD
+    // 2. PDF -> IMAGE & PDF -> TXT/MD/HTML/CSV/TSV/JSON/XML (PdfRenderer + ML Kit OCR)
     for (dst in listOf(ConvertibleFormat.PNG, ConvertibleFormat.JPG, ConvertibleFormat.WEBP, ConvertibleFormat.BMP)) {
       register(
         source = ConvertibleFormat.PDF,
@@ -602,6 +613,15 @@ object FileConverterEngine {
         preferred = ConverterBackend.NATIVE,
         fallback = null,
         description = "Native Android PdfRenderer page rasterization",
+      )
+    }
+    for (docDst in TEXT_MARKUP_FORMATS + STRUCTURED_DATA_FORMATS) {
+      register(
+        source = ConvertibleFormat.PDF,
+        target = docDst,
+        preferred = ConverterBackend.NATIVE,
+        fallback = null,
+        description = "Native PdfRenderer + on-device ML Kit OCR document extraction (PDF → ${docDst.displayName})",
       )
     }
 
@@ -1016,6 +1036,7 @@ object FileConverterEngine {
     desiredStem: String = extractFileStem(sourceFile.name),
     sourceFormatOverride: ConvertibleFormat? = null,
     ffmpegRunner: (suspend (List<String>, File) -> Boolean)? = null,
+    ocrRunner: (suspend (File, ConvertibleFormat) -> List<CameraScannedDocument>)? = null,
   ): ConversionResult = withContext(Dispatchers.IO) {
     val startTime = System.currentTimeMillis()
     val sourceFormat = sourceFormatOverride ?: detectFormat(sourceFile)
@@ -1081,6 +1102,7 @@ object FileConverterEngine {
         sourceFormat = sourceFormat,
         targetFormat = targetFormat,
         ffmpegRunner = ffmpegRunner,
+        ocrRunner = ocrRunner,
       )
     } catch (e: Throwable) {
       primaryError = e.message ?: e::class.java.simpleName
@@ -1119,6 +1141,7 @@ object FileConverterEngine {
           sourceFormat = sourceFormat,
           targetFormat = targetFormat,
           ffmpegRunner = ffmpegRunner,
+          ocrRunner = ocrRunner,
         )
       } catch (e: Throwable) {
         fallbackError = e.message ?: e::class.java.simpleName
@@ -1180,6 +1203,7 @@ object FileConverterEngine {
     sourceFormat: ConvertibleFormat,
     targetFormat: ConvertibleFormat,
     ffmpegRunner: (suspend (List<String>, File) -> Boolean)?,
+    ocrRunner: (suspend (File, ConvertibleFormat) -> List<CameraScannedDocument>)?,
   ): Boolean {
     return when (backend) {
       ConverterBackend.NATIVE -> executeNativeConversion(
@@ -1188,6 +1212,7 @@ object FileConverterEngine {
         outputFile = outputFile,
         sourceFormat = sourceFormat,
         targetFormat = targetFormat,
+        ocrRunner = ocrRunner,
       )
       ConverterBackend.FFMPEG -> executeFfmpegConversion(
         sourceFile = sourceFile,
@@ -1195,6 +1220,7 @@ object FileConverterEngine {
         sourceFormat = sourceFormat,
         targetFormat = targetFormat,
         ffmpegRunner = ffmpegRunner,
+        ocrRunner = ocrRunner,
       )
     }
   }
@@ -1209,6 +1235,7 @@ object FileConverterEngine {
     outputFile: File,
     sourceFormat: ConvertibleFormat,
     targetFormat: ConvertibleFormat,
+    ocrRunner: (suspend (File, ConvertibleFormat) -> List<CameraScannedDocument>)? = null,
   ): Boolean {
     return when {
       // 1. Archive <-> Archive
@@ -1234,12 +1261,37 @@ object FileConverterEngine {
         convertPdfToImageNative(sourceFile, outputFile, targetFormat)
       }
 
-      // 5. Image -> PDF
+      // 5. PDF -> Document / Structured Data (PdfRenderer + ML Kit OCR)
+      sourceFormat == ConvertibleFormat.PDF &&
+        (targetFormat in TEXT_MARKUP_FORMATS || targetFormat in STRUCTURED_DATA_FORMATS) -> {
+        convertPdfToDocumentOcrNative(
+          sourceFile = sourceFile,
+          outputFile = outputFile,
+          targetFormat = targetFormat,
+          defaultTitle = extractFileStem(sourceFile.name),
+          ocrRunner = ocrRunner,
+        )
+      }
+
+      // 6. Image -> PDF
       sourceFormat.category == ConversionMediaCategory.IMAGE && targetFormat == ConvertibleFormat.PDF -> {
         convertImageToPdfNative(sourceFile, outputFile)
       }
 
-      // 6. Image -> Image
+      // 7. Image -> Document / Structured Data (ML Kit OCR)
+      sourceFormat.category == ConversionMediaCategory.IMAGE &&
+        (targetFormat in TEXT_MARKUP_FORMATS || targetFormat in STRUCTURED_DATA_FORMATS) -> {
+        convertImageToDocumentOcrNative(
+          sourceFile = sourceFile,
+          outputFile = outputFile,
+          sourceFormat = sourceFormat,
+          targetFormat = targetFormat,
+          defaultTitle = extractFileStem(sourceFile.name),
+          ocrRunner = ocrRunner,
+        )
+      }
+
+      // 8. Image -> Image
       sourceFormat.category == ConversionMediaCategory.IMAGE &&
         targetFormat.category == ConversionMediaCategory.IMAGE -> {
         convertImageToImageNative(sourceFile, outputFile, targetFormat)
@@ -1608,6 +1660,307 @@ object FileConverterEngine {
         }
       }
     }
+  }
+
+  /**
+   * Native Image -> Document / Structured Data conversion using on-device ML Kit OCR
+   * ([CameraEngine.recognizeTextFromBitmapWithMlKit]).
+   */
+  private suspend fun convertImageToDocumentOcrNative(
+    sourceFile: File,
+    outputFile: File,
+    sourceFormat: ConvertibleFormat,
+    targetFormat: ConvertibleFormat,
+    defaultTitle: String,
+    ocrRunner: (suspend (File, ConvertibleFormat) -> List<CameraScannedDocument>)? = null,
+  ): Boolean {
+    val documents = if (ocrRunner != null) {
+      ocrRunner(sourceFile, sourceFormat)
+    } else {
+      val bitmap = BitmapFactory.decodeFile(sourceFile.absolutePath) ?: return false
+      try {
+        val recognized = CameraEngine.recognizeTextFromBitmapWithMlKit(bitmap = bitmap)
+        listOf(
+          recognized ?: CameraEngine.analyzeScannedDocumentText(
+            rawText = "",
+            fallbackTitle = defaultTitle.ifBlank { "Scanned Document" },
+          )
+        )
+      } finally {
+        bitmap.recycle()
+      }
+    }
+    if (documents.isEmpty()) return false
+    val formatted = formatOcrDocuments(
+      documents = documents,
+      targetFormat = targetFormat,
+      defaultTitle = defaultTitle.ifBlank { "Scanned Document" },
+    )
+    outputFile.writeText(formatted.ifEmpty { " " }, Charsets.UTF_8)
+    return outputFile.exists() && outputFile.length() > 0L
+  }
+
+  /**
+   * Native PDF -> Document / Structured Data conversion using Android's [PdfRenderer] to rasterize
+   * each page at 2x resolution followed by on-device ML Kit OCR ([CameraEngine.recognizeTextFromBitmapWithMlKit]).
+   */
+  private suspend fun convertPdfToDocumentOcrNative(
+    sourceFile: File,
+    outputFile: File,
+    targetFormat: ConvertibleFormat,
+    defaultTitle: String,
+    ocrRunner: (suspend (File, ConvertibleFormat) -> List<CameraScannedDocument>)? = null,
+  ): Boolean {
+    val documents = if (ocrRunner != null) {
+      ocrRunner(sourceFile, ConvertibleFormat.PDF)
+    } else {
+      val pfd = ParcelFileDescriptor.open(sourceFile, ParcelFileDescriptor.MODE_READ_ONLY) ?: return false
+      pfd.use { descriptor ->
+        PdfRenderer(descriptor).use { renderer ->
+          val pageCount = renderer.pageCount
+          if (pageCount <= 0) return false
+          val scannedPages = mutableListOf<CameraScannedDocument>()
+          for (pageIndex in 0 until pageCount) {
+            renderer.openPage(pageIndex).use { page ->
+              val width = (page.width * 2).coerceIn(1, 3072)
+              val height = (page.height * 2).coerceIn(1, 3072)
+              val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+              try {
+                val canvas = Canvas(bitmap)
+                canvas.drawColor(Color.WHITE)
+                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                val recognized = CameraEngine.recognizeTextFromBitmapWithMlKit(bitmap = bitmap)
+                val pageFallbackTitle = if (pageCount > 1) {
+                  "${defaultTitle.ifBlank { "Scanned PDF" }} - Page ${pageIndex + 1}"
+                } else {
+                  defaultTitle.ifBlank { "Scanned PDF" }
+                }
+                scannedPages.add(
+                  recognized ?: CameraEngine.analyzeScannedDocumentText(
+                    rawText = "",
+                    fallbackTitle = pageFallbackTitle,
+                  )
+                )
+              } finally {
+                bitmap.recycle()
+              }
+            }
+          }
+          scannedPages
+        }
+      }
+    }
+    if (documents.isEmpty()) return false
+    val formatted = formatOcrDocuments(
+      documents = documents,
+      targetFormat = targetFormat,
+      defaultTitle = defaultTitle.ifBlank { "Scanned PDF" },
+    )
+    outputFile.writeText(formatted.ifEmpty { " " }, Charsets.UTF_8)
+    return outputFile.exists() && outputFile.length() > 0L
+  }
+
+  /**
+   * Formats one or more OCR-scanned pages ([CameraScannedDocument]) into the requested text/markup
+   * ([ConvertibleFormat.TXT], [ConvertibleFormat.MD], [ConvertibleFormat.HTML]) or structured data
+   * ([ConvertibleFormat.JSON], [ConvertibleFormat.CSV], [ConvertibleFormat.TSV], [ConvertibleFormat.XML]) format.
+   */
+  fun formatOcrDocuments(
+    documents: List<CameraScannedDocument>,
+    targetFormat: ConvertibleFormat,
+    defaultTitle: String = "Scanned Document",
+  ): String {
+    val cleanDefaultTitle = defaultTitle.trim().ifEmpty { "Scanned Document" }
+    val effectiveDocs = documents.ifEmpty {
+      listOf(
+        CameraEngine.analyzeScannedDocumentText(
+          rawText = "",
+          fallbackTitle = cleanDefaultTitle,
+        )
+      )
+    }
+    val documentTitle = effectiveDocs.firstOrNull()?.title?.takeIf { it.isNotBlank() } ?: cleanDefaultTitle
+    val isMultiPage = effectiveDocs.size > 1
+
+    return when (targetFormat) {
+      ConvertibleFormat.TXT -> {
+        if (!isMultiPage) {
+          val single = effectiveDocs.first()
+          single.rawText.ifBlank { documentTitle }
+        } else {
+          buildString {
+            effectiveDocs.forEachIndexed { index, doc ->
+              if (index > 0) append("\n\n")
+              appendLine("--- Page ${index + 1} ---")
+              append(doc.rawText.ifBlank { "(No text detected on page ${index + 1})" })
+            }
+          }
+        }
+      }
+
+      ConvertibleFormat.MD -> {
+        buildString {
+          appendLine("# $documentTitle")
+          if (!isMultiPage) {
+            val single = effectiveDocs.first()
+            val blocks = single.blocks
+            if (blocks.isNotEmpty()) {
+              for (block in blocks) {
+                val blockText = block.lines.joinToString("\n").trim()
+                if (blockText.isNotEmpty() && !blockText.equals(documentTitle, ignoreCase = false)) {
+                  appendLine()
+                  appendLine(blockText)
+                }
+              }
+            } else if (single.body.isNotBlank()) {
+              appendLine()
+              appendLine(single.body)
+            }
+          } else {
+            effectiveDocs.forEachIndexed { index, doc ->
+              appendLine()
+              appendLine("## Page ${index + 1}")
+              if (doc.blocks.isNotEmpty()) {
+                for (block in doc.blocks) {
+                  val blockText = block.lines.joinToString("\n").trim()
+                  if (blockText.isNotEmpty()) {
+                    appendLine()
+                    appendLine(blockText)
+                  }
+                }
+              } else if (doc.rawText.isNotBlank()) {
+                appendLine()
+                appendLine(doc.rawText)
+              }
+            }
+          }
+        }
+      }
+
+      ConvertibleFormat.HTML -> {
+        buildString {
+          appendLine("<!DOCTYPE html>")
+          appendLine("<html><head><meta charset=\"UTF-8\"><title>${escapeXml(documentTitle)}</title></head><body>")
+          appendLine("<article class=\"ocr-document\">")
+          appendLine("  <h1>${escapeXml(documentTitle)}</h1>")
+          effectiveDocs.forEachIndexed { index, doc ->
+            appendLine("  <section class=\"ocr-page\" data-page=\"${index + 1}\">")
+            if (isMultiPage) {
+              appendLine("    <h2>Page ${index + 1}</h2>")
+            }
+            if (doc.blocks.isNotEmpty()) {
+              for (block in doc.blocks) {
+                val escapedLines = block.lines
+                  .map { it.trim() }
+                  .filter { it.isNotEmpty() }
+                  .joinToString("<br/>") { escapeXml(it) }
+                if (escapedLines.isNotEmpty()) {
+                  appendLine("    <p>$escapedLines</p>")
+                }
+              }
+            } else if (doc.rawText.isNotBlank()) {
+              for (line in doc.rawText.lines().map { it.trim() }.filter { it.isNotEmpty() }) {
+                appendLine("    <p>${escapeXml(line)}</p>")
+              }
+            }
+            appendLine("  </section>")
+          }
+          appendLine("</article>")
+          appendLine("</body></html>")
+        }
+      }
+
+      ConvertibleFormat.JSON -> {
+        val rows = extractOcrStructuredRows(effectiveDocs, documentTitle)
+        val array = JSONArray()
+        for (row in rows) {
+          val obj = JSONObject()
+          for ((k, v) in row) {
+            obj.put(k, v)
+          }
+          array.put(obj)
+        }
+        array.toString(2)
+      }
+
+      ConvertibleFormat.CSV,
+      ConvertibleFormat.TSV,
+      ConvertibleFormat.XML -> {
+        val rows = extractOcrStructuredRows(effectiveDocs, documentTitle)
+        formatStructuredRows(rows, targetFormat)
+      }
+
+      else -> effectiveDocs.joinToString("\n\n") { it.rawText }.ifBlank { documentTitle }
+    }
+  }
+
+  /**
+   * Extracts normalized tabular records (`page`, `block`, `line`, `title`, `text`) from OCR-scanned
+   * [CameraScannedDocument] pages for structured data export (`JSON`, `CSV`, `TSV`, `XML`).
+   */
+  internal fun extractOcrStructuredRows(
+    documents: List<CameraScannedDocument>,
+    defaultTitle: String = "Scanned Document",
+  ): List<Map<String, String>> {
+    val rows = mutableListOf<Map<String, String>>()
+    documents.forEachIndexed { pageIdx, doc ->
+      val pageNumber = (pageIdx + 1).toString()
+      val pageTitle = doc.title.ifBlank { defaultTitle }
+      if (doc.blocks.isNotEmpty()) {
+        doc.blocks.forEachIndexed { blockIdx, block ->
+          val blockNumber = (blockIdx + 1).toString()
+          val nonBlankLines = block.lines.map { it.trim() }.filter { it.isNotEmpty() }
+          if (nonBlankLines.isNotEmpty()) {
+            nonBlankLines.forEachIndexed { lineIdx, lineText ->
+              rows.add(
+                linkedMapOf(
+                  "page" to pageNumber,
+                  "block" to blockNumber,
+                  "line" to (lineIdx + 1).toString(),
+                  "title" to pageTitle,
+                  "text" to lineText,
+                )
+              )
+            }
+          } else if (block.text.isNotBlank()) {
+            rows.add(
+              linkedMapOf(
+                "page" to pageNumber,
+                "block" to blockNumber,
+                "line" to "1",
+                "title" to pageTitle,
+                "text" to block.text.trim(),
+              )
+            )
+          }
+        }
+      } else {
+        val rawLines = doc.rawText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        rawLines.forEachIndexed { lineIdx, lineText ->
+          rows.add(
+            linkedMapOf(
+              "page" to pageNumber,
+              "block" to "1",
+              "line" to (lineIdx + 1).toString(),
+              "title" to pageTitle,
+              "text" to lineText,
+            )
+          )
+        }
+      }
+    }
+    if (rows.isEmpty()) {
+      rows.add(
+        linkedMapOf(
+          "page" to "1",
+          "block" to "1",
+          "line" to "1",
+          "title" to defaultTitle,
+          "text" to "",
+        )
+      )
+    }
+    return rows
   }
 
   /**
@@ -2626,6 +2979,7 @@ object FileConverterEngine {
     sourceFormat: ConvertibleFormat,
     targetFormat: ConvertibleFormat,
     ffmpegRunner: (suspend (List<String>, File) -> Boolean)?,
+    ocrRunner: (suspend (File, ConvertibleFormat) -> List<CameraScannedDocument>)? = null,
   ): Boolean {
     // Special case: Image -> PDF fallback via FFmpeg (decode to temporary PNG via FFmpeg, then wrap in PDF)
     if (targetFormat == ConvertibleFormat.PDF && sourceFormat.category == ConversionMediaCategory.IMAGE) {
@@ -2637,9 +2991,39 @@ object FileConverterEngine {
           sourceFormat = sourceFormat,
           targetFormat = ConvertibleFormat.PNG,
           ffmpegRunner = ffmpegRunner,
+          ocrRunner = ocrRunner,
         )
         if (!decoded || !tempPng.exists()) return false
         return convertImageToPdfNative(tempPng, outputFile)
+      } finally {
+        tempPng.delete()
+      }
+    }
+
+    // Special case: Image -> Document / Structured Data via FFmpeg (decode to temporary PNG via FFmpeg, then run ML Kit OCR)
+    if (
+      (targetFormat in TEXT_MARKUP_FORMATS || targetFormat in STRUCTURED_DATA_FORMATS) &&
+      sourceFormat.category == ConversionMediaCategory.IMAGE
+    ) {
+      val tempPng = File.createTempFile("ffmpeg_ocr_", ".png", outputFile.parentFile)
+      try {
+        val decoded = executeFfmpegConversion(
+          sourceFile = sourceFile,
+          outputFile = tempPng,
+          sourceFormat = sourceFormat,
+          targetFormat = ConvertibleFormat.PNG,
+          ffmpegRunner = ffmpegRunner,
+          ocrRunner = ocrRunner,
+        )
+        if (!decoded || !tempPng.exists()) return false
+        return convertImageToDocumentOcrNative(
+          sourceFile = tempPng,
+          outputFile = outputFile,
+          sourceFormat = ConvertibleFormat.PNG,
+          targetFormat = targetFormat,
+          defaultTitle = extractFileStem(sourceFile.name),
+          ocrRunner = ocrRunner,
+        )
       } finally {
         tempPng.delete()
       }

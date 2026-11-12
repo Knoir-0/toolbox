@@ -191,12 +191,17 @@ fun TodoListScreen(
 
   // Quick Add State (title only)
   var newTaskTitle by remember { mutableStateOf("") }
+  val taskInputFocusRequester = remember { FocusRequester() }
 
   // Inline edit state (task ID currently being edited inline)
   var inlineEditingTaskId by remember { mutableStateOf<String?>(null) }
 
-  // Schedule / Reschedule dialog state
+  // Schedule / Reschedule panel state
+  var showSchedulePanel by remember { mutableStateOf(false) }
   var schedulingTaskId by remember { mutableStateOf<String?>(null) }
+  var scheduleStartMillis by remember { mutableLongStateOf(System.currentTimeMillis() + 3_600_000L) }
+  var scheduleNotesText by remember { mutableStateOf("") }
+  var hasPendingSchedule by remember { mutableStateOf(false) }
 
   // Active in-app due notification popups
   var duePopupTasks by remember { mutableStateOf<List<TodoItem>>(emptyList()) }
@@ -346,14 +351,44 @@ fun TodoListScreen(
     applySnapshot(nextSnapshot)
   }
 
+  fun openScheduleForTask(task: TodoItem) {
+    val defaultStart = task.scheduledAtMillis ?: (System.currentTimeMillis() + 3_600_000L)
+    scheduleStartMillis = defaultStart
+    scheduleNotesText = task.notes
+    schedulingTaskId = task.id
+    showSchedulePanel = true
+  }
+
   fun addTask() {
     val trimmed = newTaskTitle.trim()
     if (trimmed.isEmpty()) return
 
-    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-    val newItem = TodoItem(title = trimmed)
-    applyAction(listOf(newItem) + tasks)
-    newTaskTitle = ""
+    val shouldSchedule = hasPendingSchedule || (showSchedulePanel && schedulingTaskId == null)
+    if (shouldSchedule) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !TodoNotificationHelper.hasNotificationPermission(context)) {
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+      }
+      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+      val startMillis = scheduleStartMillis
+      val newItem = TodoItem(
+        title = trimmed,
+        notes = scheduleNotesText.trim(),
+        scheduledAtMillis = startMillis,
+        scheduledEndMillis = null,
+      )
+      applyAction(listOf(newItem) + tasks)
+      val label = TodoListEngine.formatScheduleLabel(startMillis, null)
+      Toast.makeText(context, "Scheduled for $label", Toast.LENGTH_SHORT).show()
+      newTaskTitle = ""
+      hasPendingSchedule = false
+      scheduleNotesText = ""
+      showSchedulePanel = false
+    } else {
+      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+      val newItem = TodoItem(title = trimmed)
+      applyAction(listOf(newItem) + tasks)
+      newTaskTitle = ""
+    }
   }
 
   fun addSavedTask(savedTask: TodoItem) {
@@ -558,22 +593,122 @@ fun TodoListScreen(
     }
   }
 
+  val taskToSchedule = schedulingTaskId?.let { id -> tasks.firstOrNull { it.id == id } }
+  val isSchedulePanelOpen = showSchedulePanel || taskToSchedule != null
+
   Scaffold(
     modifier = modifier
       .fillMaxSize()
       .testTag("todo_list_screen"),
     containerColor = MaterialTheme.colorScheme.background,
     bottomBar = {
-      // Streamlined Rounded Quick Add Dock
-      RoundedQuickAddBar(
-        title = newTaskTitle,
-        onTitleChange = { newTaskTitle = it },
-        onAdd = { addTask() },
-        onOpenSavedTasks = {
-          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-          showSavedTasksSheet = true
-        },
-      )
+      Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("todo_quick_add_card"),
+      ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+          // Streamlined Rounded Quick Add Dock
+          RoundedQuickAddBar(
+            title = newTaskTitle,
+            onTitleChange = { newTaskTitle = it },
+            onAdd = { addTask() },
+            onOpenSavedTasks = {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              showSavedTasksSheet = true
+            },
+            isScheduleOpen = isSchedulePanelOpen,
+            hasPendingSchedule = hasPendingSchedule,
+            onToggleSchedule = {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              if (isSchedulePanelOpen) {
+                showSchedulePanel = false
+                schedulingTaskId = null
+              } else {
+                schedulingTaskId = null
+                if (!hasPendingSchedule) {
+                  val defaultStart = System.currentTimeMillis() + 3_600_000L
+                  scheduleStartMillis = defaultStart
+                  scheduleNotesText = ""
+                }
+                showSchedulePanel = true
+              }
+            },
+            inputFocusRequester = taskInputFocusRequester,
+          )
+
+          // Schedule Task panel slides up from below the task input bar, pushing the task input bar up
+          AnimatedVisibility(
+            visible = isSchedulePanelOpen,
+            enter = slideInVertically(initialOffsetY = { it }) +
+              expandVertically(expandFrom = Alignment.Top) +
+              fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) +
+              shrinkVertically(shrinkTowards = Alignment.Top) +
+              fadeOut(),
+          ) {
+            ScheduleTaskPanel(
+              taskTitle = taskToSchedule?.title ?: newTaskTitle.trim().ifEmpty { "New Task" },
+              isExistingScheduled = taskToSchedule?.isScheduled == true || hasPendingSchedule,
+              startMillis = scheduleStartMillis,
+              onStartMillisChange = { newStart ->
+                scheduleStartMillis = newStart
+              },
+              onPresetSelected = {
+                taskInputFocusRequester.requestFocus()
+              },
+              notesText = scheduleNotesText,
+              onNotesTextChange = { scheduleNotesText = it },
+              onConfirmSchedule = {
+                if (taskToSchedule != null) {
+                  scheduleTask(
+                    taskId = taskToSchedule.id,
+                    scheduledAtMillis = scheduleStartMillis,
+                    scheduledEndMillis = null,
+                    notes = scheduleNotesText,
+                  )
+                  schedulingTaskId = null
+                  showSchedulePanel = false
+                } else {
+                  val trimmed = newTaskTitle.trim()
+                  if (trimmed.isNotEmpty()) {
+                    hasPendingSchedule = true
+                    addTask()
+                  } else {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !TodoNotificationHelper.hasNotificationPermission(context)) {
+                      notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    hasPendingSchedule = true
+                    showSchedulePanel = false
+                    val label = TodoListEngine.formatScheduleLabel(scheduleStartMillis, null)
+                    Toast.makeText(context, "Scheduled for $label", Toast.LENGTH_SHORT).show()
+                  }
+                }
+              },
+              onUnschedule = {
+                if (taskToSchedule != null) {
+                  unscheduleTask(taskToSchedule.id)
+                  schedulingTaskId = null
+                } else {
+                  hasPendingSchedule = false
+                  scheduleNotesText = ""
+                }
+                showSchedulePanel = false
+              },
+              onDismiss = {
+                if (taskToSchedule == null) {
+                  hasPendingSchedule = false
+                }
+                schedulingTaskId = null
+                showSchedulePanel = false
+              },
+            )
+          }
+        }
+      }
     },
   ) { innerPadding ->
     Column(
@@ -722,7 +857,7 @@ fun TodoListScreen(
             task = topDue,
             onReschedule = {
               duePopupTasks = duePopupTasks.filter { it.id != topDue.id }
-              schedulingTaskId = topDue.id
+              openScheduleForTask(topDue)
             },
             onDismiss = {
               duePopupTasks = duePopupTasks.filter { it.id != topDue.id }
@@ -802,7 +937,7 @@ fun TodoListScreen(
               isEditingInline = isEditingInline,
               onScheduleClick = {
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                schedulingTaskId = task.id
+                openScheduleForTask(task)
               },
               onComplete = { completeTask(task) },
               onDelete = { deleteTask(task) },
@@ -853,28 +988,6 @@ fun TodoListScreen(
           }
         }
       }
-    }
-
-    // Schedule / Reschedule Task Dialog
-    val taskToSchedule = schedulingTaskId?.let { id -> tasks.firstOrNull { it.id == id } }
-    if (taskToSchedule != null) {
-      ScheduleTaskDialog(
-        task = taskToSchedule,
-        onConfirmSchedule = { startMillis, endMillis, notes ->
-          scheduleTask(
-            taskId = taskToSchedule.id,
-            scheduledAtMillis = startMillis,
-            scheduledEndMillis = endMillis,
-            notes = notes,
-          )
-          schedulingTaskId = null
-        },
-        onUnschedule = {
-          unscheduleTask(taskToSchedule.id)
-          schedulingTaskId = null
-        },
-        onDismiss = { schedulingTaskId = null },
-      )
     }
 
     // Completed Tasks Sheet
@@ -1274,46 +1387,23 @@ private fun TaskCardContent(
 
         Spacer(modifier = Modifier.width(4.dp))
 
-        // Circular Schedule / Reschedule icon button (replaces the check circle)
+        // Checkbox to complete task
         Box(
           modifier = Modifier
-            .size(34.dp)
+            .size(32.dp)
             .scale(checkScale.value)
             .clip(CircleShape)
-            .background(
-              if (task.isScheduled) {
-                MaterialTheme.colorScheme.primaryContainer
-              } else {
-                MaterialTheme.colorScheme.surfaceContainerHighest
-              },
-              CircleShape,
-            )
-            .border(
-              BorderStroke(
-                1.dp,
-                if (task.isScheduled) {
-                  MaterialTheme.colorScheme.primary
-                } else {
-                  MaterialTheme.colorScheme.outlineVariant
-                },
-              ),
-              CircleShape,
-            )
             .clickable {
-              currentOnScheduleClick()
+              currentOnCheckboxClick()
             }
-            .testTag("todo_item_schedule_button_${task.id}"),
+            .testTag("todo_item_checkbox_${task.id}"),
           contentAlignment = Alignment.Center,
         ) {
           Icon(
-            imageVector = if (task.isScheduled) Icons.Default.Update else Icons.Default.Schedule,
-            contentDescription = if (task.isScheduled) "Reschedule task" else "Schedule task",
-            tint = if (task.isScheduled) {
-              MaterialTheme.colorScheme.primary
-            } else {
-              MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier.size(19.dp),
+            imageVector = Icons.Default.RadioButtonUnchecked,
+            contentDescription = "Complete task",
+            tint = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.size(24.dp),
           )
         }
 
@@ -1969,6 +2059,10 @@ private fun RoundedQuickAddBar(
   onTitleChange: (String) -> Unit,
   onAdd: () -> Unit,
   onOpenSavedTasks: () -> Unit,
+  isScheduleOpen: Boolean = false,
+  hasPendingSchedule: Boolean = false,
+  onToggleSchedule: () -> Unit = {},
+  inputFocusRequester: FocusRequester = remember { FocusRequester() },
 ) {
   val isEnabled = title.trim().isNotEmpty()
   val addScale by animateFloatAsState(
@@ -1977,22 +2071,16 @@ private fun RoundedQuickAddBar(
     label = "add_btn_scale",
   )
 
-  Surface(
-    color = MaterialTheme.colorScheme.surfaceContainer,
-    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+  Row(
     modifier = Modifier
       .fillMaxWidth()
-      .testTag("todo_quick_add_card"),
+      .height(IntrinsicSize.Min)
+      .padding(horizontal = 12.dp, vertical = 10.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .height(IntrinsicSize.Min)
-        .padding(horizontal = 12.dp, vertical = 10.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      // Button to the left of the task input to access saved tasks
+    // Button to the left of the task input to access saved tasks (hidden when schedule panel is open)
+    if (!isScheduleOpen) {
       IconButton(
         onClick = onOpenSavedTasks,
         modifier = Modifier
@@ -2008,58 +2096,86 @@ private fun RoundedQuickAddBar(
           modifier = Modifier.size(22.dp),
         )
       }
+    }
 
-      // Rounded text input field (pill / CircleShape)
-      OutlinedTextField(
-        value = title,
-        onValueChange = onTitleChange,
-        placeholder = {
-          Text(
-            "Add a task...",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        },
-        modifier = Modifier
-          .weight(1f)
-          .fillMaxHeight()
-          .testTag("todo_input_title"),
-        singleLine = true,
-        shape = CircleShape,
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(onDone = { onAdd() }),
-        colors = OutlinedTextFieldDefaults.colors(
-          focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-          unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-          focusedBorderColor = MaterialTheme.colorScheme.primary,
-          unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
-          focusedTextColor = MaterialTheme.colorScheme.onSurface,
-          unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-          cursorColor = MaterialTheme.colorScheme.primary,
-        ),
-      )
-
-      // Fully rounded plus button (CircleShape)
-      FilledIconButton(
-        onClick = onAdd,
-        enabled = isEnabled,
-        shape = CircleShape,
-        modifier = Modifier
-          .size(52.dp)
-          .scale(addScale)
-          .testTag("todo_add_button"),
-        colors = IconButtonDefaults.filledIconButtonColors(
-          containerColor = MaterialTheme.colorScheme.primary,
-          contentColor = MaterialTheme.colorScheme.onPrimary,
-          disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-          disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-        ),
-      ) {
-        Icon(
-          imageVector = Icons.Default.Add,
-          contentDescription = "Add Task",
-          modifier = Modifier.size(26.dp),
+    // Schedule button in-between saved tasks and the task input
+    IconButton(
+      onClick = onToggleSchedule,
+      modifier = Modifier
+        .size(48.dp)
+        .clip(CircleShape)
+        .background(
+          if (isScheduleOpen || hasPendingSchedule) {
+            MaterialTheme.colorScheme.primaryContainer
+          } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+          }
         )
-      }
+        .testTag("todo_schedule_button"),
+    ) {
+      Icon(
+        imageVector = Icons.Default.Schedule,
+        contentDescription = "Schedule task",
+        tint = if (isScheduleOpen || hasPendingSchedule) {
+          MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+          MaterialTheme.colorScheme.primary
+        },
+        modifier = Modifier.size(22.dp),
+      )
+    }
+
+    // Rounded text input field (pill / CircleShape)
+    OutlinedTextField(
+      value = title,
+      onValueChange = onTitleChange,
+      placeholder = {
+        Text(
+          "Add a task...",
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      },
+      modifier = Modifier
+        .weight(1f)
+        .fillMaxHeight()
+        .focusRequester(inputFocusRequester)
+        .testTag("todo_input_title"),
+      singleLine = true,
+      shape = CircleShape,
+      keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+      keyboardActions = KeyboardActions(onDone = { onAdd() }),
+      colors = OutlinedTextFieldDefaults.colors(
+        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        focusedBorderColor = MaterialTheme.colorScheme.primary,
+        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+        focusedTextColor = MaterialTheme.colorScheme.onSurface,
+        unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+        cursorColor = MaterialTheme.colorScheme.primary,
+      ),
+    )
+
+    // Fully rounded plus button (CircleShape)
+    FilledIconButton(
+      onClick = onAdd,
+      enabled = isEnabled,
+      shape = CircleShape,
+      modifier = Modifier
+        .size(52.dp)
+        .scale(addScale)
+        .testTag("todo_add_button"),
+      colors = IconButtonDefaults.filledIconButtonColors(
+        containerColor = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+      ),
+    ) {
+      Icon(
+        imageVector = Icons.Default.Add,
+        contentDescription = "Add Task",
+        modifier = Modifier.size(26.dp),
+      )
     }
   }
 }
@@ -2883,403 +2999,325 @@ private fun applyHourMinuteToLocalMillis(hourOfDay: Int, minute: Int, existingLo
   return localCal.timeInMillis
 }
 
+private fun addCalendarOffset(baseMillis: Long, field: Int, amount: Int): Long {
+  return Calendar.getInstance().apply {
+    timeInMillis = baseMillis
+    add(field, amount)
+  }.timeInMillis
+}
+
 /**
- * Dialog for scheduling or rescheduling a [TodoItem] across variable date and time ranges,
- * with quick presets, custom date/time pickers, optional end date/time range, and note contents.
+ * Panel that slides up from below the task input bar for scheduling or rescheduling a task,
+ * with multi-row quick shortcuts, custom date/time pickers, and note contents.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ScheduleTaskDialog(
-  task: TodoItem,
-  onConfirmSchedule: (startMillis: Long, endMillis: Long?, notes: String) -> Unit,
+private fun ScheduleTaskPanel(
+  taskTitle: String,
+  isExistingScheduled: Boolean,
+  startMillis: Long,
+  onStartMillisChange: (Long) -> Unit,
+  onPresetSelected: () -> Unit = {},
+  notesText: String,
+  onNotesTextChange: (String) -> Unit,
+  onConfirmSchedule: () -> Unit,
   onUnschedule: () -> Unit,
   onDismiss: () -> Unit,
 ) {
-  val defaultStart = remember(task.id) {
-    task.scheduledAtMillis ?: (System.currentTimeMillis() + 3_600_000L)
-  }
-  var startMillis by remember(task.id) { mutableLongStateOf(defaultStart) }
-  var hasEndRange by remember(task.id) {
-    mutableStateOf(task.scheduledEndMillis != null && task.scheduledEndMillis > defaultStart)
-  }
-  var endMillis by remember(task.id) {
-    mutableLongStateOf(task.scheduledEndMillis ?: (defaultStart + 3_600_000L))
-  }
-  var notesText by remember(task.id) { mutableStateOf(task.notes) }
-
   var showStartDatePicker by remember { mutableStateOf(false) }
   var showStartTimePicker by remember { mutableStateOf(false) }
-  var showEndDatePicker by remember { mutableStateOf(false) }
-  var showEndTimePicker by remember { mutableStateOf(false) }
 
   val dateFormatter = remember { SimpleDateFormat("EEE, MMM d, yyyy", Locale.US) }
   val timeFormatter = remember { SimpleDateFormat("h:mm a", Locale.US) }
 
-  fun updateStart(newStart: Long) {
-    val duration = if (hasEndRange) (endMillis - startMillis).coerceAtLeast(1_800_000L) else 3_600_000L
-    startMillis = newStart
-    if (hasEndRange && endMillis <= newStart) {
-      endMillis = newStart + duration
-    }
-  }
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("todo_schedule_dialog"),
+  ) {
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    shape = RoundedCornerShape(28.dp),
-    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-    tonalElevation = 6.dp,
-    modifier = Modifier.testTag("todo_schedule_dialog"),
-    title = {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(max = 460.dp)
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = 16.dp, vertical = 12.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      // Header Row
       Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.fillMaxWidth(),
       ) {
         Box(
           modifier = Modifier
-            .size(44.dp)
+            .size(38.dp)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.primaryContainer),
           contentAlignment = Alignment.Center,
         ) {
           Icon(
-            imageVector = if (task.isScheduled) Icons.Default.Update else Icons.Default.Schedule,
+            imageVector = if (isExistingScheduled) Icons.Default.Update else Icons.Default.Schedule,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(24.dp),
+            modifier = Modifier.size(20.dp),
           )
         }
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = if (task.isScheduled) "Reschedule Note" else "Schedule Note",
-            style = MaterialTheme.typography.titleLarge,
+            text = "Schedule Task",
+            style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
           )
           Text(
-            text = "Set date, time range, and notification contents",
+            text = "Set date, time, and notification contents",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
+        IconButton(
+          onClick = onDismiss,
+          modifier = Modifier.size(32.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = "Close schedule task",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+          )
+        }
       }
-    },
-    text = {
-      Column(
-        modifier = Modifier
-          .fillMaxWidth()
-          .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+
+      // Context Preview Card
+      Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+          containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        ),
+        modifier = Modifier.fillMaxWidth(),
       ) {
-        // Context Preview Card
-        Card(
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        Column(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+          verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+          Text(
+            text = taskTitle,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          Text(
+            text = "Scheduled: ${
+              TodoListEngine.formatScheduleLabel(
+                scheduledAtMillis = startMillis,
+                scheduledEndMillis = null,
+              )
+            }",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.testTag("todo_schedule_preview_label"),
+          )
+        }
+      }
+
+      // Quick Relative Time Shortcuts in Separate Rows
+      val shortcutRows = remember {
+        listOf(
+          listOf(
+            Triple("5 min", Calendar.MINUTE, 5),
+            Triple("10 min", Calendar.MINUTE, 10),
+            Triple("15 min", Calendar.MINUTE, 15),
+            Triple("20 min", Calendar.MINUTE, 20),
+            Triple("30 min", Calendar.MINUTE, 30),
           ),
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-          ) {
-            Text(
-              text = task.title,
-              style = MaterialTheme.typography.bodyLarge,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-              text = "Scheduled: ${
-                TodoListEngine.formatScheduleLabel(
-                  scheduledAtMillis = startMillis,
-                  scheduledEndMillis = if (hasEndRange) endMillis else null,
-                )
-              }",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.Medium,
-              color = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.testTag("todo_schedule_preview_label"),
-            )
-          }
-        }
-
-        // Quick Relative Time Presets
-        Text(
-          text = "Quick Presets",
-          style = MaterialTheme.typography.labelMedium,
-          fontWeight = FontWeight.SemiBold,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          listOf(
+            Triple("1 hr", Calendar.HOUR_OF_DAY, 1),
+            Triple("2 hr", Calendar.HOUR_OF_DAY, 2),
+            Triple("4 hr", Calendar.HOUR_OF_DAY, 4),
+            Triple("8 hr", Calendar.HOUR_OF_DAY, 8),
+            Triple("12 hr", Calendar.HOUR_OF_DAY, 12),
+          ),
+          listOf(
+            Triple("1 day", Calendar.DAY_OF_YEAR, 1),
+            Triple("3 days", Calendar.DAY_OF_YEAR, 3),
+            Triple("5 days", Calendar.DAY_OF_YEAR, 5),
+            Triple("7 days", Calendar.DAY_OF_YEAR, 7),
+          ),
+          listOf(
+            Triple("1 wk", Calendar.WEEK_OF_YEAR, 1),
+            Triple("2 wks", Calendar.WEEK_OF_YEAR, 2),
+            Triple("3 wks", Calendar.WEEK_OF_YEAR, 3),
+            Triple("4 wks", Calendar.WEEK_OF_YEAR, 4),
+          ),
+          listOf(
+            Triple("1 mo", Calendar.MONTH, 1),
+            Triple("2 mo", Calendar.MONTH, 2),
+            Triple("3 mo", Calendar.MONTH, 3),
+            Triple("6 mo", Calendar.MONTH, 6),
+          ),
         )
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          val presets = listOf(
-            "In 1 min" to 60_000L,
-            "In 15 min" to 15 * 60_000L,
-            "In 1 hour" to 3_600_000L,
-            "In 3 hours" to 3 * 3_600_000L,
-            "In 1 day" to 24 * 3_600_000L,
-            "In 1 week" to 7 * 24 * 3_600_000L,
-          )
-          presets.forEach { (label, offsetMs) ->
-            SuggestionChip(
-              onClick = {
-                updateStart(System.currentTimeMillis() + offsetMs)
-              },
-              label = { Text(label, style = MaterialTheme.typography.labelSmall) },
-              shape = CircleShape,
-            )
-          }
-        }
+      }
 
-        // Variable Offset Adjusters
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          val adjustments = listOf(
-            "-15m" to -15 * 60_000L,
-            "+15m" to 15 * 60_000L,
-            "+1h" to 3_600_000L,
-            "+1d" to 24 * 3_600_000L,
-          )
-          adjustments.forEach { (label, deltaMs) ->
-            OutlinedButton(
-              onClick = { updateStart(startMillis + deltaMs) },
-              shape = RoundedCornerShape(12.dp),
-              contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-            ) {
-              Text(label, style = MaterialTheme.typography.labelSmall)
-            }
-          }
-        }
-
-        // Start Date & Time Pickers
-        Text(
-          text = if (hasEndRange) "Start Date & Time" else "Date & Time",
-          style = MaterialTheme.typography.labelMedium,
-          fontWeight = FontWeight.SemiBold,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          OutlinedButton(
-            onClick = { showStartDatePicker = true },
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier
-              .weight(1f)
-              .testTag("todo_schedule_start_date_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.CalendarToday,
-              contentDescription = null,
-              modifier = Modifier.size(16.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-              text = dateFormatter.format(Date(startMillis)),
-              style = MaterialTheme.typography.labelMedium,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-          }
-
-          OutlinedButton(
-            onClick = { showStartTimePicker = true },
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier
-              .testTag("todo_schedule_start_time_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.AccessTime,
-              contentDescription = null,
-              modifier = Modifier.size(16.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-              text = timeFormatter.format(Date(startMillis)),
-              style = MaterialTheme.typography.labelMedium,
-            )
-          }
-        }
-
-        // Toggle Variable Date & Time Range (End Date & Time)
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-          FilterChip(
-            selected = hasEndRange,
-            onClick = {
-              hasEndRange = !hasEndRange
-              if (hasEndRange && endMillis <= startMillis) {
-                endMillis = startMillis + 3_600_000L
-              }
-            },
-            label = { Text("Time Range (End Date & Time)") },
-            leadingIcon = {
-              Icon(
-                imageVector = Icons.Default.Event,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-              )
-            },
-            shape = CircleShape,
-            modifier = Modifier.testTag("todo_schedule_range_toggle"),
-          )
-        }
-
-        AnimatedVisibility(visible = hasEndRange) {
-          Column(
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        shortcutRows.forEach { rowPresets ->
+          Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
           ) {
-            Text(
-              text = "End Date & Time Range",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            // Quick range durations
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-              val durations = listOf(
-                "30m" to 30 * 60_000L,
-                "1h" to 3_600_000L,
-                "2h" to 2 * 3_600_000L,
-                "4h" to 4 * 3_600_000L,
-                "1d" to 24 * 3_600_000L,
-              )
-              durations.forEach { (label, durationMs) ->
-                SuggestionChip(
-                  onClick = { endMillis = startMillis + durationMs },
-                  label = { Text(label, style = MaterialTheme.typography.labelSmall) },
-                  shape = CircleShape,
-                )
-              }
-            }
-
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              OutlinedButton(
-                onClick = { showEndDatePicker = true },
-                shape = RoundedCornerShape(14.dp),
+            rowPresets.forEach { (label, calField, amount) ->
+              Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                shape = CircleShape,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier
                   .weight(1f)
-                  .testTag("todo_schedule_end_date_button"),
+                  .clip(CircleShape)
+                  .clickable {
+                    onStartMillisChange(
+                      addCalendarOffset(System.currentTimeMillis(), calField, amount),
+                    )
+                    onPresetSelected()
+                  },
               ) {
-                Icon(
-                  imageVector = Icons.Default.CalendarToday,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                  text = dateFormatter.format(Date(endMillis)),
-                  style = MaterialTheme.typography.labelMedium,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                )
-              }
-
-              OutlinedButton(
-                onClick = { showEndTimePicker = true },
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                  .testTag("todo_schedule_end_time_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.AccessTime,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                  text = timeFormatter.format(Date(endMillis)),
-                  style = MaterialTheme.typography.labelMedium,
-                )
+                Box(
+                  modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                  )
+                }
               }
             }
           }
         }
-
-        // Note Contents input for notification body
-        OutlinedTextField(
-          value = notesText,
-          onValueChange = { notesText = it },
-          label = { Text("Note contents") },
-          placeholder = { Text("Add details to display in notification...") },
-          shape = RoundedCornerShape(14.dp),
-          minLines = 2,
-          maxLines = 4,
-          trailingIcon = {
-            if (notesText.isNotEmpty()) {
-              IconButton(onClick = { notesText = "" }) {
-                Icon(Icons.Default.Clear, contentDescription = "Clear contents")
-              }
-            }
-          },
-          modifier = Modifier
-            .fillMaxWidth()
-            .testTag("todo_schedule_notes_input"),
-        )
       }
-    },
-    confirmButton = {
-      Button(
-        onClick = {
-          onConfirmSchedule(
-            startMillis,
-            if (hasEndRange && endMillis > startMillis) endMillis else null,
-            notesText,
-          )
-        },
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.testTag("todo_schedule_confirm_button"),
+
+      // Date & Time Pickers
+      Text(
+        text = "Date & Time",
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(if (task.isScheduled) "Reschedule" else "Schedule")
+        OutlinedButton(
+          onClick = { showStartDatePicker = true },
+          shape = RoundedCornerShape(14.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("todo_schedule_start_date_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.CalendarToday,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(
+            text = dateFormatter.format(Date(startMillis)),
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+
+        OutlinedButton(
+          onClick = { showStartTimePicker = true },
+          shape = RoundedCornerShape(14.dp),
+          modifier = Modifier
+            .testTag("todo_schedule_start_time_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.AccessTime,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(
+            text = timeFormatter.format(Date(startMillis)),
+            style = MaterialTheme.typography.labelMedium,
+          )
+        }
       }
-    },
-    dismissButton = {
-      Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (task.isScheduled) {
+
+      // Note Contents input for notification body
+      OutlinedTextField(
+        value = notesText,
+        onValueChange = onNotesTextChange,
+        label = { Text("Note contents") },
+        placeholder = { Text("Add details to display in notification...") },
+        shape = RoundedCornerShape(14.dp),
+        minLines = 2,
+        maxLines = 4,
+        trailingIcon = {
+          if (notesText.isNotEmpty()) {
+            IconButton(onClick = { onNotesTextChange("") }) {
+              Icon(Icons.Default.Clear, contentDescription = "Clear contents")
+            }
+          }
+        },
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("todo_schedule_notes_input"),
+      )
+
+      // Bottom Action Buttons
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+          if (isExistingScheduled) {
+            TextButton(
+              onClick = onUnschedule,
+              shape = RoundedCornerShape(12.dp),
+              modifier = Modifier.testTag("todo_schedule_clear_button"),
+            ) {
+              Text("Unschedule", color = MaterialTheme.colorScheme.error)
+            }
+          }
           TextButton(
-            onClick = onUnschedule,
+            onClick = onDismiss,
             shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.testTag("todo_schedule_clear_button"),
+            modifier = Modifier.testTag("todo_schedule_cancel_button"),
           ) {
-            Text("Unschedule", color = MaterialTheme.colorScheme.error)
+            Text("Cancel")
           }
         }
-        TextButton(
-          onClick = onDismiss,
+
+        Button(
+          onClick = onConfirmSchedule,
           shape = RoundedCornerShape(12.dp),
-          modifier = Modifier.testTag("todo_schedule_cancel_button"),
+          modifier = Modifier.testTag("todo_schedule_confirm_button"),
         ) {
-          Text("Cancel")
+          Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(if (isExistingScheduled) "Reschedule" else "Schedule")
         }
       }
-    },
-  )
+    }
+  }
 
   if (showStartDatePicker) {
     val datePickerState = rememberDatePickerState(
@@ -3291,7 +3329,7 @@ private fun ScheduleTaskDialog(
         TextButton(
           onClick = {
             datePickerState.selectedDateMillis?.let { utcMillis ->
-              updateStart(applyUtcDateToLocalMillis(utcMillis, startMillis))
+              onStartMillisChange(applyUtcDateToLocalMillis(utcMillis, startMillis))
             }
             showStartDatePicker = false
           },
@@ -3328,7 +3366,7 @@ private fun ScheduleTaskDialog(
       confirmButton = {
         Button(
           onClick = {
-            updateStart(applyHourMinuteToLocalMillis(timePickerState.hour, timePickerState.minute, startMillis))
+            onStartMillisChange(applyHourMinuteToLocalMillis(timePickerState.hour, timePickerState.minute, startMillis))
             showStartTimePicker = false
           },
           shape = RoundedCornerShape(12.dp),
@@ -3338,71 +3376,6 @@ private fun ScheduleTaskDialog(
       },
       dismissButton = {
         TextButton(onClick = { showStartTimePicker = false }) {
-          Text("Cancel")
-        }
-      },
-    )
-  }
-
-  if (showEndDatePicker) {
-    val datePickerState = rememberDatePickerState(
-      initialSelectedDateMillis = localMillisToUtcDateMillis(endMillis),
-    )
-    DatePickerDialog(
-      onDismissRequest = { showEndDatePicker = false },
-      confirmButton = {
-        TextButton(
-          onClick = {
-            datePickerState.selectedDateMillis?.let { utcMillis ->
-              val candidate = applyUtcDateToLocalMillis(utcMillis, endMillis)
-              endMillis = maxOf(startMillis + 60_000L, candidate)
-            }
-            showEndDatePicker = false
-          },
-        ) {
-          Text("OK")
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = { showEndDatePicker = false }) {
-          Text("Cancel")
-        }
-      },
-    ) {
-      DatePicker(state = datePickerState)
-    }
-  }
-
-  if (showEndTimePicker) {
-    val cal = remember(endMillis) { Calendar.getInstance().apply { timeInMillis = endMillis } }
-    val timePickerState = rememberTimePickerState(
-      initialHour = cal.get(Calendar.HOUR_OF_DAY),
-      initialMinute = cal.get(Calendar.MINUTE),
-    )
-    AlertDialog(
-      onDismissRequest = { showEndTimePicker = false },
-      shape = RoundedCornerShape(28.dp),
-      containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-      title = { Text("Select End Time", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) },
-      text = {
-        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-          TimePicker(state = timePickerState)
-        }
-      },
-      confirmButton = {
-        Button(
-          onClick = {
-            val candidate = applyHourMinuteToLocalMillis(timePickerState.hour, timePickerState.minute, endMillis)
-            endMillis = if (candidate <= startMillis) candidate + 24 * 3_600_000L else candidate
-            showEndTimePicker = false
-          },
-          shape = RoundedCornerShape(12.dp),
-        ) {
-          Text("OK")
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = { showEndTimePicker = false }) {
           Text("Cancel")
         }
       },

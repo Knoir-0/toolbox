@@ -1,6 +1,8 @@
 package com.example.toolbox.ui.tools
 
+import android.app.Activity
 import android.content.Context
+import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -9,13 +11,30 @@ import android.graphics.Paint
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
+import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.MediaMetadataRetriever
+import android.media.MediaPlayer
+import android.media.PlaybackParams
+import android.os.Build
+import android.os.Looper
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import java.io.File
 import java.io.FileOutputStream
+import java.lang.ref.WeakReference
 import java.util.Locale
+import kotlin.coroutines.CoroutineContext
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -23,8 +42,16 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 const val MUSIC_PLAYER_PREFS_NAME = "music_player_preferences"
@@ -35,9 +62,10 @@ const val PREF_KEY_MUSIC_SHUFFLE = "music_player_shuffle_enabled"
 const val PREF_KEY_MUSIC_REPEAT = "music_player_repeat_mode"
 const val PREF_KEY_MUSIC_FAVORITES = "music_player_favorite_ids"
 const val PREF_KEY_MUSIC_PLAYLISTS = "music_player_playlists"
+const val PREF_KEY_MUSIC_PLAY_STATS = "music_player_play_stats"
 const val PREF_KEY_MUSIC_INCLUDE_SAMPLES = "music_player_include_samples"
 
-val DEFAULT_MUSIC_FOLDER_NAMES: List<String> = listOf("Music", "Audio", "Download")
+val DEFAULT_MUSIC_FOLDER_NAMES: List<String> = listOf("Music", "Audio")
 
 /**
  * Primary library browse tabs in the Music Player tool.
@@ -121,6 +149,7 @@ enum class MusicSortOrder(
   ALBUM_ASC("Album (A to Z)"),
   DURATION_DESC("Duration (Longest)"),
   DURATION_ASC("Duration (Shortest)"),
+  MOST_PLAYED("Most Played"),
   ;
 
   companion object {
@@ -287,6 +316,29 @@ data class MusicGenre(
 }
 
 /**
+ * Persisted playback statistics for a single track.
+ */
+data class TrackPlayStats(
+  val playCount: Int = 0,
+  val totalPlayTimeMs: Long = 0L,
+  val lastPlayedAtMs: Long = 0L,
+) {
+  /**
+   * Combined engagement score blending play count and total listen time:
+   * each play contributes 60,000 points (equivalent to 1 minute of listening) plus 1 point per
+   * millisecond of actual listen time.
+   */
+  val engagementScore: Long
+    get() = playCount.toLong() * 60_000L + totalPlayTimeMs
+
+  val hasBeenPlayed: Boolean
+    get() = playCount > 0 || totalPlayTimeMs > 0L
+
+  val totalPlayTimeFormatted: String
+    get() = AudioRecorderEngine.formatDurationMs(totalPlayTimeMs)
+}
+
+/**
  * Persisted metadata entry for a user-saved Playlist.
  */
 data class SavedPlaylistEntry(
@@ -306,6 +358,8 @@ data class MusicPlaylist(
   val createdAtMs: Long = 0L,
 ) {
   val isFavorites: Boolean get() = id == MusicPlayerEngine.FAVORITES_PLAYLIST_ID
+  val isMostPlayed: Boolean get() = id == MusicPlayerEngine.MOST_PLAYED_PLAYLIST_ID
+  val isBuiltIn: Boolean get() = isFavorites || isMostPlayed
   val songCount: Int get() = tracks.size
   val totalDurationMs: Long get() = tracks.sumOf { it.durationMs }
   val totalDurationFormatted: String get() = AudioRecorderEngine.formatDurationMs(totalDurationMs)
@@ -1452,7 +1506,7 @@ object MusicPlayerEngine {
 
   /**
    * Resolves the full library of tracks from [initialDirectory] (if provided) or the default
-   * `/Music`, `/Audio`, and `/Download` folders under [rootDirectory], combining or falling back to
+   * `/Music` and `/Audio` folders under [rootDirectory], combining or falling back to
    * [DEFAULT_SAMPLE_TRACKS] when [includeSamples] is enabled or when no local audio files exist.
    */
   fun loadLibraryTracks(
@@ -1642,6 +1696,13 @@ object MusicPlayerEngine {
   const val FAVORITES_PLAYLIST_ID = "playlist_favorites"
   const val FAVORITES_PLAYLIST_NAME = "Favorites"
 
+  /** Identifier of the built-in, always-present Most Played playlist. */
+  const val MOST_PLAYED_PLAYLIST_ID = "playlist_most_played"
+  const val MOST_PLAYED_PLAYLIST_NAME = "Most Played"
+
+  /** IDs of built-in playlists that are dynamically generated rather than persisted as user entries. */
+  val BUILT_IN_PLAYLIST_IDS: Set<String> = setOf(FAVORITES_PLAYLIST_ID, MOST_PLAYED_PLAYLIST_ID)
+
   /** IDs of sample playlists shipped by older versions; stripped from persisted playlists on load. */
   val LEGACY_SAMPLE_PLAYLIST_IDS: Set<String> = setOf("playlist_synth_night", "playlist_chill_focus")
 
@@ -1658,6 +1719,101 @@ object MusicPlayerEngine {
       name = FAVORITES_PLAYLIST_NAME,
       tracks = allTracks.filter { it.id in favoriteIds },
     )
+  }
+
+  /**
+   * Sorts [tracks] by combined play statistics (# of plays and total listen time), falling back to
+   * most-recently-played and alphabetical title order for ties.
+   */
+  fun sortTracksByPlayStats(
+    tracks: List<MusicTrack>,
+    playStats: Map<String, TrackPlayStats>,
+  ): List<MusicTrack> {
+    if (tracks.isEmpty()) return emptyList()
+    return tracks.sortedWith(
+      compareByDescending<MusicTrack> { playStats[it.id]?.engagementScore ?: 0L }
+        .thenByDescending { playStats[it.id]?.playCount ?: 0 }
+        .thenByDescending { playStats[it.id]?.totalPlayTimeMs ?: 0L }
+        .thenByDescending { playStats[it.id]?.lastPlayedAtMs ?: 0L }
+        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
+    )
+  }
+
+  /**
+   * Builds the built-in Most Played [MusicPlaylist], automatically sorting all songs in [allTracks]
+   * by a combination of play count and total playtime. Always returned so it is available by default.
+   */
+  fun buildMostPlayedPlaylist(
+    playStats: Map<String, TrackPlayStats>,
+    allTracks: List<MusicTrack>,
+  ): MusicPlaylist {
+    return MusicPlaylist(
+      id = MOST_PLAYED_PLAYLIST_ID,
+      name = MOST_PLAYED_PLAYLIST_NAME,
+      tracks = sortTracksByPlayStats(allTracks, playStats),
+    )
+  }
+
+  /**
+   * Records a play-count increment and/or additional listening duration for [trackId] inside [current].
+   */
+  fun recordPlayStat(
+    current: Map<String, TrackPlayStats>,
+    trackId: String,
+    incrementPlayCount: Boolean = false,
+    addedPlayTimeMs: Long = 0L,
+    timestampMs: Long = System.currentTimeMillis(),
+  ): Map<String, TrackPlayStats> {
+    if (trackId.isBlank()) return current
+    val deltaMs = addedPlayTimeMs.coerceAtLeast(0L)
+    if (!incrementPlayCount && deltaMs == 0L) return current
+    val prev = current[trackId] ?: TrackPlayStats()
+    val updated = prev.copy(
+      playCount = prev.playCount + if (incrementPlayCount) 1 else 0,
+      totalPlayTimeMs = prev.totalPlayTimeMs + deltaMs,
+      lastPlayedAtMs = max(prev.lastPlayedAtMs, timestampMs),
+    )
+    return current + (trackId to updated)
+  }
+
+  /**
+   * Serializes a [TrackPlayStats] map into a compact string for `SharedPreferences`.
+   */
+  fun serializePlayStats(stats: Map<String, TrackPlayStats>): String {
+    return stats.entries
+      .filter { (id, s) -> id.isNotBlank() && s.hasBeenPlayed }
+      .joinToString("\n") { (id, s) ->
+        val safeId = id.replace("\n", " ").replace("\t", " ").trim()
+        "$safeId\t${s.playCount}\t${s.totalPlayTimeMs}\t${s.lastPlayedAtMs}"
+      }
+  }
+
+  /**
+   * Deserializes a `SharedPreferences` string produced by [serializePlayStats].
+   */
+  fun deserializePlayStats(raw: String?): Map<String, TrackPlayStats> {
+    if (raw.isNullOrBlank()) return emptyMap()
+    val result = LinkedHashMap<String, TrackPlayStats>()
+    raw.lineSequence()
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .forEach { line ->
+        val parts = line.split("\t")
+        if (parts.size >= 3) {
+          val id = parts[0].trim()
+          val count = parts[1].trim().toIntOrNull()?.coerceAtLeast(0) ?: 0
+          val timeMs = parts[2].trim().toLongOrNull()?.coerceAtLeast(0L) ?: 0L
+          val lastAt = parts.getOrNull(3)?.trim()?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
+          if (id.isNotEmpty() && (count > 0 || timeMs > 0L)) {
+            result[id] = TrackPlayStats(
+              playCount = count,
+              totalPlayTimeMs = timeMs,
+              lastPlayedAtMs = lastAt,
+            )
+          }
+        }
+      }
+    return result
   }
 
   /**
@@ -1735,6 +1891,7 @@ object MusicPlayerEngine {
   fun sortTracks(
     tracks: List<MusicTrack>,
     sortOrder: MusicSortOrder,
+    playStats: Map<String, TrackPlayStats> = emptyMap(),
   ): List<MusicTrack> {
     return when (sortOrder) {
       MusicSortOrder.TITLE_ASC -> tracks.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
@@ -1757,6 +1914,7 @@ object MusicPlayerEngine {
         compareBy<MusicTrack> { it.durationMs }
           .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
       )
+      MusicSortOrder.MOST_PLAYED -> sortTracksByPlayStats(tracks, playStats)
     }
   }
 
@@ -1822,15 +1980,43 @@ object MusicPlayerEngine {
   }
 
   /**
+   * Moves the track at [fromIndex] to [toIndex] in [queue], returning the updated queue and the
+   * adjusted [currentQueueIndex] so the currently active track stays pointed at the same song.
+   */
+  fun reorderQueue(
+    queue: List<MusicTrack>,
+    fromIndex: Int,
+    toIndex: Int,
+    currentQueueIndex: Int,
+  ): Pair<List<MusicTrack>, Int> {
+    if (queue.isEmpty() || fromIndex !in queue.indices || toIndex !in queue.indices || fromIndex == toIndex) {
+      return queue to currentQueueIndex.coerceIn(0, maxOf(0, queue.lastIndex))
+    }
+    val mutable = queue.toMutableList()
+    val moved = mutable.removeAt(fromIndex)
+    mutable.add(toIndex, moved)
+    val safeCur = currentQueueIndex.coerceIn(0, queue.lastIndex)
+    val newCurrentIndex = when {
+      safeCur == fromIndex -> toIndex
+      fromIndex < safeCur && toIndex >= safeCur -> safeCur - 1
+      fromIndex > safeCur && toIndex <= safeCur -> safeCur + 1
+      else -> safeCur
+    }
+    return mutable.toList() to newCurrentIndex
+  }
+
+  /**
    * Synthesizes a valid, melodic 16-bit PCM WAV file for a built-in sample [track] so `MediaPlayer`
    * can play real musical chords and progressions offline.
    */
   fun ensurePlayableSampleWavFile(
     cacheDir: File,
     track: MusicTrack,
+    targetDir: File? = null,
+    fileName: String = "${track.id}.wav",
   ): File {
-    val sampleDir = File(cacheDir, "music_player_samples").apply { mkdirs() }
-    val targetFile = File(sampleDir, "${track.id}.wav")
+    val sampleDir = (targetDir ?: File(cacheDir, "music_player_samples")).apply { mkdirs() }
+    val targetFile = File(sampleDir, fileName)
     if (targetFile.exists() && targetFile.length() > 1024L) {
       return targetFile
     }
@@ -1887,4 +2073,923 @@ object MusicPlayerEngine {
     }
     return targetFile
   }
+
+  private val sessionLock = Any()
+  private var activePlaybackSession: MusicPlaybackSession? = null
+  private var activeActivityRef: WeakReference<Activity>? = null
+  private var activeLifecycleObserver: LifecycleEventObserver? = null
+
+  /**
+   * Currently active [MusicPlaybackSession], observable by Compose UI (such as the expanded
+   * navigation pane mini-player in [com.example.toolbox.ui.main.MainScreen]).
+   */
+  var activeSessionState by mutableStateOf<MusicPlaybackSession?>(null)
+    internal set
+
+  /**
+   * Currently active [MusicTrack] across the Music Player session, observable by Compose UI
+   * (including [com.example.toolbox.ui.theme.ToolboxTheme] and Settings).
+   */
+  var activeTrack by mutableStateOf<MusicTrack?>(DEFAULT_SAMPLE_TRACKS.firstOrNull())
+    internal set
+
+  /**
+   * Currently active [AlbumArtPalette] for the Music Player's active track, observable by Compose UI
+   * so the app's accent color can dynamically follow the Music Player's colors.
+   */
+  var activeTrackPalette by mutableStateOf(resolveTrackPalette(DEFAULT_SAMPLE_TRACKS.firstOrNull()))
+    internal set
+
+  /**
+   * Updates the observable [activeTrack] and [activeTrackPalette] for the Music Player.
+   */
+  fun updateActiveTrackPalette(
+    track: MusicTrack?,
+    palette: AlbumArtPalette = resolveTrackPalette(track),
+  ) {
+    activeTrack = track
+    activeTrackPalette = palette
+  }
+
+  /**
+   * Returns the currently active [MusicPlaybackSession], if any.
+   */
+  fun getActivePlaybackSession(): MusicPlaybackSession? {
+    synchronized(sessionLock) {
+      return activePlaybackSession
+    }
+  }
+
+  /**
+   * Stops and releases the active [MusicPlaybackSession], if any.
+   */
+  fun resetPlaybackSession() {
+    val sessionToRelease: MusicPlaybackSession?
+    val activity: Activity?
+    val observer: LifecycleEventObserver?
+    synchronized(sessionLock) {
+      sessionToRelease = activePlaybackSession
+      activity = activeActivityRef?.get()
+      observer = activeLifecycleObserver
+      activePlaybackSession = null
+      activeActivityRef = null
+      activeLifecycleObserver = null
+    }
+    activeSessionState = null
+    if (activity is LifecycleOwner && observer != null) {
+      try {
+        activity.lifecycle.removeObserver(observer)
+      } catch (_: Throwable) {}
+    }
+    sessionToRelease?.release()
+    val defaultTrack = DEFAULT_SAMPLE_TRACKS.firstOrNull()
+    updateActiveTrackPalette(defaultTrack, resolveTrackPalette(defaultTrack))
+  }
+
+  /**
+   * Acquires or creates the background-capable [MusicPlaybackSession] scoped to [activity] so that
+   * music playback, queue progression, play statistics, and sleep timers continue seamlessly in the
+   * background when the user switches from the Music tool to another tool.
+   */
+  fun getOrCreatePlaybackSession(
+    context: Context,
+    activity: Activity? = null,
+    initialDirectory: File? = null,
+    initialTracks: List<MusicTrack>? = null,
+    initialTab: MusicLibraryTab? = null,
+    initialViewMode: MusicViewMode? = null,
+    initialPlayerExpanded: Boolean = false,
+    initialQueueExpanded: Boolean = false,
+    isInspection: Boolean = false,
+  ): MusicPlaybackSession {
+    if (isInspection) {
+      val createdInspection = MusicPlaybackSession(
+        context = context,
+        initialDirectory = initialDirectory,
+        initialTracks = initialTracks,
+        initialTab = initialTab,
+        initialViewMode = initialViewMode,
+        initialPlayerExpanded = initialPlayerExpanded,
+        initialQueueExpanded = initialQueueExpanded,
+        isInspection = true,
+      )
+      activeSessionState = createdInspection
+      return createdInspection
+    }
+
+    var previousToRelease: MusicPlaybackSession? = null
+    val session: MusicPlaybackSession
+
+    synchronized(sessionLock) {
+      val currentSession = activePlaybackSession
+      val currentActivity = activeActivityRef?.get()
+      if (currentSession != null && !currentSession.isReleased && (activity == null || currentActivity === activity)) {
+        currentSession.syncConfiguration(
+          initialDirectory = initialDirectory,
+          initialTracks = initialTracks,
+          initialTab = initialTab,
+          initialViewMode = initialViewMode,
+          initialPlayerExpanded = initialPlayerExpanded,
+          initialQueueExpanded = initialQueueExpanded,
+        )
+        activeSessionState = currentSession
+        return currentSession
+      }
+
+      previousToRelease = currentSession
+      val created = MusicPlaybackSession(
+        context = context.applicationContext ?: context,
+        initialDirectory = initialDirectory,
+        initialTracks = initialTracks,
+        initialTab = initialTab,
+        initialViewMode = initialViewMode,
+        initialPlayerExpanded = initialPlayerExpanded,
+        initialQueueExpanded = initialQueueExpanded,
+        isInspection = false,
+      )
+      activePlaybackSession = created
+      activeSessionState = created
+      activeActivityRef = if (activity != null) WeakReference(activity) else null
+
+      if (activity is LifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+          if (event == Lifecycle.Event.ON_DESTROY) {
+            var shouldRelease = false
+            synchronized(sessionLock) {
+              if (activePlaybackSession === created) {
+                activePlaybackSession = null
+                activeActivityRef = null
+                activeLifecycleObserver = null
+                shouldRelease = true
+              }
+            }
+            if (shouldRelease) {
+              if (activeSessionState === created) {
+                activeSessionState = null
+              }
+              created.release()
+            }
+          }
+        }
+        activeLifecycleObserver = observer
+        try {
+          activity.lifecycle.addObserver(observer)
+        } catch (_: Throwable) {}
+      }
+      session = created
+    }
+
+    previousToRelease?.release()
+    return session
+  }
 }
+
+private fun defaultPlaybackDispatcher(): CoroutineDispatcher {
+  return try {
+    if (Looper.getMainLooper() != null) {
+      Dispatchers.Main
+    } else {
+      Dispatchers.Default
+    }
+  } catch (_: Throwable) {
+    Dispatchers.Default
+  }
+}
+
+/**
+ * Persistent playback session and state holder for the Music Player tool.
+ *
+ * Continues playing audio, advancing the playback queue, tracking listening statistics, and
+ * counting down the sleep timer in the background when the user switches to another tool.
+ */
+class MusicPlaybackSession(
+  context: Context? = null,
+  initialDirectory: File? = null,
+  initialTracks: List<MusicTrack>? = null,
+  initialTab: MusicLibraryTab? = null,
+  initialViewMode: MusicViewMode? = null,
+  initialPlayerExpanded: Boolean = false,
+  initialQueueExpanded: Boolean = false,
+  val isInspection: Boolean = false,
+  coroutineContext: CoroutineContext = defaultPlaybackDispatcher(),
+) {
+  private val appContext: Context? = context?.applicationContext ?: context
+  private val cacheDir: File? = if (isInspection) null else appContext?.cacheDir
+  private val prefs: SharedPreferences? = if (isInspection || appContext == null) {
+    null
+  } else {
+    appContext.getSharedPreferences(MUSIC_PLAYER_PREFS_NAME, Context.MODE_PRIVATE)
+  }
+
+  private val scope = CoroutineScope(SupervisorJob() + coroutineContext)
+  private var mediaPlayer: MediaPlayer? = null
+  private var preparedTrackId: String? = null
+  private var activePlayInstanceId: Long = 0L
+  private var progressJob: Job? = null
+  private var sleepTimerJob: Job? = null
+  private var libraryLoadJob: Job? = null
+  private var paletteLoadJob: Job? = null
+
+  var isReleased: Boolean = false
+    private set
+
+  internal var configuredInitialDirectory: File? = initialDirectory
+    private set
+  internal var configuredInitialTracks: List<MusicTrack>? = initialTracks
+    private set
+  internal var configuredInitialTab: MusicLibraryTab? = initialTab
+    private set
+  internal var configuredInitialViewMode: MusicViewMode? = initialViewMode
+    private set
+  internal var configuredInitialPlayerExpanded: Boolean = initialPlayerExpanded
+    private set
+  internal var configuredInitialQueueExpanded: Boolean = initialQueueExpanded
+    private set
+
+  // Library Tab: Artists, Albums, Songs, Genres, Playlists
+  var selectedTab by mutableStateOf(
+    initialTab ?: MusicLibraryTab.fromNameOrDefault(prefs?.getString(PREF_KEY_MUSIC_TAB, null))
+  )
+
+  fun updateTab(tab: MusicLibraryTab) {
+    selectedTab = tab
+    prefs?.edit()?.putString(PREF_KEY_MUSIC_TAB, tab.name)?.apply()
+  }
+
+  // View Mode: List vs Card
+  var viewMode by mutableStateOf(
+    initialViewMode ?: MusicViewMode.fromNameOrDefault(prefs?.getString(PREF_KEY_MUSIC_VIEW_MODE, null))
+  )
+
+  fun updateViewMode(mode: MusicViewMode) {
+    viewMode = mode
+    prefs?.edit()?.putString(PREF_KEY_MUSIC_VIEW_MODE, mode.name)?.apply()
+  }
+
+  // Sort Order
+  var sortOrder by mutableStateOf(
+    MusicSortOrder.fromNameOrDefault(prefs?.getString(PREF_KEY_MUSIC_SORT_ORDER, null))
+  )
+
+  fun updateSortOrder(order: MusicSortOrder) {
+    sortOrder = order
+    prefs?.edit()?.putString(PREF_KEY_MUSIC_SORT_ORDER, order.name)?.apply()
+  }
+
+  // Shuffle & Repeat
+  var isShuffleEnabled by mutableStateOf(
+    prefs?.getBoolean(PREF_KEY_MUSIC_SHUFFLE, false) ?: false
+  )
+
+  fun toggleShuffle() {
+    isShuffleEnabled = !isShuffleEnabled
+    prefs?.edit()?.putBoolean(PREF_KEY_MUSIC_SHUFFLE, isShuffleEnabled)?.apply()
+  }
+
+  var repeatMode by mutableStateOf(
+    MusicRepeatMode.fromNameOrDefault(prefs?.getString(PREF_KEY_MUSIC_REPEAT, null))
+  )
+
+  fun cycleRepeatMode() {
+    repeatMode = repeatMode.next()
+    prefs?.edit()?.putString(PREF_KEY_MUSIC_REPEAT, repeatMode.name)?.apply()
+  }
+
+  // Favorites
+  var favoriteIds by mutableStateOf(
+    prefs?.getString(PREF_KEY_MUSIC_FAVORITES, "")
+      .orEmpty()
+      .split("|")
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .toSet()
+  )
+
+  fun toggleFavorite(trackId: String) {
+    val next = if (trackId in favoriteIds) favoriteIds - trackId else favoriteIds + trackId
+    favoriteIds = next
+    prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITES, next.joinToString("|"))?.apply()
+  }
+
+  var showFavoritesOnly by mutableStateOf(false)
+
+  // Play Statistics (persisted in SharedPreferences: play count + total playtime per track)
+  var playStats by mutableStateOf(
+    MusicPlayerEngine.deserializePlayStats(prefs?.getString(PREF_KEY_MUSIC_PLAY_STATS, ""))
+  )
+
+  fun recordTrackPlayStats(
+    trackId: String,
+    incrementPlayCount: Boolean = false,
+    addedPlayTimeMs: Long = 0L,
+    persistImmediately: Boolean = incrementPlayCount,
+  ) {
+    val next = MusicPlayerEngine.recordPlayStat(
+      current = playStats,
+      trackId = trackId,
+      incrementPlayCount = incrementPlayCount,
+      addedPlayTimeMs = addedPlayTimeMs,
+    )
+    if (next !== playStats) {
+      playStats = next
+      if (persistImmediately) {
+        prefs?.edit()?.putString(PREF_KEY_MUSIC_PLAY_STATS, MusicPlayerEngine.serializePlayStats(next))?.apply()
+      }
+    }
+  }
+
+  fun flushPlayStats() {
+    prefs?.edit()?.putString(PREF_KEY_MUSIC_PLAY_STATS, MusicPlayerEngine.serializePlayStats(playStats))?.apply()
+  }
+
+  // Playlists
+  var savedPlaylistEntries by mutableStateOf(
+    MusicPlayerEngine.deserializePlaylists(prefs?.getString(PREF_KEY_MUSIC_PLAYLISTS, ""))
+      .filterNot { it.id in MusicPlayerEngine.LEGACY_SAMPLE_PLAYLIST_IDS || it.id in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS }
+  )
+
+  fun updateSavedPlaylists(next: List<SavedPlaylistEntry>) {
+    savedPlaylistEntries = next
+    prefs?.edit()?.putString(PREF_KEY_MUSIC_PLAYLISTS, MusicPlayerEngine.serializePlaylists(next))?.apply()
+  }
+
+  fun saveQueueAsPlaylist(name: String, tracksToSave: List<MusicTrack>) {
+    val trimmedName = name.trim().ifEmpty { "Playlist ${savedPlaylistEntries.size + 1}" }
+    val trackIds = tracksToSave.map { it.id }
+    if (trackIds.isEmpty()) return
+    val newEntry = SavedPlaylistEntry(
+      id = "playlist_${System.currentTimeMillis()}_${savedPlaylistEntries.size + 1}",
+      name = trimmedName,
+      trackIds = trackIds,
+      createdAtMs = System.currentTimeMillis(),
+    )
+    updateSavedPlaylists(listOf(newEntry) + savedPlaylistEntries)
+  }
+
+  fun deletePlaylist(playlistId: String) {
+    if (playlistId in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS) return
+    updateSavedPlaylists(savedPlaylistEntries.filterNot { it.id == playlistId })
+  }
+
+  // Search state
+  var isSearchActive by mutableStateOf(false)
+  var searchQuery by mutableStateOf("")
+
+  // Drill-down selection state
+  var selectedArtistName by mutableStateOf<String?>(null)
+  var selectedAlbumKey by mutableStateOf<String?>(null)
+  var selectedGenreName by mutableStateOf<String?>(null)
+  var selectedPlaylistId by mutableStateOf<String?>(null)
+
+  fun clearDrillDown() {
+    selectedArtistName = null
+    selectedAlbumKey = null
+    selectedGenreName = null
+    selectedPlaylistId = null
+  }
+
+  // Library Tracks & Playback Queue State
+  var allTracks by mutableStateOf<List<MusicTrack>>(emptyList())
+  var playbackQueue by mutableStateOf<List<MusicTrack>>(emptyList())
+  var currentQueueIndex by mutableIntStateOf(0)
+
+  val currentTrack: MusicTrack?
+    get() = playbackQueue.getOrNull(
+      currentQueueIndex.coerceIn(0, maxOf(0, playbackQueue.size - 1))
+    ) ?: allTracks.firstOrNull()
+
+  var activePalette by mutableStateOf(MusicPlayerEngine.resolveTrackPalette(null))
+    internal set
+  private var lastSyncedPaletteTrackId: String? = null
+
+  var isPlaying by mutableStateOf(false)
+  var isPlayerExpanded by mutableStateOf(initialPlayerExpanded)
+  var initialQueueExpandedState by mutableStateOf(initialQueueExpanded)
+  var currentPositionMs by mutableLongStateOf(0L)
+  var trackDurationMs by mutableLongStateOf(15_000L)
+  var isDraggingSeek by mutableStateOf(false)
+  var dragSeekFraction by mutableFloatStateOf(0f)
+
+  // Speed & Sleep Timer & Sheet state
+  var playbackSpeed by mutableFloatStateOf(1.0f)
+  var sleepTimerPreset by mutableStateOf(SleepTimerPreset.OFF)
+  var sleepRemainingMs by mutableLongStateOf(0L)
+  var showQueueSheet by mutableStateOf(false)
+
+  private var lastCountedPlayTrackId: String? = null
+
+  /**
+   * Returns `true` if a hardware [MediaPlayer] instance is currently playing audio.
+   */
+  val isHardwarePlayerActive: Boolean
+    get() = try {
+      mediaPlayer?.isPlaying == true
+    } catch (_: Throwable) {
+      false
+    }
+
+  init {
+    if (!isInspection && cacheDir != null) {
+      MusicPlayerEngine.configureDiskCache(cacheDir)
+    }
+    val includeSamples = prefs?.getBoolean(PREF_KEY_MUSIC_INCLUDE_SAMPLES, false) ?: false
+    val initialLoaded = when {
+      initialTracks != null -> initialTracks
+      isInspection -> MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+      else -> MusicPlayerEngine.getCachedLibraryTracks(
+        initialDirectory = initialDirectory,
+        includeSamples = includeSamples,
+      ) ?: MusicPlayerEngine.loadLibraryTracks(
+        initialDirectory = initialDirectory,
+        includeSamples = includeSamples,
+        inspectMetadataRetriever = false,
+        deferAlbumArt = true,
+      )
+    }
+    allTracks = initialLoaded
+    playbackQueue = initialLoaded
+    currentQueueIndex = 0
+    trackDurationMs = currentTrack?.durationMs?.coerceAtLeast(1000L) ?: 15_000L
+    MusicPlayerEngine.activeSessionState = this
+    prepareAndSyncMediaPlayer(forceRestart = false)
+    startAsyncLibraryLoadAndArtworkPrefetch()
+  }
+
+  internal fun syncConfiguration(
+    initialDirectory: File?,
+    initialTracks: List<MusicTrack>?,
+    initialTab: MusicLibraryTab?,
+    initialViewMode: MusicViewMode?,
+    initialPlayerExpanded: Boolean,
+    initialQueueExpanded: Boolean,
+  ) {
+    if (initialTab != null && initialTab != configuredInitialTab) {
+      configuredInitialTab = initialTab
+      selectedTab = initialTab
+    }
+    if (initialViewMode != null && initialViewMode != configuredInitialViewMode) {
+      configuredInitialViewMode = initialViewMode
+      viewMode = initialViewMode
+    }
+    if (initialPlayerExpanded != configuredInitialPlayerExpanded) {
+      configuredInitialPlayerExpanded = initialPlayerExpanded
+      isPlayerExpanded = initialPlayerExpanded
+    }
+    if (initialQueueExpanded != configuredInitialQueueExpanded) {
+      configuredInitialQueueExpanded = initialQueueExpanded
+      initialQueueExpandedState = initialQueueExpanded
+    }
+
+    val tracksChanged = initialTracks != null && initialTracks != configuredInitialTracks
+    val dirChanged = initialDirectory != configuredInitialDirectory
+    if (tracksChanged || dirChanged) {
+      configuredInitialTracks = initialTracks ?: configuredInitialTracks
+      configuredInitialDirectory = initialDirectory
+      val includeSamples = prefs?.getBoolean(PREF_KEY_MUSIC_INCLUDE_SAMPLES, false) ?: false
+      val reloaded = when {
+        initialTracks != null -> initialTracks
+        else -> MusicPlayerEngine.getCachedLibraryTracks(
+          initialDirectory = initialDirectory,
+          includeSamples = includeSamples,
+        ) ?: MusicPlayerEngine.loadLibraryTracks(
+          initialDirectory = initialDirectory,
+          includeSamples = includeSamples,
+          inspectMetadataRetriever = false,
+          deferAlbumArt = true,
+        )
+      }
+      val activeId = currentTrack?.id
+      allTracks = reloaded
+      if (playbackQueue.isEmpty() || !isPlaying) {
+        playbackQueue = reloaded
+        val idx = if (activeId != null) reloaded.indexOfFirst { it.id == activeId } else 0
+        currentQueueIndex = idx.coerceAtLeast(0)
+        prepareAndSyncMediaPlayer(forceRestart = false)
+      }
+      startAsyncLibraryLoadAndArtworkPrefetch()
+    }
+  }
+
+  private fun startAsyncLibraryLoadAndArtworkPrefetch() {
+    if (isInspection || appContext == null) return
+    libraryLoadJob?.cancel()
+    libraryLoadJob = scope.launch {
+      val explicitTracks = configuredInitialTracks
+      if (explicitTracks == null) {
+        val includeSamples = prefs?.getBoolean(PREF_KEY_MUSIC_INCLUDE_SAMPLES, false) ?: false
+        val loaded = MusicPlayerEngine.loadLibraryTracksAsync(
+          initialDirectory = configuredInitialDirectory,
+          includeSamples = includeSamples,
+          inspectMetadataRetriever = true,
+          deferAlbumArt = true,
+        )
+        val prevTrackId = currentTrack?.id
+        val activeId = playbackQueue.getOrNull(currentQueueIndex)?.id
+        allTracks = loaded
+        val byId = loaded.associateBy { it.id }
+        val updatedQueue = if (playbackQueue.isEmpty()) {
+          loaded
+        } else {
+          playbackQueue.map { existing -> byId[existing.id] ?: existing }
+        }
+        playbackQueue = if (updatedQueue.size == loaded.size && updatedQueue.zip(loaded).all { (a, b) -> a.id == b.id }) {
+          loaded
+        } else {
+          updatedQueue
+        }
+        if (activeId != null) {
+          val newIdx = playbackQueue.indexOfFirst { it.id == activeId }
+          if (newIdx >= 0) {
+            currentQueueIndex = newIdx
+          }
+        }
+        val newTrack = currentTrack
+        if (newTrack != null && (newTrack.id != prevTrackId || mediaPlayer == null)) {
+          trackDurationMs = newTrack.durationMs.coerceAtLeast(1000L)
+          prepareAndSyncMediaPlayer(forceRestart = false)
+        }
+      }
+      val tracksToPrefetch = allTracks
+      if (tracksToPrefetch.isNotEmpty()) {
+        try {
+          MusicPlayerEngine.prefetchAlbumArt(tracksToPrefetch, sizePx = 240)
+        } catch (_: kotlinx.coroutines.CancellationException) {
+          throw kotlinx.coroutines.CancellationException()
+        } catch (_: Throwable) {}
+      }
+    }
+  }
+
+  private fun releaseMediaPlayer() {
+    val mp = mediaPlayer
+    mediaPlayer = null
+    preparedTrackId = null
+    if (mp != null) {
+      try {
+        mp.setOnCompletionListener(null)
+      } catch (_: Throwable) {}
+      try {
+        if (mp.isPlaying) mp.stop()
+      } catch (_: Throwable) {}
+      try {
+        mp.release()
+      } catch (_: Throwable) {}
+    }
+  }
+
+  private fun applyPlaybackSpeed(mp: MediaPlayer?) {
+    if (mp == null) return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && isPlaying) {
+      try {
+        mp.playbackParams = PlaybackParams().setSpeed(playbackSpeed.coerceIn(0.5f, 2.0f))
+      } catch (_: Throwable) {}
+    }
+  }
+
+  internal fun syncActiveTrackPalette(force: Boolean = false) {
+    if (isReleased) return
+    val track = currentTrack
+    val trackId = track?.id
+    if (!force && trackId == lastSyncedPaletteTrackId && track != null) {
+      return
+    }
+    lastSyncedPaletteTrackId = trackId
+    val immediatePalette = MusicPlayerEngine.resolveTrackPalette(track)
+    activePalette = immediatePalette
+    MusicPlayerEngine.updateActiveTrackPalette(track, immediatePalette)
+    paletteLoadJob?.cancel()
+    if (track != null && !isInspection && !track.isSampleTrack && appContext != null) {
+      paletteLoadJob = scope.launch {
+        try {
+          val loadedPalette = MusicPlayerEngine.loadTrackPaletteAsync(track, sizePx = 360)
+          if (!isReleased && currentTrack?.id == track.id) {
+            activePalette = loadedPalette
+            MusicPlayerEngine.updateActiveTrackPalette(track, loadedPalette)
+          }
+        } catch (_: kotlinx.coroutines.CancellationException) {
+          throw kotlinx.coroutines.CancellationException()
+        } catch (_: Throwable) {}
+      }
+    }
+  }
+
+  fun prepareAndSyncMediaPlayer(forceRestart: Boolean = false) {
+    if (isReleased) return
+    syncActiveTrackPalette(force = forceRestart)
+    val track = currentTrack
+    if (track == null) {
+      releaseMediaPlayer()
+      syncProgressTicker()
+      return
+    }
+
+    if (isInspection) {
+      trackDurationMs = track.durationMs.coerceAtLeast(1000L)
+      syncProgressTicker()
+      return
+    }
+
+    val existingMp = mediaPlayer
+    if (existingMp != null && preparedTrackId == track.id) {
+      try {
+        if (forceRestart) {
+          existingMp.seekTo(currentPositionMs.toInt().coerceAtLeast(0))
+        }
+        if (isPlaying && !existingMp.isPlaying) {
+          existingMp.start()
+          applyPlaybackSpeed(existingMp)
+        } else if (!isPlaying && existingMp.isPlaying) {
+          existingMp.pause()
+        } else if (isPlaying) {
+          applyPlaybackSpeed(existingMp)
+        }
+        syncProgressTicker()
+        return
+      } catch (_: Throwable) {
+        releaseMediaPlayer()
+      }
+    }
+
+    releaseMediaPlayer()
+    trackDurationMs = track.durationMs.coerceAtLeast(1000L)
+
+    val dir = cacheDir
+    val instanceId = activePlayInstanceId
+    if (dir != null) {
+      try {
+        val playableFile = if (track.isSampleTrack || track.file == null || !track.file.exists()) {
+          if (appContext != null) {
+            FileManagerEngine.getOrCreateSampleMusicFile(track, appContext)
+          } else {
+            MusicPlayerEngine.ensurePlayableSampleWavFile(dir, track)
+          }
+        } else {
+          track.file
+        }
+        if (playableFile.exists()) {
+          val mp = MediaPlayer()
+          mp.setAudioAttributes(
+            AudioAttributes.Builder()
+              .setUsage(AudioAttributes.USAGE_MEDIA)
+              .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+              .build()
+          )
+          mp.setDataSource(playableFile.absolutePath)
+          mp.prepare()
+          val actualDur = mp.duration.toLong()
+          if (actualDur > 0L) {
+            trackDurationMs = actualDur
+          }
+          mp.setOnCompletionListener {
+            scope.launch {
+              autoAdvanceFromInstance(instanceId)
+            }
+          }
+          mediaPlayer = mp
+          preparedTrackId = track.id
+          if (currentPositionMs > 0L && currentPositionMs < trackDurationMs) {
+            mp.seekTo(currentPositionMs.toInt())
+          }
+          if (isPlaying) {
+            mp.start()
+            applyPlaybackSpeed(mp)
+          }
+        }
+      } catch (_: Throwable) {
+        // Fallback simulated timer loop in syncProgressTicker handles progression if hardware codec is unavailable
+      }
+    }
+
+    syncProgressTicker()
+  }
+
+  private fun autoAdvanceFromInstance(instanceId: Long) {
+    if (isReleased || instanceId != activePlayInstanceId) return
+    skipToNext(userInitiated = false)
+  }
+
+  private fun syncProgressTicker() {
+    if (isReleased || !isPlaying || currentTrack == null) {
+      progressJob?.cancel()
+      progressJob = null
+      return
+    }
+    if (progressJob?.isActive == true) return
+
+    progressJob = scope.launch {
+      val tickMs = 200L
+      var ticksSinceFlush = 0
+      while (isActive && isPlaying && !isReleased) {
+        val tickInstanceId = activePlayInstanceId
+        delay(tickMs)
+        val activeTrack = currentTrack ?: break
+        if (!isPlaying || isReleased) break
+        recordTrackPlayStats(
+          trackId = activeTrack.id,
+          incrementPlayCount = false,
+          addedPlayTimeMs = tickMs,
+          persistImmediately = ++ticksSinceFlush % 10 == 0,
+        )
+        if (!isDraggingSeek) {
+          val mp = mediaPlayer
+          val hardwarePos = try {
+            if (mp != null && mp.isPlaying) mp.currentPosition.toLong() else null
+          } catch (_: Throwable) {
+            null
+          }
+          if (hardwarePos != null && hardwarePos > 0L) {
+            currentPositionMs = hardwarePos.coerceAtMost(trackDurationMs)
+          } else {
+            val delta = (tickMs * playbackSpeed).toLong().coerceAtLeast(50L)
+            val nextPos = currentPositionMs + delta
+            if (nextPos >= trackDurationMs) {
+              autoAdvanceFromInstance(tickInstanceId)
+            } else {
+              currentPositionMs = nextPos
+            }
+          }
+        }
+      }
+    }
+  }
+
+  fun setPlayingState(playing: Boolean) {
+    if (isReleased) return
+    isPlaying = playing
+    val activeId = currentTrack?.id
+    if (playing && activeId != null && lastCountedPlayTrackId != activeId) {
+      lastCountedPlayTrackId = activeId
+      recordTrackPlayStats(trackId = activeId, incrementPlayCount = true, persistImmediately = true)
+    } else if (!playing) {
+      flushPlayStats()
+    }
+    prepareAndSyncMediaPlayer(forceRestart = false)
+  }
+
+  fun togglePlayPause() {
+    setPlayingState(!isPlaying)
+  }
+
+  fun stepToTrack(
+    newIndex: Int,
+    autoPlay: Boolean = isPlaying,
+  ) {
+    if (isReleased || playbackQueue.isEmpty()) return
+    activePlayInstanceId++
+    val clamped = newIndex.coerceIn(0, playbackQueue.lastIndex)
+    val prevId = playbackQueue.getOrNull(currentQueueIndex)?.id
+    currentQueueIndex = clamped
+    currentPositionMs = 0L
+    val target = playbackQueue[clamped]
+    trackDurationMs = target.durationMs.coerceAtLeast(1000L)
+    if (autoPlay) {
+      if (target.id == prevId) {
+        lastCountedPlayTrackId = target.id
+      } else {
+        lastCountedPlayTrackId = target.id
+      }
+      recordTrackPlayStats(trackId = target.id, incrementPlayCount = true, persistImmediately = true)
+    }
+    isPlaying = autoPlay
+    prepareAndSyncMediaPlayer(forceRestart = true)
+  }
+
+  fun playTrackInContext(
+    track: MusicTrack,
+    contextTracks: List<MusicTrack>,
+  ) {
+    if (isReleased) return
+    activePlayInstanceId++
+    val queueList = if (contextTracks.isNotEmpty()) contextTracks else listOf(track)
+    playbackQueue = queueList
+    val idx = queueList.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+    currentQueueIndex = idx
+    currentPositionMs = 0L
+    trackDurationMs = track.durationMs.coerceAtLeast(1000L)
+    lastCountedPlayTrackId = track.id
+    recordTrackPlayStats(trackId = track.id, incrementPlayCount = true, persistImmediately = true)
+    isPlaying = true
+    prepareAndSyncMediaPlayer(forceRestart = true)
+  }
+
+  fun skipToNext(userInitiated: Boolean = true) {
+    if (isReleased) return
+    val nextIdx = MusicPlayerEngine.resolveNextTrackIndex(
+      currentIndex = currentQueueIndex,
+      queueSize = playbackQueue.size,
+      repeatMode = repeatMode,
+      shuffleEnabled = isShuffleEnabled,
+      userInitiated = userInitiated,
+    )
+    if (nextIdx != null) {
+      stepToTrack(nextIdx, autoPlay = if (userInitiated) isPlaying else true)
+    } else {
+      activePlayInstanceId++
+      isPlaying = false
+      currentPositionMs = 0L
+      try {
+        val mp = mediaPlayer
+        if (mp != null) {
+          if (mp.isPlaying) mp.pause()
+          mp.seekTo(0)
+        }
+      } catch (_: Throwable) {}
+      flushPlayStats()
+      syncProgressTicker()
+    }
+  }
+
+  fun skipToPrevious() {
+    if (isReleased) return
+    val prevIdx = MusicPlayerEngine.resolvePreviousTrackIndex(
+      currentIndex = currentQueueIndex,
+      queueSize = playbackQueue.size,
+      currentPositionMs = currentPositionMs,
+    ) ?: return
+    if (prevIdx == currentQueueIndex) {
+      activePlayInstanceId++
+      currentPositionMs = 0L
+      if (isPlaying) {
+        playbackQueue.getOrNull(currentQueueIndex)?.id?.let { id ->
+          recordTrackPlayStats(trackId = id, incrementPlayCount = true, persistImmediately = true)
+        }
+      }
+      prepareAndSyncMediaPlayer(forceRestart = true)
+    } else {
+      stepToTrack(prevIdx, autoPlay = isPlaying)
+    }
+  }
+
+  fun moveQueueItem(fromIndex: Int, toIndex: Int): Boolean {
+    val (updatedQueue, updatedCurrentIndex) = MusicPlayerEngine.reorderQueue(
+      queue = playbackQueue,
+      fromIndex = fromIndex,
+      toIndex = toIndex,
+      currentQueueIndex = currentQueueIndex,
+    )
+    if (updatedQueue !== playbackQueue) {
+      playbackQueue = updatedQueue
+      currentQueueIndex = updatedCurrentIndex
+      return true
+    }
+    return false
+  }
+
+  fun updateSeekDrag(fraction: Float) {
+    isDraggingSeek = true
+    dragSeekFraction = fraction.coerceIn(0f, 1f)
+  }
+
+  fun finishSeekDrag() {
+    val targetMs = (dragSeekFraction * trackDurationMs).toLong().coerceIn(0L, trackDurationMs)
+    currentPositionMs = targetMs
+    isDraggingSeek = false
+    try {
+      mediaPlayer?.seekTo(targetMs.toInt())
+    } catch (_: Throwable) {}
+  }
+
+  fun cyclePlaybackSpeed() {
+    val idx = MusicPlayerEngine.PLAYBACK_SPEED_OPTIONS.indexOfFirst { it == playbackSpeed }
+    val nextIdx = if (idx >= 0) (idx + 1) % MusicPlayerEngine.PLAYBACK_SPEED_OPTIONS.size else 2
+    playbackSpeed = MusicPlayerEngine.PLAYBACK_SPEED_OPTIONS[nextIdx]
+    applyPlaybackSpeed(mediaPlayer)
+  }
+
+  fun selectSleepTimer(preset: SleepTimerPreset) {
+    sleepTimerPreset = preset
+    sleepRemainingMs = preset.durationMs
+    sleepTimerJob?.cancel()
+    if (preset != SleepTimerPreset.OFF && sleepRemainingMs > 0L) {
+      sleepTimerJob = scope.launch {
+        while (isActive && !isReleased && sleepTimerPreset != SleepTimerPreset.OFF && sleepRemainingMs > 0L) {
+          delay(1000L)
+          sleepRemainingMs = (sleepRemainingMs - 1000L).coerceAtLeast(0L)
+          if (sleepRemainingMs == 0L) {
+            setPlayingState(false)
+            sleepTimerPreset = SleepTimerPreset.OFF
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Releases all resources (MediaPlayer and background coroutines) when the host Activity is destroyed.
+   */
+  fun release() {
+    if (isReleased) return
+    isReleased = true
+    if (MusicPlayerEngine.activeSessionState === this) {
+      MusicPlayerEngine.activeSessionState = null
+    }
+    flushPlayStats()
+    progressJob?.cancel()
+    sleepTimerJob?.cancel()
+    libraryLoadJob?.cancel()
+    paletteLoadJob?.cancel()
+    scope.cancel()
+    releaseMediaPlayer()
+  }
+}
+

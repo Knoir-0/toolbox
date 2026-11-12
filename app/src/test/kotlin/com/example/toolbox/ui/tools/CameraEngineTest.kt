@@ -435,4 +435,49 @@ class CameraEngineTest {
     assertEquals(CameraScanPayloadType.PRODUCT, analyzedEan.payloadType)
     assertEquals("Germany", analyzedEan.fields["Origin / Prefix"])
   }
+
+  @Test
+  fun captureMode_supportsNoteModeResolution() {
+    assertEquals(CameraCaptureMode.NOTE, CameraCaptureMode.fromNameOrDefault("NOTE"))
+    assertEquals(CameraCaptureMode.NOTE, CameraCaptureMode.fromNameOrDefault("Note"))
+    assertEquals(CameraCaptureMode.NOTE, CameraCaptureMode.fromNameOrDefault("ocr"))
+    assertEquals("Note", CameraCaptureMode.NOTE.displayName)
+    assertEquals("NOTE", CameraCaptureMode.NOTE.shortLabel)
+  }
+
+  @Test
+  fun analyzeScannedDocumentText_andSaveToNotes_addsScannedNoteToNotesRepository() {
+    val rawOcrText = """
+      Sprint Architecture Review
+      - Finalize on-device ML Kit OCR pipeline
+      - Move adjustment and filter buttons to shutter row
+      - Persist scanned document into NotesRepository
+    """.trimIndent()
+
+    val scannedDoc = CameraEngine.analyzeScannedDocumentText(
+      rawText = rawOcrText,
+      scannedAtMs = 1794335400000L,
+    )
+    assertEquals("Sprint Architecture Review", scannedDoc.title)
+    assertTrue(scannedDoc.bodyContent.contains("Finalize on-device ML Kit OCR pipeline"))
+    assertEquals(4, scannedDoc.lineCount)
+    assertTrue(scannedDoc.wordCount >= 18)
+
+    val notesRepo = InMemoryNotesRepository(initialNotes = emptyList())
+    val (savedDoc, createdNote) = CameraEngine.saveScannedDocumentToNotes(
+      repository = notesRepo,
+      document = scannedDoc,
+    )
+
+    assertEquals(createdNote.id, savedDoc.savedNoteId)
+    assertEquals("Sprint Architecture Review", createdNote.title)
+    assertTrue(createdNote.content.contains("Finalize on-device ML Kit OCR pipeline"))
+    assertTrue(createdNote.labels.contains("Scanned"))
+
+    val storedNotes = notesRepo.loadNotes()
+    assertEquals(1, storedNotes.size)
+    assertEquals(createdNote.id, storedNotes.first().id)
+    assertEquals("Sprint Architecture Review", storedNotes.first().title)
+    assertEquals(createdNote.content, storedNotes.first().content)
+  }
 }

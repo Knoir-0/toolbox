@@ -9,6 +9,10 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RadialGradient
 import android.graphics.Shader
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.Text as MlKitText
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
@@ -31,11 +35,13 @@ import java.util.Locale
 import java.util.zip.CRC32
 import java.util.zip.Deflater
 import java.util.zip.Inflater
+import kotlin.coroutines.resume
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 const val CAMERA_PREFS_NAME = "camera_tool_preferences"
 const val PREF_KEY_CAMERA_DIRECTORY = "camera_save_directory"
@@ -48,6 +54,7 @@ const val PREF_KEY_CAMERA_FILTER = "camera_color_filter"
 const val PREF_KEY_CAMERA_FORMAT = "camera_photo_format"
 const val PREF_KEY_CAMERA_MIRROR_FRONT = "camera_mirror_front"
 const val PREF_KEY_CAMERA_SCAN_FILTER = "camera_scan_filter"
+const val PREF_KEY_CAMERA_NOTE_PRESET = "camera_note_preset"
 
 const val DEFAULT_CAMERA_FOLDER_SUBPATH = "DCIM/Camera"
 const val DEFAULT_CAMERA_FOLDER_DISPLAY = "/DCIM/Camera"
@@ -70,6 +77,7 @@ enum class CameraCaptureMode(
   PHOTO(displayName = "Photo", shortLabel = "PHOTO"),
   VIDEO(displayName = "Video", shortLabel = "VIDEO"),
   SCANNER(displayName = "Scan", shortLabel = "SCAN"),
+  NOTE(displayName = "Note", shortLabel = "NOTE"),
   ;
 
   companion object {
@@ -77,13 +85,98 @@ enum class CameraCaptureMode(
 
     fun fromNameOrDefault(name: String?): CameraCaptureMode {
       if (name.isNullOrBlank()) return DEFAULT
+      val trimmed = name.trim()
+      if (trimmed.equals("ocr", ignoreCase = true) ||
+        trimmed.equals("notes", ignoreCase = true) ||
+        trimmed.equals("document", ignoreCase = true)
+      ) {
+        return NOTE
+      }
       return entries.find {
-        it.name.equals(name.trim(), ignoreCase = true) ||
-          it.displayName.equals(name.trim(), ignoreCase = true) ||
-          it.shortLabel.equals(name.trim(), ignoreCase = true)
+        it.name.equals(trimmed, ignoreCase = true) ||
+          it.displayName.equals(trimmed, ignoreCase = true) ||
+          it.shortLabel.equals(trimmed, ignoreCase = true)
       } ?: DEFAULT
     }
   }
+}
+
+/**
+ * Sample document templates for OCR Note scanning simulation and testing when a live physical document
+ * is not in front of the camera lens.
+ */
+enum class CameraNoteSamplePreset(
+  val label: String,
+  val defaultTitle: String,
+  val sampleText: String,
+  val noteColor: NoteColor,
+) {
+  MEETING_NOTES(
+    label = "Meeting Notes",
+    defaultTitle = "Product Roadmap Sync",
+    sampleText = "Product Roadmap Sync\nFinalize Q4 mobile release milestones\nReview camera OCR document scanner metrics\nSync recognized notes with offline board\nAction owner: Design & Engineering Team",
+    noteColor = NoteColor.SAGE,
+  ),
+  CHECKLIST(
+    label = "Checklist",
+    defaultTitle = "Weekly Grocery List",
+    sampleText = "Weekly Grocery List\n- Organic espresso beans\n- Sourdough bread\n- Avocados and cherry tomatoes\n- Sparkling water",
+    noteColor = NoteColor.MINT,
+  ),
+  RECEIPT(
+    label = "Receipt",
+    defaultTitle = "Hardware Store Receipt",
+    sampleText = "Hardware Store Receipt\nPrecision Screwdriver Set  $18.50\nDigital Caliper 150mm      $29.00\nMicrofiber Lens Cloths     $6.50\nTotal Paid: $54.00",
+    noteColor = NoteColor.SAND,
+  ),
+  LECTURE_OUTLINE(
+    label = "Study Notes",
+    defaultTitle = "Optical Character Recognition",
+    sampleText = "Optical Character Recognition\n1. Image preprocessing and contrast normalization\n2. Text block and line layout segmentation\n3. On-device ML Kit neural text recognition\n4. Automatic export to Toolbox Notes",
+    noteColor = NoteColor.FOG,
+  ),
+  ;
+
+  companion object {
+    val DEFAULT: CameraNoteSamplePreset = MEETING_NOTES
+
+    fun fromNameOrDefault(name: String?): CameraNoteSamplePreset {
+      if (name.isNullOrBlank()) return DEFAULT
+      val trimmed = name.trim()
+      return entries.find {
+        it.name.equals(trimmed, ignoreCase = true) ||
+          it.label.equals(trimmed, ignoreCase = true) ||
+          it.defaultTitle.equals(trimmed, ignoreCase = true)
+      } ?: DEFAULT
+    }
+  }
+}
+
+/**
+ * Represents a single recognized block of text from an OCR document scan.
+ */
+data class CameraScannedTextBlock(
+  val text: String,
+  val lines: List<String>,
+  val boundingBoxNormalized: List<Pair<Float, Float>> = emptyList(),
+)
+
+/**
+ * Represents a document scanned via OCR in [CameraCaptureMode.NOTE] mode.
+ */
+data class CameraScannedDocument(
+  val id: String,
+  val rawText: String,
+  val title: String,
+  val body: String,
+  val blocks: List<CameraScannedTextBlock> = emptyList(),
+  val wordCount: Int = 0,
+  val lineCount: Int = 0,
+  val scannedAtMs: Long = System.currentTimeMillis(),
+  val savedNoteId: String? = null,
+) {
+  val bodyContent: String get() = body
+  val timestampFormatted: String get() = FileManagerEngine.formatTimestamp(scannedAtMs)
 }
 
 /**
@@ -2423,6 +2516,245 @@ object CameraEngine {
       977 -> "ISSN Periodical"
       978, 979 -> "Bookland ISBN"
       else -> "GS1 International"
+    }
+  }
+
+  // =========================================================================
+  // Document OCR & Note Scanner Engine (Google ML Kit Text Recognition v2)
+  // =========================================================================
+
+  /**
+   * Parses raw OCR recognized text into a structured [CameraScannedDocument], extracting a clean
+   * note title, body content, line count, word count, and text blocks.
+   */
+  fun analyzeScannedDocumentText(
+    rawText: String,
+    blocks: List<CameraScannedTextBlock> = emptyList(),
+    fallbackTitle: String = "Scanned Note",
+    scannedAtMs: Long = System.currentTimeMillis(),
+  ): CameraScannedDocument {
+    val normalizedText = rawText.replace("\r\n", "\n").replace('\r', '\n').trim()
+    val nonBlankLines = normalizedText
+      .lines()
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+
+    val title: String
+    val body: String
+    when {
+      nonBlankLines.size >= 2 -> {
+        val rawFirst = nonBlankLines.first().removePrefix("#").trim()
+        title = (if (rawFirst.length <= 72) rawFirst else rawFirst.take(72).trimEnd() + "…")
+          .ifEmpty { fallbackTitle }
+        body = nonBlankLines.drop(1).joinToString("\n")
+      }
+      nonBlankLines.size == 1 -> {
+        val single = nonBlankLines.first()
+        title = if (single.length <= 48) single else single.take(48).trimEnd() + "…"
+        body = single
+      }
+      else -> {
+        title = fallbackTitle
+        body = ""
+      }
+    }
+
+    val wordCount = if (normalizedText.isEmpty()) {
+      0
+    } else {
+      normalizedText.split(Regex("\\s+")).count { it.isNotEmpty() }
+    }
+
+    val effectiveBlocks = blocks.ifEmpty {
+      if (nonBlankLines.isNotEmpty()) {
+        listOf(
+          CameraScannedTextBlock(
+            text = nonBlankLines.joinToString("\n"),
+            lines = nonBlankLines,
+          )
+        )
+      } else {
+        emptyList()
+      }
+    }
+
+    return CameraScannedDocument(
+      id = "OCR_${scannedAtMs}_${normalizedText.hashCode()}",
+      rawText = normalizedText,
+      title = title,
+      body = body,
+      blocks = effectiveBlocks,
+      wordCount = wordCount,
+      lineCount = nonBlankLines.size,
+      scannedAtMs = scannedAtMs,
+    )
+  }
+
+  /**
+   * Converts a [CameraScannedDocument] into a [NoteItem] ready to be stored in the Notes tool.
+   */
+  fun createNoteItemFromScannedDocument(
+    document: CameraScannedDocument,
+    color: NoteColor = NoteColor.DEFAULT,
+    labels: List<String> = listOf("Scanned"),
+  ): NoteItem {
+    val cleanTitle = document.title.trim().ifEmpty { "Scanned Note" }
+    val cleanContent = document.body.trim().ifEmpty { document.rawText.trim() }
+    return NoteItem(
+      title = cleanTitle,
+      content = cleanContent,
+      isChecklist = false,
+      checklistItems = emptyList(),
+      color = color,
+      isPinned = false,
+      isArchived = false,
+      isTrashed = false,
+      labels = labels.map { it.trim() }.filter { it.isNotEmpty() }.distinct(),
+      createdAt = document.scannedAtMs,
+      updatedAt = document.scannedAtMs,
+    )
+  }
+
+  /**
+   * Adds the contents of a scanned [document] as a new [NoteItem] in [repository] (the Notes tool),
+   * persisting both the note and its labels.
+   */
+  fun saveScannedDocumentToNotes(
+    repository: NotesRepository,
+    document: CameraScannedDocument,
+    color: NoteColor = NoteColor.DEFAULT,
+    labels: List<String> = listOf("Scanned"),
+  ): Pair<CameraScannedDocument, NoteItem> {
+    val noteItem = createNoteItemFromScannedDocument(
+      document = document,
+      color = color,
+      labels = labels,
+    )
+    val existingNotes = repository.loadNotes()
+    val updatedNotes = NotesEngine.saveOrDiscardNote(
+      notes = existingNotes,
+      draft = noteItem,
+      nowMs = document.scannedAtMs,
+    )
+    repository.saveNotes(updatedNotes)
+
+    val mergedLabels = (repository.loadLabels() + noteItem.labels)
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .distinct()
+    repository.saveLabels(mergedLabels)
+
+    val savedNote = updatedNotes.firstOrNull { it.id == noteItem.id } ?: noteItem
+    return document.copy(savedNoteId = savedNote.id) to savedNote
+  }
+
+  /**
+   * Renders a high-contrast synthetic document page [Bitmap] containing [text] so that on-device
+   * ML Kit OCR can process a crisp bitmap when a live physical document is not in front of the camera.
+   */
+  fun createSyntheticDocumentBitmap(
+    text: String,
+    width: Int = 720,
+    height: Int = 960,
+  ): Bitmap? {
+    val w = width.coerceIn(240, 2048)
+    val h = height.coerceIn(240, 2048)
+    return try {
+      val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+      if (bmp == null || bmp.width <= 0 || bmp.height <= 0) return null
+      val canvas = Canvas(bmp)
+      canvas.drawColor(android.graphics.Color.WHITE)
+
+      val lines = text
+        .replace("\r\n", "\n")
+        .lines()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+
+      val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.BLACK
+        textSize = 36f
+        isFakeBoldText = true
+      }
+      val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.rgb(24, 24, 28)
+        textSize = 28f
+      }
+
+      var y = 96f
+      val leftMargin = 48f
+      lines.forEachIndexed { index, line ->
+        if (y < h - 48f) {
+          val paint = if (index == 0) titlePaint else bodyPaint
+          canvas.drawText(line, leftMargin, y, paint)
+          y += if (index == 0) 64f else 48f
+        }
+      }
+      bmp
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  /**
+   * Runs Google ML Kit on-device Text Recognition v2 (`com.google.mlkit:text-recognition`) on [bitmap]
+   * and returns the recognized [CameraScannedDocument], or `null` if no text was recognized or ML Kit
+   * runtime is unavailable.
+   */
+  suspend fun recognizeTextFromBitmapWithMlKit(
+    bitmap: Bitmap,
+    rotationDegrees: Int = 0,
+    scannedAtMs: Long = System.currentTimeMillis(),
+  ): CameraScannedDocument? {
+    if (bitmap.width <= 16 || bitmap.height <= 16) return null
+    return try {
+      val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+      val inputImage = InputImage.fromBitmap(bitmap, rotationDegrees)
+      val visionText = suspendCancellableCoroutine<MlKitText?> { continuation ->
+        recognizer.process(inputImage)
+          .addOnSuccessListener { result ->
+            recognizer.close()
+            if (continuation.isActive) {
+              continuation.resume(result)
+            }
+          }
+          .addOnFailureListener {
+            recognizer.close()
+            if (continuation.isActive) {
+              continuation.resume(null)
+            }
+          }
+      } ?: return null
+
+      val rawText = visionText.text.trim()
+      if (rawText.isEmpty()) return null
+
+      val bw = bitmap.width.toFloat().coerceAtLeast(1f)
+      val bh = bitmap.height.toFloat().coerceAtLeast(1f)
+      val blocks = visionText.textBlocks.mapNotNull { block ->
+        val blockText = block.text.trim()
+        if (blockText.isEmpty()) return@mapNotNull null
+        val blockLines = block.lines.map { it.text.trim() }.filter { it.isNotEmpty() }
+        val normBox = block.cornerPoints?.map { pt ->
+          Pair(
+            (pt.x / bw).coerceIn(0f, 1f),
+            (pt.y / bh).coerceIn(0f, 1f),
+          )
+        }.orEmpty()
+        CameraScannedTextBlock(
+          text = blockText,
+          lines = blockLines.ifEmpty { blockText.lines() },
+          boundingBoxNormalized = normBox,
+        )
+      }
+
+      analyzeScannedDocumentText(
+        rawText = rawText,
+        blocks = blocks,
+        scannedAtMs = scannedAtMs,
+      )
+    } catch (_: Throwable) {
+      null
     }
   }
 }

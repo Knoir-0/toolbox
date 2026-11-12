@@ -6,7 +6,9 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import com.example.toolbox.ui.theme.ToolboxTheme
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -18,7 +20,7 @@ class ChordBookScreenTest {
   fun reverseScaleSearch_switchesModeSelectsNotesAndJumpsToScale() {
     composeTestRule.setContent {
       ToolboxTheme {
-        ChordBookScreen()
+        ChordBookScreen(tuningRepository = InMemoryGuitarTunerRepository())
       }
     }
 
@@ -56,5 +58,32 @@ class ChordBookScreenTest {
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("reverse_scale_pitch_0").assertIsDisplayed()
+  }
+
+  @Test
+  fun tuningSearch_searchesSelectsAndSharesFavoriteTuningsWithGuitarTuner() {
+    val sharedRepo = InMemoryGuitarTunerRepository(
+      initialFavorites = setOf(GuitarTuningPreset.DROP_D),
+    )
+    composeTestRule.setContent {
+      ToolboxTheme {
+        ChordBookScreen(tuningRepository = sharedRepo)
+      }
+    }
+
+    // Open the toolbar tuning search
+    composeTestRule.onNodeWithTag("toggle_search_bar_button").performClick()
+    composeTestRule.onNodeWithTag("toolbar_search_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("catalog_search_overlay").assertIsDisplayed()
+
+    // Search for DADGAD, favorite it, and select it
+    composeTestRule.onNodeWithTag("tuning_search_input").performTextInput("DADGAD")
+    composeTestRule.onNodeWithTag("catalog_favorite_button_DADGAD").performClick()
+    assertTrue(GuitarTuningPreset.DADGAD in sharedRepo.loadFavoritePresets())
+    assertTrue(GuitarTuningPreset.DROP_D in sharedRepo.loadFavoritePresets())
+
+    composeTestRule.onNodeWithTag("catalog_tuning_card_DADGAD").performClick()
+    composeTestRule.onNodeWithTag("catalog_search_overlay").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("chord_book_header_subtext").assertIsDisplayed()
   }
 }

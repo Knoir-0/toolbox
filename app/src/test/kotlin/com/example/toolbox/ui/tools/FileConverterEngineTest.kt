@@ -32,7 +32,7 @@ class FileConverterEngineTest {
 
   @Test
   fun toolEnum_includesFileConverterUnderFilesAndStorage() {
-    assertEquals("File Converter", Tool.FILE_CONVERTER.title)
+    assertEquals("Converter", Tool.FILE_CONVERTER.title)
     assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.FILE_CONVERTER.category)
   }
 
@@ -327,5 +327,195 @@ class FileConverterEngineTest {
     assertTrue(FileConverterEngine.isSupportedFile(tarGzFile))
     assertFalse(FileConverterEngine.isSupportedFile(unsupportedFile))
     assertFalse(FileConverterEngine.isSupportedFile(noExtFile))
+  }
+
+  @Test
+  fun capabilityMap_includesOcrRoutesForImagesAndPdfsToTextMarkupAndStructuredData() {
+    val ocrTargets = listOf(
+      ConvertibleFormat.TXT,
+      ConvertibleFormat.MD,
+      ConvertibleFormat.HTML,
+      ConvertibleFormat.JSON,
+      ConvertibleFormat.CSV,
+      ConvertibleFormat.TSV,
+      ConvertibleFormat.XML,
+    )
+
+    // Standard decodable images use NATIVE preferred + FFMPEG fallback for OCR
+    for (target in ocrTargets) {
+      val pngRoute = FileConverterEngine.getRoute(ConvertibleFormat.PNG, target)
+      assertNotNull("Expected PNG -> ${target.name} OCR route", pngRoute)
+      assertEquals(ConverterBackend.NATIVE, pngRoute!!.preferredBackend)
+      assertEquals(ConverterBackend.FFMPEG, pngRoute.fallbackBackend)
+
+      val jpgRoute = FileConverterEngine.getRoute(ConvertibleFormat.JPG, target)
+      assertNotNull("Expected JPG -> ${target.name} OCR route", jpgRoute)
+      assertEquals(ConverterBackend.NATIVE, jpgRoute!!.preferredBackend)
+
+      // TIFF uses FFMPEG decode + ML Kit OCR
+      val tiffRoute = FileConverterEngine.getRoute(ConvertibleFormat.TIFF, target)
+      assertNotNull("Expected TIFF -> ${target.name} OCR route", tiffRoute)
+      assertEquals(ConverterBackend.FFMPEG, tiffRoute!!.preferredBackend)
+
+      // PDF uses NATIVE PdfRenderer + ML Kit OCR
+      val pdfRoute = FileConverterEngine.getRoute(ConvertibleFormat.PDF, target)
+      assertNotNull("Expected PDF -> ${target.name} OCR route", pdfRoute)
+      assertEquals(ConverterBackend.NATIVE, pdfRoute!!.preferredBackend)
+    }
+  }
+
+  @Test
+  fun convertFile_imageOcrToTextMarkupAndStructuredData() = runTest {
+    val imageFile = File(tempDir, "receipt_scan.png").apply {
+      writeBytes(byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47))
+    }
+
+    val mockOcrDoc = CameraEngine.analyzeScannedDocumentText(
+      rawText = "Grocery Receipt\nApples $3.50\nCoffee Beans $12.00\nTotal $15.50",
+      blocks = listOf(
+        CameraScannedTextBlock(
+          text = "Grocery Receipt",
+          lines = listOf("Grocery Receipt"),
+        ),
+        CameraScannedTextBlock(
+          text = "Apples $3.50\nCoffee Beans $12.00\nTotal $15.50",
+          lines = listOf("Apples $3.50", "Coffee Beans $12.00", "Total $15.50"),
+        ),
+      ),
+      fallbackTitle = "receipt_scan",
+    )
+
+    val ocrRunner: suspend (File, ConvertibleFormat) -> List<CameraScannedDocument> = { _, _ ->
+      listOf(mockOcrDoc)
+    }
+
+    // 1. Image -> TXT
+    val toTxt = FileConverterEngine.convertFile(
+      context = null,
+      sourceFile = imageFile,
+      targetFormat = ConvertibleFormat.TXT,
+      outputDir = tempDir,
+      ocrRunner = ocrRunner,
+    )
+    assertTrue(toTxt.success)
+    val txtContent = toTxt.outputFile!!.readText()
+    assertTrue(txtContent.contains("Grocery Receipt"))
+    assertTrue(txtContent.contains("Coffee Beans $12.00"))
+
+    // 2. Image -> MD
+    val toMd = FileConverterEngine.convertFile(
+      context = null,
+      sourceFile = imageFile,
+      targetFormat = ConvertibleFormat.MD,
+      outputDir = tempDir,
+      ocrRunner = ocrRunner,
+    )
+    assertTrue(toMd.success)
+    val mdContent = toMd.outputFile!!.readText()
+    assertTrue(mdContent.contains("# Grocery Receipt"))
+    assertTrue(mdContent.contains("Total $15.50"))
+
+    // 3. Image -> HTML
+    val toHtml = FileConverterEngine.convertFile(
+      context = null,
+      sourceFile = imageFile,
+      targetFormat = ConvertibleFormat.HTML,
+      outputDir = tempDir,
+      ocrRunner = ocrRunner,
+    )
+    assertTrue(toHtml.success)
+    val htmlContent = toHtml.outputFile!!.readText()
+    assertTrue(htmlContent.contains("<h1>Grocery Receipt</h1>"))
+    assertTrue(htmlContent.contains("Apples $3.50"))
+
+    // 4. Image -> JSON
+    val toJson = FileConverterEngine.convertFile(
+      context = null,
+      sourceFile = imageFile,
+      targetFormat = ConvertibleFormat.JSON,
+      outputDir = tempDir,
+      ocrRunner = ocrRunner,
+    )
+    assertTrue(toJson.success)
+    val jsonContent = toJson.outputFile!!.readText()
+    assertTrue(jsonContent.contains("\"Grocery Receipt\""))
+    assertTrue(jsonContent.contains("\"Coffee Beans $12.00\""))
+
+    // 5. Image -> CSV & TSV & XML
+    for (structuredFormat in listOf(ConvertibleFormat.CSV, ConvertibleFormat.TSV, ConvertibleFormat.XML)) {
+      val res = FileConverterEngine.convertFile(
+        context = null,
+        sourceFile = imageFile,
+        targetFormat = structuredFormat,
+        outputDir = tempDir,
+        ocrRunner = ocrRunner,
+      )
+      assertTrue("Expected PNG -> ${structuredFormat.name} to succeed", res.success)
+      val text = res.outputFile!!.readText()
+      assertTrue(text.contains("Grocery Receipt"))
+      assertTrue(text.contains("Total $15.50"))
+    }
+  }
+
+  @Test
+  fun convertFile_pdfOcrMultiPageToTextMarkupAndStructuredData() = runTest {
+    val pdfFile = File(tempDir, "handbook.pdf").apply {
+      writeBytes("%PDF-1.4 mock".toByteArray(Charsets.UTF_8))
+    }
+
+    val page1 = CameraEngine.analyzeScannedDocumentText(
+      rawText = "Chapter 1: Getting Started\nWelcome to the handbook.",
+      fallbackTitle = "Page 1",
+    )
+    val page2 = CameraEngine.analyzeScannedDocumentText(
+      rawText = "Chapter 2: Advanced Usage\nConfigure settings and shortcuts.",
+      fallbackTitle = "Page 2",
+    )
+
+    val ocrRunner: suspend (File, ConvertibleFormat) -> List<CameraScannedDocument> = { _, _ ->
+      listOf(page1, page2)
+    }
+
+    // PDF -> TXT (multi-page markers)
+    val toTxt = FileConverterEngine.convertFile(
+      context = null,
+      sourceFile = pdfFile,
+      targetFormat = ConvertibleFormat.TXT,
+      outputDir = tempDir,
+      ocrRunner = ocrRunner,
+    )
+    assertTrue(toTxt.success)
+    val txtContent = toTxt.outputFile!!.readText()
+    assertTrue(txtContent.contains("--- Page 1 ---"))
+    assertTrue(txtContent.contains("--- Page 2 ---"))
+    assertTrue(txtContent.contains("Welcome to the handbook."))
+    assertTrue(txtContent.contains("Configure settings and shortcuts."))
+
+    // PDF -> MD (multi-page headings)
+    val toMd = FileConverterEngine.convertFile(
+      context = null,
+      sourceFile = pdfFile,
+      targetFormat = ConvertibleFormat.MD,
+      outputDir = tempDir,
+      ocrRunner = ocrRunner,
+    )
+    assertTrue(toMd.success)
+    val mdContent = toMd.outputFile!!.readText()
+    assertTrue(mdContent.contains("## Page 1"))
+    assertTrue(mdContent.contains("## Page 2"))
+
+    // PDF -> CSV (page column numbers)
+    val toCsv = FileConverterEngine.convertFile(
+      context = null,
+      sourceFile = pdfFile,
+      targetFormat = ConvertibleFormat.CSV,
+      outputDir = tempDir,
+      ocrRunner = ocrRunner,
+    )
+    assertTrue(toCsv.success)
+    val csvContent = toCsv.outputFile!!.readText()
+    assertTrue(csvContent.contains("page,block,line,title,text"))
+    assertTrue(csvContent.contains("Welcome to the handbook."))
+    assertTrue(csvContent.contains("Configure settings and shortcuts."))
   }
 }

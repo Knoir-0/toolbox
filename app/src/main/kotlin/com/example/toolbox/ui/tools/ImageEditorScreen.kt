@@ -301,7 +301,8 @@ fun ImageEditorScreen(
       OpenFileInitialView(
         onOpenFile = { filePickerLauncher.launch("image/*") },
         onUseSample = {
-          val sample = BitmapOperations.createSampleBitmap()
+          val sampleFile = FileManagerEngine.getOrCreateSampleImageFile(context)
+          val sample = decodeBitmapFromFile(sampleFile) ?: BitmapOperations.createSampleBitmap()
           originalBitmap = sample
           currentBitmap = sample
           history.clear()

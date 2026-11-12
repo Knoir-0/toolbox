@@ -160,7 +160,7 @@ enum class Tool(
     category = ToolCategory.AUDIO_AND_SOUND,
   ),
   FILE_CONVERTER(
-    title = "File Converter",
+    title = "Converter",
     icon = Icons.Default.SwapHoriz,
     category = ToolCategory.FILES_AND_STORAGE,
   ),

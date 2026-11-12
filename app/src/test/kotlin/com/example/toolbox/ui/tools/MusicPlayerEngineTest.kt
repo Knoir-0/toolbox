@@ -2,12 +2,17 @@ package com.example.toolbox.ui.tools
 
 import java.io.File
 import java.nio.file.Files
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -110,6 +115,42 @@ class MusicPlayerEngineTest {
   }
 
   @Test
+  fun mostPlayedPlaylist_andPlayStats_recordSerializeAndSortByCombinedPlaysAndPlaytime() {
+    val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+    val trackA = tracks[0] // Neon Horizon
+    val trackB = tracks[1] // Starlight Drive
+    val trackC = tracks[2] // Cybernetic Pulse
+
+    var stats = emptyMap<String, TrackPlayStats>()
+    // Track B played 3 times with 30s total listen time => score = 3 * 60_000 + 30_000 = 210_000
+    stats = MusicPlayerEngine.recordPlayStat(stats, trackB.id, incrementPlayCount = true, addedPlayTimeMs = 10_000L, timestampMs = 100L)
+    stats = MusicPlayerEngine.recordPlayStat(stats, trackB.id, incrementPlayCount = true, addedPlayTimeMs = 10_000L, timestampMs = 200L)
+    stats = MusicPlayerEngine.recordPlayStat(stats, trackB.id, incrementPlayCount = true, addedPlayTimeMs = 10_000L, timestampMs = 300L)
+
+    // Track C played 1 time but listened for 4 minutes (240_000 ms) => score = 1 * 60_000 + 240_000 = 300_000
+    stats = MusicPlayerEngine.recordPlayStat(stats, trackC.id, incrementPlayCount = true, addedPlayTimeMs = 240_000L, timestampMs = 400L)
+
+    // Track A played 1 time for 5s => score = 65_000
+    stats = MusicPlayerEngine.recordPlayStat(stats, trackA.id, incrementPlayCount = true, addedPlayTimeMs = 5_000L, timestampMs = 500L)
+
+    val mostPlayed = MusicPlayerEngine.buildMostPlayedPlaylist(stats, tracks)
+    assertEquals(MusicPlayerEngine.MOST_PLAYED_PLAYLIST_NAME, mostPlayed.name)
+    assertTrue(mostPlayed.isMostPlayed)
+    assertTrue(mostPlayed.isBuiltIn)
+    assertEquals(tracks.size, mostPlayed.songCount)
+    assertEquals(listOf(trackC.id, trackB.id, trackA.id), mostPlayed.tracks.take(3).map { it.id })
+
+    // Sort order MOST_PLAYED produces the same ranking
+    val sortedByMostPlayed = MusicPlayerEngine.sortTracks(tracks, MusicSortOrder.MOST_PLAYED, stats)
+    assertEquals(mostPlayed.tracks.map { it.id }, sortedByMostPlayed.map { it.id })
+
+    // Serialization & deserialization round-trip
+    val raw = MusicPlayerEngine.serializePlayStats(stats)
+    val restored = MusicPlayerEngine.deserializePlayStats(raw)
+    assertEquals(stats, restored)
+  }
+
+  @Test
   fun resolveTrackPalette_producesDistinctBackgroundColorsFollowingAlbumArt() {
     val synthTrack = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS.first { it.genre == "Synthwave" }
     val jazzTrack = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS.first { it.genre == "Jazz" }
@@ -201,6 +242,27 @@ class MusicPlayerEngineTest {
         currentPositionMs = 1_200L,
       )
     )
+
+    // Reordering queue items updates track positions and keeps currentQueueIndex pointed at the active track
+    val sampleQueue = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS.take(4)
+    val activeTrackId = sampleQueue[1].id
+    val (reordered1, newCur1) = MusicPlayerEngine.reorderQueue(
+      queue = sampleQueue,
+      fromIndex = 1,
+      toIndex = 3,
+      currentQueueIndex = 1,
+    )
+    assertEquals(3, newCur1)
+    assertEquals(activeTrackId, reordered1[newCur1].id)
+
+    val (reordered2, newCur2) = MusicPlayerEngine.reorderQueue(
+      queue = sampleQueue,
+      fromIndex = 0,
+      toIndex = 2,
+      currentQueueIndex = 1,
+    )
+    assertEquals(0, newCur2)
+    assertEquals(activeTrackId, reordered2[newCur2].id)
   }
 
   @Test
@@ -224,6 +286,23 @@ class MusicPlayerEngineTest {
       assertNotNull(parsedCustom)
       assertEquals("Daft Punk", parsedCustom!!.artist)
       assertEquals("Digital Love", parsedCustom.title)
+
+      // Default library loading scans the Music and Audio folders (ignoring Download)
+      val musicDir = File(tempDir, "Music").apply { mkdirs() }
+      val audioDir = File(tempDir, "Audio").apply { mkdirs() }
+      val downloadDir = File(tempDir, "Download").apply { mkdirs() }
+      wavFile.copyTo(File(musicDir, "MusicSong.wav"), overwrite = true)
+      wavFile.copyTo(File(audioDir, "AudioRecording.wav"), overwrite = true)
+      wavFile.copyTo(File(downloadDir, "DownloadedClip.wav"), overwrite = true)
+
+      val libraryTracks = MusicPlayerEngine.loadLibraryTracks(
+        rootDirectory = tempDir,
+        initialDirectory = null,
+        includeSamples = false,
+        inspectMetadataRetriever = false,
+      )
+      assertEquals(2, libraryTracks.size)
+      assertEquals(setOf("MusicSong", "AudioRecording"), libraryTracks.map { it.title }.toSet())
     } finally {
       tempDir.deleteRecursively()
     }
@@ -271,6 +350,48 @@ class MusicPlayerEngineTest {
       MusicPlayerEngine.clearArtworkCache()
       MusicPlayerEngine.clearTrackMetadataCache()
       tempDir.deleteRecursively()
+    }
+  }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun playbackSession_continuesPlayingAndAdvancesQueueInBackground() = runTest {
+    val testDispatcher = StandardTestDispatcher(testScheduler)
+    val sampleTracks = listOf(
+      MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS[0].copy(durationMs = 2_000L),
+      MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS[1].copy(durationMs = 2_000L),
+    )
+    val session = MusicPlaybackSession(
+      context = null,
+      initialTracks = sampleTracks,
+      isInspection = false,
+      coroutineContext = testDispatcher,
+    )
+    try {
+      assertFalse(session.isPlaying)
+      assertEquals(sampleTracks[0].id, session.currentTrack?.id)
+
+      // Start playing first track
+      session.playTrackInContext(sampleTracks[0], sampleTracks)
+      assertTrue(session.isPlaying)
+      assertEquals(0, session.currentQueueIndex)
+      assertEquals(0L, session.currentPositionMs)
+      assertEquals(1, session.playStats[sampleTracks[0].id]?.playCount)
+
+      // Advance time in background (simulating switching away from Music tool)
+      advanceTimeBy(1_000L)
+      assertTrue(session.isPlaying)
+      assertTrue(session.currentPositionMs > 0L)
+      assertTrue((session.playStats[sampleTracks[0].id]?.totalPlayTimeMs ?: 0L) >= 800L)
+
+      // Advance past the end of track 0 -> automatically steps to track 1 in background and keeps playing
+      advanceTimeBy(1_500L)
+      assertTrue(session.isPlaying)
+      assertEquals(1, session.currentQueueIndex)
+      assertEquals(sampleTracks[1].id, session.currentTrack?.id)
+      assertEquals(1, session.playStats[sampleTracks[1].id]?.playCount)
+    } finally {
+      session.release()
     }
   }
 }

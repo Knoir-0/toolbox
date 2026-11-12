@@ -67,6 +67,15 @@ data class ChordTuning(
 ) {
   val stringCount: Int get() = openStringMidi.size
 
+  val matchingTunerPreset: GuitarTuningPreset?
+    get() = GuitarTuningPreset.fromKey(id)
+
+  val displayLabel: String
+    get() = matchingTunerPreset?.label ?: name.substringBefore(" (").trim()
+
+  val tuningCategory: GuitarTuningCategory?
+    get() = matchingTunerPreset?.category
+
   fun effectiveMidi(stringIndex: Int, capoFret: Int = 0): Int {
     return openStringMidi[stringIndex] + capoFret.coerceIn(0, 12)
   }
@@ -89,6 +98,24 @@ data class ChordTuning(
       val midi = effectiveMidi(idx, capoFret)
       ChordBookEngine.formatMidiNote(midi, preference)
     }
+  }
+
+  fun matches(
+    query: String,
+    preference: EnharmonicPreference = EnharmonicPreference.AUTO,
+  ): Boolean {
+    val trimmed = query.trim()
+    if (trimmed.isEmpty()) return true
+    if (matchingTunerPreset?.matches(trimmed) == true) return true
+    val terms = trimmed.lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    val notesSpace = formattedNotes(0, preference)
+    val notesCompact = notesSpace.replace(" ", "")
+    val notesOctaves = formattedNotesWithOctaves(0, preference).joinToString(" ")
+    val catName = tuningCategory?.displayName.orEmpty()
+    val haystack =
+      "$name $displayLabel ${instrument.displayName} ${instrument.shortName} $notesSpace $notesCompact $notesOctaves $catName"
+        .lowercase()
+    return terms.all { haystack.contains(it) }
   }
 
   fun toJson(): JSONObject {
@@ -637,6 +664,45 @@ object ChordBookEngine {
     ChordTuning("mandolin_std", "Standard Fifths (G D A E)", InstrumentFamily.MANDOLIN, listOf(55, 62, 69, 76)),
     ChordTuning("mandolin_gdad", "GDAD Celtic (G D A D)", InstrumentFamily.MANDOLIN, listOf(55, 62, 69, 74)),
   )
+
+  fun isTuningFavorite(
+    tuning: ChordTuning,
+    favoriteIds: Set<String>,
+  ): Boolean {
+    val preset = tuning.matchingTunerPreset
+    return tuning.id in favoriteIds || (preset != null && (preset.name in favoriteIds || preset.chordTuningId in favoriteIds))
+  }
+
+  fun toggleFavoriteTuning(
+    currentFavoriteIds: Set<String>,
+    tuning: ChordTuning,
+  ): Set<String> {
+    val canonicalId = tuning.matchingTunerPreset?.chordTuningId ?: tuning.id
+    val presetName = tuning.matchingTunerPreset?.name
+    val isCurrentlyFav = isTuningFavorite(tuning, currentFavoriteIds)
+    val cleaned = currentFavoriteIds.filterNot {
+      it == tuning.id || it == canonicalId || (presetName != null && it == presetName)
+    }.toSet()
+    return if (isCurrentlyFav) cleaned else cleaned + canonicalId
+  }
+
+  fun searchTunings(
+    catalog: List<ChordTuning> = BUILT_IN_TUNINGS,
+    query: String = "",
+    instrument: InstrumentFamily? = null,
+    category: GuitarTuningCategory? = null,
+    favoritesOnly: Boolean = false,
+    favoriteIds: Set<String> = emptySet(),
+    preference: EnharmonicPreference = EnharmonicPreference.AUTO,
+  ): List<ChordTuning> {
+    val filtered = catalog.filter { tuning ->
+      (!favoritesOnly || isTuningFavorite(tuning, favoriteIds)) &&
+        (instrument == null || tuning.instrument == instrument) &&
+        (category == null || tuning.tuningCategory == category) &&
+        tuning.matches(query, preference)
+    }
+    return filtered.sortedByDescending { isTuningFavorite(it, favoriteIds) }
+  }
 
   fun defaultProgressions(): List<ChordProgression> = listOf(
     ChordProgression(

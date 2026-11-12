@@ -30,6 +30,11 @@ class CameraScreenTest {
       .edit()
       .clear()
       .commit()
+    composeTestRule.activity
+      .getSharedPreferences(SharedPreferencesNotesRepository.PREFS_NAME, Context.MODE_PRIVATE)
+      .edit()
+      .clear()
+      .commit()
     tempCameraDir = Files.createTempDirectory("camera_ui_test").toFile()
   }
 
@@ -54,6 +59,7 @@ class CameraScreenTest {
     composeTestRule.onNodeWithTag("camera_top_overlay").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_bottom_overlay").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_shutter_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_shutter_photo_icon", useUnmergedTree = true).assertIsDisplayed()
 
     // Verify viewfinder fills the entire stage viewport by default (Full aspect ratio)
     val stageBounds = composeTestRule.onNodeWithTag("camera_viewfinder_stage").fetchSemanticsNode().boundsInRoot
@@ -100,6 +106,7 @@ class CameraScreenTest {
     // Switch to Video mode and record a video clip
     composeTestRule.onNodeWithTag("mode_tab_VIDEO").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_shutter_video_dot_icon", useUnmergedTree = true).assertIsDisplayed()
 
     // Start recording
     composeTestRule.onNodeWithTag("camera_shutter_button").performClick()
@@ -154,5 +161,38 @@ class CameraScreenTest {
     composeTestRule.onNodeWithTag("generator_preview_canvas").assertIsDisplayed()
     composeTestRule.onNodeWithTag("close_create_code_button").performClick()
     composeTestRule.waitForIdle()
+
+    // Verify Note option is in the Photo/Video/Scan/Note selector and icon buttons moved down to camera shutter row
+    composeTestRule.onNodeWithTag("mode_tab_NOTE").assertIsDisplayed()
+    val selectorBounds = composeTestRule.onNodeWithTag("capture_mode_selector").fetchSemanticsNode().boundsInRoot
+    val shutterRowBounds = composeTestRule.onNodeWithTag("camera_shutter_row").fetchSemanticsNode().boundsInRoot
+    val adjustmentsBounds = composeTestRule.onNodeWithTag("toggle_adjustments_button").fetchSemanticsNode().boundsInRoot
+    val filtersBounds = composeTestRule.onNodeWithTag("toggle_filters_button").fetchSemanticsNode().boundsInRoot
+    assertTrue(adjustmentsBounds.top >= selectorBounds.bottom - 1f)
+    assertTrue(filtersBounds.top >= selectorBounds.bottom - 1f)
+    assertTrue(adjustmentsBounds.center.y >= shutterRowBounds.top && adjustmentsBounds.center.y <= shutterRowBounds.bottom)
+    assertTrue(filtersBounds.center.y >= shutterRowBounds.top && filtersBounds.center.y <= shutterRowBounds.bottom)
+
+    // Select Note mode, scan a document via OCR, and verify its contents are added to the Notes tool
+    composeTestRule.onNodeWithTag("mode_tab_NOTE").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_note_reticle_overlay").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("note_scanner_controls_bar").assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("camera_shutter_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("note_scanner_detected_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("note_scanner_saved_badge").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("note_scanner_detected_title").assertIsDisplayed()
+
+    val savedNotes = SharedPreferencesNotesRepository(composeTestRule.activity).loadNotes()
+    assertTrue(savedNotes.any { it.title == "Product Roadmap Sync" && it.labels.contains("Scanned") })
+
+    // Open Notes directly from the scanned note card and verify the scanned note is displayed in the Notes tool
+    composeTestRule.onNodeWithTag("note_scanner_open_notes_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("notes_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Product Roadmap Sync").assertIsDisplayed()
   }
 }

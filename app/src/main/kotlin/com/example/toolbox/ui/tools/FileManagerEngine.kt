@@ -958,13 +958,30 @@ object FileManagerEngine {
     return currentDirectory.absoluteFile.normalize().parentFile
   }
 
+  const val SAMPLES_VOLUME_ID = "samples_root"
+  const val SAMPLES_FOLDER_NAME = "Samples"
+
+  /**
+   * Resolves the dedicated Samples directory where all sample files in the app are stored.
+   */
+  fun getSamplesDirectory(context: android.content.Context? = null): File {
+    val baseDir = try {
+      context?.filesDir
+    } catch (_: Throwable) {
+      null
+    } ?: File(System.getProperty("java.io.tmpdir") ?: "/tmp", "toolbox_samples")
+    return File(baseDir, SAMPLES_FOLDER_NAME)
+  }
+
   /**
    * Discovers all available storage volumes on the device:
    * 1. Primary root folder (storage/emulated/0)
-   * 2. Connected external / removable storage devices (SD cards, USB OTG drives).
+   * 2. Samples folder (built-in sample files across all tools)
+   * 3. Connected external / removable storage devices (SD cards, USB OTG drives).
    */
   fun getStorageVolumes(context: android.content.Context?): List<StorageVolumeInfo> {
     val primaryRoot = getUserRootDirectory()
+    val samplesRoot = getSamplesDirectory(context)
     val volumes = mutableListOf(
       StorageVolumeInfo(
         id = "primary_root",
@@ -972,7 +989,14 @@ object FileManagerEngine {
         file = primaryRoot,
         isPrimary = true,
         isRemovable = false,
-      )
+      ),
+      StorageVolumeInfo(
+        id = SAMPLES_VOLUME_ID,
+        name = SAMPLES_FOLDER_NAME,
+        file = samplesRoot,
+        isPrimary = false,
+        isRemovable = false,
+      ),
     )
 
     if (context == null) return volumes
@@ -1336,62 +1360,232 @@ object FileManagerEngine {
   }
 
   /**
-   * Seeds default sample files and directories in [baseDir] if it is empty.
+   * Returns (and creates if missing) the sample PNG image inside `<samplesRoot>/Images/sample_image.png`.
    */
-  fun populateDefaultSampleFiles(baseDir: File) {
+  fun getOrCreateSampleImageFile(
+    context: android.content.Context? = null,
+    samplesRoot: File = getSamplesDirectory(context),
+  ): File {
+    val imagesDir = File(samplesRoot, "Images").apply { mkdirs() }
+    val targetFile = File(imagesDir, "sample_image.png")
+    if (targetFile.exists() && targetFile.length() > 64L) {
+      return targetFile
+    }
+    try {
+      val bmp = BitmapOperations.createSampleBitmap()
+      java.io.FileOutputStream(targetFile).use { out ->
+        bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+      }
+    } catch (_: Throwable) {}
+    if (!targetFile.exists() || targetFile.length() == 0L) {
+      GalleryEngine.writeSolidColorPng(
+        outputFile = targetFile,
+        red = 0x8E,
+        green = 0x66,
+        blue = 0xA6,
+        width = 128,
+        height = 128,
+      )
+    }
+    return targetFile
+  }
+
+  /**
+   * Returns (and creates if missing) the sample WAV audio clip inside `<samplesRoot>/Audio/sample_chord_arpeggio.wav`.
+   */
+  fun getOrCreateSampleAudioFile(
+    context: android.content.Context? = null,
+    samplesRoot: File = getSamplesDirectory(context),
+  ): File {
+    val audioDir = File(samplesRoot, "Audio").apply { mkdirs() }
+    val targetFile = File(audioDir, "sample_chord_arpeggio.wav")
+    if (targetFile.exists() && targetFile.length() > 44L) {
+      return targetFile
+    }
+    val buffer = AudioEditorEngine.createSampleAudioBuffer()
+    AudioEditorEngine.writeWavFile(buffer, targetFile)
+    return targetFile
+  }
+
+  /**
+   * Returns (and creates if missing) a playable sample music track inside `<samplesRoot>/Music/<Artist> - <Title>.wav`.
+   */
+  fun getOrCreateSampleMusicFile(
+    track: MusicTrack,
+    context: android.content.Context? = null,
+    samplesRoot: File = getSamplesDirectory(context),
+  ): File {
+    val musicDir = File(samplesRoot, "Music").apply { mkdirs() }
+    val fileName = "${track.artist} - ${track.title}.wav"
+    return MusicPlayerEngine.ensurePlayableSampleWavFile(
+      cacheDir = musicDir,
+      track = track,
+      targetDir = musicDir,
+      fileName = fileName,
+    )
+  }
+
+  /**
+   * Returns (and creates if missing) the sample PDF document inside `<samplesRoot>/Documents/sample_document.pdf`.
+   */
+  fun getOrCreateSamplePdfFile(
+    context: android.content.Context? = null,
+    samplesRoot: File = getSamplesDirectory(context),
+  ): File {
+    val docsDir = File(samplesRoot, "Documents").apply { mkdirs() }
+    val targetFile = File(docsDir, "sample_document.pdf")
+    if (targetFile.exists() && targetFile.length() > 32L) {
+      return targetFile
+    }
+    try {
+      PdfViewerEngine.generateSamplePdfFile(targetFile)
+    } catch (_: Throwable) {}
+    if (!targetFile.exists() || targetFile.length() == 0L) {
+      targetFile.writeText(
+        """
+        %PDF-1.4
+        1 0 obj
+        << /Type /Catalog /Pages 2 0 R >>
+        endobj
+        2 0 obj
+        << /Type /Pages /Kids [3 0 R] /Count 1 >>
+        endobj
+        3 0 obj
+        << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>
+        endobj
+        trailer
+        << /Root 1 0 R >>
+        %%EOF
+        """.trimIndent()
+      )
+    }
+    return targetFile
+  }
+
+  /**
+   * Returns (and creates if missing) the sample ZIP archive inside `<samplesRoot>/Archives/sample_project_bundle.zip`.
+   */
+  fun getOrCreateSampleArchiveFile(
+    context: android.content.Context? = null,
+    samplesRoot: File = getSamplesDirectory(context),
+  ): File {
+    val archivesDir = File(samplesRoot, "Archives").apply { mkdirs() }
+    val targetFile = File(archivesDir, "sample_project_bundle.zip")
+    if (targetFile.exists() && targetFile.length() > 64L) {
+      return targetFile
+    }
+    return ArchiveEngine.generateSampleArchive(archivesDir, "sample_project_bundle.zip")
+  }
+
+  /**
+   * Returns the target file path for the sample MP4 video inside `<samplesRoot>/Videos/sample_clip.mp4`.
+   */
+  fun getSampleVideoFile(
+    context: android.content.Context? = null,
+    samplesRoot: File = getSamplesDirectory(context),
+  ): File {
+    val videosDir = File(samplesRoot, "Videos").apply { mkdirs() }
+    return File(videosDir, "sample_clip.mp4")
+  }
+
+  /**
+   * Seeds default sample files and directories in [baseDir], organizing all sample files across
+   * the app into categorized subfolders (`Documents/`, `Notes/`, `Images/`, `Audio/`, `Music/`,
+   * `Videos/`, and `Archives/`).
+   */
+  fun populateDefaultSampleFiles(
+    baseDir: File,
+    context: android.content.Context? = null,
+  ) {
     if (!baseDir.exists()) baseDir.mkdirs()
-    val existing = baseDir.listFiles()
-    if (existing != null && existing.isNotEmpty()) return
 
     val welcomeFile = File(baseDir, "Welcome.txt")
-    welcomeFile.writeText(
-      """
-      Welcome to the Toolbox Files Manager!
-      =====================================
-      
-      Here you can:
-      - Browse, create, and organize folders
-      - Create and edit text and markdown files
-      - Preview images and photos
-      - Inspect file metadata and MD5 checksums
-      - Copy, rename, share, and delete files
-      - Import files from your device storage
-      
-      Enjoy exploring!
-      """.trimIndent()
-    )
+    if (!welcomeFile.exists()) {
+      welcomeFile.writeText(
+        """
+        Welcome to the Toolbox Samples Folder!
+        ======================================
+        
+        All sample files across Toolbox are organized here:
+        - Documents/  — Sample PDF document, Markdown notes, and JSON config
+        - Notes/      — Sample plain-text checklists
+        - Images/     — Sample PNG artwork for Image Editor & Converter
+        - Videos/     — Sample MP4 clip for Video Editor
+        - Audio/      — Sample WAV chord arpeggio for Audio Editor
+        - Music/      — Sample synthesized music tracks for Music Player
+        - Archives/   — Sample ZIP project bundle for Archives
+        
+        Tap any file or open its context menu to preview, edit, or convert it!
+        """.trimIndent()
+      )
+    }
 
-    val docsDir = File(baseDir, "Documents")
-    docsDir.mkdirs()
-    File(docsDir, "QuickNotes.md").writeText(
-      """
-      # Quick Notes
-      
-      - [x] Integrate Files tool into Toolbox
-      - [x] Support text viewing and editing
-      - [x] Add image preview and MD5 calculation
-      - [ ] Add more cool tools to Toolbox!
-      """.trimIndent()
-    )
-    File(docsDir, "Config.json").writeText(
-      """
-      {
-        "appName": "Toolbox",
-        "version": "1.0",
-        "features": ["Calculator", "Unit Converter", "Dice Roller", "Files"]
-      }
-      """.trimIndent()
-    )
+    val docsDir = File(baseDir, "Documents").apply { mkdirs() }
+    val quickNotesFile = File(docsDir, "QuickNotes.md")
+    if (!quickNotesFile.exists()) {
+      quickNotesFile.writeText(
+        """
+        # Quick Notes
+        
+        - [x] Integrate Files tool into Toolbox
+        - [x] Support text viewing and editing
+        - [x] Add image preview and MD5 calculation
+        - [x] Centralize all app samples into the Samples folder
+        """.trimIndent()
+      )
+    }
+    val configFile = File(docsDir, "Config.json")
+    if (!configFile.exists()) {
+      configFile.writeText(
+        """
+        {
+          "appName": "Toolbox",
+          "version": "1.0",
+          "features": ["Calculator", "Unit Converter", "Dice Roller", "Files"]
+        }
+        """.trimIndent()
+      )
+    }
+    getOrCreateSamplePdfFile(context = context, samplesRoot = baseDir)
 
-    val notesDir = File(baseDir, "Notes")
-    notesDir.mkdirs()
-    File(notesDir, "ShoppingList.txt").writeText(
-      """
-      - Apples
-      - Coffee beans
-      - Notebook
-      - USB-C cable
-      """.trimIndent()
-    )
+    val notesDir = File(baseDir, "Notes").apply { mkdirs() }
+    val shoppingListFile = File(notesDir, "ShoppingList.txt")
+    if (!shoppingListFile.exists()) {
+      shoppingListFile.writeText(
+        """
+        - Apples
+        - Coffee beans
+        - Notebook
+        - USB-C cable
+        """.trimIndent()
+      )
+    }
+
+    getOrCreateSampleImageFile(context = context, samplesRoot = baseDir)
+    getOrCreateSampleAudioFile(context = context, samplesRoot = baseDir)
+    getOrCreateSampleArchiveFile(context = context, samplesRoot = baseDir)
+    File(baseDir, "Videos").mkdirs()
+
+    val musicDir = File(baseDir, "Music").apply { mkdirs() }
+    MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS.forEach { track ->
+      getOrCreateSampleMusicFile(track = track, context = context, samplesRoot = baseDir)
+    }
+
+    // Clean up any legacy cache sample directories if context is provided
+    if (context != null) {
+      try {
+        val cacheDir = context.cacheDir
+        val legacyVideo = File(cacheDir, "video_editor_samples/sample_clip.mp4")
+        val targetVideo = getSampleVideoFile(context = context, samplesRoot = baseDir)
+        if (legacyVideo.exists() && legacyVideo.length() > 1024L && !targetVideo.exists()) {
+          legacyVideo.copyTo(targetVideo, overwrite = true)
+        }
+        File(cacheDir, "video_editor_samples").deleteRecursively()
+        File(cacheDir, "sample_archives").deleteRecursively()
+        File(cacheDir, "converter_samples").deleteRecursively()
+        File(cacheDir, "music_player_samples").deleteRecursively()
+        File(cacheDir, "sample_document.pdf").delete()
+      } catch (_: Throwable) {}
+    }
   }
 }
