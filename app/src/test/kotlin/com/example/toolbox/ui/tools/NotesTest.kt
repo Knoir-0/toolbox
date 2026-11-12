@@ -1,7 +1,10 @@
 package com.example.toolbox.ui.tools
 
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import junit.framework.TestCase.assertEquals
 import junit.framework.TestCase.assertFalse
+import junit.framework.TestCase.assertNull
 import junit.framework.TestCase.assertTrue
 import org.junit.Test
 
@@ -267,5 +270,81 @@ class NotesTest {
     assertEquals(listOf("personal"), remainingLabels)
     assertTrue(afterLabelDelete.all { "work" !in it.labels })
     assertTrue(afterLabelDelete.all { "urgent" in it.labels })
+  }
+
+  @Test
+  fun reorderNotes_rearrangesNotesAndFilterPreservesManualArrangement() {
+    val n1 = NoteItem(id = "n1", title = "First", updatedAt = 100L)
+    val n2 = NoteItem(id = "n2", title = "Second", updatedAt = 300L)
+    val n3 = NoteItem(id = "n3", title = "Third", updatedAt = 200L)
+    val initial = listOf(n1, n2, n3)
+
+    // Move n1 to n3's position
+    val reordered = NotesEngine.reorderNotes(initial, fromNoteId = "n1", toNoteId = "n3")
+    assertEquals(listOf("n2", "n3", "n1"), reordered.map { it.id })
+
+    // filterNotes preserves manual arrangement rather than overriding with updatedAt
+    val filtered = NotesEngine.filterNotes(reordered, filter = NotesFilter.All)
+    assertEquals(listOf("n2", "n3", "n1"), filtered.others.map { it.id })
+
+    // Move n1 back to the top
+    val movedBack = NotesEngine.reorderNotes(reordered, fromNoteId = "n1", toNoteId = "n2")
+    assertEquals(listOf("n1", "n2", "n3"), movedBack.map { it.id })
+  }
+
+  @Test
+  fun findTargetNoteId_resolvesTargetsInBothGridAndListViewsWithoutOscillation() {
+    val n1 = NoteItem(id = "n1", title = "Short Note")
+    val n2 = NoteItem(id = "n2", title = "Tall Note")
+    val section = listOf(n1, n2)
+
+    // 1. List view (1 column) with variable heights (n1 = 100px, n2 = 300px)
+    val listBounds = mutableMapOf(
+      "n1" to Rect(0f, 0f, 400f, 100f),
+      "n2" to Rect(0f, 110f, 400f, 410f),
+    )
+
+    // Dragging n1 down to n2's center (y = 260f) triggers swap
+    val targetInList = findTargetNoteId(
+      draggedNoteId = "n1",
+      point = Offset(200f, 260f),
+      sectionNotes = section,
+      cardBounds = listBounds,
+      isGridView = false,
+    )
+    assertEquals("n2", targetInList)
+
+    val reorderedList = listOf(n2, n1)
+    updateSectionCardBoundsOptimistically(
+      oldSectionNotes = section,
+      newSectionNotes = reorderedList,
+      cardBounds = listBounds,
+      isGridView = false,
+      verticalSpacingPx = 10f,
+    )
+
+    // Holding finger at y = 260f after swap does NOT oscillate back
+    val afterSwapInList = findTargetNoteId(
+      draggedNoteId = "n1",
+      point = Offset(200f, 260f),
+      sectionNotes = reorderedList,
+      cardBounds = listBounds,
+      isGridView = false,
+    )
+    assertNull(afterSwapInList)
+
+    // 2. Grid view (2 columns) horizontal drag
+    val gridBounds = mutableMapOf(
+      "n1" to Rect(0f, 0f, 195f, 120f),
+      "n2" to Rect(205f, 0f, 400f, 120f),
+    )
+    val targetInGrid = findTargetNoteId(
+      draggedNoteId = "n1",
+      point = Offset(302.5f, 60f),
+      sectionNotes = section,
+      cardBounds = gridBounds,
+      isGridView = true,
+    )
+    assertEquals("n2", targetInGrid)
   }
 }

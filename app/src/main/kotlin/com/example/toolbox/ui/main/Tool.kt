@@ -6,7 +6,9 @@ import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Mic
@@ -17,6 +19,7 @@ import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsRemote
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.SquareFoot
 import androidx.compose.material.icons.filled.Straighten
@@ -156,9 +159,29 @@ enum class Tool(
     icon = Icons.Default.SwapHoriz,
     category = ToolCategory.FILES_AND_STORAGE,
   ),
+  DECIBEL_METER(
+    title = "Decibel Meter",
+    icon = Icons.Default.Speed,
+    category = ToolCategory.AUDIO_AND_SOUND,
+  ),
+  ARCHIVE(
+    title = "Archive",
+    icon = Icons.Default.FolderZip,
+    category = ToolCategory.FILES_AND_STORAGE,
+  ),
+  MUSIC(
+    title = "Music",
+    icon = Icons.Default.Headphones,
+    category = ToolCategory.AUDIO_AND_SOUND,
+  ),
   SETTINGS(
     title = "Settings",
     icon = Icons.Default.Settings,
     category = ToolCategory.SYSTEM,
   ),
+  ;
+
+  companion object {
+    val MUSIC_PLAYER: Tool get() = MUSIC
+  }
 }

@@ -694,7 +694,39 @@ object NotesEngine {
   }
 
   /**
-   * Filters and searches [notes] according to [filter], [searchQuery], and [colorFilter].
+   * Moves the note with [fromNoteId] to the position of [toNoteId] in [notes].
+   */
+  fun reorderNotes(
+    notes: List<NoteItem>,
+    fromNoteId: String,
+    toNoteId: String,
+  ): List<NoteItem> {
+    if (fromNoteId == toNoteId) return notes
+    val fromIndex = notes.indexOfFirst { it.id == fromNoteId }
+    val toIndex = notes.indexOfFirst { it.id == toNoteId }
+    return reorderNotes(notes, fromIndex, toIndex)
+  }
+
+  /**
+   * Moves a note from [fromIndex] to [toIndex] in [notes].
+   */
+  fun reorderNotes(
+    notes: List<NoteItem>,
+    fromIndex: Int,
+    toIndex: Int,
+  ): List<NoteItem> {
+    if (fromIndex !in notes.indices || toIndex !in notes.indices || fromIndex == toIndex) {
+      return notes
+    }
+    val mutable = notes.toMutableList()
+    val moved = mutable.removeAt(fromIndex)
+    mutable.add(toIndex, moved)
+    return mutable.toList()
+  }
+
+  /**
+   * Filters and searches [notes] according to [filter], [searchQuery], and [colorFilter],
+   * preserving the arrangement order of [notes].
    */
   fun filterNotes(
     notes: List<NoteItem>,
@@ -732,20 +764,18 @@ object NotesEngine {
       }
     }
 
-    val sorted = matchesSearch.sortedByDescending { it.updatedAt }
-
     // Partition into Pinned and Others when not viewing Archive or Trash or Pinned-only
     return when (filter) {
       NotesFilter.Archived, NotesFilter.Trash -> FilteredNotesResult(
         pinned = emptyList(),
-        others = sorted,
+        others = matchesSearch,
       )
       NotesFilter.Pinned -> FilteredNotesResult(
-        pinned = sorted,
+        pinned = matchesSearch,
         others = emptyList(),
       )
       else -> {
-        val (pinned, others) = sorted.partition { it.isPinned }
+        val (pinned, others) = matchesSearch.partition { it.isPinned }
         FilteredNotesResult(pinned = pinned, others = others)
       }
     }

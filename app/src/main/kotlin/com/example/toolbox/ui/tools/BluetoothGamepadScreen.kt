@@ -66,8 +66,10 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -93,8 +95,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.toolbox.ui.theme.ToolboxTheme
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -105,12 +109,21 @@ import kotlinx.coroutines.launch
 /** All input the gamepad UI can emit. Implemented by [BluetoothRemoteViewModel] in production. */
 interface GamepadInputActions {
   fun setButton(button: GamepadButton, pressed: Boolean)
+  fun updateDpad(previous: Set<GamepadButton>, current: Set<GamepadButton>) {
+    for (button in previous - current) {
+      setButton(button, false)
+    }
+    for (button in current - previous) {
+      setButton(button, true)
+    }
+  }
   fun setLeftJoystick(x: Float, y: Float)
   fun setRightJoystick(x: Float, y: Float)
 }
 
 private class ViewModelGamepadActions(private val vm: BluetoothRemoteViewModel) : GamepadInputActions {
   override fun setButton(button: GamepadButton, pressed: Boolean) = vm.setGamepadButton(button, pressed)
+  override fun updateDpad(previous: Set<GamepadButton>, current: Set<GamepadButton>) = vm.setGamepadDpad(current)
   override fun setLeftJoystick(x: Float, y: Float) = vm.setLeftJoystick(x, y)
   override fun setRightJoystick(x: Float, y: Float) = vm.setRightJoystick(x, y)
 }
@@ -627,26 +640,78 @@ private fun MinusPlusCluster(
 }
 
 // =================================================================================================
-// Left D-Pad
+// Left D-Pad (8-way with equal 45° sectors, rolling support, rim indicator & bridging corner chevrons)
 // =================================================================================================
 
-internal fun gamepadDpadButtonForOffset(offset: Offset, sizePx: Float): GamepadButton? {
-  if (sizePx <= 0f) return null
-  val cx = sizePx / 2f
-  val cy = sizePx / 2f
-  val dx = offset.x - cx
-  val dy = offset.y - cy
-  val dist = sqrt(dx * dx + dy * dy)
-  val radius = sizePx / 2f
-  if (dist > radius) return null
-  // Small center hub dead-zone
-  if (dist < radius * 0.20f) return null
+internal enum class DpadSector(
+  val centerAngleDeg: Float,
+  val buttons: Set<GamepadButton>,
+) {
+  RIGHT(0f, setOf(GamepadButton.DPAD_RIGHT)),
+  DOWN_RIGHT(45f, setOf(GamepadButton.DPAD_DOWN, GamepadButton.DPAD_RIGHT)),
+  DOWN(90f, setOf(GamepadButton.DPAD_DOWN)),
+  DOWN_LEFT(135f, setOf(GamepadButton.DPAD_DOWN, GamepadButton.DPAD_LEFT)),
+  LEFT(180f, setOf(GamepadButton.DPAD_LEFT)),
+  UP_LEFT(-135f, setOf(GamepadButton.DPAD_UP, GamepadButton.DPAD_LEFT)),
+  UP(-90f, setOf(GamepadButton.DPAD_UP)),
+  UP_RIGHT(-45f, setOf(GamepadButton.DPAD_UP, GamepadButton.DPAD_RIGHT)),
+}
 
-  return if (abs(dx) <= abs(dy)) {
-    if (dy < 0f) GamepadButton.DPAD_UP else GamepadButton.DPAD_DOWN
-  } else {
-    if (dx < 0f) GamepadButton.DPAD_LEFT else GamepadButton.DPAD_RIGHT
+private const val DPAD_DEAD_ZONE_RATIO = 0.20f
+private const val DPAD_HALF_SECTOR_DEG = 22.5f
+private const val DPAD_HYSTERESIS_DEG = 3.5f
+
+private fun angularDistanceDeg(a: Float, b: Float): Float {
+  var diff = (a - b) % 360f
+  if (diff > 180f) diff -= 360f
+  if (diff < -180f) diff += 360f
+  return abs(diff)
+}
+
+/**
+ * Maps a touch [offset] inside (or rolling around) a square D-Pad box of [sizePx] into the
+ * active set of cardinal [GamepadButton]s (`1` button for cardinals, `2` for diagonals, or empty
+ * in the center dead-zone / outside initial bounds).
+ *
+ * Uses 8 equal 45° sectors. When [allowOutsideBounds] is true (during an active roll/drag),
+ * touches that sweep outside the circular outer radius remain active along their angle.
+ * When [previousButtons] is non-empty, applies a small angular hysteresis window to prevent
+ * sector boundary flicker while rolling.
+ */
+internal fun gamepadDpadButtonsForOffset(
+  offset: Offset,
+  sizePx: Float,
+  allowOutsideBounds: Boolean = false,
+  previousButtons: Set<GamepadButton> = emptySet(),
+): Set<GamepadButton> {
+  if (sizePx <= 0f) return emptySet()
+  val radius = sizePx / 2f
+  val dx = offset.x - radius
+  val dy = offset.y - radius
+  val dist = sqrt(dx * dx + dy * dy)
+  if (!allowOutsideBounds && dist > radius) return emptySet()
+  // Small center hub dead-zone
+  if (dist < radius * DPAD_DEAD_ZONE_RATIO) return emptySet()
+
+  val angleDeg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
+
+  if (previousButtons.isNotEmpty()) {
+    val previousSector = DpadSector.entries.firstOrNull { it.buttons == previousButtons }
+    if (previousSector != null &&
+      angularDistanceDeg(angleDeg, previousSector.centerAngleDeg) <= DPAD_HALF_SECTOR_DEG + DPAD_HYSTERESIS_DEG
+    ) {
+      return previousSector.buttons
+    }
   }
+
+  val normalized = ((angleDeg % 360f) + 360f) % 360f
+  val sectorIndex = (((normalized + DPAD_HALF_SECTOR_DEG) % 360f) / 45f).toInt().coerceIn(0, 7)
+  return DpadSector.entries[sectorIndex].buttons
+}
+
+internal fun gamepadDpadButtonForOffset(offset: Offset, sizePx: Float): GamepadButton? {
+  val buttons = gamepadDpadButtonsForOffset(offset, sizePx)
+  return buttons.singleOrNull()
 }
 
 @Composable
@@ -658,10 +723,26 @@ private fun GamepadDPad(
   val housingColor = MaterialTheme.colorScheme.surfaceContainerLow
   val crossColor = MaterialTheme.colorScheme.surfaceContainerHigh
   val outlineColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+  val bridgeTrackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+  val activeBridgeColor = MaterialTheme.colorScheme.primaryContainer
+  val primaryColor = MaterialTheme.colorScheme.primary
   val haptics = LocalHapticFeedback.current
   val coroutineScope = rememberCoroutineScope()
   val currentActions by rememberUpdatedState(actions)
-  var activeButton by remember { mutableStateOf<GamepadButton?>(null) }
+  var activeButtons by remember { mutableStateOf<Set<GamepadButton>>(emptySet()) }
+  var touchOffset by remember { mutableStateOf<Offset?>(null) }
+
+  val upPressed = GamepadButton.DPAD_UP in activeButtons
+  val downPressed = GamepadButton.DPAD_DOWN in activeButtons
+  val leftPressed = GamepadButton.DPAD_LEFT in activeButtons
+  val rightPressed = GamepadButton.DPAD_RIGHT in activeButtons
+
+  val upLeftActive = upPressed && leftPressed
+  val upRightActive = upPressed && rightPressed
+  val downLeftActive = downPressed && leftPressed
+  val downRightActive = downPressed && rightPressed
+
+  val cornerOffset = size * 0.27f
 
   Box(
     modifier = modifier
@@ -671,16 +752,28 @@ private fun GamepadDPad(
       .border(1.dp, outlineColor, CircleShape)
       .testTag("bt_gamepad_dpad")
       .pointerInput(Unit) {
+        var releaseJob: Job? = null
         awaitEachGesture {
           val down = awaitFirstDown(requireUnconsumed = false)
           down.consume()
+          releaseJob?.cancel()
+          releaseJob = null
           val sizePx = this.size.width.toFloat()
-          val initial = gamepadDpadButtonForOffset(down.position, sizePx)
-          var current: GamepadButton? = initial
-          activeButton = initial
-          if (initial != null) {
+          val previouslyActive = activeButtons
+          val initial = gamepadDpadButtonsForOffset(
+            offset = down.position,
+            sizePx = sizePx,
+            allowOutsideBounds = false,
+            previousButtons = emptySet(),
+          )
+          var current: Set<GamepadButton> = initial
+          activeButtons = initial
+          touchOffset = down.position
+          if (initial != previouslyActive) {
+            currentActions.updateDpad(previouslyActive, initial)
+          }
+          if (initial.isNotEmpty()) {
             haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
-            currentActions.setButton(initial, true)
           }
           val pressStartTime = System.currentTimeMillis()
 
@@ -692,42 +785,60 @@ private fun GamepadDPad(
               break
             }
             change.consume()
-            val next = gamepadDpadButtonForOffset(change.position, sizePx)
+            touchOffset = change.position
+            val next = gamepadDpadButtonsForOffset(
+              offset = change.position,
+              sizePx = sizePx,
+              allowOutsideBounds = true,
+              previousButtons = current,
+            )
             if (next != current) {
-              if (current != null) {
-                currentActions.setButton(current, false)
-              }
+              currentActions.updateDpad(current, next)
               current = next
-              activeButton = next
-              if (next != null) {
+              activeButtons = next
+              if (next.isNotEmpty()) {
                 haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
-                currentActions.setButton(next, true)
               }
             }
           }
 
-          val releasedButton = current
-          if (releasedButton != null) {
+          touchOffset = null
+          val releasedButtons = current
+          if (releasedButtons.isNotEmpty()) {
             val elapsed = System.currentTimeMillis() - pressStartTime
             if (elapsed < 45L) {
-              coroutineScope.launch {
+              releaseJob = coroutineScope.launch {
                 delay(45L - elapsed)
-                activeButton = null
-                currentActions.setButton(releasedButton, false)
+                activeButtons = emptySet()
+                currentActions.updateDpad(releasedButtons, emptySet())
               }
             } else {
-              activeButton = null
-              currentActions.setButton(releasedButton, false)
+              activeButtons = emptySet()
+              currentActions.updateDpad(releasedButtons, emptySet())
             }
           } else {
-            activeButton = null
+            activeButtons = emptySet()
           }
         }
       },
     contentAlignment = Alignment.Center,
   ) {
-    // Draw cross background inside the circular D-Pad well
+    // Draw cross background, diagonal bridging arcs, and Option B dynamic rim/thumb indicator
     Canvas(modifier = Modifier.fillMaxSize()) {
+      val center = Offset(this.size.width / 2f, this.size.height / 2f)
+      val outerRadius = this.size.minDimension / 2f
+      val bridgeRadius = outerRadius * 0.68f
+      val bridgeTopLeft = Offset(center.x - bridgeRadius, center.y - bridgeRadius)
+      val bridgeSize = Size(bridgeRadius * 2f, bridgeRadius * 2f)
+
+      // Subtle guide ring connecting cardinal arms through the diagonal corner chevrons
+      drawCircle(
+        color = bridgeTrackColor,
+        radius = bridgeRadius,
+        center = center,
+        style = Stroke(width = 1.5.dp.toPx()),
+      )
+
       val armThickness = this.size.width * 0.34f
       val armLength = this.size.width * 0.88f
       val corner = CornerRadius(10.dp.toPx(), 10.dp.toPx())
@@ -745,13 +856,159 @@ private fun GamepadDPad(
         size = Size(armLength, armThickness),
         cornerRadius = corner,
       )
+
+      // Active diagonal bridge bands connecting the two lit cardinal arms through the corner chevron
+      val bridgeStroke = Stroke(width = 20.dp.toPx(), cap = StrokeCap.Round)
+      if (upRightActive) {
+        drawArc(
+          color = activeBridgeColor,
+          startAngle = -90f,
+          sweepAngle = 90f,
+          useCenter = false,
+          topLeft = bridgeTopLeft,
+          size = bridgeSize,
+          style = bridgeStroke,
+        )
+      }
+      if (downRightActive) {
+        drawArc(
+          color = activeBridgeColor,
+          startAngle = 0f,
+          sweepAngle = 90f,
+          useCenter = false,
+          topLeft = bridgeTopLeft,
+          size = bridgeSize,
+          style = bridgeStroke,
+        )
+      }
+      if (downLeftActive) {
+        drawArc(
+          color = activeBridgeColor,
+          startAngle = 90f,
+          sweepAngle = 90f,
+          useCenter = false,
+          topLeft = bridgeTopLeft,
+          size = bridgeSize,
+          style = bridgeStroke,
+        )
+      }
+      if (upLeftActive) {
+        drawArc(
+          color = activeBridgeColor,
+          startAngle = 180f,
+          sweepAngle = 90f,
+          useCenter = false,
+          topLeft = bridgeTopLeft,
+          size = bridgeSize,
+          style = bridgeStroke,
+        )
+      }
+
+      // Option B: Dynamic outer rim arc & floating thumb contact indicator while pressing/rolling
+      val currentTouch = touchOffset
+      val activeSector = DpadSector.entries.firstOrNull { it.buttons == activeButtons }
+      if (activeSector != null) {
+        val contactAngleDeg = if (currentTouch != null) {
+          val dx = currentTouch.x - center.x
+          val dy = currentTouch.y - center.y
+          if (sqrt(dx * dx + dy * dy) >= outerRadius * DPAD_DEAD_ZONE_RATIO) {
+            Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
+          } else {
+            activeSector.centerAngleDeg
+          }
+        } else {
+          activeSector.centerAngleDeg
+        }
+
+        val rimInset = 3.dp.toPx()
+        drawArc(
+          color = primaryColor,
+          startAngle = contactAngleDeg - 22.5f,
+          sweepAngle = 45f,
+          useCenter = false,
+          topLeft = Offset(rimInset, rimInset),
+          size = Size(this.size.width - rimInset * 2f, this.size.height - rimInset * 2f),
+          style = Stroke(width = 3.5.dp.toPx(), cap = StrokeCap.Round),
+        )
+      }
+
+      if (currentTouch != null && activeButtons.isNotEmpty()) {
+        val dx = currentTouch.x - center.x
+        val dy = currentTouch.y - center.y
+        val dist = sqrt(dx * dx + dy * dy)
+        val maxContactRadius = outerRadius * 0.76f
+        val clampedCenter = if (dist > maxContactRadius && dist > 0f) {
+          Offset(
+            center.x + (dx / dist) * maxContactRadius,
+            center.y + (dy / dist) * maxContactRadius,
+          )
+        } else {
+          currentTouch
+        }
+        drawCircle(
+          color = primaryColor.copy(alpha = 0.22f),
+          radius = 13.dp.toPx(),
+          center = clampedCenter,
+        )
+        drawCircle(
+          color = primaryColor.copy(alpha = 0.55f),
+          radius = 6.dp.toPx(),
+          center = clampedCenter,
+        )
+      }
     }
+
+    // 4 Diagonal Corner Chevrons that bridge adjacent cardinal directions
+    GamepadDPadCornerChevron(
+      label = "Up Left",
+      buttons = DpadSector.UP_LEFT.buttons,
+      dirX = -1f,
+      dirY = -1f,
+      isPressed = upLeftActive,
+      isAdjacentPressed = upPressed || leftPressed,
+      actions = actions,
+      modifier = Modifier.offset(x = -cornerOffset, y = -cornerOffset),
+      tag = "bt_gamepad_dpad_up_left",
+    )
+    GamepadDPadCornerChevron(
+      label = "Up Right",
+      buttons = DpadSector.UP_RIGHT.buttons,
+      dirX = 1f,
+      dirY = -1f,
+      isPressed = upRightActive,
+      isAdjacentPressed = upPressed || rightPressed,
+      actions = actions,
+      modifier = Modifier.offset(x = cornerOffset, y = -cornerOffset),
+      tag = "bt_gamepad_dpad_up_right",
+    )
+    GamepadDPadCornerChevron(
+      label = "Down Left",
+      buttons = DpadSector.DOWN_LEFT.buttons,
+      dirX = -1f,
+      dirY = 1f,
+      isPressed = downLeftActive,
+      isAdjacentPressed = downPressed || leftPressed,
+      actions = actions,
+      modifier = Modifier.offset(x = -cornerOffset, y = cornerOffset),
+      tag = "bt_gamepad_dpad_down_left",
+    )
+    GamepadDPadCornerChevron(
+      label = "Down Right",
+      buttons = DpadSector.DOWN_RIGHT.buttons,
+      dirX = 1f,
+      dirY = 1f,
+      isPressed = downRightActive,
+      isAdjacentPressed = downPressed || rightPressed,
+      actions = actions,
+      modifier = Modifier.offset(x = cornerOffset, y = cornerOffset),
+      tag = "bt_gamepad_dpad_down_right",
+    )
 
     GamepadDPadArrow(
       icon = Icons.Default.KeyboardArrowUp,
       label = "Up",
       button = GamepadButton.DPAD_UP,
-      isPressed = activeButton == GamepadButton.DPAD_UP,
+      isPressed = upPressed,
       actions = actions,
       alignment = Alignment.TopCenter,
       tag = "bt_gamepad_dpad_up",
@@ -760,7 +1017,7 @@ private fun GamepadDPad(
       icon = Icons.Default.KeyboardArrowDown,
       label = "Down",
       button = GamepadButton.DPAD_DOWN,
-      isPressed = activeButton == GamepadButton.DPAD_DOWN,
+      isPressed = downPressed,
       actions = actions,
       alignment = Alignment.BottomCenter,
       tag = "bt_gamepad_dpad_down",
@@ -769,7 +1026,7 @@ private fun GamepadDPad(
       icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
       label = "Left",
       button = GamepadButton.DPAD_LEFT,
-      isPressed = activeButton == GamepadButton.DPAD_LEFT,
+      isPressed = leftPressed,
       actions = actions,
       alignment = Alignment.CenterStart,
       tag = "bt_gamepad_dpad_left",
@@ -778,7 +1035,7 @@ private fun GamepadDPad(
       icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
       label = "Right",
       button = GamepadButton.DPAD_RIGHT,
-      isPressed = activeButton == GamepadButton.DPAD_RIGHT,
+      isPressed = rightPressed,
       actions = actions,
       alignment = Alignment.CenterEnd,
       tag = "bt_gamepad_dpad_right",
@@ -791,6 +1048,78 @@ private fun GamepadDPad(
         .clip(CircleShape)
         .background(MaterialTheme.colorScheme.surfaceContainerHighest),
     )
+  }
+}
+
+@Composable
+private fun BoxScope.GamepadDPadCornerChevron(
+  label: String,
+  buttons: Set<GamepadButton>,
+  dirX: Float,
+  dirY: Float,
+  isPressed: Boolean,
+  isAdjacentPressed: Boolean,
+  actions: GamepadInputActions,
+  modifier: Modifier = Modifier,
+  tag: String,
+) {
+  val containerColor = when {
+    isPressed -> MaterialTheme.colorScheme.primaryContainer
+    isAdjacentPressed -> MaterialTheme.colorScheme.surfaceContainerHighest
+    else -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.75f)
+  }
+  val borderColor = when {
+    isPressed -> MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
+    isAdjacentPressed -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+    else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+  }
+  val chevronColor = when {
+    isPressed -> MaterialTheme.colorScheme.onPrimaryContainer
+    isAdjacentPressed -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+    else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+  }
+
+  Box(
+    modifier = modifier
+      .align(Alignment.Center)
+      .size(28.dp)
+      .clip(RoundedCornerShape(8.dp))
+      .background(containerColor)
+      .border(1.dp, borderColor, RoundedCornerShape(8.dp))
+      .semantics {
+        role = Role.Button
+        contentDescription = label
+        onClick {
+          actions.updateDpad(emptySet(), buttons)
+          actions.updateDpad(buttons, emptySet())
+          true
+        }
+      }
+      .testTag(tag),
+    contentAlignment = Alignment.Center,
+  ) {
+    Canvas(modifier = Modifier.size(14.dp)) {
+      val cx = this.size.width / 2f
+      val cy = this.size.height / 2f
+      val tipOffset = this.size.width * 0.28f
+      val armLength = this.size.width * 0.44f
+      val tipX = cx + dirX * tipOffset
+      val tipY = cy + dirY * tipOffset
+      val path = Path().apply {
+        moveTo(tipX - dirX * armLength, tipY)
+        lineTo(tipX, tipY)
+        lineTo(tipX, tipY - dirY * armLength)
+      }
+      drawPath(
+        path = path,
+        color = chevronColor,
+        style = Stroke(
+          width = if (isPressed) 2.6.dp.toPx() else 2.dp.toPx(),
+          cap = StrokeCap.Round,
+          join = StrokeJoin.Round,
+        ),
+      )
+    }
   }
 }
 

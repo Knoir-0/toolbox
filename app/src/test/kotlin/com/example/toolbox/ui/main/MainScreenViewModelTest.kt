@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.main
 
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.SheetValue
 import com.example.toolbox.data.DataRepository
 import junit.framework.TestCase.assertEquals
 import kotlinx.coroutines.flow.Flow
@@ -223,6 +225,93 @@ class MainScreenViewModelTest {
     assertEquals(0, movedBackToPage0.indexOf(firstTool))
     assertEquals(6, movedBackToPage0.indexOf(page1FirstTool))
     assertEquals(initial, movedBackToPage0)
+  }
+
+  @OptIn(ExperimentalMaterial3Api::class)
+  @Test
+  fun resolveToolPanelSheetValue_transitionsBetweenHiddenCollapsedAndExpanded() {
+    val minimizedPx = 26f
+    val collapsedPx = 118f
+    val expandedPx = 284f
+    val thresholdPx = 12f
+
+    // Dragging down from PartiallyExpanded -> Hidden (handle only at bottom of screen)
+    assertEquals(
+      SheetValue.Hidden,
+      resolveToolPanelSheetValue(
+        startValue = SheetValue.PartiallyExpanded,
+        currentHeightPx = 90f,
+        minimizedHeightPx = minimizedPx,
+        collapsedHeightPx = collapsedPx,
+        expandedHeightPx = expandedPx,
+        minDragThresholdPx = thresholdPx,
+      ),
+    )
+
+    // Dragging up from Hidden -> PartiallyExpanded
+    assertEquals(
+      SheetValue.PartiallyExpanded,
+      resolveToolPanelSheetValue(
+        startValue = SheetValue.Hidden,
+        currentHeightPx = 60f,
+        minimizedHeightPx = minimizedPx,
+        collapsedHeightPx = collapsedPx,
+        expandedHeightPx = expandedPx,
+        minDragThresholdPx = thresholdPx,
+      ),
+    )
+
+    // Dragging all the way up from Hidden past midpoint -> Expanded
+    assertEquals(
+      SheetValue.Expanded,
+      resolveToolPanelSheetValue(
+        startValue = SheetValue.Hidden,
+        currentHeightPx = 240f,
+        minimizedHeightPx = minimizedPx,
+        collapsedHeightPx = collapsedPx,
+        expandedHeightPx = expandedPx,
+        minDragThresholdPx = thresholdPx,
+      ),
+    )
+
+    // Dragging down from Expanded to 1-row region -> PartiallyExpanded
+    assertEquals(
+      SheetValue.PartiallyExpanded,
+      resolveToolPanelSheetValue(
+        startValue = SheetValue.Expanded,
+        currentHeightPx = 140f,
+        minimizedHeightPx = minimizedPx,
+        collapsedHeightPx = collapsedPx,
+        expandedHeightPx = expandedPx,
+        minDragThresholdPx = thresholdPx,
+      ),
+    )
+
+    // Dragging all the way down from Expanded to bottom of screen -> Hidden
+    assertEquals(
+      SheetValue.Hidden,
+      resolveToolPanelSheetValue(
+        startValue = SheetValue.Expanded,
+        currentHeightPx = 40f,
+        minimizedHeightPx = minimizedPx,
+        collapsedHeightPx = collapsedPx,
+        expandedHeightPx = expandedPx,
+        minDragThresholdPx = thresholdPx,
+      ),
+    )
+
+    // Dragging up from PartiallyExpanded -> Expanded
+    assertEquals(
+      SheetValue.Expanded,
+      resolveToolPanelSheetValue(
+        startValue = SheetValue.PartiallyExpanded,
+        currentHeightPx = 150f,
+        minimizedHeightPx = minimizedPx,
+        collapsedHeightPx = collapsedPx,
+        expandedHeightPx = expandedPx,
+        minDragThresholdPx = thresholdPx,
+      ),
+    )
   }
 }
 

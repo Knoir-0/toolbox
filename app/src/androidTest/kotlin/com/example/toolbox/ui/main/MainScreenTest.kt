@@ -15,8 +15,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
+import androidx.compose.ui.test.swipeUp
 import junit.framework.TestCase.assertEquals
 import junit.framework.TestCase.assertTrue
 import org.junit.Before
@@ -894,5 +896,106 @@ class MainScreenTest {
     } finally {
       tempDir.deleteRecursively()
     }
+  }
+
+  @Test
+  fun filesTool_backPressAlwaysGoesUpAFolderUnlessAtRoot_andActsAsNormalAtRoot() {
+    val rootDir = java.io.File(composeTestRule.activity.cacheDir, "files_back_test_${System.currentTimeMillis()}").apply {
+      mkdirs()
+    }
+    try {
+      val folderA = java.io.File(rootDir, "FolderA").apply { mkdirs() }
+      val folderB = java.io.File(folderA, "FolderB").apply { mkdirs() }
+      java.io.File(folderB, "deep_note.txt").writeText("deep")
+
+      var outerBackTriggered = false
+
+      composeTestRule.setContent {
+        androidx.activity.compose.BackHandler {
+          outerBackTriggered = true
+        }
+        com.example.toolbox.ui.tools.FilesScreen(
+          initialDirectory = folderB,
+          rootDirectory = rootDir,
+        )
+      }
+      composeTestRule.waitForIdle()
+
+      // Started at nested FolderB -> header shows FolderB and Up button is displayed
+      composeTestRule.onNodeWithText("FolderB").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_navigate_up").assertIsDisplayed()
+
+      // 1st Back press -> goes up a folder to FolderA
+      composeTestRule.runOnUiThread {
+        composeTestRule.activity.onBackPressedDispatcher.onBackPressed()
+      }
+      composeTestRule.waitForIdle()
+      org.junit.Assert.assertFalse(outerBackTriggered)
+      composeTestRule.onNodeWithText("FolderA").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_navigate_up").assertIsDisplayed()
+
+      // 2nd Back press -> goes up a folder to rootDir
+      composeTestRule.runOnUiThread {
+        composeTestRule.activity.onBackPressedDispatcher.onBackPressed()
+      }
+      composeTestRule.waitForIdle()
+      org.junit.Assert.assertFalse(outerBackTriggered)
+      composeTestRule.onNodeWithTag("action_navigate_up").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("file_item_FolderA").assertIsDisplayed()
+
+      // 3rd Back press (once at root) -> BackHandler in FilesScreen is disabled so back acts as normal
+      composeTestRule.runOnUiThread {
+        composeTestRule.activity.onBackPressedDispatcher.onBackPressed()
+      }
+      composeTestRule.waitForIdle()
+      org.junit.Assert.assertTrue(outerBackTriggered)
+    } finally {
+      rootDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun pullUpPanel_dragToBottom_leavesOnlyDragHandle_andRestoresOnDragOrTap() {
+    val handleNode = composeTestRule.onNodeWithTag("pull_up_panel_toggle")
+    handleNode.assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tools_grid").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
+
+    val initialHandleTop = handleNode.fetchSemanticsNode().boundsInRoot.top
+
+    // Drag the tool panel down to the bottom of the screen
+    composeTestRule.onNodeWithTag("tools_pull_up_panel").performTouchInput {
+      swipeDown()
+    }
+    composeTestRule.waitForIdle()
+
+    // Only the drag handle remains displayed at the bottom of the screen
+    handleNode.assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tools_grid").assertDoesNotExist()
+    composeTestRule.onNodeWithText("Calculator").assertDoesNotExist()
+    val minimizedHandleTop = handleNode.fetchSemanticsNode().boundsInRoot.top
+    assertTrue(minimizedHandleTop > initialHandleTop)
+
+    // Dragging the handle back up restores the single-row tool panel
+    handleNode.performTouchInput {
+      swipeUp()
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("tools_grid").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
+
+    // Dragging the handle down again minimizes to only the drag handle, and tapping restores it
+    handleNode.performTouchInput {
+      swipeDown()
+    }
+    composeTestRule.waitForIdle()
+    handleNode.assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tools_grid").assertDoesNotExist()
+
+    handleNode.performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tools_grid").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
   }
 }

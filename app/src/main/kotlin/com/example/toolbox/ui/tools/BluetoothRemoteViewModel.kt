@@ -525,6 +525,21 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
     sendGamepadReport()
   }
 
+  fun setGamepadDpad(directions: Set<GamepadButton>) {
+    val dpadMask = GamepadButton.DPAD_UP.mask or
+      GamepadButton.DPAD_DOWN.mask or
+      GamepadButton.DPAD_LEFT.mask or
+      GamepadButton.DPAD_RIGHT.mask
+    var activeMask = 0
+    for (dir in directions) {
+      activeMask = activeMask or (dir.mask and dpadMask)
+    }
+    val nextButtons = (gamepadButtons and dpadMask.inv()) or activeMask
+    if (nextButtons == gamepadButtons) return
+    gamepadButtons = nextButtons
+    sendGamepadReport()
+  }
+
   fun setLeftJoystick(x: Float, y: Float) {
     val ix = (x.coerceIn(-1f, 1f) * 127f).roundToInt().coerceIn(-127, 127)
     val iy = (y.coerceIn(-1f, 1f) * 127f).roundToInt().coerceIn(-127, 127)

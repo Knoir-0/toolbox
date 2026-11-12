@@ -905,6 +905,50 @@ object FileManagerEngine {
   }
 
   /**
+   * Returns true if [file] is the same directory as [rootDir] or a descendant inside [rootDir].
+   */
+  fun isSameOrDescendant(file: File, rootDir: File): Boolean {
+    val filePath = file.absoluteFile.normalize().path
+    val rootPath = rootDir.absoluteFile.normalize().path
+    if (filePath == rootPath) return true
+    val prefix = if (rootPath.endsWith(File.separator)) rootPath else rootPath + File.separator
+    return filePath.startsWith(prefix)
+  }
+
+  /**
+   * Returns true if [currentDirectory] is at (or above) [rootDirectory], meaning it is at the root
+   * and cannot navigate up a folder.
+   */
+  fun isAtRootDirectory(currentDirectory: File, rootDirectory: File): Boolean {
+    val currentNormalized = currentDirectory.absoluteFile.normalize()
+    val rootNormalized = rootDirectory.absoluteFile.normalize()
+    if (currentNormalized.path == rootNormalized.path) return true
+    if (currentNormalized.parentFile == null) return true
+    val currentPrefix = if (currentNormalized.path.endsWith(File.separator)) {
+      currentNormalized.path
+    } else {
+      currentNormalized.path + File.separator
+    }
+    if (rootNormalized.path.startsWith(currentPrefix)) return true
+    return false
+  }
+
+  /**
+   * Returns true if the file manager can navigate up a folder from [currentDirectory] towards [rootDirectory].
+   */
+  fun canNavigateUp(currentDirectory: File, rootDirectory: File): Boolean {
+    return !isAtRootDirectory(currentDirectory, rootDirectory)
+  }
+
+  /**
+   * Returns the parent directory to navigate up to from [currentDirectory], or null if already at [rootDirectory].
+   */
+  fun navigateUpDirectory(currentDirectory: File, rootDirectory: File): File? {
+    if (!canNavigateUp(currentDirectory, rootDirectory)) return null
+    return currentDirectory.absoluteFile.normalize().parentFile
+  }
+
+  /**
    * Discovers all available storage volumes on the device:
    * 1. Primary root folder (storage/emulated/0)
    * 2. Connected external / removable storage devices (SD cards, USB OTG drives).

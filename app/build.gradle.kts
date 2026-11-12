@@ -95,6 +95,9 @@ dependencies {
   implementation(libs.androidx.media3.effect)
   implementation(libs.androidx.media3.common)
   implementation(libs.ffmpeg.kit.android)
+
+  // ZXing (QR Code Reader & Barcode Scanner)
+  implementation(libs.zxing.core)
 }
 
 tasks.register<Exec>("runDebug") {

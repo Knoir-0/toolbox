@@ -61,6 +61,9 @@ class NavigationPreferencesTest {
       Tool.VIDEO_EDITOR,
       Tool.AUDIO_EDITOR,
       Tool.FILE_CONVERTER,
+      Tool.DECIBEL_METER,
+      Tool.ARCHIVE,
+      Tool.MUSIC,
       Tool.SETTINGS,
     )
     assertEquals(expectedDefaultOrder, Tool.entries)
@@ -71,7 +74,7 @@ class NavigationPreferencesTest {
 
   @Test
   fun parseToolOrder_validSavedOrder_preservesOrder() {
-    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,NOTES,CHORD_BOOK,PLANT_SCHEDULE,CAMERA,AUDIO_EDITOR,VIDEO_EDITOR,BLUETOOTH_GAMEPAD,SETTINGS"
+    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,NOTES,CHORD_BOOK,PLANT_SCHEDULE,CAMERA,AUDIO_EDITOR,VIDEO_EDITOR,BLUETOOTH_GAMEPAD,DECIBEL_METER,ARCHIVE,MUSIC,SETTINGS"
     val result = parseToolOrder(raw)
     val expected = listOf(
       Tool.IMAGE_EDITOR,
@@ -95,6 +98,9 @@ class NavigationPreferencesTest {
       Tool.AUDIO_EDITOR,
       Tool.VIDEO_EDITOR,
       Tool.BLUETOOTH_GAMEPAD,
+      Tool.DECIBEL_METER,
+      Tool.ARCHIVE,
+      Tool.MUSIC,
       Tool.SETTINGS,
     )
     assertEquals(expected, result)
@@ -180,6 +186,9 @@ class NavigationPreferencesTest {
       Tool.AUDIO_EDITOR,
       Tool.VIDEO_EDITOR,
       Tool.BLUETOOTH_GAMEPAD,
+      Tool.DECIBEL_METER,
+      Tool.ARCHIVE,
+      Tool.MUSIC,
       Tool.SETTINGS,
     )
     repo.setToolOrder(customOrder)
@@ -223,6 +232,9 @@ class NavigationPreferencesTest {
       Tool.AUDIO_EDITOR,
       Tool.VIDEO_EDITOR,
       Tool.BLUETOOTH_GAMEPAD,
+      Tool.DECIBEL_METER,
+      Tool.ARCHIVE,
+      Tool.MUSIC,
       Tool.SETTINGS,
     )
     repo.setToolOrder(customOrder)
@@ -319,14 +331,16 @@ class NavigationPreferencesTest {
   }
 
   @Test
-  fun hiddenTools_fileConverterImageEditorVideoEditorAndAudioEditorAreHiddenByDefault_andCanBeUnhidden() {
+  fun hiddenTools_fileConverterImageEditorVideoEditorAudioEditorAndDecibelMeterAreHiddenByDefault_andCanBeUnhidden() {
     val expectedDefaultHidden = setOf(
       Tool.FILE_CONVERTER,
       Tool.IMAGE_EDITOR,
       Tool.VIDEO_EDITOR,
       Tool.AUDIO_EDITOR,
+      Tool.DECIBEL_METER,
+      Tool.ARCHIVE,
     )
-    // Null rawString (no saved preference) returns DEFAULT_HIDDEN_TOOLS containing FILE_CONVERTER, IMAGE_EDITOR, VIDEO_EDITOR, AUDIO_EDITOR
+    // Null rawString (no saved preference) returns DEFAULT_HIDDEN_TOOLS containing FILE_CONVERTER, IMAGE_EDITOR, VIDEO_EDITOR, AUDIO_EDITOR, DECIBEL_METER
     assertEquals(expectedDefaultHidden, DEFAULT_HIDDEN_TOOLS)
     assertEquals(DEFAULT_HIDDEN_TOOLS, parseHiddenTools(null))
     // Explicit blank string (user unhid all tools) returns emptySet()

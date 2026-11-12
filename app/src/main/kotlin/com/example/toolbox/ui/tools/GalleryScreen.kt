@@ -142,8 +142,10 @@ fun GalleryScreen(
   modifier: Modifier = Modifier,
   rootDirectory: File? = null,
   initialFolders: List<File>? = null,
+  initialAlbumDirectory: File? = null,
   initialAlbumsPerRow: Int? = null,
   initialViewMode: GalleryViewMode? = null,
+  onNavigateBack: (() -> Unit)? = null,
   onOpenImageEditor: ((File) -> Unit)? = null,
   onOpenVideoEditor: ((File) -> Unit)? = null,
 ) {
@@ -170,6 +172,7 @@ fun GalleryScreen(
       isInspection ||
         rootDirectory != null ||
         initialFolders != null ||
+        initialAlbumDirectory != null ||
         FileManagerEngine.hasStoragePermission(context)
     )
   }
@@ -250,18 +253,8 @@ fun GalleryScreen(
     refreshTrigger++
   }
 
-  // Navigation stack for nested albums/folders
-  val albumStack = remember { mutableStateListOf<GalleryAlbum>() }
-  val currentAlbum: GalleryAlbum? = albumStack.lastOrNull()
-
-  BackHandler(enabled = albumStack.isNotEmpty()) {
-    if (albumStack.isNotEmpty()) {
-      albumStack.removeAt(albumStack.lastIndex)
-    }
-  }
-
   // Load un-nested root contents (DCIM and Photos merged as if they were the same folder)
-  val rootContents = remember(effectiveRootDir, initialFolders, additionalFolderPaths, refreshTrigger, isInspection) {
+  val baseRootContents = remember(effectiveRootDir, initialFolders, additionalFolderPaths, refreshTrigger, isInspection) {
     if (isInspection && rootDirectory == null && initialFolders == null) {
       AlbumContents(
         directory = File("/storage/emulated/0/DCIM"),
@@ -307,6 +300,101 @@ fun GalleryScreen(
         additionalPaths = additionalFolderPaths,
       )
     }
+  }
+
+  val resolvedInitialAlbum: GalleryAlbum? = remember(
+    initialAlbumDirectory?.absolutePath,
+    baseRootContents,
+    refreshTrigger,
+    isInspection,
+  ) {
+    initialAlbumDirectory?.let { dir ->
+      if (!isInspection && !dir.exists()) {
+        try {
+          dir.mkdirs()
+        } catch (_: Throwable) {}
+      }
+      val built = GalleryEngine.buildAlbum(dir)
+      val displayName = if (dir.name.startsWith("camera", ignoreCase = true) || dir.name.isBlank()) {
+        "Camera"
+      } else {
+        built.name
+      }
+      val matchingRoot = baseRootContents.nestedAlbums.find {
+        it.name.equals(displayName, ignoreCase = true) ||
+          it.directories.any { d -> d.absolutePath.equals(dir.absolutePath, ignoreCase = true) }
+      }
+      if (matchingRoot != null && !isInspection) {
+        val mergedDirs = (listOf(dir) + matchingRoot.directories)
+          .distinctBy { it.absolutePath.lowercase() }
+        GalleryEngine.buildMergedAlbum(mergedDirs).copy(name = displayName)
+      } else {
+        built.copy(name = displayName)
+      }
+    }
+  }
+
+  val rootContents = remember(baseRootContents, resolvedInitialAlbum) {
+    if (resolvedInitialAlbum == null) {
+      baseRootContents
+    } else {
+      val existingIndex = baseRootContents.nestedAlbums.indexOfFirst {
+        it.name.equals(resolvedInitialAlbum.name, ignoreCase = true) ||
+          it.directories.any { d -> d.absolutePath.equals(resolvedInitialAlbum.directory.absolutePath, ignoreCase = true) }
+      }
+      val updatedNested = if (existingIndex >= 0) {
+        baseRootContents.nestedAlbums.toMutableList().apply {
+          set(existingIndex, resolvedInitialAlbum)
+        }
+      } else {
+        (baseRootContents.nestedAlbums + resolvedInitialAlbum)
+          .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+      }
+      baseRootContents.copy(nestedAlbums = updatedNested)
+    }
+  }
+
+  // Navigation stack for nested albums/folders
+  var navigatedToRootFromInitial by remember(initialAlbumDirectory?.absolutePath) {
+    mutableStateOf(false)
+  }
+  val albumStack = remember(initialAlbumDirectory?.absolutePath) {
+    mutableStateListOf<GalleryAlbum>().apply {
+      if (resolvedInitialAlbum != null) {
+        add(resolvedInitialAlbum)
+      }
+    }
+  }
+  LaunchedEffect(resolvedInitialAlbum) {
+    if (resolvedInitialAlbum != null &&
+      albumStack.size == 1 &&
+      albumStack[0].name.equals(resolvedInitialAlbum.name, ignoreCase = true)
+    ) {
+      albumStack[0] = resolvedInitialAlbum
+    }
+  }
+  val currentAlbum: GalleryAlbum? = albumStack.lastOrNull()
+
+  fun handleGalleryBack() {
+    when {
+      albumStack.size > 1 -> {
+        albumStack.removeAt(albumStack.lastIndex)
+      }
+      albumStack.size == 1 -> {
+        if (!navigatedToRootFromInitial && initialAlbumDirectory != null && onNavigateBack != null) {
+          onNavigateBack()
+        } else {
+          albumStack.removeAt(albumStack.lastIndex)
+        }
+      }
+      else -> {
+        onNavigateBack?.invoke()
+      }
+    }
+  }
+
+  BackHandler(enabled = albumStack.isNotEmpty() || onNavigateBack != null) {
+    handleGalleryBack()
   }
 
   val currentAlbumContents = remember(currentAlbum, refreshTrigger) {
@@ -406,13 +494,9 @@ fun GalleryScreen(
           append(if (photoCount == 1) "1 photo" else "$photoCount photos")
         }
       },
-      canNavigateBack = albumStack.isNotEmpty(),
+      canNavigateBack = albumStack.isNotEmpty() || onNavigateBack != null,
       viewMode = viewMode,
-      onBack = {
-        if (albumStack.isNotEmpty()) {
-          albumStack.removeAt(albumStack.lastIndex)
-        }
-      },
+      onBack = { handleGalleryBack() },
       onToggleViewMode = {
         val next = if (viewMode == GalleryViewMode.TILE) GalleryViewMode.LIST else GalleryViewMode.TILE
         updateViewMode(next)
@@ -427,7 +511,10 @@ fun GalleryScreen(
       albumStack = albumStack.toList(),
       viewMode = viewMode,
       albumsPerRow = albumsPerRow,
-      onNavigateToRoot = { albumStack.clear() },
+      onNavigateToRoot = {
+        navigatedToRootFromInitial = true
+        albumStack.clear()
+      },
       onNavigateToIndex = { index ->
         while (albumStack.size > index + 1) {
           albumStack.removeAt(albumStack.lastIndex)

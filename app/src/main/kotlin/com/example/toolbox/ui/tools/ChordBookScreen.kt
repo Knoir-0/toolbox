@@ -2457,15 +2457,13 @@ private fun SongbookTabContent(
                   Icon(Icons.Default.Delete, contentDescription = "Delete Progression", modifier = Modifier.size(16.dp))
                 }
               }
-              FilledTonalButton(
+              FilledTonalIconButton(
                 onClick = onRequestNewProgression,
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                modifier = Modifier.testTag("new_progression_button"),
+                modifier = Modifier
+                  .size(32.dp)
+                  .testTag("new_progression_button"),
               ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("New", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                Icon(Icons.Default.Add, contentDescription = "New Progression", modifier = Modifier.size(16.dp))
               }
             }
           }
@@ -2485,12 +2483,11 @@ private fun SongbookTabContent(
           HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
           // Key Transposition Controls
-          Row(
+          Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
           ) {
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
               Text(
                 text = "Transpose Progression Key",
                 style = MaterialTheme.typography.bodyMedium,
@@ -2504,13 +2501,18 @@ private fun SongbookTabContent(
               )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
               FilledTonalButton(
                 onClick = { onTransposeProgression(-1) },
                 enabled = chords.isNotEmpty(),
                 shape = RoundedCornerShape(12.dp),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                modifier = Modifier.testTag("transpose_down_button"),
+                modifier = Modifier
+                  .weight(1f)
+                  .testTag("transpose_down_button"),
               ) {
                 Text("−1 Semi", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
               }
@@ -2519,7 +2521,9 @@ private fun SongbookTabContent(
                 enabled = chords.isNotEmpty(),
                 shape = RoundedCornerShape(12.dp),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                modifier = Modifier.testTag("transpose_up_button"),
+                modifier = Modifier
+                  .weight(1f)
+                  .testTag("transpose_up_button"),
               ) {
                 Text("+1 Semi", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
               }

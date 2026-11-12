@@ -21,6 +21,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -42,6 +44,7 @@ import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -102,10 +105,14 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -113,12 +120,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -128,8 +142,14 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.example.toolbox.ui.theme.ToolboxTheme
+import kotlin.math.abs
+import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 /**
  * Resolves the adaptive background [Color] for a [NoteColor] card or editor surface by blending
@@ -235,6 +255,35 @@ fun NotesScreen(
   var showManageLabelsDialog by remember { mutableStateOf(false) }
   var showBulkColorDialog by remember { mutableStateOf(false) }
   var showEmptyTrashDialog by remember { mutableStateOf(false) }
+
+  // Drag-and-drop state for rearranging notes in both grid and list views
+  val density = LocalDensity.current
+  val gridState = rememberLazyStaggeredGridState()
+  val verticalSpacingPx = with(density) { 10.dp.toPx() }
+  val autoScrollEdgeThresholdPx = with(density) { 56.dp.toPx() }
+  val maxAutoScrollStepPx = with(density) { 14.dp.toPx() }
+
+  var gridCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+  val cardBounds = remember { mutableStateMapOf<String, Rect>() }
+  var draggedNoteId by remember { mutableStateOf<String?>(null) }
+  var dragPointerOffset by remember { mutableStateOf(Offset.Zero) }
+  var grabOffsetFromCenter by remember { mutableStateOf(Offset.Zero) }
+  var draggedCardSize by remember { mutableStateOf<IntSize?>(null) }
+  var hasDragged by remember { mutableStateOf(false) }
+  var initialDragSnapshot by remember { mutableStateOf<NotesHistorySnapshot?>(null) }
+  var autoScrollSpeedPx by remember { mutableFloatStateOf(0f) }
+
+  LaunchedEffect(isGridView, activeFilter) {
+    cardBounds.clear()
+  }
+
+  LaunchedEffect(draggedNoteId, autoScrollSpeedPx) {
+    if (draggedNoteId == null || autoScrollSpeedPx == 0f) return@LaunchedEffect
+    while (isActive && draggedNoteId != null && autoScrollSpeedPx != 0f) {
+      gridState.scrollBy(autoScrollSpeedPx)
+      delay(16L)
+    }
+  }
 
   fun applyStateChange(
     updatedNotes: List<NoteItem>,
@@ -504,122 +553,349 @@ fun NotesScreen(
             filteredResult.pinned.isNotEmpty() &&
             filteredResult.others.isNotEmpty()
 
-          LazyVerticalStaggeredGrid(
-            columns = StaggeredGridCells.Fixed(columns),
-            contentPadding = PaddingValues(
-              start = 12.dp,
-              end = 12.dp,
-              top = 6.dp,
-              bottom = 88.dp,
-            ),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalItemSpacing = 10.dp,
+          val currentFilteredResult by rememberUpdatedState(filteredResult)
+          val currentActiveFilter by rememberUpdatedState(activeFilter)
+          val currentIsSearchActive by rememberUpdatedState(isSearchActive)
+          val currentSearchQuery by rememberUpdatedState(searchQuery)
+          val currentSelectedColorFilter by rememberUpdatedState(selectedColorFilter)
+          val currentIsGridView by rememberUpdatedState(isGridView)
+
+          Box(
             modifier = Modifier
               .fillMaxSize()
-              .testTag("notes_staggered_grid"),
+              .onGloballyPositioned { coords ->
+                gridCoordinates = coords
+              }
+              .pointerInput(isGridView, activeFilter) {
+                detectDragGesturesAfterLongPress(
+                  onDragStart = { startOffset ->
+                    val hitNote = findInitialHitNote(
+                      point = startOffset,
+                      visibleNotes = currentFilteredResult.allNotes,
+                      cardBounds = cardBounds,
+                    )
+                    if (hitNote != null) {
+                      val rect = cardBounds[hitNote.id]
+                      draggedNoteId = hitNote.id
+                      dragPointerOffset = startOffset
+                      grabOffsetFromCenter = if (rect != null) {
+                        startOffset - rect.center
+                      } else {
+                        Offset.Zero
+                      }
+                      draggedCardSize = rect?.let {
+                        IntSize(it.width.roundToInt(), it.height.roundToInt())
+                      }
+                      hasDragged = false
+                      autoScrollSpeedPx = 0f
+                      initialDragSnapshot = NotesHistorySnapshot(notes, savedLabels)
+                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    }
+                  },
+                  onDrag = { change, dragAmount ->
+                    val activeNoteId = draggedNoteId ?: return@detectDragGesturesAfterLongPress
+                    change.consume()
+                    if (dragAmount.x != 0f || dragAmount.y != 0f) {
+                      hasDragged = true
+                    }
+                    dragPointerOffset += dragAmount
+                    val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+
+                    val viewportHeight = (gridCoordinates?.size?.height ?: 0).toFloat()
+                    autoScrollSpeedPx = when {
+                      viewportHeight <= 0f -> 0f
+                      dragPointerOffset.y < autoScrollEdgeThresholdPx && gridState.canScrollBackward -> {
+                        val fraction = ((autoScrollEdgeThresholdPx - dragPointerOffset.y) / autoScrollEdgeThresholdPx)
+                          .coerceIn(0f, 1f)
+                        -maxAutoScrollStepPx * fraction
+                      }
+                      dragPointerOffset.y > viewportHeight - autoScrollEdgeThresholdPx && gridState.canScrollForward -> {
+                        val fraction = ((dragPointerOffset.y - (viewportHeight - autoScrollEdgeThresholdPx)) / autoScrollEdgeThresholdPx)
+                          .coerceIn(0f, 1f)
+                        maxAutoScrollStepPx * fraction
+                      }
+                      else -> 0f
+                    }
+
+                    val liveFiltered = NotesEngine.filterNotes(
+                      notes = notes,
+                      filter = currentActiveFilter,
+                      searchQuery = if (currentIsSearchActive) currentSearchQuery else "",
+                      colorFilter = if (currentIsSearchActive) currentSelectedColorFilter else null,
+                    )
+                    val sectionNotes = if (liveFiltered.pinned.any { it.id == activeNoteId }) {
+                      liveFiltered.pinned
+                    } else {
+                      liveFiltered.others
+                    }
+
+                    val targetNoteId = findTargetNoteId(
+                      draggedNoteId = activeNoteId,
+                      point = desiredCenter,
+                      sectionNotes = sectionNotes,
+                      cardBounds = cardBounds,
+                      isGridView = currentIsGridView,
+                    )
+
+                    if (targetNoteId != null && targetNoteId != activeNoteId) {
+                      val firstVisibleIndex = gridState.firstVisibleItemIndex
+                      val firstVisibleOffset = gridState.firstVisibleItemScrollOffset
+                      val reordered = NotesEngine.reorderNotes(notes, activeNoteId, targetNoteId)
+                      if (reordered != notes) {
+                        val nextFiltered = NotesEngine.filterNotes(
+                          notes = reordered,
+                          filter = currentActiveFilter,
+                          searchQuery = if (currentIsSearchActive) currentSearchQuery else "",
+                          colorFilter = if (currentIsSearchActive) currentSelectedColorFilter else null,
+                        )
+                        val newSectionNotes = if (nextFiltered.pinned.any { it.id == activeNoteId }) {
+                          nextFiltered.pinned
+                        } else {
+                          nextFiltered.others
+                        }
+                        updateSectionCardBoundsOptimistically(
+                          oldSectionNotes = sectionNotes,
+                          newSectionNotes = newSectionNotes,
+                          cardBounds = cardBounds,
+                          isGridView = currentIsGridView,
+                          verticalSpacingPx = verticalSpacingPx,
+                        )
+                        notes = reordered
+                        gridState.requestScrollToItem(firstVisibleIndex, firstVisibleOffset)
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                      }
+                    }
+                  },
+                  onDragEnd = {
+                    val finishedNoteId = draggedNoteId
+                    val didMove = hasDragged
+                    val before = initialDragSnapshot
+
+                    draggedNoteId = null
+                    dragPointerOffset = Offset.Zero
+                    grabOffsetFromCenter = Offset.Zero
+                    draggedCardSize = null
+                    hasDragged = false
+                    autoScrollSpeedPx = 0f
+                    initialDragSnapshot = null
+
+                    if (!didMove && finishedNoteId != null) {
+                      selectedNoteIds = if (finishedNoteId in selectedNoteIds) {
+                        selectedNoteIds - finishedNoteId
+                      } else {
+                        selectedNoteIds + finishedNoteId
+                      }
+                    } else if (before != null && before.notes != notes) {
+                      undoStack = listOf(before) + undoStack.take(49)
+                      redoStack = emptyList()
+                      repo.saveNotes(notes)
+                    }
+                  },
+                  onDragCancel = {
+                    val before = initialDragSnapshot
+                    draggedNoteId = null
+                    dragPointerOffset = Offset.Zero
+                    grabOffsetFromCenter = Offset.Zero
+                    draggedCardSize = null
+                    hasDragged = false
+                    autoScrollSpeedPx = 0f
+                    initialDragSnapshot = null
+
+                    if (before != null && before.notes != notes) {
+                      undoStack = listOf(before) + undoStack.take(49)
+                      redoStack = emptyList()
+                      repo.saveNotes(notes)
+                    }
+                  },
+                )
+              },
           ) {
-            if (filteredResult.pinned.isNotEmpty()) {
-              if (showSectionHeaders || activeFilter == NotesFilter.All) {
-                item(
-                  key = "section_header_pinned",
-                  span = StaggeredGridItemSpan.FullLine,
-                ) {
-                  NotesSectionHeader(
-                    title = "PINNED",
-                    modifier = Modifier.testTag("notes_section_pinned"),
+            LazyVerticalStaggeredGrid(
+              state = gridState,
+              userScrollEnabled = draggedNoteId == null,
+              columns = StaggeredGridCells.Fixed(columns),
+              contentPadding = PaddingValues(
+                start = 12.dp,
+                end = 12.dp,
+                top = 6.dp,
+                bottom = 88.dp,
+              ),
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
+              verticalItemSpacing = 10.dp,
+              modifier = Modifier
+                .fillMaxSize()
+                .testTag("notes_staggered_grid"),
+            ) {
+              if (filteredResult.pinned.isNotEmpty()) {
+                if (showSectionHeaders || activeFilter == NotesFilter.All) {
+                  item(
+                    key = "section_header_pinned",
+                    span = StaggeredGridItemSpan.FullLine,
+                  ) {
+                    NotesSectionHeader(
+                      title = "PINNED",
+                      modifier = Modifier.testTag("notes_section_pinned"),
+                    )
+                  }
+                }
+
+                items(
+                  items = filteredResult.pinned,
+                  key = { "pinned_${it.id}" },
+                ) { note ->
+                  val isDraggingThis = draggedNoteId == note.id
+                  DisposableEffect(note.id) {
+                    onDispose {
+                      cardBounds.remove(note.id)
+                    }
+                  }
+                  NoteCard(
+                    note = note,
+                    isSelected = note.id in selectedNoteIds,
+                    isSelectionMode = isSelectionMode,
+                    isDragging = false,
+                    onClick = {
+                      if (draggedNoteId != null) return@NoteCard
+                      if (isSelectionMode) {
+                        selectedNoteIds = if (note.id in selectedNoteIds) {
+                          selectedNoteIds - note.id
+                        } else {
+                          selectedNoteIds + note.id
+                        }
+                      } else {
+                        editingNote = note
+                      }
+                    },
+                    onLongClick = null,
+                    onTogglePin = {
+                      if (draggedNoteId != null) return@NoteCard
+                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                      applyStateChange(NotesEngine.togglePin(notes, note.id))
+                    },
+                    onToggleChecklistItem = { itemId ->
+                      if (draggedNoteId != null) return@NoteCard
+                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                      applyStateChange(NotesEngine.toggleChecklistItem(notes, note.id, itemId))
+                    },
+                    modifier = Modifier
+                      .onGloballyPositioned { coords ->
+                        val gridCoords = gridCoordinates
+                        if (gridCoords != null && gridCoords.isAttached && coords.isAttached) {
+                          cardBounds[note.id] = gridCoords.localBoundingBoxOf(coords, clipBounds = false)
+                        }
+                      }
+                      .graphicsLayer {
+                        if (isDraggingThis) {
+                          alpha = 0.3f
+                        }
+                      },
                   )
                 }
               }
 
-              items(
-                items = filteredResult.pinned,
-                key = { "pinned_${it.id}" },
-              ) { note ->
-                NoteCard(
-                  note = note,
-                  isSelected = note.id in selectedNoteIds,
-                  isSelectionMode = isSelectionMode,
-                  onClick = {
-                    if (isSelectionMode) {
-                      selectedNoteIds = if (note.id in selectedNoteIds) {
-                        selectedNoteIds - note.id
+              if (filteredResult.others.isNotEmpty()) {
+                if (showSectionHeaders) {
+                  item(
+                    key = "section_header_others",
+                    span = StaggeredGridItemSpan.FullLine,
+                  ) {
+                    NotesSectionHeader(
+                      title = "OTHERS",
+                      modifier = Modifier
+                        .padding(top = 6.dp)
+                        .testTag("notes_section_others"),
+                    )
+                  }
+                }
+
+                items(
+                  items = filteredResult.others,
+                  key = { "other_${it.id}" },
+                ) { note ->
+                  val isDraggingThis = draggedNoteId == note.id
+                  DisposableEffect(note.id) {
+                    onDispose {
+                      cardBounds.remove(note.id)
+                    }
+                  }
+                  NoteCard(
+                    note = note,
+                    isSelected = note.id in selectedNoteIds,
+                    isSelectionMode = isSelectionMode,
+                    isDragging = false,
+                    onClick = {
+                      if (draggedNoteId != null) return@NoteCard
+                      if (isSelectionMode) {
+                        selectedNoteIds = if (note.id in selectedNoteIds) {
+                          selectedNoteIds - note.id
+                        } else {
+                          selectedNoteIds + note.id
+                        }
                       } else {
-                        selectedNoteIds + note.id
+                        editingNote = note
                       }
-                    } else {
-                      editingNote = note
-                    }
-                  },
-                  onLongClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    selectedNoteIds = if (note.id in selectedNoteIds) {
-                      selectedNoteIds - note.id
-                    } else {
-                      selectedNoteIds + note.id
-                    }
-                  },
-                  onTogglePin = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    applyStateChange(NotesEngine.togglePin(notes, note.id))
-                  },
-                  onToggleChecklistItem = { itemId ->
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    applyStateChange(NotesEngine.toggleChecklistItem(notes, note.id, itemId))
-                  },
-                )
+                    },
+                    onLongClick = null,
+                    onTogglePin = {
+                      if (draggedNoteId != null) return@NoteCard
+                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                      applyStateChange(NotesEngine.togglePin(notes, note.id))
+                    },
+                    onToggleChecklistItem = { itemId ->
+                      if (draggedNoteId != null) return@NoteCard
+                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                      applyStateChange(NotesEngine.toggleChecklistItem(notes, note.id, itemId))
+                    },
+                    modifier = Modifier
+                      .onGloballyPositioned { coords ->
+                        val gridCoords = gridCoordinates
+                        if (gridCoords != null && gridCoords.isAttached && coords.isAttached) {
+                          cardBounds[note.id] = gridCoords.localBoundingBoxOf(coords, clipBounds = false)
+                        }
+                      }
+                      .graphicsLayer {
+                        if (isDraggingThis) {
+                          alpha = 0.3f
+                        }
+                      },
+                  )
+                }
               }
             }
 
-            if (filteredResult.others.isNotEmpty()) {
-              if (showSectionHeaders) {
-                item(
-                  key = "section_header_others",
-                  span = StaggeredGridItemSpan.FullLine,
-                ) {
-                  NotesSectionHeader(
-                    title = "OTHERS",
-                    modifier = Modifier
-                      .padding(top = 6.dp)
-                      .testTag("notes_section_others"),
-                  )
-                }
-              }
+            // Floating lifted note card overlay while dragging
+            val activeDraggedNote = draggedNoteId?.let { id -> notes.firstOrNull { it.id == id } }
+            if (activeDraggedNote != null && gridCoordinates != null) {
+              val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+              val fallbackWidthPx = ((gridCoordinates?.size?.width ?: 1) / columns.toFloat())
+              val cardWidthPx = draggedCardSize?.width?.toFloat()
+                ?: cardBounds[activeDraggedNote.id]?.width
+                ?: fallbackWidthPx
+              val cardHeightPx = draggedCardSize?.height?.toFloat()
+                ?: cardBounds[activeDraggedNote.id]?.height
+                ?: with(density) { 100.dp.toPx() }
 
-              items(
-                items = filteredResult.others,
-                key = { "other_${it.id}" },
-              ) { note ->
+              Box(
+                modifier = Modifier
+                  .width(with(density) { cardWidthPx.toDp() })
+                  .graphicsLayer {
+                    translationX = desiredCenter.x - cardWidthPx / 2f
+                    translationY = desiredCenter.y - cardHeightPx / 2f
+                    scaleX = 1.04f
+                    scaleY = 1.04f
+                  }
+                  .zIndex(100f),
+              ) {
                 NoteCard(
-                  note = note,
-                  isSelected = note.id in selectedNoteIds,
+                  note = activeDraggedNote,
+                  isSelected = activeDraggedNote.id in selectedNoteIds,
                   isSelectionMode = isSelectionMode,
-                  onClick = {
-                    if (isSelectionMode) {
-                      selectedNoteIds = if (note.id in selectedNoteIds) {
-                        selectedNoteIds - note.id
-                      } else {
-                        selectedNoteIds + note.id
-                      }
-                    } else {
-                      editingNote = note
-                    }
-                  },
-                  onLongClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    selectedNoteIds = if (note.id in selectedNoteIds) {
-                      selectedNoteIds - note.id
-                    } else {
-                      selectedNoteIds + note.id
-                    }
-                  },
-                  onTogglePin = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    applyStateChange(NotesEngine.togglePin(notes, note.id))
-                  },
-                  onToggleChecklistItem = { itemId ->
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    applyStateChange(NotesEngine.toggleChecklistItem(notes, note.id, itemId))
-                  },
+                  isDragging = true,
+                  testTagOverride = "dragged_note_overlay",
+                  onClick = {},
+                  onLongClick = null,
+                  onTogglePin = {},
+                  onToggleChecklistItem = {},
                 )
               }
             }
@@ -1386,6 +1662,140 @@ private fun NotesSectionHeader(
   )
 }
 
+internal fun findInitialHitNote(
+  point: Offset,
+  visibleNotes: List<NoteItem>,
+  cardBounds: Map<String, Rect>,
+): NoteItem? {
+  for (note in visibleNotes) {
+    val rect = cardBounds[note.id] ?: continue
+    if (rect.contains(point)) {
+      return note
+    }
+  }
+  return null
+}
+
+internal fun findTargetNoteId(
+  draggedNoteId: String,
+  point: Offset,
+  sectionNotes: List<NoteItem>,
+  cardBounds: Map<String, Rect>,
+  isGridView: Boolean,
+): String? {
+  val currentIndex = sectionNotes.indexOfFirst { it.id == draggedNoteId }
+  if (currentIndex == -1 || sectionNotes.size <= 1) return null
+  val draggedRect = cardBounds[draggedNoteId] ?: return null
+
+  var candidateIndex: Int? = null
+  for (index in sectionNotes.indices) {
+    val note = sectionNotes[index]
+    val rect = cardBounds[note.id] ?: continue
+    if (rect.contains(point)) {
+      candidateIndex = index
+      break
+    }
+  }
+
+  if (candidateIndex == null) {
+    var minDistanceSq = Float.MAX_VALUE
+    for (index in sectionNotes.indices) {
+      val note = sectionNotes[index]
+      val rect = cardBounds[note.id] ?: continue
+      val dx = point.x - rect.center.x
+      val dy = point.y - rect.center.y
+      val distSq = dx * dx + dy * dy
+      if (distSq < minDistanceSq) {
+        minDistanceSq = distSq
+        candidateIndex = index
+      }
+    }
+  }
+
+  val targetIndex = candidateIndex ?: return null
+  if (targetIndex == currentIndex) return null
+
+  val targetNote = sectionNotes[targetIndex]
+  val targetRect = cardBounds[targetNote.id] ?: return null
+
+  val isDifferentColumn = isGridView &&
+    abs(targetRect.center.x - draggedRect.center.x) >= draggedRect.width * 0.45f
+
+  if (isDifferentColumn) {
+    val passedHorizontally = if (targetRect.center.x > draggedRect.center.x) {
+      point.x >= targetRect.left + targetRect.width * 0.25f
+    } else {
+      point.x <= targetRect.right - targetRect.width * 0.25f
+    }
+    if (!passedHorizontally) return null
+
+    val verticallySeparated = targetRect.top >= draggedRect.bottom || targetRect.bottom <= draggedRect.top
+    if (verticallySeparated) {
+      val passedVertically = if (targetRect.center.y > draggedRect.center.y) {
+        point.y >= targetRect.top + targetRect.height * 0.25f
+      } else {
+        point.y <= targetRect.bottom - targetRect.height * 0.25f
+      }
+      if (!passedVertically) return null
+    }
+    return targetNote.id
+  } else {
+    val passedVertically = if (targetIndex > currentIndex) {
+      point.y >= targetRect.center.y - 2f
+    } else {
+      point.y <= targetRect.center.y + 2f
+    }
+    return if (passedVertically) targetNote.id else null
+  }
+}
+
+internal fun updateSectionCardBoundsOptimistically(
+  oldSectionNotes: List<NoteItem>,
+  newSectionNotes: List<NoteItem>,
+  cardBounds: MutableMap<String, Rect>,
+  isGridView: Boolean,
+  verticalSpacingPx: Float,
+) {
+  val existingRects = oldSectionNotes.mapNotNull { cardBounds[it.id] }
+  if (existingRects.size != oldSectionNotes.size || existingRects.isEmpty()) return
+
+  val sectionTop = existingRects.minOf { it.top }
+  if (!isGridView || existingRects.size == 1) {
+    val left = existingRects.first().left
+    val width = existingRects.first().width
+    var currentTop = sectionTop
+    for (note in newSectionNotes) {
+      val h = cardBounds[note.id]?.height ?: continue
+      cardBounds[note.id] = Rect(
+        left = left,
+        top = currentTop,
+        right = left + width,
+        bottom = currentTop + h,
+      )
+      currentTop += h + verticalSpacingPx
+    }
+  } else {
+    val minLeft = existingRects.minOf { it.left }
+    val maxLeft = existingRects.maxOf { it.left }
+    val colWidth = existingRects.first().width
+    val colLefts = floatArrayOf(minLeft, if (maxLeft > minLeft + 1f) maxLeft else minLeft + colWidth)
+    val colBottoms = floatArrayOf(sectionTop, sectionTop)
+    for (note in newSectionNotes) {
+      val h = cardBounds[note.id]?.height ?: continue
+      val col = if (colBottoms[0] <= colBottoms[1]) 0 else 1
+      val top = colBottoms[col]
+      val left = colLefts[col]
+      cardBounds[note.id] = Rect(
+        left = left,
+        top = top,
+        right = left + colWidth,
+        bottom = top + h,
+      )
+      colBottoms[col] = top + h + verticalSpacingPx
+    }
+  }
+}
+
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun NoteCard(
@@ -1393,31 +1803,41 @@ fun NoteCard(
   isSelected: Boolean,
   isSelectionMode: Boolean,
   onClick: () -> Unit,
-  onLongClick: () -> Unit,
+  onLongClick: (() -> Unit)? = null,
   onTogglePin: () -> Unit,
   onToggleChecklistItem: (String) -> Unit,
+  isDragging: Boolean = false,
+  testTagOverride: String? = null,
   modifier: Modifier = Modifier,
 ) {
-  val cardColor = resolveNoteCardColor(note.color)
-  val borderColor = if (isSelected) {
+  val cardColor = resolveNoteCardColor(note.color, isElevatedSurface = isDragging)
+  val borderColor = if (isSelected || isDragging) {
     MaterialTheme.colorScheme.primary
   } else {
     MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
   }
-  val borderWidth = if (isSelected) 2.dp else 1.dp
+  val borderWidth = if (isSelected || isDragging) 2.dp else 1.dp
+  val clickModifier = if (isDragging) {
+    Modifier
+  } else if (onLongClick != null) {
+    Modifier.combinedClickable(
+      onClick = onClick,
+      onLongClick = onLongClick,
+    )
+  } else {
+    Modifier.clickable(onClick = onClick)
+  }
 
   Card(
     shape = RoundedCornerShape(14.dp),
     colors = CardDefaults.cardColors(containerColor = cardColor),
+    elevation = CardDefaults.cardElevation(defaultElevation = if (isDragging) 6.dp else 0.dp),
     border = BorderStroke(borderWidth, borderColor),
     modifier = modifier
       .fillMaxWidth()
       .clip(RoundedCornerShape(14.dp))
-      .combinedClickable(
-        onClick = onClick,
-        onLongClick = onLongClick,
-      )
-      .testTag("note_card_${note.id}"),
+      .then(clickModifier)
+      .testTag(testTagOverride ?: "note_card_${note.id}"),
   ) {
     Column(
       modifier = Modifier
@@ -2247,6 +2667,19 @@ private fun NoteEditorSheet(
         }
 
         AnimatedVisibility(visible = showLabelPicker) {
+          val trimmedInlineLabel = newLabelInput.trim().removePrefix("#").trim()
+          val canAttachInlineLabel = trimmedInlineLabel.isNotEmpty()
+          val attachInlineLabel = {
+            if (canAttachInlineLabel) {
+              if (draft.labels.none { it.equals(trimmedInlineLabel, ignoreCase = true) }) {
+                draft = draft.copy(labels = draft.labels + trimmedInlineLabel)
+              }
+              if (newlyCreatedLabels.none { it.equals(trimmedInlineLabel, ignoreCase = true) }) {
+                newlyCreatedLabels = newlyCreatedLabels + trimmedInlineLabel
+              }
+              newLabelInput = ""
+            }
+          }
           Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -2258,27 +2691,41 @@ private fun NoteEditorSheet(
               placeholder = { Text("New label name...") },
               singleLine = true,
               shape = RoundedCornerShape(14.dp),
+              leadingIcon = {
+                Icon(
+                  imageVector = Icons.AutoMirrored.Filled.Label,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                )
+              },
+              trailingIcon = {
+                if (newLabelInput.isNotEmpty()) {
+                  IconButton(onClick = { newLabelInput = "" }) {
+                    Icon(
+                      imageVector = Icons.Default.Clear,
+                      contentDescription = "Clear label input",
+                    )
+                  }
+                }
+              },
+              keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+              keyboardActions = KeyboardActions(onDone = { attachInlineLabel() }),
               modifier = Modifier
                 .weight(1f)
                 .testTag("editor_new_label_input"),
             )
             Button(
-              onClick = {
-                val trimmed = newLabelInput.trim().removePrefix("#").trim()
-                if (trimmed.isNotEmpty()) {
-                  if (draft.labels.none { it.equals(trimmed, ignoreCase = true) }) {
-                    draft = draft.copy(labels = draft.labels + trimmed)
-                  }
-                  if (newlyCreatedLabels.none { it.equals(trimmed, ignoreCase = true) }) {
-                    newlyCreatedLabels = newlyCreatedLabels + trimmed
-                  }
-                  newLabelInput = ""
-                }
-              },
-              enabled = newLabelInput.trim().removePrefix("#").isNotBlank(),
+              onClick = attachInlineLabel,
+              enabled = canAttachInlineLabel,
               shape = RoundedCornerShape(12.dp),
               modifier = Modifier.testTag("editor_add_label_confirm"),
             ) {
+              Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+              )
+              Spacer(modifier = Modifier.width(6.dp))
               Text("Attach")
             }
           }
@@ -2362,6 +2809,7 @@ private fun ManageLabelsDialog(
   val trimmed = labelText.trim().removePrefix("#").trim()
   val isDuplicate = labels.any { it.equals(trimmed, ignoreCase = true) }
   val canAdd = trimmed.isNotEmpty() && !isDuplicate
+  val totalTaggedNotes = notesCountByLabel.values.sum()
 
   LaunchedEffect(Unit) {
     try {
@@ -2389,7 +2837,7 @@ private fun ManageLabelsDialog(
           contentAlignment = Alignment.Center,
         ) {
           Icon(
-            imageVector = Icons.AutoMirrored.Filled.Label,
+            imageVector = Icons.Default.NewLabel,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(24.dp),
@@ -2397,13 +2845,13 @@ private fun ManageLabelsDialog(
         }
         Column {
           Text(
-            text = "Manage Labels",
+            text = "Add & Manage Labels",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
           )
           Text(
-            text = "Create or remove offline note tags",
+            text = "Create or remove tags to organize your notes",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -2413,8 +2861,9 @@ private fun ManageLabelsDialog(
     text = {
       Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
       ) {
+        // Context & Live Tag Preview Card
         Card(
           shape = RoundedCornerShape(14.dp),
           colors = CardDefaults.cardColors(
@@ -2427,130 +2876,258 @@ private fun ManageLabelsDialog(
               .fillMaxWidth()
               .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
           ) {
-            Icon(
-              imageVector = Icons.Default.NewLabel,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(20.dp),
-            )
-            Text(
-              text = "${labels.size} active ${if (labels.size == 1) "label" else "labels"} across your board",
-              style = MaterialTheme.typography.bodyMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-          }
-        }
-
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          OutlinedTextField(
-            value = labelText,
-            onValueChange = { labelText = it },
-            label = { Text("New label") },
-            singleLine = true,
-            isError = isDuplicate,
-            shape = RoundedCornerShape(14.dp),
-            leadingIcon = {
+            Box(
+              modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(
+                  if (isDuplicate) {
+                    MaterialTheme.colorScheme.errorContainer
+                  } else {
+                    MaterialTheme.colorScheme.primaryContainer
+                  }
+                ),
+              contentAlignment = Alignment.Center,
+            ) {
               Icon(
                 imageVector = Icons.AutoMirrored.Filled.Label,
                 contentDescription = null,
+                tint = if (isDuplicate) {
+                  MaterialTheme.colorScheme.error
+                } else {
+                  MaterialTheme.colorScheme.primary
+                },
+                modifier = Modifier.size(18.dp),
               )
-            },
-            trailingIcon = {
+            }
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = if (trimmed.isNotEmpty()) {
+                  "#$trimmed"
+                } else {
+                  "${labels.size} Active ${if (labels.size == 1) "Label" else "Labels"}"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              Text(
+                text = when {
+                  isDuplicate -> "Label already exists on your board"
+                  canAdd -> "New tag preview • Ready to add"
+                  else -> "$totalTaggedNotes tagged note ${if (totalTaggedNotes == 1) "assignment" else "assignments"} across your board"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = if (isDuplicate) {
+                  MaterialTheme.colorScheme.error
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
+        }
+
+        // Full-width Input Field with integrated Clear & Quick-Add actions
+        OutlinedTextField(
+          value = labelText,
+          onValueChange = { labelText = it },
+          label = { Text("Label name") },
+          placeholder = { Text("e.g. ideas, work, recipes") },
+          singleLine = true,
+          isError = isDuplicate,
+          shape = RoundedCornerShape(14.dp),
+          leadingIcon = {
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.Label,
+              contentDescription = null,
+              tint = if (isDuplicate) {
+                MaterialTheme.colorScheme.error
+              } else {
+                MaterialTheme.colorScheme.primary
+              },
+            )
+          },
+          trailingIcon = {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(2.dp),
+              modifier = Modifier.padding(end = 6.dp),
+            ) {
               if (labelText.isNotEmpty()) {
-                IconButton(onClick = { labelText = "" }) {
-                  Icon(Icons.Default.Clear, contentDescription = "Clear")
+                IconButton(
+                  onClick = { labelText = "" },
+                  modifier = Modifier.size(32.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Clear,
+                    contentDescription = "Clear",
+                    modifier = Modifier.size(18.dp),
+                  )
                 }
               }
-            },
-            supportingText = if (isDuplicate) {
-              { Text("Label already exists") }
-            } else {
-              null
-            },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(
-              onDone = {
-                if (canAdd) {
-                  onAddLabel(trimmed)
-                  labelText = ""
+              IconButton(
+                onClick = {
+                  if (canAdd) {
+                    onAddLabel(trimmed)
+                    labelText = ""
+                  }
+                },
+                enabled = canAdd,
+                modifier = Modifier
+                  .size(36.dp)
+                  .testTag("manage_labels_add_button"),
+              ) {
+                Box(
+                  modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(
+                      if (canAdd) {
+                        MaterialTheme.colorScheme.primaryContainer
+                      } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                      }
+                    ),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Add label",
+                    tint = if (canAdd) {
+                      MaterialTheme.colorScheme.primary
+                    } else {
+                      MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                    },
+                    modifier = Modifier.size(16.dp),
+                  )
                 }
-              },
-            ),
-            modifier = Modifier
-              .weight(1f)
-              .focusRequester(focusRequester)
-              .testTag("manage_labels_input"),
-          )
-
-          Button(
-            onClick = {
+              }
+            }
+          },
+          supportingText = if (isDuplicate) {
+            { Text("A label with this name already exists") }
+          } else {
+            null
+          },
+          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+          keyboardActions = KeyboardActions(
+            onDone = {
               if (canAdd) {
                 onAddLabel(trimmed)
                 labelText = ""
               }
             },
-            enabled = canAdd,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.testTag("manage_labels_add_button"),
-          ) {
-            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-          }
-        }
+          ),
+          modifier = Modifier
+            .fillMaxWidth()
+            .focusRequester(focusRequester)
+            .testTag("manage_labels_input"),
+        )
 
-        if (labels.isNotEmpty()) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .heightIn(max = 200.dp)
-              .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-          ) {
-            labels.forEach { label ->
-              val count = notesCountByLabel[label] ?: 0
-              Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(
-                  containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                ),
-                modifier = Modifier.fillMaxWidth(),
-              ) {
-                Row(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                  verticalAlignment = Alignment.CenterVertically,
+        // Existing Board Labels Section
+        Column(
+          modifier = Modifier.fillMaxWidth(),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Text(
+            text = "BOARD LABELS (${labels.size})",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+          )
+
+          if (labels.isEmpty()) {
+            Surface(
+              shape = RoundedCornerShape(14.dp),
+              color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+              border = BorderStroke(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+              ),
+              modifier = Modifier.fillMaxWidth(),
+            ) {
+              Text(
+                text = "No labels yet. Type a name above to create your first note tag.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+              )
+            }
+          } else {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 200.dp)
+                .verticalScroll(rememberScrollState()),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              labels.forEach { label ->
+                val count = notesCountByLabel[label] ?: 0
+                Surface(
+                  shape = RoundedCornerShape(14.dp),
+                  color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                  border = BorderStroke(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                  ),
+                  modifier = Modifier.fillMaxWidth(),
                 ) {
-                  Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                      text = "#$label",
-                      style = MaterialTheme.typography.bodyMedium,
-                      fontWeight = FontWeight.SemiBold,
-                      color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                      text = "$count ${if (count == 1) "note" else "notes"}",
-                      style = MaterialTheme.typography.labelSmall,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                  }
-                  IconButton(
-                    onClick = { onDeleteLabel(label) },
-                    modifier = Modifier.testTag("delete_label_$label"),
+                  Row(
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                   ) {
-                    Icon(
-                      imageVector = Icons.Default.Delete,
-                      contentDescription = "Delete label $label",
-                      tint = MaterialTheme.colorScheme.error,
-                      modifier = Modifier.size(18.dp),
-                    )
+                    Box(
+                      modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                      contentAlignment = Alignment.Center,
+                    ) {
+                      Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Label,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp),
+                      )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                      Text(
+                        text = "#$label",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                      )
+                      Text(
+                        text = "$count ${if (count == 1) "note" else "notes"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      )
+                    }
+                    IconButton(
+                      onClick = { onDeleteLabel(label) },
+                      modifier = Modifier
+                        .size(34.dp)
+                        .testTag("delete_label_$label"),
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Delete label $label",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(18.dp),
+                      )
+                    }
                   }
                 }
               }
@@ -2567,12 +3144,26 @@ private fun ManageLabelsDialog(
           }
           onDismiss()
         },
+        enabled = trimmed.isEmpty() || canAdd,
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier.testTag("manage_labels_done_button"),
       ) {
-        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+        Icon(
+          imageVector = if (canAdd) Icons.Default.Add else Icons.Default.Check,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
         Spacer(modifier = Modifier.width(6.dp))
-        Text("Done")
+        Text(if (canAdd) "Add & Done" else "Done")
+      }
+    },
+    dismissButton = {
+      TextButton(
+        onClick = onDismiss,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.testTag("manage_labels_cancel_button"),
+      ) {
+        Text("Cancel")
       }
     },
   )

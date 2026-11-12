@@ -178,4 +178,52 @@ class BluetoothGamepadScreenTest {
     assertTrue(rightStickMoves.any { it.first < -0.3f && it.second > 0.3f })
     assertTrue(rightStickMoves.last() == (0f to 0f))
   }
+
+  @Test
+  fun gamepadControl_dpadSupportsDiagonalChevronsAndRolling() {
+    val activeHistory = mutableListOf<Set<GamepadButton>>()
+    val currentlyHeld = mutableSetOf<GamepadButton>()
+    val testActions = object : GamepadInputActions {
+      override fun setButton(button: GamepadButton, pressed: Boolean) {
+        if (pressed) currentlyHeld.add(button) else currentlyHeld.remove(button)
+        activeHistory.add(currentlyHeld.toSet())
+      }
+      override fun setLeftJoystick(x: Float, y: Float) = Unit
+      override fun setRightJoystick(x: Float, y: Float) = Unit
+    }
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        Surface {
+          GamepadControlContent(
+            deviceName = "Living Room TV",
+            actions = testActions,
+            onDisconnect = {},
+          )
+        }
+      }
+    }
+
+    // Verify all 4 diagonal corner chevrons are displayed
+    composeTestRule.onNodeWithTag("bt_gamepad_dpad_up_left").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("bt_gamepad_dpad_up_right").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("bt_gamepad_dpad_down_left").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("bt_gamepad_dpad_down_right").assertIsDisplayed()
+
+    // Perform a quarter-circle roll on the D-Pad: Down -> Down-Right -> Right (including outside rim)
+    val dpadNode = composeTestRule.onNodeWithTag("bt_gamepad_dpad")
+    dpadNode.performTouchInput {
+      val cx = width / 2f
+      val cy = height / 2f
+      val r = width * 0.38f
+      down(Offset(cx, cy + r)) // Down
+      moveTo(Offset(cx + r * 0.75f, cy + r * 0.75f)) // Down-Right
+      moveTo(Offset(width + 15f, cy)) // Right (sweeping outside the outer radius while rolling)
+      up()
+    }
+
+    assertTrue(activeHistory.contains(setOf(GamepadButton.DPAD_DOWN)))
+    assertTrue(activeHistory.contains(setOf(GamepadButton.DPAD_DOWN, GamepadButton.DPAD_RIGHT)))
+    assertTrue(activeHistory.contains(setOf(GamepadButton.DPAD_RIGHT)))
+  }
 }

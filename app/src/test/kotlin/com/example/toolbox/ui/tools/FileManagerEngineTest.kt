@@ -576,4 +576,35 @@ class FileManagerEngineTest {
     assertFalse(AudioEditorEngine.isSupportedAudioFile(png))
     assertFalse(AudioEditorEngine.isSupportedAudioFile(txt))
   }
+
+  @Test
+  fun backNavigation_goesUpAFolderUnlessAtRoot_andStopsAtRoot() {
+    val root = File("/storage/emulated/0")
+    val docs = File("/storage/emulated/0/Documents")
+    val projects = File("/storage/emulated/0/Documents/Projects")
+    val subProject = File("/storage/emulated/0/Documents/Projects/2026")
+
+    assertTrue(FileManagerEngine.isSameOrDescendant(root, root))
+    assertTrue(FileManagerEngine.isSameOrDescendant(docs, root))
+    assertTrue(FileManagerEngine.isSameOrDescendant(subProject, root))
+    assertFalse(FileManagerEngine.isSameOrDescendant(File("/storage/1234-5678"), root))
+
+    // At nested folder: not at root, can navigate up step by step
+    assertFalse(FileManagerEngine.isAtRootDirectory(subProject, root))
+    assertTrue(FileManagerEngine.canNavigateUp(subProject, root))
+    assertEquals(projects, FileManagerEngine.navigateUpDirectory(subProject, root))
+
+    assertFalse(FileManagerEngine.isAtRootDirectory(projects, root))
+    assertTrue(FileManagerEngine.canNavigateUp(projects, root))
+    assertEquals(docs, FileManagerEngine.navigateUpDirectory(projects, root))
+
+    assertFalse(FileManagerEngine.isAtRootDirectory(docs, root))
+    assertTrue(FileManagerEngine.canNavigateUp(docs, root))
+    assertEquals(root, FileManagerEngine.navigateUpDirectory(docs, root))
+
+    // Once at root: isAtRootDirectory is true, canNavigateUp is false, navigateUpDirectory returns null
+    assertTrue(FileManagerEngine.isAtRootDirectory(root, root))
+    assertFalse(FileManagerEngine.canNavigateUp(root, root))
+    assertNull(FileManagerEngine.navigateUpDirectory(root, root))
+  }
 }

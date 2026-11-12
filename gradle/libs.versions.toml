@@ -15,6 +15,7 @@ nav3Core = "1.0.1"
 lifecycleViewmodelNav3 = "2.10.0"
 media3 = "1.11.1"
 ffmpegKit16kb = "6.1.1"
+zxing = "3.5.3"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
@@ -43,6 +44,7 @@ androidx-media3-transformer = { module = "androidx.media3:media3-transformer", v
 androidx-media3-effect = { module = "androidx.media3:media3-effect", version.ref = "media3" }
 androidx-media3-common = { module = "androidx.media3:media3-common", version.ref = "media3" }
 ffmpeg-kit-android = { module = "com.moizhassan.ffmpeg:ffmpeg-kit-16kb", version.ref = "ffmpegKit16kb" }
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "androidGradlePlugin" }

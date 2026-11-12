@@ -180,4 +180,61 @@ class PlantScheduleTest {
     assertEquals(listOf(customPlant), repo.loadScheduledPlants())
     assertEquals(listOf(customPlant), repo.loadCustomPlants())
   }
+
+  @Test
+  fun plantIcons_matchPlantTypesAndCategories() {
+    val byId = PlantScheduleEngine.BUILT_IN_PLANTS.associateBy { it.id }
+
+    assertEquals(PlantIconType.TOMATO, byId.getValue("tomato").iconType)
+    assertEquals(PlantIconType.BELL_PEPPER, byId.getValue("bell_pepper").iconType)
+    assertEquals(PlantIconType.CHILI_PEPPER, byId.getValue("jalapeno_pepper").iconType)
+    assertEquals(PlantIconType.CUCUMBER_SQUASH, byId.getValue("cucumber").iconType)
+    assertEquals(PlantIconType.PUMPKIN, byId.getValue("pumpkin").iconType)
+    assertEquals(PlantIconType.PEA_POD, byId.getValue("snap_peas").iconType)
+    assertEquals(PlantIconType.CORN, byId.getValue("sweet_corn").iconType)
+    assertEquals(PlantIconType.EGGPLANT, byId.getValue("eggplant").iconType)
+    assertEquals(PlantIconType.BROCCOLI, byId.getValue("broccoli").iconType)
+    assertEquals(PlantIconType.CABBAGE, byId.getValue("cabbage").iconType)
+    assertEquals(PlantIconType.STALK, byId.getValue("asparagus").iconType)
+    assertEquals(PlantIconType.ARTICHOKE_OKRA, byId.getValue("artichoke").iconType)
+    assertEquals(PlantIconType.LETTUCE_HEAD, byId.getValue("lettuce").iconType)
+    assertEquals(PlantIconType.LEAFY_GREEN, byId.getValue("spinach").iconType)
+    assertEquals(PlantIconType.CARROT_ROOT, byId.getValue("carrot").iconType)
+    assertEquals(PlantIconType.ROUND_ROOT, byId.getValue("radish").iconType)
+    assertEquals(PlantIconType.POTATO_TUBER, byId.getValue("potato").iconType)
+    assertEquals(PlantIconType.ALLIUM_BULB, byId.getValue("garlic").iconType)
+    assertEquals(PlantIconType.SCALLION_LEEK, byId.getValue("scallion").iconType)
+    assertEquals(PlantIconType.HERB_LEAF, byId.getValue("basil").iconType)
+    assertEquals(PlantIconType.HERB_NEEDLE, byId.getValue("rosemary").iconType)
+    assertEquals(PlantIconType.STRAWBERRY, byId.getValue("strawberry").iconType)
+    assertEquals(PlantIconType.MELON, byId.getValue("watermelon").iconType)
+    assertEquals(PlantIconType.BERRY, byId.getValue("blueberry").iconType)
+    assertEquals(PlantIconType.GRAPE, byId.getValue("grape").iconType)
+    assertEquals(PlantIconType.FLOWER_BLOOM, byId.getValue("sunflower").iconType)
+
+    // Every PlantIconType produces a distinct ImageVector
+    val vectors = PlantIconType.entries.map { it.imageVector() }
+    assertEquals(PlantIconType.entries.size, vectors.map { it.name }.distinct().size)
+
+    // Custom plants match by name keywords or fall back to category icon
+    val customChili = PlantItem(
+      id = "custom_1",
+      name = "Ghost Chili Pepper",
+      category = PlantCategory.VEGETABLES,
+      plantingMonths = setOf(4),
+      harvestMonths = setOf(8),
+      isCustom = true,
+    )
+    assertEquals(PlantIconType.CHILI_PEPPER, customChili.iconType)
+
+    val customFlower = PlantItem(
+      id = "custom_2",
+      name = "Moonbeam Blossom",
+      category = PlantCategory.FLOWERS,
+      plantingMonths = setOf(4),
+      harvestMonths = setOf(7),
+      isCustom = true,
+    )
+    assertEquals(PlantIconType.FLOWER_BLOOM, customFlower.iconType)
+  }
 }

@@ -579,20 +579,35 @@ object ChordBookEngine {
   private val FLAT_PREFERRED_ROOTS = setOf(1, 3, 5, 8, 10)
 
   val BUILT_IN_TUNINGS: List<ChordTuning> = listOf(
-    // 6-String Guitar
+    // 6-String Guitar — Standard & lowered standard tunings (matching GuitarTuningPreset)
     ChordTuning("guitar_std", "Standard (E A D G B E)", InstrumentFamily.GUITAR_6, listOf(40, 45, 50, 55, 59, 64)),
+    ChordTuning("guitar_half_down", "Eb Standard (E♭ A♭ D♭ G♭ B♭ E♭)", InstrumentFamily.GUITAR_6, listOf(39, 44, 49, 54, 58, 63)),
+    ChordTuning("guitar_full_down", "D Standard (D G C F A D)", InstrumentFamily.GUITAR_6, listOf(38, 43, 48, 53, 57, 62)),
+    ChordTuning("guitar_csharp_std", "C# Standard (D♭ G♭ B E A♭ D♭)", InstrumentFamily.GUITAR_6, listOf(37, 42, 47, 52, 56, 61)),
+    ChordTuning("guitar_c_std", "C Standard (C F B♭ E♭ G C)", InstrumentFamily.GUITAR_6, listOf(36, 41, 46, 51, 55, 60)),
+    ChordTuning("guitar_b_std", "B Standard (B E A D F♯ B)", InstrumentFamily.GUITAR_6, listOf(35, 40, 45, 50, 54, 59)),
+
+    // 6-String Guitar — Drop tunings
     ChordTuning("guitar_drop_d", "Drop D (D A D G B E)", InstrumentFamily.GUITAR_6, listOf(38, 45, 50, 55, 59, 64)),
-    ChordTuning("guitar_half_down", "Half Step Down (E♭ A♭ D♭ G♭ B♭ E♭)", InstrumentFamily.GUITAR_6, listOf(39, 44, 49, 54, 58, 63)),
-    ChordTuning("guitar_full_down", "Full Step Down (D G C F A D)", InstrumentFamily.GUITAR_6, listOf(38, 43, 48, 53, 57, 62)),
+    ChordTuning("guitar_drop_csharp", "Drop C# (D♭ A♭ D♭ G♭ B♭ E♭)", InstrumentFamily.GUITAR_6, listOf(37, 44, 49, 54, 58, 63)),
+    ChordTuning("guitar_drop_c", "Drop C (C G C F A D)", InstrumentFamily.GUITAR_6, listOf(36, 43, 48, 53, 57, 62)),
+    ChordTuning("guitar_drop_b", "Drop B (B F♯ B E G♯ C♯)", InstrumentFamily.GUITAR_6, listOf(35, 42, 47, 52, 56, 61)),
+    ChordTuning("guitar_drop_a", "Drop A (A E A D F♯ B)", InstrumentFamily.GUITAR_6, listOf(33, 40, 45, 50, 54, 59)),
     ChordTuning("guitar_double_drop_d", "Double Drop D (D A D G B D)", InstrumentFamily.GUITAR_6, listOf(38, 45, 50, 55, 59, 62)),
-    ChordTuning("guitar_dadgad", "DADGAD (D A D G A D)", InstrumentFamily.GUITAR_6, listOf(38, 45, 50, 55, 57, 62)),
-    ChordTuning("guitar_open_d", "Open D (D A D F♯ A D)", InstrumentFamily.GUITAR_6, listOf(38, 45, 50, 54, 57, 62)),
+
+    // 6-String Guitar — Open tunings
     ChordTuning("guitar_open_g", "Open G (D G D G B D)", InstrumentFamily.GUITAR_6, listOf(38, 43, 50, 55, 59, 62)),
+    ChordTuning("guitar_open_d", "Open D (D A D F♯ A D)", InstrumentFamily.GUITAR_6, listOf(38, 45, 50, 54, 57, 62)),
     ChordTuning("guitar_open_e", "Open E (E B E G♯ B E)", InstrumentFamily.GUITAR_6, listOf(40, 47, 52, 56, 59, 64)),
     ChordTuning("guitar_open_a", "Open A (E A E A C♯ E)", InstrumentFamily.GUITAR_6, listOf(40, 45, 52, 57, 61, 64)),
     ChordTuning("guitar_open_c", "Open C (C G C G C E)", InstrumentFamily.GUITAR_6, listOf(36, 43, 48, 55, 60, 64)),
+    ChordTuning("guitar_open_dm", "Open D Minor (D A D F A D)", InstrumentFamily.GUITAR_6, listOf(38, 45, 50, 53, 57, 62)),
+
+    // 6-String Guitar — Modal & alternative tunings
+    ChordTuning("guitar_dadgad", "DADGAD (D A D G A D)", InstrumentFamily.GUITAR_6, listOf(38, 45, 50, 55, 57, 62)),
     ChordTuning("guitar_all_fourths", "All Fourths (E A D G C F)", InstrumentFamily.GUITAR_6, listOf(40, 45, 50, 55, 60, 65)),
     ChordTuning("guitar_nst", "New Standard (C G D A E G)", InstrumentFamily.GUITAR_6, listOf(36, 43, 50, 57, 64, 67)),
+    ChordTuning("guitar_nashville", "Nashville (E A D G B E)", InstrumentFamily.GUITAR_6, listOf(52, 57, 62, 67, 59, 64)),
 
     // 7-String Guitar
     ChordTuning("guitar7_std", "7-String Standard (B E A D G B E)", InstrumentFamily.GUITAR_7, listOf(35, 40, 45, 50, 55, 59, 64)),

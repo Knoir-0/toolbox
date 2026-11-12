@@ -1,5 +1,6 @@
 package com.example.toolbox.ui.tools
 
+import androidx.compose.ui.geometry.Offset
 import junit.framework.TestCase.assertEquals
 import junit.framework.TestCase.assertNull
 import junit.framework.TestCase.assertTrue
@@ -159,5 +160,69 @@ class BluetoothHidProtocolTest {
     assertEquals(6, HidProtocol.hatSwitchForDpad(up = false, down = true, left = true, right = false))
     assertEquals(7, HidProtocol.hatSwitchForDpad(up = false, down = false, left = true, right = false))
     assertEquals(8, HidProtocol.hatSwitchForDpad(up = true, down = false, left = true, right = false))
+  }
+
+  @Test
+  fun gamepadDpadButtonsForOffset_mapsAll8Equal45DegreeSectorsAndSupportsRolling() {
+    val sizePx = 200f
+    val center = Offset(100f, 100f)
+
+    // Center dead-zone returns empty
+    assertEquals(emptySet<GamepadButton>(), gamepadDpadButtonsForOffset(center, sizePx))
+
+    // Cardinal directions
+    assertEquals(setOf(GamepadButton.DPAD_UP), gamepadDpadButtonsForOffset(Offset(100f, 20f), sizePx))
+    assertEquals(setOf(GamepadButton.DPAD_DOWN), gamepadDpadButtonsForOffset(Offset(100f, 180f), sizePx))
+    assertEquals(setOf(GamepadButton.DPAD_LEFT), gamepadDpadButtonsForOffset(Offset(20f, 100f), sizePx))
+    assertEquals(setOf(GamepadButton.DPAD_RIGHT), gamepadDpadButtonsForOffset(Offset(180f, 100f), sizePx))
+
+    // Diagonal directions (45° corners inside the circle)
+    assertEquals(
+      setOf(GamepadButton.DPAD_UP, GamepadButton.DPAD_LEFT),
+      gamepadDpadButtonsForOffset(Offset(45f, 45f), sizePx),
+    )
+    assertEquals(
+      setOf(GamepadButton.DPAD_UP, GamepadButton.DPAD_RIGHT),
+      gamepadDpadButtonsForOffset(Offset(155f, 45f), sizePx),
+    )
+    assertEquals(
+      setOf(GamepadButton.DPAD_DOWN, GamepadButton.DPAD_LEFT),
+      gamepadDpadButtonsForOffset(Offset(45f, 155f), sizePx),
+    )
+    assertEquals(
+      setOf(GamepadButton.DPAD_DOWN, GamepadButton.DPAD_RIGHT),
+      gamepadDpadButtonsForOffset(Offset(155f, 155f), sizePx),
+    )
+
+    // Rolling outside the outer circle boundary stays active when allowOutsideBounds = true
+    val outsideDownRight = Offset(220f, 220f)
+    assertEquals(
+      emptySet<GamepadButton>(),
+      gamepadDpadButtonsForOffset(outsideDownRight, sizePx, allowOutsideBounds = false),
+    )
+    assertEquals(
+      setOf(GamepadButton.DPAD_DOWN, GamepadButton.DPAD_RIGHT),
+      gamepadDpadButtonsForOffset(outsideDownRight, sizePx, allowOutsideBounds = true),
+    )
+
+    // Hysteresis keeps current sector right across the 22.5° boundary (+24° from Right = 0°)
+    val angle24Rad = Math.toRadians(24.0)
+    val boundaryPoint = Offset(
+      100f + (80f * kotlin.math.cos(angle24Rad)).toFloat(),
+      100f + (80f * kotlin.math.sin(angle24Rad)).toFloat(),
+    )
+    assertEquals(
+      setOf(GamepadButton.DPAD_DOWN, GamepadButton.DPAD_RIGHT),
+      gamepadDpadButtonsForOffset(boundaryPoint, sizePx, previousButtons = emptySet()),
+    )
+    assertEquals(
+      setOf(GamepadButton.DPAD_RIGHT),
+      gamepadDpadButtonsForOffset(
+        boundaryPoint,
+        sizePx,
+        allowOutsideBounds = true,
+        previousButtons = setOf(GamepadButton.DPAD_RIGHT),
+      ),
+    )
   }
 }

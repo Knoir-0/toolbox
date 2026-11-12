@@ -54,7 +54,49 @@ enum class PlantCategory(
   ROOTS_AND_ALLIUMS("Roots & Alliums"),
   HERBS("Herbs"),
   FRUITS("Fruits & Berries"),
-  FLOWERS("Flowers"),
+  FLOWERS("Flowers");
+
+  val defaultIconType: PlantIconType
+    get() = when (this) {
+      VEGETABLES -> PlantIconType.TOMATO
+      LEAFY_GREENS -> PlantIconType.LEAFY_GREEN
+      ROOTS_AND_ALLIUMS -> PlantIconType.CARROT_ROOT
+      HERBS -> PlantIconType.HERB_LEAF
+      FRUITS -> PlantIconType.STRAWBERRY
+      FLOWERS -> PlantIconType.FLOWER_BLOOM
+    }
+}
+
+/**
+ * Distinct botanical and produce icon types matching individual plant varieties.
+ */
+enum class PlantIconType {
+  TOMATO,
+  BELL_PEPPER,
+  CHILI_PEPPER,
+  CUCUMBER_SQUASH,
+  PUMPKIN,
+  PEA_POD,
+  CORN,
+  EGGPLANT,
+  BROCCOLI,
+  CABBAGE,
+  STALK,
+  ARTICHOKE_OKRA,
+  LETTUCE_HEAD,
+  LEAFY_GREEN,
+  CARROT_ROOT,
+  ROUND_ROOT,
+  POTATO_TUBER,
+  ALLIUM_BULB,
+  SCALLION_LEEK,
+  HERB_LEAF,
+  HERB_NEEDLE,
+  STRAWBERRY,
+  MELON,
+  BERRY,
+  GRAPE,
+  FLOWER_BLOOM,
 }
 
 /**
@@ -103,6 +145,9 @@ data class PlantItem(
 
   val normalizedHarvestMonths: Set<Int>
     get() = harvestMonths.filter { it in 1..12 }.toSortedSet()
+
+  val iconType: PlantIconType
+    get() = PlantScheduleEngine.resolvePlantIconType(this)
 
   fun isPlantingInMonth(month: Int): Boolean = month in normalizedPlantingMonths
 
@@ -1703,6 +1748,193 @@ object PlantScheduleEngine {
       } else {
         "$startName–$endName"
       }
+    }
+  }
+
+  private val PLANT_ID_ICON_MAP: Map<String, PlantIconType> = mapOf(
+    // Vegetables
+    "tomato" to PlantIconType.TOMATO,
+    "cherry_tomato" to PlantIconType.TOMATO,
+    "tomatillo" to PlantIconType.TOMATO,
+    "peppers" to PlantIconType.BELL_PEPPER,
+    "sweet_peppers" to PlantIconType.BELL_PEPPER,
+    "bell_pepper" to PlantIconType.BELL_PEPPER,
+    "banana_pepper" to PlantIconType.CHILI_PEPPER,
+    "shishito_pepper" to PlantIconType.CHILI_PEPPER,
+    "poblano_pepper" to PlantIconType.CHILI_PEPPER,
+    "anaheim_pepper" to PlantIconType.CHILI_PEPPER,
+    "jalapeno_pepper" to PlantIconType.CHILI_PEPPER,
+    "serrano_pepper" to PlantIconType.CHILI_PEPPER,
+    "cayenne_pepper" to PlantIconType.CHILI_PEPPER,
+    "habanero_pepper" to PlantIconType.CHILI_PEPPER,
+    "thai_chili_pepper" to PlantIconType.CHILI_PEPPER,
+    "cucumber" to PlantIconType.CUCUMBER_SQUASH,
+    "zucchini" to PlantIconType.CUCUMBER_SQUASH,
+    "yellow_squash" to PlantIconType.CUCUMBER_SQUASH,
+    "spaghetti_squash" to PlantIconType.CUCUMBER_SQUASH,
+    "pumpkin" to PlantIconType.PUMPKIN,
+    "butternut_squash" to PlantIconType.PUMPKIN,
+    "acorn_squash" to PlantIconType.PUMPKIN,
+    "green_beans" to PlantIconType.PEA_POD,
+    "snap_peas" to PlantIconType.PEA_POD,
+    "edamame" to PlantIconType.PEA_POD,
+    "lima_beans" to PlantIconType.PEA_POD,
+    "sweet_corn" to PlantIconType.CORN,
+    "eggplant" to PlantIconType.EGGPLANT,
+    "broccoli" to PlantIconType.BROCCOLI,
+    "cauliflower" to PlantIconType.BROCCOLI,
+    "cabbage" to PlantIconType.CABBAGE,
+    "brussels_sprouts" to PlantIconType.CABBAGE,
+    "kohlrabi" to PlantIconType.CABBAGE,
+    "asparagus" to PlantIconType.STALK,
+    "celery" to PlantIconType.STALK,
+    "fennel" to PlantIconType.STALK,
+    "okra" to PlantIconType.ARTICHOKE_OKRA,
+    "artichoke" to PlantIconType.ARTICHOKE_OKRA,
+
+    // Leafy Greens
+    "lettuce" to PlantIconType.LETTUCE_HEAD,
+    "bok_choy" to PlantIconType.LETTUCE_HEAD,
+    "endive" to PlantIconType.LETTUCE_HEAD,
+    "radicchio" to PlantIconType.LETTUCE_HEAD,
+    "tatsoi" to PlantIconType.LETTUCE_HEAD,
+    "spinach" to PlantIconType.LEAFY_GREEN,
+    "kale" to PlantIconType.LEAFY_GREEN,
+    "swiss_chard" to PlantIconType.LEAFY_GREEN,
+    "arugula" to PlantIconType.LEAFY_GREEN,
+    "collard_greens" to PlantIconType.LEAFY_GREEN,
+    "mustard_greens" to PlantIconType.LEAFY_GREEN,
+    "watercress" to PlantIconType.LEAFY_GREEN,
+
+    // Roots & Alliums
+    "carrot" to PlantIconType.CARROT_ROOT,
+    "parsnip" to PlantIconType.CARROT_ROOT,
+    "daikon_radish" to PlantIconType.CARROT_ROOT,
+    "radish" to PlantIconType.ROUND_ROOT,
+    "beet" to PlantIconType.ROUND_ROOT,
+    "turnip" to PlantIconType.ROUND_ROOT,
+    "rutabaga" to PlantIconType.ROUND_ROOT,
+    "potato" to PlantIconType.POTATO_TUBER,
+    "sweet_potato" to PlantIconType.POTATO_TUBER,
+    "ginger" to PlantIconType.POTATO_TUBER,
+    "onion" to PlantIconType.ALLIUM_BULB,
+    "garlic" to PlantIconType.ALLIUM_BULB,
+    "shallot" to PlantIconType.ALLIUM_BULB,
+    "scallion" to PlantIconType.SCALLION_LEEK,
+    "leek" to PlantIconType.SCALLION_LEEK,
+
+    // Herbs
+    "basil" to PlantIconType.HERB_LEAF,
+    "cilantro" to PlantIconType.HERB_LEAF,
+    "parsley" to PlantIconType.HERB_LEAF,
+    "mint" to PlantIconType.HERB_LEAF,
+    "oregano" to PlantIconType.HERB_LEAF,
+    "sage" to PlantIconType.HERB_LEAF,
+    "lemon_balm" to PlantIconType.HERB_LEAF,
+    "marjoram" to PlantIconType.HERB_LEAF,
+    "rosemary" to PlantIconType.HERB_NEEDLE,
+    "thyme" to PlantIconType.HERB_NEEDLE,
+    "dill" to PlantIconType.HERB_NEEDLE,
+    "chives" to PlantIconType.HERB_NEEDLE,
+    "lemongrass" to PlantIconType.HERB_NEEDLE,
+    "tarragon" to PlantIconType.HERB_NEEDLE,
+    "lavender" to PlantIconType.FLOWER_BLOOM,
+    "chamomile" to PlantIconType.FLOWER_BLOOM,
+
+    // Fruits & Berries
+    "strawberry" to PlantIconType.STRAWBERRY,
+    "watermelon" to PlantIconType.MELON,
+    "cantaloupe" to PlantIconType.MELON,
+    "honeydew_melon" to PlantIconType.MELON,
+    "blueberry" to PlantIconType.BERRY,
+    "raspberry" to PlantIconType.BERRY,
+    "blackberry" to PlantIconType.BERRY,
+    "ground_cherry" to PlantIconType.BERRY,
+    "fig" to PlantIconType.BERRY,
+    "grape" to PlantIconType.GRAPE,
+    "rhubarb" to PlantIconType.STALK,
+
+    // Flowers
+    "sunflower" to PlantIconType.FLOWER_BLOOM,
+    "marigold" to PlantIconType.FLOWER_BLOOM,
+    "zinnia" to PlantIconType.FLOWER_BLOOM,
+    "nasturtium" to PlantIconType.FLOWER_BLOOM,
+    "cosmos" to PlantIconType.FLOWER_BLOOM,
+    "calendula" to PlantIconType.FLOWER_BLOOM,
+    "dahlia" to PlantIconType.FLOWER_BLOOM,
+    "sweet_pea_flower" to PlantIconType.FLOWER_BLOOM,
+    "snapdragon" to PlantIconType.FLOWER_BLOOM,
+    "borage" to PlantIconType.FLOWER_BLOOM,
+    "echinacea" to PlantIconType.FLOWER_BLOOM,
+    "poppy" to PlantIconType.FLOWER_BLOOM,
+  )
+
+  /**
+   * Resolves the most specific [PlantIconType] for a built-in or custom [PlantItem]
+   * based on its ID, common/scientific name keywords, and category fallback.
+   */
+  fun resolvePlantIconType(plant: PlantItem): PlantIconType {
+    PLANT_ID_ICON_MAP[plant.id]?.let { return it }
+
+    val text = "${plant.name} ${plant.scientificName}".lowercase()
+    return when {
+      text.contains("sweet pea") && plant.category == PlantCategory.FLOWERS -> PlantIconType.FLOWER_BLOOM
+      text.contains("tomato") || text.contains("tomatillo") || text.contains("lycopersicum") -> PlantIconType.TOMATO
+      text.contains("bell pepper") || text.contains("sweet pepper") || text.contains("peppers") -> PlantIconType.BELL_PEPPER
+      text.contains("chili") || text.contains("chile") || text.contains("jalap") ||
+        text.contains("habanero") || text.contains("cayenne") || text.contains("serrano") ||
+        text.contains("poblano") || text.contains("anaheim") || text.contains("shishito") ||
+        text.contains("banana pepper") || text.contains("pepper") || text.contains("capsicum") -> PlantIconType.CHILI_PEPPER
+      text.contains("pumpkin") || text.contains("butternut") || text.contains("acorn squash") ||
+        text.contains("gourd") -> PlantIconType.PUMPKIN
+      text.contains("cucumber") || text.contains("zucchini") || text.contains("squash") ||
+        text.contains("courgette") -> PlantIconType.CUCUMBER_SQUASH
+      text.contains("bean") || text.contains("pea") || text.contains("edamame") ||
+        text.contains("soybean") || text.contains("lentil") -> PlantIconType.PEA_POD
+      text.contains("corn") || text.contains("maize") || text.contains("zea mays") -> PlantIconType.CORN
+      text.contains("eggplant") || text.contains("aubergine") || text.contains("melongena") -> PlantIconType.EGGPLANT
+      text.contains("broccoli") || text.contains("cauliflower") || text.contains("romanesco") -> PlantIconType.BROCCOLI
+      text.contains("cabbage") || text.contains("brussels") || text.contains("kohlrabi") -> PlantIconType.CABBAGE
+      text.contains("asparagus") || text.contains("celery") || text.contains("fennel") ||
+        text.contains("rhubarb") -> PlantIconType.STALK
+      text.contains("artichoke") || text.contains("okra") -> PlantIconType.ARTICHOKE_OKRA
+      text.contains("lettuce") || text.contains("bok choy") || text.contains("pak choi") ||
+        text.contains("endive") || text.contains("escarole") || text.contains("radicchio") ||
+        text.contains("tatsoi") -> PlantIconType.LETTUCE_HEAD
+      text.contains("spinach") || text.contains("kale") || text.contains("chard") ||
+        text.contains("arugula") || text.contains("collard") || text.contains("mustard") ||
+        text.contains("watercress") || text.contains("sorrel") -> PlantIconType.LEAFY_GREEN
+      text.contains("carrot") || text.contains("parsnip") || text.contains("daikon") ||
+        text.contains("salsify") -> PlantIconType.CARROT_ROOT
+      text.contains("radish") || text.contains("beet") || text.contains("turnip") ||
+        text.contains("rutabaga") || text.contains("celeriac") -> PlantIconType.ROUND_ROOT
+      text.contains("potato") || text.contains("yam") || text.contains("ginger") ||
+        text.contains("turmeric") || text.contains("taro") -> PlantIconType.POTATO_TUBER
+      text.contains("scallion") || text.contains("green onion") || text.contains("spring onion") ||
+        text.contains("leek") -> PlantIconType.SCALLION_LEEK
+      text.contains("onion") || text.contains("garlic") || text.contains("shallot") ||
+        text.contains("allium") -> PlantIconType.ALLIUM_BULB
+      text.contains("rosemary") || text.contains("thyme") || text.contains("dill") ||
+        text.contains("chive") || text.contains("lemongrass") || text.contains("tarragon") -> PlantIconType.HERB_NEEDLE
+      text.contains("basil") || text.contains("cilantro") || text.contains("coriander") ||
+        text.contains("parsley") || text.contains("mint") || text.contains("oregano") ||
+        text.contains("sage") || text.contains("lemon balm") || text.contains("marjoram") ||
+        text.contains("stevia") -> PlantIconType.HERB_LEAF
+      text.contains("strawberry") || text.contains("fragaria") -> PlantIconType.STRAWBERRY
+      text.contains("melon") || text.contains("watermelon") || text.contains("cantaloupe") ||
+        text.contains("honeydew") -> PlantIconType.MELON
+      text.contains("grape") || text.contains("vitis") -> PlantIconType.GRAPE
+      text.contains("berry") || text.contains("blueberry") || text.contains("raspberry") ||
+        text.contains("blackberry") || text.contains("currant") || text.contains("cherry") ||
+        text.contains("fig") -> PlantIconType.BERRY
+      text.contains("flower") || text.contains("sunflower") || text.contains("marigold") ||
+        text.contains("zinnia") || text.contains("nasturtium") || text.contains("cosmos") ||
+        text.contains("calendula") || text.contains("dahlia") || text.contains("snapdragon") ||
+        text.contains("borage") || text.contains("echinacea") || text.contains("coneflower") ||
+        text.contains("poppy") || text.contains("lavender") || text.contains("chamomile") ||
+        text.contains("rose") || text.contains("tulip") || text.contains("daisy") ||
+        text.contains("petunia") || text.contains("pansy") || text.contains("peony") -> PlantIconType.FLOWER_BLOOM
+      else -> plant.category.defaultIconType
     }
   }
 }

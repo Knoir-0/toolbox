@@ -898,6 +898,13 @@ private fun CatalogSearchOverlay(
               onClick = {
                 onSelectCategory(if (isSelected) null else category)
               },
+              leadingIcon = {
+                Icon(
+                  imageVector = category.iconVector(),
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+              },
               label = {
                 Text(
                   text = category.displayName,
@@ -909,6 +916,7 @@ private fun CatalogSearchOverlay(
               colors = FilterChipDefaults.filterChipColors(
                 selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                 selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
               ),
               modifier = Modifier.testTag("category_chip_${category.name}"),
             )
@@ -1084,14 +1092,16 @@ private fun CatalogPlantItemCard(
             contentAlignment = Alignment.Center,
           ) {
             Icon(
-              imageVector = if (isScheduled) Icons.Default.Check else Icons.Default.Yard,
+              imageVector = plant.iconVector(),
               contentDescription = null,
               tint = if (isScheduled) {
                 MaterialTheme.colorScheme.primary
               } else {
                 MaterialTheme.colorScheme.onSecondaryContainer
               },
-              modifier = Modifier.size(20.dp),
+              modifier = Modifier
+                .size(20.dp)
+                .testTag("catalog_plant_icon_${plant.id}"),
             )
           }
 
@@ -1697,10 +1707,12 @@ private fun ScheduledPlantYearRow(
               contentAlignment = Alignment.Center,
             ) {
               Icon(
-                imageVector = Icons.Default.Yard,
+                imageVector = plant.iconVector(),
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier
+                  .size(18.dp)
+                  .testTag("scheduled_plant_icon_${plant.id}"),
               )
             }
           }
@@ -2108,12 +2120,23 @@ private fun MonthActivitySummaryCard(
               )
             } else {
               plantingThisMonth.forEach { plant ->
-                Text(
-                  text = "• ${plant.name}",
-                  style = MaterialTheme.typography.bodySmall,
-                  fontWeight = FontWeight.Medium,
-                  color = MaterialTheme.colorScheme.onSurface,
-                )
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                  Icon(
+                    imageVector = plant.iconVector(),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(15.dp),
+                  )
+                  Text(
+                    text = plant.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                  )
+                }
               }
             }
           }
@@ -2157,12 +2180,23 @@ private fun MonthActivitySummaryCard(
               )
             } else {
               harvestingThisMonth.forEach { plant ->
-                Text(
-                  text = "• ${plant.name}",
-                  style = MaterialTheme.typography.bodySmall,
-                  fontWeight = FontWeight.Medium,
-                  color = MaterialTheme.colorScheme.onSurface,
-                )
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                  Icon(
+                    imageVector = plant.iconVector(),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.size(15.dp),
+                  )
+                  Text(
+                    text = plant.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                  )
+                }
               }
             }
           }
@@ -2260,7 +2294,7 @@ private fun PlantEditorDialog(
           contentAlignment = Alignment.Center,
         ) {
           Icon(
-            imageVector = Icons.Default.Yard,
+            imageVector = previewPlant.iconVector(),
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(24.dp),
@@ -2307,14 +2341,34 @@ private fun PlantEditorDialog(
               horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically,
             ) {
-              Text(
-                text = previewPlant.name,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f),
+              ) {
+                Box(
+                  modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Icon(
+                    imageVector = previewPlant.iconVector(),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp),
+                  )
+                }
+                Text(
+                  text = previewPlant.name,
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
               Text(
                 text = "${selectedCategory.displayName} • Plant: ${previewPlant.plantingSummary()} • Harvest: ${previewPlant.harvestSummary()}",
                 style = MaterialTheme.typography.labelSmall,
@@ -2348,7 +2402,7 @@ private fun PlantEditorDialog(
           },
           shape = RoundedCornerShape(14.dp),
           leadingIcon = {
-            Icon(Icons.Default.Yard, contentDescription = null)
+            Icon(previewPlant.iconVector(), contentDescription = null)
           },
           trailingIcon = {
             if (nameField.text.isNotEmpty()) {
@@ -2378,6 +2432,13 @@ private fun PlantEditorDialog(
             FilterChip(
               selected = selectedCategory == cat,
               onClick = { selectedCategory = cat },
+              leadingIcon = {
+                Icon(
+                  imageVector = cat.iconVector(),
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+              },
               label = {
                 Text(
                   text = cat.displayName,
@@ -2495,7 +2556,7 @@ private fun PlantDetailsDialog(
           contentAlignment = Alignment.Center,
         ) {
           Icon(
-            imageVector = Icons.Default.Info,
+            imageVector = singlePlant?.iconVector() ?: Icons.Default.Info,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(24.dp),
@@ -2542,17 +2603,39 @@ private fun PlantDetailsDialog(
                 .padding(12.dp),
               verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-              Text(
-                text = plant.name,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-              )
-              Text(
-                text = "${plant.category.displayName} • Plant: ${plant.plantingSummary()} • Harvest: ${plant.harvestSummary()}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth(),
+              ) {
+                Box(
+                  modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Icon(
+                    imageVector = plant.iconVector(),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                  )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                  Text(
+                    text = plant.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                  )
+                  Text(
+                    text = "${plant.category.displayName} • Plant: ${plant.plantingSummary()} • Harvest: ${plant.harvestSummary()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+              }
               PlantYearMonthBar(plant = plant)
               val details = buildList {
                 if (plant.sunRequirement.isNotBlank()) add("Sun: ${plant.sunRequirement}")

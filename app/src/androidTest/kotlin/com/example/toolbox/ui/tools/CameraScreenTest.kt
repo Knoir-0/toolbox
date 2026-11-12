@@ -114,10 +114,42 @@ class CameraScreenTest {
     assertEquals(2, mediaAfterVideo.size)
     assertTrue(mediaAfterVideo.any { it.isVideo && it.name.startsWith("VID_") })
 
-    // Open Recent Captures dialog
+    // Open Gallery tool directly at the Camera folder via the thumbnail link button
     composeTestRule.onNodeWithTag("recent_captures_button").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("recent_captures_dialog").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Recent Captures").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_header_title").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Camera").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_breadcrumb_Camera").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_tile_item_${mediaAfterPhoto.first().name}").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_back_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_screen").assertIsDisplayed()
+
+    // Switch to Scan mode (QR Code Reader & Barcode Scanner)
+    composeTestRule.onNodeWithTag("mode_tab_SCANNER").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_scanner_reticle_overlay").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("scanner_controls_bar").assertIsDisplayed()
+
+    // Filter to QR Code and trigger scan
+    composeTestRule.onNodeWithTag("scan_filter_QR_CODE").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_shutter_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("scanner_detected_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("scanner_detected_format_badge").assertIsDisplayed()
+
+    // Switch filter to 1D Barcode and scan an EAN-13 barcode
+    composeTestRule.onNodeWithTag("scan_filter_BARCODE").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_shutter_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("scanner_detected_card").assertIsDisplayed()
+
+    // Open QR & Barcode Hub dialog and verify scan history
+    composeTestRule.onNodeWithTag("scanner_history_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("scanner_history_dialog").assertIsDisplayed()
   }
 }

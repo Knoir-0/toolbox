@@ -486,6 +486,48 @@
         </activity-alias>
 
         <activity-alias
+            android:name=".MainActivityToolDecibelMeter"
+            android:targetActivity=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_decibel_meter"
+            android:roundIcon="@mipmap/ic_tool_decibel_meter"
+            android:label="Decibel Meter">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".MainActivityToolArchive"
+            android:targetActivity=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_archive"
+            android:roundIcon="@mipmap/ic_tool_archive"
+            android:label="Archive">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".MainActivityToolMusicPlayer"
+            android:targetActivity=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_music_player"
+            android:roundIcon="@mipmap/ic_tool_music_player"
+            android:label="Music">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
             android:name=".MainActivityToolSettings"
             android:targetActivity=".MainActivity"
             android:enabled="true"

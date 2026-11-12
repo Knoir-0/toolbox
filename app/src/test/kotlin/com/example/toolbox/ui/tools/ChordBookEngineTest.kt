@@ -279,4 +279,23 @@ class ChordBookEngineTest {
     assertEquals(1, restored.chords.size)
     assertEquals(listOf(3, 3, 5, 3, 4, 3), restored.chords.first().preferredFrets)
   }
+
+  @Test
+  fun builtInGuitarTunings_matchGuitarTunerPresets() {
+    val guitar6Tunings = ChordBookEngine.BUILT_IN_TUNINGS.filter { it.instrument == InstrumentFamily.GUITAR_6 }
+    val tunerPresets = GuitarTuningPreset.entries
+    assertEquals(tunerPresets.size, guitar6Tunings.size)
+
+    tunerPresets.zip(guitar6Tunings).forEach { (preset, chordTuning) ->
+      assertTrue(
+        "Chord tuning '${chordTuning.name}' should start with preset label '${preset.label}'",
+        chordTuning.name.startsWith("${preset.label} ("),
+      )
+      assertEquals(6, chordTuning.openStringMidi.size)
+      preset.strings.zip(chordTuning.openStringMidi).forEach { (stringSpec, midi) ->
+        val expectedFreq = ((440.0 * Math.pow(2.0, (midi - 69) / 12.0)) * 100.0).let { Math.round(it) / 100.0 }
+        assertEquals(expectedFreq, stringSpec.frequencyHz, 0.02)
+      }
+    }
+  }
 }

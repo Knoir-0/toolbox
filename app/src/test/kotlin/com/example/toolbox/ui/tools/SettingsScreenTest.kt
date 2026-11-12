@@ -208,6 +208,9 @@ class SettingsScreenTest {
     assertEquals(ToolCategory.MISCELLANEOUS, Tool.DICE_ROLLER.category)
     assertEquals(ToolCategory.REMOTES_AND_DEVICES, Tool.BLUETOOTH_REMOTE.category)
     assertEquals(ToolCategory.REMOTES_AND_DEVICES, Tool.BLUETOOTH_GAMEPAD.category)
+    assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.DECIBEL_METER.category)
+    assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.ARCHIVE.category)
+    assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.MUSIC.category)
     assertEquals(ToolCategory.SYSTEM, Tool.SETTINGS.category)
   }
 
@@ -403,5 +406,13 @@ class SettingsScreenTest {
     assertEquals(CategorySortingOption.MANUAL, repo.getCategorySorting())
     assertEquals(CategoryToolSortingOption.MANUAL, repo.getCategoryToolSorting())
     assertTrue(repo.getToolUsageCounts().isEmpty())
+  }
+
+  @Test
+  fun githubIssueUrls_pointToRepositoryNewIssuePage() {
+    val expectedUrl = "https://github.com/Knoir-0/toolbox/issues/new"
+    assertEquals(expectedUrl, GITHUB_NEW_ISSUE_URL)
+    assertEquals(expectedUrl, GITHUB_REPORT_BUG_URL)
+    assertEquals(expectedUrl, GITHUB_REQUEST_FEATURE_URL)
   }
 }

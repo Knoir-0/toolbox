@@ -33,6 +33,8 @@ val DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
   Tool.IMAGE_EDITOR,
   Tool.VIDEO_EDITOR,
   Tool.AUDIO_EDITOR,
+  Tool.DECIBEL_METER,
+  Tool.ARCHIVE,
 )
 
 /**

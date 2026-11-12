@@ -8,7 +8,10 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,8 +35,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.AddToHomeScreen
-import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.QuestionMark
+import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
@@ -49,10 +52,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.material3.rememberStandardBottomSheetState
+import androidx.compose.material3.rememberBottomSheetScaffoldState
+import androidx.compose.material3.rememberStandardBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -72,6 +78,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -91,6 +98,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.navigation3.runtime.NavKey
 import com.example.toolbox.ui.theme.ToolboxTheme
+import com.example.toolbox.ui.tools.ArchiveScreen
 import com.example.toolbox.ui.tools.AudioEditorScreen
 import com.example.toolbox.ui.tools.AudioRecorderScreen
 import com.example.toolbox.ui.tools.BluetoothGamepadScreen
@@ -99,6 +107,7 @@ import com.example.toolbox.ui.tools.CalculatorScreen
 import com.example.toolbox.ui.tools.CameraScreen
 import com.example.toolbox.ui.tools.ChordBookScreen
 import com.example.toolbox.ui.tools.ColorPickerScreen
+import com.example.toolbox.ui.tools.DecibelMeterScreen
 import com.example.toolbox.ui.tools.DiceRollerScreen
 import com.example.toolbox.ui.tools.FileConverterScreen
 import com.example.toolbox.ui.tools.FilesScreen
@@ -107,6 +116,7 @@ import java.io.File
 import com.example.toolbox.ui.tools.GuitarTunerScreen
 import com.example.toolbox.ui.tools.ImageEditorScreen
 import com.example.toolbox.ui.tools.MetronomeScreen
+import com.example.toolbox.ui.tools.MusicPlayerScreen
 import com.example.toolbox.ui.tools.NotesScreen
 import com.example.toolbox.ui.tools.PlantScheduleScreen
 import com.example.toolbox.ui.tools.RulerScreen
@@ -126,6 +136,7 @@ const val ROWS_PER_PAGE_EXPANDED = 2
 const val ROWS_PER_PAGE_COLLAPSED = 1
 const val PAGE_HOVER_EDGE_DWELL_MS = 400L
 const val PAGE_HOVER_REPEAT_DELAY_MS = 700L
+val TOOL_PANEL_HANDLE_HEIGHT = 26.dp
 
 /**
  * Defines the background style used by each tool screen.
@@ -261,6 +272,71 @@ fun mergeReorderedVisible(
   return merged.filter { it != Tool.SETTINGS } + Tool.SETTINGS
 }
 
+/**
+ * Resolves the target [SheetValue] for the tool panel after a vertical drag gesture finishes.
+ *
+ * - [SheetValue.Hidden] represents the panel dragged to the bottom of the screen, leaving only
+ *   the drag handle visible ([minimizedHeightPx]).
+ * - [SheetValue.PartiallyExpanded] represents the single-row collapsed panel ([collapsedHeightPx]).
+ * - [SheetValue.Expanded] represents the multi-row expanded panel with controls ([expandedHeightPx]).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+fun resolveToolPanelSheetValue(
+  startValue: SheetValue,
+  currentHeightPx: Float,
+  minimizedHeightPx: Float,
+  collapsedHeightPx: Float,
+  expandedHeightPx: Float,
+  minDragThresholdPx: Float,
+): SheetValue {
+  val safeExpandedPx = maxOf(expandedHeightPx, collapsedHeightPx)
+  val safeCollapsedPx = collapsedHeightPx.coerceIn(minimizedHeightPx, safeExpandedPx)
+  val startHeightPx = when (startValue) {
+    SheetValue.Hidden -> minimizedHeightPx
+    SheetValue.PartiallyExpanded -> safeCollapsedPx
+    SheetValue.Expanded -> safeExpandedPx
+  }
+  val clampedCurrentPx = currentHeightPx.coerceIn(minimizedHeightPx, safeExpandedPx)
+  val effectiveDragDeltaY = startHeightPx - clampedCurrentPx
+
+  if (effectiveDragDeltaY >= minDragThresholdPx) {
+    return when (startValue) {
+      SheetValue.Expanded -> {
+        val collapseToHiddenMidpoint = (safeCollapsedPx + minimizedHeightPx) / 2f
+        if (clampedCurrentPx <= collapseToHiddenMidpoint) {
+          SheetValue.Hidden
+        } else {
+          SheetValue.PartiallyExpanded
+        }
+      }
+      SheetValue.PartiallyExpanded, SheetValue.Hidden -> SheetValue.Hidden
+    }
+  }
+
+  if (effectiveDragDeltaY <= -minDragThresholdPx) {
+    return when (startValue) {
+      SheetValue.Hidden -> {
+        val expandMidpoint = (safeCollapsedPx + safeExpandedPx) / 2f
+        if (clampedCurrentPx >= expandMidpoint) {
+          SheetValue.Expanded
+        } else {
+          SheetValue.PartiallyExpanded
+        }
+      }
+      SheetValue.PartiallyExpanded, SheetValue.Expanded -> SheetValue.Expanded
+    }
+  }
+
+  val distToHidden = kotlin.math.abs(clampedCurrentPx - minimizedHeightPx)
+  val distToCollapsed = kotlin.math.abs(clampedCurrentPx - safeCollapsedPx)
+  val distToExpanded = kotlin.math.abs(clampedCurrentPx - safeExpandedPx)
+  return when (minOf(distToHidden, distToCollapsed, distToExpanded)) {
+    distToHidden -> SheetValue.Hidden
+    distToExpanded -> SheetValue.Expanded
+    else -> SheetValue.PartiallyExpanded
+  }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
@@ -369,33 +445,124 @@ fun ToolboxScaffold(
   val toolsPerRow = coerceToolsPerRow(persistedToolsPerRow)
   var isDraggingTool by remember { mutableStateOf(false) }
 
-  val sheetState = rememberStandardBottomSheetState(
-    initialValue = initialSheetValue,
-    skipHiddenState = true,
-  )
-  val scaffoldState = rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
-  val coroutineScope = rememberCoroutineScope()
-
-  // Native NavigationBar height (80.dp) + compact pull-up handle (28.dp) + bottom clearance + navigation bar insets
+  val density = LocalDensity.current
+  // Native NavigationBar height (80.dp) + compact pull-up handle (26.dp) + bottom clearance + navigation bar insets
   val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+  val minimizedPeekHeight = TOOL_PANEL_HANDLE_HEIGHT + navBarBottom
   val basePeekHeight = if (toolSorting == ToolSortingOption.TOOL_CATEGORIES) 130.dp else 118.dp
   val sheetPeekHeight = basePeekHeight + navBarBottom
-  val isExpanded = sheetState.currentValue == SheetValue.Expanded ||
-    sheetState.targetValue == SheetValue.Expanded
+
+  val minimizedHeightPx = with(density) { minimizedPeekHeight.toPx() }
+  val collapsedHeightPx = with(density) { sheetPeekHeight.toPx() }
+  val defaultExpandedHeightPx = with(density) { (284.dp + navBarBottom).toPx() }
+  val minDragThresholdPx = with(density) { 12.dp.toPx() }
+
+  var sheetValue by rememberSaveable(initialSheetValue) { mutableStateOf(initialSheetValue) }
+  var measuredExpandedHeightPx by remember { mutableFloatStateOf(defaultExpandedHeightPx) }
+  val expandedHeightPx = maxOf(measuredExpandedHeightPx, collapsedHeightPx)
+
+  var isDraggingSheet by remember { mutableStateOf(false) }
+  var dragStartValue by remember { mutableStateOf(initialSheetValue) }
+  var dragStartHeightPx by remember { mutableFloatStateOf(collapsedHeightPx) }
+  var dragDeltaSumPx by remember { mutableFloatStateOf(0f) }
+  var dragHeightPx by remember { mutableFloatStateOf(collapsedHeightPx) }
+
+  val currentSheetValue by rememberUpdatedState(sheetValue)
+  val currentMinimizedHeightPx by rememberUpdatedState(minimizedHeightPx)
+  val currentCollapsedHeightPx by rememberUpdatedState(collapsedHeightPx)
+  val currentExpandedHeightPx by rememberUpdatedState(expandedHeightPx)
+
+  val sheetDraggableState = rememberDraggableState { deltaY ->
+    dragDeltaSumPx += deltaY
+    dragHeightPx = (dragStartHeightPx - dragDeltaSumPx)
+      .coerceIn(currentMinimizedHeightPx, currentExpandedHeightPx)
+  }
+
+  val isExpanded = sheetValue == SheetValue.Expanded ||
+    (isDraggingSheet && dragHeightPx > collapsedHeightPx + 1f)
+  val isMinimized = !isDraggingSheet && sheetValue == SheetValue.Hidden
   val currentToolBackgroundColor = toolBackgroundColor(selectedTool)
 
-  BottomSheetScaffold(
-    modifier = modifier.fillMaxSize(),
-    scaffoldState = scaffoldState,
-    sheetPeekHeight = sheetPeekHeight,
-    sheetSwipeEnabled = !isDraggingTool,
-    sheetShape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-    sheetContainerColor = NavigationBarDefaults.containerColor,
-    sheetTonalElevation = NavigationBarDefaults.Elevation,
-    sheetShadowElevation = 8.dp,
-    sheetDragHandle = null,
-    containerColor = currentToolBackgroundColor,
-    sheetContent = {
+  val currentVisibleSheetHeightDp = when {
+    isDraggingSheet -> with(density) { dragHeightPx.toDp() }
+    sheetValue == SheetValue.Hidden -> minimizedPeekHeight
+    else -> sheetPeekHeight
+  }
+  val toolContentBottomPadding = minOf(currentVisibleSheetHeightDp, sheetPeekHeight)
+
+  Box(
+    modifier = modifier
+      .fillMaxSize()
+      .background(currentToolBackgroundColor),
+  ) {
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .background(currentToolBackgroundColor)
+        .statusBarsPadding(),
+      contentAlignment = Alignment.Center,
+    ) {
+      ToolContentView(
+        tool = selectedTool,
+        bottomPadding = toolContentBottomPadding,
+        initialDirectory = initialDirectory,
+        preferencesRepository = preferencesRepository,
+      )
+    }
+
+    val sheetHeightModifier = when {
+      isDraggingSheet -> Modifier.height(
+        with(density) { dragHeightPx.coerceIn(minimizedHeightPx, expandedHeightPx).toDp() }
+      )
+      sheetValue == SheetValue.Hidden -> Modifier.height(minimizedPeekHeight)
+      sheetValue == SheetValue.PartiallyExpanded -> Modifier.height(sheetPeekHeight)
+      else -> Modifier
+    }
+
+    Surface(
+      modifier = Modifier
+        .align(Alignment.BottomCenter)
+        .fillMaxWidth()
+        .then(sheetHeightModifier)
+        .onSizeChanged { size ->
+          if (sheetValue == SheetValue.Expanded && !isDraggingSheet && size.height > 0) {
+            measuredExpandedHeightPx = size.height.toFloat()
+          }
+        }
+        .draggable(
+          state = sheetDraggableState,
+          orientation = Orientation.Vertical,
+          enabled = !isDraggingTool,
+          onDragStarted = {
+            dragStartValue = currentSheetValue
+            dragStartHeightPx = when (currentSheetValue) {
+              SheetValue.Hidden -> currentMinimizedHeightPx
+              SheetValue.PartiallyExpanded -> currentCollapsedHeightPx
+              SheetValue.Expanded -> currentExpandedHeightPx
+            }
+            dragDeltaSumPx = 0f
+            dragHeightPx = dragStartHeightPx
+            isDraggingSheet = true
+          },
+          onDragStopped = {
+            val nextValue = resolveToolPanelSheetValue(
+              startValue = dragStartValue,
+              currentHeightPx = dragHeightPx,
+              minimizedHeightPx = currentMinimizedHeightPx,
+              collapsedHeightPx = currentCollapsedHeightPx,
+              expandedHeightPx = currentExpandedHeightPx,
+              minDragThresholdPx = minDragThresholdPx,
+            )
+            sheetValue = nextValue
+            isDraggingSheet = false
+            dragDeltaSumPx = 0f
+          },
+        ),
+      shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+      color = NavigationBarDefaults.containerColor,
+      tonalElevation = NavigationBarDefaults.Elevation,
+      shadowElevation = 8.dp,
+    ) {
       ToolsPullUpPanelContent(
         tools = displayTools,
         selectedTool = selectedTool,
@@ -406,24 +573,19 @@ fun ToolboxScaffold(
         usageCounts = toolUsageCounts,
         themeColor = themeColor,
         isExpanded = isExpanded,
+        isMinimized = isMinimized,
         onTogglePanel = {
-          coroutineScope.launch {
-            if (sheetState.currentValue == SheetValue.Expanded) {
-              sheetState.partialExpand()
-            } else {
-              sheetState.expand()
-            }
+          sheetValue = when (sheetValue) {
+            SheetValue.Expanded -> SheetValue.PartiallyExpanded
+            SheetValue.PartiallyExpanded -> SheetValue.Expanded
+            SheetValue.Hidden -> SheetValue.PartiallyExpanded
           }
         },
         onSelectTool = { tool ->
           preferencesRepository?.incrementToolUsage(tool)
           onSelectTool(tool)
-          if (sheetState.currentValue == SheetValue.Expanded ||
-            sheetState.targetValue == SheetValue.Expanded
-          ) {
-            coroutineScope.launch {
-              sheetState.partialExpand()
-            }
+          if (sheetValue == SheetValue.Expanded) {
+            sheetValue = SheetValue.PartiallyExpanded
           }
         },
         onToolsPerRowChange = { newCount ->
@@ -438,21 +600,6 @@ fun ToolboxScaffold(
         onDraggingChanged = { dragging ->
           isDraggingTool = dragging
         },
-      )
-    },
-  ) { innerPadding ->
-    Box(
-      modifier = Modifier
-        .fillMaxSize()
-        .background(currentToolBackgroundColor)
-        .statusBarsPadding(),
-      contentAlignment = Alignment.Center,
-    ) {
-      ToolContentView(
-        tool = selectedTool,
-        bottomPadding = innerPadding.calculateBottomPadding(),
-        initialDirectory = initialDirectory,
-        preferencesRepository = preferencesRepository,
       )
     }
   }
@@ -475,6 +622,7 @@ fun ToolsPullUpPanelContent(
   themeColor: String? = null,
   onAddToHomeScreen: ((Tool) -> Unit)? = null,
   onDraggingChanged: (Boolean) -> Unit = {},
+  isMinimized: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
@@ -496,7 +644,7 @@ fun ToolsPullUpPanelContent(
     Box(
       modifier = Modifier
         .fillMaxWidth()
-        .height(26.dp)
+        .height(TOOL_PANEL_HANDLE_HEIGHT)
         .clickable(onClick = onTogglePanel)
         .testTag("pull_up_panel_toggle")
         .semantics {
@@ -515,53 +663,52 @@ fun ToolsPullUpPanelContent(
       )
     }
 
-    // Native NavigationBar-style Reorderable Grid of Tool Icons
-    ReorderableToolsGrid(
-      tools = tools,
-      selectedTool = selectedTool,
-      toolsPerRow = coerceToolsPerRow(toolsPerRow),
-      isExpanded = isExpanded,
-      toolSorting = toolSorting,
-      categorySorting = categorySorting,
-      categoryToolSorting = categoryToolSorting,
-      usageCounts = usageCounts,
-      onSelectTool = onSelectTool,
-      onReorderTools = onReorderTools,
-      onDraggingChanged = onDraggingChanged,
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(horizontal = 8.dp, vertical = 4.dp),
-    )
-
-    // Row controls (add to home screen button, slider with dots 3-6, + ? help button) are hidden until pulled up
-    if (isExpanded) {
-      HorizontalDivider(
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-      )
-
-      ToolsPerRowControl(
-        toolsPerRow = toolsPerRow,
-        showHelp = showReorderHelp,
-        onToolsPerRowChange = onToolsPerRowChange,
-        onToggleHelp = { showReorderHelp = !showReorderHelp },
+    if (!isMinimized) {
+      // Native NavigationBar-style Reorderable Grid of Tool Icons
+      ReorderableToolsGrid(
+        tools = tools,
         selectedTool = selectedTool,
-        onAddToHomeScreen = {
-          if (onAddToHomeScreen != null) {
-            onAddToHomeScreen(selectedTool)
-          } else {
-            addToolToHomeScreen(context, selectedTool, themeColor = themeColor)
-          }
-        },
+        toolsPerRow = coerceToolsPerRow(toolsPerRow),
+        isExpanded = isExpanded,
         toolSorting = toolSorting,
         categorySorting = categorySorting,
+        categoryToolSorting = categoryToolSorting,
+        usageCounts = usageCounts,
+        onSelectTool = onSelectTool,
+        onReorderTools = onReorderTools,
+        onDraggingChanged = onDraggingChanged,
         modifier = Modifier
           .fillMaxWidth()
-          .padding(horizontal = 16.dp, vertical = 8.dp),
+          .padding(horizontal = 8.dp, vertical = 4.dp),
       )
-    } else {
-      // Reserve off-screen height so BottomSheetScaffold always has an Expanded anchor
-      Spacer(modifier = Modifier.height(88.dp))
+
+      // Row controls (add to home screen button, slider with dots 3-6, + ? help button) are hidden until pulled up
+      if (isExpanded) {
+        HorizontalDivider(
+          modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+          color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+        )
+
+        ToolsPerRowControl(
+          toolsPerRow = toolsPerRow,
+          showHelp = showReorderHelp,
+          onToolsPerRowChange = onToolsPerRowChange,
+          onToggleHelp = { showReorderHelp = !showReorderHelp },
+          selectedTool = selectedTool,
+          onAddToHomeScreen = {
+            if (onAddToHomeScreen != null) {
+              onAddToHomeScreen(selectedTool)
+            } else {
+              addToolToHomeScreen(context, selectedTool, themeColor = themeColor)
+            }
+          },
+          toolSorting = toolSorting,
+          categorySorting = categorySorting,
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+      }
     }
   }
 }
@@ -1614,6 +1761,7 @@ fun ToolContentView(
           onOpenImageEditor = { preferencesRepository?.incrementToolUsage(Tool.IMAGE_EDITOR) },
           onOpenVideoEditor = { preferencesRepository?.incrementToolUsage(Tool.VIDEO_EDITOR) },
           onOpenAudioEditor = { preferencesRepository?.incrementToolUsage(Tool.AUDIO_EDITOR) },
+          onOpenArchive = { preferencesRepository?.incrementToolUsage(Tool.ARCHIVE) },
           modifier = Modifier.padding(bottom = bottomPadding),
         )
       }
@@ -1640,6 +1788,7 @@ fun ToolContentView(
       )
       Tool.CAMERA -> CameraScreen(
         initialDirectory = initialDirectory,
+        onOpenGallery = { preferencesRepository?.incrementToolUsage(Tool.GALLERY) },
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.AUDIO_EDITOR -> AudioEditorScreen(
@@ -1653,6 +1802,17 @@ fun ToolContentView(
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.BLUETOOTH_GAMEPAD -> BluetoothGamepadScreen(
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.DECIBEL_METER -> DecibelMeterScreen(
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.ARCHIVE -> ArchiveScreen(
+        initialDirectory = initialDirectory,
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.MUSIC -> MusicPlayerScreen(
+        initialDirectory = initialDirectory,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.SETTINGS -> SettingsScreen(

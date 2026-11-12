@@ -177,6 +177,7 @@ import java.util.Locale
 fun FilesScreen(
   modifier: Modifier = Modifier,
   initialDirectory: File? = null,
+  rootDirectory: File? = null,
   initialSearchActive: Boolean = false,
   themeColor: String? = null,
   onOpenFile: ((File, Boolean) -> Unit)? = null,
@@ -184,18 +185,35 @@ fun FilesScreen(
   onOpenImageEditor: ((File) -> Unit)? = null,
   onOpenVideoEditor: ((File) -> Unit)? = null,
   onOpenAudioEditor: ((File) -> Unit)? = null,
+  onOpenArchive: ((File) -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
   val haptic = LocalHapticFeedback.current
 
-  // User's default root folder: storage/emulated/0
-  val userRoot = remember {
-    if (isInspection) File("/storage/emulated/0") else FileManagerEngine.getUserRootDirectory()
+  // User's default root folder: storage/emulated/0 (or custom rootDirectory if provided)
+  val userRoot = remember(rootDirectory, initialDirectory, isInspection) {
+    when {
+      rootDirectory != null -> rootDirectory
+      isInspection -> File("/storage/emulated/0")
+      else -> {
+        val defaultRoot = FileManagerEngine.getUserRootDirectory()
+        val initDir = initialDirectory
+        if (initDir != null && !FileManagerEngine.isSameOrDescendant(initDir, defaultRoot)) {
+          val volumes = FileManagerEngine.getStorageVolumes(context)
+          val matchingVolume = volumes.firstOrNull { vol ->
+            FileManagerEngine.isSameOrDescendant(initDir, vol.file)
+          }
+          matchingVolume?.file ?: initDir
+        } else {
+          defaultRoot
+        }
+      }
+    }
   }
 
   // Active directory defaults to storage/emulated/0
-  var currentDirectory by remember {
+  var currentDirectory by rememberSaveable(initialDirectory?.absolutePath, rootDirectory?.absolutePath) {
     mutableStateOf(initialDirectory ?: userRoot)
   }
 
@@ -203,13 +221,13 @@ fun FilesScreen(
   var storageRevision by remember { mutableIntStateOf(0) }
 
   // Discovered storage volumes (Primary root + any connected external storage devices)
-  val storageVolumes = remember(storageRevision, isInspection) {
+  val storageVolumes = remember(storageRevision, isInspection, userRoot) {
     if (isInspection) {
       listOf(
         StorageVolumeInfo(
           id = "primary_root",
           name = "Home",
-          file = File("/storage/emulated/0"),
+          file = userRoot,
           isPrimary = true,
           isRemovable = false,
         ),
@@ -222,15 +240,16 @@ fun FilesScreen(
         ),
       )
     } else {
-      FileManagerEngine.getStorageVolumes(context)
+      FileManagerEngine.getStorageVolumes(context).map { vol ->
+        if (vol.isPrimary) vol.copy(file = userRoot) else vol
+      }
     }
   }
 
   // Resolve the currently active volume based on currentDirectory
   val activeVolume = remember(currentDirectory, storageVolumes) {
     storageVolumes.firstOrNull { vol ->
-      currentDirectory.absolutePath == vol.file.absolutePath ||
-        currentDirectory.absolutePath.startsWith(vol.file.absolutePath + "/")
+      FileManagerEngine.isSameOrDescendant(currentDirectory, vol.file)
     } ?: storageVolumes.firstOrNull()
   }
 
@@ -409,6 +428,7 @@ fun FilesScreen(
   var fileForImageEditor by remember { mutableStateOf<File?>(null) }
   var fileForVideoEditor by remember { mutableStateOf<File?>(null) }
   var fileForAudioEditor by remember { mutableStateOf<File?>(null) }
+  var fileForArchive by remember { mutableStateOf<File?>(null) }
   var showSortMenu by remember { mutableStateOf(false) }
 
   // Multi-selection state
@@ -420,15 +440,6 @@ fun FilesScreen(
 
   val selectedItems = remember(processedItems, selectedPaths) {
     processedItems.filter { it.path in selectedPaths }
-  }
-
-  BackHandler(enabled = isSelectionMode || isFabExpanded) {
-    if (isFabExpanded) {
-      isFabExpanded = false
-    } else {
-      isSelectionMode = false
-      selectedPaths = emptySet()
-    }
   }
 
   fun navigateTo(dir: File) {
@@ -450,22 +461,16 @@ fun FilesScreen(
     isFabExpanded = false
   }
 
+  val activeRoot = activeVolume?.file ?: userRoot
+
   fun canNavigateUp(): Boolean {
-    val activeRoot = activeVolume?.file ?: userRoot
-    if (currentDirectory.absolutePath == activeRoot.absolutePath) return false
-    val parent = currentDirectory.parentFile
-    return parent != null && parent.exists() && parent.canRead()
+    return FileManagerEngine.canNavigateUp(currentDirectory, activeRoot)
   }
 
   fun navigateUp(): Boolean {
-    if (!canNavigateUp()) return false
-    val parent = currentDirectory.parentFile
-    return if (parent != null && parent.exists()) {
-      navigateTo(parent)
-      true
-    } else {
-      false
-    }
+    val parent = FileManagerEngine.navigateUpDirectory(currentDirectory, activeRoot) ?: return false
+    navigateTo(parent)
+    return true
   }
 
   fun openFile(file: File, chooseApp: Boolean = false) {
@@ -548,6 +553,41 @@ fun FilesScreen(
       },
     )
     return
+  }
+
+  val activeArchiveFile = fileForArchive
+  if (activeArchiveFile != null) {
+    ArchiveScreen(
+      modifier = modifier,
+      initialFile = activeArchiveFile,
+      initialDirectory = currentDirectory,
+      onNavigateBack = {
+        fileForArchive = null
+        refreshTrigger++
+      },
+    )
+    return
+  }
+
+  val canGoUp = canNavigateUp()
+
+  BackHandler(enabled = isFabExpanded || isSelectionMode || isSearchActive || canGoUp) {
+    when {
+      isFabExpanded -> {
+        isFabExpanded = false
+      }
+      isSelectionMode -> {
+        isSelectionMode = false
+        selectedPaths = emptySet()
+      }
+      isSearchActive -> {
+        isSearchActive = false
+        searchQuery = ""
+      }
+      canGoUp -> {
+        navigateUp()
+      }
+    }
   }
 
   Box(
@@ -856,6 +896,10 @@ fun FilesScreen(
                           fileForAudioEditor = item.file
                           onOpenAudioEditor?.invoke(item.file)
                         },
+                        onOpenArchive = {
+                          fileForArchive = item.file
+                          onOpenArchive?.invoke(item.file)
+                        },
                         onOpenText = { fileForTextEdit = item },
                         onOpenImage = { fileForImagePreview = item },
                         onShare = { shareFile(item.file) },
@@ -965,6 +1009,10 @@ fun FilesScreen(
                       onEditAudio = {
                         fileForAudioEditor = item.file
                         onOpenAudioEditor?.invoke(item.file)
+                      },
+                      onOpenArchive = {
+                        fileForArchive = item.file
+                        onOpenArchive?.invoke(item.file)
                       },
                       onOpenText = { fileForTextEdit = item },
                       onOpenImage = { fileForImagePreview = item },
@@ -1371,10 +1419,6 @@ private fun FilesHeader(
     } else {
       keyboardController?.hide()
     }
-  }
-
-  BackHandler(enabled = isSearchActive) {
-    onToggleSearch()
   }
 
   Surface(
@@ -2247,6 +2291,7 @@ private fun FileListItem(
   onEditImage: () -> Unit = {},
   onEditVideo: () -> Unit = {},
   onEditAudio: () -> Unit = {},
+  onOpenArchive: () -> Unit = {},
   onOpenText: () -> Unit,
   onOpenImage: () -> Unit,
   onShare: () -> Unit,
@@ -2376,6 +2421,10 @@ private fun FileListItem(
               showMenu = false
               onEditAudio()
             },
+            onOpenArchive = {
+              showMenu = false
+              onOpenArchive()
+            },
             onOpenText = {
               showMenu = false
               onOpenText()
@@ -2429,6 +2478,7 @@ private fun FileGridItem(
   onEditImage: () -> Unit = {},
   onEditVideo: () -> Unit = {},
   onEditAudio: () -> Unit = {},
+  onOpenArchive: () -> Unit = {},
   onOpenText: () -> Unit = {},
   onOpenImage: () -> Unit = {},
   onShare: () -> Unit,
@@ -2553,6 +2603,10 @@ private fun FileGridItem(
               showMenu = false
               onEditAudio()
             },
+            onOpenArchive = {
+              showMenu = false
+              onOpenArchive()
+            },
             onOpenText = {
               showMenu = false
               onOpenText()
@@ -2630,6 +2684,7 @@ private fun FileActionMenu(
   onEditImage: () -> Unit = {},
   onEditVideo: () -> Unit = {},
   onEditAudio: () -> Unit = {},
+  onOpenArchive: () -> Unit = {},
   onOpenText: () -> Unit,
   onOpenImage: () -> Unit,
   onShare: () -> Unit,
@@ -2656,6 +2711,14 @@ private fun FileActionMenu(
           leadingIcon = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
           onClick = onOpenConverter,
           modifier = Modifier.testTag("action_file_converter"),
+        )
+      }
+      if (ArchiveEngine.isSupportedArchive(item.file)) {
+        DropdownMenuItem(
+          text = { Text("Open in Archive") },
+          leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
+          onClick = onOpenArchive,
+          modifier = Modifier.testTag("action_open_archive"),
         )
       }
       if (FileManagerEngine.isImageFile(item.file)) {

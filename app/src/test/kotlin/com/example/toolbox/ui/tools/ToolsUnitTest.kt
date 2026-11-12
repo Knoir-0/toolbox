@@ -282,4 +282,50 @@ class ToolsUnitTest {
     val restored = TimeSignatureSaver.restore("23/16:true")
     assertEquals(customGanon, restored)
   }
+
+  @Test
+  fun metronomeClickSynthesizer_synthesizesNonZeroWaveformAndPadsToMinBufferSize() {
+    val activeSamples = (MetronomeClickSynthesizer.SAMPLE_RATE * (MetronomeClickSynthesizer.CLICK_DURATION_MS / 1000.0)).toInt()
+    val minBufferBytes = 4096 // 2048 samples (> 771 active samples)
+    val pcm = MetronomeClickSynthesizer.synthesizeClickPcm(
+      frequencyHz = 1080.0,
+      minBufferBytes = minBufferBytes,
+    )
+
+    // Total buffer byte length must cover minBufferBytes so AudioTrack(MODE_STATIC) is completely filled
+    assertTrue(pcm.size * 2 >= minBufferBytes)
+    // Active click region has non-zero samples
+    assertTrue(pcm.take(activeSamples).any { it.toInt() != 0 })
+    // Padding region beyond active click is silent (0)
+    assertTrue(pcm.drop(activeSamples).all { it.toInt() == 0 })
+  }
+
+  @Test
+  fun decibelMeterMath_calculatesRmsConvertsToDbAndClassifiesNoiseLevels() {
+    // Silence returns 0 RMS and 0 dB
+    val silence = ShortArray(256)
+    assertEquals(0.0, DecibelMeterMath.calculateNormalizedRms(silence, silence.size), 1e-6)
+    assertEquals(0f, DecibelMeterMath.rmsToDecibels(0.0), 1e-4f)
+
+    // Full-scale square wave has normalized RMS ~1.0 -> ~95 dB SPL before calibration
+    val loudWave = ShortArray(256) { i -> if (i % 2 == 0) 16384 else -16384 }
+    val rms = DecibelMeterMath.calculateNormalizedRms(loudWave, loudWave.size)
+    assertEquals(0.5, rms, 0.01)
+    val dbNoOffset = DecibelMeterMath.rmsToDecibels(rms, calibrationOffsetDb = 0f)
+    val dbWithOffset = DecibelMeterMath.rmsToDecibels(rms, calibrationOffsetDb = 5f)
+    assertEquals(dbNoOffset + 5f, dbWithOffset, 0.05f)
+
+    // Noise level classification
+    assertEquals(NoiseLevelCategory.QUIET, DecibelMeterMath.classifyNoiseLevel(25f))
+    assertEquals(NoiseLevelCategory.MODERATE, DecibelMeterMath.classifyNoiseLevel(50f))
+    assertEquals(NoiseLevelCategory.LOUD, DecibelMeterMath.classifyNoiseLevel(75f))
+    assertEquals(NoiseLevelCategory.VERY_LOUD, DecibelMeterMath.classifyNoiseLevel(92f))
+    assertEquals(NoiseLevelCategory.EXTREME, DecibelMeterMath.classifyNoiseLevel(108f))
+
+    // Formatting
+    assertEquals("46.5 dB", DecibelMeterMath.formatDb(46.5f))
+    assertEquals("46.5", DecibelMeterMath.formatDb(46.5f, includeUnit = false))
+    assertEquals("+2.5 dB", DecibelMeterMath.formatCalibrationOffset(2.5f))
+    assertEquals("-1.5 dB", DecibelMeterMath.formatCalibrationOffset(-1.5f))
+  }
 }

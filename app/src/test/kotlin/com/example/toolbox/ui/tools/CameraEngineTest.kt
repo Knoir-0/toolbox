@@ -290,4 +290,157 @@ class CameraEngineTest {
     assertEquals("IMG_20261110_100000.png", listed[1].name)
     assertFalse(listed[1].isVideo)
   }
+
+  @Test
+  fun qrCodeAndBarcodeEncodingAndDecoding_roundTrips2DAnd1DFormats() {
+    // 1. QR Code (Web URL)
+    val qrPayload = "https://toolbox.example.com/qr-scanner?mode=test"
+    val qrPixels = CameraEngine.renderCodeToArgbPixels(
+      content = qrPayload,
+      format = CameraBarcodeFormat.QR_CODE,
+      width = 320,
+      height = 320,
+    )
+    assertNotNull(qrPixels)
+    val qrResults = CameraEngine.decodeCodesFromArgbPixels(
+      pixels = qrPixels!!,
+      width = 320,
+      height = 320,
+      filter = CameraScanFilter.QR_CODE,
+    )
+    assertEquals(1, qrResults.size)
+    assertEquals(qrPayload, qrResults[0].rawValue)
+    assertEquals(CameraBarcodeFormat.QR_CODE, qrResults[0].format)
+    assertEquals(CameraScanPayloadType.URL, qrResults[0].payloadType)
+    assertEquals("toolbox.example.com", qrResults[0].title)
+
+    // Filter BARCODE should exclude QR_CODE
+    val excludedByBarcodeFilter = CameraEngine.decodeCodesFromArgbPixels(
+      pixels = qrPixels,
+      width = 320,
+      height = 320,
+      filter = CameraScanFilter.BARCODE,
+    )
+    assertTrue(excludedByBarcodeFilter.isEmpty())
+
+    // 2. Inverted (light-on-dark) QR Code decoding
+    val invertedQrPixels = CameraEngine.renderCodeToArgbPixels(
+      content = "WIFI:S:ToolboxNet;T:WPA;P:secret99;;",
+      format = CameraBarcodeFormat.QR_CODE,
+      width = 320,
+      height = 320,
+      darkColorArgb = 0xFFFFFFFF.toInt(),
+      lightColorArgb = 0xFF000000.toInt(),
+    )
+    assertNotNull(invertedQrPixels)
+    val invertedDecoded = CameraEngine.decodeCodesFromArgbPixels(
+      pixels = invertedQrPixels!!,
+      width = 320,
+      height = 320,
+      filter = CameraScanFilter.ALL,
+      tryInverted = true,
+    )
+    assertEquals(1, invertedDecoded.size)
+    assertEquals(CameraScanPayloadType.WIFI, invertedDecoded[0].payloadType)
+    assertEquals("Wi-Fi: ToolboxNet", invertedDecoded[0].title)
+    assertEquals("secret99", invertedDecoded[0].primaryCopyValue)
+
+    // 3. EAN-13 Barcode (ISBN-13)
+    val ean13Payload = "9780201379624"
+    assertTrue(CameraEngine.verifyLinearBarcodeChecksum(ean13Payload))
+    val eanPixels = CameraEngine.renderCodeToArgbPixels(
+      content = ean13Payload,
+      format = CameraBarcodeFormat.EAN_13,
+      width = 420,
+      height = 180,
+    )
+    assertNotNull(eanPixels)
+    val eanResults = CameraEngine.decodeCodesFromArgbPixels(
+      pixels = eanPixels!!,
+      width = 420,
+      height = 180,
+      filter = CameraScanFilter.BARCODE,
+    )
+    assertEquals(1, eanResults.size)
+    assertEquals(ean13Payload, eanResults[0].rawValue)
+    assertEquals(CameraBarcodeFormat.EAN_13, eanResults[0].format)
+    assertEquals(CameraScanPayloadType.ISBN, eanResults[0].payloadType)
+
+    // 4. UPC-A & Code 128 & Code 39 Barcodes
+    val code128Payload = "TOOLBOX-SCAN-2026"
+    val code128Pixels = CameraEngine.renderCodeToArgbPixels(
+      content = code128Payload,
+      format = CameraBarcodeFormat.CODE_128,
+      width = 440,
+      height = 180,
+    )
+    assertNotNull(code128Pixels)
+    val code128Decoded = CameraEngine.decodeCodesFromArgbPixels(
+      pixels = code128Pixels!!,
+      width = 440,
+      height = 180,
+      filter = CameraScanFilter.BARCODE,
+    )
+    assertEquals(1, code128Decoded.size)
+    assertEquals(code128Payload, code128Decoded[0].rawValue)
+    assertEquals(CameraBarcodeFormat.CODE_128, code128Decoded[0].format)
+    assertEquals(CameraScanPayloadType.BARCODE_ID, code128Decoded[0].payloadType)
+  }
+
+  @Test
+  fun saveAndDecodeBarcodeImageFile_persistsAndReadsPngOnDisk() {
+    val barcodeFile = CameraEngine.createTimestampedBarcodeFile(
+      directory = tempDir,
+      format = CameraBarcodeFormat.UPC_A,
+      epochMs = 1794335400000L,
+    )
+    CameraEngine.saveBarcodeImageFile(
+      outputFile = barcodeFile,
+      content = "012345678905",
+      format = CameraBarcodeFormat.UPC_A,
+      width = 440,
+      height = 200,
+    )
+    assertTrue(barcodeFile.exists())
+    assertTrue(barcodeFile.length() > 128L)
+
+    val decodedFromFile = CameraEngine.decodeCodesFromImageFile(
+      file = barcodeFile,
+      filter = CameraScanFilter.ALL,
+    )
+    assertEquals(1, decodedFromFile.size)
+    assertEquals("012345678905", decodedFromFile[0].rawValue)
+    assertEquals(CameraBarcodeFormat.UPC_A, decodedFromFile[0].format)
+    assertEquals(CameraScanPayloadType.PRODUCT, decodedFromFile[0].payloadType)
+  }
+
+  @Test
+  fun scanHistorySerializationAndPayloadClassification_preservesAllMetadata() {
+    val vcard = "BEGIN:VCARD\nVERSION:3.0\nFN:Jane Doe\nORG:DeepMind\nTEL:+1-555-0100\nEMAIL:jane@example.com\nEND:VCARD"
+    val analyzedContact = CameraEngine.analyzeScannedPayload(
+      rawValue = vcard,
+      format = CameraBarcodeFormat.QR_CODE,
+      scannedAtMs = 5000L,
+    )
+    assertEquals(CameraScanPayloadType.CONTACT, analyzedContact.payloadType)
+    assertEquals("Contact: Jane Doe", analyzedContact.title)
+    assertEquals("DeepMind", analyzedContact.fields["Organization"])
+    assertEquals("+1-555-0100", analyzedContact.fields["Phone"])
+
+    val analyzedEan = CameraEngine.analyzeScannedPayload(
+      rawValue = "4006381333931",
+      format = CameraBarcodeFormat.EAN_13,
+      scannedAtMs = 6000L,
+    )
+    assertEquals(CameraScanPayloadType.PRODUCT, analyzedEan.payloadType)
+    assertEquals("Germany", analyzedEan.fields["Origin / Prefix"])
+
+    val json = CameraEngine.serializeScanHistory(listOf(analyzedEan, analyzedContact))
+    val restored = CameraEngine.deserializeScanHistory(json)
+    assertEquals(2, restored.size)
+    assertEquals("4006381333931", restored[0].rawValue)
+    assertEquals(CameraBarcodeFormat.EAN_13, restored[0].format)
+    assertEquals(vcard, restored[1].rawValue)
+    assertEquals(CameraScanPayloadType.CONTACT, restored[1].payloadType)
+  }
 }

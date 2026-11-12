@@ -86,6 +86,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.toolbox.ui.theme.ToolboxTheme
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.exp
@@ -161,29 +162,92 @@ enum class BeatSubdivision(val label: String, val ticksPerBeat: Int) {
 
 /**
  * Lightweight synthesizer for metronome clicks.
+ * Caches synthesized PCM buffers per frequency and deterministically releases
+ * [AudioTrack] instances after each click so native AudioFlinger tracks are never leaked
+ * during long-running metronome sessions.
  * Safely catches audio initialization exceptions in headless test environments.
  */
-private object MetronomeClickSynthesizer {
+internal object MetronomeClickSynthesizer {
+  internal const val SAMPLE_RATE = 22050
+  internal const val CLICK_DURATION_MS = 35
+  private const val TRACK_RELEASE_DELAY_MS = 100L
+  private const val MAX_ACTIVE_TRACKS = 6
+
+  private val pcmCache = ConcurrentHashMap<Double, ShortArray>()
+  private val activeTracksLock = Any()
+  private val activeTracks = ArrayDeque<AudioTrack>()
+
+  internal fun synthesizeClickPcm(
+    frequencyHz: Double,
+    sampleRate: Int = SAMPLE_RATE,
+    durationMs: Int = CLICK_DURATION_MS,
+    minBufferBytes: Int = 0,
+  ): ShortArray {
+    val activeSamples = (sampleRate * (durationMs / 1000.0)).toInt().coerceAtLeast(1)
+    val minSamples = ((minBufferBytes + 1) / 2).coerceAtLeast(activeSamples)
+    val samples = ShortArray(minSamples)
+    for (i in 0 until activeSamples) {
+      val t = i.toDouble() / sampleRate
+      val envelope = exp(-95.0 * t)
+      val wave = sin(2.0 * PI * frequencyHz * t)
+      samples[i] = (wave * envelope * Short.MAX_VALUE * 0.8).toInt()
+        .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+    }
+    return samples
+  }
+
   suspend fun playMetronomeClick(frequencyHz: Double) = withContext(Dispatchers.Default) {
+    var track: AudioTrack? = null
     try {
-      val sampleRate = 22050
-      val durationMs = 35
-      val numSamples = (sampleRate * (durationMs / 1000.0)).toInt()
-      val samples = ShortArray(numSamples)
-      for (i in 0 until numSamples) {
-        val t = i.toDouble() / sampleRate
-        val envelope = exp(-95.0 * t)
-        val wave = sin(2.0 * PI * frequencyHz * t)
-        samples[i] = (wave * envelope * Short.MAX_VALUE * 0.8).toInt()
-          .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+      val minBufferBytes = try {
+        AudioTrack.getMinBufferSize(
+          SAMPLE_RATE,
+          AudioFormat.CHANNEL_OUT_MONO,
+          AudioFormat.ENCODING_PCM_16BIT,
+        ).coerceAtLeast(0)
+      } catch (_: Throwable) {
+        0
       }
-      playPcmBuffer(samples, sampleRate)
+      val samples = pcmCache.getOrPut(frequencyHz) {
+        synthesizeClickPcm(
+          frequencyHz = frequencyHz,
+          sampleRate = SAMPLE_RATE,
+          durationMs = CLICK_DURATION_MS,
+          minBufferBytes = minBufferBytes,
+        )
+      }
+      track = startPcmTrack(samples, SAMPLE_RATE)
+      delay(TRACK_RELEASE_DELAY_MS)
     } catch (_: Throwable) {
       // Ignore in test / no-audio environments
+    } finally {
+      if (track != null) {
+        synchronized(activeTracksLock) {
+          activeTracks.remove(track)
+        }
+        releaseTrackQuietly(track)
+      }
     }
   }
 
-  private fun playPcmBuffer(samples: ShortArray, sampleRate: Int) {
+  fun releaseAll() {
+    val tracksToRelease = synchronized(activeTracksLock) {
+      val copy = activeTracks.toList()
+      activeTracks.clear()
+      copy
+    }
+    tracksToRelease.forEach { releaseTrackQuietly(it) }
+  }
+
+  private fun startPcmTrack(samples: ShortArray, sampleRate: Int): AudioTrack {
+    val evicted = mutableListOf<AudioTrack>()
+    synchronized(activeTracksLock) {
+      while (activeTracks.size >= MAX_ACTIVE_TRACKS) {
+        evicted.add(activeTracks.removeFirst())
+      }
+    }
+    evicted.forEach { releaseTrackQuietly(it) }
+
     val bufferSizeBytes = samples.size * 2
     val track = AudioTrack.Builder()
       .setAudioAttributes(
@@ -199,15 +263,35 @@ private object MetronomeClickSynthesizer {
           .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
           .build(),
       )
-      .setBufferSizeInBytes(bufferSizeBytes.coerceAtLeast(AudioTrack.getMinBufferSize(
-        sampleRate,
-        AudioFormat.CHANNEL_OUT_MONO,
-        AudioFormat.ENCODING_PCM_16BIT,
-      )))
+      .setBufferSizeInBytes(bufferSizeBytes)
       .setTransferMode(AudioTrack.MODE_STATIC)
       .build()
-    track.write(samples, 0, samples.size)
-    track.play()
+
+    try {
+      track.write(samples, 0, samples.size)
+      track.play()
+      synchronized(activeTracksLock) {
+        activeTracks.addLast(track)
+      }
+      return track
+    } catch (t: Throwable) {
+      releaseTrackQuietly(track)
+      throw t
+    }
+  }
+
+  private fun releaseTrackQuietly(track: AudioTrack?) {
+    if (track == null) return
+    try {
+      if (track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+        track.stop()
+      }
+    } catch (_: Throwable) {
+    }
+    try {
+      track.release()
+    } catch (_: Throwable) {
+    }
   }
 }
 
@@ -233,6 +317,7 @@ fun MetronomeScreen(modifier: Modifier = Modifier) {
     if (!isMetronomePlaying) {
       currentBeat = 0
       currentSubTick = 0
+      MetronomeClickSynthesizer.releaseAll()
       return@LaunchedEffect
     }
     var beatIdx = 0
@@ -264,6 +349,7 @@ fun MetronomeScreen(modifier: Modifier = Modifier) {
   DisposableEffect(Unit) {
     onDispose {
       isMetronomePlaying = false
+      MetronomeClickSynthesizer.releaseAll()
     }
   }
 
@@ -564,7 +650,7 @@ private fun MetronomeContent(
               modifier = Modifier
                 .weight(1f)
                 .height(52.dp),
-              shape = RoundedCornerShape(16.dp),
+              shape = CircleShape,
             ) {
               Icon(
                 imageVector = Icons.Default.TouchApp,
@@ -584,7 +670,7 @@ private fun MetronomeContent(
               modifier = Modifier
                 .weight(1f)
                 .height(52.dp),
-              shape = RoundedCornerShape(16.dp),
+              shape = CircleShape,
               colors = if (isPlaying) {
                 ButtonDefaults.buttonColors(
                   containerColor = MaterialTheme.colorScheme.error,

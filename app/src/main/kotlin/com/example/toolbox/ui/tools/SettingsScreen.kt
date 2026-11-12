@@ -1,5 +1,8 @@
 package com.example.toolbox.ui.tools
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -46,6 +49,7 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.BrightnessAuto
 import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DarkMode
@@ -54,6 +58,7 @@ import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.SaveAlt
@@ -107,6 +112,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.toolbox.ui.main.CategorySortingOption
@@ -163,6 +169,21 @@ val ACCENT_PRESET_COLORS = listOf(
   ColorPreset("Gold", "#FFA000", Color(0xFFFFA000)),
 )
 
+const val GITHUB_NEW_ISSUE_URL = "https://github.com/Knoir-0/toolbox/issues/new"
+const val GITHUB_REPORT_BUG_URL = GITHUB_NEW_ISSUE_URL
+const val GITHUB_REQUEST_FEATURE_URL = GITHUB_NEW_ISSUE_URL
+
+fun openExternalUrl(context: Context, url: String) {
+  try {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(intent)
+  } catch (_: Exception) {
+    Toast.makeText(context, "Unable to open link", Toast.LENGTH_SHORT).show()
+  }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -172,6 +193,7 @@ fun SettingsScreen(
   initialCollapsedCategories: Set<ToolCategory> = remember { ToolCategory.entries.toSet() },
   initialThemeColorExpanded: Boolean = false,
   initialAccentColorExpanded: Boolean = false,
+  onOpenUrl: ((String) -> Unit)? = null,
 ) {
   val themeMode by preferencesRepository.themeModeFlow.collectAsState()
   val themeColor by preferencesRepository.themeColorFlow.collectAsState()
@@ -1834,6 +1856,7 @@ fun SettingsScreen(
       onClick = {
         showResetConfirmDialog = true
       },
+      shape = CircleShape,
       modifier = Modifier
         .fillMaxWidth()
         .testTag("reset_defaults_button"),
@@ -1845,6 +1868,60 @@ fun SettingsScreen(
       )
       Spacer(modifier = Modifier.width(8.dp))
       Text("Reset All Settings to Defaults")
+    }
+
+    // Report a Bug & Request a Feature (side-by-side rounded buttons)
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .testTag("github_feedback_buttons_row"),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      OutlinedButton(
+        onClick = {
+          onOpenUrl?.invoke(GITHUB_REPORT_BUG_URL) ?: openExternalUrl(context, GITHUB_REPORT_BUG_URL)
+        },
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+        modifier = Modifier
+          .weight(1f)
+          .testTag("report_bug_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.BugReport,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+          text = "Report a Bug",
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+
+      OutlinedButton(
+        onClick = {
+          onOpenUrl?.invoke(GITHUB_REQUEST_FEATURE_URL) ?: openExternalUrl(context, GITHUB_REQUEST_FEATURE_URL)
+        },
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+        modifier = Modifier
+          .weight(1f)
+          .testTag("request_feature_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Lightbulb,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+          text = "Request a Feature",
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
     }
 
     if (showResetConfirmDialog) {
