@@ -66,7 +66,20 @@ class MusicPlayerEngineTest {
   @Test
   fun playlists_buildFilterSerializeAndDeserializeCorrectly() {
     val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
-    val entries = MusicPlayerEngine.DEFAULT_SAMPLE_PLAYLIST_ENTRIES
+    val entries = listOf(
+      SavedPlaylistEntry(
+        id = "playlist_a",
+        name = "Neon Night Drive",
+        trackIds = listOf("sample_neon_horizon", "sample_starlight_drive", "sample_cybernetic_pulse", "sample_crimson_velocity"),
+        createdAtMs = 1_700_000_000_000L,
+      ),
+      SavedPlaylistEntry(
+        id = "playlist_b",
+        name = "Chill & Focus",
+        trackIds = listOf("sample_autumn_coffee", "sample_blue_note_stroll"),
+        createdAtMs = 1_700_000_100_000L,
+      ),
+    )
     val playlists = MusicPlayerEngine.buildPlaylists(entries, tracks)
 
     assertEquals(2, playlists.size)
@@ -80,6 +93,20 @@ class MusicPlayerEngineTest {
     val serialized = MusicPlayerEngine.serializePlaylists(entries)
     val deserialized = MusicPlayerEngine.deserializePlaylists(serialized)
     assertEquals(entries, deserialized)
+  }
+
+  @Test
+  fun favoritesPlaylist_isAlwaysBuiltAndFollowsFavoriteIds() {
+    val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+    val empty = MusicPlayerEngine.buildFavoritesPlaylist(emptySet(), tracks)
+    assertEquals(MusicPlayerEngine.FAVORITES_PLAYLIST_NAME, empty.name)
+    assertEquals(0, empty.songCount)
+    assertTrue(empty.isFavorites)
+
+    val favs = MusicPlayerEngine.buildFavoritesPlaylist(setOf(tracks[1].id, tracks[0].id), tracks)
+    assertEquals(listOf(tracks[0].id, tracks[1].id), favs.tracks.map { it.id })
+
+    assertTrue(MusicPlayerEngine.buildFavoritesPlaylist(emptySet(), emptyList()).tracks.isEmpty())
   }
 
   @Test

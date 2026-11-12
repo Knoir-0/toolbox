@@ -1000,10 +1000,10 @@ private fun GalleryTileGridView(
       },
     contentPadding = PaddingValues(if (isInsideAlbum) 2.dp else 10.dp),
     horizontalArrangement = Arrangement.spacedBy(
-      if (isInsideAlbum) 2.dp else if (isCompactTile) 8.dp else 10.dp
+      if (isInsideAlbum) 2.dp else if (isCompactTile) 6.dp else 8.dp
     ),
     verticalArrangement = Arrangement.spacedBy(
-      if (isInsideAlbum) 2.dp else if (isCompactTile) 10.dp else 12.dp
+      if (isInsideAlbum) 2.dp else if (isCompactTile) 8.dp else 10.dp
     ),
   ) {
     items(

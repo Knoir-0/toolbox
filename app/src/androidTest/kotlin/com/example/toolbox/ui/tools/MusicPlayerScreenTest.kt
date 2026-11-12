@@ -90,7 +90,7 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("music_play_all_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("music_shuffle_all_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("playlist_list_view").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Neon Night Drive").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Favorites").assertIsDisplayed()
 
     composeTestRule.onNodeWithTag("music_view_mode_card").performClick()
     composeTestRule.waitForIdle()
@@ -100,9 +100,9 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("music_search_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("music_search_input").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("music_search_input").performTextInput("Chill")
+    composeTestRule.onNodeWithTag("music_search_input").performTextInput("Fav")
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("Chill & Focus").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Favorites").assertIsDisplayed()
     composeTestRule.onNodeWithTag("music_search_toggle").performClick()
     composeTestRule.waitForIdle()
   }

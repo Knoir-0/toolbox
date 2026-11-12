@@ -27,7 +27,6 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -148,7 +147,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -159,6 +157,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -174,6 +173,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -728,6 +728,10 @@ fun CameraScreen(
     return
   }
 
+  // Measured height of the top controls overlay, used to pin the scanner box just beneath it.
+  var topOverlayHeightPx by remember { mutableStateOf(0) }
+  val density = LocalDensity.current
+
   Box(
     modifier = modifier
       .fillMaxSize()
@@ -794,9 +798,14 @@ fun CameraScreen(
 
         // QR Code & Barcode Scanner Viewfinder Reticle Overlay
         if (captureMode == CameraCaptureMode.SCANNER) {
+          // Pin the reticle near the top of the screen, just below the top controls overlay.
+          val frameTopInScreen = (containerH - frameH) / 2
+          val topOverlayHeight = with(density) { topOverlayHeightPx.toDp() }
+          val reticleTopInset = (topOverlayHeight + 24.dp - frameTopInScreen).coerceAtLeast(24.dp)
           ScannerReticleOverlayCanvas(
             scanFilter = scanFilter,
             hasDetectedCode = latestScannedCode != null,
+            topInset = reticleTopInset,
             modifier = Modifier
               .fillMaxSize()
               .testTag("camera_scanner_reticle_overlay"),
@@ -879,6 +888,7 @@ fun CameraScreen(
       modifier = Modifier
         .fillMaxWidth()
         .align(Alignment.TopCenter)
+        .onSizeChanged { topOverlayHeightPx = it.height }
         .testTag("camera_top_overlay"),
     ) {
       Surface(
@@ -2687,24 +2697,13 @@ private fun ScannerReticleOverlayCanvas(
   scanFilter: CameraScanFilter,
   hasDetectedCode: Boolean,
   modifier: Modifier = Modifier,
+  topInset: Dp = 24.dp,
 ) {
-  val infiniteTransition = rememberInfiniteTransition(label = "ScannerLaserSweep")
-  val laserProgress by infiniteTransition.animateFloat(
-    initialValue = 0.08f,
-    targetValue = 0.92f,
-    animationSpec = infiniteRepeatable(
-      animation = tween(durationMillis = 1900, easing = LinearEasing),
-      repeatMode = RepeatMode.Reverse,
-    ),
-    label = "LaserSweepProgress",
-  )
-
   val bracketColor = if (hasDetectedCode) {
     MaterialTheme.colorScheme.tertiary
   } else {
     MaterialTheme.colorScheme.primary
   }
-  val laserColor = MaterialTheme.colorScheme.tertiary
 
   Box(modifier = modifier) {
     Canvas(modifier = Modifier.fillMaxSize()) {
@@ -2719,7 +2718,7 @@ private fun ScannerReticleOverlayCanvas(
       }
 
       val left = (size.width - reticleW) / 2f
-      val top = (size.height - reticleH) / 2f
+      val top = topInset.toPx().coerceAtMost((size.height - reticleH).coerceAtLeast(0f))
       val right = left + reticleW
       val bottom = top + reticleH
 
@@ -2797,24 +2796,6 @@ private fun ScannerReticleOverlayCanvas(
         start = Offset(right, bottom - armLen),
         end = Offset(right, bottom),
         strokeWidth = strokePx,
-        cap = StrokeCap.Round,
-      )
-
-      // Sweeping laser line inside reticle
-      val laserY = top + reticleH * laserProgress
-      drawLine(
-        brush = Brush.horizontalGradient(
-          colors = listOf(
-            laserColor.copy(alpha = 0f),
-            laserColor.copy(alpha = 0.9f),
-            laserColor.copy(alpha = 0f),
-          ),
-          startX = left + 8.dp.toPx(),
-          endX = right - 8.dp.toPx(),
-        ),
-        start = Offset(left + 8.dp.toPx(), laserY),
-        end = Offset(right - 8.dp.toPx(), laserY),
-        strokeWidth = 2.5.dp.toPx(),
         cap = StrokeCap.Round,
       )
     }

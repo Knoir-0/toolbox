@@ -305,6 +305,7 @@ data class MusicPlaylist(
   val tracks: List<MusicTrack>,
   val createdAtMs: Long = 0L,
 ) {
+  val isFavorites: Boolean get() = id == MusicPlayerEngine.FAVORITES_PLAYLIST_ID
   val songCount: Int get() = tracks.size
   val totalDurationMs: Long get() = tracks.sumOf { it.durationMs }
   val totalDurationFormatted: String get() = AudioRecorderEngine.formatDurationMs(totalDurationMs)
@@ -1441,7 +1442,7 @@ object MusicPlayerEngine {
   fun getCachedLibraryTracks(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
     initialDirectory: File? = null,
-    includeSamples: Boolean = true,
+    includeSamples: Boolean = false,
   ): List<MusicTrack>? {
     val key = libraryCacheKey(rootDirectory, initialDirectory, includeSamples)
     synchronized(metadataCacheLock) {
@@ -1457,7 +1458,7 @@ object MusicPlayerEngine {
   fun loadLibraryTracks(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
     initialDirectory: File? = null,
-    includeSamples: Boolean = true,
+    includeSamples: Boolean = false,
     inspectMetadataRetriever: Boolean = true,
     deferAlbumArt: Boolean = true,
   ): List<MusicTrack> {
@@ -1493,7 +1494,7 @@ object MusicPlayerEngine {
   suspend fun loadLibraryTracksAsync(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
     initialDirectory: File? = null,
-    includeSamples: Boolean = true,
+    includeSamples: Boolean = false,
     inspectMetadataRetriever: Boolean = true,
     deferAlbumArt: Boolean = true,
   ): List<MusicTrack> = withContext(Dispatchers.IO) {
@@ -1637,30 +1638,27 @@ object MusicPlayerEngine {
     }
   }
 
-  val DEFAULT_SAMPLE_PLAYLIST_ENTRIES: List<SavedPlaylistEntry> = listOf(
-    SavedPlaylistEntry(
-      id = "playlist_synth_night",
-      name = "Neon Night Drive",
-      trackIds = listOf(
-        "sample_neon_horizon",
-        "sample_starlight_drive",
-        "sample_cybernetic_pulse",
-        "sample_crimson_velocity",
-      ),
-      createdAtMs = 1_700_000_000_000L,
-    ),
-    SavedPlaylistEntry(
-      id = "playlist_chill_focus",
-      name = "Chill & Focus",
-      trackIds = listOf(
-        "sample_autumn_coffee",
-        "sample_blue_note_stroll",
-        "sample_canyon_breeze",
-        "sample_moonlight_prelude",
-      ),
-      createdAtMs = 1_700_000_100_000L,
-    ),
-  )
+  /** Identifier of the built-in, always-present Favorites playlist. */
+  const val FAVORITES_PLAYLIST_ID = "playlist_favorites"
+  const val FAVORITES_PLAYLIST_NAME = "Favorites"
+
+  /** IDs of sample playlists shipped by older versions; stripped from persisted playlists on load. */
+  val LEGACY_SAMPLE_PLAYLIST_IDS: Set<String> = setOf("playlist_synth_night", "playlist_chill_focus")
+
+  /**
+   * Builds the built-in Favorites [MusicPlaylist] from [favoriteIds], preserving library order.
+   * Always returned (even when empty) so it is available by default.
+   */
+  fun buildFavoritesPlaylist(
+    favoriteIds: Set<String>,
+    allTracks: List<MusicTrack>,
+  ): MusicPlaylist {
+    return MusicPlaylist(
+      id = FAVORITES_PLAYLIST_ID,
+      name = FAVORITES_PLAYLIST_NAME,
+      tracks = allTracks.filter { it.id in favoriteIds },
+    )
+  }
 
   /**
    * Resolves [SavedPlaylistEntry] items against [allTracks] to build [MusicPlaylist] models.

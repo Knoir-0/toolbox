@@ -60,6 +60,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.key
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -463,9 +465,14 @@ fun ToolboxScaffold(
     }
   }
 
+  // Tool opened via a cross-tool link (e.g. Music -> Colors). It may be hidden from the grid, so it is
+  // exempt from the hidden-tool auto-switch, and Back returns to the tool that opened it.
+  var linkedTool by rememberSaveable { mutableStateOf<Tool?>(null) }
+  var linkReturnTool by rememberSaveable { mutableStateOf<Tool?>(null) }
+
   // Auto-switch selectedTool if it becomes hidden
-  LaunchedEffect(selectedTool, displayTools) {
-    if (selectedTool in hiddenTools && selectedTool != Tool.SETTINGS) {
+  LaunchedEffect(selectedTool, displayTools, hiddenTools, linkedTool) {
+    if (selectedTool in hiddenTools && selectedTool != Tool.SETTINGS && selectedTool != linkedTool) {
       onSelectTool(displayTools.firstOrNull() ?: Tool.SETTINGS)
     }
   }
@@ -519,6 +526,16 @@ fun ToolboxScaffold(
   }
   val toolContentBottomPadding = minOf(currentVisibleSheetHeightDp, sheetPeekHeight)
   var selectedColorPickerHex by rememberSaveable { mutableStateOf<String?>(null) }
+  var colorLinkRequestId by rememberSaveable { mutableIntStateOf(0) }
+
+  // Back from a linked tool returns to the tool that opened it
+  BackHandler(enabled = linkedTool != null && selectedTool == linkedTool && linkReturnTool != null) {
+    val returnTo = linkReturnTool
+    linkedTool = null
+    linkReturnTool = null
+    selectedColorPickerHex = null
+    if (returnTo != null) onSelectTool(returnTo)
+  }
 
   Box(
     modifier = modifier
@@ -532,18 +549,24 @@ fun ToolboxScaffold(
         .statusBarsPadding(),
       contentAlignment = Alignment.Center,
     ) {
-      ToolContentView(
-        tool = selectedTool,
-        bottomPadding = toolContentBottomPadding,
-        initialDirectory = initialDirectory,
-        initialColorPickerHex = selectedColorPickerHex,
-        onOpenColorPicker = { hex ->
-          selectedColorPickerHex = hex
-          preferencesRepository?.incrementToolUsage(Tool.COLOR_PICKER)
-          onSelectTool(Tool.COLOR_PICKER)
-        },
-        preferencesRepository = preferencesRepository,
-      )
+      // Re-key on each link request so tapping a color always re-selects it in the Colors tool
+      key(selectedTool, colorLinkRequestId) {
+        ToolContentView(
+          tool = selectedTool,
+          bottomPadding = toolContentBottomPadding,
+          initialDirectory = initialDirectory,
+          initialColorPickerHex = selectedColorPickerHex,
+          onOpenColorPicker = { hex ->
+            selectedColorPickerHex = hex
+            colorLinkRequestId++
+            linkReturnTool = selectedTool
+            linkedTool = Tool.COLOR_PICKER
+            preferencesRepository?.incrementToolUsage(Tool.COLOR_PICKER)
+            onSelectTool(Tool.COLOR_PICKER)
+          },
+          preferencesRepository = preferencesRepository,
+        )
+      }
     }
 
     val sheetHeightModifier = when {
@@ -618,6 +641,10 @@ fun ToolboxScaffold(
           }
         },
         onSelectTool = { tool ->
+          // Manual navigation ends any cross-tool link so the Colors tool isn't stuck on a linked color
+          linkedTool = null
+          linkReturnTool = null
+          selectedColorPickerHex = null
           preferencesRepository?.incrementToolUsage(tool)
           onSelectTool(tool)
           if (sheetValue == SheetValue.Expanded) {

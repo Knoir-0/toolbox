@@ -75,8 +75,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.GridView
@@ -269,13 +269,10 @@ fun MusicPlayerScreen(
 
   var showFavoritesOnly by rememberSaveable { mutableStateOf(false) }
 
-  // Playlists (persisted in SharedPreferences, initialized with built-in sample playlists when unset)
+  // Playlists (persisted in SharedPreferences; the built-in Favorites playlist is derived from favoriteIds)
   var savedPlaylistEntries by remember {
-    val initialEntries = if (prefs != null && prefs.contains(PREF_KEY_MUSIC_PLAYLISTS)) {
-      MusicPlayerEngine.deserializePlaylists(prefs.getString(PREF_KEY_MUSIC_PLAYLISTS, ""))
-    } else {
-      MusicPlayerEngine.DEFAULT_SAMPLE_PLAYLIST_ENTRIES
-    }
+    val initialEntries = MusicPlayerEngine.deserializePlaylists(prefs?.getString(PREF_KEY_MUSIC_PLAYLISTS, ""))
+      .filterNot { it.id in MusicPlayerEngine.LEGACY_SAMPLE_PLAYLIST_IDS || it.id == MusicPlayerEngine.FAVORITES_PLAYLIST_ID }
     mutableStateOf(initialEntries)
   }
 
@@ -299,6 +296,7 @@ fun MusicPlayerScreen(
   }
 
   fun deletePlaylist(playlistId: String) {
+    if (playlistId == MusicPlayerEngine.FAVORITES_PLAYLIST_ID) return
     updateSavedPlaylists(savedPlaylistEntries.filterNot { it.id == playlistId })
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
   }
@@ -335,10 +333,10 @@ fun MusicPlayerScreen(
         isInspection -> MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
         else -> MusicPlayerEngine.getCachedLibraryTracks(
           initialDirectory = initialDirectory,
-          includeSamples = true,
+          includeSamples = false,
         ) ?: MusicPlayerEngine.loadLibraryTracks(
           initialDirectory = initialDirectory,
-          includeSamples = true,
+          includeSamples = false,
           inspectMetadataRetriever = false,
           deferAlbumArt = true,
         )
@@ -385,8 +383,9 @@ fun MusicPlayerScreen(
     MusicPlayerEngine.filterGenres(baseGenres, activeQuery)
   }
 
-  val basePlaylists = remember(savedPlaylistEntries, allTracks) {
-    MusicPlayerEngine.buildPlaylists(savedPlaylistEntries, allTracks)
+  val basePlaylists = remember(savedPlaylistEntries, allTracks, favoriteIds) {
+    listOf(MusicPlayerEngine.buildFavoritesPlaylist(favoriteIds, allTracks)) +
+      MusicPlayerEngine.buildPlaylists(savedPlaylistEntries, allTracks)
   }
   val allPlaylists = remember(basePlaylists, searchQuery, selectedTab, selectedArtistName, selectedAlbumKey, selectedGenreName, selectedPlaylistId) {
     val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
@@ -407,7 +406,7 @@ fun MusicPlayerScreen(
     if (initialTracks == null && !isInspection) {
       val loaded = MusicPlayerEngine.loadLibraryTracksAsync(
         initialDirectory = initialDirectory,
-        includeSamples = true,
+        includeSamples = false,
         inspectMetadataRetriever = true,
         deferAlbumArt = true,
       )
@@ -1260,9 +1259,6 @@ fun MusicPlayerScreen(
           },
           onSaveQueueAsPlaylist = {
             showSavePlaylistDialog = true
-          },
-          onOpenColorPicker = {
-            openColorInColorsTool(activePalette.dominantHex)
           },
           onOpenTrackInfo = { showTrackInfoDialog = true },
           onOpenSleepTimerMenu = { showSleepTimerMenu = true },
@@ -2195,7 +2191,7 @@ private fun SongsTabContent(
         label = { Text("Favorites", style = MaterialTheme.typography.labelSmall) },
         leadingIcon = {
           Icon(
-            imageVector = if (showFavoritesOnly) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+            imageVector = if (showFavoritesOnly) Icons.Default.Star else Icons.Default.StarBorder,
             contentDescription = null,
             modifier = Modifier.size(14.dp),
           )
@@ -2605,18 +2601,20 @@ private fun PlaylistsTabContent(
                   overflow = TextOverflow.Ellipsis,
                 )
               }
-              IconButton(
-                onClick = { onDeletePlaylist(playlist) },
-                modifier = Modifier
-                  .size(34.dp)
-                  .testTag("delete_playlist_${playlist.name}"),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Delete,
-                  contentDescription = "Delete ${playlist.name}",
-                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier.size(18.dp),
-                )
+              if (!playlist.isFavorites) {
+                IconButton(
+                  onClick = { onDeletePlaylist(playlist) },
+                  modifier = Modifier
+                    .size(34.dp)
+                    .testTag("delete_playlist_${playlist.name}"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete ${playlist.name}",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                  )
+                }
               }
               FilledIconButton(
                 onClick = { onPlayPlaylist(playlist) },
@@ -2692,7 +2690,7 @@ private fun PlaylistsTabContent(
                   .padding(10.dp),
               ) {
                 Icon(
-                  imageVector = Icons.AutoMirrored.Filled.PlaylistPlay,
+                  imageVector = if (playlist.isFavorites) Icons.Default.Star else Icons.AutoMirrored.Filled.PlaylistPlay,
                   contentDescription = null,
                   tint = Color.White.copy(alpha = 0.85f),
                   modifier = Modifier
@@ -3196,17 +3194,24 @@ private fun PlaylistDetailContent(
             }
           }
         }
-        IconButton(
-          onClick = onDeletePlaylist,
-          modifier = Modifier.size(36.dp),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Delete,
-            contentDescription = "Delete playlist",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
+        if (!playlist.isFavorites) {
+          IconButton(
+            onClick = onDeletePlaylist,
+            modifier = Modifier.size(36.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Delete,
+              contentDescription = "Delete playlist",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
         }
       }
+    }
+
+    if (playlist.isFavorites && playlist.tracks.isEmpty()) {
+      EmptyMusicState(message = "No favorites yet — tap the star on any song to add it here")
+      return@Column
     }
 
     if (viewMode == MusicViewMode.LIST) {
@@ -3340,7 +3345,7 @@ private fun SongListItemCard(
           .testTag("favorite_song_${track.id}"),
       ) {
         Icon(
-          imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+          imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
           contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
           tint = if (isFavorite) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
           modifier = Modifier.size(18.dp),
@@ -3416,7 +3421,7 @@ private fun SongGridItemCard(
             .size(30.dp),
         ) {
           Icon(
-            imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+            imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
             contentDescription = "Favorite",
             tint = if (isFavorite) Color(0xFFFF80AB) else Color.White,
             modifier = Modifier.size(16.dp),
@@ -3553,7 +3558,7 @@ private fun CollapsedMiniMusicPlayer(
             .testTag("mini_player_favorite_button"),
         ) {
           Icon(
-            imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+            imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
             contentDescription = "Favorite",
             tint = if (isFavorite) accentColor else Color.White.copy(alpha = 0.8f),
             modifier = Modifier.size(18.dp),
@@ -3675,7 +3680,6 @@ private fun ExpandedMusicPlayerOverlay(
   onCycleSpeed: () -> Unit,
   onSelectQueueIndex: (Int) -> Unit,
   onSaveQueueAsPlaylist: () -> Unit,
-  onOpenColorPicker: () -> Unit,
   onOpenTrackInfo: () -> Unit,
   onOpenSleepTimerMenu: () -> Unit,
   onDismissSleepTimerMenu: () -> Unit,
@@ -3806,53 +3810,18 @@ private fun ExpandedMusicPlayerOverlay(
               )
             }
 
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            IconButton(
+              onClick = onOpenTrackInfo,
+              modifier = Modifier
+                .size(40.dp)
+                .testTag("expanded_player_info_button"),
             ) {
-              // Album art color swatch badge (links to the Colors tool and selects this color)
-              Surface(
-                shape = CircleShape,
-                color = Color.White.copy(alpha = 0.14f),
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
-                modifier = Modifier
-                  .clip(CircleShape)
-                  .clickable(onClick = onOpenColorPicker)
-                  .testTag("expanded_player_palette_badge"),
-              ) {
-                Row(
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(5.dp),
-                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                ) {
-                  Box(
-                    modifier = Modifier
-                      .size(10.dp)
-                      .clip(CircleShape)
-                      .background(dominantColor),
-                  )
-                  Text(
-                    text = dominantHex,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = Color.White,
-                  )
-                }
-              }
-
-              IconButton(
-                onClick = onOpenTrackInfo,
-                modifier = Modifier
-                  .size(36.dp)
-                  .testTag("expanded_player_info_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Info,
-                  contentDescription = "Track details",
-                  tint = Color.White.copy(alpha = 0.85f),
-                  modifier = Modifier.size(20.dp),
-                )
-              }
+              Icon(
+                imageVector = Icons.Default.Info,
+                contentDescription = "Track details",
+                tint = Color.White.copy(alpha = 0.85f),
+                modifier = Modifier.size(20.dp),
+              )
             }
           }
 
@@ -3947,7 +3916,7 @@ private fun ExpandedMusicPlayerOverlay(
                 .testTag("expanded_player_favorite_button"),
             ) {
               Icon(
-                imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
                 contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
                 tint = if (isFavorite) accentColor else Color.White,
                 modifier = Modifier.size(26.dp),
