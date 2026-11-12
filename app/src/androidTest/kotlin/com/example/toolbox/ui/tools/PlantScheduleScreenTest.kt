@@ -84,6 +84,8 @@ class PlantScheduleScreenTest {
       }
     }
 
+    composeTestRule.onNodeWithTag("plant_fab_menu_button").performClick()
+    composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("add_custom_plant_button").performClick()
     composeTestRule.waitForIdle()
 

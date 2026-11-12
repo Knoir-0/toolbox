@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
@@ -41,23 +42,77 @@ data class TodoSubTask(
 }
 
 /**
- * Represents a single todo task, optionally containing subtasks.
+ * Represents a single todo task, optionally containing subtasks, notes, and a scheduled date/time range.
  */
 data class TodoItem(
   val id: String = UUID.randomUUID().toString(),
   val title: String,
+  val notes: String = "",
   val subtasks: List<TodoSubTask> = emptyList(),
   val isSubtasksCollapsed: Boolean = false,
   val createdAt: Long = System.currentTimeMillis(),
+  val scheduledAtMillis: Long? = null,
+  val scheduledEndMillis: Long? = null,
+  val notifiedAtScheduleMillis: Long? = null,
 ) {
+  val isScheduled: Boolean
+    get() = scheduledAtMillis != null
+
+  fun isDue(nowMillis: Long = System.currentTimeMillis()): Boolean =
+    scheduledAtMillis != null && nowMillis >= scheduledAtMillis
+
+  fun shouldTriggerNotification(nowMillis: Long = System.currentTimeMillis()): Boolean =
+    scheduledAtMillis != null &&
+      nowMillis >= scheduledAtMillis &&
+      notifiedAtScheduleMillis != scheduledAtMillis
+
+  /**
+   * Builds the notification body from the note's contents (notes text and/or subtasks).
+   */
+  fun buildNotificationContent(): String {
+    val parts = mutableListOf<String>()
+    val trimmedNotes = notes.trim()
+    if (trimmedNotes.isNotEmpty()) {
+      parts.add(trimmedNotes)
+    }
+    if (subtasks.isNotEmpty()) {
+      val subtasksText = subtasks.joinToString("\n") { sub ->
+        val prefix = if (sub.isCompleted) "✓" else "•"
+        "$prefix ${sub.title}"
+      }
+      parts.add(subtasksText)
+    }
+    if (parts.isEmpty()) {
+      val scheduleText = scheduledAtMillis?.let {
+        TodoListEngine.formatScheduleLabel(it, scheduledEndMillis)
+      }
+      return if (scheduleText != null) {
+        "$title ($scheduleText)"
+      } else {
+        title
+      }
+    }
+    return parts.joinToString("\n")
+  }
+
   fun toJson(): JSONObject = JSONObject().apply {
     put("id", id)
     put("title", title)
+    put("notes", notes)
     val subtasksArray = JSONArray()
     subtasks.forEach { subtasksArray.put(it.toJson()) }
     put("subtasks", subtasksArray)
     put("isSubtasksCollapsed", isSubtasksCollapsed)
     put("createdAt", createdAt)
+    if (scheduledAtMillis != null) {
+      put("scheduledAtMillis", scheduledAtMillis)
+    }
+    if (scheduledEndMillis != null) {
+      put("scheduledEndMillis", scheduledEndMillis)
+    }
+    if (notifiedAtScheduleMillis != null) {
+      put("notifiedAtScheduleMillis", notifiedAtScheduleMillis)
+    }
   }
 
   companion object {
@@ -74,12 +129,31 @@ data class TodoItem(
           }
         }
       }
+      val scheduledAt = if (json.has("scheduledAtMillis") && !json.isNull("scheduledAtMillis")) {
+        json.optLong("scheduledAtMillis")
+      } else {
+        null
+      }
+      val scheduledEnd = if (json.has("scheduledEndMillis") && !json.isNull("scheduledEndMillis")) {
+        json.optLong("scheduledEndMillis")
+      } else {
+        null
+      }
+      val notifiedAt = if (json.has("notifiedAtScheduleMillis") && !json.isNull("notifiedAtScheduleMillis")) {
+        json.optLong("notifiedAtScheduleMillis")
+      } else {
+        null
+      }
       return TodoItem(
         id = json.optString("id", UUID.randomUUID().toString()),
         title = json.optString("title", ""),
+        notes = json.optString("notes", ""),
         subtasks = subtasksList,
         isSubtasksCollapsed = json.optBoolean("isSubtasksCollapsed", false),
         createdAt = json.optLong("createdAt", System.currentTimeMillis()),
+        scheduledAtMillis = scheduledAt,
+        scheduledEndMillis = scheduledEnd,
+        notifiedAtScheduleMillis = notifiedAt,
       )
     }
   }
@@ -615,7 +689,7 @@ object TodoListEngine {
   }
 
   /**
-   * Saves [task] as a template in [savedTasks], preserving its title and subtasks
+   * Saves [task] as a template in [savedTasks], preserving its title, notes, and subtasks
    * (with completion reset to false) and deduplicating by trimmed title.
    */
   fun saveTaskAsTemplate(savedTasks: List<TodoItem>, task: TodoItem): List<TodoItem> {
@@ -623,9 +697,146 @@ object TodoListEngine {
     if (trimmed.isEmpty()) return savedTasks
     val template = TodoItem(
       title = trimmed,
+      notes = task.notes.trim(),
       subtasks = task.subtasks.map { TodoSubTask(title = it.title, isCompleted = false) },
       isSubtasksCollapsed = false,
     )
     return listOf(template) + savedTasks.filter { it.title != trimmed }
+  }
+
+  /**
+   * Schedules or reschedules a task for [scheduledAtMillis] and an optional [scheduledEndMillis]
+   * date/time range. Resets [TodoItem.notifiedAtScheduleMillis] so a notification fires when
+   * [scheduledAtMillis] is reached.
+   */
+  fun scheduleTask(
+    tasks: List<TodoItem>,
+    taskId: String,
+    scheduledAtMillis: Long,
+    scheduledEndMillis: Long? = null,
+    notes: String? = null,
+  ): List<TodoItem> {
+    val normalizedEnd = scheduledEndMillis?.takeIf { it > scheduledAtMillis }
+    return tasks.map { item ->
+      if (item.id == taskId) {
+        item.copy(
+          scheduledAtMillis = scheduledAtMillis,
+          scheduledEndMillis = normalizedEnd,
+          notifiedAtScheduleMillis = null,
+          notes = notes?.trim() ?: item.notes,
+        )
+      } else {
+        item
+      }
+    }
+  }
+
+  /**
+   * Clears any schedule from the specified task.
+   */
+  fun unscheduleTask(tasks: List<TodoItem>, taskId: String): List<TodoItem> {
+    return tasks.map { item ->
+      if (item.id == taskId) {
+        item.copy(
+          scheduledAtMillis = null,
+          scheduledEndMillis = null,
+          notifiedAtScheduleMillis = null,
+        )
+      } else {
+        item
+      }
+    }
+  }
+
+  /**
+   * Updates the note contents of an existing task.
+   */
+  fun updateTaskNotes(tasks: List<TodoItem>, taskId: String, notes: String): List<TodoItem> {
+    val trimmed = notes.trim()
+    return tasks.map { item ->
+      if (item.id == taskId) {
+        item.copy(notes = trimmed)
+      } else {
+        item
+      }
+    }
+  }
+
+  /**
+   * Marks that a notification has been shown for [scheduledAtMillis] on [taskId].
+   */
+  fun markTaskNotified(
+    tasks: List<TodoItem>,
+    taskId: String,
+    scheduledAtMillis: Long,
+  ): List<TodoItem> {
+    return tasks.map { item ->
+      if (item.id == taskId) {
+        item.copy(notifiedAtScheduleMillis = scheduledAtMillis)
+      } else {
+        item
+      }
+    }
+  }
+
+  /**
+   * Returns all active tasks whose scheduled date/time has been reached and have not yet
+   * triggered a notification for their current schedule.
+   */
+  fun getDueUnnotifiedTasks(
+    tasks: List<TodoItem>,
+    nowMillis: Long = System.currentTimeMillis(),
+  ): List<TodoItem> {
+    return tasks.filter { it.shouldTriggerNotification(nowMillis) }
+  }
+
+  /**
+   * Formats a scheduled timestamp or date/time range into a concise human-readable label.
+   */
+  fun formatScheduleLabel(
+    scheduledAtMillis: Long,
+    scheduledEndMillis: Long? = null,
+    nowMillis: Long = System.currentTimeMillis(),
+  ): String {
+    val timeFormat = SimpleDateFormat("h:mm a", Locale.US)
+    val shortDateFormat = SimpleDateFormat("MMM d", Locale.US)
+    val fullDateFormat = SimpleDateFormat("MMM d, yyyy", Locale.US)
+
+    val nowCal = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val startCal = Calendar.getInstance().apply { timeInMillis = scheduledAtMillis }
+
+    fun formatDayPrefix(cal: Calendar): String {
+      val sameYear = cal.get(Calendar.YEAR) == nowCal.get(Calendar.YEAR)
+      val dayDiff = if (sameYear) {
+        cal.get(Calendar.DAY_OF_YEAR) - nowCal.get(Calendar.DAY_OF_YEAR)
+      } else {
+        Int.MIN_VALUE
+      }
+      return when {
+        sameYear && dayDiff == 0 -> "Today"
+        sameYear && dayDiff == 1 -> "Tomorrow"
+        sameYear && dayDiff == -1 -> "Yesterday"
+        sameYear -> shortDateFormat.format(Date(cal.timeInMillis))
+        else -> fullDateFormat.format(Date(cal.timeInMillis))
+      }
+    }
+
+    val startDayLabel = formatDayPrefix(startCal)
+    val startTimeLabel = timeFormat.format(Date(scheduledAtMillis))
+
+    val validEnd = scheduledEndMillis?.takeIf { it > scheduledAtMillis }
+      ?: return "$startDayLabel, $startTimeLabel"
+
+    val endCal = Calendar.getInstance().apply { timeInMillis = validEnd }
+    val endTimeLabel = timeFormat.format(Date(validEnd))
+    val sameDay = startCal.get(Calendar.YEAR) == endCal.get(Calendar.YEAR) &&
+      startCal.get(Calendar.DAY_OF_YEAR) == endCal.get(Calendar.DAY_OF_YEAR)
+
+    return if (sameDay) {
+      "$startDayLabel, $startTimeLabel – $endTimeLabel"
+    } else {
+      val endDayLabel = formatDayPrefix(endCal)
+      "$startDayLabel, $startTimeLabel – $endDayLabel, $endTimeLabel"
+    }
   }
 }

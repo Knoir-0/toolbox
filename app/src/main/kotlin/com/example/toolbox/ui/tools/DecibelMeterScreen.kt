@@ -431,7 +431,7 @@ fun DecibelMeterScreen(
 
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "Decibel Meter",
+                text = "Decibels",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,

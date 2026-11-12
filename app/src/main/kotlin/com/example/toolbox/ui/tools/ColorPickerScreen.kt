@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -69,6 +70,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -88,6 +90,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -396,15 +399,30 @@ private fun rememberSystemAccentColor(): Color {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ColorPickerScreen(modifier: Modifier = Modifier) {
+fun ColorPickerScreen(
+  modifier: Modifier = Modifier,
+  initialHexColor: String? = null,
+  onNavigateBack: (() -> Unit)? = null,
+) {
+  if (onNavigateBack != null) {
+    BackHandler {
+      onNavigateBack()
+    }
+  }
+
   val systemAccentColor = rememberSystemAccentColor()
-  val initialRgb = remember(systemAccentColor) {
-    val argb = systemAccentColor.toArgb()
-    Triple(
-      (argb shr 16) and 0xFF,
-      (argb shr 8) and 0xFF,
-      argb and 0xFF,
-    )
+  val initialRgb = remember(systemAccentColor, initialHexColor) {
+    val parsed = initialHexColor?.let { ColorMath.parseHex(it) }
+    if (parsed != null) {
+      parsed
+    } else {
+      val argb = systemAccentColor.toArgb()
+      Triple(
+        (argb shr 16) and 0xFF,
+        (argb shr 8) and 0xFF,
+        argb and 0xFF,
+      )
+    }
   }
   val initialHsv = remember(initialRgb) {
     ColorMath.rgbToHsv(initialRgb.first, initialRgb.second, initialRgb.third)
@@ -462,6 +480,18 @@ fun ColorPickerScreen(modifier: Modifier = Modifier) {
     hexInput = ColorMath.toHex(newR, newG, newB)
   }
 
+  LaunchedEffect(initialHexColor) {
+    if (!initialHexColor.isNullOrBlank()) {
+      ColorMath.parseHex(initialHexColor)?.let { (pr, pg, pb) ->
+        updateFromRgb(pr, pg, pb)
+        val normalized = ColorMath.toHex(pr, pg, pb)
+        if (!savedPalette.contains(normalized)) {
+          savedPalette.add(0, normalized)
+        }
+      }
+    }
+  }
+
   fun copyToClipboard(label: String, text: String) {
     try {
       val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
@@ -473,7 +503,9 @@ fun ColorPickerScreen(modifier: Modifier = Modifier) {
   }
 
   LazyColumn(
-    modifier = modifier.fillMaxSize(),
+    modifier = modifier
+      .fillMaxSize()
+      .testTag("color_picker_screen"),
     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
     verticalArrangement = Arrangement.spacedBy(14.dp),
   ) {
@@ -716,6 +748,7 @@ private fun ColorHeroCard(
                   fontFamily = FontFamily.Monospace,
                   fontWeight = FontWeight.Black,
                   color = foregroundColor,
+                  modifier = Modifier.testTag("color_picker_hero_hex"),
                 )
               }
               Text(
@@ -758,8 +791,8 @@ private fun ColorHeroCard(
       ) {
         Button(
           onClick = onCopyHex,
-          modifier = Modifier.weight(1.2f),
-          shape = RoundedCornerShape(14.dp),
+          modifier = Modifier.weight(1f),
+          shape = CircleShape,
           contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
         ) {
           Icon(
@@ -770,7 +803,7 @@ private fun ColorHeroCard(
               .size(18.dp),
           )
           Text(
-            text = "Copy HEX",
+            text = "Copy",
             fontWeight = FontWeight.Bold,
             maxLines = 1,
           )
@@ -779,7 +812,7 @@ private fun ColorHeroCard(
         FilledTonalButton(
           onClick = onRandomize,
           modifier = Modifier.weight(1f),
-          shape = RoundedCornerShape(14.dp),
+          shape = CircleShape,
           contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
         ) {
           Icon(
@@ -799,7 +832,7 @@ private fun ColorHeroCard(
         OutlinedButton(
           onClick = onSaveSwatch,
           modifier = Modifier.weight(1f),
-          shape = RoundedCornerShape(14.dp),
+          shape = CircleShape,
           contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
         ) {
           Icon(
@@ -1421,6 +1454,7 @@ private fun ColorHarmoniesCard(
           FilterChip(
             selected = isSelected,
             onClick = { onSelectHarmonyMode(mode) },
+            shape = CircleShape,
             label = {
               Text(
                 text = mode.label,

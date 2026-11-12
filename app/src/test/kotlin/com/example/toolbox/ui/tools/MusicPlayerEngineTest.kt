@@ -2,6 +2,7 @@ package com.example.toolbox.ui.tools
 
 import java.io.File
 import java.nio.file.Files
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -59,6 +60,26 @@ class MusicPlayerEngineTest {
     assertEquals(MusicLibraryTab.ALBUMS, MusicLibraryTab.fromNameOrDefault("albums"))
     assertEquals(MusicLibraryTab.SONGS, MusicLibraryTab.fromNameOrDefault("SONGS"))
     assertEquals(MusicLibraryTab.GENRES, MusicLibraryTab.fromNameOrDefault("genres"))
+    assertEquals(MusicLibraryTab.PLAYLISTS, MusicLibraryTab.fromNameOrDefault("playlists"))
+  }
+
+  @Test
+  fun playlists_buildFilterSerializeAndDeserializeCorrectly() {
+    val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+    val entries = MusicPlayerEngine.DEFAULT_SAMPLE_PLAYLIST_ENTRIES
+    val playlists = MusicPlayerEngine.buildPlaylists(entries, tracks)
+
+    assertEquals(2, playlists.size)
+    assertEquals("Neon Night Drive", playlists.first().name)
+    assertEquals(4, playlists.first().songCount)
+
+    val filtered = MusicPlayerEngine.filterPlaylists(playlists, "Chill")
+    assertEquals(1, filtered.size)
+    assertEquals("Chill & Focus", filtered.first().name)
+
+    val serialized = MusicPlayerEngine.serializePlaylists(entries)
+    val deserialized = MusicPlayerEngine.deserializePlaylists(serialized)
+    assertEquals(entries, deserialized)
   }
 
   @Test
@@ -177,6 +198,51 @@ class MusicPlayerEngineTest {
       assertEquals("Daft Punk", parsedCustom!!.artist)
       assertEquals("Digital Love", parsedCustom.title)
     } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun deferredAlbumArt_andMetadataAndLibraryCaching_workInBackground() = runBlocking {
+    val tempDir = Files.createTempDirectory("music_cache_test").toFile()
+    try {
+      MusicPlayerEngine.clearArtworkCache()
+      MusicPlayerEngine.clearTrackMetadataCache()
+      MusicPlayerEngine.configureDiskCache(tempDir)
+
+      val albumDir = File(tempDir, "Music/Discovery").apply { mkdirs() }
+      val sample = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS.first()
+      val baseWav = MusicPlayerEngine.ensurePlayableSampleWavFile(tempDir, sample)
+
+      val trackFile1 = File(albumDir, "Daft Punk - One More Time.wav")
+      val trackFile2 = File(albumDir, "Daft Punk - Aerodynamic.wav")
+      baseWav.copyTo(trackFile1, overwrite = true)
+      baseWav.copyTo(trackFile2, overwrite = true)
+
+      assertNull(MusicPlayerEngine.getCachedTrackMetadata(trackFile1))
+      assertNull(MusicPlayerEngine.getCachedLibraryTracks(rootDirectory = tempDir, initialDirectory = albumDir, includeSamples = false))
+
+      // Deferred scan populates track metadata & library caches without decoding bitmaps synchronously
+      val loaded = MusicPlayerEngine.loadLibraryTracksAsync(
+        rootDirectory = tempDir,
+        initialDirectory = albumDir,
+        includeSamples = false,
+        inspectMetadataRetriever = true,
+        deferAlbumArt = true,
+      )
+      assertEquals(2, loaded.size)
+      assertNotNull(MusicPlayerEngine.getCachedTrackMetadata(trackFile1))
+      assertNotNull(MusicPlayerEngine.getCachedLibraryTracks(rootDirectory = tempDir, initialDirectory = albumDir, includeSamples = false))
+
+      // Both tracks in the same album share a single album art identity key and have not decoded bitmaps yet
+      val t1 = loaded[0]
+      val t2 = loaded[1]
+      assertEquals(MusicPlayerEngine.albumArtIdentityKey(t1), MusicPlayerEngine.albumArtIdentityKey(t2))
+      assertNull(MusicPlayerEngine.getCachedAlbumArtBitmap(t1, 240))
+    } finally {
+      MusicPlayerEngine.configureDiskCache(null)
+      MusicPlayerEngine.clearArtworkCache()
+      MusicPlayerEngine.clearTrackMetadataCache()
       tempDir.deleteRecursively()
     }
   }

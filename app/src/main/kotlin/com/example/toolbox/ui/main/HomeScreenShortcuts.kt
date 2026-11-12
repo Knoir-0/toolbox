@@ -194,6 +194,8 @@ fun resolveToolShortcutAliasClassName(tool: Tool): String {
     Tool.DECIBEL_METER -> "com.example.toolbox.MainActivityToolDecibelMeter"
     Tool.ARCHIVE -> "com.example.toolbox.MainActivityToolArchive"
     Tool.MUSIC -> "com.example.toolbox.MainActivityToolMusicPlayer"
+    Tool.PDF_VIEWER -> "com.example.toolbox.MainActivityToolPdfViewer"
+    Tool.RECIPES -> "com.example.toolbox.MainActivityToolRecipeBook"
     Tool.SETTINGS -> "com.example.toolbox.MainActivityToolSettings"
   }
 }

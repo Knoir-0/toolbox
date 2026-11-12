@@ -96,6 +96,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SdCard
 import androidx.compose.material.icons.filled.Search
@@ -186,6 +187,7 @@ fun FilesScreen(
   onOpenVideoEditor: ((File) -> Unit)? = null,
   onOpenAudioEditor: ((File) -> Unit)? = null,
   onOpenArchive: ((File) -> Unit)? = null,
+  onOpenPdfViewer: ((File) -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
@@ -429,6 +431,7 @@ fun FilesScreen(
   var fileForVideoEditor by remember { mutableStateOf<File?>(null) }
   var fileForAudioEditor by remember { mutableStateOf<File?>(null) }
   var fileForArchive by remember { mutableStateOf<File?>(null) }
+  var fileForPdfViewer by remember { mutableStateOf<File?>(null) }
   var showSortMenu by remember { mutableStateOf(false) }
 
   // Multi-selection state
@@ -563,6 +566,20 @@ fun FilesScreen(
       initialDirectory = currentDirectory,
       onNavigateBack = {
         fileForArchive = null
+        refreshTrigger++
+      },
+    )
+    return
+  }
+
+  val activePdfViewerFile = fileForPdfViewer
+  if (activePdfViewerFile != null) {
+    PdfViewerScreen(
+      modifier = modifier,
+      initialFile = activePdfViewerFile,
+      initialDirectory = currentDirectory,
+      onNavigateBack = {
+        fileForPdfViewer = null
         refreshTrigger++
       },
     )
@@ -760,6 +777,18 @@ fun FilesScreen(
           fileForAudioEditor = file
           onOpenAudioEditor?.invoke(file)
         },
+        onOpenSelectedArchive = { file ->
+          isSelectionMode = false
+          selectedPaths = emptySet()
+          fileForArchive = file
+          onOpenArchive?.invoke(file)
+        },
+        onOpenSelectedPdf = { file ->
+          isSelectionMode = false
+          selectedPaths = emptySet()
+          fileForPdfViewer = file
+          onOpenPdfViewer?.invoke(file)
+        },
         onAddFolderToHomeScreen = { folder -> addFolderToHomeScreen(context, folder, themeColor) },
         onAddCurrentFolderToHomeScreen = { addFolderToHomeScreen(context, currentDirectory, themeColor) },
       )
@@ -900,6 +929,10 @@ fun FilesScreen(
                           fileForArchive = item.file
                           onOpenArchive?.invoke(item.file)
                         },
+                        onOpenPdf = {
+                          fileForPdfViewer = item.file
+                          onOpenPdfViewer?.invoke(item.file)
+                        },
                         onOpenText = { fileForTextEdit = item },
                         onOpenImage = { fileForImagePreview = item },
                         onShare = { shareFile(item.file) },
@@ -1013,6 +1046,10 @@ fun FilesScreen(
                       onOpenArchive = {
                         fileForArchive = item.file
                         onOpenArchive?.invoke(item.file)
+                      },
+                      onOpenPdf = {
+                        fileForPdfViewer = item.file
+                        onOpenPdfViewer?.invoke(item.file)
                       },
                       onOpenText = { fileForTextEdit = item },
                       onOpenImage = { fileForImagePreview = item },
@@ -1405,6 +1442,8 @@ private fun FilesHeader(
   onEditSelectedImage: ((File) -> Unit)? = null,
   onEditSelectedVideo: ((File) -> Unit)? = null,
   onEditSelectedAudio: ((File) -> Unit)? = null,
+  onOpenSelectedArchive: ((File) -> Unit)? = null,
+  onOpenSelectedPdf: ((File) -> Unit)? = null,
   onAddFolderToHomeScreen: ((File) -> Unit)? = null,
   onAddCurrentFolderToHomeScreen: (() -> Unit)? = null,
 ) {
@@ -1624,6 +1663,28 @@ private fun FilesHeader(
                     modifier = Modifier.testTag("action_selection_file_converter"),
                   )
                 }
+                if (singleSelectedFile != null && onOpenSelectedArchive != null && ArchiveEngine.isSupportedArchive(singleSelectedFile)) {
+                  DropdownMenuItem(
+                    text = { Text("Archives") },
+                    leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
+                    onClick = {
+                      showOverflowMenu = false
+                      onOpenSelectedArchive(singleSelectedFile)
+                    },
+                    modifier = Modifier.testTag("action_selection_open_archive"),
+                  )
+                }
+                if (singleSelectedFile != null && onOpenSelectedPdf != null && FileManagerEngine.isPdfFile(singleSelectedFile)) {
+                  DropdownMenuItem(
+                    text = { Text("PDF Viewer") },
+                    leadingIcon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null) },
+                    onClick = {
+                      showOverflowMenu = false
+                      onOpenSelectedPdf(singleSelectedFile)
+                    },
+                    modifier = Modifier.testTag("action_selection_open_pdf"),
+                  )
+                }
                 if (singleSelectedFile != null && onEditSelectedImage != null && FileManagerEngine.isImageFile(singleSelectedFile)) {
                   DropdownMenuItem(
                     text = { Text("Edit") },
@@ -1766,12 +1827,17 @@ private fun FilesHeader(
               )
             }
 
-            IconButton(onClick = onToggleViewMode, modifier = Modifier.testTag("action_toggle_view_mode")) {
-              Icon(
-                if (viewMode == FileViewMode.LIST) Icons.Default.GridView else Icons.AutoMirrored.Filled.ViewList,
-                contentDescription = "Toggle View Mode",
-              )
-            }
+            ViewModeSegmentedToggle(
+              isListView = viewMode == FileViewMode.LIST,
+              onSelectListView = { if (viewMode != FileViewMode.LIST) onToggleViewMode() },
+              onSelectGridView = { if (viewMode == FileViewMode.LIST) onToggleViewMode() },
+              onToggle = onToggleViewMode,
+              toggleTestTag = "action_toggle_view_mode",
+              listTestTag = "files_view_mode_list",
+              gridTestTag = "files_view_mode_grid",
+              listContentDescription = "List view",
+              gridContentDescription = "Grid view",
+            )
 
             Box {
               IconButton(onClick = onOpenSortMenu, modifier = Modifier.testTag("action_sort_menu")) {
@@ -2292,6 +2358,7 @@ private fun FileListItem(
   onEditVideo: () -> Unit = {},
   onEditAudio: () -> Unit = {},
   onOpenArchive: () -> Unit = {},
+  onOpenPdf: () -> Unit = {},
   onOpenText: () -> Unit,
   onOpenImage: () -> Unit,
   onShare: () -> Unit,
@@ -2425,6 +2492,10 @@ private fun FileListItem(
               showMenu = false
               onOpenArchive()
             },
+            onOpenPdf = {
+              showMenu = false
+              onOpenPdf()
+            },
             onOpenText = {
               showMenu = false
               onOpenText()
@@ -2479,6 +2550,7 @@ private fun FileGridItem(
   onEditVideo: () -> Unit = {},
   onEditAudio: () -> Unit = {},
   onOpenArchive: () -> Unit = {},
+  onOpenPdf: () -> Unit = {},
   onOpenText: () -> Unit = {},
   onOpenImage: () -> Unit = {},
   onShare: () -> Unit,
@@ -2607,6 +2679,10 @@ private fun FileGridItem(
               showMenu = false
               onOpenArchive()
             },
+            onOpenPdf = {
+              showMenu = false
+              onOpenPdf()
+            },
             onOpenText = {
               showMenu = false
               onOpenText()
@@ -2655,6 +2731,7 @@ private fun FileIconBox(item: FileItem, size: androidx.compose.ui.unit.Dp) {
     FileManagerEngine.isAudioFile(item.file) -> Triple(Icons.Default.AudioFile, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.error)
     FileManagerEngine.isVideoFile(item.file) -> Triple(Icons.Default.VideoFile, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.error)
     FileManagerEngine.isArchiveFile(item.file) -> Triple(Icons.Default.FolderZip, MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.colorScheme.onSurface)
+    FileManagerEngine.isPdfFile(item.file) -> Triple(Icons.Default.PictureAsPdf, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.error)
     FileManagerEngine.isTextFile(item.file) -> Triple(Icons.Default.Description, MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.primary)
     else -> Triple(Icons.AutoMirrored.Filled.InsertDriveFile, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
   }
@@ -2685,6 +2762,7 @@ private fun FileActionMenu(
   onEditVideo: () -> Unit = {},
   onEditAudio: () -> Unit = {},
   onOpenArchive: () -> Unit = {},
+  onOpenPdf: () -> Unit = {},
   onOpenText: () -> Unit,
   onOpenImage: () -> Unit,
   onShare: () -> Unit,
@@ -2715,10 +2793,18 @@ private fun FileActionMenu(
       }
       if (ArchiveEngine.isSupportedArchive(item.file)) {
         DropdownMenuItem(
-          text = { Text("Open in Archive") },
+          text = { Text("Archives") },
           leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
           onClick = onOpenArchive,
           modifier = Modifier.testTag("action_open_archive"),
+        )
+      }
+      if (FileManagerEngine.isPdfFile(item.file)) {
+        DropdownMenuItem(
+          text = { Text("PDF Viewer") },
+          leadingIcon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null) },
+          onClick = onOpenPdf,
+          modifier = Modifier.testTag("action_open_pdf"),
         )
       }
       if (FileManagerEngine.isImageFile(item.file)) {

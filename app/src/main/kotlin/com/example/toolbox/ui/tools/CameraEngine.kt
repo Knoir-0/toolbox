@@ -36,8 +36,6 @@ import kotlin.math.cos
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
-import org.json.JSONArray
-import org.json.JSONObject
 
 const val CAMERA_PREFS_NAME = "camera_tool_preferences"
 const val PREF_KEY_CAMERA_DIRECTORY = "camera_save_directory"
@@ -50,8 +48,6 @@ const val PREF_KEY_CAMERA_FILTER = "camera_color_filter"
 const val PREF_KEY_CAMERA_FORMAT = "camera_photo_format"
 const val PREF_KEY_CAMERA_MIRROR_FRONT = "camera_mirror_front"
 const val PREF_KEY_CAMERA_SCAN_FILTER = "camera_scan_filter"
-const val PREF_KEY_CAMERA_SCAN_HISTORY = "camera_scan_history_json"
-const val PREF_KEY_CAMERA_AUTO_SCAN = "camera_auto_scan_enabled"
 
 const val DEFAULT_CAMERA_FOLDER_SUBPATH = "DCIM/Camera"
 const val DEFAULT_CAMERA_FOLDER_DISPLAY = "/DCIM/Camera"
@@ -2427,51 +2423,6 @@ object CameraEngine {
       977 -> "ISSN Periodical"
       978, 979 -> "Bookland ISBN"
       else -> "GS1 International"
-    }
-  }
-
-  /**
-   * Serializes a list of [CameraScannedCode] items to a JSON string for SharedPreferences storage.
-   */
-  fun serializeScanHistory(history: List<CameraScannedCode>, maxItems: Int = 50): String {
-    val array = JSONArray()
-    history.take(maxItems).forEach { item ->
-      val obj = JSONObject().apply {
-        put("rawValue", item.rawValue)
-        put("format", item.format.name)
-        put("scannedAtMs", item.scannedAtMs)
-      }
-      array.put(obj)
-    }
-    return array.toString()
-  }
-
-  /**
-   * Deserializes a JSON string produced by [serializeScanHistory] back into a list of [CameraScannedCode].
-   */
-  fun deserializeScanHistory(jsonString: String?): List<CameraScannedCode> {
-    if (jsonString.isNullOrBlank()) return emptyList()
-    return try {
-      val array = JSONArray(jsonString)
-      val list = mutableListOf<CameraScannedCode>()
-      for (i in 0 until array.length()) {
-        val obj = array.optJSONObject(i) ?: continue
-        val rawValue = obj.optString("rawValue", "")
-        if (rawValue.isEmpty()) continue
-        val formatName = obj.optString("format", CameraBarcodeFormat.QR_CODE.name)
-        val scannedAtMs = obj.optLong("scannedAtMs", 0L)
-        val format = CameraBarcodeFormat.fromNameOrDefault(formatName)
-        list.add(
-          analyzeScannedPayload(
-            rawValue = rawValue,
-            format = format,
-            scannedAtMs = scannedAtMs,
-          )
-        )
-      }
-      list
-    } catch (_: Throwable) {
-      emptyList()
     }
   }
 }

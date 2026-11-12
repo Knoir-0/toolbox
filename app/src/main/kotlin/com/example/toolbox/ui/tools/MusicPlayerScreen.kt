@@ -12,9 +12,11 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -23,7 +25,9 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +35,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -38,6 +43,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -51,8 +57,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.ViewList
@@ -63,6 +72,7 @@ import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Favorite
@@ -72,6 +82,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
@@ -87,6 +98,8 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -105,11 +118,16 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.rememberBottomSheetScaffoldState
+import androidx.compose.material3.rememberStandardBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -119,11 +137,13 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
@@ -133,8 +153,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
@@ -152,6 +174,7 @@ import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -162,6 +185,8 @@ fun MusicPlayerScreen(
   initialTab: MusicLibraryTab? = null,
   initialViewMode: MusicViewMode? = null,
   initialPlayerExpanded: Boolean = false,
+  initialQueueExpanded: Boolean = false,
+  onOpenColorPicker: ((String) -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
@@ -244,62 +269,177 @@ fun MusicPlayerScreen(
 
   var showFavoritesOnly by rememberSaveable { mutableStateOf(false) }
 
+  // Playlists (persisted in SharedPreferences, initialized with built-in sample playlists when unset)
+  var savedPlaylistEntries by remember {
+    val initialEntries = if (prefs != null && prefs.contains(PREF_KEY_MUSIC_PLAYLISTS)) {
+      MusicPlayerEngine.deserializePlaylists(prefs.getString(PREF_KEY_MUSIC_PLAYLISTS, ""))
+    } else {
+      MusicPlayerEngine.DEFAULT_SAMPLE_PLAYLIST_ENTRIES
+    }
+    mutableStateOf(initialEntries)
+  }
+
+  fun updateSavedPlaylists(next: List<SavedPlaylistEntry>) {
+    savedPlaylistEntries = next
+    prefs?.edit()?.putString(PREF_KEY_MUSIC_PLAYLISTS, MusicPlayerEngine.serializePlaylists(next))?.apply()
+  }
+
+  fun saveQueueAsPlaylist(name: String, tracksToSave: List<MusicTrack>) {
+    val trimmedName = name.trim().ifEmpty { "Playlist ${savedPlaylistEntries.size + 1}" }
+    val trackIds = tracksToSave.map { it.id }
+    if (trackIds.isEmpty()) return
+    val newEntry = SavedPlaylistEntry(
+      id = "playlist_${System.currentTimeMillis()}_${savedPlaylistEntries.size + 1}",
+      name = trimmedName,
+      trackIds = trackIds,
+      createdAtMs = System.currentTimeMillis(),
+    )
+    updateSavedPlaylists(listOf(newEntry) + savedPlaylistEntries)
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+  }
+
+  fun deletePlaylist(playlistId: String) {
+    updateSavedPlaylists(savedPlaylistEntries.filterNot { it.id == playlistId })
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+  }
+
   // Search state
   var isSearchActive by rememberSaveable { mutableStateOf(false) }
   var searchQuery by rememberSaveable { mutableStateOf("") }
 
-  // Drill-down selection state (Artist detail, Album detail, Genre detail)
+  // Drill-down selection state (Artist detail, Album detail, Genre detail, Playlist detail)
   var selectedArtistName by rememberSaveable { mutableStateOf<String?>(null) }
   var selectedAlbumKey by rememberSaveable { mutableStateOf<String?>(null) }
   var selectedGenreName by rememberSaveable { mutableStateOf<String?>(null) }
+  var selectedPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
 
   fun clearDrillDown() {
     selectedArtistName = null
     selectedAlbumKey = null
     selectedGenreName = null
+    selectedPlaylistId = null
   }
 
-  // Load library tracks
-  val allTracks = remember(initialTracks, initialDirectory, isInspection) {
-    when {
-      initialTracks != null -> initialTracks
-      isInspection -> MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
-      else -> MusicPlayerEngine.loadLibraryTracks(
-        initialDirectory = initialDirectory,
-        includeSamples = true,
-      )
+  // Configure persistent album art disk cache
+  LaunchedEffect(context, isInspection) {
+    if (!isInspection) {
+      MusicPlayerEngine.configureDiskCache(context.cacheDir)
     }
   }
 
-  val sortedTracks = remember(allTracks, sortOrder, showFavoritesOnly, favoriteIds, searchQuery) {
+  // Load library tracks (fast non-blocking initial state + background metadata & artwork resolution)
+  var allTracks by remember(initialTracks, initialDirectory, isInspection) {
+    mutableStateOf(
+      when {
+        initialTracks != null -> initialTracks
+        isInspection -> MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+        else -> MusicPlayerEngine.getCachedLibraryTracks(
+          initialDirectory = initialDirectory,
+          includeSamples = true,
+        ) ?: MusicPlayerEngine.loadLibraryTracks(
+          initialDirectory = initialDirectory,
+          includeSamples = true,
+          inspectMetadataRetriever = false,
+          deferAlbumArt = true,
+        )
+      }
+    )
+  }
+
+  val sortedTracks = remember(allTracks, sortOrder, showFavoritesOnly, favoriteIds, searchQuery, selectedTab, selectedArtistName, selectedAlbumKey, selectedGenreName, selectedPlaylistId) {
     val base = if (showFavoritesOnly) {
       allTracks.filter { it.id in favoriteIds }
     } else {
       allTracks
     }
-    val filtered = MusicPlayerEngine.filterTracks(base, searchQuery)
+    val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
+    val activeQuery = if (!hasDrill && selectedTab == MusicLibraryTab.SONGS) searchQuery else ""
+    val filtered = MusicPlayerEngine.filterTracks(base, activeQuery)
     MusicPlayerEngine.sortTracks(filtered, sortOrder)
   }
 
-  val allArtists = remember(allTracks, searchQuery) {
-    MusicPlayerEngine.filterArtists(MusicPlayerEngine.buildArtists(allTracks), searchQuery)
+  val baseArtists = remember(allTracks) {
+    MusicPlayerEngine.buildArtists(allTracks)
+  }
+  val allArtists = remember(baseArtists, searchQuery, selectedTab, selectedArtistName, selectedAlbumKey, selectedGenreName, selectedPlaylistId) {
+    val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
+    val activeQuery = if (!hasDrill && selectedTab == MusicLibraryTab.ARTISTS) searchQuery else ""
+    MusicPlayerEngine.filterArtists(baseArtists, activeQuery)
   }
 
-  val allAlbums = remember(allTracks, searchQuery) {
-    MusicPlayerEngine.filterAlbums(MusicPlayerEngine.buildAlbums(allTracks), searchQuery)
+  val baseAlbums = remember(allTracks) {
+    MusicPlayerEngine.buildAlbums(allTracks)
+  }
+  val allAlbums = remember(baseAlbums, searchQuery, selectedTab, selectedArtistName, selectedAlbumKey, selectedGenreName, selectedPlaylistId) {
+    val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
+    val activeQuery = if (!hasDrill && selectedTab == MusicLibraryTab.ALBUMS) searchQuery else ""
+    MusicPlayerEngine.filterAlbums(baseAlbums, activeQuery)
   }
 
-  val allGenres = remember(allTracks, searchQuery) {
-    MusicPlayerEngine.filterGenres(MusicPlayerEngine.buildGenres(allTracks), searchQuery)
+  val baseGenres = remember(allTracks) {
+    MusicPlayerEngine.buildGenres(allTracks)
+  }
+  val allGenres = remember(baseGenres, searchQuery, selectedTab, selectedArtistName, selectedAlbumKey, selectedGenreName, selectedPlaylistId) {
+    val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
+    val activeQuery = if (!hasDrill && selectedTab == MusicLibraryTab.GENRES) searchQuery else ""
+    MusicPlayerEngine.filterGenres(baseGenres, activeQuery)
+  }
+
+  val basePlaylists = remember(savedPlaylistEntries, allTracks) {
+    MusicPlayerEngine.buildPlaylists(savedPlaylistEntries, allTracks)
+  }
+  val allPlaylists = remember(basePlaylists, searchQuery, selectedTab, selectedArtistName, selectedAlbumKey, selectedGenreName, selectedPlaylistId) {
+    val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
+    val activeQuery = if (!hasDrill && selectedTab == MusicLibraryTab.PLAYLISTS) searchQuery else ""
+    MusicPlayerEngine.filterPlaylists(basePlaylists, activeQuery)
   }
 
   // Playback Queue & Active Track State
-  var playbackQueue by remember(allTracks) {
+  var playbackQueue by remember(initialTracks, initialDirectory, isInspection) {
     mutableStateOf(allTracks)
   }
   var currentQueueIndex by rememberSaveable {
     mutableIntStateOf(0)
   }
+
+  // Defer full ID3 metadata inspection to background thread when opening local library
+  LaunchedEffect(initialTracks, initialDirectory, isInspection) {
+    if (initialTracks == null && !isInspection) {
+      val loaded = MusicPlayerEngine.loadLibraryTracksAsync(
+        initialDirectory = initialDirectory,
+        includeSamples = true,
+        inspectMetadataRetriever = true,
+        deferAlbumArt = true,
+      )
+      val activeId = playbackQueue.getOrNull(currentQueueIndex)?.id
+      allTracks = loaded
+      val byId = loaded.associateBy { it.id }
+      val updatedQueue = if (playbackQueue.isEmpty()) {
+        loaded
+      } else {
+        playbackQueue.map { existing -> byId[existing.id] ?: existing }
+      }
+      playbackQueue = if (updatedQueue.size == loaded.size && updatedQueue.zip(loaded).all { (a, b) -> a.id == b.id }) {
+        loaded
+      } else {
+        updatedQueue
+      }
+      if (activeId != null) {
+        val newIdx = playbackQueue.indexOfFirst { it.id == activeId }
+        if (newIdx >= 0) {
+          currentQueueIndex = newIdx
+        }
+      }
+    }
+  }
+
+  // Defer album art prefetching to the background on Dispatchers.IO
+  LaunchedEffect(allTracks, isInspection) {
+    if (!isInspection && allTracks.isNotEmpty()) {
+      MusicPlayerEngine.prefetchAlbumArt(allTracks, sizePx = 240)
+    }
+  }
+
   val currentTrack: MusicTrack? = playbackQueue.getOrNull(
     currentQueueIndex.coerceIn(0, maxOf(0, playbackQueue.size - 1))
   ) ?: allTracks.firstOrNull()
@@ -320,9 +460,20 @@ fun MusicPlayerScreen(
   var sleepTimerPreset by rememberSaveable { mutableStateOf(SleepTimerPreset.OFF) }
   var sleepRemainingMs by rememberSaveable { mutableLongStateOf(0L) }
   var showQueueSheet by rememberSaveable { mutableStateOf(false) }
+  var showSavePlaylistDialog by rememberSaveable { mutableStateOf(false) }
   var showTrackInfoDialog by rememberSaveable { mutableStateOf(false) }
+  var inlineColorPickerHex by rememberSaveable { mutableStateOf<String?>(null) }
   var showSortMenu by remember { mutableStateOf(false) }
   var showSleepTimerMenu by remember { mutableStateOf(false) }
+
+  fun openColorInColorsTool(hex: String) {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    if (onOpenColorPicker != null) {
+      onOpenColorPicker(hex)
+    } else {
+      inlineColorPickerHex = hex
+    }
+  }
 
   // MediaPlayer lifecycle management
   val mediaPlayerRef = remember { mutableStateOf<MediaPlayer?>(null) }
@@ -524,18 +675,16 @@ fun MusicPlayerScreen(
   }
 
   // Dynamic Album Art Palette for the active track
-  var activePalette by remember(currentTrack?.id) {
+  var activePalette by remember(currentTrack?.id, currentTrack?.artworkPrimaryRgb) {
     mutableStateOf(MusicPlayerEngine.resolveTrackPalette(currentTrack))
   }
 
-  LaunchedEffect(currentTrack) {
+  LaunchedEffect(currentTrack?.id, currentTrack?.album, currentTrack?.artist, isInspection) {
     val track = currentTrack ?: return@LaunchedEffect
-    val bmp = MusicPlayerEngine.loadAlbumArtBitmapAsync(track, sizePx = 360)
-    val extracted = MusicPlayerEngine.extractPaletteFromBitmap(bmp)
-    activePalette = if (track.isSampleTrack) {
-      MusicPlayerEngine.resolveTrackPalette(track)
+    if (isInspection || track.isSampleTrack) {
+      activePalette = MusicPlayerEngine.resolveTrackPalette(track)
     } else {
-      extracted
+      activePalette = MusicPlayerEngine.loadTrackPaletteAsync(track, sizePx = 360)
     }
   }
 
@@ -565,10 +714,23 @@ fun MusicPlayerScreen(
     label = "deepBgAlbumColor",
   )
 
-  val hasDrillDown = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null
+  val hasDrillDown = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
 
-  BackHandler(enabled = isPlayerExpanded || showQueueSheet || isSearchActive || hasDrillDown) {
+  val activeInlineColorHex = inlineColorPickerHex
+  if (activeInlineColorHex != null) {
+    ColorPickerScreen(
+      modifier = modifier,
+      initialHexColor = activeInlineColorHex,
+      onNavigateBack = {
+        inlineColorPickerHex = null
+      },
+    )
+    return
+  }
+
+  BackHandler(enabled = isPlayerExpanded || showQueueSheet || showSavePlaylistDialog || isSearchActive || hasDrillDown) {
     when {
+      showSavePlaylistDialog -> showSavePlaylistDialog = false
       showQueueSheet -> showQueueSheet = false
       isPlayerExpanded -> isPlayerExpanded = false
       isSearchActive -> {
@@ -601,34 +763,77 @@ fun MusicPlayerScreen(
     ) {
       // 1. Top Tool Header Bar
       val activeArtist = selectedArtistName?.let { name ->
-        allArtists.find { it.name.equals(name, ignoreCase = true) }
-          ?: MusicPlayerEngine.buildArtists(allTracks).find { it.name.equals(name, ignoreCase = true) }
+        baseArtists.find { it.name.equals(name, ignoreCase = true) }?.let { artist ->
+          if (searchQuery.isBlank()) {
+            artist
+          } else {
+            artist.copy(
+              albums = MusicPlayerEngine.filterAlbums(artist.albums, searchQuery),
+              tracks = MusicPlayerEngine.filterTracks(artist.tracks, searchQuery),
+            )
+          }
+        }
       }
       val activeAlbum = selectedAlbumKey?.let { key ->
-        allAlbums.find { "${it.name}|${it.artist}".equals(key, ignoreCase = true) }
-          ?: MusicPlayerEngine.buildAlbums(allTracks).find { "${it.name}|${it.artist}".equals(key, ignoreCase = true) }
+        baseAlbums.find { "${it.name}|${it.artist}".equals(key, ignoreCase = true) }?.let { album ->
+          if (searchQuery.isBlank()) {
+            album
+          } else {
+            album.copy(
+              tracks = MusicPlayerEngine.filterTracks(album.tracks, searchQuery),
+            )
+          }
+        }
       }
       val activeGenre = selectedGenreName?.let { name ->
-        allGenres.find { it.name.equals(name, ignoreCase = true) }
-          ?: MusicPlayerEngine.buildGenres(allTracks).find { it.name.equals(name, ignoreCase = true) }
+        baseGenres.find { it.name.equals(name, ignoreCase = true) }?.let { genre ->
+          if (searchQuery.isBlank()) {
+            genre
+          } else {
+            genre.copy(
+              tracks = MusicPlayerEngine.filterTracks(genre.tracks, searchQuery),
+            )
+          }
+        }
+      }
+      val activePlaylist = selectedPlaylistId?.let { id ->
+        basePlaylists.find { it.id == id }?.let { playlist ->
+          if (searchQuery.isBlank()) {
+            playlist
+          } else {
+            playlist.copy(
+              tracks = MusicPlayerEngine.filterTracks(playlist.tracks, searchQuery),
+            )
+          }
+        }
       }
 
       val headerTitle = when {
         activeAlbum != null -> activeAlbum.name
         activeArtist != null -> activeArtist.name
         activeGenre != null -> activeGenre.name
+        activePlaylist != null -> activePlaylist.name
         else -> "Music"
       }
       val headerSubtext = when {
         activeAlbum != null -> "${activeAlbum.artist} • ${activeAlbum.songCount} songs • ${activeAlbum.totalDurationFormatted}"
         activeArtist != null -> "${activeArtist.albumCount} albums • ${activeArtist.songCount} songs"
         activeGenre != null -> "${activeGenre.songCount} songs • ${activeGenre.artistCount} artists"
-        else -> "${allArtists.size} artists • ${allAlbums.size} albums • ${allTracks.size} songs"
+        activePlaylist != null -> activePlaylist.summaryText
+        else -> "${baseArtists.size} artists • ${baseAlbums.size} albums • ${allTracks.size} songs"
+      }
+      val searchPlaceholder = when {
+        activeAlbum != null -> "Search in ${activeAlbum.name}..."
+        activeArtist != null -> "Search in ${activeArtist.name}..."
+        activeGenre != null -> "Search in ${activeGenre.name}..."
+        activePlaylist != null -> "Search in ${activePlaylist.name}..."
+        else -> "Search ${selectedTab.displayName.lowercase()}..."
       }
 
       MusicPlayerTopBar(
         title = headerTitle,
         subtext = headerSubtext,
+        searchPlaceholder = searchPlaceholder,
         hasDrillDown = hasDrillDown,
         isSearchActive = isSearchActive,
         searchQuery = searchQuery,
@@ -641,10 +846,18 @@ fun MusicPlayerScreen(
           isSearchActive = !isSearchActive
           if (!isSearchActive) searchQuery = ""
         },
+        onCloseSearch = {
+          isSearchActive = false
+          searchQuery = ""
+        },
         onSearchQueryChange = { searchQuery = it },
         onToggleViewMode = {
           updateViewMode(viewMode.toggle())
           haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        },
+        onSelectViewMode = { mode ->
+          updateViewMode(mode)
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         },
         onOpenSortMenu = { showSortMenu = true },
         onDismissSortMenu = { showSortMenu = false },
@@ -652,21 +865,14 @@ fun MusicPlayerScreen(
           updateSortOrder(order)
           showSortMenu = false
         },
-        onOpenQueue = { showQueueSheet = true },
       )
 
-      // 2. Category Tabs (Artists, Albums, Songs, Genres) + List/Card View Mode Selector
+      // 2. Category Tabs (Artists, Albums, Songs, Genres, Playlists)
       MusicCategoryAndViewBar(
         selectedTab = selectedTab,
-        viewMode = viewMode,
-        accentColor = animatedDominant,
         onSelectTab = { tab ->
           clearDrillDown()
           updateTab(tab)
-          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-        },
-        onSelectViewMode = { mode ->
-          updateViewMode(mode)
           haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         },
       )
@@ -744,6 +950,31 @@ fun MusicPlayerScreen(
             )
           }
 
+          activePlaylist != null -> {
+            PlaylistDetailContent(
+              playlist = activePlaylist,
+              viewMode = viewMode,
+              currentTrackId = currentTrack?.id,
+              isPlaying = isPlaying,
+              favoriteIds = favoriteIds,
+              onPlayPlaylist = { shuffle ->
+                if (shuffle && !isShuffleEnabled) toggleShuffle()
+                val tracks = if (shuffle) activePlaylist.tracks.shuffled() else activePlaylist.tracks
+                if (tracks.isNotEmpty()) {
+                  playTrackInContext(tracks.first(), tracks)
+                }
+              },
+              onDeletePlaylist = {
+                deletePlaylist(activePlaylist.id)
+                selectedPlaylistId = null
+              },
+              onSelectTrack = { track ->
+                playTrackInContext(track, activePlaylist.tracks)
+              },
+              onToggleFavorite = { toggleFavorite(it.id) },
+            )
+          }
+
           else -> {
             when (selectedTab) {
               MusicLibraryTab.ARTISTS -> {
@@ -752,6 +983,25 @@ fun MusicPlayerScreen(
                   viewMode = viewMode,
                   currentArtistName = currentTrack?.artist,
                   isPlaying = isPlaying,
+                  onPlayAll = {
+                    val tracks = allArtists.flatMap { it.tracks }.ifEmpty { sortedTracks }
+                    if (tracks.isNotEmpty()) {
+                      playTrackInContext(tracks.first(), tracks)
+                    }
+                  },
+                  onShuffleAll = {
+                    if (allArtists.isNotEmpty()) {
+                      val candidates = if (allArtists.size > 1 && currentTrack != null) {
+                        allArtists.filter { !it.name.equals(currentTrack.artist, ignoreCase = true) }.ifEmpty { allArtists }
+                      } else {
+                        allArtists
+                      }
+                      val randomArtist = candidates.random()
+                      if (randomArtist.tracks.isNotEmpty()) {
+                        playTrackInContext(randomArtist.tracks.first(), randomArtist.tracks)
+                      }
+                    }
+                  },
                   onSelectArtist = { artist ->
                     selectedArtistName = artist.name
                   },
@@ -769,6 +1019,25 @@ fun MusicPlayerScreen(
                   viewMode = viewMode,
                   currentAlbumName = currentTrack?.album,
                   isPlaying = isPlaying,
+                  onPlayAll = {
+                    val tracks = allAlbums.flatMap { it.tracks }.ifEmpty { sortedTracks }
+                    if (tracks.isNotEmpty()) {
+                      playTrackInContext(tracks.first(), tracks)
+                    }
+                  },
+                  onShuffleAll = {
+                    if (allAlbums.isNotEmpty()) {
+                      val candidates = if (allAlbums.size > 1 && currentTrack != null) {
+                        allAlbums.filter { !it.name.equals(currentTrack.album, ignoreCase = true) }.ifEmpty { allAlbums }
+                      } else {
+                        allAlbums
+                      }
+                      val randomAlbum = candidates.random()
+                      if (randomAlbum.tracks.isNotEmpty()) {
+                        playTrackInContext(randomAlbum.tracks.first(), randomAlbum.tracks)
+                      }
+                    }
+                  },
                   onSelectAlbum = { album ->
                     selectedAlbumKey = "${album.name}|${album.artist}"
                   },
@@ -814,6 +1083,25 @@ fun MusicPlayerScreen(
                   viewMode = viewMode,
                   currentGenreName = currentTrack?.genre,
                   isPlaying = isPlaying,
+                  onPlayAll = {
+                    val tracks = allGenres.flatMap { it.tracks }.ifEmpty { sortedTracks }
+                    if (tracks.isNotEmpty()) {
+                      playTrackInContext(tracks.first(), tracks)
+                    }
+                  },
+                  onShuffleAll = {
+                    if (allGenres.isNotEmpty()) {
+                      val candidates = if (allGenres.size > 1 && currentTrack != null) {
+                        allGenres.filter { !it.name.equals(currentTrack.genre, ignoreCase = true) }.ifEmpty { allGenres }
+                      } else {
+                        allGenres
+                      }
+                      val randomGenre = candidates.random()
+                      if (randomGenre.tracks.isNotEmpty()) {
+                        playTrackInContext(randomGenre.tracks.first(), randomGenre.tracks)
+                      }
+                    }
+                  },
                   onSelectGenre = { genre ->
                     selectedGenreName = genre.name
                   },
@@ -821,6 +1109,43 @@ fun MusicPlayerScreen(
                     if (genre.tracks.isNotEmpty()) {
                       playTrackInContext(genre.tracks.first(), genre.tracks)
                     }
+                  },
+                )
+              }
+
+              MusicLibraryTab.PLAYLISTS -> {
+                PlaylistsTabContent(
+                  playlists = allPlaylists,
+                  viewMode = viewMode,
+                  currentTrackId = currentTrack?.id,
+                  isPlaying = isPlaying,
+                  onPlayAll = {
+                    val tracks = allPlaylists.flatMap { it.tracks }.distinctBy { it.id }.ifEmpty { sortedTracks }
+                    if (tracks.isNotEmpty()) {
+                      playTrackInContext(tracks.first(), tracks)
+                    }
+                  },
+                  onShuffleAll = {
+                    if (allPlaylists.isNotEmpty()) {
+                      val randomPlaylist = allPlaylists.random()
+                      if (randomPlaylist.tracks.isNotEmpty()) {
+                        playTrackInContext(randomPlaylist.tracks.first(), randomPlaylist.tracks)
+                      }
+                    }
+                  },
+                  onSaveQueueAsPlaylist = {
+                    showSavePlaylistDialog = true
+                  },
+                  onSelectPlaylist = { playlist ->
+                    selectedPlaylistId = playlist.id
+                  },
+                  onPlayPlaylist = { playlist ->
+                    if (playlist.tracks.isNotEmpty()) {
+                      playTrackInContext(playlist.tracks.first(), playlist.tracks)
+                    }
+                  },
+                  onDeletePlaylist = { playlist ->
+                    deletePlaylist(playlist.id)
                   },
                 )
               }
@@ -886,8 +1211,9 @@ fun MusicPlayerScreen(
           playbackSpeed = playbackSpeed,
           sleepTimerPreset = sleepTimerPreset,
           sleepRemainingMs = sleepRemainingMs,
-          queueSize = playbackQueue.size,
+          queue = playbackQueue,
           currentQueueIndex = currentQueueIndex,
+          initialQueueSheetValue = if (initialQueueExpanded) SheetValue.Expanded else SheetValue.PartiallyExpanded,
           dominantColor = animatedDominant,
           secondaryColor = animatedSecondary,
           accentColor = animatedAccent,
@@ -929,7 +1255,15 @@ fun MusicPlayerScreen(
             val nextIdx = if (idx >= 0) (idx + 1) % MusicPlayerEngine.PLAYBACK_SPEED_OPTIONS.size else 2
             playbackSpeed = MusicPlayerEngine.PLAYBACK_SPEED_OPTIONS[nextIdx]
           },
-          onOpenQueue = { showQueueSheet = true },
+          onSelectQueueIndex = { index ->
+            stepToTrack(index, autoPlay = true)
+          },
+          onSaveQueueAsPlaylist = {
+            showSavePlaylistDialog = true
+          },
+          onOpenColorPicker = {
+            openColorInColorsTool(activePalette.dominantHex)
+          },
           onOpenTrackInfo = { showTrackInfoDialog = true },
           onOpenSleepTimerMenu = { showSleepTimerMenu = true },
           onDismissSleepTimerMenu = { showSleepTimerMenu = false },
@@ -954,8 +1288,8 @@ fun MusicPlayerScreen(
       }
     }
 
-    // 6. Queue Dialog / Sheet
-    if (showQueueSheet) {
+    // 6. Queue Dialog (for Library View when Full Player is collapsed)
+    if (showQueueSheet && !isPlayerExpanded) {
       PlaybackQueueDialog(
         queue = playbackQueue,
         currentQueueIndex = currentQueueIndex,
@@ -964,15 +1298,36 @@ fun MusicPlayerScreen(
         onSelectQueueIndex = { index ->
           stepToTrack(index, autoPlay = true)
         },
+        onSaveQueueAsPlaylist = {
+          showSavePlaylistDialog = true
+        },
         onDismiss = { showQueueSheet = false },
       )
     }
 
-    // 7. Track Details Dialog
+    // 7. Save Queue as Playlist Dialog
+    if (showSavePlaylistDialog) {
+      SaveQueueAsPlaylistDialog(
+        defaultPlaylistName = "Queue Playlist ${savedPlaylistEntries.size + 1}",
+        queueTrackCount = playbackQueue.size,
+        accentColor = animatedDominant,
+        onConfirm = { name ->
+          saveQueueAsPlaylist(name, playbackQueue.ifEmpty { allTracks })
+          showSavePlaylistDialog = false
+        },
+        onDismiss = { showSavePlaylistDialog = false },
+      )
+    }
+
+    // 8. Track Details Dialog
     if (showTrackInfoDialog && currentTrack != null) {
       TrackDetailsDialog(
         track = currentTrack,
         palette = activePalette,
+        onSelectColor = { hex ->
+          showTrackInfoDialog = false
+          openColorInColorsTool(hex)
+        },
         onDismiss = { showTrackInfoDialog = false },
       )
     }
@@ -983,6 +1338,7 @@ fun MusicPlayerScreen(
 private fun MusicPlayerTopBar(
   title: String,
   subtext: String,
+  searchPlaceholder: String,
   hasDrillDown: Boolean,
   isSearchActive: Boolean,
   searchQuery: String,
@@ -992,14 +1348,16 @@ private fun MusicPlayerTopBar(
   accentTint: Color,
   onBackClick: () -> Unit,
   onSearchToggle: () -> Unit,
+  onCloseSearch: () -> Unit,
   onSearchQueryChange: (String) -> Unit,
   onToggleViewMode: () -> Unit,
+  onSelectViewMode: (MusicViewMode) -> Unit,
   onOpenSortMenu: () -> Unit,
   onDismissSortMenu: () -> Unit,
   onSelectSortOrder: (MusicSortOrder) -> Unit,
-  onOpenQueue: () -> Unit,
 ) {
   val focusRequester = remember { FocusRequester() }
+  val focusManager = LocalFocusManager.current
 
   LaunchedEffect(isSearchActive) {
     if (isSearchActive) {
@@ -1014,20 +1372,87 @@ private fun MusicPlayerTopBar(
     tonalElevation = 1.dp,
     modifier = Modifier.fillMaxWidth(),
   ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-      Box(
+    Box(
+      modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(min = 68.dp),
+      contentAlignment = Alignment.CenterStart,
+    ) {
+      Row(
         modifier = Modifier
           .fillMaxWidth()
-          .heightIn(min = 68.dp),
-        contentAlignment = Alignment.CenterStart,
+          .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
       ) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
+        if (isSearchActive) {
+          Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            IconButton(
+              onClick = {
+                focusManager.clearFocus()
+                onCloseSearch()
+              },
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("music_search_toggle"),
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Close search",
+                tint = MaterialTheme.colorScheme.onSurface,
+              )
+            }
+
+            TextField(
+              value = searchQuery,
+              onValueChange = onSearchQueryChange,
+              placeholder = {
+                Text(
+                  text = searchPlaceholder,
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              },
+              singleLine = true,
+              textStyle = MaterialTheme.typography.bodyMedium.copy(
+                color = MaterialTheme.colorScheme.onSurface,
+              ),
+              colors = TextFieldDefaults.colors(
+                focusedContainerColor = Color.Transparent,
+                unfocusedContainerColor = Color.Transparent,
+                disabledContainerColor = Color.Transparent,
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+                disabledIndicatorColor = Color.Transparent,
+              ),
+              trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                  IconButton(
+                    onClick = { onSearchQueryChange("") },
+                    modifier = Modifier.testTag("music_search_clear"),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.Clear,
+                      contentDescription = "Clear search",
+                      tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                }
+              },
+              keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+              keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+              modifier = Modifier
+                .weight(1f)
+                .focusRequester(focusRequester)
+                .testTag("music_search_input"),
+            )
+          }
+        } else {
           Row(
             modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically,
@@ -1084,115 +1509,159 @@ private fun MusicPlayerTopBar(
               )
             }
           }
+        }
 
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-          ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+          if (!isSearchActive) {
             IconButton(
               onClick = onSearchToggle,
               modifier = Modifier.testTag("music_search_toggle"),
             ) {
               Icon(
-                imageVector = if (isSearchActive) Icons.Default.Close else Icons.Default.Search,
-                contentDescription = if (isSearchActive) "Close search" else "Search music",
-                tint = if (isSearchActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-
-            IconButton(
-              onClick = onToggleViewMode,
-              modifier = Modifier.testTag("music_view_mode_toggle"),
-            ) {
-              Icon(
-                imageVector = if (viewMode == MusicViewMode.LIST) Icons.Default.GridView else Icons.AutoMirrored.Filled.ViewList,
-                contentDescription = if (viewMode == MusicViewMode.LIST) "Switch to Card view" else "Switch to List view",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-
-            Box {
-              IconButton(
-                onClick = onOpenSortMenu,
-                modifier = Modifier.testTag("music_sort_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.AutoMirrored.Filled.Sort,
-                  contentDescription = "Sort tracks",
-                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-              DropdownMenu(
-                expanded = showSortMenu,
-                onDismissRequest = onDismissSortMenu,
-              ) {
-                MusicSortOrder.entries.forEach { option ->
-                  DropdownMenuItem(
-                    text = {
-                      Text(
-                        text = option.displayName,
-                        fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
-                      )
-                    },
-                    leadingIcon = {
-                      if (option == sortOrder) {
-                        Icon(
-                          imageVector = Icons.Default.Check,
-                          contentDescription = null,
-                          tint = MaterialTheme.colorScheme.primary,
-                        )
-                      }
-                    },
-                    onClick = { onSelectSortOrder(option) },
-                  )
-                }
-              }
-            }
-
-            IconButton(
-              onClick = onOpenQueue,
-              modifier = Modifier.testTag("music_queue_button"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-                contentDescription = "Playback Queue",
+                imageVector = Icons.Default.Search,
+                contentDescription = "Search music",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
               )
             }
           }
+
+          ViewModeSegmentedToggle(
+            isListView = viewMode == MusicViewMode.LIST,
+            onSelectListView = { onSelectViewMode(MusicViewMode.LIST) },
+            onSelectGridView = { onSelectViewMode(MusicViewMode.CARD) },
+            onToggle = onToggleViewMode,
+            accentColor = accentTint,
+            toggleTestTag = "music_view_mode_toggle",
+            listTestTag = "music_view_mode_list",
+            gridTestTag = "music_view_mode_card",
+            listContentDescription = "List view",
+            gridContentDescription = "Card view",
+          )
+
+          Box {
+            IconButton(
+              onClick = onOpenSortMenu,
+              modifier = Modifier.testTag("music_sort_button"),
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.Sort,
+                contentDescription = "Sort tracks",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+            DropdownMenu(
+              expanded = showSortMenu,
+              onDismissRequest = onDismissSortMenu,
+            ) {
+              MusicSortOrder.entries.forEach { option ->
+                DropdownMenuItem(
+                  text = {
+                    Text(
+                      text = option.displayName,
+                      fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
+                    )
+                  },
+                  leadingIcon = {
+                    if (option == sortOrder) {
+                      Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                      )
+                    }
+                  },
+                  onClick = { onSelectSortOrder(option) },
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Shared icon-only List / Card (or Grid / Tile) segmented view mode toggle used across tools.
+ */
+@Composable
+internal fun ViewModeSegmentedToggle(
+  isListView: Boolean,
+  onSelectListView: () -> Unit,
+  onSelectGridView: () -> Unit,
+  onToggle: () -> Unit = {
+    if (isListView) onSelectGridView() else onSelectListView()
+  },
+  accentColor: Color = MaterialTheme.colorScheme.primary,
+  toggleTestTag: String? = null,
+  listTestTag: String? = null,
+  gridTestTag: String? = null,
+  listContentDescription: String = "List view",
+  gridContentDescription: String = "Card view",
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    shape = CircleShape,
+    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+    modifier = modifier
+      .clip(CircleShape)
+      .clickable(onClick = onToggle)
+      .then(if (toggleTestTag != null) Modifier.testTag(toggleTestTag) else Modifier),
+  ) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.padding(2.dp),
+    ) {
+      val activeContainerColor = lerp(MaterialTheme.colorScheme.primaryContainer, accentColor, 0.25f)
+
+      Surface(
+        shape = CircleShape,
+        color = if (isListView) activeContainerColor else Color.Transparent,
+        modifier = Modifier
+          .clip(CircleShape)
+          .clickable {
+            if (isListView) onToggle() else onSelectListView()
+          }
+          .then(if (listTestTag != null) Modifier.testTag(listTestTag) else Modifier),
+      ) {
+        Box(
+          contentAlignment = Alignment.Center,
+          modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.ViewList,
+            contentDescription = listContentDescription,
+            tint = if (isListView) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp),
+          )
         }
       }
 
-      AnimatedVisibility(
-        visible = isSearchActive,
-        enter = expandVertically() + fadeIn(),
-        exit = shrinkVertically() + fadeOut(),
+      Surface(
+        shape = CircleShape,
+        color = if (!isListView) activeContainerColor else Color.Transparent,
+        modifier = Modifier
+          .clip(CircleShape)
+          .clickable {
+            if (!isListView) onToggle() else onSelectGridView()
+          }
+          .then(if (gridTestTag != null) Modifier.testTag(gridTestTag) else Modifier),
       ) {
-        OutlinedTextField(
-          value = searchQuery,
-          onValueChange = onSearchQueryChange,
-          placeholder = { Text("Search artists, albums, songs, genres...") },
-          singleLine = true,
-          shape = RoundedCornerShape(14.dp),
-          leadingIcon = {
-            Icon(Icons.Default.Search, contentDescription = null)
-          },
-          trailingIcon = {
-            if (searchQuery.isNotEmpty()) {
-              IconButton(onClick = { onSearchQueryChange("") }) {
-                Icon(Icons.Default.Clear, contentDescription = "Clear search")
-              }
-            }
-          },
-          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-          keyboardActions = KeyboardActions(onSearch = {}),
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .padding(bottom = 10.dp)
-            .focusRequester(focusRequester)
-            .testTag("music_search_input"),
-        )
+        Box(
+          contentAlignment = Alignment.Center,
+          modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Default.GridView,
+            contentDescription = gridContentDescription,
+            tint = if (!isListView) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp),
+          )
+        }
       }
     }
   }
@@ -1201,100 +1670,45 @@ private fun MusicPlayerTopBar(
 @Composable
 private fun MusicCategoryAndViewBar(
   selectedTab: MusicLibraryTab,
-  viewMode: MusicViewMode,
-  accentColor: Color,
   onSelectTab: (MusicLibraryTab) -> Unit,
-  onSelectViewMode: (MusicViewMode) -> Unit,
 ) {
   Row(
     modifier = Modifier
       .fillMaxWidth()
-      .padding(horizontal = 12.dp, vertical = 8.dp),
-    horizontalArrangement = Arrangement.SpaceBetween,
+      .padding(horizontal = 12.dp, vertical = 8.dp)
+      .horizontalScroll(rememberScrollState()),
+    horizontalArrangement = Arrangement.spacedBy(6.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    // 4 Library Category Tabs: Artists, Albums, Songs, Genres
-    Row(
-      modifier = Modifier
-        .weight(1f)
-        .horizontalScroll(rememberScrollState()),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      MusicLibraryTab.entries.forEach { tab ->
-        val isSelected = tab == selectedTab
-        val tabIcon = when (tab) {
-          MusicLibraryTab.ARTISTS -> Icons.Default.Person
-          MusicLibraryTab.ALBUMS -> Icons.Default.Album
-          MusicLibraryTab.SONGS -> Icons.Default.MusicNote
-          MusicLibraryTab.GENRES -> Icons.Default.Category
-        }
-        FilterChip(
-          selected = isSelected,
-          onClick = { onSelectTab(tab) },
-          label = {
-            Text(
-              text = tab.displayName,
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-            )
-          },
-          leadingIcon = {
-            Icon(
-              imageVector = tabIcon,
-              contentDescription = null,
-              modifier = Modifier.size(16.dp),
-            )
-          },
-          shape = RoundedCornerShape(20.dp),
-          modifier = Modifier.testTag("music_tab_${tab.name}"),
-        )
+    MusicLibraryTab.entries.forEach { tab ->
+      val isSelected = tab == selectedTab
+      val tabIcon = when (tab) {
+        MusicLibraryTab.ARTISTS -> Icons.Default.Person
+        MusicLibraryTab.ALBUMS -> Icons.Default.Album
+        MusicLibraryTab.SONGS -> Icons.Default.MusicNote
+        MusicLibraryTab.GENRES -> Icons.Default.Category
+        MusicLibraryTab.PLAYLISTS -> Icons.AutoMirrored.Filled.PlaylistPlay
       }
-    }
-
-    Spacer(modifier = Modifier.width(8.dp))
-
-    // Explicit List / Card View Segmented Pill
-    Surface(
-      shape = RoundedCornerShape(20.dp),
-      color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-    ) {
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(2.dp),
-      ) {
-        MusicViewMode.entries.forEach { mode ->
-          val active = viewMode == mode
-          Surface(
-            shape = RoundedCornerShape(18.dp),
-            color = if (active) lerp(MaterialTheme.colorScheme.primaryContainer, accentColor, 0.25f) else Color.Transparent,
-            modifier = Modifier
-              .clip(RoundedCornerShape(18.dp))
-              .clickable { onSelectViewMode(mode) }
-              .testTag("music_view_mode_${mode.name.lowercase()}"),
-          ) {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(4.dp),
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-            ) {
-              Icon(
-                imageVector = if (mode == MusicViewMode.LIST) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
-                contentDescription = "${mode.displayName} view",
-                tint = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(14.dp),
-              )
-              Text(
-                text = mode.displayName,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
-                color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-          }
-        }
-      }
+      FilterChip(
+        selected = isSelected,
+        onClick = { onSelectTab(tab) },
+        label = {
+          Text(
+            text = tab.displayName,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+          )
+        },
+        leadingIcon = {
+          Icon(
+            imageVector = tabIcon,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+        },
+        shape = CircleShape,
+        modifier = Modifier.testTag("music_tab_${tab.name}"),
+      )
     }
   }
 }
@@ -1305,56 +1719,187 @@ private fun ArtistsTabContent(
   viewMode: MusicViewMode,
   currentArtistName: String?,
   isPlaying: Boolean,
+  onPlayAll: () -> Unit,
+  onShuffleAll: () -> Unit,
   onSelectArtist: (MusicArtist) -> Unit,
   onPlayArtist: (MusicArtist) -> Unit,
 ) {
-  if (artists.isEmpty()) {
-    EmptyMusicState(message = "No artists match your search")
-    return
-  }
-
-  if (viewMode == MusicViewMode.LIST) {
-    LazyColumn(
+  Column(modifier = Modifier.fillMaxSize()) {
+    // Quick Action Row: Play All, Shuffle
+    Row(
       modifier = Modifier
-        .fillMaxSize()
-        .testTag("artist_list_view"),
-      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
+        .fillMaxWidth()
+        .padding(horizontal = 12.dp, vertical = 4.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
     ) {
-      items(artists, key = { it.name }) { artist ->
-        val isActive = currentArtistName != null && currentArtistName.equals(artist.name, ignoreCase = true)
-        Card(
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = if (isActive) {
-              MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-            } else {
-              MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-            },
-          ),
-          border = BorderStroke(
-            width = 1.dp,
-            color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-          ),
-          modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onSelectArtist(artist) }
-            .testTag("artist_item_${artist.name}"),
-        ) {
-          Row(
+      FilledTonalButton(
+        onClick = onPlayAll,
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier.testTag("music_play_all_button"),
+      ) {
+        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Play All", style = MaterialTheme.typography.labelMedium)
+      }
+
+      OutlinedButton(
+        onClick = onShuffleAll,
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier.testTag("music_shuffle_all_button"),
+      ) {
+        Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Shuffle", style = MaterialTheme.typography.labelMedium)
+      }
+    }
+
+    if (artists.isEmpty()) {
+      EmptyMusicState(message = "No artists match your search")
+      return
+    }
+
+    if (viewMode == MusicViewMode.LIST) {
+      LazyColumn(
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag("artist_list_view"),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        items(artists, key = { it.name }) { artist ->
+          val isActive = currentArtistName != null && currentArtistName.equals(artist.name, ignoreCase = true)
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = if (isActive) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+              } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+              },
+            ),
+            border = BorderStroke(
+              width = 1.dp,
+              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            ),
             modifier = Modifier
               .fillMaxWidth()
-              .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+              .clickable { onSelectArtist(artist) }
+              .testTag("artist_item_${artist.name}"),
           ) {
-            TrackArtworkThumbnail(
-              track = artist.representativeTrack,
-              size = 52.dp,
-              shape = CircleShape,
-            )
-            Column(modifier = Modifier.weight(1f)) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+              TrackArtworkThumbnail(
+                track = artist.representativeTrack,
+                size = 52.dp,
+                shape = CircleShape,
+              )
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = artist.name,
+                  style = MaterialTheme.typography.bodyLarge,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                  text = "${artist.summaryText} • ${artist.genres.joinToString(", ")}",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+              FilledIconButton(
+                onClick = { onPlayArtist(artist) },
+                shape = CircleShape,
+                modifier = Modifier
+                  .size(36.dp)
+                  .testTag("play_artist_${artist.name}"),
+                colors = IconButtonDefaults.filledIconButtonColors(
+                  containerColor = MaterialTheme.colorScheme.primaryContainer,
+                  contentColor = MaterialTheme.colorScheme.primary,
+                ),
+              ) {
+                Icon(
+                  imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                  contentDescription = "Play ${artist.name}",
+                  modifier = Modifier.size(18.dp),
+                )
+              }
+            }
+          }
+        }
+      }
+    } else {
+      LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag("artist_card_view"),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        items(artists, key = { it.name }) { artist ->
+          val isActive = currentArtistName != null && currentArtistName.equals(artist.name, ignoreCase = true)
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = if (isActive) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+              } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+              },
+            ),
+            border = BorderStroke(
+              width = 1.dp,
+              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            ),
+            modifier = Modifier
+              .fillMaxWidth()
+              .clickable { onSelectArtist(artist) }
+              .testTag("artist_item_${artist.name}"),
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Box(contentAlignment = Alignment.BottomEnd) {
+                TrackArtworkThumbnail(
+                  track = artist.representativeTrack,
+                  size = 96.dp,
+                  shape = CircleShape,
+                )
+                FilledIconButton(
+                  onClick = { onPlayArtist(artist) },
+                  shape = CircleShape,
+                  modifier = Modifier.size(30.dp),
+                  colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                  ),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Play ${artist.name}",
+                    modifier = Modifier.size(16.dp),
+                  )
+                }
+              }
               Text(
                 text = artist.name,
                 style = MaterialTheme.typography.bodyLarge,
@@ -1362,111 +1907,17 @@ private fun ArtistsTabContent(
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
               )
               Text(
-                text = "${artist.summaryText} • ${artist.genres.joinToString(", ")}",
+                text = artist.summaryText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
               )
             }
-            FilledIconButton(
-              onClick = { onPlayArtist(artist) },
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("play_artist_${artist.name}"),
-              colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.primary,
-              ),
-            ) {
-              Icon(
-                imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
-                contentDescription = "Play ${artist.name}",
-                modifier = Modifier.size(18.dp),
-              )
-            }
-          }
-        }
-      }
-    }
-  } else {
-    LazyVerticalGrid(
-      columns = GridCells.Fixed(2),
-      modifier = Modifier
-        .fillMaxSize()
-        .testTag("artist_card_view"),
-      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-      items(artists, key = { it.name }) { artist ->
-        val isActive = currentArtistName != null && currentArtistName.equals(artist.name, ignoreCase = true)
-        Card(
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = if (isActive) {
-              MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-            } else {
-              MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-            },
-          ),
-          border = BorderStroke(
-            width = 1.dp,
-            color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-          ),
-          modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onSelectArtist(artist) }
-            .testTag("artist_item_${artist.name}"),
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            Box(contentAlignment = Alignment.BottomEnd) {
-              TrackArtworkThumbnail(
-                track = artist.representativeTrack,
-                size = 96.dp,
-                shape = CircleShape,
-              )
-              FilledIconButton(
-                onClick = { onPlayArtist(artist) },
-                modifier = Modifier.size(30.dp),
-                colors = IconButtonDefaults.filledIconButtonColors(
-                  containerColor = MaterialTheme.colorScheme.primaryContainer,
-                  contentColor = MaterialTheme.colorScheme.primary,
-                ),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.PlayArrow,
-                  contentDescription = "Play ${artist.name}",
-                  modifier = Modifier.size(16.dp),
-                )
-              }
-            }
-            Text(
-              text = artist.name,
-              style = MaterialTheme.typography.bodyLarge,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              textAlign = TextAlign.Center,
-            )
-            Text(
-              text = artist.summaryText,
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              textAlign = TextAlign.Center,
-            )
           }
         }
       }
@@ -1480,56 +1931,194 @@ private fun AlbumsTabContent(
   viewMode: MusicViewMode,
   currentAlbumName: String?,
   isPlaying: Boolean,
+  onPlayAll: () -> Unit,
+  onShuffleAll: () -> Unit,
   onSelectAlbum: (MusicAlbum) -> Unit,
   onPlayAlbum: (MusicAlbum) -> Unit,
 ) {
-  if (albums.isEmpty()) {
-    EmptyMusicState(message = "No albums match your search")
-    return
-  }
-
-  if (viewMode == MusicViewMode.LIST) {
-    LazyColumn(
+  Column(modifier = Modifier.fillMaxSize()) {
+    // Quick Action Row: Play All, Shuffle
+    Row(
       modifier = Modifier
-        .fillMaxSize()
-        .testTag("album_list_view"),
-      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
+        .fillMaxWidth()
+        .padding(horizontal = 12.dp, vertical = 4.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
     ) {
-      items(albums, key = { "${it.name}|${it.artist}" }) { album ->
-        val isActive = currentAlbumName != null && currentAlbumName.equals(album.name, ignoreCase = true)
-        Card(
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = if (isActive) {
-              MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-            } else {
-              MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-            },
-          ),
-          border = BorderStroke(
-            width = 1.dp,
-            color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-          ),
-          modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onSelectAlbum(album) }
-            .testTag("album_item_${album.name}"),
-        ) {
-          Row(
+      FilledTonalButton(
+        onClick = onPlayAll,
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier.testTag("music_play_all_button"),
+      ) {
+        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Play All", style = MaterialTheme.typography.labelMedium)
+      }
+
+      OutlinedButton(
+        onClick = onShuffleAll,
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier.testTag("music_shuffle_all_button"),
+      ) {
+        Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Shuffle", style = MaterialTheme.typography.labelMedium)
+      }
+    }
+
+    if (albums.isEmpty()) {
+      EmptyMusicState(message = "No albums match your search")
+      return
+    }
+
+    if (viewMode == MusicViewMode.LIST) {
+      LazyColumn(
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag("album_list_view"),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        items(albums, key = { "${it.name}|${it.artist}" }) { album ->
+          val isActive = currentAlbumName != null && currentAlbumName.equals(album.name, ignoreCase = true)
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = if (isActive) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+              } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+              },
+            ),
+            border = BorderStroke(
+              width = 1.dp,
+              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            ),
             modifier = Modifier
               .fillMaxWidth()
-              .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+              .clickable { onSelectAlbum(album) }
+              .testTag("album_item_${album.name}"),
           ) {
-            TrackArtworkThumbnail(
-              track = album.representativeTrack,
-              size = 56.dp,
-              shape = RoundedCornerShape(12.dp),
-            )
-            Column(modifier = Modifier.weight(1f)) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+              TrackArtworkThumbnail(
+                track = album.representativeTrack,
+                size = 56.dp,
+                shape = RoundedCornerShape(12.dp),
+              )
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = album.name,
+                  style = MaterialTheme.typography.bodyLarge,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                  text = "${album.summaryText} • ${album.year}",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+              FilledIconButton(
+                onClick = { onPlayAlbum(album) },
+                shape = CircleShape,
+                modifier = Modifier
+                  .size(36.dp)
+                  .testTag("play_album_${album.name}"),
+                colors = IconButtonDefaults.filledIconButtonColors(
+                  containerColor = MaterialTheme.colorScheme.primaryContainer,
+                  contentColor = MaterialTheme.colorScheme.primary,
+                ),
+              ) {
+                Icon(
+                  imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                  contentDescription = "Play ${album.name}",
+                  modifier = Modifier.size(18.dp),
+                )
+              }
+            }
+          }
+        }
+      }
+    } else {
+      LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag("album_card_view"),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        items(albums, key = { "${it.name}|${it.artist}" }) { album ->
+          val isActive = currentAlbumName != null && currentAlbumName.equals(album.name, ignoreCase = true)
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = if (isActive) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+              } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+              },
+            ),
+            border = BorderStroke(
+              width = 1.dp,
+              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            ),
+            modifier = Modifier
+              .fillMaxWidth()
+              .clickable { onSelectAlbum(album) }
+              .testTag("album_item_${album.name}"),
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Box(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .aspectRatio(1f),
+                contentAlignment = Alignment.BottomEnd,
+              ) {
+                TrackArtworkBanner(
+                  track = album.representativeTrack,
+                  modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(12.dp)),
+                )
+                FilledIconButton(
+                  onClick = { onPlayAlbum(album) },
+                  shape = CircleShape,
+                  modifier = Modifier
+                    .padding(8.dp)
+                    .size(34.dp),
+                  colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                  ),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Play ${album.name}",
+                    modifier = Modifier.size(18.dp),
+                  )
+                }
+              }
               Text(
                 text = album.name,
                 style = MaterialTheme.typography.bodyLarge,
@@ -1539,114 +2128,13 @@ private fun AlbumsTabContent(
                 overflow = TextOverflow.Ellipsis,
               )
               Text(
-                text = "${album.summaryText} • ${album.year}",
+                text = album.summaryText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
             }
-            FilledIconButton(
-              onClick = { onPlayAlbum(album) },
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("play_album_${album.name}"),
-              colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.primary,
-              ),
-            ) {
-              Icon(
-                imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
-                contentDescription = "Play ${album.name}",
-                modifier = Modifier.size(18.dp),
-              )
-            }
-          }
-        }
-      }
-    }
-  } else {
-    LazyVerticalGrid(
-      columns = GridCells.Fixed(2),
-      modifier = Modifier
-        .fillMaxSize()
-        .testTag("album_card_view"),
-      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-      items(albums, key = { "${it.name}|${it.artist}" }) { album ->
-        val isActive = currentAlbumName != null && currentAlbumName.equals(album.name, ignoreCase = true)
-        Card(
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = if (isActive) {
-              MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-            } else {
-              MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-            },
-          ),
-          border = BorderStroke(
-            width = 1.dp,
-            color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-          ),
-          modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onSelectAlbum(album) }
-            .testTag("album_item_${album.name}"),
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            Box(
-              modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f),
-              contentAlignment = Alignment.BottomEnd,
-            ) {
-              TrackArtworkBanner(
-                track = album.representativeTrack,
-                modifier = Modifier
-                  .fillMaxSize()
-                  .clip(RoundedCornerShape(12.dp)),
-              )
-              FilledIconButton(
-                onClick = { onPlayAlbum(album) },
-                modifier = Modifier
-                  .padding(8.dp)
-                  .size(34.dp),
-                colors = IconButtonDefaults.filledIconButtonColors(
-                  containerColor = MaterialTheme.colorScheme.primaryContainer,
-                  contentColor = MaterialTheme.colorScheme.primary,
-                ),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.PlayArrow,
-                  contentDescription = "Play ${album.name}",
-                  modifier = Modifier.size(18.dp),
-                )
-              }
-            }
-            Text(
-              text = album.name,
-              style = MaterialTheme.typography.bodyLarge,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-              text = album.summaryText,
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
           }
         }
       }
@@ -1679,7 +2167,7 @@ private fun SongsTabContent(
     ) {
       FilledTonalButton(
         onClick = onPlayAll,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         modifier = Modifier.testTag("music_play_all_button"),
       ) {
@@ -1690,7 +2178,7 @@ private fun SongsTabContent(
 
       OutlinedButton(
         onClick = onShuffleAll,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         modifier = Modifier.testTag("music_shuffle_all_button"),
       ) {
@@ -1712,7 +2200,7 @@ private fun SongsTabContent(
             modifier = Modifier.size(14.dp),
           )
         },
-        shape = RoundedCornerShape(20.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("music_favorites_filter_chip"),
       )
     }
@@ -1774,56 +2262,205 @@ private fun GenresTabContent(
   viewMode: MusicViewMode,
   currentGenreName: String?,
   isPlaying: Boolean,
+  onPlayAll: () -> Unit,
+  onShuffleAll: () -> Unit,
   onSelectGenre: (MusicGenre) -> Unit,
   onPlayGenre: (MusicGenre) -> Unit,
 ) {
-  if (genres.isEmpty()) {
-    EmptyMusicState(message = "No genres match your search")
-    return
-  }
-
-  if (viewMode == MusicViewMode.LIST) {
-    LazyColumn(
+  Column(modifier = Modifier.fillMaxSize()) {
+    // Quick Action Row: Play All, Shuffle
+    Row(
       modifier = Modifier
-        .fillMaxSize()
-        .testTag("genre_list_view"),
-      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
+        .fillMaxWidth()
+        .padding(horizontal = 12.dp, vertical = 4.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
     ) {
-      items(genres, key = { it.name }) { genre ->
-        val isActive = currentGenreName != null && currentGenreName.equals(genre.name, ignoreCase = true)
-        Card(
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = if (isActive) {
-              MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-            } else {
-              MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-            },
-          ),
-          border = BorderStroke(
-            width = 1.dp,
-            color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-          ),
-          modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onSelectGenre(genre) }
-            .testTag("genre_item_${genre.name}"),
-        ) {
-          Row(
+      FilledTonalButton(
+        onClick = onPlayAll,
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier.testTag("music_play_all_button"),
+      ) {
+        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Play All", style = MaterialTheme.typography.labelMedium)
+      }
+
+      OutlinedButton(
+        onClick = onShuffleAll,
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier.testTag("music_shuffle_all_button"),
+      ) {
+        Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Shuffle", style = MaterialTheme.typography.labelMedium)
+      }
+    }
+
+    if (genres.isEmpty()) {
+      EmptyMusicState(message = "No genres match your search")
+      return
+    }
+
+    if (viewMode == MusicViewMode.LIST) {
+      LazyColumn(
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag("genre_list_view"),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        items(genres, key = { it.name }) { genre ->
+          val isActive = currentGenreName != null && currentGenreName.equals(genre.name, ignoreCase = true)
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = if (isActive) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+              } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+              },
+            ),
+            border = BorderStroke(
+              width = 1.dp,
+              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            ),
             modifier = Modifier
               .fillMaxWidth()
-              .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+              .clickable { onSelectGenre(genre) }
+              .testTag("genre_item_${genre.name}"),
           ) {
-            TrackArtworkThumbnail(
-              track = genre.representativeTrack,
-              size = 52.dp,
-              shape = RoundedCornerShape(12.dp),
-            )
-            Column(modifier = Modifier.weight(1f)) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+              TrackArtworkThumbnail(
+                track = genre.representativeTrack,
+                size = 52.dp,
+                shape = RoundedCornerShape(12.dp),
+              )
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = genre.name,
+                  style = MaterialTheme.typography.bodyLarge,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                  text = "${genre.summaryText} • ${genre.totalDurationFormatted}",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+              FilledIconButton(
+                onClick = { onPlayGenre(genre) },
+                shape = CircleShape,
+                modifier = Modifier
+                  .size(36.dp)
+                  .testTag("play_genre_${genre.name}"),
+                colors = IconButtonDefaults.filledIconButtonColors(
+                  containerColor = MaterialTheme.colorScheme.primaryContainer,
+                  contentColor = MaterialTheme.colorScheme.primary,
+                ),
+              ) {
+                Icon(
+                  imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                  contentDescription = "Play ${genre.name}",
+                  modifier = Modifier.size(18.dp),
+                )
+              }
+            }
+          }
+        }
+      }
+    } else {
+      LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag("genre_card_view"),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        items(genres, key = { it.name }) { genre ->
+          val isActive = currentGenreName != null && currentGenreName.equals(genre.name, ignoreCase = true)
+          val genrePalette = remember(genre.representativeTrack?.id) {
+            MusicPlayerEngine.resolveTrackPalette(genre.representativeTrack)
+          }
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = if (isActive) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+              } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+              },
+            ),
+            border = BorderStroke(
+              width = 1.dp,
+              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            ),
+            modifier = Modifier
+              .fillMaxWidth()
+              .clickable { onSelectGenre(genre) }
+              .testTag("genre_item_${genre.name}"),
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Box(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .height(84.dp)
+                  .clip(RoundedCornerShape(12.dp))
+                  .background(
+                    Brush.linearGradient(
+                      colors = listOf(genrePalette.dominantColor, genrePalette.secondaryColor),
+                    )
+                  )
+                  .padding(10.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.LibraryMusic,
+                  contentDescription = null,
+                  tint = Color.White.copy(alpha = 0.85f),
+                  modifier = Modifier
+                    .size(28.dp)
+                    .align(Alignment.TopStart),
+                )
+                FilledIconButton(
+                  onClick = { onPlayGenre(genre) },
+                  shape = CircleShape,
+                  modifier = Modifier
+                    .size(30.dp)
+                    .align(Alignment.BottomEnd),
+                  colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = Color.White.copy(alpha = 0.22f),
+                    contentColor = Color.White,
+                  ),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Play ${genre.name}",
+                    modifier = Modifier.size(16.dp),
+                  )
+                }
+              }
               Text(
                 text = genre.name,
                 style = MaterialTheme.typography.bodyLarge,
@@ -1833,125 +2470,269 @@ private fun GenresTabContent(
                 overflow = TextOverflow.Ellipsis,
               )
               Text(
-                text = "${genre.summaryText} • ${genre.totalDurationFormatted}",
+                text = genre.summaryText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
             }
-            FilledIconButton(
-              onClick = { onPlayGenre(genre) },
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("play_genre_${genre.name}"),
-              colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.primary,
-              ),
-            ) {
-              Icon(
-                imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
-                contentDescription = "Play ${genre.name}",
-                modifier = Modifier.size(18.dp),
-              )
-            }
           }
         }
       }
     }
-  } else {
-    LazyVerticalGrid(
-      columns = GridCells.Fixed(2),
+  }
+}
+
+@Composable
+private fun PlaylistsTabContent(
+  playlists: List<MusicPlaylist>,
+  viewMode: MusicViewMode,
+  currentTrackId: String?,
+  isPlaying: Boolean,
+  onPlayAll: () -> Unit,
+  onShuffleAll: () -> Unit,
+  onSaveQueueAsPlaylist: () -> Unit,
+  onSelectPlaylist: (MusicPlaylist) -> Unit,
+  onPlayPlaylist: (MusicPlaylist) -> Unit,
+  onDeletePlaylist: (MusicPlaylist) -> Unit,
+) {
+  Column(modifier = Modifier.fillMaxSize()) {
+    // Quick Action Row: Play All, Shuffle, Save Queue
+    Row(
       modifier = Modifier
-        .fillMaxSize()
-        .testTag("genre_card_view"),
-      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
+        .fillMaxWidth()
+        .padding(horizontal = 12.dp, vertical = 4.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
     ) {
-      items(genres, key = { it.name }) { genre ->
-        val isActive = currentGenreName != null && currentGenreName.equals(genre.name, ignoreCase = true)
-        val genrePalette = remember(genre.representativeTrack?.id) {
-          MusicPlayerEngine.resolveTrackPalette(genre.representativeTrack)
-        }
-        Card(
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = if (isActive) {
-              MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-            } else {
-              MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-            },
-          ),
-          border = BorderStroke(
-            width = 1.dp,
-            color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-          ),
-          modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onSelectGenre(genre) }
-            .testTag("genre_item_${genre.name}"),
-        ) {
-          Column(
+      FilledTonalButton(
+        onClick = onPlayAll,
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier.testTag("music_play_all_button"),
+      ) {
+        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Play All", style = MaterialTheme.typography.labelMedium)
+      }
+
+      OutlinedButton(
+        onClick = onShuffleAll,
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier.testTag("music_shuffle_all_button"),
+      ) {
+        Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Shuffle", style = MaterialTheme.typography.labelMedium)
+      }
+
+      Spacer(modifier = Modifier.weight(1f))
+
+      OutlinedButton(
+        onClick = onSaveQueueAsPlaylist,
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier.testTag("playlists_save_queue_button"),
+      ) {
+        Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Save Queue", style = MaterialTheme.typography.labelMedium)
+      }
+    }
+
+    if (playlists.isEmpty()) {
+      EmptyMusicState(message = "No playlists yet — save a queue as a playlist to get started")
+      return
+    }
+
+    if (viewMode == MusicViewMode.LIST) {
+      LazyColumn(
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag("playlist_list_view"),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        items(playlists, key = { it.id }) { playlist ->
+          val isActive = currentTrackId != null && playlist.tracks.any { it.id == currentTrackId }
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = if (isActive) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+              } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+              },
+            ),
+            border = BorderStroke(
+              width = 1.dp,
+              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            ),
             modifier = Modifier
               .fillMaxWidth()
-              .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+              .clickable { onSelectPlaylist(playlist) }
+              .testTag("playlist_item_${playlist.name}"),
           ) {
-            Box(
+            Row(
               modifier = Modifier
                 .fillMaxWidth()
-                .height(84.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(
-                  Brush.linearGradient(
-                    colors = listOf(genrePalette.dominantColor, genrePalette.secondaryColor),
-                  )
-                )
-                .padding(10.dp),
+                .padding(12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-              Icon(
-                imageVector = Icons.Default.LibraryMusic,
-                contentDescription = null,
-                tint = Color.White.copy(alpha = 0.85f),
-                modifier = Modifier
-                  .size(28.dp)
-                  .align(Alignment.TopStart),
+              TrackArtworkThumbnail(
+                track = playlist.representativeTrack,
+                size = 52.dp,
+                shape = RoundedCornerShape(12.dp),
               )
-              FilledIconButton(
-                onClick = { onPlayGenre(genre) },
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = playlist.name,
+                  style = MaterialTheme.typography.bodyLarge,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                  text = playlist.summaryText,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+              IconButton(
+                onClick = { onDeletePlaylist(playlist) },
                 modifier = Modifier
-                  .size(30.dp)
-                  .align(Alignment.BottomEnd),
+                  .size(34.dp)
+                  .testTag("delete_playlist_${playlist.name}"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Delete,
+                  contentDescription = "Delete ${playlist.name}",
+                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.size(18.dp),
+                )
+              }
+              FilledIconButton(
+                onClick = { onPlayPlaylist(playlist) },
+                shape = CircleShape,
+                modifier = Modifier
+                  .size(36.dp)
+                  .testTag("play_playlist_${playlist.name}"),
                 colors = IconButtonDefaults.filledIconButtonColors(
-                  containerColor = Color.White.copy(alpha = 0.22f),
-                  contentColor = Color.White,
+                  containerColor = MaterialTheme.colorScheme.primaryContainer,
+                  contentColor = MaterialTheme.colorScheme.primary,
                 ),
               ) {
                 Icon(
-                  imageVector = Icons.Default.PlayArrow,
-                  contentDescription = "Play ${genre.name}",
-                  modifier = Modifier.size(16.dp),
+                  imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                  contentDescription = "Play ${playlist.name}",
+                  modifier = Modifier.size(18.dp),
                 )
               }
             }
-            Text(
-              text = genre.name,
-              style = MaterialTheme.typography.bodyLarge,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-              text = genre.summaryText,
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
+          }
+        }
+      }
+    } else {
+      LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag("playlist_card_view"),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        items(playlists, key = { it.id }) { playlist ->
+          val isActive = currentTrackId != null && playlist.tracks.any { it.id == currentTrackId }
+          val playlistPalette = remember(playlist.representativeTrack?.id) {
+            MusicPlayerEngine.resolveTrackPalette(playlist.representativeTrack)
+          }
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = if (isActive) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+              } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+              },
+            ),
+            border = BorderStroke(
+              width = 1.dp,
+              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            ),
+            modifier = Modifier
+              .fillMaxWidth()
+              .clickable { onSelectPlaylist(playlist) }
+              .testTag("playlist_item_${playlist.name}"),
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Box(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .height(84.dp)
+                  .clip(RoundedCornerShape(12.dp))
+                  .background(
+                    Brush.linearGradient(
+                      colors = listOf(playlistPalette.dominantColor, playlistPalette.secondaryColor),
+                    )
+                  )
+                  .padding(10.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.AutoMirrored.Filled.PlaylistPlay,
+                  contentDescription = null,
+                  tint = Color.White.copy(alpha = 0.85f),
+                  modifier = Modifier
+                    .size(28.dp)
+                    .align(Alignment.TopStart),
+                )
+                FilledIconButton(
+                  onClick = { onPlayPlaylist(playlist) },
+                  shape = CircleShape,
+                  modifier = Modifier
+                    .size(30.dp)
+                    .align(Alignment.BottomEnd),
+                  colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = Color.White.copy(alpha = 0.22f),
+                    contentColor = Color.White,
+                  ),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Play ${playlist.name}",
+                    modifier = Modifier.size(16.dp),
+                  )
+                }
+              }
+              Text(
+                text = playlist.name,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              Text(
+                text = playlist.summaryText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
           }
         }
       }
@@ -2013,14 +2794,27 @@ private fun ArtistDetailContent(
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-          }
-          FilledTonalButton(
-            onClick = { onPlayArtist(false) },
-            shape = RoundedCornerShape(12.dp),
-          ) {
-            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(modifier = Modifier.width(4.dp))
-            Text("Play")
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              FilledTonalButton(
+                onClick = { onPlayArtist(false) },
+                shape = CircleShape,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+              ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Play All", style = MaterialTheme.typography.labelMedium)
+              }
+              OutlinedButton(
+                onClick = { onPlayArtist(true) },
+                shape = CircleShape,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+              ) {
+                Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Shuffle", style = MaterialTheme.typography.labelMedium)
+              }
+            }
           }
         }
 
@@ -2030,10 +2824,11 @@ private fun ArtistDetailContent(
           ) {
             items(artist.albums, key = { it.name }) { album ->
               Surface(
-                shape = RoundedCornerShape(12.dp),
+                shape = CircleShape,
                 color = MaterialTheme.colorScheme.surface,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
                 modifier = Modifier
+                  .clip(CircleShape)
                   .clickable { onOpenAlbum(album) }
                   .padding(2.dp),
               ) {
@@ -2154,16 +2949,16 @@ private fun AlbumDetailContent(
           Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
               onClick = { onPlayAlbum(false) },
-              shape = RoundedCornerShape(12.dp),
+              shape = CircleShape,
               contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
             ) {
               Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
               Spacer(modifier = Modifier.width(4.dp))
-              Text("Play", style = MaterialTheme.typography.labelMedium)
+              Text("Play All", style = MaterialTheme.typography.labelMedium)
             }
             OutlinedButton(
               onClick = { onPlayAlbum(true) },
-              shape = RoundedCornerShape(12.dp),
+              shape = CircleShape,
               contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
             ) {
               Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -2264,14 +3059,27 @@ private fun GenreDetailContent(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
-        }
-        FilledTonalButton(
-          onClick = { onPlayGenre(false) },
-          shape = RoundedCornerShape(12.dp),
-        ) {
-          Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-          Spacer(modifier = Modifier.width(4.dp))
-          Text("Play All")
+          Spacer(modifier = Modifier.height(8.dp))
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilledTonalButton(
+              onClick = { onPlayGenre(false) },
+              shape = CircleShape,
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            ) {
+              Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("Play All", style = MaterialTheme.typography.labelMedium)
+            }
+            OutlinedButton(
+              onClick = { onPlayGenre(true) },
+              shape = CircleShape,
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            ) {
+              Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(16.dp))
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("Shuffle", style = MaterialTheme.typography.labelMedium)
+            }
+          }
         }
       }
     }
@@ -2302,6 +3110,131 @@ private fun GenreDetailContent(
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
         items(genre.tracks, key = { it.id }) { track ->
+          SongGridItemCard(
+            track = track,
+            isCurrent = track.id == currentTrackId,
+            isPlaying = isPlaying && track.id == currentTrackId,
+            isFavorite = track.id in favoriteIds,
+            onClick = { onSelectTrack(track) },
+            onToggleFavorite = { onToggleFavorite(track) },
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun PlaylistDetailContent(
+  playlist: MusicPlaylist,
+  viewMode: MusicViewMode,
+  currentTrackId: String?,
+  isPlaying: Boolean,
+  favoriteIds: Set<String>,
+  onPlayPlaylist: (shuffle: Boolean) -> Unit,
+  onDeletePlaylist: () -> Unit,
+  onSelectTrack: (MusicTrack) -> Unit,
+  onToggleFavorite: (MusicTrack) -> Unit,
+) {
+  Column(
+    modifier = Modifier
+      .fillMaxSize()
+      .testTag("playlist_detail_view"),
+  ) {
+    Card(
+      shape = RoundedCornerShape(14.dp),
+      colors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+      ),
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 12.dp, vertical = 6.dp),
+    ) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        TrackArtworkThumbnail(
+          track = playlist.representativeTrack,
+          size = 56.dp,
+          shape = RoundedCornerShape(12.dp),
+        )
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = playlist.name,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = playlist.summaryText,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          Spacer(modifier = Modifier.height(8.dp))
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilledTonalButton(
+              onClick = { onPlayPlaylist(false) },
+              shape = CircleShape,
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            ) {
+              Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("Play All", style = MaterialTheme.typography.labelMedium)
+            }
+            OutlinedButton(
+              onClick = { onPlayPlaylist(true) },
+              shape = CircleShape,
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            ) {
+              Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(16.dp))
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("Shuffle", style = MaterialTheme.typography.labelMedium)
+            }
+          }
+        }
+        IconButton(
+          onClick = onDeletePlaylist,
+          modifier = Modifier.size(36.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Delete,
+            contentDescription = "Delete playlist",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    }
+
+    if (viewMode == MusicViewMode.LIST) {
+      LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        items(playlist.tracks, key = { it.id }) { track ->
+          SongListItemCard(
+            track = track,
+            isCurrent = track.id == currentTrackId,
+            isPlaying = isPlaying && track.id == currentTrackId,
+            isFavorite = track.id in favoriteIds,
+            onClick = { onSelectTrack(track) },
+            onToggleFavorite = { onToggleFavorite(track) },
+          )
+        }
+      }
+    } else {
+      LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        items(playlist.tracks, key = { it.id }) { track ->
           SongGridItemCard(
             track = track,
             isCurrent = track.id == currentTrackId,
@@ -2643,6 +3576,7 @@ private fun CollapsedMiniMusicPlayer(
 
         FilledIconButton(
           onClick = onPlayPause,
+          shape = CircleShape,
           modifier = Modifier
             .size(38.dp)
             .testTag("mini_player_play_pause_button"),
@@ -2696,8 +3630,10 @@ private fun CollapsedMiniMusicPlayer(
 
 /**
  * Full-Screen Collapsible Music Player Sheet.
- * Renders a multi-stop vertical gradient derived directly from the active song's album art colors.
+ * Renders a multi-stop vertical gradient derived directly from the active song's album art colors
+ * and a slide-up Queue bottom sheet panel styled similarly to the Roll History panel in the Dice Roller tool.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ExpandedMusicPlayerOverlay(
   track: MusicTrack,
@@ -2713,8 +3649,9 @@ private fun ExpandedMusicPlayerOverlay(
   playbackSpeed: Float,
   sleepTimerPreset: SleepTimerPreset,
   sleepRemainingMs: Long,
-  queueSize: Int,
+  queue: List<MusicTrack>,
   currentQueueIndex: Int,
+  initialQueueSheetValue: SheetValue = SheetValue.PartiallyExpanded,
   dominantColor: Color,
   secondaryColor: Color,
   accentColor: Color,
@@ -2736,7 +3673,9 @@ private fun ExpandedMusicPlayerOverlay(
   onVolumeChange: (Float) -> Unit,
   onToggleMute: () -> Unit,
   onCycleSpeed: () -> Unit,
-  onOpenQueue: () -> Unit,
+  onSelectQueueIndex: (Int) -> Unit,
+  onSaveQueueAsPlaylist: () -> Unit,
+  onOpenColorPicker: () -> Unit,
   onOpenTrackInfo: () -> Unit,
   onOpenSleepTimerMenu: () -> Unit,
   onDismissSleepTimerMenu: () -> Unit,
@@ -2744,11 +3683,29 @@ private fun ExpandedMusicPlayerOverlay(
   onNavigateToArtist: () -> Unit,
   onNavigateToAlbum: () -> Unit,
 ) {
+  val queueSize = queue.size
   val artworkScale by animateFloatAsState(
     targetValue = if (isPlaying) 1.0f else 0.93f,
     animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
     label = "artworkScale",
   )
+
+  val sheetState = rememberStandardBottomSheetState(
+    initialValue = initialQueueSheetValue,
+    skipHiddenState = true,
+  )
+  val scaffoldState = rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
+  val coroutineScope = rememberCoroutineScope()
+
+  val sheetPeekHeight = 32.dp
+  val isQueueExpanded = sheetState.currentValue == SheetValue.Expanded ||
+    sheetState.targetValue == SheetValue.Expanded
+
+  BackHandler(enabled = isQueueExpanded) {
+    coroutineScope.launch {
+      sheetState.partialExpand()
+    }
+  }
 
   val topGradientColor = lerp(dominantColor, Color(0xFF12121A), 0.25f)
   val midGradientColor = lerp(secondaryColor, Color(0xFF0E0E16), 0.45f)
@@ -2767,500 +3724,830 @@ private fun ExpandedMusicPlayerOverlay(
         contentDescription = "Expanded player background $dominantHex accent $accentHex"
       },
   ) {
+    BottomSheetScaffold(
+      modifier = Modifier.fillMaxSize(),
+      scaffoldState = scaffoldState,
+      sheetPeekHeight = sheetPeekHeight,
+      sheetShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+      sheetContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+      sheetTonalElevation = 6.dp,
+      sheetShadowElevation = 12.dp,
+      sheetDragHandle = null,
+      containerColor = Color.Transparent,
+      sheetContent = {
+        PlaybackQueueSheetContent(
+          queue = queue,
+          currentQueueIndex = currentQueueIndex,
+          isPlaying = isPlaying,
+          isExpanded = isQueueExpanded,
+          peekHeight = sheetPeekHeight,
+          onToggleSheet = {
+            coroutineScope.launch {
+              if (sheetState.currentValue == SheetValue.Expanded) {
+                sheetState.partialExpand()
+              } else {
+                sheetState.expand()
+              }
+            }
+          },
+          onSelectQueueIndex = onSelectQueueIndex,
+          onSaveQueueAsPlaylist = onSaveQueueAsPlaylist,
+        )
+      },
+    ) {
+      Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+          modifier = Modifier
+            .fillMaxSize()
+            .padding(
+              start = 20.dp,
+              end = 20.dp,
+              top = 12.dp,
+              bottom = 12.dp + sheetPeekHeight,
+            ),
+          horizontalAlignment = Alignment.CenterHorizontally,
+          verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+          // 1. Top Header with Collapse Button, Now Playing Context, and Palette Swatch Pill
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            IconButton(
+              onClick = onCollapse,
+              modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.14f))
+                .testTag("music_player_collapse_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.ExpandMore,
+                contentDescription = "Collapse player",
+                tint = Color.White,
+              )
+            }
+
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+              Text(
+                text = "NOW PLAYING",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = Color.White.copy(alpha = 0.72f),
+              )
+              Text(
+                text = "${track.album} (${currentQueueIndex + 1}/$queueSize)",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              // Album art color swatch badge (links to the Colors tool and selects this color)
+              Surface(
+                shape = CircleShape,
+                color = Color.White.copy(alpha = 0.14f),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
+                modifier = Modifier
+                  .clip(CircleShape)
+                  .clickable(onClick = onOpenColorPicker)
+                  .testTag("expanded_player_palette_badge"),
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(5.dp),
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                  Box(
+                    modifier = Modifier
+                      .size(10.dp)
+                      .clip(CircleShape)
+                      .background(dominantColor),
+                  )
+                  Text(
+                    text = dominantHex,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color.White,
+                  )
+                }
+              }
+
+              IconButton(
+                onClick = onOpenTrackInfo,
+                modifier = Modifier
+                  .size(36.dp)
+                  .testTag("expanded_player_info_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Info,
+                  contentDescription = "Track details",
+                  tint = Color.White.copy(alpha = 0.85f),
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+            }
+          }
+
+          // 2. Large Album Art Card
+          Box(
+            modifier = Modifier
+              .weight(1f, fill = false)
+              .padding(vertical = 8.dp),
+            contentAlignment = Alignment.Center,
+          ) {
+            Card(
+              shape = RoundedCornerShape(24.dp),
+              elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+              border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.25f)),
+              modifier = Modifier
+                .size(220.dp)
+                .scale(artworkScale)
+                .testTag("expanded_player_album_art"),
+            ) {
+              TrackArtworkBanner(
+                track = track,
+                modifier = Modifier.fillMaxSize(),
+              )
+            }
+          }
+
+          // 3. Track Title, Artist, Album, Genre Badge & Favorite Button
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = track.title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("expanded_player_title"),
+              )
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+              ) {
+                Text(
+                  text = track.artist,
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = accentColor,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                  modifier = Modifier
+                    .clickable(onClick = onNavigateToArtist)
+                    .testTag("expanded_player_artist"),
+                )
+                Text(
+                  text = "•",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = Color.White.copy(alpha = 0.6f),
+                )
+                Text(
+                  text = track.album,
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = Color.White.copy(alpha = 0.85f),
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                  modifier = Modifier
+                    .clickable(onClick = onNavigateToAlbum)
+                    .testTag("expanded_player_album"),
+                )
+              }
+              Spacer(modifier = Modifier.height(4.dp))
+              Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color.White.copy(alpha = 0.15f),
+              ) {
+                Text(
+                  text = "${track.genre} • ${track.year}",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color.White.copy(alpha = 0.9f),
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+              }
+            }
+
+            IconButton(
+              onClick = onToggleFavorite,
+              modifier = Modifier
+                .size(44.dp)
+                .testTag("expanded_player_favorite_button"),
+            ) {
+              Icon(
+                imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
+                tint = if (isFavorite) accentColor else Color.White,
+                modifier = Modifier.size(26.dp),
+              )
+            }
+          }
+
+          // 4. Seek Slider (SlimDotSlider per DESIGN_LANGUAGE.md) + Elapsed / Total Time
+          Column(modifier = Modifier.fillMaxWidth()) {
+            MusicSlimDotSlider(
+              value = seekFraction,
+              onValueChange = onSeekChange,
+              onValueChangeFinished = onSeekFinished,
+              accentColor = accentColor,
+              inactiveColor = Color.White.copy(alpha = 0.25f),
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("expanded_player_seek_slider"),
+            )
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+              Text(
+                text = AudioRecorderEngine.formatDurationMs(currentPositionMs),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = Color.White.copy(alpha = 0.82f),
+                modifier = Modifier.testTag("expanded_player_current_time"),
+              )
+              Text(
+                text = AudioRecorderEngine.formatDurationMs(durationMs),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = Color.White.copy(alpha = 0.82f),
+                modifier = Modifier.testTag("expanded_player_total_time"),
+              )
+            }
+          }
+
+          // 5. Primary Transport Controls (Shuffle, Previous, Rewind 10s, Play/Pause, Forward 10s, Next, Repeat)
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            IconButton(
+              onClick = onToggleShuffle,
+              modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(if (isShuffleEnabled) accentColor.copy(alpha = 0.25f) else Color.Transparent)
+                .testTag("expanded_player_shuffle_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Shuffle,
+                contentDescription = if (isShuffleEnabled) "Shuffle On" else "Shuffle Off",
+                tint = if (isShuffleEnabled) accentColor else Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.size(22.dp),
+              )
+            }
+
+            IconButton(
+              onClick = onPrevious,
+              modifier = Modifier
+                .size(44.dp)
+                .testTag("expanded_player_prev_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.SkipPrevious,
+                contentDescription = "Previous track",
+                tint = Color.White,
+                modifier = Modifier.size(30.dp),
+              )
+            }
+
+            IconButton(
+              onClick = onRewind10s,
+              modifier = Modifier
+                .size(40.dp)
+                .testTag("expanded_player_rewind_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Replay10,
+                contentDescription = "Rewind 10 seconds",
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(24.dp),
+              )
+            }
+
+            FilledIconButton(
+              onClick = onPlayPause,
+              modifier = Modifier
+                .size(64.dp)
+                .testTag("expanded_player_play_pause_button"),
+              shape = CircleShape,
+              colors = IconButtonDefaults.filledIconButtonColors(
+                containerColor = accentColor,
+                contentColor = if (accentColor.red * 0.299f + accentColor.green * 0.587f + accentColor.blue * 0.114f > 0.55f) {
+                  Color(0xFF101018)
+                } else {
+                  Color.White
+                },
+              ),
+            ) {
+              Icon(
+                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = if (isPlaying) "Pause" else "Play",
+                modifier = Modifier.size(34.dp),
+              )
+            }
+
+            IconButton(
+              onClick = onForward10s,
+              modifier = Modifier
+                .size(40.dp)
+                .testTag("expanded_player_forward_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Forward10,
+                contentDescription = "Fast-forward 10 seconds",
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(24.dp),
+              )
+            }
+
+            IconButton(
+              onClick = onNext,
+              modifier = Modifier
+                .size(44.dp)
+                .testTag("expanded_player_next_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.SkipNext,
+                contentDescription = "Next track",
+                tint = Color.White,
+                modifier = Modifier.size(30.dp),
+              )
+            }
+
+            IconButton(
+              onClick = onCycleRepeat,
+              modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(if (repeatMode != MusicRepeatMode.OFF) accentColor.copy(alpha = 0.25f) else Color.Transparent)
+                .testTag("expanded_player_repeat_button"),
+            ) {
+              Icon(
+                imageVector = if (repeatMode == MusicRepeatMode.REPEAT_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                contentDescription = repeatMode.displayName,
+                tint = if (repeatMode != MusicRepeatMode.OFF) accentColor else Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.size(22.dp),
+              )
+            }
+          }
+
+          // 6. Volume Control Row
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            IconButton(
+              onClick = onToggleMute,
+              modifier = Modifier
+                .size(32.dp)
+                .testTag("expanded_player_mute_button"),
+            ) {
+              Icon(
+                imageVector = if (isMuted || volume == 0f) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                contentDescription = if (isMuted) "Unmute" else "Mute",
+                tint = Color.White.copy(alpha = 0.85f),
+                modifier = Modifier.size(20.dp),
+              )
+            }
+
+            MusicSlimDotSlider(
+              value = volume,
+              onValueChange = onVolumeChange,
+              accentColor = accentColor,
+              inactiveColor = Color.White.copy(alpha = 0.22f),
+              modifier = Modifier
+                .weight(1f)
+                .testTag("expanded_player_volume_slider"),
+            )
+
+            Text(
+              text = "${(volume * 100).toInt()}%",
+              style = MaterialTheme.typography.labelSmall,
+              fontFamily = FontFamily.Monospace,
+              color = Color.White.copy(alpha = 0.8f),
+              modifier = Modifier.width(36.dp),
+              textAlign = TextAlign.End,
+            )
+          }
+
+          // 7. Secondary Utility Bar: Speed & Sleep Timer (Queue is a bottom slide-up panel right below)
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Surface(
+              shape = CircleShape,
+              color = Color.White.copy(alpha = 0.14f),
+              modifier = Modifier
+                .clip(CircleShape)
+                .clickable(onClick = onCycleSpeed)
+                .testTag("expanded_player_speed_button"),
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Speed,
+                  contentDescription = null,
+                  tint = Color.White,
+                  modifier = Modifier.size(16.dp),
+                )
+                Text(
+                  text = "${playbackSpeed}x",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = Color.White,
+                )
+              }
+            }
+
+            Box {
+              Surface(
+                shape = CircleShape,
+                color = if (sleepTimerPreset != SleepTimerPreset.OFF) accentColor.copy(alpha = 0.28f)
+                else Color.White.copy(alpha = 0.14f),
+                modifier = Modifier
+                  .clip(CircleShape)
+                  .clickable(onClick = onOpenSleepTimerMenu)
+                  .testTag("expanded_player_sleep_button"),
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Timer,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp),
+                  )
+                  Text(
+                    text = if (sleepTimerPreset == SleepTimerPreset.OFF) {
+                      "Sleep"
+                    } else {
+                      AudioRecorderEngine.formatDurationMs(sleepRemainingMs)
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                  )
+                }
+              }
+
+              DropdownMenu(
+                expanded = showSleepTimerMenu,
+                onDismissRequest = onDismissSleepTimerMenu,
+              ) {
+                SleepTimerPreset.entries.forEach { preset ->
+                  DropdownMenuItem(
+                    text = { Text(preset.label) },
+                    leadingIcon = {
+                      if (preset == sleepTimerPreset) {
+                        Icon(Icons.Default.Check, contentDescription = null)
+                      }
+                    },
+                    onClick = { onSelectSleepTimer(preset) },
+                  )
+                }
+              }
+            }
+          }
+        }
+
+        // Scrim overlay behind queue sheet when expanded
+        AnimatedVisibility(
+          visible = isQueueExpanded,
+          enter = fadeIn(tween(250)),
+          exit = fadeOut(tween(200)),
+        ) {
+          Box(
+            modifier = Modifier
+              .fillMaxSize()
+              .background(Color.Black.copy(alpha = 0.5f))
+              .pointerInput(Unit) {
+                detectTapGestures {
+                  coroutineScope.launch {
+                    sheetState.partialExpand()
+                  }
+                }
+              },
+          )
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Slide-up Playback Queue Sheet Panel inside the Full Music Player,
+ * styled similarly to `RollHistorySheetContent` in the Dice Roller tool.
+ */
+@Composable
+private fun PlaybackQueueSheetContent(
+  queue: List<MusicTrack>,
+  currentQueueIndex: Int,
+  isPlaying: Boolean,
+  isExpanded: Boolean,
+  peekHeight: Dp = 32.dp,
+  onToggleSheet: () -> Unit,
+  onSelectQueueIndex: (Int) -> Unit,
+  onSaveQueueAsPlaylist: () -> Unit,
+) {
+  val arrowRotation by animateFloatAsState(
+    targetValue = if (isExpanded) 180f else 0f,
+    label = "QueueChevronRotation",
+  )
+
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .fillMaxHeight(0.60f)
+      .testTag("music_queue_sheet"),
+  ) {
+    // Peek Header Bar (Drag or Tap to Pull Up Over the Player)
     Column(
       modifier = Modifier
-        .fillMaxSize()
-        .padding(horizontal = 20.dp, vertical = 12.dp),
+        .fillMaxWidth()
+        .height(peekHeight)
+        .clickable(onClick = onToggleSheet)
+        .testTag("music_queue_panel_toggle")
+        .padding(horizontal = 20.dp, vertical = 3.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.SpaceBetween,
+      verticalArrangement = Arrangement.Center,
     ) {
-      // 1. Top Header with Collapse Button, Now Playing Context, and Palette Swatch Pill
-      Row(
+      // Drag handle pill
+      Box(
         modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+      ) {
+        Box(
+          modifier = Modifier
+            .width(28.dp)
+            .height(2.5.dp)
+            .background(
+              color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+              shape = CircleShape,
+            ),
+        )
+      }
+
+      Spacer(modifier = Modifier.height(2.dp))
+
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("expanded_player_up_next_button"),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        IconButton(
-          onClick = onCollapse,
-          modifier = Modifier
-            .size(40.dp)
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.14f))
-            .testTag("music_player_collapse_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.ExpandMore,
-            contentDescription = "Collapse player",
-            tint = Color.White,
-          )
-        }
-
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-          Text(
-            text = "NOW PLAYING",
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = Color.White.copy(alpha = 0.72f),
-          )
-          Text(
-            text = "${track.album} (${currentQueueIndex + 1}/$queueSize)",
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Medium,
-            color = Color.White,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-
         Row(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-          // Album art color swatch badge
-          Surface(
-            shape = CircleShape,
-            color = Color.White.copy(alpha = 0.14f),
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
-            modifier = Modifier
-              .clickable(onClick = onOpenTrackInfo)
-              .testTag("expanded_player_palette_badge"),
-          ) {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(5.dp),
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(15.dp),
+          )
+          Text(
+            text = "Playback Queue",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+          )
+          if (queue.isNotEmpty()) {
+            Badge(
+              containerColor = MaterialTheme.colorScheme.primaryContainer,
+              contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             ) {
-              Box(
-                modifier = Modifier
-                  .size(10.dp)
-                  .clip(CircleShape)
-                  .background(dominantColor),
-              )
               Text(
-                text = dominantHex,
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
-                color = Color.White,
+                text = queue.size.toString(),
+                modifier = Modifier.padding(horizontal = 4.dp),
               )
             }
           }
+        }
 
-          IconButton(
-            onClick = onOpenTrackInfo,
-            modifier = Modifier
-              .size(36.dp)
-              .testTag("expanded_player_info_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Info,
-              contentDescription = "Track details",
-              tint = Color.White.copy(alpha = 0.85f),
-              modifier = Modifier.size(20.dp),
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+          if (!isExpanded && queue.isNotEmpty()) {
+            val nextTrack = queue.getOrNull((currentQueueIndex + 1) % queue.size)
+            val previewText = if (queue.size > 1 && nextTrack != null) {
+              "Next: ${nextTrack.title}"
+            } else {
+              "Track ${currentQueueIndex + 1}/${queue.size}"
+            }
+            Text(
+              text = previewText,
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.widthIn(max = 150.dp),
             )
           }
+          Icon(
+            imageVector = Icons.Default.KeyboardArrowUp,
+            contentDescription = "Toggle queue panel",
+            modifier = Modifier
+              .size(18.dp)
+              .rotate(arrowRotation),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
         }
       }
+    }
 
-      // 2. Large Album Art Card
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+    // Top of Song Queue Action Bar: Save Queue as Playlist
+    if (queue.isNotEmpty()) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(
+          text = "${queue.size} songs in queue",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        FilledTonalButton(
+          onClick = onSaveQueueAsPlaylist,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+          modifier = Modifier.testTag("save_queue_as_playlist_button"),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(
+            text = "Save as Playlist",
+            style = MaterialTheme.typography.labelMedium,
+          )
+        }
+      }
+    }
+
+    // Expanded Queue Content
+    if (queue.isEmpty()) {
       Box(
         modifier = Modifier
-          .weight(1f, fill = false)
-          .padding(vertical = 8.dp),
+          .fillMaxWidth()
+          .weight(1f)
+          .padding(24.dp),
         contentAlignment = Alignment.Center,
       ) {
-        Card(
-          shape = RoundedCornerShape(24.dp),
-          elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-          border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.25f)),
-          modifier = Modifier
-            .size(220.dp)
-            .scale(artworkScale)
-            .testTag("expanded_player_album_art"),
-        ) {
-          TrackArtworkBanner(
-            track = track,
-            modifier = Modifier.fillMaxSize(),
-          )
-        }
-      }
-
-      // 3. Track Title, Artist, Album, Genre Badge & Favorite Button
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-      ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = track.title,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.testTag("expanded_player_title"),
-          )
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-          ) {
-            Text(
-              text = track.artist,
-              style = MaterialTheme.typography.bodyMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = accentColor,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier
-                .clickable(onClick = onNavigateToArtist)
-                .testTag("expanded_player_artist"),
-            )
-            Text(
-              text = "•",
-              style = MaterialTheme.typography.bodyMedium,
-              color = Color.White.copy(alpha = 0.6f),
-            )
-            Text(
-              text = track.album,
-              style = MaterialTheme.typography.bodyMedium,
-              color = Color.White.copy(alpha = 0.85f),
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier
-                .clickable(onClick = onNavigateToAlbum)
-                .testTag("expanded_player_album"),
-            )
-          }
-          Spacer(modifier = Modifier.height(4.dp))
-          Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = Color.White.copy(alpha = 0.15f),
-          ) {
-            Text(
-              text = "${track.genre} • ${track.year}",
-              style = MaterialTheme.typography.labelSmall,
-              color = Color.White.copy(alpha = 0.9f),
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-            )
-          }
-        }
-
-        IconButton(
-          onClick = onToggleFavorite,
-          modifier = Modifier
-            .size(44.dp)
-            .testTag("expanded_player_favorite_button"),
-        ) {
-          Icon(
-            imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-            contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
-            tint = if (isFavorite) accentColor else Color.White,
-            modifier = Modifier.size(26.dp),
-          )
-        }
-      }
-
-      // 4. Seek Slider (SlimDotSlider per DESIGN_LANGUAGE.md) + Elapsed / Total Time
-      Column(modifier = Modifier.fillMaxWidth()) {
-        MusicSlimDotSlider(
-          value = seekFraction,
-          onValueChange = onSeekChange,
-          onValueChangeFinished = onSeekFinished,
-          accentColor = accentColor,
-          inactiveColor = Color.White.copy(alpha = 0.25f),
-          modifier = Modifier
-            .fillMaxWidth()
-            .testTag("expanded_player_seek_slider"),
-        )
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-          Text(
-            text = AudioRecorderEngine.formatDurationMs(currentPositionMs),
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = FontFamily.Monospace,
-            color = Color.White.copy(alpha = 0.82f),
-            modifier = Modifier.testTag("expanded_player_current_time"),
-          )
-          Text(
-            text = AudioRecorderEngine.formatDurationMs(durationMs),
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = FontFamily.Monospace,
-            color = Color.White.copy(alpha = 0.82f),
-            modifier = Modifier.testTag("expanded_player_total_time"),
-          )
-        }
-      }
-
-      // 5. Primary Transport Controls (Shuffle, Previous, Rewind 10s, Play/Pause, Forward 10s, Next, Repeat)
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        IconButton(
-          onClick = onToggleShuffle,
-          modifier = Modifier
-            .size(40.dp)
-            .clip(CircleShape)
-            .background(if (isShuffleEnabled) accentColor.copy(alpha = 0.25f) else Color.Transparent)
-            .testTag("expanded_player_shuffle_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Shuffle,
-            contentDescription = if (isShuffleEnabled) "Shuffle On" else "Shuffle Off",
-            tint = if (isShuffleEnabled) accentColor else Color.White.copy(alpha = 0.7f),
-            modifier = Modifier.size(22.dp),
-          )
-        }
-
-        IconButton(
-          onClick = onPrevious,
-          modifier = Modifier
-            .size(44.dp)
-            .testTag("expanded_player_prev_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.SkipPrevious,
-            contentDescription = "Previous track",
-            tint = Color.White,
-            modifier = Modifier.size(30.dp),
-          )
-        }
-
-        IconButton(
-          onClick = onRewind10s,
-          modifier = Modifier
-            .size(40.dp)
-            .testTag("expanded_player_rewind_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Replay10,
-            contentDescription = "Rewind 10 seconds",
-            tint = Color.White.copy(alpha = 0.9f),
-            modifier = Modifier.size(24.dp),
-          )
-        }
-
-        FilledIconButton(
-          onClick = onPlayPause,
-          modifier = Modifier
-            .size(64.dp)
-            .testTag("expanded_player_play_pause_button"),
-          shape = CircleShape,
-          colors = IconButtonDefaults.filledIconButtonColors(
-            containerColor = accentColor,
-            contentColor = if (accentColor.red * 0.299f + accentColor.green * 0.587f + accentColor.blue * 0.114f > 0.55f) {
-              Color(0xFF101018)
-            } else {
-              Color.White
-            },
-          ),
-        ) {
-          Icon(
-            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-            contentDescription = if (isPlaying) "Pause" else "Play",
-            modifier = Modifier.size(34.dp),
-          )
-        }
-
-        IconButton(
-          onClick = onForward10s,
-          modifier = Modifier
-            .size(40.dp)
-            .testTag("expanded_player_forward_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Forward10,
-            contentDescription = "Fast-forward 10 seconds",
-            tint = Color.White.copy(alpha = 0.9f),
-            modifier = Modifier.size(24.dp),
-          )
-        }
-
-        IconButton(
-          onClick = onNext,
-          modifier = Modifier
-            .size(44.dp)
-            .testTag("expanded_player_next_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.SkipNext,
-            contentDescription = "Next track",
-            tint = Color.White,
-            modifier = Modifier.size(30.dp),
-          )
-        }
-
-        IconButton(
-          onClick = onCycleRepeat,
-          modifier = Modifier
-            .size(40.dp)
-            .clip(CircleShape)
-            .background(if (repeatMode != MusicRepeatMode.OFF) accentColor.copy(alpha = 0.25f) else Color.Transparent)
-            .testTag("expanded_player_repeat_button"),
-        ) {
-          Icon(
-            imageVector = if (repeatMode == MusicRepeatMode.REPEAT_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
-            contentDescription = repeatMode.displayName,
-            tint = if (repeatMode != MusicRepeatMode.OFF) accentColor else Color.White.copy(alpha = 0.7f),
-            modifier = Modifier.size(22.dp),
-          )
-        }
-      }
-
-      // 6. Volume Control Row
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        IconButton(
-          onClick = onToggleMute,
-          modifier = Modifier
-            .size(32.dp)
-            .testTag("expanded_player_mute_button"),
-        ) {
-          Icon(
-            imageVector = if (isMuted || volume == 0f) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
-            contentDescription = if (isMuted) "Unmute" else "Mute",
-            tint = Color.White.copy(alpha = 0.85f),
-            modifier = Modifier.size(20.dp),
-          )
-        }
-
-        MusicSlimDotSlider(
-          value = volume,
-          onValueChange = onVolumeChange,
-          accentColor = accentColor,
-          inactiveColor = Color.White.copy(alpha = 0.22f),
-          modifier = Modifier
-            .weight(1f)
-            .testTag("expanded_player_volume_slider"),
-        )
-
         Text(
-          text = "${(volume * 100).toInt()}%",
-          style = MaterialTheme.typography.labelSmall,
-          fontFamily = FontFamily.Monospace,
-          color = Color.White.copy(alpha = 0.8f),
-          modifier = Modifier.width(36.dp),
-          textAlign = TextAlign.End,
+          text = "No songs in queue — select a track or album to start listening!",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          textAlign = TextAlign.Center,
         )
       }
-
-      // 7. Secondary Utility Bar: Speed, Sleep Timer, Up Next Queue
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+    } else {
+      LazyColumn(
+        modifier = Modifier
+          .fillMaxWidth()
+          .weight(1f)
+          .testTag("music_queue_list"),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        Surface(
-          shape = RoundedCornerShape(16.dp),
-          color = Color.White.copy(alpha = 0.14f),
-          modifier = Modifier
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onCycleSpeed)
-            .testTag("expanded_player_speed_button"),
-        ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Speed,
-              contentDescription = null,
-              tint = Color.White,
-              modifier = Modifier.size(16.dp),
-            )
-            Text(
-              text = "${playbackSpeed}x",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = Color.White,
-            )
-          }
-        }
-
-        Box {
+        itemsIndexed(queue, key = { idx, t -> "${idx}_${t.id}" }) { index, item ->
+          val isCurrent = index == currentQueueIndex
           Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = if (sleepTimerPreset != SleepTimerPreset.OFF) accentColor.copy(alpha = 0.28f)
-            else Color.White.copy(alpha = 0.14f),
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = if (isCurrent) {
+              BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
+            } else {
+              null
+            },
             modifier = Modifier
-              .clip(RoundedCornerShape(16.dp))
-              .clickable(onClick = onOpenSleepTimerMenu)
-              .testTag("expanded_player_sleep_button"),
+              .fillMaxWidth()
+              .clip(RoundedCornerShape(14.dp))
+              .clickable { onSelectQueueIndex(index) }
+              .testTag("music_queue_item_$index"),
           ) {
             Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+              horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-              modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
-              Icon(
-                imageVector = Icons.Default.Timer,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(16.dp),
-              )
-              Text(
-                text = if (sleepTimerPreset == SleepTimerPreset.OFF) {
-                  "Sleep"
-                } else {
-                  AudioRecorderEngine.formatDurationMs(sleepRemainingMs)
-                },
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = Color.White,
-              )
-            }
-          }
-
-          DropdownMenu(
-            expanded = showSleepTimerMenu,
-            onDismissRequest = onDismissSleepTimerMenu,
-          ) {
-            SleepTimerPreset.entries.forEach { preset ->
-              DropdownMenuItem(
-                text = { Text(preset.label) },
-                leadingIcon = {
-                  if (preset == sleepTimerPreset) {
-                    Icon(Icons.Default.Check, contentDescription = null)
+              Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+              ) {
+                Box(contentAlignment = Alignment.Center) {
+                  TrackArtworkThumbnail(
+                    track = item,
+                    size = 40.dp,
+                    shape = RoundedCornerShape(10.dp),
+                  )
+                  if (isCurrent) {
+                    Box(
+                      modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.Black.copy(alpha = 0.42f)),
+                      contentAlignment = Alignment.Center,
+                    ) {
+                      Icon(
+                        imageVector = if (isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Now Playing" else "Selected",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp),
+                      )
+                    }
                   }
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                  ) {
+                    Text(
+                      text = "#${index + 1}",
+                      style = MaterialTheme.typography.labelSmall,
+                      fontFamily = FontFamily.Monospace,
+                      fontWeight = FontWeight.Bold,
+                      color = if (isCurrent) {
+                        MaterialTheme.colorScheme.primary
+                      } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                      },
+                    )
+                    Text(
+                      text = item.title,
+                      style = MaterialTheme.typography.bodyLarge,
+                      fontWeight = FontWeight.Bold,
+                      color = if (isCurrent) {
+                        MaterialTheme.colorScheme.primary
+                      } else {
+                        MaterialTheme.colorScheme.onSurface
+                      },
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                      modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (isCurrent) {
+                      Badge(containerColor = MaterialTheme.colorScheme.primary) {
+                        Text(if (isPlaying) "PLAYING" else "NOW")
+                      }
+                    }
+                  }
+                  Text(
+                    text = "${item.artist} • ${item.album}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+              }
+              Spacer(modifier = Modifier.width(12.dp))
+              Text(
+                text = item.durationFormatted,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.ExtraBold,
+                fontFamily = FontFamily.Monospace,
+                color = if (isCurrent) {
+                  MaterialTheme.colorScheme.primary
+                } else {
+                  MaterialTheme.colorScheme.onSurface
                 },
-                onClick = { onSelectSleepTimer(preset) },
               )
             }
-          }
-        }
-
-        Surface(
-          shape = RoundedCornerShape(16.dp),
-          color = Color.White.copy(alpha = 0.14f),
-          modifier = Modifier
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onOpenQueue)
-            .testTag("expanded_player_up_next_button"),
-        ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-          ) {
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-              contentDescription = null,
-              tint = Color.White,
-              modifier = Modifier.size(16.dp),
-            )
-            Text(
-              text = "Queue ($queueSize)",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = Color.White,
-            )
           }
         }
       }
@@ -3317,24 +4604,24 @@ private fun MusicSlimDotSlider(
 private fun TrackArtworkThumbnail(
   track: MusicTrack?,
   size: Dp,
-  shape: androidx.compose.ui.graphics.Shape,
+  shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(12.dp),
   modifier: Modifier = Modifier,
 ) {
   val isInspection = LocalInspectionMode.current
-  var bitmap by remember(track?.id) {
+  var bitmap by remember(track?.id, track?.album, track?.artist, track?.artworkPrimaryRgb) {
     mutableStateOf<Bitmap?>(
       if (track != null && !isInspection) MusicPlayerEngine.getCachedAlbumArtBitmap(track, 240)
       else null
     )
   }
 
-  LaunchedEffect(track, isInspection) {
+  LaunchedEffect(track?.id, track?.album, track?.artist, isInspection) {
     if (track != null && !isInspection && bitmap == null) {
       bitmap = MusicPlayerEngine.loadAlbumArtBitmapAsync(track, sizePx = 240)
     }
   }
 
-  val palette = remember(track?.id) {
+  val palette = remember(track?.id, track?.artworkPrimaryRgb, bitmap) {
     MusicPlayerEngine.resolveTrackPalette(track)
   }
 
@@ -3374,20 +4661,20 @@ private fun TrackArtworkBanner(
   modifier: Modifier = Modifier,
 ) {
   val isInspection = LocalInspectionMode.current
-  var bitmap by remember(track?.id) {
+  var bitmap by remember(track?.id, track?.album, track?.artist, track?.artworkPrimaryRgb) {
     mutableStateOf<Bitmap?>(
       if (track != null && !isInspection) MusicPlayerEngine.getCachedAlbumArtBitmap(track, 360)
       else null
     )
   }
 
-  LaunchedEffect(track, isInspection) {
+  LaunchedEffect(track?.id, track?.album, track?.artist, isInspection) {
     if (track != null && !isInspection && bitmap == null) {
       bitmap = MusicPlayerEngine.loadAlbumArtBitmapAsync(track, sizePx = 360)
     }
   }
 
-  val palette = remember(track?.id) {
+  val palette = remember(track?.id, track?.artworkPrimaryRgb, bitmap) {
     MusicPlayerEngine.resolveTrackPalette(track)
   }
 
@@ -3425,6 +4712,7 @@ private fun PlaybackQueueDialog(
   isPlaying: Boolean,
   accentColor: Color,
   onSelectQueueIndex: (Int) -> Unit,
+  onSaveQueueAsPlaylist: () -> Unit,
   onDismiss: () -> Unit,
 ) {
   AlertDialog(
@@ -3452,7 +4740,7 @@ private fun PlaybackQueueDialog(
             modifier = Modifier.size(24.dp),
           )
         }
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
           Text(
             text = "Playback Queue",
             style = MaterialTheme.typography.titleLarge,
@@ -3468,65 +4756,94 @@ private fun PlaybackQueueDialog(
       }
     },
     text = {
-      LazyColumn(
-        modifier = Modifier
-          .fillMaxWidth()
-          .heightIn(max = 320.dp)
-          .testTag("music_queue_list"),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        itemsIndexed(queue, key = { idx, t -> "${idx}_${t.id}" }) { index, item ->
-          val isCurrent = index == currentQueueIndex
-          Card(
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(
-              containerColor = if (isCurrent) {
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-              } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-              },
-            ),
+        if (queue.isNotEmpty()) {
+          FilledTonalButton(
+            onClick = onSaveQueueAsPlaylist,
+            shape = CircleShape,
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
             modifier = Modifier
               .fillMaxWidth()
-              .clickable { onSelectQueueIndex(index) },
+              .testTag("save_queue_as_playlist_dialog_button"),
           ) {
-            Row(
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Save as Playlist", style = MaterialTheme.typography.labelLarge)
+          }
+        }
+
+        LazyColumn(
+          modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 320.dp)
+            .testTag("music_queue_list"),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          itemsIndexed(queue, key = { idx, t -> "${idx}_${t.id}" }) { index, item ->
+            val isCurrent = index == currentQueueIndex
+            Card(
+              shape = RoundedCornerShape(12.dp),
+              colors = CardDefaults.cardColors(
+                containerColor = if (isCurrent) {
+                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                } else {
+                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                },
+              ),
               modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(10.dp),
+                .clickable { onSelectQueueIndex(index) },
             ) {
-              Text(
-                text = "${index + 1}",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-              Column(modifier = Modifier.weight(1f)) {
-                Text(
-                  text = item.title,
-                  style = MaterialTheme.typography.bodyMedium,
-                  fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.onSurface,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+              ) {
+                TrackArtworkThumbnail(
+                  track = item,
+                  size = 38.dp,
+                  shape = RoundedCornerShape(10.dp),
                 )
                 Text(
-                  text = "${item.artist} • ${item.durationFormatted}",
-                  style = MaterialTheme.typography.bodySmall,
+                  text = "${index + 1}",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontFamily = FontFamily.Monospace,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
                 )
-              }
-              if (isCurrent) {
-                Icon(
-                  imageVector = if (isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.size(18.dp),
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                  Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                  Text(
+                    text = "${item.artist} • ${item.durationFormatted}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+                if (isCurrent) {
+                  Icon(
+                    imageVector = if (isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                  )
+                }
               }
             }
           }
@@ -3536,7 +4853,7 @@ private fun PlaybackQueueDialog(
     confirmButton = {
       Button(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(6.dp))
@@ -3547,16 +4864,116 @@ private fun PlaybackQueueDialog(
 }
 
 @Composable
-private fun TrackDetailsDialog(
-  track: MusicTrack,
-  palette: AlbumArtPalette,
+private fun SaveQueueAsPlaylistDialog(
+  defaultPlaylistName: String,
+  queueTrackCount: Int,
+  accentColor: Color,
+  onConfirm: (String) -> Unit,
   onDismiss: () -> Unit,
 ) {
+  var playlistName by rememberSaveable(defaultPlaylistName) {
+    mutableStateOf(defaultPlaylistName)
+  }
+
   AlertDialog(
     onDismissRequest = onDismiss,
     shape = RoundedCornerShape(28.dp),
     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     tonalElevation = 6.dp,
+    modifier = Modifier.testTag("save_playlist_dialog"),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(lerp(MaterialTheme.colorScheme.primaryContainer, accentColor, 0.25f)),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "Save Queue as Playlist",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "$queueTrackCount songs will be saved",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        OutlinedTextField(
+          value = playlistName,
+          onValueChange = { playlistName = it },
+          label = { Text("Playlist Name") },
+          singleLine = true,
+          shape = RoundedCornerShape(14.dp),
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("playlist_name_input"),
+        )
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = { onConfirm(playlistName) },
+        shape = CircleShape,
+        modifier = Modifier.testTag("confirm_save_playlist_button"),
+      ) {
+        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Save")
+      }
+    },
+    dismissButton = {
+      OutlinedButton(
+        onClick = onDismiss,
+        shape = CircleShape,
+      ) {
+        Text("Cancel")
+      }
+    },
+  )
+}
+
+@Composable
+private fun TrackDetailsDialog(
+  track: MusicTrack,
+  palette: AlbumArtPalette,
+  onSelectColor: (String) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  val paletteEntries = listOf(
+    palette.dominantColor to palette.dominantHex,
+    palette.secondaryColor to palette.secondaryHex,
+    palette.accentColor to palette.accentHex,
+  )
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    modifier = Modifier.testTag("track_details_dialog"),
     title = {
       Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -3585,7 +5002,7 @@ private fun TrackDetailsDialog(
             color = MaterialTheme.colorScheme.onSurface,
           )
           Text(
-            text = "Metadata and album art palette",
+            text = "Metadata, audio info, and colors",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -3594,8 +5011,10 @@ private fun TrackDetailsDialog(
     },
     text = {
       Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier
+          .fillMaxWidth()
+          .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         Card(
           shape = RoundedCornerShape(14.dp),
@@ -3633,21 +5052,79 @@ private fun TrackDetailsDialog(
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
+        // Interactive Colors row (links to Colors tool and selects the tapped color)
+        Column(
+          modifier = Modifier.fillMaxWidth(),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = "Colors",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            paletteEntries.forEachIndexed { index, (swatchColor, hex) ->
+              Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+                border = BorderStroke(1.dp, swatchColor.copy(alpha = 0.55f)),
+                modifier = Modifier
+                  .weight(1f)
+                  .clip(CircleShape)
+                  .clickable { onSelectColor(hex) }
+                  .testTag("track_details_color_$index"),
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.Center,
+                ) {
+                  Box(
+                    modifier = Modifier
+                      .size(12.dp)
+                      .clip(CircleShape)
+                      .background(swatchColor)
+                      .border(1.dp, Color.White.copy(alpha = 0.5f), CircleShape),
+                  )
+                  Spacer(modifier = Modifier.width(5.dp))
+                  Text(
+                    text = hex,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                  )
+                }
+              }
+            }
+          }
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        DetailRow(label = "Artist", value = track.artist)
+        DetailRow(label = "Album", value = track.album)
+        DetailRow(label = "Track #", value = track.trackNumberFormatted, isMono = true)
         DetailRow(label = "Genre", value = track.genre)
-        DetailRow(label = "Year", value = track.year.toString())
+        DetailRow(label = "Year", value = track.year.toString(), isMono = true)
         DetailRow(label = "Duration", value = track.durationFormatted, isMono = true)
+        DetailRow(label = "Format", value = track.formatLabel, isMono = true)
+        DetailRow(label = "Bitrate", value = track.bitrateFormatted, isMono = true)
+        DetailRow(label = "Sample Rate", value = track.sampleRateFormatted, isMono = true)
+        DetailRow(label = "Channels", value = track.channelsLabel)
         DetailRow(label = "Size", value = track.sizeFormatted, isMono = true)
-        DetailRow(
-          label = "Album Art Palette",
-          value = "${palette.dominantHex} / ${palette.secondaryHex} / ${palette.accentHex}",
-          isMono = true,
-        )
+        DetailRow(label = "Source", value = track.sourceLabel, isMono = true)
       }
     },
     confirmButton = {
       Button(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(6.dp))
@@ -3673,12 +5150,15 @@ private fun DetailRow(
       style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    Spacer(modifier = Modifier.width(12.dp))
     Text(
       text = value,
       style = MaterialTheme.typography.bodyMedium,
       fontWeight = FontWeight.Medium,
       fontFamily = if (isMono) FontFamily.Monospace else null,
       color = MaterialTheme.colorScheme.onSurface,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
     )
   }
 }
@@ -3716,5 +5196,26 @@ private fun EmptyMusicState(message: String) {
 private fun MusicPlayerScreenPreview() {
   ToolboxTheme {
     MusicPlayerScreen()
+  }
+}
+
+@Preview(showBackground = true, name = "Music Player - Full Player Expanded")
+@Composable
+private fun MusicPlayerExpandedPreview() {
+  ToolboxTheme {
+    MusicPlayerScreen(
+      initialPlayerExpanded = true,
+    )
+  }
+}
+
+@Preview(showBackground = true, name = "Music Player - Full Player Queue Expanded")
+@Composable
+private fun MusicPlayerQueueExpandedPreview() {
+  ToolboxTheme {
+    MusicPlayerScreen(
+      initialPlayerExpanded = true,
+      initialQueueExpanded = true,
+    )
   }
 }

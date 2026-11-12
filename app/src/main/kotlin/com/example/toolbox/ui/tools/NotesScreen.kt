@@ -1186,20 +1186,17 @@ private fun NotesHeaderTopBar(
             )
           }
 
-          IconButton(
-            onClick = onToggleViewMode,
-            modifier = Modifier.testTag("notes_view_mode_toggle"),
-          ) {
-            Icon(
-              imageVector = if (isGridView) {
-                Icons.Default.ViewAgenda
-              } else {
-                Icons.Default.GridView
-              },
-              contentDescription = if (isGridView) "Switch to list view" else "Switch to grid view",
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
+          ViewModeSegmentedToggle(
+            isListView = !isGridView,
+            onSelectListView = { if (isGridView) onToggleViewMode() },
+            onSelectGridView = { if (!isGridView) onToggleViewMode() },
+            onToggle = onToggleViewMode,
+            toggleTestTag = "notes_view_mode_toggle",
+            listTestTag = "notes_view_mode_list",
+            gridTestTag = "notes_view_mode_grid",
+            listContentDescription = "List view",
+            gridContentDescription = "Grid view",
+          )
 
           IconButton(
             onClick = onOpenLabelsDialog,

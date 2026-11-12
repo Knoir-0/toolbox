@@ -4,6 +4,11 @@
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- Storage permissions for File Manager -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
@@ -198,7 +203,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_calculator"
             android:roundIcon="@mipmap/ic_tool_calculator"
-            android:label="Calculator">
+            android:label="Calculate">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -296,7 +301,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_audio_recorder"
             android:roundIcon="@mipmap/ic_tool_audio_recorder"
-            android:label="Recorder">
+            android:label="Record">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -492,7 +497,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_decibel_meter"
             android:roundIcon="@mipmap/ic_tool_decibel_meter"
-            android:label="Decibel Meter">
+            android:label="Decibels">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -506,7 +511,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_archive"
             android:roundIcon="@mipmap/ic_tool_archive"
-            android:label="Archive">
+            android:label="Archives">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -521,6 +526,34 @@
             android:icon="@mipmap/ic_tool_music_player"
             android:roundIcon="@mipmap/ic_tool_music_player"
             android:label="Music">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".MainActivityToolPdfViewer"
+            android:targetActivity=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_pdf_viewer"
+            android:roundIcon="@mipmap/ic_tool_pdf_viewer"
+            android:label="PDF Viewer">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".MainActivityToolRecipeBook"
+            android:targetActivity=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_recipe_book"
+            android:roundIcon="@mipmap/ic_tool_recipe_book"
+            android:label="Recipes">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -550,6 +583,15 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <receiver
+            android:name=".ui.tools.TodoAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.toolbox.ACTION_TODO_SCHEDULE_ALARM" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

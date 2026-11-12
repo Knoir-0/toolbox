@@ -17,6 +17,7 @@ const val PREF_KEY_TOOL_ORDER = "tool_order"
 const val PREF_KEY_THEME_MODE = "theme_mode"
 const val PREF_KEY_THEME_COLOR = "theme_color"
 const val PREF_KEY_HIDDEN_TOOLS = "hidden_tools"
+const val PREF_KEY_KNOWN_DEFAULT_HIDDEN_TOOLS = "known_default_hidden_tools"
 const val PREF_KEY_TOOL_SORTING = "tool_sorting"
 const val PREF_KEY_TOOL_SORT_ORDER = "tool_sort_order"
 const val PREF_KEY_CATEGORY_SORTING = "category_sorting"
@@ -26,15 +27,38 @@ const val PREF_KEY_TOOL_USAGE = "tool_usage"
 const val DEFAULT_THEME_COLOR_SYSTEM = "SYSTEM"
 const val FALLBACK_THEME_COLOR_HEX = "#8E66A6"
 const val DEFAULT_ACCENT_COLOR_AUTO = "AUTO"
+const val ACCENT_COLOR_AUTO_COMPLEMENTARY = DEFAULT_ACCENT_COLOR_AUTO
+const val ACCENT_COLOR_AUTO_ANALOGOUS = "AUTO_ANALOGOUS"
+const val ACCENT_COLOR_AUTO_ANALOGOUS_MINUS_30 = "AUTO_ANALOGOUS_MINUS_30"
+const val ACCENT_COLOR_AUTO_TRIADIC = "AUTO_TRIADIC"
+const val ACCENT_COLOR_AUTO_TRIADIC_240 = "AUTO_TRIADIC_240"
+const val ACCENT_COLOR_AUTO_SPLIT_COMPLEMENTARY = "AUTO_SPLIT_COMPLEMENTARY"
+const val ACCENT_COLOR_AUTO_SPLIT_COMPLEMENTARY_210 = "AUTO_SPLIT_COMPLEMENTARY_210"
+const val ACCENT_COLOR_AUTO_SHADES = "AUTO_SHADES"
+const val ACCENT_COLOR_AUTO_TINT_LIGHT = "AUTO_TINT_LIGHT"
+const val ACCENT_COLOR_AUTO_MONOCHROMATIC = "AUTO_MONOCHROMATIC"
+const val ACCENT_COLOR_AUTO_SHADE_MID = "AUTO_SHADE_MID"
+const val ACCENT_COLOR_AUTO_SHADE_DEEP = "AUTO_SHADE_DEEP"
 const val PREF_KEY_ACCENT_COLOR = "accent_color"
 
 val DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
+  Tool.IMAGE_EDITOR,
+  Tool.VIDEO_EDITOR,
+  Tool.AUDIO_EDITOR,
+  Tool.FILE_CONVERTER,
+  Tool.PDF_VIEWER,
+  Tool.ARCHIVE,
+  Tool.DECIBEL_METER,
+  Tool.METRONOME,
+  Tool.COLOR_PICKER,
+)
+
+private val LEGACY_DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
   Tool.FILE_CONVERTER,
   Tool.IMAGE_EDITOR,
   Tool.VIDEO_EDITOR,
   Tool.AUDIO_EDITOR,
   Tool.DECIBEL_METER,
-  Tool.ARCHIVE,
 )
 
 /**
@@ -461,6 +485,7 @@ class DefaultNavigationPreferencesRepository(
   }
 
   override fun getHiddenTools(): Set<Tool> {
+    migrateNewDefaultHiddenToolsIfNeeded()
     val raw = sharedPreferences.getString(PREF_KEY_HIDDEN_TOOLS, null)
     return parseHiddenTools(raw)
   }
@@ -468,8 +493,32 @@ class DefaultNavigationPreferencesRepository(
   override fun setHiddenTools(tools: Set<Tool>) {
     val sanitized = tools.filter { it != Tool.SETTINGS }.toSet()
     val serialized = serializeHiddenTools(sanitized)
-    sharedPreferences.edit().putString(PREF_KEY_HIDDEN_TOOLS, serialized).apply()
+    sharedPreferences.edit()
+      .putString(PREF_KEY_HIDDEN_TOOLS, serialized)
+      .putString(PREF_KEY_KNOWN_DEFAULT_HIDDEN_TOOLS, serializeHiddenTools(DEFAULT_HIDDEN_TOOLS))
+      .apply()
     _hiddenToolsFlow.value = sanitized
+  }
+
+  private fun migrateNewDefaultHiddenToolsIfNeeded() {
+    if (!sharedPreferences.contains(PREF_KEY_HIDDEN_TOOLS)) {
+      return
+    }
+    val knownRaw = sharedPreferences.getString(PREF_KEY_KNOWN_DEFAULT_HIDDEN_TOOLS, null)
+    val knownDefaults = if (knownRaw == null) {
+      LEGACY_DEFAULT_HIDDEN_TOOLS
+    } else {
+      parseHiddenTools(knownRaw)
+    }
+    val newlyAddedDefaultHidden = DEFAULT_HIDDEN_TOOLS - knownDefaults
+    if (newlyAddedDefaultHidden.isNotEmpty() || knownRaw == null) {
+      val currentHidden = parseHiddenTools(sharedPreferences.getString(PREF_KEY_HIDDEN_TOOLS, null))
+      val updatedHidden = (currentHidden + newlyAddedDefaultHidden).filter { it != Tool.SETTINGS }.toSet()
+      sharedPreferences.edit()
+        .putString(PREF_KEY_HIDDEN_TOOLS, serializeHiddenTools(updatedHidden))
+        .putString(PREF_KEY_KNOWN_DEFAULT_HIDDEN_TOOLS, serializeHiddenTools(DEFAULT_HIDDEN_TOOLS))
+        .apply()
+    }
   }
 
   override fun getToolSorting(): ToolSortingOption {

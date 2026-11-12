@@ -1,6 +1,17 @@
 package com.example.toolbox.ui.tools
 
 import androidx.compose.ui.graphics.Color
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS_MINUS_30
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_MONOCHROMATIC
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SHADES
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SHADE_DEEP
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SHADE_MID
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SPLIT_COMPLEMENTARY
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SPLIT_COMPLEMENTARY_210
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_TINT_LIGHT
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_TRIADIC
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_TRIADIC_240
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
 import com.example.toolbox.ui.main.DEFAULT_HIDDEN_TOOLS
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
@@ -13,9 +24,12 @@ import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.ToolCategory
 import com.example.toolbox.ui.main.ToolSortOrder
 import com.example.toolbox.ui.main.ToolSortingOption
+import com.example.toolbox.ui.theme.AccentHarmonyOption
+import com.example.toolbox.ui.theme.calculateAccentHarmonyColor
 import com.example.toolbox.ui.theme.calculateComplementaryColor
 import com.example.toolbox.ui.theme.createCustomColorScheme
 import com.example.toolbox.ui.theme.createTertiaryTokens
+import com.example.toolbox.ui.theme.isAutoAccentColorSetting
 import com.example.toolbox.ui.theme.parseHexColor
 import com.example.toolbox.ui.theme.resolveEffectiveAccentColor
 import junit.framework.TestCase.assertEquals
@@ -104,6 +118,77 @@ class SettingsScreenTest {
     // User set accent overrides theme color
     val userAccent = resolveEffectiveAccentColor("#00668B", "#386A20")
     assertEquals(Color(0xFF386A20), userAccent)
+  }
+
+  @Test
+  fun accentHarmonyOptions_resolveExpectedHarmoniesFromBaseColor() {
+    // Pure Red #FF0000 (Hue = 0 deg)
+    val redHex = "#FF0000"
+    val redColor = Color(0xFFFF0000)
+
+    // 1. Complementary (+180 deg -> Cyan)
+    val comp = resolveEffectiveAccentColor(redHex, DEFAULT_ACCENT_COLOR_AUTO)
+    assertEquals(calculateComplementaryColor(redColor), comp)
+    assertTrue("Complementary of Red should be cyan (high green & blue, low red)", comp.green > comp.red && comp.blue > comp.red)
+
+    // 2. Analogous (+30 deg -> Warm Orange & -30 deg -> Magenta/Rose)
+    val analogousPlus30 = resolveEffectiveAccentColor(redHex, ACCENT_COLOR_AUTO_ANALOGOUS)
+    val analogousMinus30 = resolveEffectiveAccentColor(redHex, ACCENT_COLOR_AUTO_ANALOGOUS_MINUS_30)
+    assertTrue("Analogous +30 of Red should be orange (green > blue)", analogousPlus30.green > analogousPlus30.blue)
+    assertTrue("Analogous -30 of Red should be rose/magenta (blue > green)", analogousMinus30.blue > analogousMinus30.green)
+
+    // 3. Triadic (+120 deg -> Green & +240 deg -> Blue)
+    val triadic120 = resolveEffectiveAccentColor(redHex, ACCENT_COLOR_AUTO_TRIADIC)
+    val triadic240 = resolveEffectiveAccentColor(redHex, ACCENT_COLOR_AUTO_TRIADIC_240)
+    assertTrue("Triadic +120 of Red should be green-dominant", triadic120.green > triadic120.red && triadic120.green > triadic120.blue)
+    assertTrue("Triadic +240 of Red should be blue-dominant", triadic240.blue > triadic240.red && triadic240.blue > triadic240.green)
+
+    // 4. Split-Complementary (+150 deg -> Spring Green & +210 deg -> Azure Blue)
+    val split150 = resolveEffectiveAccentColor(redHex, ACCENT_COLOR_AUTO_SPLIT_COMPLEMENTARY)
+    val split210 = resolveEffectiveAccentColor(redHex, ACCENT_COLOR_AUTO_SPLIT_COMPLEMENTARY_210)
+    assertTrue("Split-Comp +150 of Red should have green > blue", split150.green > split150.blue)
+    assertTrue("Split-Comp +210 of Red should have blue > green", split210.blue > split210.green)
+
+    // 5. Tints & Shades (Light Tint, Soft Tint, Monochromatic Base, Mid Shade, Deep Shade)
+    val tintLight = resolveEffectiveAccentColor(redHex, ACCENT_COLOR_AUTO_TINT_LIGHT)
+    val softTint = resolveEffectiveAccentColor(redHex, ACCENT_COLOR_AUTO_SHADES)
+    val monoBase = resolveEffectiveAccentColor(redHex, ACCENT_COLOR_AUTO_MONOCHROMATIC)
+    val midShade = resolveEffectiveAccentColor(redHex, ACCENT_COLOR_AUTO_SHADE_MID)
+    val deepShade = resolveEffectiveAccentColor(redHex, ACCENT_COLOR_AUTO_SHADE_DEEP)
+
+    // Tints have higher green/blue (whiteness) than pure red base, shades have lower red (darker)
+    assertTrue(tintLight.green > softTint.green)
+    assertTrue(softTint.green > monoBase.green)
+    assertTrue(monoBase.red > midShade.red)
+    assertTrue(midShade.red > deepShade.red)
+  }
+
+  @Test
+  fun accentHarmonyOptions_mapToAllColorsToolHarmonyModes() {
+    for (mode in HarmonyMode.entries) {
+      val defaultOption = AccentHarmonyOption.defaultForMode(mode)
+      assertEquals(mode, defaultOption.harmonyMode)
+      assertTrue(isAutoAccentColorSetting(defaultOption.prefValue))
+
+      val swatches = AccentHarmonyOption.swatchesForMode(mode)
+      assertTrue("Mode $mode should have at least 2 swatches", swatches.size >= 2)
+      assertTrue("Mode $mode swatches should include its default option", swatches.contains(defaultOption))
+
+      // Swatch count matches ColorMath.generateHarmony count
+      val baseHsv = HsvColor(200f, 0.8f, 0.85f)
+      val colorToolHarmony = ColorMath.generateHarmony(baseHsv, mode)
+      assertEquals(colorToolHarmony.size, swatches.size)
+    }
+
+    for (option in AccentHarmonyOption.entries) {
+      assertEquals(option, AccentHarmonyOption.fromPrefValue(option.prefValue))
+      assertEquals(option, AccentHarmonyOption.fromPrefValue(option.prefValue.lowercase()))
+      assertTrue(isAutoAccentColorSetting(option.prefValue))
+    }
+
+    assertFalse(isAutoAccentColorSetting("#E65100"))
+    assertFalse(isAutoAccentColorSetting(""))
+    assertFalse(isAutoAccentColorSetting(null))
   }
 
   @Test
@@ -211,6 +296,7 @@ class SettingsScreenTest {
     assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.DECIBEL_METER.category)
     assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.ARCHIVE.category)
     assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.MUSIC.category)
+    assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.PDF_VIEWER.category)
     assertEquals(ToolCategory.SYSTEM, Tool.SETTINGS.category)
   }
 
@@ -279,7 +365,7 @@ class SettingsScreenTest {
     assertEquals(
       listOf(
         "Audio & Sound",
-        "Files & Storage",
+        "Files",
         "Math & Measurement",
         "Miscellaneous",
         "Music & Instruments",

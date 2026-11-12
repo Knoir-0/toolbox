@@ -27,7 +27,8 @@ const val DEFAULT_ALBUMS_PER_ROW = 3
 const val MIN_PHOTO_ZOOM = 1f
 const val MAX_PHOTO_ZOOM = 5f
 
-val DEFAULT_GALLERY_FOLDER_NAMES: List<String> = listOf("DCIM", "Photos")
+val DEFAULT_GALLERY_FOLDER_NAMES: List<String> = listOf("Pictures", "DCIM")
+const val DEFAULT_NEW_ALBUM_FOLDER_NAME: String = "Pictures"
 
 /**
  * Presentation modes for the Gallery tool:
@@ -67,7 +68,7 @@ data class GalleryPhoto(
 
 /**
  * Represents an album (folder) in the Gallery, including its most recent photo and nested counts.
- * When multiple root folders (such as `DCIM` and `Photos`) are un-nested as if they were the same folder,
+ * When multiple root folders (such as `Pictures` and `DCIM`) are un-nested as if they were the same folder,
  * same-named subfolders across those roots are unified via [directories].
  */
 data class GalleryAlbum(
@@ -112,7 +113,7 @@ data class AlbumContents(
 
 /**
  * Core engine for the Gallery tool:
- * - Resolves default gallery folders (`DCIM` and `Photos`)
+ * - Resolves default gallery folders (`Pictures` and `DCIM`)
  * - Scans albums and nested folders for the most recent photo cover image
  * - Supports hierarchical navigation into nested albums/folders
  * - Coerces and calculates pinch-to-zoom column density (`3..6` albums per row)
@@ -124,6 +125,8 @@ object GalleryEngine {
   )
 
   val SUPPORTED_VIDEO_EXTENSIONS: Set<String> = VideoEditorEngine.SUPPORTED_VIDEO_EXTENSIONS
+
+  const val NO_MEDIA_FILE_NAME: String = ".nomedia"
 
   private const val MAX_THUMBNAIL_CACHE_ENTRIES = 96
 
@@ -223,11 +226,36 @@ object GalleryEngine {
    * Checks whether [file] is a visible subdirectory representing a nested album/folder.
    */
   fun isAlbumDirectory(file: File): Boolean {
-    return file.exists() && file.isDirectory && !file.name.startsWith(".")
+    return file.exists() && file.isDirectory && !file.name.startsWith(".") && !hasNoMediaFile(file)
   }
 
   /**
-   * Returns the default folders loaded into the gallery (`DCIM` and `Photos`) under [rootDirectory].
+   * Checks whether [directory] directly contains a `.nomedia` marker file. Following Android
+   * MediaStore conventions, such a directory (and its entire subtree) is excluded from the gallery.
+   */
+  fun hasNoMediaFile(directory: File): Boolean {
+    return try {
+      File(directory, NO_MEDIA_FILE_NAME).exists()
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  /**
+   * Checks whether [directory] is hidden from the gallery because it, or any of its ancestor
+   * directories, contains a `.nomedia` marker file.
+   */
+  fun isHiddenByNoMedia(directory: File): Boolean {
+    var current: File? = directory.absoluteFile
+    while (current != null) {
+      if (hasNoMediaFile(current)) return true
+      current = current.parentFile
+    }
+    return false
+  }
+
+  /**
+   * Returns the default folders loaded into the gallery (`Pictures` and `DCIM`) under [rootDirectory].
    */
   fun getDefaultGalleryFolders(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
@@ -238,7 +266,16 @@ object GalleryEngine {
   }
 
   /**
-   * Resolves the list of folders loaded into the gallery, starting with the default `DCIM` and `Photos`
+   * Returns the default location for creating a new top-level album (`Pictures`) under [rootDirectory].
+   */
+  fun getDefaultNewAlbumFolder(
+    rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
+  ): File {
+    return File(rootDirectory, DEFAULT_NEW_ALBUM_FOLDER_NAME)
+  }
+
+  /**
+   * Resolves the list of folders loaded into the gallery, starting with the default `Pictures` and `DCIM`
    * folders and appending any user-added folder paths.
    */
   fun resolveGalleryFolders(
@@ -291,6 +328,7 @@ object GalleryEngine {
 
     fun scan(currentDir: File, depth: Int) {
       if (depth > maxDepth) return
+      if (hasNoMediaFile(currentDir)) return
       val children = try {
         currentDir.listFiles()
       } catch (_: Throwable) {
@@ -338,6 +376,7 @@ object GalleryEngine {
 
     fun scan(currentDir: File, depth: Int) {
       if (depth > maxDepth) return
+      if (hasNoMediaFile(currentDir)) return
       val children = try {
         currentDir.listFiles()
       } catch (_: Throwable) {
@@ -400,7 +439,7 @@ object GalleryEngine {
     val primaryDir = distinctDirs.firstOrNull() ?: File("")
 
     val children = distinctDirs.flatMap { dir ->
-      if (dir.exists() && dir.isDirectory) {
+      if (dir.exists() && dir.isDirectory && !hasNoMediaFile(dir)) {
         try {
           dir.listFiles()?.toList().orEmpty()
         } catch (_: Throwable) {
@@ -501,23 +540,24 @@ object GalleryEngine {
   }
 
   /**
-   * Loads the un-nested root contents of the Gallery by combining `DCIM` and `Photos`
+   * Loads the un-nested root contents of the Gallery by combining `Pictures` and `DCIM`
    * (plus any [additionalPaths]) as if they were the same folder:
-   * - [AlbumContents.nestedAlbums]: All subdirectories inside `DCIM` and `Photos` (merging same-named
+   * - [AlbumContents.nestedAlbums]: All subdirectories inside `Pictures` and `DCIM` (merging same-named
    *   subfolders), sorted alphabetically.
-   * - [AlbumContents.photos]: All direct photo files inside `DCIM` and `Photos`, sorted newest first.
+   * - [AlbumContents.photos]: All direct photo files inside `Pictures` and `DCIM`, sorted newest first.
    */
   fun loadRootContents(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
     folders: List<File>? = null,
     additionalPaths: List<String> = emptyList(),
   ): AlbumContents {
-    val targetFolders = folders ?: resolveGalleryFolders(rootDirectory, additionalPaths)
+    val targetFolders = (folders ?: resolveGalleryFolders(rootDirectory, additionalPaths))
+      .filterNot { isHiddenByNoMedia(it) }
     return loadMergedAlbumContents(targetFolders)
   }
 
   /**
-   * Loads the root-level albums for the Gallery by un-nesting the contents of `DCIM` and `Photos`
+   * Loads the root-level albums for the Gallery by un-nesting the contents of `Pictures` and `DCIM`
    * (and any [additionalPaths]) as if they were the same folder.
    */
   fun loadRootAlbums(
@@ -565,7 +605,7 @@ object GalleryEngine {
     val primaryDir = distinctDirs.firstOrNull() ?: File("")
 
     val children = distinctDirs.flatMap { dir ->
-      if (dir.exists() && dir.isDirectory) {
+      if (dir.exists() && dir.isDirectory && !hasNoMediaFile(dir)) {
         try {
           dir.listFiles()?.toList().orEmpty()
         } catch (_: Throwable) {

@@ -415,7 +415,7 @@ class CameraEngineTest {
   }
 
   @Test
-  fun scanHistorySerializationAndPayloadClassification_preservesAllMetadata() {
+  fun payloadClassification_preservesAllMetadata() {
     val vcard = "BEGIN:VCARD\nVERSION:3.0\nFN:Jane Doe\nORG:DeepMind\nTEL:+1-555-0100\nEMAIL:jane@example.com\nEND:VCARD"
     val analyzedContact = CameraEngine.analyzeScannedPayload(
       rawValue = vcard,
@@ -434,13 +434,5 @@ class CameraEngineTest {
     )
     assertEquals(CameraScanPayloadType.PRODUCT, analyzedEan.payloadType)
     assertEquals("Germany", analyzedEan.fields["Origin / Prefix"])
-
-    val json = CameraEngine.serializeScanHistory(listOf(analyzedEan, analyzedContact))
-    val restored = CameraEngine.deserializeScanHistory(json)
-    assertEquals(2, restored.size)
-    assertEquals("4006381333931", restored[0].rawValue)
-    assertEquals(CameraBarcodeFormat.EAN_13, restored[0].format)
-    assertEquals(vcard, restored[1].rawValue)
-    assertEquals(CameraScanPayloadType.CONTACT, restored[1].payloadType)
   }
 }

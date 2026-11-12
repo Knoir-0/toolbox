@@ -3,6 +3,7 @@ package com.example.toolbox.ui.tools
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
@@ -11,6 +12,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -79,6 +82,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -95,6 +99,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -172,7 +177,7 @@ fun PlantScheduleScreen(
   var selectedPlantIds by remember { mutableStateOf(setOf<String>()) }
 
   // Dialog & menu states (Section 5.2 of DESIGN_LANGUAGE.md)
-  var showTopOverflowMenu by remember { mutableStateOf(false) }
+  var isFabExpanded by remember { mutableStateOf(false) }
   var showSelectionOverflowMenu by remember { mutableStateOf(false) }
   var showEditorDialog by remember { mutableStateOf(false) }
   var editingPlant by remember { mutableStateOf<PlantItem?>(null) }
@@ -504,64 +509,6 @@ fun PlantScheduleScreen(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                   )
                 }
-
-                Box {
-                  IconButton(
-                    onClick = { showTopOverflowMenu = true },
-                    modifier = Modifier.testTag("header_overflow_menu_button"),
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.MoreVert,
-                      contentDescription = "More options",
-                      tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                  }
-                  DropdownMenu(
-                    expanded = showTopOverflowMenu,
-                    onDismissRequest = { showTopOverflowMenu = false },
-                  ) {
-                    DropdownMenuItem(
-                      text = { Text("Add Custom Plant") },
-                      leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
-                      onClick = {
-                        showTopOverflowMenu = false
-                        editingPlant = null
-                        initialCustomName = searchQuery.trim()
-                        showEditorDialog = true
-                      },
-                    )
-                    if (scheduledPlants.isNotEmpty()) {
-                      DropdownMenuItem(
-                        text = { Text("Select Plants") },
-                        leadingIcon = { Icon(Icons.Default.Check, contentDescription = null) },
-                        onClick = {
-                          showTopOverflowMenu = false
-                          isSelectionMode = true
-                          selectedPlantIds = scheduledPlants.firstOrNull()?.let { setOf(it.id) } ?: emptySet()
-                        },
-                      )
-                      DropdownMenuItem(
-                        text = {
-                          Text(
-                            text = "Clear Schedule",
-                            color = MaterialTheme.colorScheme.error,
-                          )
-                        },
-                        leadingIcon = {
-                          Icon(
-                            imageVector = Icons.Default.DeleteOutline,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                          )
-                        },
-                        onClick = {
-                          showTopOverflowMenu = false
-                          pendingDeletePlants = scheduledPlants
-                        },
-                      )
-                    }
-                  }
-                }
               }
             }
           }
@@ -754,26 +701,176 @@ fun PlantScheduleScreen(
       }
     }
 
-    // Section 5.3: Floating Action Button (CircleShape, primaryContainer, globally recognizable Add icon)
-    FloatingActionButton(
-      onClick = {
-        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        editingPlant = null
-        initialCustomName = searchQuery.trim()
-        showEditorDialog = true
-      },
-      shape = CircleShape,
-      containerColor = MaterialTheme.colorScheme.primaryContainer,
-      contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-      modifier = Modifier
-        .align(Alignment.BottomEnd)
-        .padding(16.dp)
-        .testTag("add_custom_plant_button"),
+    // Scrim overlay when speed dial FAB is expanded
+    AnimatedVisibility(
+      visible = isFabExpanded && !isSelectionMode,
+      enter = fadeIn(tween(150)),
+      exit = fadeOut(tween(150)),
+      modifier = Modifier.fillMaxSize(),
     ) {
-      Icon(
-        imageVector = Icons.Default.Add,
-        contentDescription = "Add Custom Plant",
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .background(Color.Black.copy(alpha = 0.32f))
+          .clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+          ) {
+            isFabExpanded = false
+          },
       )
+    }
+
+    // Section 5.3: Speed dial FAB menu (hidden during multi-select)
+    if (!isSelectionMode) {
+      Column(
+        modifier = Modifier
+          .align(Alignment.BottomEnd)
+          .padding(end = 16.dp, bottom = 16.dp),
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        // Mini FABs sliding up from underneath
+        AnimatedVisibility(
+          visible = isFabExpanded,
+          enter = fadeIn(tween(160)) + slideInVertically(
+            initialOffsetY = { it },
+            animationSpec = spring(
+              dampingRatio = Spring.DampingRatioMediumBouncy,
+              stiffness = Spring.StiffnessMediumLow,
+            ),
+          ) + expandVertically(),
+          exit = fadeOut(tween(120)) + slideOutVertically(
+            targetOffsetY = { it },
+            animationSpec = tween(140),
+          ) + shrinkVertically(),
+        ) {
+          Column(
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            // Mini FAB: Add Plant
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              modifier = Modifier.clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+              ) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                isFabExpanded = false
+                editingPlant = null
+                initialCustomName = searchQuery.trim()
+                showEditorDialog = true
+              },
+            ) {
+              Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                tonalElevation = 2.dp,
+                shadowElevation = 2.dp,
+              ) {
+                Text(
+                  text = "Add Plant",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                )
+              }
+              SmallFloatingActionButton(
+                onClick = {
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                  isFabExpanded = false
+                  editingPlant = null
+                  initialCustomName = searchQuery.trim()
+                  showEditorDialog = true
+                },
+                shape = CircleShape,
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.testTag("add_custom_plant_button"),
+              ) {
+                Icon(Icons.Default.Add, contentDescription = "Add Plant")
+              }
+            }
+
+            // Mini FAB: Select Plants
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              modifier = Modifier.clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+              ) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                isFabExpanded = false
+                isSelectionMode = true
+                selectedPlantIds = scheduledPlants.firstOrNull()?.let { setOf(it.id) } ?: emptySet()
+              },
+            ) {
+              Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                tonalElevation = 2.dp,
+                shadowElevation = 2.dp,
+              ) {
+                Text(
+                  text = "Select Plants",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                )
+              }
+              SmallFloatingActionButton(
+                onClick = {
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                  isFabExpanded = false
+                  isSelectionMode = true
+                  selectedPlantIds = scheduledPlants.firstOrNull()?.let { setOf(it.id) } ?: emptySet()
+                },
+                shape = CircleShape,
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.testTag("select_plants_fab_button"),
+              ) {
+                Icon(Icons.Default.Check, contentDescription = "Select Plants")
+              }
+            }
+          }
+        }
+
+        val addIconRotation by animateFloatAsState(
+          targetValue = if (isFabExpanded) 135f else 0f,
+          label = "plant_fab_rotation",
+        )
+
+        FloatingActionButton(
+          onClick = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            isFabExpanded = !isFabExpanded
+          },
+          shape = CircleShape,
+          containerColor = if (isFabExpanded) {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+          } else {
+            MaterialTheme.colorScheme.primaryContainer
+          },
+          contentColor = if (isFabExpanded) {
+            MaterialTheme.colorScheme.onSurfaceVariant
+          } else {
+            MaterialTheme.colorScheme.onPrimaryContainer
+          },
+          modifier = Modifier.testTag("plant_fab_menu_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = if (isFabExpanded) "Close plant actions" else "Plant actions",
+            modifier = Modifier.rotate(addIconRotation),
+          )
+        }
+      }
     }
   }
 
@@ -1203,7 +1300,7 @@ private fun CatalogPlantItemCard(
               onDismissRequest = { showItemMenu = false },
             ) {
               DropdownMenuItem(
-                text = { Text("Inspect Details") },
+                text = { Text("Info") },
                 leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
                 onClick = {
                   showItemMenu = false
@@ -1211,7 +1308,7 @@ private fun CatalogPlantItemCard(
                 },
               )
               DropdownMenuItem(
-                text = { Text(if (isScheduled) "Remove from Schedule" else "Add to Schedule") },
+                text = { Text(if (isScheduled) "Remove" else "Add to Schedule") },
                 leadingIcon = {
                   Icon(
                     imageVector = if (isScheduled) Icons.Default.DeleteOutline else Icons.Default.Add,
@@ -2589,72 +2686,100 @@ private fun PlantDetailsDialog(
           .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
-        plants.forEach { plant ->
-          Card(
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.cardColors(
-              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-            ),
-            modifier = Modifier.fillMaxWidth(),
-          ) {
-            Column(
-              modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-              verticalArrangement = Arrangement.spacedBy(8.dp),
+        if (singlePlant != null) {
+          Text(
+            text = "Plant: ${singlePlant.plantingSummary()} • Harvest: ${singlePlant.harvestSummary()}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          PlantYearMonthBar(plant = singlePlant)
+          val details = buildList {
+            if (singlePlant.sunRequirement.isNotBlank()) add("Sun: ${singlePlant.sunRequirement}")
+            if (singlePlant.daysToMaturity.isNotBlank()) add("Maturity: ${singlePlant.daysToMaturity}")
+            if (singlePlant.spacing.isNotBlank()) add("Spacing: ${singlePlant.spacing}")
+          }
+          if (details.isNotEmpty()) {
+            Text(
+              text = details.joinToString(" • "),
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          if (singlePlant.notes.isNotBlank()) {
+            Text(
+              text = singlePlant.notes,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+          }
+        } else {
+          plants.forEach { plant ->
+            Card(
+              shape = RoundedCornerShape(14.dp),
+              colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+              ),
+              modifier = Modifier.fillMaxWidth(),
             ) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxWidth(),
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
               ) {
-                Box(
-                  modifier = Modifier
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                  contentAlignment = Alignment.Center,
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                  modifier = Modifier.fillMaxWidth(),
                 ) {
-                  Icon(
-                    imageVector = plant.iconVector(),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp),
-                  )
+                  Box(
+                    modifier = Modifier
+                      .size(34.dp)
+                      .clip(CircleShape)
+                      .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center,
+                  ) {
+                    Icon(
+                      imageVector = plant.iconVector(),
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.size(18.dp),
+                    )
+                  }
+                  Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                      text = plant.name,
+                      style = MaterialTheme.typography.bodyLarge,
+                      fontWeight = FontWeight.SemiBold,
+                      color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                      text = "${plant.category.displayName} • Plant: ${plant.plantingSummary()} • Harvest: ${plant.harvestSummary()}",
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
                 }
-                Column(modifier = Modifier.weight(1f)) {
+                PlantYearMonthBar(plant = plant)
+                val details = buildList {
+                  if (plant.sunRequirement.isNotBlank()) add("Sun: ${plant.sunRequirement}")
+                  if (plant.daysToMaturity.isNotBlank()) add("Maturity: ${plant.daysToMaturity}")
+                  if (plant.spacing.isNotBlank()) add("Spacing: ${plant.spacing}")
+                }
+                if (details.isNotEmpty()) {
                   Text(
-                    text = plant.name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                  )
-                  Text(
-                    text = "${plant.category.displayName} • Plant: ${plant.plantingSummary()} • Harvest: ${plant.harvestSummary()}",
-                    style = MaterialTheme.typography.bodySmall,
+                    text = details.joinToString(" • "),
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                   )
                 }
-              }
-              PlantYearMonthBar(plant = plant)
-              val details = buildList {
-                if (plant.sunRequirement.isNotBlank()) add("Sun: ${plant.sunRequirement}")
-                if (plant.daysToMaturity.isNotBlank()) add("Maturity: ${plant.daysToMaturity}")
-                if (plant.spacing.isNotBlank()) add("Spacing: ${plant.spacing}")
-              }
-              if (details.isNotEmpty()) {
-                Text(
-                  text = details.joinToString(" • "),
-                  style = MaterialTheme.typography.labelSmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-              if (plant.notes.isNotBlank()) {
-                Text(
-                  text = plant.notes,
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurface,
-                )
+                if (plant.notes.isNotBlank()) {
+                  Text(
+                    text = plant.notes,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                  )
+                }
               }
             }
           }

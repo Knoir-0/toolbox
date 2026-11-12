@@ -25,7 +25,7 @@ class DecibelMeterScreenTest {
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("decibel_meter_screen").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Decibel Meter").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Decibels").assertIsDisplayed()
     composeTestRule.onNodeWithTag("decibel_gauge_card").assertIsDisplayed()
     composeTestRule.onNodeWithTag("decibel_current_value").assertTextEquals("52.0")
     composeTestRule.onNodeWithTag("decibel_category_badge").assertIsDisplayed()

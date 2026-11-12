@@ -48,22 +48,24 @@ class NavigationPreferencesTest {
       Tool.FILES,
       Tool.UNIT_CONVERTER,
       Tool.RULER,
-      Tool.COLOR_PICKER,
       Tool.AUDIO_RECORDER,
+      Tool.MUSIC,
       Tool.BLUETOOTH_REMOTE,
       Tool.BLUETOOTH_GAMEPAD,
       Tool.GUITAR_TUNER,
-      Tool.METRONOME,
       Tool.CHORD_BOOK,
-      Tool.DICE_ROLLER,
+      Tool.RECIPES,
       Tool.PLANT_SCHEDULE,
+      Tool.DICE_ROLLER,
       Tool.IMAGE_EDITOR,
       Tool.VIDEO_EDITOR,
       Tool.AUDIO_EDITOR,
       Tool.FILE_CONVERTER,
-      Tool.DECIBEL_METER,
+      Tool.PDF_VIEWER,
       Tool.ARCHIVE,
-      Tool.MUSIC,
+      Tool.DECIBEL_METER,
+      Tool.METRONOME,
+      Tool.COLOR_PICKER,
       Tool.SETTINGS,
     )
     assertEquals(expectedDefaultOrder, Tool.entries)
@@ -74,7 +76,7 @@ class NavigationPreferencesTest {
 
   @Test
   fun parseToolOrder_validSavedOrder_preservesOrder() {
-    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,NOTES,CHORD_BOOK,PLANT_SCHEDULE,CAMERA,AUDIO_EDITOR,VIDEO_EDITOR,BLUETOOTH_GAMEPAD,DECIBEL_METER,ARCHIVE,MUSIC,SETTINGS"
+    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,NOTES,CHORD_BOOK,PLANT_SCHEDULE,CAMERA,AUDIO_EDITOR,VIDEO_EDITOR,BLUETOOTH_GAMEPAD,DECIBEL_METER,ARCHIVE,MUSIC,PDF_VIEWER,RECIPES,SETTINGS"
     val result = parseToolOrder(raw)
     val expected = listOf(
       Tool.IMAGE_EDITOR,
@@ -101,6 +103,8 @@ class NavigationPreferencesTest {
       Tool.DECIBEL_METER,
       Tool.ARCHIVE,
       Tool.MUSIC,
+      Tool.PDF_VIEWER,
+      Tool.RECIPES,
       Tool.SETTINGS,
     )
     assertEquals(expected, result)
@@ -189,6 +193,8 @@ class NavigationPreferencesTest {
       Tool.DECIBEL_METER,
       Tool.ARCHIVE,
       Tool.MUSIC,
+      Tool.PDF_VIEWER,
+      Tool.RECIPE_BOOK,
       Tool.SETTINGS,
     )
     repo.setToolOrder(customOrder)
@@ -235,6 +241,8 @@ class NavigationPreferencesTest {
       Tool.DECIBEL_METER,
       Tool.ARCHIVE,
       Tool.MUSIC,
+      Tool.PDF_VIEWER,
+      Tool.RECIPE_BOOK,
       Tool.SETTINGS,
     )
     repo.setToolOrder(customOrder)
@@ -339,6 +347,9 @@ class NavigationPreferencesTest {
       Tool.AUDIO_EDITOR,
       Tool.DECIBEL_METER,
       Tool.ARCHIVE,
+      Tool.PDF_VIEWER,
+      Tool.METRONOME,
+      Tool.COLOR_PICKER,
     )
     // Null rawString (no saved preference) returns DEFAULT_HIDDEN_TOOLS containing FILE_CONVERTER, IMAGE_EDITOR, VIDEO_EDITOR, AUDIO_EDITOR, DECIBEL_METER
     assertEquals(expectedDefaultHidden, DEFAULT_HIDDEN_TOOLS)
@@ -359,6 +370,22 @@ class NavigationPreferencesTest {
     // Persisted empty set survives repository reload
     val reloadedRepo = DefaultNavigationPreferencesRepository(fakePrefs)
     assertTrue(reloadedRepo.getHiddenTools().isEmpty())
+
+    // Existing installation with legacy PREF_KEY_HIDDEN_TOOLS automatically hides newly added default-hidden tools (e.g. ARCHIVE)
+    val legacyPrefs = FakeSharedPreferences()
+    legacyPrefs.edit()
+      .putString(PREF_KEY_HIDDEN_TOOLS, "FILE_CONVERTER,IMAGE_EDITOR,VIDEO_EDITOR,AUDIO_EDITOR,DECIBEL_METER")
+      .apply()
+    val upgradedRepo = DefaultNavigationPreferencesRepository(legacyPrefs)
+    assertTrue(upgradedRepo.getHiddenTools().contains(Tool.ARCHIVE))
+    assertTrue(upgradedRepo.getHiddenTools().contains(Tool.PDF_VIEWER))
+    assertTrue(upgradedRepo.hiddenToolsFlow.value.contains(Tool.ARCHIVE))
+    assertTrue(upgradedRepo.hiddenToolsFlow.value.contains(Tool.PDF_VIEWER))
+
+    // User can subsequently unhide ARCHIVE and the choice persists across reloads
+    upgradedRepo.setHiddenTools(upgradedRepo.getHiddenTools() - Tool.ARCHIVE)
+    val reloadedAfterUnhide = DefaultNavigationPreferencesRepository(legacyPrefs)
+    assertTrue(!reloadedAfterUnhide.getHiddenTools().contains(Tool.ARCHIVE))
   }
 
   @Test
@@ -767,6 +794,53 @@ class NavigationPreferencesTest {
     assertEquals(ToolSortingOption.USAGE, repo.getToolSorting())
     assertEquals(ToolSortingOption.USAGE, repo.toolSortingFlow.value)
     assertEquals("USAGE", fakePrefs.getString(PREF_KEY_TOOL_SORTING, null))
+  }
+
+  @Test
+  fun buildCategoryRows_packsSmallCategoriesAndSplitsLargeCategoriesForTwoRowExpandedPagination() {
+    val groups = listOf(
+      CategoryGroup(
+        ToolCategory.MATH_AND_MEASUREMENT,
+        listOf(Tool.CALCULATOR, Tool.UNIT_CONVERTER, Tool.RULER),
+      ),
+      CategoryGroup(
+        ToolCategory.PRODUCTIVITY,
+        listOf(Tool.NOTES, Tool.TODO_LIST),
+      ),
+      CategoryGroup(
+        ToolCategory.FILES_AND_STORAGE,
+        listOf(Tool.FILES),
+      ),
+      CategoryGroup(
+        ToolCategory.MISCELLANEOUS,
+        listOf(Tool.COLOR_PICKER, Tool.DICE_ROLLER, Tool.PLANT_SCHEDULE, Tool.RECIPES),
+      ),
+      CategoryGroup(
+        ToolCategory.SYSTEM,
+        listOf(Tool.SETTINGS),
+      ),
+    )
+
+    // At 3 tools per row:
+    // Row 0: Math & Measurement (3)
+    // Row 1: Productivity (2) + Files (1)
+    // Row 2: Miscellaneous part 1 (3)
+    // Row 3: Miscellaneous part 2 (1) + System (1)
+    val rows3 = buildCategoryRows(groups, effectiveColumns = 3)
+    assertEquals(4, rows3.size)
+    assertEquals(listOf(ToolCategory.MATH_AND_MEASUREMENT), rows3[0].groups.map { it.category })
+    assertEquals(
+      listOf(ToolCategory.PRODUCTIVITY, ToolCategory.FILES_AND_STORAGE),
+      rows3[1].groups.map { it.category },
+    )
+    assertEquals(listOf(ToolCategory.MISCELLANEOUS), rows3[2].groups.map { it.category })
+    assertEquals(3, rows3[2].groups.first().tools.size)
+    assertEquals(
+      listOf(ToolCategory.MISCELLANEOUS, ToolCategory.SYSTEM),
+      rows3[3].groups.map { it.category },
+    )
+    // Expanded mode paginates 2 category rows per page -> 2 pages for 4 rows
+    assertEquals(2, calculateExpandedPageCount(rows3.size))
   }
 }
 

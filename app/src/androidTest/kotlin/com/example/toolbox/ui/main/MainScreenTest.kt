@@ -41,7 +41,7 @@ class MainScreenTest {
 
   @Test
   fun collapsedPanel_firstRowToolLabelsAreDisplayed() {
-    composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Calculate").assertIsDisplayed()
     composeTestRule.onNodeWithText("Notes").assertIsDisplayed()
     composeTestRule.onNodeWithText("To Do").assertIsDisplayed()
   }
@@ -80,15 +80,10 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("ruler_unit_toggle").assertIsDisplayed()
     composeTestRule.onNodeWithTag("ruler_unit_toggle").performClick()
 
-    // Pull up and navigate to Page 1 for Colors
-    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    // Unhide Colors and Metronome to verify switching to them
+    DefaultNavigationPreferencesRepository(composeTestRule.activity)
+      .setHiddenTools(DEFAULT_HIDDEN_TOOLS - Tool.COLOR_PICKER - Tool.METRONOME)
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
-    composeTestRule.waitForIdle()
-
-    composeTestRule.onAllNodesWithText("Colors").onFirst().performClick()
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("2D Color Canvas").assertExists()
 
     // Pull up and navigate to Page 2 for Guitar Tuner and Metronome
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
@@ -108,6 +103,16 @@ class MainScreenTest {
     composeTestRule.onAllNodesWithText("Metronome").onFirst().performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("Play").assertExists()
+
+    // Pull up and navigate to Page 3 for Colors
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_3").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onAllNodesWithText("Colors").onFirst().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("2D Color Canvas").assertExists()
   }
 
   @Test
@@ -180,8 +185,8 @@ class MainScreenTest {
     val sliderBounds = slider.fetchSemanticsNode().boundsInRoot
     assertTrue(addButtonBounds.right <= sliderBounds.left)
 
-    // Initially Calculator is selected
-    composeTestRule.onNodeWithContentDescription("Add Calculator to Home screen").assertIsDisplayed()
+    // Initially Calculate is selected
+    composeTestRule.onNodeWithContentDescription("Add Calculate to Home screen").assertIsDisplayed()
     addButton.performClick()
     composeTestRule.waitForIdle()
 
@@ -310,7 +315,7 @@ class MainScreenTest {
   @Test
   fun collapsedPanel_swipeBetweenRows_allowsNavigatingAndSelectingTools() {
     // Initially on Row 0
-    composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Calculate").assertIsDisplayed()
     composeTestRule.onNodeWithText("Notes").assertIsDisplayed()
     composeTestRule.onNodeWithText("To Do").assertIsDisplayed()
     composeTestRule.onNodeWithText("Camera").assertDoesNotExist()
@@ -326,7 +331,7 @@ class MainScreenTest {
     composeTestRule.onNodeWithText("Camera").assertIsDisplayed()
     composeTestRule.onNodeWithText("Gallery").assertIsDisplayed()
     composeTestRule.onNodeWithText("Files").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Calculator").assertDoesNotExist()
+    composeTestRule.onNodeWithText("Calculate").assertDoesNotExist()
 
     // Selecting a tool on Row 1 switches to that tool
     composeTestRule.onNodeWithText("Camera").performClick()
@@ -336,7 +341,7 @@ class MainScreenTest {
     // Tapping dot 0 in the row indicator jumps back to Row 0
     composeTestRule.onNodeWithTag("tools_panel_row_indicator_dot_0").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Calculate").assertIsDisplayed()
   }
 
   @Test
@@ -404,15 +409,14 @@ class MainScreenTest {
 
     // With 3 tools per row:
     // Page 0: Math & Measurement (3 tools)
-    // Page 1: Productivity (2 tools)
-    // Page 2: Files & Storage (2 tools)
-    // Page 3: Photo & Video (4 tools)
-    // Page 4: Audio & Sound (2 tools)
-    // Page 5: Music & Instruments (3 tools)
-    // Page 6: Remotes & Devices (2 tools)
-    // Page 7: Miscellaneous (3 tools)
-    // Page 8: System (1 tool)
-    val systemPageIndex = 8
+    // Page 1: Productivity (2 tools) + Files (1 tool)
+    // Page 2: Photo & Video (2 tools)
+    // Page 3: Audio & Sound (2 tools)
+    // Page 4: Music & Instruments (2 tools)
+    // Page 5: Remotes & Devices (2 tools)
+    // Page 6: Miscellaneous (3 tools: Dice, Plants, Recipes)
+    // Page 7: System (1 tool: Settings)
+    val systemPageIndex = 7
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$systemPageIndex").performClick()
     composeTestRule.waitForIdle()
 
@@ -442,17 +446,65 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$mathIndex").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("Math & Measurement").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Calculate").assertIsDisplayed()
     composeTestRule.onNodeWithText("Units").assertIsDisplayed()
     composeTestRule.onNodeWithText("Ruler").assertIsDisplayed()
 
-    // Check Music & Instruments category (Page 5)
-    val musicIndex = 5
+    // Check Music & Instruments category
+    val musicIndex = 4
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$musicIndex").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("Music & Instruments").assertIsDisplayed()
     composeTestRule.onNodeWithText("Tuner").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Metronome").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Chords").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Metronome").assertDoesNotExist()
+  }
+
+  @Test
+  fun categorySorting_dragUpOnDragHandle_revealsSecondRowOfCategories() {
+    val repo = DefaultNavigationPreferencesRepository(composeTestRule.activity)
+    repo.setToolSorting(ToolSortingOption.TOOL_CATEGORIES)
+    repo.setToolsPerRow(3)
+    composeTestRule.waitForIdle()
+
+    // Initially collapsed: only Row 0 (Math & Measurement) is visible; Row 1 does not exist
+    composeTestRule.onNodeWithTag("tools_grid_row_0").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Math & Measurement").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tools_grid_row_1").assertDoesNotExist()
+    composeTestRule.onNodeWithText("Productivity").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("tools_per_row_control").assertDoesNotExist()
+
+    // Drag up on the drag handle to reveal the second row of categories + controls
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performTouchInput {
+      swipeUp()
+    }
+    composeTestRule.waitForIdle()
+
+    // Both Row 0 and Row 1 of categories are now displayed simultaneously
+    composeTestRule.onNodeWithTag("tools_grid_row_0").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tools_grid_row_1").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Math & Measurement").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Productivity").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("category_label_files_and_storage").assertTextEquals("Files").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tools_per_row_control").assertIsDisplayed()
+
+    // Navigate to Page 1 while expanded -> shows Row 2 (Photo & Video) and Row 3 (Audio & Sound)
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tools_grid_row_2").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tools_grid_row_3").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Photo & Video").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Audio & Sound").assertIsDisplayed()
+
+    // Drag down on the drag handle to return to single-row category state
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performTouchInput {
+      swipeDown()
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("tools_grid_row_2").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tools_grid_row_3").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("tools_per_row_control").assertDoesNotExist()
   }
 
   @Test
@@ -462,22 +514,25 @@ class MainScreenTest {
     repo.setToolsPerRow(6)
     composeTestRule.waitForIdle()
 
-    // With 6 tools per row (and FILE_CONVERTER, IMAGE_EDITOR, VIDEO_EDITOR, AUDIO_EDITOR hidden by default):
-    // Page 0: Math & Measurement (3 tools) + Productivity (2 tools) + Files & Storage (1 tool) = 6 tools
-    // Page 1: Photo & Video (2 tools) + Audio & Sound (1 tool) + Music & Instruments (3 tools) = 6 tools
-    // Page 2: Remotes & Devices (2 tools) + Miscellaneous (3 tools) + System (1 tool) = 6 tools on 1 row!
+    // With 6 tools per row:
+    // Row 0: Math & Measurement (3 tools) + Productivity (2 tools) + Files (1 tool) = 6 tools
+    // Row 1: Photo & Video (2 tools) + Audio & Sound (2 tools) + Music & Instruments (2 tools) = 6 tools
+    // Row 2: Remotes & Devices (2 tools) + Miscellaneous (3 tools) + System (1 tool: Settings) = 6 tools on 1 row!
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
     composeTestRule.waitForIdle()
 
-    // Miscellaneous and System fit on Page 2 as one row
+    // Remotes & Devices, Miscellaneous, and System fit on Page 2 as one row
+    composeTestRule.onNodeWithText("Remotes & Devices").assertIsDisplayed()
     composeTestRule.onNodeWithText("Miscellaneous").assertIsDisplayed()
-    composeTestRule.onNodeWithText("System").assertIsDisplayed()
     composeTestRule.onNodeWithText("Dice").assertIsDisplayed()
+    composeTestRule.onNodeWithText("System").assertIsDisplayed()
     composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
 
     // Pull up the panel to reveal the tools per row slider
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("System").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tools_per_row_slider").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tools_per_row_count").assertTextEquals("6")
   }
@@ -489,10 +544,10 @@ class MainScreenTest {
     repo.setToolsPerRow(6)
     composeTestRule.waitForIdle()
 
-    // With 6 tools per row (and 4 default hidden tools):
-    // Page 0: Math & Measurement (3 tools) + Productivity (2 tools) + Files & Storage (1 tool) = 6 tools
-    // Page 1: Photo & Video (2 tools) + Audio & Sound (1 tool) + Music & Instruments (3 tools) = 6 tools
-    // Page 2: Remotes & Devices (2 tools) + Miscellaneous (3 tools) + System (1 tool: Settings) = 6 tools
+    // With 6 tools per row:
+    // Row 0: Math & Measurement (3 tools) + Productivity (2 tools) + Files (1 tool) = 6 tools
+    // Row 1: Photo & Video (2 tools) + Audio & Sound (2 tools) + Music & Instruments (2 tools) = 6 tools
+    // Row 2: Remotes & Devices (2 tools) + Miscellaneous (3 tools) + System (1 tool: Settings) = 6 tools
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
     composeTestRule.waitForIdle()
 
@@ -508,6 +563,7 @@ class MainScreenTest {
   @Test
   fun usageSorting_ordersToolsByUsageCountAndUpdatesOnToolSelection() {
     val repo = DefaultNavigationPreferencesRepository(composeTestRule.activity)
+    repo.setHiddenTools(DEFAULT_HIDDEN_TOOLS - Tool.METRONOME)
 
     // Simulate usage: Calculator used 20 times, Metronome used 10 times, Ruler used 5 times
     repeat(20) { repo.incrementToolUsage(Tool.CALCULATOR) }
@@ -519,7 +575,7 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
 
     // Row 0 of tools grid should now display Calculator, Metronome, Ruler as the top 3 most used
-    composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Calculate").assertIsDisplayed()
     composeTestRule.onNodeWithText("Metronome").assertIsDisplayed()
     composeTestRule.onNodeWithText("Ruler").assertIsDisplayed()
 
@@ -564,25 +620,26 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
     composeTestRule.waitForIdle()
 
-    // Tool visibility card is displayed
+    // Tool visibility card is displayed and expanded by default
     composeTestRule.onNodeWithTag("tool_visibility_card").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tool_visibility_toggle").assertIsDisplayed()
 
-    // Initially collapsed: rows are not visible
+    // Initially expanded: category headers exist while individual tool rows are collapsed inside categories
+    composeTestRule.onNodeWithTag("category_header_math_and_measurement").assertExists()
     composeTestRule.onNodeWithTag("tool_visibility_row_CALCULATOR").assertDoesNotExist()
 
-    // Click toggle to expand
+    // Click toggle to collapse Tool Settings
     composeTestRule.onNodeWithTag("tool_visibility_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    // Now expanded: row exists
-    composeTestRule.onNodeWithTag("tool_visibility_row_CALCULATOR").assertExists()
+    // Now collapsed: category headers do not exist
+    composeTestRule.onNodeWithTag("category_header_math_and_measurement").assertDoesNotExist()
 
-    // Click toggle to collapse again
+    // Click toggle to expand again
     composeTestRule.onNodeWithTag("tool_visibility_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    composeTestRule.onNodeWithTag("tool_visibility_row_CALCULATOR").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("category_header_math_and_measurement").assertExists()
   }
 
   @Test
@@ -706,17 +763,17 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
     composeTestRule.waitForIdle()
 
-    // Tool settings card & toggle exist
+    // Tool settings card & toggle exist and are expanded by default
     composeTestRule.onNodeWithTag("tool_settings_card").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tool_settings_toggle").assertIsDisplayed()
 
-    // Expand Tool Settings
-    composeTestRule.onNodeWithTag("tool_settings_toggle").performClick()
-    composeTestRule.waitForIdle()
-
-    // Category headers should exist
+    // Category headers and their tool/hidden count badges should exist by default without tapping toggle
     composeTestRule.onNodeWithTag("category_header_math_and_measurement").assertExists()
+    composeTestRule.onNodeWithTag("category_tool_count_math_and_measurement").assertExists()
+    composeTestRule.onNodeWithTag("category_hidden_count_math_and_measurement").assertExists()
     composeTestRule.onNodeWithTag("category_header_music_and_instruments").assertExists()
+    composeTestRule.onNodeWithTag("category_tool_count_music_and_instruments").assertExists()
+    composeTestRule.onNodeWithTag("category_hidden_count_music_and_instruments").assertExists()
     composeTestRule.onNodeWithTag("category_header_system").assertExists()
 
     // Categories are collapsed by default, so Calculator tool row should not exist yet
@@ -859,10 +916,54 @@ class MainScreenTest {
       composeTestRule.onNodeWithTag("action_edit_audio").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_edit_image").assertDoesNotExist()
       composeTestRule.onNodeWithTag("action_edit_video").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_open_archive").assertDoesNotExist()
       composeTestRule.onNodeWithTag("action_edit_audio").performClick()
       composeTestRule.waitForIdle()
 
       composeTestRule.onNodeWithTag("audio_editor_screen").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()
+
+      // Archive file menu shows Archive button (action_open_archive) and opens ArchiveScreen
+      com.example.toolbox.ui.tools.ArchiveEngine.generateSampleArchive(dcimDir, "bundle.zip")
+      composeTestRule.setContent {
+        com.example.toolbox.ui.tools.FilesScreen(initialDirectory = dcimDir)
+      }
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("file_options_bundle.zip").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("action_open_archive").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_edit_image").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_edit_video").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_edit_audio").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_open_archive").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("archive_screen").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("archive_explorer_view").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()
+
+      // PDF file menu shows PDF Viewer button (action_open_pdf) and opens PdfViewerScreen
+      com.example.toolbox.ui.tools.PdfViewerEngine.generateSamplePdfFile(java.io.File(dcimDir, "doc.pdf"))
+      composeTestRule.setContent {
+        com.example.toolbox.ui.tools.FilesScreen(initialDirectory = dcimDir)
+      }
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("file_options_doc.pdf").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("action_open_pdf").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_edit_image").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_edit_video").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_edit_audio").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_open_pdf").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("pdf_viewer_screen").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_navigate_back").performClick()
       composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()
@@ -959,7 +1060,7 @@ class MainScreenTest {
     val handleNode = composeTestRule.onNodeWithTag("pull_up_panel_toggle")
     handleNode.assertIsDisplayed()
     composeTestRule.onNodeWithTag("tools_grid").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Calculate").assertIsDisplayed()
 
     val initialHandleTop = handleNode.fetchSemanticsNode().boundsInRoot.top
 
@@ -972,7 +1073,7 @@ class MainScreenTest {
     // Only the drag handle remains displayed at the bottom of the screen
     handleNode.assertIsDisplayed()
     composeTestRule.onNodeWithTag("tools_grid").assertDoesNotExist()
-    composeTestRule.onNodeWithText("Calculator").assertDoesNotExist()
+    composeTestRule.onNodeWithText("Calculate").assertDoesNotExist()
     val minimizedHandleTop = handleNode.fetchSemanticsNode().boundsInRoot.top
     assertTrue(minimizedHandleTop > initialHandleTop)
 
@@ -983,7 +1084,7 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("tools_grid").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Calculate").assertIsDisplayed()
 
     // Dragging the handle down again minimizes to only the drag handle, and tapping restores it
     handleNode.performTouchInput {
@@ -996,6 +1097,46 @@ class MainScreenTest {
     handleNode.performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tools_grid").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Calculator").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Calculate").assertIsDisplayed()
+  }
+
+  @Test
+  fun categorySorting_manualToolsWithinCategory_longPressAndDragReordersWithinCategoryAndPersists() {
+    val repo = DefaultNavigationPreferencesRepository(composeTestRule.activity)
+    repo.setToolSorting(ToolSortingOption.TOOL_CATEGORIES)
+    repo.setCategoryToolSorting(CategoryToolSortingOption.MANUAL)
+    repo.setToolsPerRow(3)
+    composeTestRule.waitForIdle()
+
+    // On Page 0 (Math & Measurement): Calculate, Units, Ruler
+    val calcNode = composeTestRule.onNodeWithTag("tool_item_CALCULATOR")
+    val unitsNode = composeTestRule.onNodeWithTag("tool_item_UNIT_CONVERTER")
+    calcNode.assertIsDisplayed()
+    unitsNode.assertIsDisplayed()
+
+    val initialCalcLeft = calcNode.fetchSemanticsNode().boundsInRoot.left
+    val initialUnitsLeft = unitsNode.fetchSemanticsNode().boundsInRoot.left
+    assertTrue(initialCalcLeft < initialUnitsLeft)
+
+    val gridBounds = composeTestRule.onNodeWithTag("tools_grid").fetchSemanticsNode().boundsInRoot
+    val calcCenterInGrid = calcNode.fetchSemanticsNode().boundsInRoot.center - gridBounds.topLeft
+    val dragDeltaX = unitsNode.fetchSemanticsNode().boundsInRoot.center.x -
+      calcNode.fetchSemanticsNode().boundsInRoot.center.x
+
+    composeTestRule.onNodeWithTag("tools_grid").performTouchInput {
+      down(calcCenterInGrid)
+      advanceEventTime(viewConfiguration.longPressTimeoutMillis + 100L)
+      moveBy(Offset(dragDeltaX, 0f))
+      advanceEventTime(100L)
+      up()
+    }
+    composeTestRule.waitForIdle()
+
+    val newCalcLeft = calcNode.fetchSemanticsNode().boundsInRoot.left
+    val newUnitsLeft = unitsNode.fetchSemanticsNode().boundsInRoot.left
+    assertTrue(newUnitsLeft < newCalcLeft)
+
+    val savedOrder = repo.getToolOrder()
+    assertTrue(savedOrder.indexOf(Tool.UNIT_CONVERTER) < savedOrder.indexOf(Tool.CALCULATOR))
   }
 }

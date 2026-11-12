@@ -47,17 +47,17 @@ class GalleryScreenTest {
   }
 
   @Test
-  fun defaultGallery_unNestsDcimAndPhotosAsSameFolder_defaultsToTileViewThreePerRow_withMostRecentPhotoAndLabelUnderneath() {
+  fun defaultGallery_unNestsPicturesAndDcimAsSameFolder_defaultsToTileViewThreePerRow_withMostRecentPhotoAndLabelUnderneath() {
     val dcimDir = File(testRootDir, "DCIM").apply { mkdirs() }
-    val photosDir = File(testRootDir, "Photos").apply { mkdirs() }
+    val picturesDir = File(testRootDir, "Pictures").apply { mkdirs() }
 
-    // Create albums inside DCIM ("Camera") and Photos ("Vacation"), plus a shared album name ("Favorites") in both
+    // Create albums inside DCIM ("Camera") and Pictures ("Vacation"), plus a shared album name ("Favorites") in both
     val cameraAlbum = File(dcimDir, "Camera").apply { mkdirs() }
-    val vacationAlbum = File(photosDir, "Vacation").apply { mkdirs() }
+    val vacationAlbum = File(picturesDir, "Vacation").apply { mkdirs() }
     val dcimFavorites = File(dcimDir, "Favorites").apply { mkdirs() }
-    val photosFavorites = File(photosDir, "Favorites").apply { mkdirs() }
+    val picturesFavorites = File(picturesDir, "Favorites").apply { mkdirs() }
 
-    // Populate older and newer photos in DCIM/Camera and Photos/Vacation
+    // Populate older and newer photos in DCIM/Camera and Pictures/Vacation
     GalleryEngine.writeSolidColorPng(
       outputFile = File(cameraAlbum, "camera_older.png"),
       red = 180,
@@ -88,13 +88,13 @@ class GalleryScreenTest {
       lastModifiedMs = 8_000_000L,
     )
 
-    // Populate shared "Favorites" folder across DCIM and Photos
+    // Populate shared "Favorites" folder across DCIM and Pictures
     GalleryEngine.writeSolidColorPng(
       outputFile = File(dcimFavorites, "fav_dcim_older.png"),
       lastModifiedMs = 3_000_000L,
     )
     GalleryEngine.writeSolidColorPng(
-      outputFile = File(photosFavorites, "fav_photos_newest.png"),
+      outputFile = File(picturesFavorites, "fav_pictures_newest.png"),
       lastModifiedMs = 9_000_000L,
     )
 
@@ -110,7 +110,7 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("3")
     composeTestRule.onNodeWithTag("gallery_albums_per_row_label").assertTextEquals("3 per row")
 
-    // 2. Contents of DCIM and Photos are un-nested at the root level as if they were the same folder
+    // 2. Contents of Pictures and DCIM are un-nested at the root level as if they were the same folder
     val cameraTile = composeTestRule.onNodeWithTag("album_tile_Camera", useUnmergedTree = true)
     val cameraLabel = composeTestRule.onNodeWithTag("album_label_Camera", useUnmergedTree = true)
     val favoritesTile = composeTestRule.onNodeWithTag("album_tile_Favorites", useUnmergedTree = true)
@@ -125,11 +125,11 @@ class GalleryScreenTest {
     vacationTile.assertIsDisplayed()
     vacationLabel.assertIsDisplayed().assertTextEquals("Vacation")
 
-    // 3. Each tile shows the most recent photo from that album (including merged Favorites across DCIM & Photos)
+    // 3. Each tile shows the most recent photo from that album (including merged Favorites across Pictures & DCIM)
     composeTestRule.onNodeWithTag("album_cover_Camera", useUnmergedTree = true)
       .assertContentDescriptionEquals("Most recent photo: camera_most_recent.png")
     composeTestRule.onNodeWithTag("album_cover_Favorites", useUnmergedTree = true)
-      .assertContentDescriptionEquals("Most recent photo: fav_photos_newest.png")
+      .assertContentDescriptionEquals("Most recent photo: fav_pictures_newest.png")
     composeTestRule.onNodeWithTag("album_cover_Vacation", useUnmergedTree = true)
       .assertContentDescriptionEquals("Most recent photo: vacation_most_recent.png")
 
@@ -152,9 +152,9 @@ class GalleryScreenTest {
   @Test
   fun tileView_pinchInAndOut_adjustsAlbumsPerRowFromThreeUpToSix() {
     val dcimDir = File(testRootDir, "DCIM").apply { mkdirs() }
-    val photosDir = File(testRootDir, "Photos").apply { mkdirs() }
+    val picturesDir = File(testRootDir, "Pictures").apply { mkdirs() }
 
-    // Create 3 albums in DCIM and 3 albums in Photos -> un-nested together as 6 albums at root
+    // Create 3 albums in DCIM and 3 albums in Pictures -> un-nested together as 6 albums at root
     (1..3).forEach { index ->
       File(dcimDir, "Album_$index").apply {
         mkdirs()
@@ -165,7 +165,7 @@ class GalleryScreenTest {
       }
     }
     (4..6).forEach { index ->
-      File(photosDir, "Album_$index").apply {
+      File(picturesDir, "Album_$index").apply {
         mkdirs()
         GalleryEngine.writeSolidColorPng(
           outputFile = File(this, "cover_$index.png"),
@@ -200,7 +200,7 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("6")
     composeTestRule.onNodeWithTag("gallery_albums_per_row_label").assertTextEquals("6 per row")
 
-    // Verify all 6 un-nested albums from DCIM and Photos are aligned on the same first row
+    // Verify all 6 un-nested albums from Pictures and DCIM are aligned on the same first row
     val firstTileTop = composeTestRule.onNodeWithTag("album_tile_Album_1", useUnmergedTree = true)
       .fetchSemanticsNode().boundsInRoot.top
     val sixthTileTop = composeTestRule.onNodeWithTag("album_tile_Album_6", useUnmergedTree = true)
@@ -229,10 +229,10 @@ class GalleryScreenTest {
   @Test
   fun listView_displaysAlbumPhotoIconOnLeftAndLabelOnRight() {
     val dcimDir = File(testRootDir, "DCIM").apply { mkdirs() }
-    val photosDir = File(testRootDir, "Photos").apply { mkdirs() }
+    val picturesDir = File(testRootDir, "Pictures").apply { mkdirs() }
 
     val cameraAlbum = File(dcimDir, "Camera").apply { mkdirs() }
-    val vacationAlbum = File(photosDir, "Vacation").apply { mkdirs() }
+    val vacationAlbum = File(picturesDir, "Vacation").apply { mkdirs() }
 
     GalleryEngine.writeSolidColorPng(
       outputFile = File(cameraAlbum, "camera_cover.png"),
@@ -274,11 +274,11 @@ class GalleryScreenTest {
   @Test
   fun nestedAlbums_allowsNavigatingIntoUnNestedSubfoldersAndBack() {
     val dcimDir = File(testRootDir, "DCIM").apply { mkdirs() }
-    val photosDir = File(testRootDir, "Photos").apply { mkdirs() }
+    val picturesDir = File(testRootDir, "Pictures").apply { mkdirs() }
 
-    // Create Camera inside DCIM, and nested albums inside Photos: Photos -> Vacation -> Hawaii -> Beaches
+    // Create Camera inside DCIM, and nested albums inside Pictures: Pictures -> Vacation -> Hawaii -> Beaches
     val cameraDir = File(dcimDir, "Camera").apply { mkdirs() }
-    val vacationDir = File(photosDir, "Vacation").apply { mkdirs() }
+    val vacationDir = File(picturesDir, "Vacation").apply { mkdirs() }
     val hawaiiDir = File(vacationDir, "Hawaii").apply { mkdirs() }
 
     GalleryEngine.writeSolidColorPng(
@@ -297,7 +297,7 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // Root un-nests DCIM and Photos, showing Camera and Vacation directly; Vacation tile uses newest photo from nested Hawaii folder
+    // Root un-nests Pictures and DCIM, showing Camera and Vacation directly; Vacation tile uses newest photo from nested Hawaii folder
     composeTestRule.onNodeWithTag("album_tile_item_Camera").assertIsDisplayed()
     composeTestRule.onNodeWithTag("album_tile_item_Vacation").assertIsDisplayed()
     composeTestRule.onNodeWithTag("album_cover_Vacation", useUnmergedTree = true)
@@ -334,7 +334,7 @@ class GalleryScreenTest {
   }
 
   @Test
-  fun emptyState_displaysNoPhotosOrAlbumsFoundAndCreateAlbumButton() {
+  fun emptyState_displaysNoPhotosOrAlbumsFoundAndCreateAlbumButton_andDefaultsNewAlbumLocationToPictures() {
     composeTestRule.setContent {
       ToolboxTheme {
         GalleryScreen(rootDirectory = testRootDir)
@@ -345,6 +345,13 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("gallery_empty_album_state").assertIsDisplayed()
     composeTestRule.onNodeWithText("No photos or albums found").assertIsDisplayed()
     composeTestRule.onNodeWithText("Create Album").assertIsDisplayed()
+
+    // Open Add Album dialog and verify default location is Pictures
+    composeTestRule.onNodeWithTag("gallery_add_folder_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("gallery_add_folder_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Pictures").assertIsDisplayed()
   }
 
   @Test
@@ -485,5 +492,72 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("action_navigate_back").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("gallery_screen").assertIsDisplayed()
+  }
+
+  @Test
+  fun insideAlbum_picturesHaveNoTextUnderneath_areSquareWithTightSpacing_andPinchAdjustsFromThreeUpToSixPerRow() {
+    val vacationDir = File(testRootDir, "Pictures/Vacation").apply { mkdirs() }
+    (1..6).forEach { index ->
+      GalleryEngine.writeSolidColorPng(
+        outputFile = File(vacationDir, "pic_$index.png"),
+        lastModifiedMs = 1_000_000L * index,
+      )
+    }
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        GalleryScreen(rootDirectory = testRootDir)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Navigate into Vacation album
+    composeTestRule.onNodeWithTag("album_tile_item_Vacation").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("gallery_header_title").assertTextEquals("Vacation")
+    composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("3")
+
+    // Verify no text is shown underneath pictures
+    composeTestRule.onNodeWithTag("photo_label_pic_6.png").assertDoesNotExist()
+    composeTestRule.onNodeWithText("pic_6.png").assertDoesNotExist()
+
+    // Verify pictures are square and have very little whitespace between them
+    val firstPhotoBounds = composeTestRule.onNodeWithTag("photo_tile_pic_6.png", useUnmergedTree = true)
+      .fetchSemanticsNode().boundsInRoot
+    val secondPhotoBounds = composeTestRule.onNodeWithTag("photo_tile_pic_5.png", useUnmergedTree = true)
+      .fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      "Expected square picture tile (width=${firstPhotoBounds.width}, height=${firstPhotoBounds.height})",
+      kotlin.math.abs(firstPhotoBounds.width - firstPhotoBounds.height) < 3f,
+    )
+    val horizontalGapPx = secondPhotoBounds.left - firstPhotoBounds.right
+    assertTrue(
+      "Expected minimal whitespace between picture tiles, got $horizontalGapPx px",
+      horizontalGapPx <= 16f,
+    )
+
+    // Pinch to zoom out from 3 pictures per row up to 6 pictures per row
+    composeTestRule.onNodeWithTag("gallery_content_container").performTouchInput {
+      val center = this.center
+      pinch(
+        start0 = Offset(center.x - 320f, center.y),
+        end0 = Offset(center.x - 40f, center.y),
+        start1 = Offset(center.x + 320f, center.y),
+        end1 = Offset(center.x + 40f, center.y),
+        durationMillis = 300L,
+      )
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("6")
+    val rowFirstTop = composeTestRule.onNodeWithTag("photo_tile_pic_6.png", useUnmergedTree = true)
+      .fetchSemanticsNode().boundsInRoot.top
+    val rowSixthTop = composeTestRule.onNodeWithTag("photo_tile_pic_1.png", useUnmergedTree = true)
+      .fetchSemanticsNode().boundsInRoot.top
+    assertTrue(
+      "Expected all 6 pictures on the same row when zoomed out to 6 per row",
+      kotlin.math.abs(rowFirstTop - rowSixthTop) < 5f,
+    )
   }
 }

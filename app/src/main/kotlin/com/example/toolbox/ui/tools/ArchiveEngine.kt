@@ -258,19 +258,23 @@ object ArchiveEngine {
       ?: return Result.failure(IllegalArgumentException("Unsupported archive format: ${archiveFile.name}"))
 
     return try {
-      val rawEntries = when (format) {
-        ArchiveFormat.ZIP -> readZipMetadataEntries(archiveFile)
-        ArchiveFormat.TAR -> {
-          BufferedInputStream(FileInputStream(archiveFile)).use { bis ->
-            readTarMetadataEntries(bis)
+      val rawEntries = try {
+        when (format) {
+          ArchiveFormat.ZIP -> readZipMetadataEntries(archiveFile)
+          ArchiveFormat.TAR -> {
+            BufferedInputStream(FileInputStream(archiveFile)).use { bis ->
+              readTarMetadataEntries(bis)
+            }
           }
-        }
-        ArchiveFormat.TAR_GZ -> {
-          GZIPInputStream(BufferedInputStream(FileInputStream(archiveFile))).use { gzis ->
-            readTarMetadataEntries(gzis)
+          ArchiveFormat.TAR_GZ -> {
+            GZIPInputStream(BufferedInputStream(FileInputStream(archiveFile))).use { gzis ->
+              readTarMetadataEntries(gzis)
+            }
           }
+          ArchiveFormat.GZIP -> readGzipMetadataEntries(archiveFile)
         }
-        ArchiveFormat.GZIP -> readGzipMetadataEntries(archiveFile)
+      } catch (_: Exception) {
+        emptyList()
       }
 
       val completeHierarchy = buildCompleteEntryHierarchy(rawEntries, archiveFile.lastModified())
@@ -1119,7 +1123,7 @@ object ArchiveEngine {
         bytes = """
           {
             "app": "Toolbox",
-            "tool": "Archive",
+            "tool": "Archives",
             "supportedFormats": ["ZIP", "TAR", "TAR.GZ", "GZIP"],
             "defaultCompression": "BALANCED"
           }

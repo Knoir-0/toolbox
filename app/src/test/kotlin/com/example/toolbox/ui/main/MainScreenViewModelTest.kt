@@ -313,6 +313,95 @@ class MainScreenViewModelTest {
       ),
     )
   }
+
+  @Test
+  fun reorderToolsWithinCategory_reordersOnlyWithinSameCategory_andPreservesOtherCategories() {
+    val initial = listOf(
+      Tool.CALCULATOR, // Math (index 0)
+      Tool.NOTES, // Productivity (index 1)
+      Tool.TODO_LIST, // Productivity (index 2)
+      Tool.UNIT_CONVERTER, // Math (index 3)
+      Tool.RULER, // Math (index 4)
+      Tool.SETTINGS, // System (index 5)
+    )
+
+    // Move CALCULATOR (index 0) to RULER (index 4) within MATH_AND_MEASUREMENT
+    val reorderedMath = reorderToolsWithinCategory(initial, fromIndex = 0, toIndex = 4)
+    assertEquals(
+      listOf(
+        Tool.UNIT_CONVERTER, // Math slot 0
+        Tool.NOTES, // Productivity unchanged at index 1
+        Tool.TODO_LIST, // Productivity unchanged at index 2
+        Tool.RULER, // Math slot 1
+        Tool.CALCULATOR, // Math slot 2
+        Tool.SETTINGS, // System stays last
+      ),
+      reorderedMath,
+    )
+
+    // Attempting to reorder across different categories (e.g. Math tool onto Productivity tool) is a no-op
+    val crossCategoryAttempt = reorderToolsWithinCategory(initial, fromIndex = 0, toIndex = 1)
+    assertEquals(initial, crossCategoryAttempt)
+
+    // Attempting to move Settings is a no-op
+    val settingsAttempt = reorderToolsWithinCategory(initial, fromIndex = 5, toIndex = 0)
+    assertEquals(initial, settingsAttempt)
+  }
+
+  @Test
+  fun calculateCategoryPageTransitionTargetTool_resolvesTargetWithinSameCategoryAcrossPages() {
+    val categoryRows = buildCategoryRows(
+      activeCategories = listOf(
+        CategoryGroup(
+          ToolCategory.MISCELLANEOUS,
+          listOf(Tool.RECIPES, Tool.PLANT_SCHEDULE, Tool.DICE_ROLLER, Tool.COLOR_PICKER),
+        ),
+        CategoryGroup(
+          ToolCategory.SYSTEM,
+          listOf(Tool.SETTINGS),
+        ),
+      ),
+      effectiveColumns = 3,
+    )
+    // Row 0: Misc [RECIPES, PLANT_SCHEDULE, DICE_ROLLER]
+    // Row 1: Misc [COLOR_PICKER] + System [SETTINGS]
+
+    // Dragging forward from Row 0 to Row 1 in collapsed mode (1 row/page) targets COLOR_PICKER
+    assertEquals(
+      Tool.COLOR_PICKER,
+      calculateCategoryPageTransitionTargetTool(
+        categoryRows = categoryRows,
+        targetPage = 1,
+        direction = 1,
+        rowsPerPage = ROWS_PER_PAGE_COLLAPSED,
+        category = ToolCategory.MISCELLANEOUS,
+      ),
+    )
+
+    // Dragging backward from Row 1 to Row 0 in collapsed mode targets DICE_ROLLER (last of Misc on Row 0)
+    assertEquals(
+      Tool.DICE_ROLLER,
+      calculateCategoryPageTransitionTargetTool(
+        categoryRows = categoryRows,
+        targetPage = 0,
+        direction = -1,
+        rowsPerPage = ROWS_PER_PAGE_COLLAPSED,
+        category = ToolCategory.MISCELLANEOUS,
+      ),
+    )
+
+    // Target page with no tools of that category returns null
+    assertEquals(
+      null,
+      calculateCategoryPageTransitionTargetTool(
+        categoryRows = categoryRows,
+        targetPage = 0,
+        direction = -1,
+        rowsPerPage = ROWS_PER_PAGE_COLLAPSED,
+        category = ToolCategory.MATH_AND_MEASUREMENT,
+      ),
+    )
+  }
 }
 
 private class FakeMyModelRepository : DataRepository {

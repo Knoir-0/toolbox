@@ -1274,7 +1274,7 @@ private fun ArchiveInitialTopBar(
 
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = "Archive",
+            text = "Archives",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
@@ -1714,12 +1714,17 @@ private fun ArchiveExplorerHeader(
               Icon(Icons.Default.Search, contentDescription = "Search")
             }
 
-            IconButton(onClick = onToggleViewMode, modifier = Modifier.testTag("action_toggle_view_mode")) {
-              Icon(
-                if (viewMode == FileViewMode.LIST) Icons.Default.GridView else Icons.AutoMirrored.Filled.ViewList,
-                contentDescription = "Toggle View Mode",
-              )
-            }
+            ViewModeSegmentedToggle(
+              isListView = viewMode == FileViewMode.LIST,
+              onSelectListView = { if (viewMode != FileViewMode.LIST) onToggleViewMode() },
+              onSelectGridView = { if (viewMode == FileViewMode.LIST) onToggleViewMode() },
+              onToggle = onToggleViewMode,
+              toggleTestTag = "action_toggle_view_mode",
+              listTestTag = "archive_view_mode_list",
+              gridTestTag = "archive_view_mode_grid",
+              listContentDescription = "List view",
+              gridContentDescription = "Grid view",
+            )
 
             Box {
               IconButton(onClick = onOpenSortMenu, modifier = Modifier.testTag("action_sort_menu")) {

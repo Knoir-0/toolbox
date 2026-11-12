@@ -34,6 +34,7 @@ const val PREF_KEY_MUSIC_SORT_ORDER = "music_player_sort_order"
 const val PREF_KEY_MUSIC_SHUFFLE = "music_player_shuffle_enabled"
 const val PREF_KEY_MUSIC_REPEAT = "music_player_repeat_mode"
 const val PREF_KEY_MUSIC_FAVORITES = "music_player_favorite_ids"
+const val PREF_KEY_MUSIC_PLAYLISTS = "music_player_playlists"
 const val PREF_KEY_MUSIC_INCLUDE_SAMPLES = "music_player_include_samples"
 
 val DEFAULT_MUSIC_FOLDER_NAMES: List<String> = listOf("Music", "Audio", "Download")
@@ -48,6 +49,7 @@ enum class MusicLibraryTab(
   ALBUMS("Albums"),
   SONGS("Songs"),
   GENRES("Genres"),
+  PLAYLISTS("Playlists"),
   ;
 
   companion object {
@@ -182,12 +184,40 @@ data class MusicTrack(
   val artworkAccentRgb: Int = 0xFF80AB,
   val isSampleTrack: Boolean = false,
   val sampleBaseFreqHz: Double = 261.63,
+  val bitrateKbps: Int = 320,
+  val sampleRateHz: Int = 44_100,
+  val channels: Int = 2,
 ) {
   val durationFormatted: String
     get() = AudioRecorderEngine.formatDurationMs(durationMs)
 
   val sizeFormatted: String
     get() = if (sizeBytes > 0L) FileManagerEngine.formatFileSize(sizeBytes) else "2.4 MB"
+
+  val trackNumberFormatted: String
+    get() = "#$trackNumber"
+
+  val formatLabel: String
+    get() {
+      val ext = file?.extension?.uppercase(Locale.US)?.takeIf { it.isNotEmpty() }
+      return when {
+        ext != null -> "$ext Audio"
+        isSampleTrack -> "WAV (16-bit PCM)"
+        else -> "MP3 Audio"
+      }
+    }
+
+  val bitrateFormatted: String
+    get() = "${bitrateKbps.coerceAtLeast(64)} kbps"
+
+  val sampleRateFormatted: String
+    get() = String.format(Locale.US, "%.1f kHz", sampleRateHz.coerceAtLeast(8_000) / 1000.0)
+
+  val channelsLabel: String
+    get() = if (channels <= 1) "Mono (1 ch)" else "Stereo ($channels ch)"
+
+  val sourceLabel: String
+    get() = file?.name ?: if (isSampleTrack) "${id}.wav (Sample Library)" else "${title}.mp3"
 }
 
 /**
@@ -257,6 +287,37 @@ data class MusicGenre(
 }
 
 /**
+ * Persisted metadata entry for a user-saved Playlist.
+ */
+data class SavedPlaylistEntry(
+  val id: String,
+  val name: String,
+  val trackIds: List<String>,
+  val createdAtMs: Long = 0L,
+)
+
+/**
+ * Represents a resolved Playlist of tracks in the Music Player.
+ */
+data class MusicPlaylist(
+  val id: String,
+  val name: String,
+  val tracks: List<MusicTrack>,
+  val createdAtMs: Long = 0L,
+) {
+  val songCount: Int get() = tracks.size
+  val totalDurationMs: Long get() = tracks.sumOf { it.durationMs }
+  val totalDurationFormatted: String get() = AudioRecorderEngine.formatDurationMs(totalDurationMs)
+  val representativeTrack: MusicTrack? get() = tracks.firstOrNull()
+  val artists: List<String> get() = tracks.map { it.artist }.distinct()
+  val summaryText: String
+    get() {
+      val songLabel = if (songCount == 1) "1 song" else "$songCount songs"
+      return "$songLabel • $totalDurationFormatted"
+    }
+}
+
+/**
  * Core engine for the Music Player tool:
  * - Scans local music directories and extracts ID3 / audio metadata
  * - Provides a rich built-in multi-genre sample library with synthesized harmonic WAV audio
@@ -273,16 +334,82 @@ object MusicPlayerEngine {
 
   val PLAYBACK_SPEED_OPTIONS: List<Float> = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
 
-  private const val MAX_ARTWORK_CACHE_ENTRIES = 64
+  private const val MAX_ARTWORK_CACHE_ENTRIES = 256
+  private const val MAX_TRACK_METADATA_CACHE_ENTRIES = 2048
+  private const val MAX_NO_ARTWORK_CACHE_ENTRIES = 1024
+
+  private val artworkDispatcher = Dispatchers.IO.limitedParallelism(4)
+  private val artworkDecodeLocks = Array(16) { Any() }
   private val artworkCacheLock = Any()
-  private val artworkBitmapCache = object : LinkedHashMap<String, Bitmap>(32, 0.75f, true) {
+  private val metadataCacheLock = Any()
+
+  @Volatile
+  private var artworkDiskCacheDir: File? = null
+
+  private val artworkBitmapCache = object : LinkedHashMap<String, Bitmap>(64, 0.75f, true) {
     override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
       return size > MAX_ARTWORK_CACHE_ENTRIES
     }
   }
-  private val paletteCache = object : LinkedHashMap<String, AlbumArtPalette>(64, 0.75f, true) {
+  private val paletteCache = object : LinkedHashMap<String, AlbumArtPalette>(128, 0.75f, true) {
     override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, AlbumArtPalette>?): Boolean {
       return size > MAX_ARTWORK_CACHE_ENTRIES
+    }
+  }
+  private val noExternalArtworkCache = object : LinkedHashMap<String, Boolean>(128, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>?): Boolean {
+      return size > MAX_NO_ARTWORK_CACHE_ENTRIES
+    }
+  }
+  private val trackMetadataCache = object : LinkedHashMap<String, MusicTrack>(256, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, MusicTrack>?): Boolean {
+      return size > MAX_TRACK_METADATA_CACHE_ENTRIES
+    }
+  }
+  private val libraryTracksCache = object : LinkedHashMap<String, List<MusicTrack>>(8, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<MusicTrack>>?): Boolean {
+      return size > 8
+    }
+  }
+
+  /**
+   * Configures an optional disk cache directory for persisted album art thumbnails.
+   */
+  fun configureDiskCache(cacheDir: File?) {
+    if (cacheDir == null) {
+      artworkDiskCacheDir = null
+      return
+    }
+    val dir = File(cacheDir, "music_player_artwork_cache")
+    try {
+      if (!dir.exists()) dir.mkdirs()
+      artworkDiskCacheDir = dir
+    } catch (_: Throwable) {
+      artworkDiskCacheDir = null
+    }
+  }
+
+  /**
+   * Clears in-memory and disk album art and palette caches.
+   */
+  fun clearArtworkCache() {
+    synchronized(artworkCacheLock) {
+      artworkBitmapCache.clear()
+      paletteCache.clear()
+      noExternalArtworkCache.clear()
+    }
+    try {
+      artworkDiskCacheDir?.listFiles()?.forEach { it.delete() }
+    } catch (_: Throwable) {}
+  }
+
+  /**
+   * Clears cached track metadata and library scan results.
+   */
+  fun clearTrackMetadataCache() {
+    synchronized(metadataCacheLock) {
+      trackMetadataCache.clear()
+      libraryTracksCache.clear()
     }
   }
 
@@ -615,6 +742,50 @@ object MusicPlayerEngine {
   }
 
   /**
+   * Computes a shared identity key for [track]'s album artwork so all tracks belonging to the same
+   * album share a single decoded [Bitmap] and [AlbumArtPalette] in cache, while untagged single
+   * files remain isolated by file path.
+   */
+  internal fun albumArtIdentityKey(track: MusicTrack): String {
+    if (track.isSampleTrack) {
+      return "sample:${track.album.trim().lowercase(Locale.ROOT)}|${track.artist.trim().lowercase(Locale.ROOT)}|${track.artworkPrimaryRgb}"
+    }
+    val normalizedAlbum = track.album.trim().lowercase(Locale.ROOT)
+    val normalizedArtist = track.artist.trim().lowercase(Locale.ROOT)
+    val isGenericAlbum = normalizedAlbum.isEmpty() ||
+      normalizedAlbum == "local recordings" ||
+      normalizedAlbum == "unknown album"
+    val file = track.file
+    return if (isGenericAlbum && file != null) {
+      "file:${file.absolutePath}:${file.lastModified()}"
+    } else {
+      val parentPath = file?.parentFile?.absolutePath.orEmpty()
+      "album:$parentPath|$normalizedAlbum|$normalizedArtist"
+    }
+  }
+
+  private fun trackPaletteKey(track: MusicTrack): String {
+    return "${track.id}:${track.artworkPrimaryRgb}:${track.artworkSecondaryRgb}:${track.artworkAccentRgb}"
+  }
+
+  private fun albumPaletteKey(track: MusicTrack): String {
+    return "extracted_palette:${albumArtIdentityKey(track)}"
+  }
+
+  private fun paletteToRgbTriple(palette: AlbumArtPalette): Triple<Int, Int, Int> {
+    val pRgb = ((palette.dominantColor.red * 255f).roundToInt().coerceIn(0, 255) shl 16) or
+      ((palette.dominantColor.green * 255f).roundToInt().coerceIn(0, 255) shl 8) or
+      (palette.dominantColor.blue * 255f).roundToInt().coerceIn(0, 255)
+    val sRgb = ((palette.secondaryColor.red * 255f).roundToInt().coerceIn(0, 255) shl 16) or
+      ((palette.secondaryColor.green * 255f).roundToInt().coerceIn(0, 255) shl 8) or
+      (palette.secondaryColor.blue * 255f).roundToInt().coerceIn(0, 255)
+    val aRgb = ((palette.accentColor.red * 255f).roundToInt().coerceIn(0, 255) shl 16) or
+      ((palette.accentColor.green * 255f).roundToInt().coerceIn(0, 255) shl 8) or
+      (palette.accentColor.blue * 255f).roundToInt().coerceIn(0, 255)
+    return Triple(pRgb, sRgb, aRgb)
+  }
+
+  /**
    * Resolves the [AlbumArtPalette] for [track], using cached bitmap extraction if available,
    * or computing deterministically from the track's album art colors.
    */
@@ -622,8 +793,12 @@ object MusicPlayerEngine {
     if (track == null) {
       return buildPaletteFromRgb(0x6750A4, 0x311B92, 0xD0BCFF)
     }
-    val key = "${track.id}:${track.artworkPrimaryRgb}:${track.artworkSecondaryRgb}:${track.artworkAccentRgb}"
+    val albumKey = albumPaletteKey(track)
+    val key = trackPaletteKey(track)
     synchronized(artworkCacheLock) {
+      if (!track.isSampleTrack) {
+        paletteCache[albumKey]?.let { return it }
+      }
       paletteCache[key]?.let { return it }
     }
     val palette = buildPaletteFromRgb(
@@ -639,12 +814,128 @@ object MusicPlayerEngine {
 
   /**
    * Returns a cached album art [Bitmap] for [track] if already rendered/decoded, or `null`.
+   * Reuses a cached bitmap of equal or higher resolution for the same album when available.
    */
   fun getCachedAlbumArtBitmap(track: MusicTrack, sizePx: Int = 320): Bitmap? {
-    val key = "${track.album}|${track.artist}|${track.artworkPrimaryRgb}|$sizePx"
+    val safeSize = sizePx.coerceIn(64, 1024)
+    val identity = albumArtIdentityKey(track)
+    val primaryKey = "$identity|$safeSize"
+    val legacyKey = "${track.album}|${track.artist}|${track.artworkPrimaryRgb}|$safeSize"
+    val file = track.file
+    val fileKey = if (file != null) "file:${file.absolutePath}:${file.lastModified()}|$safeSize" else null
+
     synchronized(artworkCacheLock) {
-      return artworkBitmapCache[key]
+      artworkBitmapCache[primaryKey]?.let { return it }
+      artworkBitmapCache[legacyKey]?.let { return it }
+      if (fileKey != null) {
+        artworkBitmapCache[fileKey]?.let { return it }
+      }
+      // Reuse a higher-resolution cached bitmap for the same album if already decoded
+      val candidatePrefix = "$identity|"
+      for ((k, bmp) in artworkBitmapCache) {
+        if (k.startsWith(candidatePrefix) && bmp.width >= safeSize) {
+          return bmp
+        }
+      }
+      return null
     }
+  }
+
+  private fun cacheAlbumArtBitmap(
+    track: MusicTrack,
+    sizePx: Int,
+    bitmap: Bitmap,
+    extractedPalette: AlbumArtPalette? = null,
+  ) {
+    val safeSize = sizePx.coerceIn(64, 1024)
+    val identity = albumArtIdentityKey(track)
+    val primaryKey = "$identity|$safeSize"
+    val legacyKey = "${track.album}|${track.artist}|${track.artworkPrimaryRgb}|$safeSize"
+    val file = track.file
+    val fileKey = if (file != null) "file:${file.absolutePath}:${file.lastModified()}|$safeSize" else null
+
+    synchronized(artworkCacheLock) {
+      artworkBitmapCache[primaryKey] = bitmap
+      artworkBitmapCache[legacyKey] = bitmap
+      if (fileKey != null) {
+        artworkBitmapCache[fileKey] = bitmap
+      }
+      if (extractedPalette != null) {
+        paletteCache[trackPaletteKey(track)] = extractedPalette
+        paletteCache[albumPaletteKey(track)] = extractedPalette
+      }
+    }
+  }
+
+  /**
+   * Decodes a compressed image [bytes] array with power-of-two subsampling (`inSampleSize`)
+   * so embedded high-resolution cover art is scaled efficiently to [reqSizePx].
+   */
+  fun decodeDownsampledBitmap(bytes: ByteArray, reqSizePx: Int = 320): Bitmap? {
+    if (bytes.isEmpty()) return null
+    val targetSize = reqSizePx.coerceIn(64, 1024)
+    return try {
+      val boundsOptions = BitmapFactory.Options().apply {
+        inJustDecodeBounds = true
+      }
+      BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOptions)
+      val width = boundsOptions.outWidth
+      val height = boundsOptions.outHeight
+      if (width <= 0 || height <= 0) {
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+      } else {
+        var inSampleSize = 1
+        if (height > targetSize || width > targetSize) {
+          val halfHeight = height / 2
+          val halfWidth = width / 2
+          while ((halfHeight / inSampleSize) >= targetSize && (halfWidth / inSampleSize) >= targetSize) {
+            inSampleSize *= 2
+          }
+        }
+        val decodeOptions = BitmapFactory.Options().apply {
+          this.inSampleSize = inSampleSize
+        }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions)
+      }
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  private fun diskCacheFileFor(identity: String, sizePx: Int): File? {
+    val dir = artworkDiskCacheDir ?: return null
+    val bucketSize = if (sizePx <= 256) 240 else 360
+    val hash = identity.hashCode().toUInt().toString(16)
+    val lengthTag = identity.length
+    return File(dir, "art_${hash}_${lengthTag}_$bucketSize.png")
+  }
+
+  private fun readDiskCachedAlbumArtBitmap(identity: String, sizePx: Int): Bitmap? {
+    val cacheFile = diskCacheFileFor(identity, sizePx) ?: return null
+    if (!cacheFile.exists() || !cacheFile.isFile || cacheFile.length() <= 0L) return null
+    return try {
+      BitmapFactory.decodeFile(cacheFile.absolutePath)
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  private fun writeDiskCachedAlbumArtBitmap(identity: String, sizePx: Int, bitmap: Bitmap) {
+    val cacheFile = diskCacheFileFor(identity, sizePx) ?: return
+    if (cacheFile.exists() && cacheFile.length() > 0L) return
+    try {
+      cacheFile.parentFile?.mkdirs()
+      val tmpFile = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
+      FileOutputStream(tmpFile).use { fos ->
+        bitmap.compress(Bitmap.CompressFormat.PNG, 90, fos)
+        fos.flush()
+      }
+      if (tmpFile.exists() && tmpFile.length() > 0L) {
+        tmpFile.renameTo(cacheFile)
+      } else {
+        tmpFile.delete()
+      }
+    } catch (_: Throwable) {}
   }
 
   /**
@@ -654,10 +945,83 @@ object MusicPlayerEngine {
   suspend fun loadAlbumArtBitmapAsync(
     track: MusicTrack,
     sizePx: Int = 320,
-  ): Bitmap = withContext(Dispatchers.IO) {
+  ): Bitmap = withContext(artworkDispatcher) {
     ensureActive()
     getCachedAlbumArtBitmap(track, sizePx)?.let { return@withContext it }
     generateOrDecodeAlbumArtBitmap(track, sizePx)
+  }
+
+  /**
+   * Loads the [AlbumArtPalette] for [track] on a background thread after ensuring its album art
+   * bitmap has been decoded or generated.
+   */
+  suspend fun loadTrackPaletteAsync(
+    track: MusicTrack,
+    sizePx: Int = 360,
+  ): AlbumArtPalette = withContext(artworkDispatcher) {
+    ensureActive()
+    if (track.isSampleTrack) {
+      return@withContext resolveTrackPalette(track)
+    }
+    val bmp = generateOrDecodeAlbumArtBitmap(track, sizePx)
+    synchronized(artworkCacheLock) {
+      paletteCache[albumPaletteKey(track)]?.let { return@withContext it }
+      paletteCache[trackPaletteKey(track)]?.let { return@withContext it }
+    }
+    val extracted = extractPaletteFromBitmap(bmp)
+    synchronized(artworkCacheLock) {
+      paletteCache[trackPaletteKey(track)] = extracted
+      paletteCache[albumPaletteKey(track)] = extracted
+    }
+    extracted
+  }
+
+  /**
+   * Resolves a [track]'s album art and dynamic palette in the background on [Dispatchers.IO],
+   * returning an updated [MusicTrack] with extracted RGB colors when embedded or folder cover art is present.
+   */
+  suspend fun resolveTrackAlbumArtAsync(
+    track: MusicTrack,
+    sizePx: Int = 320,
+  ): MusicTrack = withContext(artworkDispatcher) {
+    ensureActive()
+    generateOrDecodeAlbumArtBitmap(track, sizePx)
+    val extractedPalette = synchronized(artworkCacheLock) {
+      paletteCache[albumPaletteKey(track)]
+    } ?: return@withContext track
+    val (pRgb, sRgb, aRgb) = paletteToRgbTriple(extractedPalette)
+    val updated = track.copy(
+      artworkPrimaryRgb = pRgb,
+      artworkSecondaryRgb = sRgb,
+      artworkAccentRgb = aRgb,
+    )
+    val file = track.file
+    if (file != null) {
+      val metaKeyTrue = "${file.absolutePath}:${file.lastModified()}:${file.length()}:true"
+      synchronized(metadataCacheLock) {
+        trackMetadataCache[metaKeyTrue] = updated
+      }
+    }
+    updated
+  }
+
+  /**
+   * Prefetches and caches album art bitmaps in the background on [Dispatchers.IO] for unique
+   * albums across [tracks] so scrolling through the library hits the in-memory cache immediately.
+   */
+  suspend fun prefetchAlbumArt(
+    tracks: List<MusicTrack>,
+    sizePx: Int = 240,
+  ) = withContext(artworkDispatcher) {
+    val seenIdentities = HashSet<String>()
+    for (track in tracks) {
+      ensureActive()
+      val identity = albumArtIdentityKey(track)
+      if (!seenIdentities.add(identity)) continue
+      if (getCachedAlbumArtBitmap(track, sizePx) == null) {
+        generateOrDecodeAlbumArtBitmap(track, sizePx)
+      }
+    }
   }
 
   /**
@@ -670,160 +1034,216 @@ object MusicPlayerEngine {
   ): Bitmap {
     getCachedAlbumArtBitmap(track, sizePx)?.let { return it }
 
-    val key = "${track.album}|${track.artist}|${track.artworkPrimaryRgb}|$sizePx"
-    val file = track.file
-    if (file != null && file.exists() && !track.isSampleTrack) {
-      // 1. Check embedded ID3 / MP4 cover art
-      val retriever = MediaMetadataRetriever()
-      try {
-        retriever.setDataSource(file.absolutePath)
-        val embeddedBytes = retriever.embeddedPicture
-        if (embeddedBytes != null && embeddedBytes.isNotEmpty()) {
-          val decoded = BitmapFactory.decodeByteArray(embeddedBytes, 0, embeddedBytes.size)
-          if (decoded != null) {
-            val extractedPalette = extractPaletteFromBitmap(decoded)
-            val paletteKey = "${track.id}:${track.artworkPrimaryRgb}:${track.artworkSecondaryRgb}:${track.artworkAccentRgb}"
-            synchronized(artworkCacheLock) {
-              artworkBitmapCache[key] = decoded
-              paletteCache[paletteKey] = extractedPalette
-            }
-            return decoded
-          }
-        }
-      } catch (_: Throwable) {
-        // Fall through to folder art or procedural cover
-      } finally {
-        try {
-          retriever.release()
-        } catch (_: Throwable) {}
-      }
-
-      // 2. Check sibling cover.jpg / folder.jpg in parent folder
-      val parent = file.parentFile
-      if (parent != null && parent.isDirectory) {
-        val coverNames = listOf("cover.jpg", "cover.png", "folder.jpg", "folder.png", "album.jpg", "album.png")
-        for (coverName in coverNames) {
-          val coverFile = File(parent, coverName)
-          if (coverFile.exists() && coverFile.isFile) {
-            val decoded = GalleryEngine.decodeThumbnailBitmap(coverFile, reqSizePx = sizePx)
-            if (decoded != null) {
-              val extractedPalette = extractPaletteFromBitmap(decoded)
-              val paletteKey = "${track.id}:${track.artworkPrimaryRgb}:${track.artworkSecondaryRgb}:${track.artworkAccentRgb}"
-              synchronized(artworkCacheLock) {
-                artworkBitmapCache[key] = decoded
-                paletteCache[paletteKey] = extractedPalette
-              }
-              return decoded
-            }
-          }
-        }
-      }
-    }
-
-    // 3. Render procedural album cover Bitmap
     val safeSize = sizePx.coerceIn(64, 1024)
-    val bitmap = Bitmap.createBitmap(safeSize, safeSize, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bitmap)
-    val sizeF = safeSize.toFloat()
+    val identity = albumArtIdentityKey(track)
+    val decodeLock = artworkDecodeLocks[(identity.hashCode() and 0x7FFFFFFF) % artworkDecodeLocks.size]
 
-    val primaryArgb = (0xFF000000 or (track.artworkPrimaryRgb.toLong() and 0xFFFFFFL)).toInt()
-    val secondaryArgb = (0xFF000000 or (track.artworkSecondaryRgb.toLong() and 0xFFFFFFL)).toInt()
-    val accentArgb = (0xFF000000 or (track.artworkAccentRgb.toLong() and 0xFFFFFFL)).toInt()
+    synchronized(decodeLock) {
+      getCachedAlbumArtBitmap(track, safeSize)?.let { return it }
 
-    // Diagonal gradient background
-    val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      shader = LinearGradient(
-        0f,
-        0f,
-        sizeF,
-        sizeF,
-        intArrayOf(primaryArgb, secondaryArgb),
-        floatArrayOf(0f, 1f),
-        Shader.TileMode.CLAMP,
-      )
-    }
-    canvas.drawRect(0f, 0f, sizeF, sizeF, bgPaint)
+      val file = track.file
+      if (file != null && file.exists() && !track.isSampleTrack) {
+        // 0. Check disk cache if configured
+        val diskCached = readDiskCachedAlbumArtBitmap(identity, safeSize)
+        if (diskCached != null) {
+          val extractedPalette = extractPaletteFromBitmap(diskCached)
+          cacheAlbumArtBitmap(track, safeSize, diskCached, extractedPalette)
+          return diskCached
+        }
 
-    // Ambient accent radial glow in upper-right
-    val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      shader = RadialGradient(
-        sizeF * 0.78f,
-        sizeF * 0.24f,
-        sizeF * 0.55f,
-        intArrayOf(
-          (accentArgb and 0x00FFFFFF) or 0xAA000000.toInt(),
-          (accentArgb and 0x00FFFFFF),
-        ),
-        floatArrayOf(0f, 1f),
-        Shader.TileMode.CLAMP,
-      )
-    }
-    canvas.drawRect(0f, 0f, sizeF, sizeF, glowPaint)
+        val knownNoExternalArt = synchronized(artworkCacheLock) {
+          noExternalArtworkCache[identity] == true
+        }
 
-    // Concentric vinyl / sonic rings
-    val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      style = Paint.Style.STROKE
-      strokeWidth = max(2f, sizeF * 0.012f)
-      color = 0x38FFFFFF
-    }
-    val cx = sizeF * 0.5f
-    val cy = sizeF * 0.5f
-    canvas.drawCircle(cx, cy, sizeF * 0.36f, ringPaint)
-    canvas.drawCircle(cx, cy, sizeF * 0.27f, ringPaint)
-    canvas.drawCircle(cx, cy, sizeF * 0.18f, ringPaint)
+        if (!knownNoExternalArt) {
+          // 1. Check embedded ID3 / MP4 cover art (downsampled to safeSize)
+          val retriever = try {
+            MediaMetadataRetriever()
+          } catch (_: Throwable) {
+            null
+          }
+          if (retriever != null) {
+            try {
+              retriever.setDataSource(file.absolutePath)
+              val embeddedBytes = retriever.embeddedPicture
+              if (embeddedBytes != null && embeddedBytes.isNotEmpty()) {
+                val decoded = decodeDownsampledBitmap(embeddedBytes, reqSizePx = safeSize)
+                if (decoded != null) {
+                  val extractedPalette = extractPaletteFromBitmap(decoded)
+                  cacheAlbumArtBitmap(track, safeSize, decoded, extractedPalette)
+                  writeDiskCachedAlbumArtBitmap(identity, safeSize, decoded)
+                  return decoded
+                }
+              }
+            } catch (_: Throwable) {
+              // Fall through to folder art or procedural cover
+            } finally {
+              try {
+                retriever.release()
+              } catch (_: Throwable) {}
+            }
+          }
 
-    // Center record label disc
-    val discPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      style = Paint.Style.FILL
-      color = accentArgb
-    }
-    canvas.drawCircle(cx, cy, sizeF * 0.11f, discPaint)
+          // 2. Check sibling cover.jpg / folder.jpg in parent folder
+          val parent = file.parentFile
+          if (parent != null && parent.isDirectory) {
+            val coverNames = listOf("cover.jpg", "cover.png", "folder.jpg", "folder.png", "album.jpg", "album.png")
+            for (coverName in coverNames) {
+              val coverFile = File(parent, coverName)
+              if (coverFile.exists() && coverFile.isFile) {
+                val decoded = GalleryEngine.decodeThumbnailBitmap(coverFile, reqSizePx = safeSize)
+                if (decoded != null) {
+                  val extractedPalette = extractPaletteFromBitmap(decoded)
+                  cacheAlbumArtBitmap(track, safeSize, decoded, extractedPalette)
+                  writeDiskCachedAlbumArtBitmap(identity, safeSize, decoded)
+                  return decoded
+                }
+              }
+            }
+          }
 
-    val holePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      style = Paint.Style.FILL
-      color = secondaryArgb
-    }
-    canvas.drawCircle(cx, cy, sizeF * 0.035f, holePaint)
+          synchronized(artworkCacheLock) {
+            noExternalArtworkCache[identity] = true
+          }
+        }
+      }
 
-    // Decorative waveform bars along bottom
-    val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      style = Paint.Style.FILL
-      color = 0x66FFFFFF
-    }
-    val barCount = 14
-    val totalBarWidth = sizeF * 0.64f
-    val startX = (sizeF - totalBarWidth) / 2f
-    val slotW = totalBarWidth / barCount
-    val barW = slotW * 0.52f
-    val seed = track.album.hashCode() xor track.artist.hashCode()
-    for (i in 0 until barCount) {
-      val wave = abs(sin((i * 0.65) + (seed and 0xFF))).toFloat()
-      val barH = sizeF * (0.04f + wave * 0.10f)
-      val left = startX + i * slotW
-      val top = sizeF * 0.86f - barH
-      canvas.drawRoundRect(
-        RectF(left, top, left + barW, sizeF * 0.86f),
-        barW / 2f,
-        barW / 2f,
-        barPaint,
-      )
-    }
+      // 3. Render procedural album cover Bitmap
+      val bitmap = Bitmap.createBitmap(safeSize, safeSize, Bitmap.Config.ARGB_8888)
+      val canvas = Canvas(bitmap)
+      val sizeF = safeSize.toFloat()
 
-    synchronized(artworkCacheLock) {
-      artworkBitmapCache[key] = bitmap
+      val primaryArgb = (0xFF000000 or (track.artworkPrimaryRgb.toLong() and 0xFFFFFFL)).toInt()
+      val secondaryArgb = (0xFF000000 or (track.artworkSecondaryRgb.toLong() and 0xFFFFFFL)).toInt()
+      val accentArgb = (0xFF000000 or (track.artworkAccentRgb.toLong() and 0xFFFFFFL)).toInt()
+
+      // Diagonal gradient background
+      val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = LinearGradient(
+          0f,
+          0f,
+          sizeF,
+          sizeF,
+          intArrayOf(primaryArgb, secondaryArgb),
+          floatArrayOf(0f, 1f),
+          Shader.TileMode.CLAMP,
+        )
+      }
+      canvas.drawRect(0f, 0f, sizeF, sizeF, bgPaint)
+
+      // Ambient accent radial glow in upper-right
+      val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = RadialGradient(
+          sizeF * 0.78f,
+          sizeF * 0.24f,
+          sizeF * 0.55f,
+          intArrayOf(
+            (accentArgb and 0x00FFFFFF) or 0xAA000000.toInt(),
+            (accentArgb and 0x00FFFFFF),
+          ),
+          floatArrayOf(0f, 1f),
+          Shader.TileMode.CLAMP,
+        )
+      }
+      canvas.drawRect(0f, 0f, sizeF, sizeF, glowPaint)
+
+      // Concentric vinyl / sonic rings
+      val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = max(2f, sizeF * 0.012f)
+        color = 0x38FFFFFF
+      }
+      val cx = sizeF * 0.5f
+      val cy = sizeF * 0.5f
+      canvas.drawCircle(cx, cy, sizeF * 0.36f, ringPaint)
+      canvas.drawCircle(cx, cy, sizeF * 0.27f, ringPaint)
+      canvas.drawCircle(cx, cy, sizeF * 0.18f, ringPaint)
+
+      // Center record label disc
+      val discPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = accentArgb
+      }
+      canvas.drawCircle(cx, cy, sizeF * 0.11f, discPaint)
+
+      val holePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = secondaryArgb
+      }
+      canvas.drawCircle(cx, cy, sizeF * 0.035f, holePaint)
+
+      // Decorative waveform bars along bottom
+      val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0x66FFFFFF
+      }
+      val barCount = 14
+      val totalBarWidth = sizeF * 0.64f
+      val startX = (sizeF - totalBarWidth) / 2f
+      val slotW = totalBarWidth / barCount
+      val barW = slotW * 0.52f
+      val seed = track.album.hashCode() xor track.artist.hashCode()
+      for (i in 0 until barCount) {
+        val wave = abs(sin((i * 0.65) + (seed and 0xFF))).toFloat()
+        val barH = sizeF * (0.04f + wave * 0.10f)
+        val left = startX + i * slotW
+        val top = sizeF * 0.86f - barH
+        canvas.drawRoundRect(
+          RectF(left, top, left + barW, sizeF * 0.86f),
+          barW / 2f,
+          barW / 2f,
+          barPaint,
+        )
+      }
+
+      cacheAlbumArtBitmap(track, safeSize, bitmap)
+      return bitmap
     }
-    return bitmap
+  }
+
+  /**
+   * Returns a cached [MusicTrack] for [file] if its path, timestamp, and byte length match.
+   */
+  fun getCachedTrackMetadata(
+    file: File,
+    requireInspectedMetadata: Boolean = false,
+  ): MusicTrack? {
+    val baseKey = "${file.absolutePath}:${file.lastModified()}:${file.length()}"
+    synchronized(metadataCacheLock) {
+      trackMetadataCache["$baseKey:true"]?.let { return it }
+      if (!requireInspectedMetadata) {
+        trackMetadataCache["$baseKey:false"]?.let { return it }
+      }
+      return null
+    }
   }
 
   /**
    * Parses track metadata from a local audio [file].
    * Uses `MediaMetadataRetriever` when available on Android runtime, falling back to intelligent
    * `Artist - Title` filename and parent folder parsing in unit tests or untagged files.
+   *
+   * When [deferAlbumArt] is `true` (the default), embedded picture decoding is skipped during
+   * track scanning so large music collections load quickly and decode artwork asynchronously in
+   * the background via [loadAlbumArtBitmapAsync] / [prefetchAlbumArt].
    */
   fun buildTrackFromFile(
     file: File,
     inspectMetadataRetriever: Boolean = true,
+    deferAlbumArt: Boolean = true,
   ): MusicTrack {
+    val fileLastMod = file.lastModified()
+    val fileLength = file.length()
+    val cacheKeyBase = "${file.absolutePath}:$fileLastMod:$fileLength"
+    synchronized(metadataCacheLock) {
+      trackMetadataCache["$cacheKeyBase:true"]?.let { cached ->
+        if (deferAlbumArt) return cached
+      }
+      if (!inspectMetadataRetriever) {
+        trackMetadataCache["$cacheKeyBase:false"]?.let { return it }
+      }
+    }
+
     val stem = file.nameWithoutExtension.trim()
     val fallbackArtist: String
     val fallbackTitle: String
@@ -857,6 +1277,8 @@ object MusicPlayerEngine {
     var durationMs = AudioRecorderEngine.readWavDurationMs(file)?.takeIf { it > 0L } ?: 180_000L
     var trackNumber = 1
     var year = 2026
+    var bitrateKbps = 320
+    var sampleRateHz = 44_100
     var extractedColors: Triple<Int, Int, Int>? = null
 
     if (inspectMetadataRetriever) {
@@ -882,22 +1304,19 @@ object MusicPlayerEngine {
             ?.substringBefore('/')?.trim()?.toIntOrNull()?.takeIf { it > 0 }?.let { trackNumber = it }
           retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)
             ?.trim()?.take(4)?.toIntOrNull()?.takeIf { it in 1900..2100 }?.let { year = it }
+          retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
+            ?.trim()?.toLongOrNull()?.takeIf { it > 0L }?.let { bitrateKbps = (it / 1000L).toInt().coerceAtLeast(32) }
+          retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)
+            ?.trim()?.toIntOrNull()?.takeIf { it > 0 }?.let { sampleRateHz = it }
 
-          val pic = retriever.embeddedPicture
-          if (pic != null && pic.isNotEmpty()) {
-            val bmp = BitmapFactory.decodeByteArray(pic, 0, pic.size)
-            if (bmp != null) {
-              val pal = extractPaletteFromBitmap(bmp)
-              val pRgb = ((pal.dominantColor.red * 255).roundToInt() shl 16) or
-                ((pal.dominantColor.green * 255).roundToInt() shl 8) or
-                (pal.dominantColor.blue * 255).roundToInt()
-              val sRgb = ((pal.secondaryColor.red * 255).roundToInt() shl 16) or
-                ((pal.secondaryColor.green * 255).roundToInt() shl 8) or
-                (pal.secondaryColor.blue * 255).roundToInt()
-              val aRgb = ((pal.accentColor.red * 255).roundToInt() shl 16) or
-                ((pal.accentColor.green * 255).roundToInt() shl 8) or
-                (pal.accentColor.blue * 255).roundToInt()
-              extractedColors = Triple(pRgb, sRgb, aRgb)
+          if (!deferAlbumArt) {
+            val pic = retriever.embeddedPicture
+            if (pic != null && pic.isNotEmpty()) {
+              val bmp = decodeDownsampledBitmap(pic, reqSizePx = 320)
+              if (bmp != null) {
+                val pal = extractPaletteFromBitmap(bmp)
+                extractedColors = paletteToRgbTriple(pal)
+              }
             }
           }
         } catch (_: Throwable) {
@@ -913,7 +1332,7 @@ object MusicPlayerEngine {
     val (primaryRgb, secondaryRgb, accentRgb) = extractedColors
       ?: computeDeterministicArtworkColors(album = album, artist = artist, genre = genre)
 
-    return MusicTrack(
+    val track = MusicTrack(
       id = "file_${file.absolutePath}",
       title = title,
       artist = artist,
@@ -923,13 +1342,35 @@ object MusicPlayerEngine {
       trackNumber = trackNumber,
       year = year,
       file = file,
-      sizeBytes = file.length(),
-      lastModifiedMs = file.lastModified(),
+      sizeBytes = fileLength,
+      lastModifiedMs = fileLastMod,
       artworkPrimaryRgb = primaryRgb,
       artworkSecondaryRgb = secondaryRgb,
       artworkAccentRgb = accentRgb,
       isSampleTrack = false,
+      bitrateKbps = bitrateKbps,
+      sampleRateHz = sampleRateHz,
     )
+
+    // Reuse already-cached album palette colors if background artwork extraction already ran for this album
+    val cachedAlbumPalette = synchronized(artworkCacheLock) {
+      paletteCache[albumPaletteKey(track)]
+    }
+    val finalTrack = if (cachedAlbumPalette != null && extractedColors == null) {
+      val (pRgb, sRgb, aRgb) = paletteToRgbTriple(cachedAlbumPalette)
+      track.copy(
+        artworkPrimaryRgb = pRgb,
+        artworkSecondaryRgb = sRgb,
+        artworkAccentRgb = aRgb,
+      )
+    } else {
+      track
+    }
+
+    synchronized(metadataCacheLock) {
+      trackMetadataCache["$cacheKeyBase:$inspectMetadataRetriever"] = finalTrack
+    }
+    return finalTrack
   }
 
   /**
@@ -939,6 +1380,7 @@ object MusicPlayerEngine {
     directories: List<File>,
     maxDepth: Int = 5,
     inspectMetadataRetriever: Boolean = true,
+    deferAlbumArt: Boolean = true,
   ): List<MusicTrack> {
     val foundFiles = LinkedHashMap<String, File>()
 
@@ -966,7 +1408,45 @@ object MusicPlayerEngine {
 
     return foundFiles.values
       .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
-      .map { buildTrackFromFile(it, inspectMetadataRetriever = inspectMetadataRetriever) }
+      .map {
+        buildTrackFromFile(
+          file = it,
+          inspectMetadataRetriever = inspectMetadataRetriever,
+          deferAlbumArt = deferAlbumArt,
+        )
+      }
+  }
+
+  private fun libraryCacheKey(
+    rootDirectory: File,
+    initialDirectory: File?,
+    includeSamples: Boolean,
+  ): String {
+    val targetDirs = if (initialDirectory != null) {
+      listOf(initialDirectory)
+    } else {
+      DEFAULT_MUSIC_FOLDER_NAMES.map { File(rootDirectory, it) }
+    }
+    val dirStamp = targetDirs.joinToString("|") { dir ->
+      val mod = if (dir.exists()) dir.lastModified() else -1L
+      "${dir.absolutePath}@$mod"
+    }
+    return "$dirStamp|samples=$includeSamples"
+  }
+
+  /**
+   * Returns the previously loaded library tracks from the in-memory cache if available and
+   * top-level music directories have not changed, or `null` if not yet cached.
+   */
+  fun getCachedLibraryTracks(
+    rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
+    initialDirectory: File? = null,
+    includeSamples: Boolean = true,
+  ): List<MusicTrack>? {
+    val key = libraryCacheKey(rootDirectory, initialDirectory, includeSamples)
+    synchronized(metadataCacheLock) {
+      return libraryTracksCache[key]
+    }
   }
 
   /**
@@ -979,6 +1459,7 @@ object MusicPlayerEngine {
     initialDirectory: File? = null,
     includeSamples: Boolean = true,
     inspectMetadataRetriever: Boolean = true,
+    deferAlbumArt: Boolean = true,
   ): List<MusicTrack> {
     val targetDirs = if (initialDirectory != null) {
       listOf(initialDirectory)
@@ -988,13 +1469,42 @@ object MusicPlayerEngine {
     val localTracks = scanMusicDirectories(
       directories = targetDirs,
       inspectMetadataRetriever = inspectMetadataRetriever,
+      deferAlbumArt = deferAlbumArt,
     )
-    return when {
+    val result = when {
       localTracks.isNotEmpty() && includeSamples && initialDirectory == null -> localTracks + DEFAULT_SAMPLE_TRACKS
       localTracks.isNotEmpty() -> localTracks
       includeSamples -> DEFAULT_SAMPLE_TRACKS
       else -> emptyList()
     }
+    if (inspectMetadataRetriever) {
+      val key = libraryCacheKey(rootDirectory, initialDirectory, includeSamples)
+      synchronized(metadataCacheLock) {
+        libraryTracksCache[key] = result
+      }
+    }
+    return result
+  }
+
+  /**
+   * Asynchronously scans and loads the music library on a background thread ([Dispatchers.IO]),
+   * deferring album art decoding so large music collections load without blocking the UI thread.
+   */
+  suspend fun loadLibraryTracksAsync(
+    rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
+    initialDirectory: File? = null,
+    includeSamples: Boolean = true,
+    inspectMetadataRetriever: Boolean = true,
+    deferAlbumArt: Boolean = true,
+  ): List<MusicTrack> = withContext(Dispatchers.IO) {
+    ensureActive()
+    loadLibraryTracks(
+      rootDirectory = rootDirectory,
+      initialDirectory = initialDirectory,
+      includeSamples = includeSamples,
+      inspectMetadataRetriever = inspectMetadataRetriever,
+      deferAlbumArt = deferAlbumArt,
+    )
   }
 
   /**
@@ -1125,6 +1635,100 @@ object MusicPlayerEngine {
         genre.artists.any { it.contains(q, ignoreCase = true) } ||
         genre.tracks.any { it.title.contains(q, ignoreCase = true) }
     }
+  }
+
+  val DEFAULT_SAMPLE_PLAYLIST_ENTRIES: List<SavedPlaylistEntry> = listOf(
+    SavedPlaylistEntry(
+      id = "playlist_synth_night",
+      name = "Neon Night Drive",
+      trackIds = listOf(
+        "sample_neon_horizon",
+        "sample_starlight_drive",
+        "sample_cybernetic_pulse",
+        "sample_crimson_velocity",
+      ),
+      createdAtMs = 1_700_000_000_000L,
+    ),
+    SavedPlaylistEntry(
+      id = "playlist_chill_focus",
+      name = "Chill & Focus",
+      trackIds = listOf(
+        "sample_autumn_coffee",
+        "sample_blue_note_stroll",
+        "sample_canyon_breeze",
+        "sample_moonlight_prelude",
+      ),
+      createdAtMs = 1_700_000_100_000L,
+    ),
+  )
+
+  /**
+   * Resolves [SavedPlaylistEntry] items against [allTracks] to build [MusicPlaylist] models.
+   */
+  fun buildPlaylists(
+    entries: List<SavedPlaylistEntry>,
+    allTracks: List<MusicTrack>,
+  ): List<MusicPlaylist> {
+    if (entries.isEmpty()) return emptyList()
+    val tracksById = allTracks.associateBy { it.id }
+    return entries.mapNotNull { entry ->
+      val resolvedTracks = entry.trackIds.mapNotNull { tracksById[it] }
+      if (resolvedTracks.isEmpty() && allTracks.isNotEmpty()) {
+        null
+      } else {
+        MusicPlaylist(
+          id = entry.id,
+          name = entry.name,
+          tracks = resolvedTracks,
+          createdAtMs = entry.createdAtMs,
+        )
+      }
+    }
+  }
+
+  /**
+   * Filters [playlists] by matching [query] against playlist name, artist names, or track titles.
+   */
+  fun filterPlaylists(playlists: List<MusicPlaylist>, query: String): List<MusicPlaylist> {
+    val q = query.trim()
+    if (q.isEmpty()) return playlists
+    return playlists.filter { playlist ->
+      playlist.name.contains(q, ignoreCase = true) ||
+        playlist.artists.any { it.contains(q, ignoreCase = true) } ||
+        playlist.tracks.any { it.title.contains(q, ignoreCase = true) }
+    }
+  }
+
+  /**
+   * Serializes [entries] into a compact string for `SharedPreferences`.
+   */
+  fun serializePlaylists(entries: List<SavedPlaylistEntry>): String {
+    return entries.joinToString("\n") { entry ->
+      val safeName = entry.name.replace("\n", " ").replace("\t", " ").trim()
+      val idsJoined = entry.trackIds.joinToString(",")
+      "${entry.id}\t$safeName\t${entry.createdAtMs}\t$idsJoined"
+    }
+  }
+
+  /**
+   * Deserializes a `SharedPreferences` string produced by [serializePlaylists].
+   */
+  fun deserializePlaylists(raw: String?): List<SavedPlaylistEntry> {
+    if (raw.isNullOrBlank()) return emptyList()
+    return raw.lineSequence()
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .mapNotNull { line ->
+        val parts = line.split("\t")
+        if (parts.size < 4) return@mapNotNull null
+        val id = parts[0].trim()
+        val name = parts[1].trim()
+        val createdAt = parts[2].trim().toLongOrNull() ?: 0L
+        val trackIds = parts[3].split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        if (id.isEmpty() || name.isEmpty() || trackIds.isEmpty()) null
+        else SavedPlaylistEntry(id = id, name = name, trackIds = trackIds, createdAtMs = createdAt)
+      }
+      .toList()
   }
 
   /**

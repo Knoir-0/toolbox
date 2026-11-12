@@ -28,21 +28,26 @@ class GalleryEngineTest {
   }
 
   @Test
-  fun defaultFolders_areDcimAndPhotos_andContentsAreUnNestedAsSameFolder() {
-    assertEquals(listOf("DCIM", "Photos"), DEFAULT_GALLERY_FOLDER_NAMES)
+  fun defaultFolders_arePicturesAndDcim_andContentsAreUnNestedAsSameFolder_andDefaultNewAlbumIsPictures() {
+    assertEquals(listOf("Pictures", "DCIM"), DEFAULT_GALLERY_FOLDER_NAMES)
+    assertEquals("Pictures", DEFAULT_NEW_ALBUM_FOLDER_NAME)
 
     val folders = GalleryEngine.getDefaultGalleryFolders(tempRootDir)
     assertEquals(2, folders.size)
-    assertEquals("DCIM", folders[0].name)
-    assertEquals("Photos", folders[1].name)
+    assertEquals("Pictures", folders[0].name)
+    assertEquals("DCIM", folders[1].name)
+
+    val defaultNewAlbumFolder = GalleryEngine.getDefaultNewAlbumFolder(tempRootDir)
+    assertEquals(File(tempRootDir, "Pictures").absolutePath, defaultNewAlbumFolder.absolutePath)
+    assertEquals("Pictures", defaultNewAlbumFolder.name)
 
     val dcimDir = File(tempRootDir, "DCIM").apply { mkdirs() }
-    val photosDir = File(tempRootDir, "Photos").apply { mkdirs() }
+    val picturesDir = File(tempRootDir, "Pictures").apply { mkdirs() }
 
-    // Create sub-albums inside DCIM and Photos
+    // Create sub-albums inside DCIM and Pictures
     val cameraAlbumDir = File(dcimDir, "Camera").apply { mkdirs() }
     val screenshotsAlbumDir = File(dcimDir, "Screenshots").apply { mkdirs() }
-    val vacationAlbumDir = File(photosDir, "Vacation").apply { mkdirs() }
+    val vacationAlbumDir = File(picturesDir, "Vacation").apply { mkdirs() }
 
     GalleryEngine.writeSolidColorPng(
       outputFile = File(cameraAlbumDir, "cam_01.png"),
@@ -57,24 +62,24 @@ class GalleryEngineTest {
       lastModifiedMs = 5_000_000L,
     )
 
-    // Also add direct photos in DCIM and Photos
+    // Also add direct photos in DCIM and Pictures
     GalleryEngine.writeSolidColorPng(
       outputFile = File(dcimDir, "dcim_direct.png"),
       lastModifiedMs = 2_000_000L,
     )
     GalleryEngine.writeSolidColorPng(
-      outputFile = File(photosDir, "photos_direct.png"),
+      outputFile = File(picturesDir, "pictures_direct.png"),
       lastModifiedMs = 6_000_000L,
     )
 
-    // Root contents un-nest DCIM and Photos as if they were the same folder
+    // Root contents un-nest Pictures and DCIM as if they were the same folder
     val rootContents = GalleryEngine.loadRootContents(rootDirectory = tempRootDir)
     assertEquals(
       listOf("Camera", "Screenshots", "Vacation"),
       rootContents.nestedAlbums.map { it.name },
     )
     assertEquals(
-      listOf("photos_direct.png", "dcim_direct.png"),
+      listOf("pictures_direct.png", "dcim_direct.png"),
       rootContents.photos.map { it.name },
     )
 
@@ -83,18 +88,18 @@ class GalleryEngineTest {
   }
 
   @Test
-  fun unNestedDcimAndPhotos_mergesSameNamedSubfoldersAcrossBothRoots() {
+  fun unNestedPicturesAndDcim_mergesSameNamedSubfoldersAcrossBothRoots() {
     val dcimFavorites = File(tempRootDir, "DCIM/Favorites").apply { mkdirs() }
-    val photosFavorites = File(tempRootDir, "Photos/Favorites").apply { mkdirs() }
+    val picturesFavorites = File(tempRootDir, "Pictures/Favorites").apply { mkdirs() }
     val dcimSub = File(dcimFavorites, "2025").apply { mkdirs() }
-    val photosSub = File(photosFavorites, "2026").apply { mkdirs() }
+    val picturesSub = File(picturesFavorites, "2026").apply { mkdirs() }
 
     GalleryEngine.writeSolidColorPng(
       outputFile = File(dcimFavorites, "older_fav.png"),
       lastModifiedMs = 1_000_000L,
     )
     val newestFav = GalleryEngine.writeSolidColorPng(
-      outputFile = File(photosFavorites, "newer_fav.png"),
+      outputFile = File(picturesFavorites, "newer_fav.png"),
       lastModifiedMs = 9_000_000L,
     )
     GalleryEngine.writeSolidColorPng(
@@ -102,7 +107,7 @@ class GalleryEngineTest {
       lastModifiedMs = 3_000_000L,
     )
     GalleryEngine.writeSolidColorPng(
-      outputFile = File(photosSub, "sub_2026.png"),
+      outputFile = File(picturesSub, "sub_2026.png"),
       lastModifiedMs = 4_000_000L,
     )
 
@@ -116,7 +121,7 @@ class GalleryEngineTest {
     assertEquals(4, mergedFavorites.totalPhotoCount)
     assertEquals(2, mergedFavorites.subAlbumCount)
 
-    // Opening the merged album combines nested albums and direct photos from both DCIM/Favorites and Photos/Favorites
+    // Opening the merged album combines nested albums and direct photos from both DCIM/Favorites and Pictures/Favorites
     val mergedContents = GalleryEngine.loadAlbumContents(mergedFavorites)
     assertEquals(listOf("2025", "2026"), mergedContents.nestedAlbums.map { it.name })
     assertEquals(listOf("newer_fav.png", "older_fav.png"), mergedContents.photos.map { it.name })
@@ -270,6 +275,46 @@ class GalleryEngineTest {
     assertNotNull(resolvedAlbum.mostRecentPhoto)
     assertEquals(newestPhoto.name, resolvedAlbum.mostRecentPhoto?.name)
     assertEquals(1, resolvedAlbum.totalPhotoCount)
+  }
+
+  @Test
+  fun noMediaFile_hidesDirectoryAndSubtreeFromAlbumsCountsAndCovers() {
+    val picturesDir = File(tempRootDir, "Pictures").apply { mkdirs() }
+    val visibleDir = File(picturesDir, "Visible").apply { mkdirs() }
+    val hiddenDir = File(picturesDir, "Hidden").apply { mkdirs() }
+    val hiddenNestedDir = File(hiddenDir, "Nested").apply { mkdirs() }
+    File(hiddenDir, ".nomedia").createNewFile()
+
+    GalleryEngine.writeSolidColorPng(File(visibleDir, "visible.png"), lastModifiedMs = 1_000_000L)
+    GalleryEngine.writeSolidColorPng(File(hiddenDir, "hidden.png"), lastModifiedMs = 9_000_000L)
+    GalleryEngine.writeSolidColorPng(File(hiddenNestedDir, "hidden_nested.png"), lastModifiedMs = 9_500_000L)
+
+    // Hidden album is excluded from the root listing
+    val rootAlbums = GalleryEngine.loadRootAlbums(rootDirectory = tempRootDir)
+    assertEquals(listOf("Visible"), rootAlbums.map { it.name })
+
+    // Covers and recursive counts ignore the .nomedia subtree
+    val picturesAlbum = GalleryEngine.buildAlbum(picturesDir)
+    assertEquals(1, picturesAlbum.subAlbumCount)
+    assertEquals(1, picturesAlbum.totalPhotoCount)
+    assertEquals("visible.png", picturesAlbum.mostRecentPhoto?.name)
+
+    // Opening a .nomedia folder directly yields nothing
+    val hiddenContents = GalleryEngine.loadAlbumContents(hiddenDir)
+    assertTrue(hiddenContents.photos.isEmpty())
+    assertTrue(hiddenContents.nestedAlbums.isEmpty())
+
+    // A whole root folder with .nomedia (or a .nomedia ancestor) is skipped entirely
+    val dcimDir = File(tempRootDir, "DCIM").apply { mkdirs() }
+    GalleryEngine.writeSolidColorPng(File(dcimDir, "dcim.png"), lastModifiedMs = 2_000_000L)
+    File(dcimDir, ".nomedia").createNewFile()
+    val rootContents = GalleryEngine.loadRootContents(
+      rootDirectory = tempRootDir,
+      additionalPaths = listOf("Pictures/Hidden/Nested"),
+    )
+    assertTrue(rootContents.photos.isEmpty())
+    assertEquals(listOf("Visible"), rootContents.nestedAlbums.map { it.name })
+    assertTrue(GalleryEngine.isHiddenByNoMedia(hiddenNestedDir))
   }
 
   @Test

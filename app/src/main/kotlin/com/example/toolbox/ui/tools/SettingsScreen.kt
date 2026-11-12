@@ -20,6 +20,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -79,6 +80,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -96,6 +99,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -111,6 +115,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -134,7 +139,11 @@ import com.example.toolbox.ui.main.exportSettingsToJson
 import com.example.toolbox.ui.main.importSettingsFromJson
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
 import com.example.toolbox.ui.main.resetAllSettingsToDefaults
+import com.example.toolbox.ui.theme.AccentHarmonyOption
+import com.example.toolbox.ui.theme.calculateAccentHarmonyColor
 import com.example.toolbox.ui.theme.calculateComplementaryColor
+import com.example.toolbox.ui.theme.colorToHexString
+import com.example.toolbox.ui.theme.isAutoAccentColorSetting
 import com.example.toolbox.ui.theme.parseHexColor
 import kotlin.math.roundToInt
 
@@ -189,7 +198,7 @@ fun openExternalUrl(context: Context, url: String) {
 fun SettingsScreen(
   modifier: Modifier = Modifier,
   preferencesRepository: NavigationPreferencesRepository = rememberNavigationPreferencesRepository(),
-  initialVisibilityExpanded: Boolean = false,
+  initialVisibilityExpanded: Boolean = true,
   initialCollapsedCategories: Set<ToolCategory> = remember { ToolCategory.entries.toSet() },
   initialThemeColorExpanded: Boolean = false,
   initialAccentColorExpanded: Boolean = false,
@@ -214,7 +223,7 @@ fun SettingsScreen(
   }
 
   var customAccentHexInput by rememberSaveable(accentColor) {
-    mutableStateOf(if (accentColor != DEFAULT_ACCENT_COLOR_AUTO) accentColor else "")
+    mutableStateOf(if (!isAutoAccentColorSetting(accentColor)) accentColor else "")
   }
 
   val scrollState = rememberScrollState()
@@ -469,7 +478,7 @@ fun SettingsScreen(
 
               Text(
                 text = when (categoryToolSorting) {
-                  CategoryToolSortingOption.MANUAL -> "Tools within each category appear in manual order."
+                  CategoryToolSortingOption.MANUAL -> "Tools within each category appear in manual order. Touch and hold a tool to drag and drop it within its category."
                   CategoryToolSortingOption.ALPHABETICAL -> "Tools within each category appear alphabetically from A to Z."
                   CategoryToolSortingOption.USAGE -> "Tools within each category appear with your most used tools first."
                 },
@@ -1064,14 +1073,32 @@ fun SettingsScreen(
     val autoComplementColor = remember(currentPrimary) {
       calculateComplementaryColor(currentPrimary)
     }
+    val activeAutoHarmony = remember(accentColor) {
+      AccentHarmonyOption.fromPrefValue(accentColor)
+    }
+    var selectedHarmonyMode by rememberSaveable {
+      mutableStateOf(activeAutoHarmony?.harmonyMode ?: HarmonyMode.COMPLEMENTARY)
+    }
+    LaunchedEffect(activeAutoHarmony) {
+      if (activeAutoHarmony != null && activeAutoHarmony != AccentHarmonyOption.MONOCHROMATIC) {
+        selectedHarmonyMode = activeAutoHarmony.harmonyMode
+      }
+    }
+    val activeAutoHarmonyColor = remember(currentPrimary, activeAutoHarmony, autoComplementColor) {
+      if (activeAutoHarmony != null) {
+        calculateAccentHarmonyColor(currentPrimary, activeAutoHarmony)
+      } else {
+        autoComplementColor
+      }
+    }
     val activeAccentPreset = ACCENT_PRESET_COLORS.find { it.hex.equals(accentColor, ignoreCase = true) }
     val accentColorSummary = when {
-      accentColor == DEFAULT_ACCENT_COLOR_AUTO -> "Auto (Complement)"
+      activeAutoHarmony != null -> activeAutoHarmony.label
       activeAccentPreset != null -> "${activeAccentPreset.name} (${activeAccentPreset.hex})"
       else -> "Custom ($accentColor)"
     }
     val activeAccentColorBadge = when {
-      accentColor == DEFAULT_ACCENT_COLOR_AUTO -> autoComplementColor
+      activeAutoHarmony != null -> activeAutoHarmonyColor
       else -> parseHexColor(accentColor) ?: autoComplementColor
     }
 
@@ -1167,11 +1194,12 @@ fun SettingsScreen(
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            val isAutoAccentSelected = accentColor == DEFAULT_ACCENT_COLOR_AUTO
+            val isAutoAccentSelected = activeAutoHarmony != null
 
             // Auto Option Card
             OutlinedCard(
               onClick = {
+                selectedHarmonyMode = HarmonyMode.COMPLEMENTARY
                 preferencesRepository.setAccentColor(DEFAULT_ACCENT_COLOR_AUTO)
                 customAccentHexInput = ""
               },
@@ -1203,12 +1231,13 @@ fun SettingsScreen(
                 Row(
                   verticalAlignment = Alignment.CenterVertically,
                   horizontalArrangement = Arrangement.spacedBy(10.dp),
+                  modifier = Modifier.weight(1f),
                 ) {
                   Box(
                     modifier = Modifier
                       .size(24.dp)
                       .clip(CircleShape)
-                      .background(autoComplementColor),
+                      .background(activeAutoHarmonyColor),
                     contentAlignment = Alignment.Center,
                   ) {
                     if (isAutoAccentSelected) {
@@ -1222,12 +1251,12 @@ fun SettingsScreen(
                   }
                   Column {
                     Text(
-                      text = "Auto (Complement)",
+                      text = activeAutoHarmony?.label ?: "Auto (Complement)",
                       style = MaterialTheme.typography.titleSmall,
                       fontWeight = FontWeight.Bold,
                     )
                     Text(
-                      text = "Automatically complements your main theme color",
+                      text = activeAutoHarmony?.description ?: "Automatically complements your main theme color",
                       style = MaterialTheme.typography.bodySmall,
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1245,6 +1274,155 @@ fun SettingsScreen(
                       style = MaterialTheme.typography.labelSmall,
                       modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                     )
+                  }
+                }
+              }
+            }
+
+            // Color Harmonies (Auto) Section inspired by Colors tool
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("accent_color_harmonies_section"),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Text(
+                  text = "Color Harmonies (Auto)",
+                  style = MaterialTheme.typography.labelLarge,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                  text = "Tap harmony to auto-track theme",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                HarmonyMode.entries.forEach { mode ->
+                  val defaultOption = AccentHarmonyOption.defaultForMode(mode)
+                  val isModeSelected = selectedHarmonyMode == mode && isAutoAccentSelected
+                  FilterChip(
+                    selected = isModeSelected,
+                    onClick = {
+                      selectedHarmonyMode = mode
+                      preferencesRepository.setAccentColor(defaultOption.prefValue)
+                      customAccentHexInput = ""
+                    },
+                    shape = CircleShape,
+                    label = {
+                      Text(
+                        text = mode.label,
+                        fontWeight = if (isModeSelected) FontWeight.Bold else FontWeight.Medium,
+                      )
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                      selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                      selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ),
+                    modifier = Modifier.testTag("accent_harmony_mode_${mode.name.lowercase()}"),
+                  )
+                }
+              }
+
+              val harmonySwatches = remember(selectedHarmonyMode) {
+                AccentHarmonyOption.swatchesForMode(selectedHarmonyMode)
+              }
+
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                harmonySwatches.forEach { swatchOption ->
+                  val swatchColor = remember(currentPrimary, swatchOption) {
+                    calculateAccentHarmonyColor(currentPrimary, swatchOption)
+                  }
+                  val swatchHex = remember(swatchColor) {
+                    colorToHexString(swatchColor)
+                  }
+                  val isSwatchSelected = activeAutoHarmony == swatchOption
+
+                  Surface(
+                    onClick = {
+                      preferencesRepository.setAccentColor(swatchOption.prefValue)
+                      customAccentHexInput = ""
+                    },
+                    modifier = Modifier
+                      .weight(1f)
+                      .testTag("accent_harmony_swatch_${swatchOption.name.lowercase()}"),
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (isSwatchSelected) {
+                      MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                    } else {
+                      MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    border = BorderStroke(
+                      width = if (isSwatchSelected) 2.dp else 1.dp,
+                      color = if (isSwatchSelected) {
+                        MaterialTheme.colorScheme.primary
+                      } else {
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                      },
+                    ),
+                  ) {
+                    Column(
+                      modifier = Modifier.padding(8.dp),
+                      horizontalAlignment = Alignment.CenterHorizontally,
+                      verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                      Box(
+                        modifier = Modifier
+                          .fillMaxWidth()
+                          .height(40.dp)
+                          .background(swatchColor, RoundedCornerShape(10.dp))
+                          .border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(10.dp),
+                          ),
+                        contentAlignment = Alignment.Center,
+                      ) {
+                        if (isSwatchSelected) {
+                          Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Selected ${swatchOption.label}",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp),
+                          )
+                        }
+                      }
+                      Text(
+                        text = swatchOption.swatchLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (isSwatchSelected) FontWeight.Bold else FontWeight.SemiBold,
+                        color = if (isSwatchSelected) {
+                          MaterialTheme.colorScheme.primary
+                        } else {
+                          MaterialTheme.colorScheme.onSurface
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                      )
+                      Text(
+                        text = swatchHex,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                      )
+                    }
                   }
                 }
               }
@@ -1469,6 +1647,7 @@ fun SettingsScreen(
                 val categoryTools = remember(category) {
                   Tool.entries.filter { it.category == category }.sortedBy { it.title }
                 }
+                val categoryHiddenCount = categoryTools.count { it != Tool.SETTINGS && it in hiddenTools }
                 val isCatCollapsed = category in collapsedCategories
                 val catRotationAngle by animateFloatAsState(
                   targetValue = if (isCatCollapsed) 0f else 180f,
@@ -1512,9 +1691,30 @@ fun SettingsScreen(
                         shape = CircleShape,
                         color = MaterialTheme.colorScheme.secondaryContainer,
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.testTag("category_tool_count_${category.name.lowercase()}"),
                       ) {
                         Text(
                           text = "${categoryTools.size}",
+                          style = MaterialTheme.typography.labelSmall,
+                          modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                      }
+                      Surface(
+                        shape = CircleShape,
+                        color = if (categoryHiddenCount > 0) {
+                          MaterialTheme.colorScheme.tertiaryContainer
+                        } else {
+                          MaterialTheme.colorScheme.surfaceVariant
+                        },
+                        contentColor = if (categoryHiddenCount > 0) {
+                          MaterialTheme.colorScheme.onTertiaryContainer
+                        } else {
+                          MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.testTag("category_hidden_count_${category.name.lowercase()}"),
+                      ) {
+                        Text(
+                          text = "$categoryHiddenCount hidden",
                           style = MaterialTheme.typography.labelSmall,
                           modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                         )
@@ -1571,64 +1771,65 @@ fun SettingsScreen(
                           verticalAlignment = Alignment.CenterVertically,
                           horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                          val eyeColor by animateColorAsState(
-                            targetValue = when {
-                              isSettings -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                              isVisible -> MaterialTheme.colorScheme.primary
-                              else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                            },
-                            animationSpec = tween(200),
-                            label = "eye_color_${tool.name}",
-                          )
+                          if (isSettings) {
+                            Spacer(modifier = Modifier.size(48.dp))
+                          } else {
+                            val eyeColor by animateColorAsState(
+                              targetValue = if (isVisible) {
+                                MaterialTheme.colorScheme.primary
+                              } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                              },
+                              animationSpec = tween(200),
+                              label = "eye_color_${tool.name}",
+                            )
 
-                          IconButton(
-                            onClick = {
-                              if (!isSettings) {
+                            IconButton(
+                              onClick = {
                                 val updated = if (isVisible) {
                                   hiddenTools + tool
                                 } else {
                                   hiddenTools - tool
                                 }
                                 preferencesRepository.setHiddenTools(updated)
-                              }
-                            },
-                            enabled = !isSettings,
-                            modifier = Modifier
-                              .testTag("tool_visibility_checkbox_${tool.name}")
-                              .testTag("tool_settings_checkbox_${tool.name}")
-                              .testTag("tool_visibility_eye_${tool.name}"),
-                          ) {
-                            AnimatedContent(
-                              targetState = isVisible,
-                              transitionSpec = {
-                                (expandVertically(
-                                  animationSpec = tween(220, easing = FastOutSlowInEasing),
-                                  expandFrom = Alignment.CenterVertically,
-                                ) + fadeIn(animationSpec = tween(220)) + scaleIn(
-                                  initialScale = 0.8f,
-                                  animationSpec = tween(220),
-                                )).togetherWith(
-                                  shrinkVertically(
-                                    animationSpec = tween(180, easing = FastOutSlowInEasing),
-                                    shrinkTowards = Alignment.CenterVertically,
-                                  ) + fadeOut(animationSpec = tween(180)) + scaleOut(
-                                    targetScale = 0.8f,
-                                    animationSpec = tween(180),
-                                  )
-                                )
                               },
-                              label = "eye_toggle_${tool.name}",
-                            ) { visible ->
-                              Icon(
-                                imageVector = if (visible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                contentDescription = when {
-                                  isSettings -> "Always visible in navigation"
-                                  visible -> "Hide ${tool.title} from navigation"
-                                  else -> "Show ${tool.title} in navigation"
+                              modifier = Modifier
+                                .testTag("tool_visibility_checkbox_${tool.name}")
+                                .testTag("tool_settings_checkbox_${tool.name}")
+                                .testTag("tool_visibility_eye_${tool.name}"),
+                            ) {
+                              AnimatedContent(
+                                targetState = isVisible,
+                                transitionSpec = {
+                                  (expandVertically(
+                                    animationSpec = tween(220, easing = FastOutSlowInEasing),
+                                    expandFrom = Alignment.CenterVertically,
+                                  ) + fadeIn(animationSpec = tween(220)) + scaleIn(
+                                    initialScale = 0.8f,
+                                    animationSpec = tween(220),
+                                  )).togetherWith(
+                                    shrinkVertically(
+                                      animationSpec = tween(180, easing = FastOutSlowInEasing),
+                                      shrinkTowards = Alignment.CenterVertically,
+                                    ) + fadeOut(animationSpec = tween(180)) + scaleOut(
+                                      targetScale = 0.8f,
+                                      animationSpec = tween(180),
+                                    )
+                                  )
                                 },
-                                tint = eyeColor,
-                                modifier = Modifier.size(24.dp),
-                              )
+                                label = "eye_toggle_${tool.name}",
+                              ) { visible ->
+                                Icon(
+                                  imageVector = if (visible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                  contentDescription = if (visible) {
+                                    "Hide ${tool.title} from navigation"
+                                  } else {
+                                    "Show ${tool.title} in navigation"
+                                  },
+                                  tint = eyeColor,
+                                  modifier = Modifier.size(24.dp),
+                                )
+                              }
                             }
                           }
 
@@ -1666,14 +1867,6 @@ fun SettingsScreen(
                                 MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                               },
                             )
-
-                            if (isSettings) {
-                              Text(
-                                text = "Always visible in navigation",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline,
-                              )
-                            }
                           }
 
                           val usage = toolUsageCounts[tool] ?: 0
@@ -1751,7 +1944,10 @@ fun SettingsScreen(
             val restoredThemeColor = preferencesRepository.getThemeColor()
             val restoredAccentColor = preferencesRepository.getAccentColor()
             customHexInput = if (restoredThemeColor != DEFAULT_THEME_COLOR_SYSTEM) restoredThemeColor else ""
-            customAccentHexInput = if (restoredAccentColor != DEFAULT_ACCENT_COLOR_AUTO) restoredAccentColor else ""
+            customAccentHexInput = if (!isAutoAccentColorSetting(restoredAccentColor)) restoredAccentColor else ""
+            AccentHarmonyOption.fromPrefValue(restoredAccentColor)?.let { restoredHarmony ->
+              selectedHarmonyMode = restoredHarmony.harmonyMode
+            }
             backupRestoreStatus = "Settings restored successfully."
             Toast.makeText(context, "Settings restored from file", Toast.LENGTH_SHORT).show()
           } else {
@@ -1945,7 +2141,9 @@ fun SettingsScreen(
               resetAllSettingsToDefaults(preferencesRepository)
               customHexInput = ""
               customAccentHexInput = ""
+              selectedHarmonyMode = HarmonyMode.COMPLEMENTARY
               collapsedCategories = ToolCategory.entries.toSet()
+              isToolSettingsExpanded = true
               isThemeColorExpanded = false
               isAccentColorExpanded = false
               backupRestoreStatus = null

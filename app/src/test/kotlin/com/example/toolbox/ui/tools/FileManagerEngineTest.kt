@@ -542,6 +542,20 @@ class FileManagerEngineTest {
     assertTrue(FileManagerEngine.isConvertibleFile(md))
     assertTrue(FileManagerEngine.isConvertibleFile(zip))
     assertFalse(FileManagerEngine.isConvertibleFile(apk))
+
+    val tar = File(tempFolder.root, "backup.tar")
+    val tarGz = File(tempFolder.root, "release.tar.gz")
+    val tgz = File(tempFolder.root, "bundle.tgz")
+    val gz = File(tempFolder.root, "log.gz")
+    assertFalse(FileManagerEngine.isSupportedArchiveFile(dir))
+    assertTrue(FileManagerEngine.isSupportedArchiveFile(zip))
+    assertTrue(FileManagerEngine.isSupportedArchiveFile(tar))
+    assertTrue(FileManagerEngine.isSupportedArchiveFile(tarGz))
+    assertTrue(FileManagerEngine.isSupportedArchiveFile(tgz))
+    assertTrue(FileManagerEngine.isSupportedArchiveFile(gz))
+    assertTrue(FileManagerEngine.isSupportedArchiveFile(apk))
+    assertFalse(FileManagerEngine.isSupportedArchiveFile(png))
+    assertFalse(FileManagerEngine.isSupportedArchiveFile(md))
   }
 
   @Test

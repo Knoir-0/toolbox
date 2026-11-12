@@ -287,8 +287,18 @@ object FileManagerEngine {
 
   fun isArchiveFile(file: File): Boolean {
     if (file.isDirectory) return false
+    if (ArchiveEngine.isSupportedArchive(file)) return true
     val ext = file.extension.lowercase(Locale.ROOT)
-    return ext in setOf("zip", "tar", "gz", "7z", "rar", "jar", "apk")
+    return ext in setOf("zip", "tar", "gz", "tgz", "7z", "rar", "jar", "apk", "cbz")
+  }
+
+  fun isSupportedArchiveFile(file: File): Boolean {
+    return ArchiveEngine.isSupportedArchive(file)
+  }
+
+  fun isPdfFile(file: File): Boolean {
+    if (file.isDirectory) return false
+    return file.extension.lowercase(Locale.ROOT) == "pdf"
   }
 
   fun isCodeFile(file: File): Boolean {

@@ -497,4 +497,74 @@ class TodoListTest {
     assertEquals("Make espresso", saved2[0].subtasks[0].title)
     assertFalse(saved2[0].subtasks[0].isCompleted)
   }
+
+  @Test
+  fun engine_schedulesReschedulesAndDetectsDueNotifications() {
+    val baseTime = 1_760_000_000_000L
+    val initial = listOf(
+      TodoItem(
+        id = "t1",
+        title = "Check lab oscillator",
+        subtasks = listOf(
+          TodoSubTask(title = "Verify 1kHz sine wave", isCompleted = false),
+          TodoSubTask(title = "Measure peak-to-peak voltage", isCompleted = true),
+        ),
+      ),
+    )
+
+    // Schedule for +30m to +90m with note contents
+    val start1 = baseTime + 30 * 60_000L
+    val end1 = baseTime + 90 * 60_000L
+    val scheduled = TodoListEngine.scheduleTask(
+      tasks = initial,
+      taskId = "t1",
+      scheduledAtMillis = start1,
+      scheduledEndMillis = end1,
+      notes = "Bring BNC probe adapters",
+    )
+
+    assertTrue(scheduled[0].isScheduled)
+    assertEquals(start1, scheduled[0].scheduledAtMillis)
+    assertEquals(end1, scheduled[0].scheduledEndMillis)
+    assertEquals("Bring BNC probe adapters", scheduled[0].notes)
+    assertFalse(scheduled[0].isDue(baseTime + 10 * 60_000L))
+    assertTrue(TodoListEngine.getDueUnnotifiedTasks(scheduled, baseTime + 10 * 60_000L).isEmpty())
+
+    // JSON round-trip preserves schedule range and notes
+    val restored = TodoItem.fromJson(scheduled[0].toJson())
+    assertEquals(start1, restored.scheduledAtMillis)
+    assertEquals(end1, restored.scheduledEndMillis)
+    assertEquals("Bring BNC probe adapters", restored.notes)
+
+    // When scheduled time is reached, task is due and triggers notification with title & contents
+    val dueNow = TodoListEngine.getDueUnnotifiedTasks(scheduled, start1)
+    assertEquals(1, dueNow.size)
+    assertEquals("Check lab oscillator", dueNow[0].title)
+    val content = dueNow[0].buildNotificationContent()
+    assertTrue(content.contains("Bring BNC probe adapters"))
+    assertTrue(content.contains("• Verify 1kHz sine wave"))
+    assertTrue(content.contains("✓ Measure peak-to-peak voltage"))
+
+    // Marking task notified prevents duplicate firing for the same schedule
+    val markedNotified = TodoListEngine.markTaskNotified(scheduled, "t1", start1)
+    assertTrue(TodoListEngine.getDueUnnotifiedTasks(markedNotified, start1 + 5_000L).isEmpty())
+
+    // Rescheduling to a new variable date/time range resets notifiedAtScheduleMillis so it will fire again
+    val start2 = baseTime + 3 * 3_600_000L
+    val end2 = baseTime + 5 * 3_600_000L
+    val rescheduled = TodoListEngine.scheduleTask(
+      tasks = markedNotified,
+      taskId = "t1",
+      scheduledAtMillis = start2,
+      scheduledEndMillis = end2,
+    )
+    assertEquals(start2, rescheduled[0].scheduledAtMillis)
+    assertEquals(end2, rescheduled[0].scheduledEndMillis)
+    assertTrue(TodoListEngine.getDueUnnotifiedTasks(rescheduled, start1 + 60_000L).isEmpty())
+    assertEquals(1, TodoListEngine.getDueUnnotifiedTasks(rescheduled, start2).size)
+
+    // Unscheduling clears schedule fields
+    val unscheduled = TodoListEngine.unscheduleTask(rescheduled, "t1")
+    assertFalse(unscheduled[0].isScheduled)
+  }
 }

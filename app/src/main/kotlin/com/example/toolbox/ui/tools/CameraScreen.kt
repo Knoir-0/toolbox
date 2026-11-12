@@ -66,8 +66,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -75,7 +73,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
@@ -83,9 +80,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Exposure
-import androidx.compose.material.icons.filled.FilterBAndW
 import androidx.compose.material.icons.filled.FlashAuto
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
@@ -95,14 +90,12 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GridOff
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Highlight
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.QrCodeScanner
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
@@ -116,12 +109,10 @@ import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -318,48 +309,9 @@ fun CameraScreen(
     mutableStateOf(CameraScanFilter.fromNameOrDefault(saved))
   }
 
-  var activeSamplePreset by rememberSaveable {
-    mutableStateOf(CameraScanSamplePreset.QR_URL)
-  }
-
-  var customTargetCodeContent by rememberSaveable {
-    mutableStateOf<String?>(null)
-  }
-
-  var customTargetCodeFormat by rememberSaveable {
-    mutableStateOf<CameraBarcodeFormat?>(null)
-  }
-
-  var showSampleTargetOnViewfinder by rememberSaveable {
-    mutableStateOf(false)
-  }
-
   fun updateScanFilter(newFilter: CameraScanFilter) {
     scanFilter = newFilter
     prefs?.edit()?.putString(PREF_KEY_CAMERA_SCAN_FILTER, newFilter.name)?.apply()
-    val customFmt = customTargetCodeFormat
-    if (customFmt != null && !customFmt.matchesFilter(newFilter)) {
-      customTargetCodeContent = null
-      customTargetCodeFormat = null
-    }
-    if (!activeSamplePreset.format.matchesFilter(newFilter)) {
-      activeSamplePreset = CameraScanSamplePreset.presetsForFilter(newFilter).first()
-    }
-  }
-
-  var autoScanEnabled by rememberSaveable {
-    val saved = prefs?.getBoolean(PREF_KEY_CAMERA_AUTO_SCAN, true) ?: true
-    mutableStateOf(saved)
-  }
-
-  fun updateAutoScanEnabled(enabled: Boolean) {
-    autoScanEnabled = enabled
-    prefs?.edit()?.putBoolean(PREF_KEY_CAMERA_AUTO_SCAN, enabled)?.apply()
-  }
-
-  var scanHistory by remember {
-    val savedJson = prefs?.getString(PREF_KEY_CAMERA_SCAN_HISTORY, null)
-    mutableStateOf(CameraEngine.deserializeScanHistory(savedJson))
   }
 
   var latestScannedCode by remember {
@@ -368,30 +320,9 @@ fun CameraScreen(
 
   fun recordScannedCode(code: CameraScannedCode, showToast: Boolean = false) {
     latestScannedCode = code
-    val updated = buildList {
-      add(code)
-      scanHistory.forEach { existing ->
-        if (existing.rawValue != code.rawValue || existing.format != code.format) {
-          add(existing)
-        }
-      }
-    }.take(50)
-    scanHistory = updated
-    prefs?.edit()?.putString(PREF_KEY_CAMERA_SCAN_HISTORY, CameraEngine.serializeScanHistory(updated))?.apply()
     if (showToast && !isInspection) {
       Toast.makeText(context, "Scanned ${code.format.shortBadge}: ${code.title}", Toast.LENGTH_SHORT).show()
     }
-  }
-
-  fun clearScanHistory() {
-    scanHistory = emptyList()
-    prefs?.edit()?.remove(PREF_KEY_CAMERA_SCAN_HISTORY)?.apply()
-  }
-
-  fun deleteScanHistoryItem(item: CameraScannedCode) {
-    val updated = scanHistory.filterNot { it.id == item.id }
-    scanHistory = updated
-    prefs?.edit()?.putString(PREF_KEY_CAMERA_SCAN_HISTORY, CameraEngine.serializeScanHistory(updated))?.apply()
   }
 
   // Output directory (defaults to /DCIM/Camera)
@@ -544,20 +475,16 @@ fun CameraScreen(
 
   // Dialog & cross-tool navigation states
   var showFolderSettingsDialog by remember { mutableStateOf(false) }
-  var showScanHistoryDialog by remember { mutableStateOf(false) }
+  var showCreateCodeDialog by rememberSaveable { mutableStateOf(false) }
   var scannedCodeToInspect by remember { mutableStateOf<CameraScannedCode?>(null) }
   var directoryForGallery by remember { mutableStateOf<File?>(null) }
 
-  // Active target code for procedural/sample viewfinder & on-demand scanning
-  val activeTargetFormat = customTargetCodeFormat ?: activeSamplePreset.format
-  val activeTargetPayload = customTargetCodeContent ?: activeSamplePreset.payload
-
   // Continuous live frame QR & Barcode scanning when in SCANNER mode and hardware TextureView is rendering
-  LaunchedEffect(captureMode, autoScanEnabled, scanFilter, activeTextureView) {
-    if (captureMode != CameraCaptureMode.SCANNER || !autoScanEnabled || isInspection) {
+  LaunchedEffect(captureMode, scanFilter, activeTextureView) {
+    if (captureMode != CameraCaptureMode.SCANNER || isInspection) {
       return@LaunchedEffect
     }
-    while (isActive && captureMode == CameraCaptureMode.SCANNER && autoScanEnabled) {
+    while (isActive && captureMode == CameraCaptureMode.SCANNER) {
       val tv = activeTextureView
       if (tv != null && tv.isAvailable) {
         val rawFrame = try {
@@ -604,17 +531,10 @@ fun CameraScreen(
       return
     }
 
-    // 2. Decode the active viewfinder target code through ZXing's pixel decoder pipeline
-    val targetFormat = if (activeTargetFormat.matchesFilter(scanFilter)) {
-      activeTargetFormat
-    } else {
-      CameraScanSamplePreset.presetsForFilter(scanFilter).first().format
-    }
-    val targetContent = if (activeTargetFormat.matchesFilter(scanFilter)) {
-      activeTargetPayload
-    } else {
-      CameraScanSamplePreset.presetsForFilter(scanFilter).first().payload
-    }
+    // 2. Fallback to decoding a synthetic target code through ZXing's pixel decoder pipeline when hardware frame is unavailable
+    val fallbackPreset = CameraScanSamplePreset.presetsForFilter(scanFilter).first()
+    val targetFormat = fallbackPreset.format
+    val targetContent = fallbackPreset.payload
 
     val synthW = if (targetFormat.is2D) 360 else 440
     val synthH = if (targetFormat.is2D) 360 else 200
@@ -872,29 +792,8 @@ fun CameraScreen(
           )
         }
 
-        // QR Code & Barcode Scanner Viewfinder Target & Reticle Overlay
+        // QR Code & Barcode Scanner Viewfinder Reticle Overlay
         if (captureMode == CameraCaptureMode.SCANNER) {
-          val effectiveTargetFormat = if (activeTargetFormat.matchesFilter(scanFilter)) {
-            activeTargetFormat
-          } else {
-            CameraScanSamplePreset.presetsForFilter(scanFilter).first().format
-          }
-          val effectiveTargetPayload = if (activeTargetFormat.matchesFilter(scanFilter)) {
-            activeTargetPayload
-          } else {
-            CameraScanSamplePreset.presetsForFilter(scanFilter).first().payload
-          }
-
-          if (showSampleTargetOnViewfinder) {
-            ScannerSampleCodeOverlay(
-              content = effectiveTargetPayload,
-              format = effectiveTargetFormat,
-              modifier = Modifier
-                .align(Alignment.Center)
-                .testTag("camera_scanner_sample_target"),
-            )
-          }
-
           ScannerReticleOverlayCanvas(
             scanFilter = scanFilter,
             hasDetectedCode = latestScannedCode != null,
@@ -992,243 +891,133 @@ fun CameraScreen(
           modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 68.dp),
-          contentAlignment = Alignment.CenterStart,
+          contentAlignment = Alignment.Center,
         ) {
+          // Top Bar Quick Camera Controls: Flash, Timer, Aspect Ratio, Grid, Settings
           Row(
             modifier = Modifier
               .fillMaxWidth()
               .padding(horizontal = 12.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
           ) {
-            Row(
-              modifier = Modifier.weight(1f),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(10.dp),
+            // Flash Mode Cycle Button
+            IconButton(
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                updateFlashMode(flashMode.next())
+              },
+              modifier = Modifier.testTag("camera_flash_button"),
             ) {
-              Box(
-                modifier = Modifier
-                  .size(36.dp)
-                  .clip(CircleShape)
-                  .background(
-                    when {
-                      isRecordingVideo -> MaterialTheme.colorScheme.errorContainer
-                      captureMode == CameraCaptureMode.SCANNER -> MaterialTheme.colorScheme.tertiaryContainer
-                      else -> MaterialTheme.colorScheme.primaryContainer
-                    }
-                  ),
-                contentAlignment = Alignment.Center,
-              ) {
-                Icon(
-                  imageVector = when (captureMode) {
-                    CameraCaptureMode.VIDEO -> Icons.Default.Videocam
-                    CameraCaptureMode.SCANNER -> Icons.Default.QrCodeScanner
-                    CameraCaptureMode.PHOTO -> Icons.Default.PhotoCamera
-                  },
-                  contentDescription = null,
-                  tint = when {
-                    isRecordingVideo -> MaterialTheme.colorScheme.error
-                    captureMode == CameraCaptureMode.SCANNER -> MaterialTheme.colorScheme.onTertiaryContainer
-                    else -> MaterialTheme.colorScheme.primary
-                  },
-                  modifier = Modifier.size(20.dp),
-                )
-              }
-
-              Column(modifier = Modifier.weight(1f)) {
-                Text(
-                  text = "Camera",
-                  style = MaterialTheme.typography.titleLarge,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.onSurface,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                  text = when {
-                    isRecordingVideo -> "Recording (${CameraEngine.formatTimerDurationMs(elapsedVideoMs)}) • $directoryDisplayPath"
-                    captureMode == CameraCaptureMode.SCANNER -> {
-                      val scanCountLabel = if (scanHistory.size == 1) "1 scan" else "${scanHistory.size} scans"
-                      "${scanFilter.displayName} • $scanCountLabel • $directoryDisplayPath"
-                    }
-                    else -> {
-                      val countLabel = if (capturedMedia.size == 1) "1 capture" else "${capturedMedia.size} captures"
-                      "$countLabel • ${aspectRatio.displayName} • $directoryDisplayPath"
-                    }
-                  },
-                  style = MaterialTheme.typography.bodySmall,
-                  color = if (isRecordingVideo) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                )
-              }
+              Icon(
+                imageVector = when (flashMode) {
+                  CameraFlashMode.OFF -> Icons.Default.FlashOff
+                  CameraFlashMode.AUTO -> Icons.Default.FlashAuto
+                  CameraFlashMode.ON -> Icons.Default.FlashOn
+                  CameraFlashMode.TORCH -> Icons.Default.Highlight
+                },
+                contentDescription = flashMode.displayName,
+                tint = if (flashMode != CameraFlashMode.OFF) {
+                  MaterialTheme.colorScheme.tertiary
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+              )
             }
 
-            // Top Bar Quick Camera Controls: QR/Barcode Scanner Toggle, Flash, Timer, Aspect Ratio, Grid, Settings
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(2.dp),
+            // Self-Timer Cycle Button
+            IconButton(
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                updateTimerDuration(timerDuration.next())
+              },
+              enabled = !isRecordingVideo && !isCountingDown,
+              modifier = Modifier.testTag("camera_timer_button"),
             ) {
-              // Quick QR & Barcode Scanner Mode / History Button
-              IconButton(
-                onClick = {
-                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                  if (captureMode == CameraCaptureMode.SCANNER) {
-                    showScanHistoryDialog = true
-                  } else {
-                    captureMode = CameraCaptureMode.SCANNER
-                  }
-                },
-                enabled = !isRecordingVideo && !isCountingDown,
-                modifier = Modifier.testTag("camera_qr_scanner_toggle_button"),
-              ) {
-                Box(contentAlignment = Alignment.Center) {
-                  Icon(
-                    imageVector = Icons.Default.QrCodeScanner,
-                    contentDescription = if (captureMode == CameraCaptureMode.SCANNER) {
-                      "Open scan history and code generator"
-                    } else {
-                      "Switch to QR code and barcode scanner"
-                    },
-                    tint = if (captureMode == CameraCaptureMode.SCANNER) {
-                      MaterialTheme.colorScheme.tertiary
-                    } else {
-                      MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                  )
-                  if (scanHistory.isNotEmpty()) {
-                    Text(
-                      text = scanHistory.size.toString(),
-                      style = MaterialTheme.typography.labelSmall,
-                      fontWeight = FontWeight.ExtraBold,
-                      color = MaterialTheme.colorScheme.tertiary,
-                      modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .offset(x = 4.dp, y = 4.dp)
-                        .testTag("scanner_history_count_badge"),
-                    )
-                  }
-                }
-              }
-
-              // Flash Mode Cycle Button
-              IconButton(
-                onClick = {
-                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                  updateFlashMode(flashMode.next())
-                },
-                modifier = Modifier.testTag("camera_flash_button"),
-              ) {
+              Box(contentAlignment = Alignment.Center) {
                 Icon(
-                  imageVector = when (flashMode) {
-                    CameraFlashMode.OFF -> Icons.Default.FlashOff
-                    CameraFlashMode.AUTO -> Icons.Default.FlashAuto
-                    CameraFlashMode.ON -> Icons.Default.FlashOn
-                    CameraFlashMode.TORCH -> Icons.Default.Highlight
-                  },
-                  contentDescription = flashMode.displayName,
-                  tint = if (flashMode != CameraFlashMode.OFF) {
-                    MaterialTheme.colorScheme.tertiary
+                  imageVector = if (timerDuration == CameraTimerDuration.OFF) {
+                    Icons.Default.TimerOff
                   } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
+                    Icons.Default.Timer
                   },
-                )
-              }
-
-              // Self-Timer Cycle Button
-              IconButton(
-                onClick = {
-                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                  updateTimerDuration(timerDuration.next())
-                },
-                enabled = !isRecordingVideo && !isCountingDown,
-                modifier = Modifier.testTag("camera_timer_button"),
-              ) {
-                Box(contentAlignment = Alignment.Center) {
-                  Icon(
-                    imageVector = if (timerDuration == CameraTimerDuration.OFF) {
-                      Icons.Default.TimerOff
-                    } else {
-                      Icons.Default.Timer
-                    },
-                    contentDescription = timerDuration.displayName,
-                    tint = if (timerDuration != CameraTimerDuration.OFF) {
-                      MaterialTheme.colorScheme.primary
-                    } else {
-                      MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                  )
-                  if (timerDuration != CameraTimerDuration.OFF) {
-                    Text(
-                      text = timerDuration.shortLabel,
-                      style = MaterialTheme.typography.labelSmall,
-                      fontWeight = FontWeight.ExtraBold,
-                      color = MaterialTheme.colorScheme.primary,
-                      modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .offset(x = 4.dp, y = 4.dp)
-                        .testTag("camera_timer_badge"),
-                    )
-                  }
-                }
-              }
-
-              // Aspect Ratio Pill Button
-              Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f),
-                modifier = Modifier
-                  .clip(RoundedCornerShape(16.dp))
-                  .clickable(enabled = !isRecordingVideo) {
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    updateAspectRatio(aspectRatio.next())
-                  }
-                  .testTag("camera_aspect_ratio_button"),
-              ) {
-                Text(
-                  text = aspectRatio.displayName,
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.onSecondaryContainer,
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                )
-              }
-
-              // Grid Overlay Cycle Button
-              IconButton(
-                onClick = {
-                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                  updateGridOverlay(gridOverlay.next())
-                },
-                modifier = Modifier.testTag("camera_grid_button"),
-              ) {
-                Icon(
-                  imageVector = if (gridOverlay == CameraGridOverlay.NONE) {
-                    Icons.Default.GridOff
-                  } else {
-                    Icons.Default.GridOn
-                  },
-                  contentDescription = gridOverlay.displayName,
-                  tint = if (gridOverlay != CameraGridOverlay.NONE) {
+                  contentDescription = timerDuration.displayName,
+                  tint = if (timerDuration != CameraTimerDuration.OFF) {
                     MaterialTheme.colorScheme.primary
                   } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
                   },
                 )
+                if (timerDuration != CameraTimerDuration.OFF) {
+                  Text(
+                    text = timerDuration.shortLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                      .align(Alignment.BottomEnd)
+                      .offset(x = 4.dp, y = 4.dp)
+                      .testTag("camera_timer_badge"),
+                  )
+                }
               }
+            }
 
-              // Camera Folder & Format Settings Button
-              IconButton(
-                onClick = { showFolderSettingsDialog = true },
-                enabled = !isRecordingVideo,
-                modifier = Modifier.testTag("camera_settings_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.FolderOpen,
-                  contentDescription = "Camera storage and format settings",
-                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
+            // Aspect Ratio Pill Button
+            Surface(
+              shape = RoundedCornerShape(16.dp),
+              color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f),
+              modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .clickable(enabled = !isRecordingVideo) {
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  updateAspectRatio(aspectRatio.next())
+                }
+                .testTag("camera_aspect_ratio_button"),
+            ) {
+              Text(
+                text = aspectRatio.displayName,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+              )
+            }
+
+            // Grid Overlay Cycle Button
+            IconButton(
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                updateGridOverlay(gridOverlay.next())
+              },
+              modifier = Modifier.testTag("camera_grid_button"),
+            ) {
+              Icon(
+                imageVector = if (gridOverlay == CameraGridOverlay.NONE) {
+                  Icons.Default.GridOff
+                } else {
+                  Icons.Default.GridOn
+                },
+                contentDescription = gridOverlay.displayName,
+                tint = if (gridOverlay != CameraGridOverlay.NONE) {
+                  MaterialTheme.colorScheme.primary
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+              )
+            }
+
+            // Camera Folder & Format Settings Button
+            IconButton(
+              onClick = { showFolderSettingsDialog = true },
+              enabled = !isRecordingVideo,
+              modifier = Modifier.testTag("camera_settings_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.FolderOpen,
+                contentDescription = "Camera storage and format settings",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
             }
           }
         }
@@ -1642,145 +1431,74 @@ fun CameraScreen(
             }
           }
 
-          // QR Code Reader & Barcode Scanner Controls Bar (visible in SCANNER mode)
+          // QR Code Reader & Barcode Scanner Selector Row (All / QR / Barcode + Create Code)
           AnimatedVisibility(
             visible = captureMode == CameraCaptureMode.SCANNER,
             enter = expandVertically() + fadeIn(),
             exit = shrinkVertically() + fadeOut(),
           ) {
-            Column(
+            Row(
               modifier = Modifier
                 .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
                 .testTag("scanner_controls_bar"),
-              verticalArrangement = Arrangement.spacedBy(6.dp),
+              horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+              verticalAlignment = Alignment.CenterVertically,
             ) {
-              // Row 1: Scanner Symbology Filter (All Codes / QR Code / Barcode) + History & Generator Button
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Row(
-                  modifier = Modifier
-                    .weight(1f)
-                    .horizontalScroll(rememberScrollState()),
-                  horizontalArrangement = Arrangement.spacedBy(6.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                ) {
-                  CameraScanFilter.entries.forEach { filterOption ->
-                    val selected = filterOption == scanFilter
-                    FilterChip(
-                      selected = selected,
-                      onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        updateScanFilter(filterOption)
-                      },
-                      label = {
-                        Text(
-                          text = filterOption.displayName,
-                          style = MaterialTheme.typography.labelMedium,
-                          fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                        )
-                      },
-                      leadingIcon = {
-                        Icon(
-                          imageVector = when (filterOption) {
-                            CameraScanFilter.ALL -> Icons.Default.QrCodeScanner
-                            CameraScanFilter.QR_CODE -> Icons.Default.QrCode2
-                            CameraScanFilter.BARCODE -> Icons.Default.ViewWeek
-                          },
-                          contentDescription = null,
-                          modifier = Modifier.size(16.dp),
-                        )
-                      },
-                      shape = RoundedCornerShape(20.dp),
-                      modifier = Modifier.testTag("scan_filter_${filterOption.name}"),
-                    )
-                  }
-                }
-
-                // Scan History & Generator Dialog Button
-                Surface(
-                  shape = RoundedCornerShape(20.dp),
-                  color = MaterialTheme.colorScheme.secondaryContainer,
-                  modifier = Modifier
-                    .padding(start = 6.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .clickable { showScanHistoryDialog = true }
-                    .testTag("scanner_history_button"),
-                ) {
-                  Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.History,
-                      contentDescription = "Scan history and code generator",
-                      tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                      modifier = Modifier.size(16.dp),
-                    )
-                    Text(
-                      text = if (scanHistory.isEmpty()) "Codes" else "${scanHistory.size}",
-                      style = MaterialTheme.typography.labelMedium,
-                      fontWeight = FontWeight.Bold,
-                      color = MaterialTheme.colorScheme.onSecondaryContainer,
-                    )
-                  }
-                }
-              }
-
-              // Row 2: Sample Target Presets & Custom Code Generator Trigger
-              Row(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                val visiblePresets = CameraScanSamplePreset.presetsForFilter(scanFilter)
-                visiblePresets.forEach { preset ->
-                  val isSelected = customTargetCodeContent == null && activeSamplePreset == preset
-                  FilterChip(
-                    selected = isSelected,
-                    onClick = {
-                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                      customTargetCodeContent = null
-                      customTargetCodeFormat = null
-                      activeSamplePreset = preset
-                      showSampleTargetOnViewfinder = true
-                    },
-                    label = {
-                      Text(
-                        text = preset.label,
-                        style = MaterialTheme.typography.labelSmall,
-                      )
-                    },
-                    shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier.testTag("scan_sample_preset_${preset.name}"),
-                  )
-                }
-
+              CameraScanFilter.entries.forEach { filterOption ->
+                val selected = filterOption == scanFilter
                 FilterChip(
-                  selected = customTargetCodeContent != null,
-                  onClick = { showScanHistoryDialog = true },
+                  selected = selected,
+                  onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    updateScanFilter(filterOption)
+                  },
                   label = {
                     Text(
-                      text = if (customTargetCodeContent != null) "Custom Code" else "Create Code",
-                      style = MaterialTheme.typography.labelSmall,
+                      text = filterOption.shortLabel,
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                     )
                   },
                   leadingIcon = {
                     Icon(
-                      imageVector = Icons.Default.Add,
+                      imageVector = when (filterOption) {
+                        CameraScanFilter.ALL -> Icons.Default.QrCodeScanner
+                        CameraScanFilter.QR_CODE -> Icons.Default.QrCode2
+                        CameraScanFilter.BARCODE -> Icons.Default.ViewWeek
+                      },
                       contentDescription = null,
-                      modifier = Modifier.size(14.dp),
+                      modifier = Modifier.size(16.dp),
                     )
                   },
-                  shape = RoundedCornerShape(18.dp),
-                  modifier = Modifier.testTag("open_code_generator_chip"),
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("scan_filter_${filterOption.name}"),
                 )
               }
+
+              FilterChip(
+                selected = showCreateCodeDialog,
+                onClick = {
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  showCreateCodeDialog = true
+                },
+                label = {
+                  Text(
+                    text = "Create Code",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                  )
+                },
+                leadingIcon = {
+                  Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                  )
+                },
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.testTag("open_code_generator_chip"),
+              )
             }
           }
 
@@ -2156,42 +1874,9 @@ fun CameraScreen(
     )
   }
 
-  // Dialog 2: QR Code & Barcode Scan History + Code Generator Hub Dialog
-  if (showScanHistoryDialog) {
-    ScanHistoryAndGeneratorDialog(
-      history = scanHistory,
-      autoScanEnabled = autoScanEnabled,
-      showSampleTarget = showSampleTargetOnViewfinder,
-      onToggleAutoScan = { updateAutoScanEnabled(it) },
-      onToggleSampleTarget = { showSampleTargetOnViewfinder = it },
-      onSelectCode = { code ->
-        showScanHistoryDialog = false
-        scannedCodeToInspect = code
-      },
-      onCopyCode = { code ->
-        copyTextToClipboard(
-          context = context,
-          label = code.format.displayName,
-          text = code.primaryCopyValue,
-          isInspection = isInspection,
-        )
-        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-      },
-      onDeleteHistoryItem = { deleteScanHistoryItem(it) },
-      onClearHistory = { clearScanHistory() },
-      onLoadGeneratedCodeToScanner = { content, format ->
-        val normalized = CameraEngine.normalizeBarcodeInputForEncoding(content, format)
-        customTargetCodeContent = normalized
-        customTargetCodeFormat = format
-        showSampleTargetOnViewfinder = true
-        if (!format.matchesFilter(scanFilter)) {
-          updateScanFilter(CameraScanFilter.ALL)
-        }
-        captureMode = CameraCaptureMode.SCANNER
-        showScanHistoryDialog = false
-        val analyzed = CameraEngine.analyzeScannedPayload(normalized, format)
-        recordScannedCode(analyzed, showToast = true)
-      },
+  // Dialog 2: Create QR / Barcode Modal
+  if (showCreateCodeDialog) {
+    CreateCodeDialog(
       onSaveGeneratedCodeToFolder = { content, format ->
         val normalized = CameraEngine.normalizeBarcodeInputForEncoding(content, format)
         val outFile = CameraEngine.createTimestampedBarcodeFile(
@@ -2204,16 +1889,17 @@ fun CameraScreen(
           format = format,
         )
         refreshTrigger++
+        showCreateCodeDialog = false
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         if (!isInspection) {
           Toast.makeText(context, "Saved ${outFile.name}", Toast.LENGTH_SHORT).show()
         }
       },
-      onDismiss = { showScanHistoryDialog = false },
+      onDismiss = { showCreateCodeDialog = false },
     )
   }
 
-  // Dialog 7: Scanned Code Structured Details & Inspector Dialog
+  // Dialog 3: Scanned Code Structured Details & Inspector Dialog
   val activeInspectedCode = scannedCodeToInspect
   if (activeInspectedCode != null) {
     ScannedCodeDetailsDialog(
@@ -2934,55 +2620,6 @@ private fun CameraFolderAndFormatDialog(
 // =========================================================================
 
 /**
- * Renders a crisp, ZXing-encoded 2D QR/Matrix code or 1D linear barcode card inside the viewfinder
- * so the scanner can be visually inspected and tested even without a physical barcode in front of the lens.
- */
-@Composable
-private fun ScannerSampleCodeOverlay(
-  content: String,
-  format: CameraBarcodeFormat,
-  modifier: Modifier = Modifier,
-) {
-  val cardWidth = if (format.is2D) 186.dp else 248.dp
-  val cardHeight = if (format.is2D) 186.dp else 118.dp
-
-  Surface(
-    shape = RoundedCornerShape(18.dp),
-    color = Color.White.copy(alpha = 0.94f),
-    tonalElevation = 4.dp,
-    modifier = modifier
-      .size(width = cardWidth, height = cardHeight)
-      .padding(4.dp),
-  ) {
-    Column(
-      modifier = Modifier
-        .fillMaxSize()
-        .padding(10.dp),
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.Center,
-    ) {
-      BarcodeBitMatrixPreviewCanvas(
-        content = content,
-        format = format,
-        modifier = Modifier
-          .weight(1f)
-          .fillMaxWidth(),
-      )
-      Spacer(modifier = Modifier.height(4.dp))
-      Text(
-        text = "${format.shortBadge} • ${content.lineSequence().firstOrNull()?.take(24).orEmpty()}",
-        style = MaterialTheme.typography.labelSmall,
-        fontFamily = FontFamily.Monospace,
-        fontWeight = FontWeight.Bold,
-        color = Color(0xFF1B1B1F),
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
-    }
-  }
-}
-
-/**
  * Renders a ZXing boolean bit matrix for [content] in [format] onto a Compose [Canvas].
  */
 @Composable
@@ -3378,25 +3015,14 @@ private fun DetectedScanResultCard(
 }
 
 /**
- * Dialog combining Scan History, Scanner Options, and a QR Code / Barcode Generator
+ * Dedicated modal dialog for generating and saving a 2D QR/Matrix code or 1D barcode image,
  * styled per `DESIGN_LANGUAGE.md` Section 5.2.
  */
 @Composable
-private fun ScanHistoryAndGeneratorDialog(
-  history: List<CameraScannedCode>,
-  autoScanEnabled: Boolean,
-  showSampleTarget: Boolean,
-  onToggleAutoScan: (Boolean) -> Unit,
-  onToggleSampleTarget: (Boolean) -> Unit,
-  onSelectCode: (CameraScannedCode) -> Unit,
-  onCopyCode: (CameraScannedCode) -> Unit,
-  onDeleteHistoryItem: (CameraScannedCode) -> Unit,
-  onClearHistory: () -> Unit,
-  onLoadGeneratedCodeToScanner: (String, CameraBarcodeFormat) -> Unit,
+private fun CreateCodeDialog(
   onSaveGeneratedCodeToFolder: (String, CameraBarcodeFormat) -> Unit,
   onDismiss: () -> Unit,
 ) {
-  var selectedTab by rememberSaveable { mutableIntStateOf(0) } // 0 = History, 1 = Create QR / Barcode
   var generatorFormat by rememberSaveable { mutableStateOf(CameraBarcodeFormat.QR_CODE) }
   var generatorInput by rememberSaveable { mutableStateOf("https://toolbox.example.com") }
 
@@ -3405,7 +3031,7 @@ private fun ScanHistoryAndGeneratorDialog(
     shape = RoundedCornerShape(28.dp),
     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     tonalElevation = 6.dp,
-    modifier = Modifier.testTag("scanner_history_dialog"),
+    modifier = Modifier.testTag("create_code_dialog"),
     title = {
       Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -3420,7 +3046,7 @@ private fun ScanHistoryAndGeneratorDialog(
           contentAlignment = Alignment.Center,
         ) {
           Icon(
-            imageVector = Icons.Default.QrCodeScanner,
+            imageVector = Icons.Default.QrCode2,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(24.dp),
@@ -3428,13 +3054,13 @@ private fun ScanHistoryAndGeneratorDialog(
         }
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = "QR & Barcode Hub",
+            text = "Create Code",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
           )
           Text(
-            text = "${history.size} scanned codes • Reader & Generator",
+            text = "Generate a 2D QR code or 1D barcode",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -3444,376 +3070,108 @@ private fun ScanHistoryAndGeneratorDialog(
     text = {
       Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
-        // Mode Switcher Pills: History vs Generator
-        Row(
+        // Live Preview Card of Generated Code
+        Card(
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+          ),
           modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          FilterChip(
-            selected = selectedTab == 0,
-            onClick = { selectedTab = 0 },
-            label = { Text("Scan History (${history.size})") },
-            leadingIcon = {
-              Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(16.dp))
-            },
-            shape = RoundedCornerShape(20.dp),
+          Column(
             modifier = Modifier
-              .weight(1f)
-              .testTag("scanner_hub_tab_history"),
-          )
-          FilterChip(
-            selected = selectedTab == 1,
-            onClick = { selectedTab = 1 },
-            label = { Text("Create Code") },
-            leadingIcon = {
-              Icon(Icons.Default.QrCode2, contentDescription = null, modifier = Modifier.size(16.dp))
-            },
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier
-              .weight(1f)
-              .testTag("scanner_hub_tab_generator"),
-          )
+              .fillMaxWidth()
+              .padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            BarcodeBitMatrixPreviewCanvas(
+              content = generatorInput.ifBlank { generatorFormat.defaultSamplePayload },
+              format = generatorFormat,
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(if (generatorFormat.is2D) 136.dp else 88.dp)
+                .testTag("generator_preview_canvas"),
+            )
+            Text(
+              text = "${generatorFormat.displayName} (${if (generatorFormat.is2D) "2D Matrix" else "1D Barcode"})",
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
         }
 
-        if (selectedTab == 0) {
-          // Live Auto-Scan & Sample Target Toggles
-          Card(
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.cardColors(
-              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-            ),
-            modifier = Modifier.fillMaxWidth(),
-          ) {
-            Column(
-              modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-              verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Column(modifier = Modifier.weight(1f)) {
-                  Text(
-                    text = "Continuous Live Frame Scan",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                  )
-                  Text(
-                    text = "Automatically decode QR & barcodes in camera view",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  )
-                }
-                Switch(
-                  checked = autoScanEnabled,
-                  onCheckedChange = onToggleAutoScan,
-                  modifier = Modifier.testTag("auto_scan_switch"),
-                )
-              }
-
-              HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Column(modifier = Modifier.weight(1f)) {
-                  Text(
-                    text = "Show Sample Code in Viewfinder",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                  )
-                  Text(
-                    text = "Display interactive test QR/barcode target on screen",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  )
-                }
-                Switch(
-                  checked = showSampleTarget,
-                  onCheckedChange = onToggleSampleTarget,
-                  modifier = Modifier.testTag("sample_target_switch"),
-                )
-              }
-            }
-          }
-
-          if (history.isEmpty()) {
-            Card(
-              shape = RoundedCornerShape(14.dp),
-              colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-              ),
-              modifier = Modifier
-                .fillMaxWidth()
-                .testTag("empty_scan_history_card"),
-            ) {
-              Column(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.QrCodeScanner,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier.size(32.dp),
-                )
-                Text(
-                  text = "No codes scanned yet",
-                  style = MaterialTheme.typography.bodyMedium,
-                  fontWeight = FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                  text = "Scan any QR code or 1D barcode using the camera or create one in the generator tab.",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  textAlign = TextAlign.Center,
-                )
-              }
-            }
-          } else {
-            LazyColumn(
-              modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 260.dp)
-                .testTag("scan_history_list"),
-              verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              items(history, key = { it.id }) { item ->
-                Card(
-                  shape = RoundedCornerShape(14.dp),
-                  colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                  ),
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .clickable { onSelectCode(item) }
-                    .testTag("scan_history_item_${item.format.name}"),
+        // Format Selector Row
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          CameraBarcodeFormat.entries.forEach { fmt ->
+            val selected = fmt == generatorFormat
+            FilterChip(
+              selected = selected,
+              onClick = {
+                generatorFormat = fmt
+                if (generatorInput.isBlank() ||
+                  CameraBarcodeFormat.entries.any { it.defaultSamplePayload == generatorInput }
                 ) {
-                  Row(
-                    modifier = Modifier
-                      .fillMaxWidth()
-                      .padding(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                  ) {
-                    Box(
-                      modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primaryContainer),
-                      contentAlignment = Alignment.Center,
-                    ) {
-                      Icon(
-                        imageVector = if (item.is2D) Icons.Default.QrCode2 else Icons.Default.ViewWeek,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp),
-                      )
-                    }
-
-                    Column(modifier = Modifier.weight(1f)) {
-                      Text(
-                        text = item.title,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                      )
-                      Text(
-                        text = "${item.format.shortBadge} • ${item.payloadType.displayName}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                      )
-                    }
-
-                    IconButton(
-                      onClick = { onCopyCode(item) },
-                      modifier = Modifier.size(34.dp),
-                    ) {
-                      Icon(
-                        imageVector = Icons.Default.ContentCopy,
-                        contentDescription = "Copy ${item.title}",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp),
-                      )
-                    }
-
-                    IconButton(
-                      onClick = { onDeleteHistoryItem(item) },
-                      modifier = Modifier.size(34.dp),
-                    ) {
-                      Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete ${item.title}",
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(18.dp),
-                      )
-                    }
-                  }
-                }
-              }
-            }
-          }
-        } else {
-          // Tab 1: QR Code & Barcode Generator
-          Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            // Live Preview Card of Generated Code
-            Card(
-              shape = RoundedCornerShape(14.dp),
-              colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-              ),
-              modifier = Modifier.fillMaxWidth(),
-            ) {
-              Column(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .padding(12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-              ) {
-                BarcodeBitMatrixPreviewCanvas(
-                  content = generatorInput.ifBlank { generatorFormat.defaultSamplePayload },
-                  format = generatorFormat,
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .height(if (generatorFormat.is2D) 136.dp else 88.dp)
-                    .testTag("generator_preview_canvas"),
-                )
-                Text(
-                  text = "${generatorFormat.displayName} (${if (generatorFormat.is2D) "2D Matrix" else "1D Barcode"})",
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-            }
-
-            // Format Selector Row
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-              CameraBarcodeFormat.entries.forEach { fmt ->
-                val selected = fmt == generatorFormat
-                FilterChip(
-                  selected = selected,
-                  onClick = {
-                    generatorFormat = fmt
-                    if (generatorInput.isBlank() ||
-                      CameraBarcodeFormat.entries.any { it.defaultSamplePayload == generatorInput }
-                    ) {
-                      generatorInput = fmt.defaultSamplePayload
-                    }
-                  },
-                  label = { Text(fmt.shortBadge) },
-                  shape = RoundedCornerShape(18.dp),
-                  modifier = Modifier.testTag("generator_format_chip_${fmt.name}"),
-                )
-              }
-            }
-
-            OutlinedTextField(
-              value = generatorInput,
-              onValueChange = { generatorInput = it },
-              label = { Text("QR / Barcode content or digits") },
-              singleLine = true,
-              shape = RoundedCornerShape(14.dp),
-              trailingIcon = {
-                if (generatorInput.isNotEmpty()) {
-                  IconButton(onClick = { generatorInput = "" }) {
-                    Icon(Icons.Default.Clear, contentDescription = "Clear input")
-                  }
+                  generatorInput = fmt.defaultSamplePayload
                 }
               },
-              modifier = Modifier
-                .fillMaxWidth()
-                .testTag("generator_content_input"),
+              label = { Text(fmt.shortBadge) },
+              shape = RoundedCornerShape(18.dp),
+              modifier = Modifier.testTag("generator_format_chip_${fmt.name}"),
             )
-
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              Button(
-                onClick = {
-                  onLoadGeneratedCodeToScanner(
-                    generatorInput.ifBlank { generatorFormat.defaultSamplePayload },
-                    generatorFormat,
-                  )
-                },
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                  .weight(1f)
-                  .testTag("generator_scan_now_button"),
-              ) {
-                Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Scan in Camera")
-              }
-
-              TextButton(
-                onClick = {
-                  onSaveGeneratedCodeToFolder(
-                    generatorInput.ifBlank { generatorFormat.defaultSamplePayload },
-                    generatorFormat,
-                  )
-                },
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.testTag("generator_save_png_button"),
-              ) {
-                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Save PNG")
-              }
-            }
           }
         }
+
+        OutlinedTextField(
+          value = generatorInput,
+          onValueChange = { generatorInput = it },
+          label = { Text("QR / Barcode content or digits") },
+          singleLine = true,
+          shape = RoundedCornerShape(14.dp),
+          trailingIcon = {
+            if (generatorInput.isNotEmpty()) {
+              IconButton(onClick = { generatorInput = "" }) {
+                Icon(Icons.Default.Clear, contentDescription = "Clear input")
+              }
+            }
+          },
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("generator_content_input"),
+        )
       }
     },
     confirmButton = {
       Button(
-        onClick = onDismiss,
+        onClick = {
+          onSaveGeneratedCodeToFolder(
+            generatorInput.ifBlank { generatorFormat.defaultSamplePayload },
+            generatorFormat,
+          )
+        },
         shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.testTag("close_scanner_hub_button"),
+        modifier = Modifier.testTag("generator_save_png_button"),
       ) {
-        Text("Done")
+        Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Save PNG")
       }
     },
     dismissButton = {
-      if (selectedTab == 0 && history.isNotEmpty()) {
-        TextButton(
-          onClick = onClearHistory,
-          shape = RoundedCornerShape(12.dp),
-          colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-          modifier = Modifier.testTag("clear_scan_history_button"),
-        ) {
-          Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-          Spacer(modifier = Modifier.width(4.dp))
-          Text("Clear All")
-        }
+      TextButton(
+        onClick = onDismiss,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.testTag("close_create_code_button"),
+      ) {
+        Text("Cancel")
       }
     },
   )

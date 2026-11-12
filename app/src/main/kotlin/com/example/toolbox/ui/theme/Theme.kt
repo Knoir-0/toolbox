@@ -29,10 +29,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS_MINUS_30
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_MONOCHROMATIC
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SHADES
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SHADE_DEEP
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SHADE_MID
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SPLIT_COMPLEMENTARY
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SPLIT_COMPLEMENTARY_210
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_TINT_LIGHT
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_TRIADIC
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_TRIADIC_240
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
 import com.example.toolbox.ui.main.FALLBACK_THEME_COLOR_HEX
 import com.example.toolbox.ui.main.ThemeMode
+import com.example.toolbox.ui.tools.HarmonyMode
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -178,12 +190,185 @@ fun parseHexColor(hex: String): Color? {
     }
 }
 
-/**
- * Calculates the complementary color (180-degree hue shift in HSV space) for a given [Color].
- * Ensures the resulting color has sufficient saturation and brightness to function effectively
- * as a Material 3 accent/tertiary color.
- */
-fun calculateComplementaryColor(baseColor: Color): Color {
+enum class AccentHarmonyOption(
+    val prefValue: String,
+    val label: String,
+    val shortLabel: String,
+    val swatchLabel: String,
+    val description: String,
+    val harmonyMode: HarmonyMode,
+    val hueShiftDegrees: Float = 0f,
+) {
+    COMPLEMENTARY(
+        prefValue = DEFAULT_ACCENT_COLOR_AUTO,
+        label = "Auto (Complement)",
+        shortLabel = "Complement (+180°)",
+        swatchLabel = "+180°",
+        description = "Automatically complements your main theme color (+180° hue shift)",
+        harmonyMode = HarmonyMode.COMPLEMENTARY,
+        hueShiftDegrees = 180f,
+    ),
+    ANALOGOUS(
+        prefValue = ACCENT_COLOR_AUTO_ANALOGOUS,
+        label = "Auto (Analogous +30°)",
+        shortLabel = "Analogous (+30°)",
+        swatchLabel = "+30°",
+        description = "Adjacent on the color wheel (+30° hue shift) for smooth, cohesive highlights",
+        harmonyMode = HarmonyMode.ANALOGOUS,
+        hueShiftDegrees = 30f,
+    ),
+    ANALOGOUS_COOL(
+        prefValue = ACCENT_COLOR_AUTO_ANALOGOUS_MINUS_30,
+        label = "Auto (Analogous -30°)",
+        shortLabel = "Analogous (-30°)",
+        swatchLabel = "-30°",
+        description = "Adjacent on the color wheel (-30° hue shift) for smooth, cohesive highlights",
+        harmonyMode = HarmonyMode.ANALOGOUS,
+        hueShiftDegrees = -30f,
+    ),
+    TRIADIC(
+        prefValue = ACCENT_COLOR_AUTO_TRIADIC,
+        label = "Auto (Triadic +120°)",
+        shortLabel = "Triadic (+120°)",
+        swatchLabel = "+120°",
+        description = "Evenly spaced triangle (+120° hue shift) for vibrant, balanced contrast",
+        harmonyMode = HarmonyMode.TRIADIC,
+        hueShiftDegrees = 120f,
+    ),
+    TRIADIC_SECONDARY(
+        prefValue = ACCENT_COLOR_AUTO_TRIADIC_240,
+        label = "Auto (Triadic +240°)",
+        shortLabel = "Triadic (+240°)",
+        swatchLabel = "+240°",
+        description = "Evenly spaced triangle (+240° hue shift) for vibrant, balanced contrast",
+        harmonyMode = HarmonyMode.TRIADIC,
+        hueShiftDegrees = 240f,
+    ),
+    SPLIT_COMPLEMENTARY(
+        prefValue = ACCENT_COLOR_AUTO_SPLIT_COMPLEMENTARY,
+        label = "Auto (Split-Comp +150°)",
+        shortLabel = "Split-Comp (+150°)",
+        swatchLabel = "+150°",
+        description = "Flanks the complement (+150° hue shift) for strong contrast with less tension",
+        harmonyMode = HarmonyMode.SPLIT_COMPLEMENTARY,
+        hueShiftDegrees = 150f,
+    ),
+    SPLIT_COMPLEMENTARY_SECONDARY(
+        prefValue = ACCENT_COLOR_AUTO_SPLIT_COMPLEMENTARY_210,
+        label = "Auto (Split-Comp +210°)",
+        shortLabel = "Split-Comp (+210°)",
+        swatchLabel = "+210°",
+        description = "Flanks the complement (+210° hue shift) for strong contrast with less tension",
+        harmonyMode = HarmonyMode.SPLIT_COMPLEMENTARY,
+        hueShiftDegrees = 210f,
+    ),
+    SHADES(
+        prefValue = ACCENT_COLOR_AUTO_SHADES,
+        label = "Auto (Soft Tint)",
+        shortLabel = "Soft Tint",
+        swatchLabel = "Soft",
+        description = "Soft tonal tint of your main theme color for a unified monochromatic palette",
+        harmonyMode = HarmonyMode.SHADES,
+        hueShiftDegrees = 0f,
+    ),
+    TINT_LIGHT(
+        prefValue = ACCENT_COLOR_AUTO_TINT_LIGHT,
+        label = "Auto (Light Tint)",
+        shortLabel = "Light Tint",
+        swatchLabel = "Light",
+        description = "Bright pastel tint of your main theme color",
+        harmonyMode = HarmonyMode.SHADES,
+        hueShiftDegrees = 0f,
+    ),
+    MONOCHROMATIC(
+        prefValue = ACCENT_COLOR_AUTO_MONOCHROMATIC,
+        label = "Auto (Monochromatic)",
+        shortLabel = "Monochromatic",
+        swatchLabel = "Base",
+        description = "Matches your main theme color's hue directly",
+        harmonyMode = HarmonyMode.SHADES,
+        hueShiftDegrees = 0f,
+    ),
+    SHADE_MID(
+        prefValue = ACCENT_COLOR_AUTO_SHADE_MID,
+        label = "Auto (Mid Shade)",
+        shortLabel = "Mid Shade",
+        swatchLabel = "Mid",
+        description = "Deeper tonal shade of your main theme color",
+        harmonyMode = HarmonyMode.SHADES,
+        hueShiftDegrees = 0f,
+    ),
+    SHADE_DEEP(
+        prefValue = ACCENT_COLOR_AUTO_SHADE_DEEP,
+        label = "Auto (Deep Shade)",
+        shortLabel = "Deep Shade",
+        swatchLabel = "Deep",
+        description = "Rich dark shade of your main theme color",
+        harmonyMode = HarmonyMode.SHADES,
+        hueShiftDegrees = 0f,
+    );
+
+    companion object {
+        fun fromPrefValue(value: String?): AccentHarmonyOption? {
+            if (value.isNullOrBlank()) return null
+            val trimmed = value.trim()
+            if (trimmed.equals("AUTO_COMPLEMENTARY", ignoreCase = true)) {
+                return COMPLEMENTARY
+            }
+            return entries.find { it.prefValue.equals(trimmed, ignoreCase = true) }
+        }
+
+        fun defaultForMode(mode: HarmonyMode): AccentHarmonyOption = when (mode) {
+            HarmonyMode.COMPLEMENTARY -> COMPLEMENTARY
+            HarmonyMode.ANALOGOUS -> ANALOGOUS
+            HarmonyMode.TRIADIC -> TRIADIC
+            HarmonyMode.SPLIT_COMPLEMENTARY -> SPLIT_COMPLEMENTARY
+            HarmonyMode.SHADES -> SHADES
+        }
+
+        fun swatchesForMode(mode: HarmonyMode): List<AccentHarmonyOption> = when (mode) {
+            HarmonyMode.COMPLEMENTARY -> listOf(
+                MONOCHROMATIC,
+                COMPLEMENTARY,
+            )
+            HarmonyMode.ANALOGOUS -> listOf(
+                ANALOGOUS_COOL,
+                MONOCHROMATIC,
+                ANALOGOUS,
+            )
+            HarmonyMode.TRIADIC -> listOf(
+                MONOCHROMATIC,
+                TRIADIC,
+                TRIADIC_SECONDARY,
+            )
+            HarmonyMode.SPLIT_COMPLEMENTARY -> listOf(
+                MONOCHROMATIC,
+                SPLIT_COMPLEMENTARY,
+                SPLIT_COMPLEMENTARY_SECONDARY,
+            )
+            HarmonyMode.SHADES -> listOf(
+                TINT_LIGHT,
+                SHADES,
+                MONOCHROMATIC,
+                SHADE_MID,
+                SHADE_DEEP,
+            )
+        }
+    }
+}
+
+fun isAutoAccentColorSetting(accentColorSetting: String?): Boolean {
+    return AccentHarmonyOption.fromPrefValue(accentColorSetting) != null
+}
+
+fun colorToHexString(color: Color): String {
+    val r = (color.red * 255f).roundToInt().coerceIn(0, 255)
+    val g = (color.green * 255f).roundToInt().coerceIn(0, 255)
+    val b = (color.blue * 255f).roundToInt().coerceIn(0, 255)
+    return String.format("#%02X%02X%02X", r, g, b)
+}
+
+private fun extractBaseHsv(baseColor: Color): Triple<Float, Float, Float> {
     val r = (baseColor.red * 255f).roundToInt().coerceIn(0, 255)
     val g = (baseColor.green * 255f).roundToInt().coerceIn(0, 255)
     val b = (baseColor.blue * 255f).roundToInt().coerceIn(0, 255)
@@ -202,15 +387,14 @@ fun calculateComplementaryColor(baseColor: Color): Color {
         else -> 60f * (((rf - gf) / delta) + 4f)
     }
     val normalizedHue = ((hue % 360f) + 360f) % 360f
-    val complementHue = (normalizedHue + 180f) % 360f
-
     val sat = if (maxC == 0f) 0f else (delta / maxC)
-    val value = maxC
+    return Triple(normalizedHue, sat, maxC)
+}
 
-    // If base color is nearly monochromatic (e.g. grayscale/black/white), fallback to warm amber accent
-    val targetSat = if (delta < 0.05f) 0.85f else sat.coerceIn(0.50f, 0.95f)
-    val targetVal = if (delta < 0.05f) 0.90f else value.coerceIn(0.60f, 0.95f)
-    val effectiveHue = if (delta < 0.05f) 30f else complementHue
+private fun hsvToComposeColor(hue: Float, sat: Float, value: Float): Color {
+    val effectiveHue = ((hue % 360f) + 360f) % 360f
+    val targetSat = sat.coerceIn(0f, 1f)
+    val targetVal = value.coerceIn(0f, 1f)
 
     val c = targetVal * targetSat
     val x = c * (1f - abs(((effectiveHue / 60f) % 2f) - 1f))
@@ -231,6 +415,95 @@ fun calculateComplementaryColor(baseColor: Color): Color {
         blue = (bPrime + m).coerceIn(0f, 1f),
         alpha = 1f,
     )
+}
+
+/**
+ * Calculates a hue-shifted accent color in HSV space for a given [baseColor].
+ * Ensures the resulting color has sufficient saturation and brightness to function effectively
+ * as a Material 3 accent/tertiary color.
+ */
+fun calculateHueShiftedAccentColor(
+    baseColor: Color,
+    hueShiftDegrees: Float,
+): Color {
+    val (normalizedHue, sat, value) = extractBaseHsv(baseColor)
+    val delta = sat * value
+    val shiftedHue = ((normalizedHue + hueShiftDegrees) % 360f + 360f) % 360f
+
+    // If base color is nearly monochromatic (e.g. grayscale/black/white), fallback to warm amber accent
+    val targetSat = if (delta < 0.05f) 0.85f else sat.coerceIn(0.50f, 0.95f)
+    val targetVal = if (delta < 0.05f) 0.90f else value.coerceIn(0.60f, 0.95f)
+    val effectiveHue = if (delta < 0.05f) {
+        ((210f + hueShiftDegrees) % 360f + 360f) % 360f
+    } else {
+        shiftedHue
+    }
+
+    return hsvToComposeColor(effectiveHue, targetSat, targetVal)
+}
+
+/**
+ * Calculates the complementary color (180-degree hue shift in HSV space) for a given [Color].
+ * Ensures the resulting color has sufficient saturation and brightness to function effectively
+ * as a Material 3 accent/tertiary color.
+ */
+fun calculateComplementaryColor(baseColor: Color): Color {
+    return calculateHueShiftedAccentColor(baseColor, 180f)
+}
+
+/**
+ * Calculates the automatic accent color for [baseColor] according to the selected [harmonyOption].
+ */
+fun calculateAccentHarmonyColor(
+    baseColor: Color,
+    harmonyOption: AccentHarmonyOption,
+): Color {
+    val (normalizedHue, sat, value) = extractBaseHsv(baseColor)
+    val delta = sat * value
+    val baseHue = if (delta < 0.05f) 210f else normalizedHue
+    val baseSat = if (delta < 0.05f) 0.85f else sat
+    val baseVal = if (delta < 0.05f) 0.90f else value
+
+    return when (harmonyOption) {
+        AccentHarmonyOption.COMPLEMENTARY,
+        AccentHarmonyOption.ANALOGOUS,
+        AccentHarmonyOption.ANALOGOUS_COOL,
+        AccentHarmonyOption.TRIADIC,
+        AccentHarmonyOption.TRIADIC_SECONDARY,
+        AccentHarmonyOption.SPLIT_COMPLEMENTARY,
+        AccentHarmonyOption.SPLIT_COMPLEMENTARY_SECONDARY,
+        AccentHarmonyOption.MONOCHROMATIC -> {
+            calculateHueShiftedAccentColor(baseColor, harmonyOption.hueShiftDegrees)
+        }
+        AccentHarmonyOption.TINT_LIGHT -> {
+            hsvToComposeColor(
+                hue = baseHue,
+                sat = (baseSat * 0.45f).coerceIn(0.15f, 1f),
+                value = 0.96f,
+            )
+        }
+        AccentHarmonyOption.SHADES -> {
+            hsvToComposeColor(
+                hue = baseHue,
+                sat = (baseSat * 0.75f).coerceIn(0.25f, 1f),
+                value = 0.88f,
+            )
+        }
+        AccentHarmonyOption.SHADE_MID -> {
+            hsvToComposeColor(
+                hue = baseHue,
+                sat = baseSat.coerceIn(0.50f, 0.95f),
+                value = (baseVal * 0.70f).coerceIn(0.12f, 1f),
+            )
+        }
+        AccentHarmonyOption.SHADE_DEEP -> {
+            hsvToComposeColor(
+                hue = baseHue,
+                sat = baseSat.coerceIn(0.50f, 0.95f),
+                value = (baseVal * 0.42f).coerceIn(0.08f, 1f),
+            )
+        }
+    }
 }
 
 data class TertiaryColorTokens(
@@ -265,11 +538,13 @@ fun resolveEffectiveAccentColor(
     accentColorSetting: String,
     fallbackPrimary: Color = Color(0xFF8E66A6),
 ): Color {
-    if (!accentColorSetting.equals(DEFAULT_ACCENT_COLOR_AUTO, ignoreCase = true)) {
-        val parsed = parseHexColor(accentColorSetting)
-        if (parsed != null) return parsed
-    }
     val primary = parseHexColor(themeColorHex) ?: fallbackPrimary
+    val harmonyOption = AccentHarmonyOption.fromPrefValue(accentColorSetting)
+    if (harmonyOption != null) {
+        return calculateAccentHarmonyColor(primary, harmonyOption)
+    }
+    val parsed = parseHexColor(accentColorSetting)
+    if (parsed != null) return parsed
     return calculateComplementaryColor(primary)
 }
 
@@ -364,8 +639,9 @@ fun ToolboxTheme(
         }
     }
 
-    val resolvedAccentColor = if (accentColor.equals(DEFAULT_ACCENT_COLOR_AUTO, ignoreCase = true)) {
-        calculateComplementaryColor(baseColorScheme.primary)
+    val harmonyOption = AccentHarmonyOption.fromPrefValue(accentColor)
+    val resolvedAccentColor = if (harmonyOption != null) {
+        calculateAccentHarmonyColor(baseColorScheme.primary, harmonyOption)
     } else {
         parseHexColor(accentColor) ?: calculateComplementaryColor(baseColorScheme.primary)
     }

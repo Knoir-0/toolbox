@@ -147,9 +147,12 @@ class CameraScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("scanner_detected_card").assertIsDisplayed()
 
-    // Open QR & Barcode Hub dialog and verify scan history
-    composeTestRule.onNodeWithTag("scanner_history_button").performClick()
+    // Open Create Code modal from the All / QR / Barcode selector row
+    composeTestRule.onNodeWithTag("open_code_generator_chip").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("scanner_history_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("create_code_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("generator_preview_canvas").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("close_create_code_button").performClick()
+    composeTestRule.waitForIdle()
   }
 }

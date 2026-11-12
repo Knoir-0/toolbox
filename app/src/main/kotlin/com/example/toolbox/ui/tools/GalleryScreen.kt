@@ -239,7 +239,7 @@ fun GalleryScreen(
     }
   }
 
-  // Additional user-added folders beyond default DCIM and Photos
+  // Additional user-added folders beyond default Pictures and DCIM
   var additionalFolderPaths by rememberSaveable {
     val raw = prefs?.getString(PREF_KEY_GALLERY_FOLDERS, null).orEmpty()
     val list = raw.split("|").map { it.trim() }.filter { it.isNotEmpty() }
@@ -253,12 +253,12 @@ fun GalleryScreen(
     refreshTrigger++
   }
 
-  // Load un-nested root contents (DCIM and Photos merged as if they were the same folder)
+  // Load un-nested root contents (Pictures and DCIM merged as if they were the same folder)
   val baseRootContents = remember(effectiveRootDir, initialFolders, additionalFolderPaths, refreshTrigger, isInspection) {
     if (isInspection && rootDirectory == null && initialFolders == null) {
       AlbumContents(
-        directory = File("/storage/emulated/0/DCIM"),
-        directories = listOf(File("/storage/emulated/0/DCIM"), File("/storage/emulated/0/Photos")),
+        directory = File("/storage/emulated/0/Pictures"),
+        directories = listOf(File("/storage/emulated/0/Pictures"), File("/storage/emulated/0/DCIM")),
         nestedAlbums = listOf(
           GalleryAlbum(
             directory = File("/storage/emulated/0/DCIM/Camera"),
@@ -281,9 +281,9 @@ fun GalleryScreen(
             lastModifiedMs = System.currentTimeMillis() - 90_000L,
           ),
           GalleryAlbum(
-            directory = File("/storage/emulated/0/Photos/Vacation"),
+            directory = File("/storage/emulated/0/Pictures/Vacation"),
             name = "Vacation",
-            path = "/storage/emulated/0/Photos/Vacation",
+            path = "/storage/emulated/0/Pictures/Vacation",
             mostRecentPhoto = null,
             directPhotoCount = 8,
             totalPhotoCount = 15,
@@ -603,6 +603,7 @@ fun GalleryScreen(
           albums = activeAlbums,
           photos = activePhotos,
           albumsPerRow = albumsPerRow,
+          isInsideAlbum = currentAlbum != null,
           onAlbumClick = { album ->
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             albumStack.add(album)
@@ -650,15 +651,15 @@ fun GalleryScreen(
 
   // Add / Create Folder Dialog
   if (showAddFolderDialog) {
-    val defaultPhotosDir = remember(effectiveRootDir, initialFolders) {
-      initialFolders?.firstOrNull() ?: File(effectiveRootDir, "Photos")
+    val defaultNewAlbumDir = remember(effectiveRootDir, initialFolders) {
+      initialFolders?.firstOrNull() ?: GalleryEngine.getDefaultNewAlbumFolder(effectiveRootDir)
     }
     AddGalleryFolderDialog(
-      parentDirectory = currentAlbum?.directory ?: defaultPhotosDir,
+      parentDirectory = currentAlbum?.directory ?: defaultNewAlbumDir,
       isRootLevel = currentAlbum == null,
       onDismiss = { showAddFolderDialog = false },
       onConfirm = { folderName ->
-        val parent = currentAlbum?.directory ?: defaultPhotosDir
+        val parent = currentAlbum?.directory ?: defaultNewAlbumDir
         val newDir = File(parent, folderName.trim())
         newDir.mkdirs()
         refreshTrigger++
@@ -756,26 +757,19 @@ private fun GalleryTopBar(
 
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(2.dp),
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-          IconButton(
-            onClick = onToggleViewMode,
-            modifier = Modifier.testTag("gallery_view_mode_toggle"),
-          ) {
-            Icon(
-              imageVector = if (viewMode == GalleryViewMode.TILE) {
-                Icons.AutoMirrored.Filled.ViewList
-              } else {
-                Icons.Default.GridView
-              },
-              contentDescription = if (viewMode == GalleryViewMode.TILE) {
-                "Switch to list view"
-              } else {
-                "Switch to tile view"
-              },
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
+          ViewModeSegmentedToggle(
+            isListView = viewMode == GalleryViewMode.LIST,
+            onSelectListView = { onSelectViewMode(GalleryViewMode.LIST) },
+            onSelectGridView = { onSelectViewMode(GalleryViewMode.TILE) },
+            onToggle = onToggleViewMode,
+            toggleTestTag = "gallery_view_mode_toggle",
+            listTestTag = "gallery_list_view_button",
+            gridTestTag = "gallery_tile_view_button",
+            listContentDescription = "List view",
+            gridContentDescription = "Tile view",
+          )
 
           IconButton(
             onClick = onOpenAddFolder,
@@ -888,48 +882,13 @@ private fun GalleryNavigationAndDensityBar(
         }
       }
 
-      // View mode pills (Tile / List) + Tile albums-per-row indicator (3..6)
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
+      // Tile albums-per-row indicator (3..6)
+      if (viewMode == GalleryViewMode.TILE) {
         Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.End,
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          FilterChip(
-            selected = viewMode == GalleryViewMode.TILE,
-            onClick = { onSelectViewMode(GalleryViewMode.TILE) },
-            label = { Text("Tile") },
-            leadingIcon = {
-              Icon(
-                imageVector = Icons.Default.GridView,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-              )
-            },
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.testTag("gallery_tile_view_button"),
-          )
-
-          FilterChip(
-            selected = viewMode == GalleryViewMode.LIST,
-            onClick = { onSelectViewMode(GalleryViewMode.LIST) },
-            label = { Text("List") },
-            leadingIcon = {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.ViewList,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-              )
-            },
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.testTag("gallery_list_view_button"),
-          )
-        }
-
-        if (viewMode == GalleryViewMode.TILE) {
           Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1002,7 +961,7 @@ private fun GalleryPermissionBanner(
           color = MaterialTheme.colorScheme.onSecondaryContainer,
         )
         Text(
-          text = "Grant access to view all photos in DCIM and Photos",
+          text = "Grant access to view all photos in Pictures and DCIM",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
         )
@@ -1023,6 +982,7 @@ private fun GalleryTileGridView(
   albums: List<GalleryAlbum>,
   photos: List<GalleryPhoto>,
   albumsPerRow: Int,
+  isInsideAlbum: Boolean = false,
   onAlbumClick: (GalleryAlbum) -> Unit,
   onPhotoClick: (GalleryPhoto) -> Unit,
   onPhotoEdit: (GalleryPhoto) -> Unit = {},
@@ -1038,9 +998,13 @@ private fun GalleryTileGridView(
       .semantics {
         contentDescription = "Tile view with $coercedColumns albums per row"
       },
-    contentPadding = PaddingValues(12.dp),
-    horizontalArrangement = Arrangement.spacedBy(if (isCompactTile) 8.dp else 12.dp),
-    verticalArrangement = Arrangement.spacedBy(if (isCompactTile) 10.dp else 14.dp),
+    contentPadding = PaddingValues(if (isInsideAlbum) 2.dp else 10.dp),
+    horizontalArrangement = Arrangement.spacedBy(
+      if (isInsideAlbum) 2.dp else if (isCompactTile) 8.dp else 10.dp
+    ),
+    verticalArrangement = Arrangement.spacedBy(
+      if (isInsideAlbum) 2.dp else if (isCompactTile) 10.dp else 12.dp
+    ),
   ) {
     items(
       items = albums,
@@ -1194,69 +1158,47 @@ private fun PhotoTileCard(
   onClick: () -> Unit,
   onEdit: () -> Unit = {},
 ) {
-  Column(
+  Box(
     modifier = Modifier
       .fillMaxWidth()
-      .clip(RoundedCornerShape(14.dp))
+      .aspectRatio(1f)
+      .clip(RoundedCornerShape(4.dp))
+      .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
       .clickable(onClick = onClick)
-      .padding(2.dp)
       .testTag("photo_tile_item_${photo.name}"),
-    horizontalAlignment = Alignment.CenterHorizontally,
   ) {
-    Card(
-      shape = RoundedCornerShape(14.dp),
-      colors = CardDefaults.cardColors(
-        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-      ),
-      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+    Box(
       modifier = Modifier
-        .fillMaxWidth()
-        .aspectRatio(1f)
+        .fillMaxSize()
         .testTag("photo_tile_${photo.name}"),
     ) {
-      Box(modifier = Modifier.fillMaxSize()) {
-        PhotoThumbnailBox(
-          photoFile = photo.file,
-          contentDescription = photo.name,
-          iconSize = if (isCompact) 22.dp else 32.dp,
-          modifier = Modifier.fillMaxSize(),
-        )
-        Surface(
-          shape = CircleShape,
-          color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-          modifier = Modifier
-            .align(Alignment.TopEnd)
-            .padding(4.dp)
-            .size(26.dp)
-            .clip(CircleShape)
-            .clickable(onClick = onEdit)
-            .testTag("photo_tile_edit_${photo.name}"),
-        ) {
-          Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-            Icon(
-              imageVector = Icons.Default.Edit,
-              contentDescription = "Edit ${photo.name}",
-              tint = MaterialTheme.colorScheme.onSurface,
-              modifier = Modifier.size(14.dp),
-            )
-          }
+      PhotoThumbnailBox(
+        photoFile = photo.file,
+        contentDescription = photo.name,
+        iconSize = if (isCompact) 22.dp else 32.dp,
+        modifier = Modifier.fillMaxSize(),
+      )
+      Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        modifier = Modifier
+          .align(Alignment.TopEnd)
+          .padding(4.dp)
+          .size(26.dp)
+          .clip(CircleShape)
+          .clickable(onClick = onEdit)
+          .testTag("photo_tile_edit_${photo.name}"),
+      ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+          Icon(
+            imageVector = Icons.Default.Edit,
+            contentDescription = "Edit ${photo.name}",
+            tint = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.size(14.dp),
+          )
         }
       }
     }
-
-    Spacer(modifier = Modifier.height(4.dp))
-
-    Text(
-      text = photo.name,
-      style = MaterialTheme.typography.labelSmall,
-      color = MaterialTheme.colorScheme.onSurface,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-      textAlign = TextAlign.Center,
-      modifier = Modifier
-        .fillMaxWidth()
-        .testTag("photo_label_${photo.name}"),
-    )
   }
 }
 
