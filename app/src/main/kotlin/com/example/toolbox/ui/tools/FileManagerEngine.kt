@@ -395,6 +395,21 @@ object FileManagerEngine {
     return dirs.sortedWith(comparator) + regularFiles.sortedWith(comparator)
   }
 
+  private fun getTypeCategoryTitle(item: FileItem): String {
+    val file = item.file
+    return when {
+      item.isDirectory -> "Folders"
+      isImageFile(file) -> "Images"
+      isAudioFile(file) -> "Audio"
+      isVideoFile(file) -> "Videos"
+      isArchiveFile(file) -> "Archives"
+      isCodeFile(file) -> "Code"
+      isTextFile(file) -> "Documents"
+      file.extension.lowercase(Locale.ROOT) in setOf("pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "epub", "rtf", "odt") -> "Documents"
+      else -> "Other"
+    }
+  }
+
   /**
    * Groups and sorts a list of [FileItem]s according to [groupOption] and [sortOrder].
    * Returns a list of [FileGroup]s, where empty groups are omitted.
@@ -421,34 +436,13 @@ object FileManagerEngine {
         listOf(FileGroup(title = "", items = sortFiles(items, sortOrder)))
       }
       FileGroupOption.TYPE -> {
-        val groups = mutableListOf<FileGroup>()
-        val dirs = items.filter { it.isDirectory }.sortedWith(comparator)
-        if (dirs.isNotEmpty()) groups.add(FileGroup("Folders", dirs))
-
-        val regularFiles = items.filter { !it.isDirectory }
-        val images = regularFiles.filter { isImageFile(it.file) }.sortedWith(comparator)
-        if (images.isNotEmpty()) groups.add(FileGroup("Images", images))
-
-        val videos = regularFiles.filter { isVideoFile(it.file) }.sortedWith(comparator)
-        if (videos.isNotEmpty()) groups.add(FileGroup("Videos", videos))
-
-        val audio = regularFiles.filter { isAudioFile(it.file) }.sortedWith(comparator)
-        if (audio.isNotEmpty()) groups.add(FileGroup("Audio", audio))
-
-        val docs = regularFiles.filter { isTextFile(it.file) }.sortedWith(comparator)
-        if (docs.isNotEmpty()) groups.add(FileGroup("Documents", docs))
-
-        val archives = regularFiles.filter { isArchiveFile(it.file) }.sortedWith(comparator)
-        if (archives.isNotEmpty()) groups.add(FileGroup("Archives", archives))
-
-        val code = regularFiles.filter { isCodeFile(it.file) }.sortedWith(comparator)
-        if (code.isNotEmpty()) groups.add(FileGroup("Code", code))
-
-        val handled = (images + videos + audio + docs + archives + code).toSet()
-        val other = regularFiles.filter { it !in handled }.sortedWith(comparator)
-        if (other.isNotEmpty()) groups.add(FileGroup("Other", other))
-
-        groups
+        val typeOrder = listOf("Folders", "Images", "Videos", "Audio", "Documents", "Archives", "Code", "Other")
+        val grouped = items.groupBy { getTypeCategoryTitle(it) }
+        typeOrder.mapNotNull { title ->
+          grouped[title]?.takeIf { it.isNotEmpty() }?.let { groupItems ->
+            FileGroup(title = title, items = groupItems.sortedWith(comparator))
+          }
+        }
       }
       FileGroupOption.DATE -> {
         val calendar = Calendar.getInstance()

@@ -11,8 +11,14 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
@@ -24,6 +30,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,7 +63,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
@@ -68,15 +77,17 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.PhotoLibrary
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -84,6 +95,7 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -103,12 +115,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -136,6 +150,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private enum class AddAlbumTarget {
+  ROOT_ALBUM,
+  NESTED_ALBUM_HERE,
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GalleryScreen(
@@ -145,6 +164,7 @@ fun GalleryScreen(
   initialAlbumDirectory: File? = null,
   initialAlbumsPerRow: Int? = null,
   initialViewMode: GalleryViewMode? = null,
+  initialSortOrder: GallerySortOrder? = null,
   onNavigateBack: (() -> Unit)? = null,
   onOpenImageEditor: ((File) -> Unit)? = null,
   onOpenVideoEditor: ((File) -> Unit)? = null,
@@ -222,6 +242,20 @@ fun GalleryScreen(
     viewMode = newMode
     prefs?.edit()?.putString(PREF_KEY_GALLERY_VIEW_MODE, newMode.name)?.apply()
   }
+
+  // Sort order: defaults to DATE_DESC (Newest first)
+  var sortOrder by rememberSaveable {
+    val saved = prefs?.getString(PREF_KEY_GALLERY_SORT_ORDER, null)
+    mutableStateOf(initialSortOrder ?: GallerySortOrder.fromNameOrDefault(saved))
+  }
+
+  fun updateSortOrder(newOrder: GallerySortOrder) {
+    sortOrder = newOrder
+    prefs?.edit()?.putString(PREF_KEY_GALLERY_SORT_ORDER, newOrder.name)?.apply()
+  }
+
+  var showSortMenu by remember { mutableStateOf(false) }
+  var isFabExpanded by rememberSaveable { mutableStateOf(false) }
 
   // Albums per row in Tile View: defaults to 3, pinchable from 3 up to 6
   var albumsPerRow by rememberSaveable {
@@ -376,6 +410,7 @@ fun GalleryScreen(
   val currentAlbum: GalleryAlbum? = albumStack.lastOrNull()
 
   fun handleGalleryBack() {
+    isFabExpanded = false
     when {
       albumStack.size > 1 -> {
         albumStack.removeAt(albumStack.lastIndex)
@@ -393,8 +428,12 @@ fun GalleryScreen(
     }
   }
 
-  BackHandler(enabled = albumStack.isNotEmpty() || onNavigateBack != null) {
-    handleGalleryBack()
+  BackHandler(enabled = isFabExpanded || albumStack.isNotEmpty() || onNavigateBack != null) {
+    if (isFabExpanded) {
+      isFabExpanded = false
+    } else {
+      handleGalleryBack()
+    }
   }
 
   val currentAlbumContents = remember(currentAlbum, refreshTrigger) {
@@ -403,16 +442,24 @@ fun GalleryScreen(
     }
   }
 
-  val activeAlbums: List<GalleryAlbum> = if (currentAlbum == null) {
+  val rawAlbums: List<GalleryAlbum> = if (currentAlbum == null) {
     rootContents.nestedAlbums
   } else {
     currentAlbumContents?.nestedAlbums.orEmpty()
   }
 
-  val activePhotos: List<GalleryPhoto> = if (currentAlbum == null) {
+  val rawPhotos: List<GalleryPhoto> = if (currentAlbum == null) {
     rootContents.photos
   } else {
     currentAlbumContents?.photos.orEmpty()
+  }
+
+  val activeAlbums: List<GalleryAlbum> = remember(rawAlbums, sortOrder) {
+    GalleryEngine.sortAlbums(rawAlbums, sortOrder)
+  }
+
+  val activePhotos: List<GalleryPhoto> = remember(rawPhotos, sortOrder) {
+    GalleryEngine.sortPhotos(rawPhotos, sortOrder)
   }
 
   // Defer album art pre-decoding to a background coroutine on Dispatchers.IO
@@ -423,7 +470,7 @@ fun GalleryScreen(
   }
 
   var selectedPhotoForViewer by remember { mutableStateOf<GalleryPhoto?>(null) }
-  var showAddFolderDialog by remember { mutableStateOf(false) }
+  var addAlbumDialogTarget by remember { mutableStateOf<AddAlbumTarget?>(null) }
   var fileForImageEditor by remember { mutableStateOf<File?>(null) }
   var fileForVideoEditor by remember { mutableStateOf<File?>(null) }
 
@@ -465,170 +512,291 @@ fun GalleryScreen(
     return
   }
 
-  Column(
+  Box(
     modifier = modifier
       .fillMaxSize()
       .background(MaterialTheme.colorScheme.background)
       .testTag("gallery_screen"),
   ) {
-    // Top Toolbar following DESIGN_LANGUAGE.md 5.1
-    GalleryTopBar(
-      title = currentAlbum?.name ?: "Gallery",
-      subtext = if (currentAlbum == null) {
-        val albumWord = if (activeAlbums.size == 1) "1 album" else "${activeAlbums.size} albums"
-        val modeInfo = if (viewMode == GalleryViewMode.TILE) "$albumsPerRow per row" else "List view"
-        if (activePhotos.isNotEmpty()) {
-          val photoWord = if (activePhotos.size == 1) "1 photo" else "${activePhotos.size} photos"
-          "$albumWord • $photoWord • $modeInfo"
-        } else {
-          "$albumWord • $modeInfo"
-        }
-      } else {
-        val nestedCount = activeAlbums.size
-        val photoCount = activePhotos.size
-        buildString {
-          if (nestedCount > 0) {
-            append(if (nestedCount == 1) "1 folder" else "$nestedCount folders")
-            append(" • ")
+    Column(
+      modifier = Modifier.fillMaxSize(),
+    ) {
+      // Top Toolbar following DESIGN_LANGUAGE.md 5.1
+      GalleryTopBar(
+        title = currentAlbum?.name ?: "Gallery",
+        subtext = if (currentAlbum == null) {
+          val albumWord = if (activeAlbums.size == 1) "1 album" else "${activeAlbums.size} albums"
+          val modeInfo = if (viewMode == GalleryViewMode.TILE) "$albumsPerRow per row" else "List view"
+          if (activePhotos.isNotEmpty()) {
+            val photoWord = if (activePhotos.size == 1) "1 photo" else "${activePhotos.size} photos"
+            "$albumWord • $photoWord • $modeInfo"
+          } else {
+            "$albumWord • $modeInfo"
           }
-          append(if (photoCount == 1) "1 photo" else "$photoCount photos")
+        } else {
+          val nestedCount = activeAlbums.size
+          val photoCount = activePhotos.size
+          buildString {
+            if (nestedCount > 0) {
+              append(if (nestedCount == 1) "1 folder" else "$nestedCount folders")
+              append(" • ")
+            }
+            append(if (photoCount == 1) "1 photo" else "$photoCount photos")
+          }
+        },
+        canNavigateBack = albumStack.isNotEmpty() || onNavigateBack != null,
+        viewMode = viewMode,
+        sortOrder = sortOrder,
+        showSortMenu = showSortMenu,
+        onBack = { handleGalleryBack() },
+        onToggleViewMode = {
+          val next = if (viewMode == GalleryViewMode.TILE) GalleryViewMode.LIST else GalleryViewMode.TILE
+          updateViewMode(next)
+        },
+        onSelectViewMode = { updateViewMode(it) },
+        onOpenSortMenu = { showSortMenu = true },
+        onDismissSortMenu = { showSortMenu = false },
+        onSelectSortOrder = {
+          updateSortOrder(it)
+          showSortMenu = false
+        },
+      )
+
+      // Breadcrumb & View/Density Controls Bar
+      GalleryNavigationAndDensityBar(
+        albumStack = albumStack.toList(),
+        viewMode = viewMode,
+        albumsPerRow = albumsPerRow,
+        onNavigateToRoot = {
+          isFabExpanded = false
+          navigatedToRootFromInitial = true
+          albumStack.clear()
+        },
+        onNavigateToIndex = { index ->
+          isFabExpanded = false
+          while (albumStack.size > index + 1) {
+            albumStack.removeAt(albumStack.lastIndex)
+          }
+        },
+        onSelectViewMode = { updateViewMode(it) },
+        onAlbumsPerRowChange = { updateAlbumsPerRow(it) },
+      )
+
+      HorizontalDivider(
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+      )
+
+      if (!hasPermission) {
+        GalleryPermissionBanner(
+          onGrantPermission = { requestStoragePermission() },
+        )
+      }
+
+      // Main Content Area (Tile View with pinch-to-zoom 3..6 per row, or List View)
+      val currentColumnsState by rememberUpdatedState(albumsPerRow)
+      val currentOnColumnsChange by rememberUpdatedState<(Int) -> Unit>({ updateAlbumsPerRow(it) })
+
+      Box(
+        modifier = Modifier
+          .weight(1f)
+          .fillMaxWidth()
+          .testTag("gallery_content_container")
+          .pointerInput(viewMode) {
+            if (viewMode != GalleryViewMode.TILE) return@pointerInput
+            awaitEachGesture {
+              var cumulativeZoom = 1f
+              var liveColumns = currentColumnsState
+              var multiTouchStarted = false
+
+              do {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val pressedCount = event.changes.count { it.pressed }
+                if (pressedCount >= 2) {
+                  if (!multiTouchStarted) {
+                    multiTouchStarted = true
+                    cumulativeZoom = 1f
+                    liveColumns = currentColumnsState
+                  }
+                  val zoomChange = event.calculateZoom()
+                  if (zoomChange != 1f && zoomChange > 0f && !zoomChange.isNaN()) {
+                    cumulativeZoom *= zoomChange
+
+                    // Pinching in (fingers moving closer, zoom < 1f) -> increase albums per row up to 6
+                    while (cumulativeZoom <= 0.82f) {
+                      val next = GalleryEngine.coerceAlbumsPerRow(liveColumns + 1)
+                      if (next != liveColumns) {
+                        liveColumns = next
+                        currentOnColumnsChange(next)
+                      }
+                      cumulativeZoom /= 0.82f
+                    }
+
+                    // Pinching out (fingers spreading apart, zoom > 1f) -> decrease albums per row down to 3
+                    while (cumulativeZoom >= 1.22f) {
+                      val next = GalleryEngine.coerceAlbumsPerRow(liveColumns - 1)
+                      if (next != liveColumns) {
+                        liveColumns = next
+                        currentOnColumnsChange(next)
+                      }
+                      cumulativeZoom /= 1.22f
+                    }
+
+                    event.changes.forEach { it.consume() }
+                  }
+                } else {
+                  multiTouchStarted = false
+                  cumulativeZoom = 1f
+                }
+              } while (event.changes.any { it.pressed })
+            }
+          },
+      ) {
+        if (activeAlbums.isEmpty() && activePhotos.isEmpty()) {
+          EmptyAlbumStateView(
+            folderName = currentAlbum?.name ?: "Gallery",
+            onCreateSubfolder = {
+              addAlbumDialogTarget = if (currentAlbum == null) {
+                AddAlbumTarget.ROOT_ALBUM
+              } else {
+                AddAlbumTarget.NESTED_ALBUM_HERE
+              }
+            },
+          )
+        } else if (viewMode == GalleryViewMode.TILE) {
+          GalleryTileGridView(
+            albums = activeAlbums,
+            photos = activePhotos,
+            albumsPerRow = albumsPerRow,
+            isInsideAlbum = currentAlbum != null,
+            onAlbumClick = { album ->
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              isFabExpanded = false
+              albumStack.add(album)
+            },
+            onPhotoClick = { photo ->
+              selectedPhotoForViewer = photo
+            },
+            onPhotoEdit = { photo ->
+              openMediaInEditor(photo)
+            },
+          )
+        } else {
+          GalleryListView(
+            albums = activeAlbums,
+            photos = activePhotos,
+            onAlbumClick = { album ->
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              isFabExpanded = false
+              albumStack.add(album)
+            },
+            onPhotoClick = { photo ->
+              selectedPhotoForViewer = photo
+            },
+            onPhotoEdit = { photo ->
+              openMediaInEditor(photo)
+            },
+          )
         }
-      },
-      canNavigateBack = albumStack.isNotEmpty() || onNavigateBack != null,
-      viewMode = viewMode,
-      onBack = { handleGalleryBack() },
-      onToggleViewMode = {
-        val next = if (viewMode == GalleryViewMode.TILE) GalleryViewMode.LIST else GalleryViewMode.TILE
-        updateViewMode(next)
-      },
-      onSelectViewMode = { updateViewMode(it) },
-      onOpenAddFolder = { showAddFolderDialog = true },
-      onRefresh = { refreshTrigger++ },
-    )
+      }
+    }
 
-    // Breadcrumb & View/Density Controls Bar
-    GalleryNavigationAndDensityBar(
-      albumStack = albumStack.toList(),
-      viewMode = viewMode,
-      albumsPerRow = albumsPerRow,
-      onNavigateToRoot = {
-        navigatedToRootFromInitial = true
-        albumStack.clear()
-      },
-      onNavigateToIndex = { index ->
-        while (albumStack.size > index + 1) {
-          albumStack.removeAt(albumStack.lastIndex)
-        }
-      },
-      onSelectViewMode = { updateViewMode(it) },
-      onAlbumsPerRowChange = { updateAlbumsPerRow(it) },
-    )
-
-    HorizontalDivider(
-      color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-    )
-
-    if (!hasPermission) {
-      GalleryPermissionBanner(
-        onGrantPermission = { requestStoragePermission() },
+    // Scrim overlay when speed dial FAB is expanded
+    AnimatedVisibility(
+      visible = isFabExpanded,
+      enter = fadeIn(tween(150)),
+      exit = fadeOut(tween(150)),
+      modifier = Modifier.fillMaxSize(),
+    ) {
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .background(Color.Black.copy(alpha = 0.32f))
+          .clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+          ) {
+            isFabExpanded = false
+          },
       )
     }
 
-    // Main Content Area (Tile View with pinch-to-zoom 3..6 per row, or List View)
-    val currentColumnsState by rememberUpdatedState(albumsPerRow)
-    val currentOnColumnsChange by rememberUpdatedState<(Int) -> Unit>({ updateAlbumsPerRow(it) })
-
-    Box(
+    // Speed dial FAB menu (matches PlantScheduleScreen and RecipeBookScreen)
+    Column(
       modifier = Modifier
-        .weight(1f)
-        .fillMaxWidth()
-        .testTag("gallery_content_container")
-        .pointerInput(viewMode) {
-          if (viewMode != GalleryViewMode.TILE) return@pointerInput
-          awaitEachGesture {
-            var cumulativeZoom = 1f
-            var liveColumns = currentColumnsState
-            var multiTouchStarted = false
-
-            do {
-              val event = awaitPointerEvent(PointerEventPass.Initial)
-              val pressedCount = event.changes.count { it.pressed }
-              if (pressedCount >= 2) {
-                if (!multiTouchStarted) {
-                  multiTouchStarted = true
-                  cumulativeZoom = 1f
-                  liveColumns = currentColumnsState
-                }
-                val zoomChange = event.calculateZoom()
-                if (zoomChange != 1f && zoomChange > 0f && !zoomChange.isNaN()) {
-                  cumulativeZoom *= zoomChange
-
-                  // Pinching in (fingers moving closer, zoom < 1f) -> increase albums per row up to 6
-                  while (cumulativeZoom <= 0.82f) {
-                    val next = GalleryEngine.coerceAlbumsPerRow(liveColumns + 1)
-                    if (next != liveColumns) {
-                      liveColumns = next
-                      currentOnColumnsChange(next)
-                    }
-                    cumulativeZoom /= 0.82f
-                  }
-
-                  // Pinching out (fingers spreading apart, zoom > 1f) -> decrease albums per row down to 3
-                  while (cumulativeZoom >= 1.22f) {
-                    val next = GalleryEngine.coerceAlbumsPerRow(liveColumns - 1)
-                    if (next != liveColumns) {
-                      liveColumns = next
-                      currentOnColumnsChange(next)
-                    }
-                    cumulativeZoom /= 1.22f
-                  }
-
-                  event.changes.forEach { it.consume() }
-                }
-              } else {
-                multiTouchStarted = false
-                cumulativeZoom = 1f
-              }
-            } while (event.changes.any { it.pressed })
-          }
-        },
+        .align(Alignment.BottomEnd)
+        .padding(end = 16.dp, bottom = 16.dp),
+      horizontalAlignment = Alignment.End,
+      verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-      if (activeAlbums.isEmpty() && activePhotos.isEmpty()) {
-        EmptyAlbumStateView(
-          folderName = currentAlbum?.name ?: "Gallery",
-          onCreateSubfolder = { showAddFolderDialog = true },
-        )
-      } else if (viewMode == GalleryViewMode.TILE) {
-        GalleryTileGridView(
-          albums = activeAlbums,
-          photos = activePhotos,
-          albumsPerRow = albumsPerRow,
-          isInsideAlbum = currentAlbum != null,
-          onAlbumClick = { album ->
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            albumStack.add(album)
-          },
-          onPhotoClick = { photo ->
-            selectedPhotoForViewer = photo
-          },
-          onPhotoEdit = { photo ->
-            openMediaInEditor(photo)
-          },
-        )
-      } else {
-        GalleryListView(
-          albums = activeAlbums,
-          photos = activePhotos,
-          onAlbumClick = { album ->
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            albumStack.add(album)
-          },
-          onPhotoClick = { photo ->
-            selectedPhotoForViewer = photo
-          },
-          onPhotoEdit = { photo ->
-            openMediaInEditor(photo)
-          },
+      // Mini FABs sliding up from underneath
+      AnimatedVisibility(
+        visible = isFabExpanded,
+        enter = fadeIn(tween(160)) + slideInVertically(
+          initialOffsetY = { it },
+          animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+          ),
+        ) + expandVertically(),
+        exit = fadeOut(tween(120)) + slideOutVertically(
+          targetOffsetY = { it },
+          animationSpec = tween(140),
+        ) + shrinkVertically(),
+      ) {
+        Column(
+          horizontalAlignment = Alignment.End,
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          GalleryMiniFab(
+            label = "New album",
+            icon = Icons.Default.CreateNewFolder,
+            testTag = "gallery_new_album_fab_button",
+            onClick = {
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              isFabExpanded = false
+              addAlbumDialogTarget = AddAlbumTarget.ROOT_ALBUM
+            },
+          )
+          GalleryMiniFab(
+            label = "New album here",
+            icon = Icons.Default.FolderOpen,
+            testTag = "gallery_new_album_here_fab_button",
+            onClick = {
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              isFabExpanded = false
+              addAlbumDialogTarget = AddAlbumTarget.NESTED_ALBUM_HERE
+            },
+          )
+        }
+      }
+
+      val addIconRotation by animateFloatAsState(
+        targetValue = if (isFabExpanded) 135f else 0f,
+        label = "gallery_fab_rotation",
+      )
+
+      FloatingActionButton(
+        onClick = {
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          isFabExpanded = !isFabExpanded
+        },
+        shape = CircleShape,
+        containerColor = if (isFabExpanded) {
+          MaterialTheme.colorScheme.surfaceContainerHighest
+        } else {
+          MaterialTheme.colorScheme.primaryContainer
+        },
+        contentColor = if (isFabExpanded) {
+          MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+          MaterialTheme.colorScheme.onPrimaryContainer
+        },
+        modifier = Modifier.testTag("gallery_fab_menu_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Add,
+          contentDescription = if (isFabExpanded) "Close gallery actions" else "Gallery actions",
+          modifier = Modifier.rotate(addIconRotation),
         )
       }
     }
@@ -650,22 +818,69 @@ fun GalleryScreen(
   }
 
   // Add / Create Folder Dialog
-  if (showAddFolderDialog) {
+  addAlbumDialogTarget?.let { target ->
     val defaultNewAlbumDir = remember(effectiveRootDir, initialFolders) {
       initialFolders?.firstOrNull() ?: GalleryEngine.getDefaultNewAlbumFolder(effectiveRootDir)
     }
+    val isRootTarget = target == AddAlbumTarget.ROOT_ALBUM || currentAlbum == null
+    val targetParentDir = if (isRootTarget) {
+      defaultNewAlbumDir
+    } else {
+      currentAlbum?.directory ?: defaultNewAlbumDir
+    }
     AddGalleryFolderDialog(
-      parentDirectory = currentAlbum?.directory ?: defaultNewAlbumDir,
-      isRootLevel = currentAlbum == null,
-      onDismiss = { showAddFolderDialog = false },
+      parentDirectory = targetParentDir,
+      isRootLevel = isRootTarget,
+      onDismiss = { addAlbumDialogTarget = null },
       onConfirm = { folderName ->
-        val parent = currentAlbum?.directory ?: defaultNewAlbumDir
-        val newDir = File(parent, folderName.trim())
+        val newDir = File(targetParentDir, folderName.trim())
         newDir.mkdirs()
         refreshTrigger++
-        showAddFolderDialog = false
+        addAlbumDialogTarget = null
       },
     )
+  }
+}
+
+@Composable
+private fun GalleryMiniFab(
+  label: String,
+  icon: ImageVector,
+  testTag: String,
+  onClick: () -> Unit,
+) {
+  Row(
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    modifier = Modifier.clickable(
+      interactionSource = remember { MutableInteractionSource() },
+      indication = null,
+      onClick = onClick,
+    ),
+  ) {
+    Surface(
+      shape = RoundedCornerShape(8.dp),
+      color = MaterialTheme.colorScheme.surfaceContainerHigh,
+      tonalElevation = 2.dp,
+      shadowElevation = 2.dp,
+    ) {
+      Text(
+        text = label,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+      )
+    }
+    SmallFloatingActionButton(
+      onClick = onClick,
+      shape = CircleShape,
+      containerColor = MaterialTheme.colorScheme.secondaryContainer,
+      contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+      modifier = Modifier.testTag(testTag),
+    ) {
+      Icon(icon, contentDescription = label)
+    }
   }
 }
 
@@ -675,11 +890,14 @@ private fun GalleryTopBar(
   subtext: String,
   canNavigateBack: Boolean,
   viewMode: GalleryViewMode,
+  sortOrder: GallerySortOrder,
+  showSortMenu: Boolean,
   onBack: () -> Unit,
   onToggleViewMode: () -> Unit,
   onSelectViewMode: (GalleryViewMode) -> Unit,
-  onOpenAddFolder: () -> Unit,
-  onRefresh: () -> Unit,
+  onOpenSortMenu: () -> Unit,
+  onDismissSortMenu: () -> Unit,
+  onSelectSortOrder: (GallerySortOrder) -> Unit,
 ) {
   Surface(
     color = MaterialTheme.colorScheme.surface,
@@ -771,26 +989,44 @@ private fun GalleryTopBar(
             gridContentDescription = "Tile view",
           )
 
-          IconButton(
-            onClick = onOpenAddFolder,
-            modifier = Modifier.testTag("gallery_add_folder_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.CreateNewFolder,
-              contentDescription = "Add folder",
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-
-          IconButton(
-            onClick = onRefresh,
-            modifier = Modifier.testTag("gallery_refresh_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Refresh,
-              contentDescription = "Refresh gallery",
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+          Box {
+            IconButton(
+              onClick = onOpenSortMenu,
+              modifier = Modifier.testTag("gallery_sort_button"),
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.Sort,
+                contentDescription = "Sort gallery",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+            DropdownMenu(
+              expanded = showSortMenu,
+              onDismissRequest = onDismissSortMenu,
+              modifier = Modifier.testTag("gallery_sort_menu"),
+            ) {
+              GallerySortOrder.entries.forEach { option ->
+                DropdownMenuItem(
+                  text = {
+                    Text(
+                      text = option.displayName,
+                      fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
+                    )
+                  },
+                  leadingIcon = {
+                    if (option == sortOrder) {
+                      Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                      )
+                    }
+                  },
+                  onClick = { onSelectSortOrder(option) },
+                  modifier = Modifier.testTag("gallery_sort_option_${option.name.lowercase()}"),
+                )
+              }
+            }
           }
         }
       }

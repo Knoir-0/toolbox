@@ -49,6 +49,9 @@
         android:name="android.hardware.bluetooth"
         android:required="false" />
     <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="false" />
+    <uses-feature
         android:name="android.hardware.sensor.gyroscope"
         android:required="false" />
 
@@ -343,7 +346,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_file_converter"
             android:roundIcon="@mipmap/ic_tool_file_converter"
-            android:label="Converter">
+            android:label="Convert">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -554,6 +557,20 @@
             android:icon="@mipmap/ic_tool_recipe_book"
             android:roundIcon="@mipmap/ic_tool_recipe_book"
             android:label="Recipes">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".MainActivityToolObd2Scanner"
+            android:targetActivity=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_obd2_scanner"
+            android:roundIcon="@mipmap/ic_tool_obd2_scanner"
+            android:label="OBD2">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

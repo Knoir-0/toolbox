@@ -424,13 +424,31 @@ class FileManagerEngineTest {
     assertEquals("Audio", groups[3].title)
     assertEquals("song.mp3", groups[3].items[0].name)
     assertEquals("Documents", groups[4].title)
-    assertEquals("notes.txt", groups[4].items[0].name)
+    assertEquals(listOf("notes.txt"), groups[4].items.map { it.name })
     assertEquals("Archives", groups[5].title)
     assertEquals("archive.zip", groups[5].items[0].name)
     assertEquals("Code", groups[6].title)
-    assertEquals("script.kt", groups[6].items[0].name)
+    assertEquals(listOf("script.kt"), groups[6].items.map { it.name })
     assertEquals("Other", groups[7].title)
     assertEquals("random.dat", groups[7].items[0].name)
+
+    // Ensure no file appears in more than one group (which would cause duplicate keys in LazyColumn)
+    val allGroupedPaths = groups.flatMap { it.items.map { item -> item.path } }
+    assertEquals(items.size, allGroupedPaths.size)
+    assertEquals(allGroupedPaths.distinct().size, allGroupedPaths.size)
+  }
+
+  @Test
+  fun groupAndSortFiles_sampleDocumentsFolder_hasUniqueItemKeysAcrossGroups() {
+    val root = tempFolder.newFolder("SampleRoot")
+    FileManagerEngine.populateDefaultSampleFiles(root)
+    val docsDir = File(root, "Documents")
+    val items = FileManagerEngine.listDirectoryContents(docsDir)
+
+    val groups = FileManagerEngine.groupAndSortFiles(items, FileGroupOption.TYPE, FileSortOrder.NAME_ASC)
+    val allGroupedPaths = groups.flatMap { it.items.map { item -> item.path } }
+    assertEquals(items.size, allGroupedPaths.size)
+    assertEquals(allGroupedPaths.distinct().size, allGroupedPaths.size)
   }
 
   @Test

@@ -260,7 +260,7 @@ fun FileConverterScreen(
 
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "Converter",
+                text = "Convert",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,

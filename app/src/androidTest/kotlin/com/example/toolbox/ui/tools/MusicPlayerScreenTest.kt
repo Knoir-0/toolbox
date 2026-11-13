@@ -17,18 +17,19 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
-import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_ACCENT
-import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_PLAYER
-import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_SECONDARY
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_TRIADIC
 import com.example.toolbox.ui.main.InMemoryNavigationPreferencesRepository
+import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_ACCENT
+import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_PLAYER
+import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_SECONDARY
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.ToolboxScaffold
 import com.example.toolbox.ui.theme.AccentHarmonyOption
 import com.example.toolbox.ui.theme.MusicPlayerColorOption
 import com.example.toolbox.ui.theme.ToolboxTheme
-import com.example.toolbox.ui.theme.buildMusicPlayerAccentPrefValue
 import com.example.toolbox.ui.theme.calculateAccentHarmonyColor
 import com.example.toolbox.ui.theme.calculateMusicPlayerBackgroundColor
+import com.example.toolbox.ui.theme.createCustomColorScheme
 import com.example.toolbox.ui.theme.createTertiaryTokens
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -277,41 +278,46 @@ class MusicPlayerScreenTest {
   }
 
   @Test
-  fun settingsScreen_accentColorMusicPlayerOption_updatesThemeBackgroundAndHarmonyAccentDynamicallyWithMusicTrack() {
+  fun settingsScreen_themeColorMusicPlayerOption_updatesMainColorBackgroundAndHarmonyAccentDynamicallyWithMusicTrack() {
     val prefsRepo = InMemoryNavigationPreferencesRepository()
+    var observedPrimaryColor: Color? = null
     var observedTertiaryColor: Color? = null
     var observedBackgroundColor: Color? = null
 
     composeTestRule.setContent {
+      val themeColor by prefsRepo.themeColorFlow.collectAsState()
       val accentColor by prefsRepo.accentColorFlow.collectAsState()
       ToolboxTheme(
         darkTheme = false,
         dynamicColor = false,
+        themeColor = themeColor,
         accentColor = accentColor,
       ) {
+        observedPrimaryColor = MaterialTheme.colorScheme.primary
         observedTertiaryColor = MaterialTheme.colorScheme.tertiary
         observedBackgroundColor = MaterialTheme.colorScheme.background
         SettingsScreen(
           preferencesRepository = prefsRepo,
           initialVisibilityExpanded = false,
+          initialThemeColorExpanded = true,
           initialAccentColorExpanded = true,
         )
       }
     }
     composeTestRule.waitForIdle()
 
-    val baseBackgroundColor = observedBackgroundColor!!
-
-    // Select the Music Player Colors option card in Accent Color settings
-    composeTestRule.onNodeWithTag("accent_preset_music_player")
+    // Select the Music Player Colors option card in Theme Color settings
+    composeTestRule.onNodeWithTag("color_preset_music_player")
       .performScrollTo()
       .performClick()
     composeTestRule.waitForIdle()
 
-    assertEquals(ACCENT_COLOR_MUSIC_PLAYER, prefsRepo.getAccentColor())
+    assertEquals(THEME_COLOR_MUSIC_PLAYER, prefsRepo.getThemeColor())
     val firstPalette = MusicPlayerEngine.activeTrackPalette
+    val customBaseBg = createCustomColorScheme(firstPalette.dominantColor, darkTheme = false).background
+    assertEquals(firstPalette.dominantColor, observedPrimaryColor)
     assertEquals(
-      calculateMusicPlayerBackgroundColor(baseBackgroundColor, firstPalette, MusicPlayerColorOption.DOMINANT),
+      calculateMusicPlayerBackgroundColor(customBaseBg, firstPalette, MusicPlayerColorOption.DOMINANT),
       observedBackgroundColor,
     )
     assertEquals(
@@ -322,19 +328,16 @@ class MusicPlayerScreenTest {
       observedTertiaryColor,
     )
 
-    // Switch harmony mode to Triadic while Music Player Colors is active:
-    // Accent color is calculated off the Music Player color using Triadic harmony while background stays music-tinted
+    // Switch harmony mode to Triadic in Accent Color settings while Music Player Colors is active on Theme Color:
+    // Accent color is calculated off the Music Player main color using Triadic harmony while background stays music-tinted
     composeTestRule.onNodeWithTag("accent_harmony_mode_triadic")
       .performScrollTo()
       .performClick()
     composeTestRule.waitForIdle()
 
+    assertEquals(ACCENT_COLOR_AUTO_TRIADIC, prefsRepo.getAccentColor())
     assertEquals(
-      buildMusicPlayerAccentPrefValue(MusicPlayerColorOption.DOMINANT, AccentHarmonyOption.TRIADIC),
-      prefsRepo.getAccentColor(),
-    )
-    assertEquals(
-      calculateMusicPlayerBackgroundColor(baseBackgroundColor, firstPalette, MusicPlayerColorOption.DOMINANT),
+      calculateMusicPlayerBackgroundColor(customBaseBg, firstPalette, MusicPlayerColorOption.DOMINANT),
       observedBackgroundColor,
     )
     assertEquals(
@@ -345,18 +348,16 @@ class MusicPlayerScreenTest {
       observedTertiaryColor,
     )
 
-    // Select the Secondary swatch from the Music Player Palette section (keeps Triadic harmony)
-    composeTestRule.onNodeWithTag("accent_music_swatch_secondary")
+    // Select the Secondary swatch from the Music Player Palette section in Theme Color
+    composeTestRule.onNodeWithTag("theme_music_swatch_secondary")
       .performScrollTo()
       .performClick()
     composeTestRule.waitForIdle()
 
+    assertEquals(THEME_COLOR_MUSIC_SECONDARY, prefsRepo.getThemeColor())
+    assertEquals(firstPalette.secondaryColor, observedPrimaryColor)
     assertEquals(
-      buildMusicPlayerAccentPrefValue(MusicPlayerColorOption.SECONDARY, AccentHarmonyOption.TRIADIC),
-      prefsRepo.getAccentColor(),
-    )
-    assertEquals(
-      calculateMusicPlayerBackgroundColor(baseBackgroundColor, firstPalette, MusicPlayerColorOption.SECONDARY),
+      calculateMusicPlayerBackgroundColor(customBaseBg, firstPalette, MusicPlayerColorOption.SECONDARY),
       observedBackgroundColor,
     )
     assertEquals(
@@ -367,18 +368,16 @@ class MusicPlayerScreenTest {
       observedTertiaryColor,
     )
 
-    // Select the Accent swatch from the Music Player Palette section
-    composeTestRule.onNodeWithTag("accent_music_swatch_accent")
+    // Select the Accent swatch from the Music Player Palette section in Theme Color
+    composeTestRule.onNodeWithTag("theme_music_swatch_accent")
       .performScrollTo()
       .performClick()
     composeTestRule.waitForIdle()
 
+    assertEquals(THEME_COLOR_MUSIC_ACCENT, prefsRepo.getThemeColor())
+    assertEquals(firstPalette.accentColor, observedPrimaryColor)
     assertEquals(
-      buildMusicPlayerAccentPrefValue(MusicPlayerColorOption.ACCENT, AccentHarmonyOption.TRIADIC),
-      prefsRepo.getAccentColor(),
-    )
-    assertEquals(
-      calculateMusicPlayerBackgroundColor(baseBackgroundColor, firstPalette, MusicPlayerColorOption.ACCENT),
+      calculateMusicPlayerBackgroundColor(customBaseBg, firstPalette, MusicPlayerColorOption.ACCENT),
       observedBackgroundColor,
     )
     assertEquals(
@@ -397,8 +396,9 @@ class MusicPlayerScreenTest {
     }
     composeTestRule.waitForIdle()
 
+    assertEquals(nextPalette.accentColor, observedPrimaryColor)
     assertEquals(
-      calculateMusicPlayerBackgroundColor(baseBackgroundColor, nextPalette, MusicPlayerColorOption.ACCENT),
+      calculateMusicPlayerBackgroundColor(customBaseBg, nextPalette, MusicPlayerColorOption.ACCENT),
       observedBackgroundColor,
     )
     assertEquals(

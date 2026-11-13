@@ -2,6 +2,7 @@ package com.example.toolbox.ui.tools
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -37,6 +38,13 @@ class NotesScreenTest {
     composeTestRule.onNodeWithTag("editor_content_input").performTextInput("Almonds, cashews, dark chocolate")
     composeTestRule.onNodeWithTag("editor_color_PEACH").performClick()
     composeTestRule.onNodeWithTag("editor_pin_button").performClick()
+    composeTestRule.onNodeWithTag("editor_toggle_label_picker").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("editor_new_label_input").assertIsFocused()
+    composeTestRule.onNodeWithTag("editor_new_label_input").performTextInput("snacks")
+    composeTestRule.onNodeWithTag("editor_add_label_confirm").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("editor_label_chip_snacks").assertIsDisplayed()
     composeTestRule.onNodeWithTag("editor_save_button").performClick()
     composeTestRule.waitForIdle()
 
@@ -261,5 +269,7 @@ class NotesScreenTest {
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("notes_filter_label_recipes").assertIsDisplayed()
+    composeTestRule.onNodeWithText("recipes").assertIsDisplayed()
+    composeTestRule.onNodeWithText("#recipes").assertDoesNotExist()
   }
 }

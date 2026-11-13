@@ -897,7 +897,7 @@ fun FilesScreen(
                   if (!isCollapsed) {
                     items(
                       items = group.items,
-                      key = { it.path },
+                      key = { if (group.title.isEmpty()) it.path else "${group.title}:${it.path}" },
                     ) { item ->
                       FileListItem(
                         item = item,
@@ -1015,7 +1015,7 @@ fun FilesScreen(
                   if (!isCollapsed) {
                     items(
                       items = group.items,
-                      key = { it.path },
+                      key = { if (group.title.isEmpty()) it.path else "${group.title}:${it.path}" },
                     ) { item ->
                     FileGridItem(
                       item = item,

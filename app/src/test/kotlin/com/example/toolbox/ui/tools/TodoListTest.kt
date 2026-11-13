@@ -4,6 +4,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -566,5 +567,59 @@ class TodoListTest {
     // Unscheduling clears schedule fields
     val unscheduled = TodoListEngine.unscheduleTask(rescheduled, "t1")
     assertFalse(unscheduled[0].isScheduled)
+  }
+
+  @Test
+  fun engine_deletingOrCompletingScheduledTask_cancelsAlarmAndSuppressesNotification() {
+    val baseTime = 1_760_000_000_000L
+    val scheduledTime = baseTime + 30 * 60_000L
+    val task1 = TodoItem(
+      id = "scheduled-to-delete",
+      title = "Delete me before alarm",
+      scheduledAtMillis = scheduledTime,
+    )
+    val task2 = TodoItem(
+      id = "scheduled-to-keep",
+      title = "Keep me scheduled",
+      scheduledAtMillis = scheduledTime,
+    )
+    val repo = InMemoryTodoListRepository(initialTasks = listOf(task1, task2))
+
+    // Delete task1 before scheduledTime is reached
+    val initialSnapshot = TodoHistorySnapshot(tasks = repo.loadTasks(), completedToday = 0)
+    val afterDeleteSnapshot = TodoListEngine.deleteTask(initialSnapshot, "scheduled-to-delete")
+    val cancelledIds = TodoListEngine.getTaskIdsToCancelAlarms(initialSnapshot.tasks, afterDeleteSnapshot.tasks)
+    assertEquals(setOf("scheduled-to-delete"), cancelledIds)
+
+    repo.saveTasks(afterDeleteSnapshot.tasks)
+
+    // When scheduledTime is reached, deleted task must NOT trigger in-app due notification or alarm receiver notification
+    val dueTasks = TodoListEngine.getDueUnnotifiedTasks(repo.loadTasks(), scheduledTime)
+    assertEquals(listOf("scheduled-to-keep"), dueTasks.map { it.id })
+
+    val deletedAlarmResult = TodoListEngine.consumeScheduledAlarm(
+      repository = repo,
+      taskId = "scheduled-to-delete",
+      scheduledAtMillis = scheduledTime,
+    )
+    assertNull(deletedAlarmResult)
+
+    // Active scheduled task DOES trigger once and is marked notified
+    val activeAlarmResult = TodoListEngine.consumeScheduledAlarm(
+      repository = repo,
+      taskId = "scheduled-to-keep",
+      scheduledAtMillis = scheduledTime,
+    )
+    assertNotNull(activeAlarmResult)
+    assertEquals("Keep me scheduled", activeAlarmResult?.title)
+
+    // Duplicate alarm for the same schedule does not re-trigger
+    assertNull(
+      TodoListEngine.consumeScheduledAlarm(
+        repository = repo,
+        taskId = "scheduled-to-keep",
+        scheduledAtMillis = scheduledTime,
+      ),
+    )
   }
 }

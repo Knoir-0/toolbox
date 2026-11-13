@@ -502,7 +502,7 @@ internal fun DeviceListContent(
       }
     }
 
-    // Single + button at the bottom middle (circular, floating above the scrollable list)
+    // Single + button at the bottom right (circular, floating above the scrollable list)
     FloatingActionButton(
       onClick = {
         when {
@@ -515,8 +515,8 @@ internal fun DeviceListContent(
       containerColor = MaterialTheme.colorScheme.primary,
       contentColor = MaterialTheme.colorScheme.onPrimary,
       modifier = Modifier
-        .align(Alignment.BottomCenter)
-        .padding(bottom = 16.dp)
+        .align(Alignment.BottomEnd)
+        .padding(end = 16.dp, bottom = 16.dp)
         .testTag("bt_add_device_fab"),
     ) {
       Icon(Icons.Default.Add, contentDescription = "Add device", modifier = Modifier.size(28.dp))

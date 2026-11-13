@@ -219,8 +219,15 @@ fun PlantScheduleScreen(
     }
   }
 
-  BackHandler(enabled = isSearchActive) {
-    closeSearch()
+  BackHandler(enabled = isFabExpanded || isSelectionMode || isSearchActive) {
+    when {
+      isFabExpanded -> isFabExpanded = false
+      isSelectionMode -> {
+        isSelectionMode = false
+        selectedPlantIds = emptySet()
+      }
+      isSearchActive -> closeSearch()
+    }
   }
 
   fun exitSelectionMode() {
@@ -1313,6 +1320,11 @@ private fun CatalogPlantItemCard(
                   Icon(
                     imageVector = if (isScheduled) Icons.Default.DeleteOutline else Icons.Default.Add,
                     contentDescription = null,
+                    tint = if (isScheduled) {
+                      MaterialTheme.colorScheme.error
+                    } else {
+                      MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                   )
                 },
                 onClick = {
@@ -2399,7 +2411,7 @@ private fun PlantEditorDialog(
         }
         Column {
           Text(
-            text = if (isEditing) "Customize Schedule" else "Add Custom Plant",
+            text = if (isEditing) "Customize Schedule" else "Add Plant",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
@@ -2543,6 +2555,7 @@ private fun PlantEditorDialog(
                   fontWeight = FontWeight.Medium,
                 )
               },
+              modifier = Modifier.height(FilterChipDefaults.Height),
               shape = RoundedCornerShape(20.dp),
             )
           }

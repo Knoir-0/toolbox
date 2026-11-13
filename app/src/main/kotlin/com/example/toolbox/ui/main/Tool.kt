@@ -6,6 +6,7 @@ import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Camera
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.GraphicEq
@@ -160,7 +161,7 @@ enum class Tool(
     category = ToolCategory.AUDIO_AND_SOUND,
   ),
   FILE_CONVERTER(
-    title = "Converter",
+    title = "Convert",
     icon = Icons.Default.SwapHoriz,
     category = ToolCategory.FILES_AND_STORAGE,
   ),
@@ -189,6 +190,11 @@ enum class Tool(
     icon = Icons.Default.Palette,
     category = ToolCategory.MISCELLANEOUS,
   ),
+  OBD2_SCANNER(
+    title = "OBD2",
+    icon = Icons.Default.DirectionsCar,
+    category = ToolCategory.REMOTES_AND_DEVICES,
+  ),
   SETTINGS(
     title = "Settings",
     icon = Icons.Default.Settings,
@@ -200,6 +206,7 @@ enum class Tool(
     val ARCHIVES: Tool get() = ARCHIVE
     val MUSIC_PLAYER: Tool get() = MUSIC
     val RECIPE_BOOK: Tool get() = RECIPES
+    val OBD2: Tool get() = OBD2_SCANNER
   }
 }
 

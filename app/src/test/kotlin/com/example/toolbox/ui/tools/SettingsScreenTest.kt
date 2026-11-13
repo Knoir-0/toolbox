@@ -23,6 +23,10 @@ import com.example.toolbox.ui.main.CategorySortingOption
 import com.example.toolbox.ui.main.CategoryToolSortingOption
 import com.example.toolbox.ui.main.FALLBACK_THEME_COLOR_HEX
 import com.example.toolbox.ui.main.InMemoryNavigationPreferencesRepository
+import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_ACCENT
+import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_DOMINANT
+import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_PLAYER
+import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_SECONDARY
 import com.example.toolbox.ui.main.ThemeMode
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.ToolCategory
@@ -38,6 +42,7 @@ import com.example.toolbox.ui.theme.createCustomColorScheme
 import com.example.toolbox.ui.theme.createTertiaryTokens
 import com.example.toolbox.ui.theme.isAutoAccentColorSetting
 import com.example.toolbox.ui.theme.isMusicPlayerAccentColorSetting
+import com.example.toolbox.ui.theme.isMusicPlayerThemeColorSetting
 import com.example.toolbox.ui.theme.parseHexColor
 import com.example.toolbox.ui.theme.resolveEffectiveAccentColor
 import com.example.toolbox.ui.theme.resolveMusicPlayerHarmonyOption
@@ -306,6 +311,7 @@ class SettingsScreenTest {
     assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.ARCHIVE.category)
     assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.MUSIC.category)
     assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.PDF_VIEWER.category)
+    assertEquals(ToolCategory.REMOTES_AND_DEVICES, Tool.OBD2_SCANNER.category)
     assertEquals(ToolCategory.SYSTEM, Tool.SETTINGS.category)
   }
 
@@ -512,29 +518,22 @@ class SettingsScreenTest {
   }
 
   @Test
-  fun isMusicPlayerAccentColorSetting_recognizesAllMusicPlayerOptions() {
-    assertTrue(isMusicPlayerAccentColorSetting(ACCENT_COLOR_MUSIC_PLAYER))
-    assertTrue(isMusicPlayerAccentColorSetting(ACCENT_COLOR_MUSIC_DOMINANT))
-    assertTrue(isMusicPlayerAccentColorSetting(ACCENT_COLOR_MUSIC_SECONDARY))
-    assertTrue(isMusicPlayerAccentColorSetting(ACCENT_COLOR_MUSIC_ACCENT))
-    val triadicMusicPref = buildMusicPlayerAccentPrefValue(
-      MusicPlayerColorOption.DOMINANT,
-      AccentHarmonyOption.TRIADIC,
-    )
-    assertTrue(isMusicPlayerAccentColorSetting(triadicMusicPref))
-    assertEquals(MusicPlayerColorOption.DOMINANT, MusicPlayerColorOption.fromPrefValue(triadicMusicPref))
-    assertEquals(AccentHarmonyOption.TRIADIC, resolveMusicPlayerHarmonyOption(triadicMusicPref))
-    assertEquals(MusicPlayerColorOption.DOMINANT, MusicPlayerColorOption.fromPrefValue(ACCENT_COLOR_MUSIC_PLAYER))
-    assertEquals(MusicPlayerColorOption.DOMINANT, MusicPlayerColorOption.fromPrefValue(ACCENT_COLOR_MUSIC_DOMINANT))
-    assertEquals(MusicPlayerColorOption.SECONDARY, MusicPlayerColorOption.fromPrefValue(ACCENT_COLOR_MUSIC_SECONDARY))
-    assertEquals(MusicPlayerColorOption.ACCENT, MusicPlayerColorOption.fromPrefValue(ACCENT_COLOR_MUSIC_ACCENT))
-    assertFalse(isMusicPlayerAccentColorSetting(DEFAULT_ACCENT_COLOR_AUTO))
-    assertFalse(isMusicPlayerAccentColorSetting("#E65100"))
-    assertFalse(isMusicPlayerAccentColorSetting(null))
+  fun isMusicPlayerThemeColorSetting_recognizesAllMusicPlayerOptions() {
+    assertTrue(isMusicPlayerThemeColorSetting(THEME_COLOR_MUSIC_PLAYER))
+    assertTrue(isMusicPlayerThemeColorSetting(THEME_COLOR_MUSIC_DOMINANT))
+    assertTrue(isMusicPlayerThemeColorSetting(THEME_COLOR_MUSIC_SECONDARY))
+    assertTrue(isMusicPlayerThemeColorSetting(THEME_COLOR_MUSIC_ACCENT))
+    assertEquals(MusicPlayerColorOption.DOMINANT, MusicPlayerColorOption.fromPrefValue(THEME_COLOR_MUSIC_PLAYER))
+    assertEquals(MusicPlayerColorOption.DOMINANT, MusicPlayerColorOption.fromPrefValue(THEME_COLOR_MUSIC_DOMINANT))
+    assertEquals(MusicPlayerColorOption.SECONDARY, MusicPlayerColorOption.fromPrefValue(THEME_COLOR_MUSIC_SECONDARY))
+    assertEquals(MusicPlayerColorOption.ACCENT, MusicPlayerColorOption.fromPrefValue(THEME_COLOR_MUSIC_ACCENT))
+    assertFalse(isMusicPlayerThemeColorSetting(DEFAULT_THEME_COLOR_SYSTEM))
+    assertFalse(isMusicPlayerThemeColorSetting("#8E66A6"))
+    assertFalse(isMusicPlayerThemeColorSetting(null))
   }
 
   @Test
-  fun resolveEffectiveAccentColor_followsMusicPlayerPaletteAndCalculatesHarmony() {
+  fun resolveEffectiveAccentColor_followsMusicPlayerMainColorPaletteAndCalculatesHarmony() {
     val track1 = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS[0]
     val track2 = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS[1]
     val palette1 = MusicPlayerEngine.resolveTrackPalette(track1)
@@ -549,23 +548,23 @@ class SettingsScreenTest {
       assertEquals(track1.id, MusicPlayerEngine.activeTrack?.id)
       assertEquals(
         calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.COMPLEMENTARY),
-        resolveEffectiveAccentColor("#8E66A6", ACCENT_COLOR_MUSIC_PLAYER),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, DEFAULT_ACCENT_COLOR_AUTO),
       )
       assertEquals(
         calculateAccentHarmonyColor(palette1.secondaryColor, AccentHarmonyOption.COMPLEMENTARY),
-        resolveEffectiveAccentColor("#8E66A6", ACCENT_COLOR_MUSIC_SECONDARY),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_SECONDARY, DEFAULT_ACCENT_COLOR_AUTO),
       )
       assertEquals(
         calculateAccentHarmonyColor(palette1.accentColor, AccentHarmonyOption.COMPLEMENTARY),
-        resolveEffectiveAccentColor("#8E66A6", ACCENT_COLOR_MUSIC_ACCENT),
-      )
-      val triadicMusicPref = buildMusicPlayerAccentPrefValue(
-        MusicPlayerColorOption.DOMINANT,
-        AccentHarmonyOption.TRIADIC,
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_ACCENT, DEFAULT_ACCENT_COLOR_AUTO),
       )
       assertEquals(
         calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.TRIADIC),
-        resolveEffectiveAccentColor("#8E66A6", triadicMusicPref),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, ACCENT_COLOR_AUTO_TRIADIC),
+      )
+      assertEquals(
+        Color(0xFFE65100),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, "#E65100"),
       )
       assertEquals(
         androidx.compose.ui.graphics.lerp(baseBg, palette1.dominantColor, 0.22f),
@@ -577,19 +576,19 @@ class SettingsScreenTest {
       assertEquals(track2.id, MusicPlayerEngine.activeTrack?.id)
       assertEquals(
         calculateAccentHarmonyColor(palette2.dominantColor, AccentHarmonyOption.COMPLEMENTARY),
-        resolveEffectiveAccentColor("#8E66A6", ACCENT_COLOR_MUSIC_PLAYER),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, DEFAULT_ACCENT_COLOR_AUTO),
       )
       assertEquals(
         calculateAccentHarmonyColor(palette2.secondaryColor, AccentHarmonyOption.COMPLEMENTARY),
-        resolveEffectiveAccentColor("#8E66A6", ACCENT_COLOR_MUSIC_SECONDARY),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_SECONDARY, DEFAULT_ACCENT_COLOR_AUTO),
       )
       assertEquals(
         calculateAccentHarmonyColor(palette2.accentColor, AccentHarmonyOption.COMPLEMENTARY),
-        resolveEffectiveAccentColor("#8E66A6", ACCENT_COLOR_MUSIC_ACCENT),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_ACCENT, DEFAULT_ACCENT_COLOR_AUTO),
       )
       assertEquals(
         calculateAccentHarmonyColor(palette2.dominantColor, AccentHarmonyOption.TRIADIC),
-        resolveEffectiveAccentColor("#8E66A6", triadicMusicPref),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, ACCENT_COLOR_AUTO_TRIADIC),
       )
     } finally {
       session.release()

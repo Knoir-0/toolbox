@@ -15,6 +15,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.example.toolbox.MainActivity
 import com.example.toolbox.R
+import java.util.Collections
 
 /**
  * Helper for scheduling exact/window alarms and posting system heads-up notifications
@@ -29,6 +30,9 @@ object TodoNotificationHelper {
   const val EXTRA_TASK_TITLE = "extra_todo_task_title"
   const val EXTRA_TASK_CONTENT = "extra_todo_task_content"
   const val EXTRA_SCHEDULED_AT = "extra_todo_scheduled_at"
+
+  private val scheduledAlarmTaskIds: MutableSet<String> =
+    Collections.synchronizedSet(mutableSetOf())
 
   fun ensureNotificationChannel(context: Context) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -170,12 +174,14 @@ object TodoNotificationHelper {
         alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
       }
     }
+    scheduledAlarmTaskIds.add(task.id)
   }
 
   /**
    * Cancels any scheduled alarm for [taskId].
    */
   fun cancelTaskAlarm(context: Context, taskId: String) {
+    scheduledAlarmTaskIds.remove(taskId)
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
     val intent = Intent(context, TodoAlarmReceiver::class.java).apply {
       action = ACTION_TODO_SCHEDULE_ALARM
@@ -193,10 +199,18 @@ object TodoNotificationHelper {
   }
 
   /**
-   * Synchronizes alarms for the current active task list.
+   * Synchronizes alarms for the current active task list, cancelling alarms for any tasks
+   * that were deleted, completed, unscheduled, or already notified.
    */
   fun syncTaskAlarms(context: Context, tasks: List<TodoItem>) {
     ensureNotificationChannel(context)
+    val activeTaskIds = tasks.map { it.id }.toSet()
+    val removedTaskIds = synchronized(scheduledAlarmTaskIds) {
+      scheduledAlarmTaskIds.toSet() - activeTaskIds
+    }
+    removedTaskIds.forEach { taskId ->
+      cancelTaskAlarm(context, taskId)
+    }
     tasks.forEach { task ->
       if (task.scheduledAtMillis != null && task.notifiedAtScheduleMillis != task.scheduledAtMillis) {
         scheduleTaskAlarm(context, task)
@@ -224,26 +238,15 @@ class TodoAlarmReceiver : BroadcastReceiver() {
 
     if (action == TodoNotificationHelper.ACTION_TODO_SCHEDULE_ALARM) {
       val taskId = intent.getStringExtra(TodoNotificationHelper.EXTRA_TASK_ID)
-      val tasks = repo.loadTasks()
-      val matchingTask = tasks.firstOrNull { it.id == taskId }
-
-      if (matchingTask != null) {
-        val scheduledAt = matchingTask.scheduledAtMillis
-        if (scheduledAt != null && matchingTask.notifiedAtScheduleMillis != scheduledAt) {
-          TodoNotificationHelper.showTaskNotification(context, matchingTask)
-          val updated = TodoListEngine.markTaskNotified(tasks, matchingTask.id, scheduledAt)
-          repo.saveTasks(updated)
-        }
-      } else if (taskId != null) {
-        // Fallback if task was only in intent extras
-        val fallbackTitle = intent.getStringExtra(TodoNotificationHelper.EXTRA_TASK_TITLE) ?: return
-        val fallbackContent = intent.getStringExtra(TodoNotificationHelper.EXTRA_TASK_CONTENT) ?: fallbackTitle
-        TodoNotificationHelper.showNotification(
-          context = context,
-          notificationId = taskId.hashCode(),
-          title = fallbackTitle,
-          content = fallbackContent,
-        )
+      val intentScheduledAt = intent.getLongExtra(TodoNotificationHelper.EXTRA_SCHEDULED_AT, -1L)
+        .takeIf { it > 0L }
+      val taskToNotify = TodoListEngine.consumeScheduledAlarm(
+        repository = repo,
+        taskId = taskId,
+        scheduledAtMillis = intentScheduledAt,
+      )
+      if (taskToNotify != null) {
+        TodoNotificationHelper.showTaskNotification(context, taskToNotify)
       }
     }
   }

@@ -247,6 +247,10 @@ class NotesTest {
     val json = original.toJson()
     val restored = NoteItem.fromJson(json)
     assertEquals(original, restored)
+    assertEquals(
+      "Project Ideas\n\n[x] Offline sync\n[ ] Color cards\n\nideas, android",
+      restored.toPlainText(),
+    )
   }
 
   @Test

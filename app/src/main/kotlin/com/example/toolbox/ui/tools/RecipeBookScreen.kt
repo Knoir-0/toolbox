@@ -198,14 +198,16 @@ fun RecipeBookScreen(
         showMultiSelectOverflow = false
     }
 
-    BackHandler(enabled = isSelectionMode || isSearchActive) {
-        if (isSelectionMode) {
-            exitSelectionMode()
-        } else if (isSearchActive) {
-            isSearchActive = false
-            searchQuery = ""
-            selectedSearchCategoryName = null
-            keyboardController?.hide()
+    BackHandler(enabled = isFabExpanded || isSelectionMode || isSearchActive) {
+        when {
+            isFabExpanded -> isFabExpanded = false
+            isSelectionMode -> exitSelectionMode()
+            isSearchActive -> {
+                isSearchActive = false
+                searchQuery = ""
+                selectedSearchCategoryName = null
+                keyboardController?.hide()
+            }
         }
     }
 
@@ -764,7 +766,7 @@ fun RecipeBookScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         RecipeMiniFab(
-                            label = "Add Custom Recipe",
+                            label = "Add Recipe",
                             icon = Icons.Default.Add,
                             testTag = "add_custom_recipe_fab_button",
                             onClick = {
@@ -1335,7 +1337,7 @@ private fun CatalogRecipeResultCard(
                             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
                         ) {
                             DropdownMenuItem(
-                                text = { Text("Inspect Recipe") },
+                                text = { Text("Info") },
                                 leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
                                 onClick = {
                                     showMenu = false
@@ -1345,14 +1347,30 @@ private fun CatalogRecipeResultCard(
                             DropdownMenuItem(
                                 text = {
                                     Text(
-                                        if (isAlreadyAdded) "Remove from Recipes" else "Add to Recipes"
+                                        if (isAlreadyAdded) "Remove" else "Add to Recipes"
                                     )
                                 },
                                 leadingIcon = {
-                                    Icon(
-                                        if (isAlreadyAdded) Icons.Default.Star else Icons.Default.StarBorder,
-                                        contentDescription = null
+                                    if (isAlreadyAdded) {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                    } else {
+                                        Icon(
+                                            Icons.Default.StarBorder,
+                                            contentDescription = null
+                                        )
+                                    }
+                                },
+                                colors = if (isAlreadyAdded) {
+                                    MenuDefaults.itemColors(
+                                        textColor = MaterialTheme.colorScheme.error,
+                                        leadingIconColor = MaterialTheme.colorScheme.error
                                     )
+                                } else {
+                                    MenuDefaults.itemColors()
                                 },
                                 onClick = {
                                     showMenu = false
@@ -2398,7 +2416,7 @@ private fun RecipeEditorDialog(
                     )
                 }
                 Text(
-                    text = if (isEditing) "Edit Recipe" else "Create Custom Recipe",
+                    text = if (isEditing) "Edit Recipe" else "Add Recipe",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )

@@ -143,14 +143,12 @@ import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
 import com.example.toolbox.ui.main.resetAllSettingsToDefaults
 import com.example.toolbox.ui.theme.AccentHarmonyOption
 import com.example.toolbox.ui.theme.MusicPlayerColorOption
-import com.example.toolbox.ui.theme.buildMusicPlayerAccentPrefValue
 import com.example.toolbox.ui.theme.calculateAccentHarmonyColor
 import com.example.toolbox.ui.theme.calculateComplementaryColor
 import com.example.toolbox.ui.theme.colorToHexString
 import com.example.toolbox.ui.theme.isAutoAccentColorSetting
-import com.example.toolbox.ui.theme.isMusicPlayerAccentColorSetting
+import com.example.toolbox.ui.theme.isMusicPlayerThemeColorSetting
 import com.example.toolbox.ui.theme.parseHexColor
-import com.example.toolbox.ui.theme.resolveMusicPlayerHarmonyOption
 import kotlin.math.roundToInt
 
 data class ColorPreset(
@@ -209,6 +207,7 @@ fun SettingsScreen(
   initialThemeColorExpanded: Boolean = false,
   initialAccentColorExpanded: Boolean = false,
   onOpenUrl: ((String) -> Unit)? = null,
+  onSelectTool: ((Tool) -> Unit)? = null,
 ) {
   val themeMode by preferencesRepository.themeModeFlow.collectAsState()
   val themeColor by preferencesRepository.themeColorFlow.collectAsState()
@@ -225,17 +224,17 @@ fun SettingsScreen(
   var isAccentColorExpanded by rememberSaveable { mutableStateOf(initialAccentColorExpanded) }
 
   var customHexInput by rememberSaveable(themeColor) {
-    mutableStateOf(if (themeColor != DEFAULT_THEME_COLOR_SYSTEM) themeColor else "")
-  }
-
-  var customAccentHexInput by rememberSaveable(accentColor) {
     mutableStateOf(
-      if (!isAutoAccentColorSetting(accentColor) && !isMusicPlayerAccentColorSetting(accentColor)) {
-        accentColor
+      if (themeColor != DEFAULT_THEME_COLOR_SYSTEM && !isMusicPlayerThemeColorSetting(themeColor)) {
+        themeColor
       } else {
         ""
       }
     )
+  }
+
+  var customAccentHexInput by rememberSaveable(accentColor) {
+    mutableStateOf(if (!isAutoAccentColorSetting(accentColor)) accentColor else "")
   }
 
   val scrollState = rememberScrollState()
@@ -762,9 +761,18 @@ fun SettingsScreen(
     }
 
     // Section 3: Theme Color (Collapsible)
+    val currentMusicPalette = MusicPlayerEngine.activeTrackPalette
+    val currentMusicTrack = MusicPlayerEngine.activeTrack
+    val activeMusicThemeOption = remember(themeColor) {
+      MusicPlayerColorOption.fromPrefValue(themeColor)
+    }
+    val activeMusicThemeColor = remember(currentMusicPalette, activeMusicThemeOption) {
+      (activeMusicThemeOption ?: MusicPlayerColorOption.DOMINANT).resolveColor(currentMusicPalette)
+    }
     val activeThemeColorPreset = PRESET_COLORS.find { it.hex.equals(themeColor, ignoreCase = true) }
     val themeColorSummary = when {
       themeColor == DEFAULT_THEME_COLOR_SYSTEM -> "System Preset"
+      activeMusicThemeOption != null -> activeMusicThemeOption.label
       activeThemeColorPreset != null -> "${activeThemeColorPreset.name} (${activeThemeColorPreset.hex})"
       else -> "Custom ($themeColor)"
     }
@@ -776,6 +784,7 @@ fun SettingsScreen(
           Color(0xFF8E66A6)
         }
       }
+      activeMusicThemeOption != null -> activeMusicThemeColor
       else -> parseHexColor(themeColor) ?: MaterialTheme.colorScheme.primary
     }
 
@@ -963,6 +972,206 @@ fun SettingsScreen(
               }
             }
 
+            // Music Player Colors Option Card & Swatches
+            val isMusicThemeSelected = activeMusicThemeOption != null
+            OutlinedCard(
+              onClick = {
+                val targetOption = activeMusicThemeOption ?: MusicPlayerColorOption.DOMINANT
+                preferencesRepository.setThemeColor(targetOption.prefValue)
+                customHexInput = ""
+              },
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("color_preset_music_player")
+                .testTag("theme_preset_music_player"),
+              shape = RoundedCornerShape(12.dp),
+              border = CardDefaults.outlinedCardBorder().copy(
+                brush = androidx.compose.ui.graphics.SolidColor(
+                  if (isMusicThemeSelected) MaterialTheme.colorScheme.primary
+                  else MaterialTheme.colorScheme.outlineVariant
+                ),
+              ),
+              colors = CardDefaults.outlinedCardColors(
+                containerColor = if (isMusicThemeSelected) {
+                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                } else {
+                  Color.Transparent
+                },
+              ),
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                  modifier = Modifier.weight(1f),
+                ) {
+                  Box(
+                    modifier = Modifier
+                      .size(24.dp)
+                      .clip(CircleShape)
+                      .background(activeMusicThemeColor),
+                    contentAlignment = Alignment.Center,
+                  ) {
+                    Icon(
+                      imageVector = if (isMusicThemeSelected) Icons.Default.Check else Icons.Default.MusicNote,
+                      contentDescription = null,
+                      tint = Color.White,
+                      modifier = Modifier.size(15.dp),
+                    )
+                  }
+                  Column {
+                    Text(
+                      text = activeMusicThemeOption?.label ?: "Music Player Colors",
+                      style = MaterialTheme.typography.titleSmall,
+                      fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                      text = if (currentMusicTrack != null) {
+                        "Follows ${currentMusicTrack.title} (${activeMusicThemeOption?.swatchLabel ?: "Dominant"})"
+                      } else {
+                        activeMusicThemeOption?.description ?: "Matches main color and background to Music Player album art"
+                      },
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                    )
+                  }
+                }
+
+                if (isMusicThemeSelected) {
+                  Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                  ) {
+                    Text(
+                      text = "Active",
+                      style = MaterialTheme.typography.labelSmall,
+                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                  }
+                }
+              }
+            }
+
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("theme_music_player_swatches_section"),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Text(
+                  text = "Music Player Palette",
+                  style = MaterialTheme.typography.labelLarge,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                  text = currentMusicTrack?.let { "${it.title} • ${it.artist}" } ?: "Tap color to track music player",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                MusicPlayerColorOption.entries.forEach { musicOption ->
+                  val swatchColor = musicOption.resolveColor(currentMusicPalette)
+                  val swatchHex = musicOption.resolveHex(currentMusicPalette)
+                  val isSwatchSelected = activeMusicThemeOption == musicOption
+
+                  Surface(
+                    onClick = {
+                      preferencesRepository.setThemeColor(musicOption.prefValue)
+                      customHexInput = ""
+                    },
+                    modifier = Modifier
+                      .weight(1f)
+                      .testTag("theme_music_swatch_${musicOption.name.lowercase()}")
+                      .testTag("color_music_swatch_${musicOption.name.lowercase()}"),
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (isSwatchSelected) {
+                      MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                    } else {
+                      MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    border = BorderStroke(
+                      width = if (isSwatchSelected) 2.dp else 1.dp,
+                      color = if (isSwatchSelected) {
+                        MaterialTheme.colorScheme.primary
+                      } else {
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                      },
+                    ),
+                  ) {
+                    Column(
+                      modifier = Modifier.padding(8.dp),
+                      horizontalAlignment = Alignment.CenterHorizontally,
+                      verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                      Box(
+                        modifier = Modifier
+                          .fillMaxWidth()
+                          .height(40.dp)
+                          .background(swatchColor, RoundedCornerShape(10.dp))
+                          .border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(10.dp),
+                          ),
+                        contentAlignment = Alignment.Center,
+                      ) {
+                        if (isSwatchSelected) {
+                          Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Selected ${musicOption.label}",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp),
+                          )
+                        }
+                      }
+                      Text(
+                        text = musicOption.swatchLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (isSwatchSelected) FontWeight.Bold else FontWeight.SemiBold,
+                        color = if (isSwatchSelected) {
+                          MaterialTheme.colorScheme.primary
+                        } else {
+                          MaterialTheme.colorScheme.onSurface
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                      )
+                      Text(
+                        text = swatchHex,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                      )
+                    }
+                  }
+                }
+              }
+            }
+
             // Color Swatches
             Text(
               text = "Preset Colors",
@@ -1089,35 +1298,12 @@ fun SettingsScreen(
     val activeAutoHarmony = remember(accentColor) {
       AccentHarmonyOption.fromPrefValue(accentColor)
     }
-    val activeMusicOption = remember(accentColor) {
-      MusicPlayerColorOption.fromPrefValue(accentColor)
-    }
-    val activeMusicHarmony = remember(accentColor, activeMusicOption) {
-      if (activeMusicOption != null) resolveMusicPlayerHarmonyOption(accentColor) else null
-    }
-    var selectedHarmonyOption by rememberSaveable {
-      mutableStateOf(activeAutoHarmony ?: activeMusicHarmony ?: AccentHarmonyOption.COMPLEMENTARY)
-    }
-    val currentMusicPalette = MusicPlayerEngine.activeTrackPalette
-    val currentMusicTrack = MusicPlayerEngine.activeTrack
-    val activeMusicColor = remember(currentMusicPalette, activeMusicOption) {
-      (activeMusicOption ?: MusicPlayerColorOption.DOMINANT).resolveColor(currentMusicPalette)
-    }
-    val activeMusicAccentColor = remember(activeMusicColor, activeMusicHarmony, selectedHarmonyOption) {
-      calculateAccentHarmonyColor(activeMusicColor, activeMusicHarmony ?: selectedHarmonyOption)
-    }
     var selectedHarmonyMode by rememberSaveable {
-      mutableStateOf(
-        (activeAutoHarmony ?: activeMusicHarmony)?.harmonyMode ?: HarmonyMode.COMPLEMENTARY
-      )
+      mutableStateOf(activeAutoHarmony?.harmonyMode ?: HarmonyMode.COMPLEMENTARY)
     }
-    LaunchedEffect(activeAutoHarmony, activeMusicHarmony) {
-      val resolvedHarmony = activeAutoHarmony ?: activeMusicHarmony
-      if (resolvedHarmony != null) {
-        selectedHarmonyOption = resolvedHarmony
-        if (resolvedHarmony != AccentHarmonyOption.MONOCHROMATIC) {
-          selectedHarmonyMode = resolvedHarmony.harmonyMode
-        }
+    LaunchedEffect(activeAutoHarmony) {
+      if (activeAutoHarmony != null && activeAutoHarmony != AccentHarmonyOption.MONOCHROMATIC) {
+        selectedHarmonyMode = activeAutoHarmony.harmonyMode
       }
     }
     val activeAutoHarmonyColor = remember(currentPrimary, activeAutoHarmony, autoComplementColor) {
@@ -1130,16 +1316,11 @@ fun SettingsScreen(
     val activeAccentPreset = ACCENT_PRESET_COLORS.find { it.hex.equals(accentColor, ignoreCase = true) }
     val accentColorSummary = when {
       activeAutoHarmony != null -> activeAutoHarmony.label
-      activeMusicOption != null -> {
-        val harmonyPart = (activeMusicHarmony ?: selectedHarmonyOption).shortLabel
-        "${activeMusicOption.label} • $harmonyPart"
-      }
       activeAccentPreset != null -> "${activeAccentPreset.name} (${activeAccentPreset.hex})"
       else -> "Custom ($accentColor)"
     }
     val activeAccentColorBadge = when {
       activeAutoHarmony != null -> activeAutoHarmonyColor
-      activeMusicOption != null -> activeMusicAccentColor
       else -> parseHexColor(accentColor) ?: autoComplementColor
     }
 
@@ -1320,9 +1501,6 @@ fun SettingsScreen(
               }
             }
 
-            val isMusicAccentSelected = activeMusicOption != null
-            val harmonyBaseColor = if (isMusicAccentSelected) activeMusicColor else currentPrimary
-
             // Color Harmonies (Auto) Section inspired by Colors tool
             Column(
               modifier = Modifier
@@ -1342,11 +1520,7 @@ fun SettingsScreen(
                   color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                  text = if (isMusicAccentSelected) {
-                    "Calculated off music player color"
-                  } else {
-                    "Tap harmony to auto-track theme"
-                  },
+                  text = "Tap harmony to auto-track theme",
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1360,22 +1534,12 @@ fun SettingsScreen(
               ) {
                 HarmonyMode.entries.forEach { mode ->
                   val defaultOption = AccentHarmonyOption.defaultForMode(mode)
-                  val isModeSelected = selectedHarmonyMode == mode && (isAutoAccentSelected || isMusicAccentSelected)
+                  val isModeSelected = selectedHarmonyMode == mode && isAutoAccentSelected
                   FilterChip(
                     selected = isModeSelected,
                     onClick = {
                       selectedHarmonyMode = mode
-                      selectedHarmonyOption = defaultOption
-                      if (activeMusicOption != null) {
-                        preferencesRepository.setAccentColor(
-                          buildMusicPlayerAccentPrefValue(
-                            activeMusicOption,
-                            defaultOption,
-                          )
-                        )
-                      } else {
-                        preferencesRepository.setAccentColor(defaultOption.prefValue)
-                      }
+                      preferencesRepository.setAccentColor(defaultOption.prefValue)
                       customAccentHexInput = ""
                     },
                     shape = CircleShape,
@@ -1403,31 +1567,17 @@ fun SettingsScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
               ) {
                 harmonySwatches.forEach { swatchOption ->
-                  val swatchColor = remember(harmonyBaseColor, swatchOption) {
-                    calculateAccentHarmonyColor(harmonyBaseColor, swatchOption)
+                  val swatchColor = remember(currentPrimary, swatchOption) {
+                    calculateAccentHarmonyColor(currentPrimary, swatchOption)
                   }
                   val swatchHex = remember(swatchColor) {
                     colorToHexString(swatchColor)
                   }
-                  val isSwatchSelected = if (isMusicAccentSelected) {
-                    (activeMusicHarmony ?: selectedHarmonyOption) == swatchOption
-                  } else {
-                    activeAutoHarmony == swatchOption
-                  }
+                  val isSwatchSelected = activeAutoHarmony == swatchOption
 
                   Surface(
                     onClick = {
-                      selectedHarmonyOption = swatchOption
-                      if (activeMusicOption != null) {
-                        preferencesRepository.setAccentColor(
-                          buildMusicPlayerAccentPrefValue(
-                            activeMusicOption,
-                            swatchOption,
-                          )
-                        )
-                      } else {
-                        preferencesRepository.setAccentColor(swatchOption.prefValue)
-                      }
+                      preferencesRepository.setAccentColor(swatchOption.prefValue)
                       customAccentHexInput = ""
                     },
                     modifier = Modifier
@@ -1476,213 +1626,6 @@ fun SettingsScreen(
                       }
                       Text(
                         text = swatchOption.swatchLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = if (isSwatchSelected) FontWeight.Bold else FontWeight.SemiBold,
-                        color = if (isSwatchSelected) {
-                          MaterialTheme.colorScheme.primary
-                        } else {
-                          MaterialTheme.colorScheme.onSurface
-                        },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                      )
-                      Text(
-                        text = swatchHex,
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                      )
-                    }
-                  }
-                }
-              }
-            }
-
-            // Music Player Colors Option Card & Swatches
-            OutlinedCard(
-              onClick = {
-                preferencesRepository.setAccentColor(
-                  buildMusicPlayerAccentPrefValue(
-                    activeMusicOption ?: MusicPlayerColorOption.DOMINANT,
-                    activeMusicHarmony ?: selectedHarmonyOption,
-                  )
-                )
-                customAccentHexInput = ""
-              },
-              modifier = Modifier
-                .fillMaxWidth()
-                .testTag("accent_preset_music_player"),
-              shape = RoundedCornerShape(12.dp),
-              border = CardDefaults.outlinedCardBorder().copy(
-                brush = androidx.compose.ui.graphics.SolidColor(
-                  if (isMusicAccentSelected) MaterialTheme.colorScheme.primary
-                  else MaterialTheme.colorScheme.outlineVariant
-                ),
-              ),
-              colors = CardDefaults.outlinedCardColors(
-                containerColor = if (isMusicAccentSelected) {
-                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-                } else {
-                  Color.Transparent
-                },
-              ),
-            ) {
-              Row(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-              ) {
-                Row(
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(10.dp),
-                  modifier = Modifier.weight(1f),
-                ) {
-                  Box(
-                    modifier = Modifier
-                      .size(24.dp)
-                      .clip(CircleShape)
-                      .background(activeMusicAccentColor),
-                    contentAlignment = Alignment.Center,
-                  ) {
-                    Icon(
-                      imageVector = if (isMusicAccentSelected) Icons.Default.Check else Icons.Default.MusicNote,
-                      contentDescription = null,
-                      tint = Color.White,
-                      modifier = Modifier.size(15.dp),
-                    )
-                  }
-                  Column {
-                    Text(
-                      text = activeMusicOption?.label ?: "Music Player Colors",
-                      style = MaterialTheme.typography.titleSmall,
-                      fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                      text = if (currentMusicTrack != null) {
-                        val harmonyPart = (activeMusicHarmony ?: selectedHarmonyOption).shortLabel
-                        "Follows ${currentMusicTrack.title} (${activeMusicOption?.swatchLabel ?: "Dominant"} • $harmonyPart)"
-                      } else {
-                        activeMusicOption?.description ?: "Matches app background to Music Player and calculates accent via harmony"
-                      },
-                      style = MaterialTheme.typography.bodySmall,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant,
-                      maxLines = 1,
-                      overflow = TextOverflow.Ellipsis,
-                    )
-                  }
-                }
-
-                if (isMusicAccentSelected) {
-                  Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                  ) {
-                    Text(
-                      text = "Active",
-                      style = MaterialTheme.typography.labelSmall,
-                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                    )
-                  }
-                }
-              }
-            }
-
-            Column(
-              modifier = Modifier
-                .fillMaxWidth()
-                .testTag("accent_music_player_swatches_section"),
-              verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Text(
-                  text = "Music Player Palette",
-                  style = MaterialTheme.typography.labelLarge,
-                  fontWeight = FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                  text = currentMusicTrack?.let { "${it.title} • ${it.artist}" } ?: "Tap color to track music player",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                )
-              }
-
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-              ) {
-                MusicPlayerColorOption.entries.forEach { musicOption ->
-                  val swatchColor = musicOption.resolveColor(currentMusicPalette)
-                  val swatchHex = musicOption.resolveHex(currentMusicPalette)
-                  val isSwatchSelected = activeMusicOption == musicOption
-
-                  Surface(
-                    onClick = {
-                      preferencesRepository.setAccentColor(
-                        buildMusicPlayerAccentPrefValue(
-                          musicOption,
-                          activeMusicHarmony ?: selectedHarmonyOption,
-                        )
-                      )
-                      customAccentHexInput = ""
-                    },
-                    modifier = Modifier
-                      .weight(1f)
-                      .testTag("accent_music_swatch_${musicOption.name.lowercase()}"),
-                    shape = RoundedCornerShape(14.dp),
-                    color = if (isSwatchSelected) {
-                      MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-                    } else {
-                      MaterialTheme.colorScheme.surfaceContainerHigh
-                    },
-                    border = BorderStroke(
-                      width = if (isSwatchSelected) 2.dp else 1.dp,
-                      color = if (isSwatchSelected) {
-                        MaterialTheme.colorScheme.primary
-                      } else {
-                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
-                      },
-                    ),
-                  ) {
-                    Column(
-                      modifier = Modifier.padding(8.dp),
-                      horizontalAlignment = Alignment.CenterHorizontally,
-                      verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                      Box(
-                        modifier = Modifier
-                          .fillMaxWidth()
-                          .height(40.dp)
-                          .background(swatchColor, RoundedCornerShape(10.dp))
-                          .border(
-                            width = 1.dp,
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
-                            shape = RoundedCornerShape(10.dp),
-                          ),
-                        contentAlignment = Alignment.Center,
-                      ) {
-                        if (isSwatchSelected) {
-                          Icon(
-                            imageVector = Icons.Default.Check,
-                            contentDescription = "Selected ${musicOption.label}",
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp),
-                          )
-                        }
-                      }
-                      Text(
-                        text = musicOption.swatchLabel,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = if (isSwatchSelected) FontWeight.Bold else FontWeight.SemiBold,
                         color = if (isSwatchSelected) {
@@ -2030,20 +1973,6 @@ fun SettingsScreen(
                           modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
-                            .then(
-                              if (!isSettings) {
-                                Modifier.clickable {
-                                  val updated = if (isVisible) {
-                                    hiddenTools + tool
-                                  } else {
-                                    hiddenTools - tool
-                                  }
-                                  preferencesRepository.setHiddenTools(updated)
-                                }
-                              } else {
-                                Modifier
-                              }
-                            )
                             .padding(vertical = 2.dp, horizontal = 2.dp)
                             .testTag("tool_visibility_row_${tool.name}")
                             .testTag("tool_settings_row_${tool.name}"),
@@ -2113,7 +2042,11 @@ fun SettingsScreen(
                           }
 
                           Surface(
-                            modifier = Modifier.size(32.dp),
+                            modifier = Modifier
+                              .size(32.dp)
+                              .clip(CircleShape)
+                              .clickable { onSelectTool?.invoke(tool) }
+                              .testTag("tool_settings_icon_${tool.name}"),
                             shape = CircleShape,
                             color = if (isVisible) {
                               MaterialTheme.colorScheme.primaryContainer
@@ -2135,7 +2068,14 @@ fun SettingsScreen(
                             }
                           }
 
-                          Column(modifier = Modifier.weight(1f)) {
+                          Column(
+                            modifier = Modifier
+                              .weight(1f)
+                              .clip(RoundedCornerShape(8.dp))
+                              .clickable { onSelectTool?.invoke(tool) }
+                              .padding(vertical = 6.dp, horizontal = 4.dp)
+                              .testTag("tool_settings_text_${tool.name}"),
+                          ) {
                             Text(
                               text = tool.title,
                               style = MaterialTheme.typography.bodyMedium,
@@ -2222,7 +2162,14 @@ fun SettingsScreen(
           if (imported) {
             val restoredThemeColor = preferencesRepository.getThemeColor()
             val restoredAccentColor = preferencesRepository.getAccentColor()
-            customHexInput = if (restoredThemeColor != DEFAULT_THEME_COLOR_SYSTEM) restoredThemeColor else ""
+            customHexInput = if (
+              restoredThemeColor != DEFAULT_THEME_COLOR_SYSTEM &&
+              !isMusicPlayerThemeColorSetting(restoredThemeColor)
+            ) {
+              restoredThemeColor
+            } else {
+              ""
+            }
             customAccentHexInput = if (!isAutoAccentColorSetting(restoredAccentColor)) restoredAccentColor else ""
             AccentHarmonyOption.fromPrefValue(restoredAccentColor)?.let { restoredHarmony ->
               selectedHarmonyMode = restoredHarmony.harmonyMode

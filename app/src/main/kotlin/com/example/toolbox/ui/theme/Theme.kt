@@ -47,6 +47,10 @@ import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_SECONDARY
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
 import com.example.toolbox.ui.main.FALLBACK_THEME_COLOR_HEX
+import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_ACCENT
+import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_DOMINANT
+import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_PLAYER
+import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_SECONDARY
 import com.example.toolbox.ui.main.ThemeMode
 import com.example.toolbox.ui.tools.AlbumArtPalette
 import com.example.toolbox.ui.tools.HarmonyMode
@@ -449,6 +453,10 @@ fun isAutoAccentColorSetting(accentColorSetting: String?): Boolean {
     return AccentHarmonyOption.fromPrefValue(accentColorSetting) != null
 }
 
+fun isMusicPlayerThemeColorSetting(themeColorSetting: String?): Boolean {
+    return MusicPlayerColorOption.fromPrefValue(themeColorSetting) != null
+}
+
 fun isMusicPlayerAccentColorSetting(accentColorSetting: String?): Boolean {
     return MusicPlayerColorOption.fromPrefValue(accentColorSetting) != null
 }
@@ -631,7 +639,10 @@ fun resolveEffectiveAccentColor(
     fallbackPrimary: Color = Color(0xFF8E66A6),
     musicPalette: AlbumArtPalette = MusicPlayerEngine.activeTrackPalette,
 ): Color {
-    val primary = parseHexColor(themeColorHex) ?: fallbackPrimary
+    val musicThemeOption = MusicPlayerColorOption.fromPrefValue(themeColorHex)
+    val primary = musicThemeOption?.resolveColor(musicPalette)
+        ?: parseHexColor(themeColorHex)
+        ?: fallbackPrimary
     val harmonyOption = AccentHarmonyOption.fromPrefValue(accentColorSetting)
     if (harmonyOption != null) {
         return calculateAccentHarmonyColor(primary, harmonyOption)
@@ -712,7 +723,12 @@ fun ToolboxTheme(
     dynamicColor: Boolean = (themeColor == DEFAULT_THEME_COLOR_SYSTEM),
     content: @Composable () -> Unit,
 ) {
+    val musicThemeOption = MusicPlayerColorOption.fromPrefValue(themeColor)
+    val musicPalette = MusicPlayerEngine.activeTrackPalette
     val baseColorScheme = when {
+        musicThemeOption != null -> {
+            createCustomColorScheme(musicThemeOption.resolveColor(musicPalette), darkTheme)
+        }
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
@@ -738,21 +754,25 @@ fun ToolboxTheme(
     }
 
     val harmonyOption = AccentHarmonyOption.fromPrefValue(accentColor)
-    val musicOption = MusicPlayerColorOption.fromPrefValue(accentColor)
-    val musicPalette = MusicPlayerEngine.activeTrackPalette
+    val legacyMusicAccentOption = if (musicThemeOption == null) {
+        MusicPlayerColorOption.fromPrefValue(accentColor)
+    } else {
+        null
+    }
     val resolvedAccentColor = when {
         harmonyOption != null -> calculateAccentHarmonyColor(baseColorScheme.primary, harmonyOption)
-        musicOption != null -> {
+        legacyMusicAccentOption != null -> {
             val musicHarmony = resolveMusicPlayerHarmonyOption(accentColor)
-            calculateAccentHarmonyColor(musicOption.resolveColor(musicPalette), musicHarmony)
+            calculateAccentHarmonyColor(legacyMusicAccentOption.resolveColor(musicPalette), musicHarmony)
         }
         else -> parseHexColor(accentColor) ?: calculateComplementaryColor(baseColorScheme.primary)
     }
 
     val tertiaryTokens = createTertiaryTokens(resolvedAccentColor, darkTheme)
-    val colorScheme = if (musicOption != null) {
-        val musicBaseColor = musicOption.resolveColor(musicPalette)
-        val musicBg = calculateMusicPlayerBackgroundColor(baseColorScheme.background, musicPalette, musicOption)
+    val activeMusicOption = musicThemeOption ?: legacyMusicAccentOption
+    val colorScheme = if (activeMusicOption != null) {
+        val musicBaseColor = activeMusicOption.resolveColor(musicPalette)
+        val musicBg = calculateMusicPlayerBackgroundColor(baseColorScheme.background, musicPalette, activeMusicOption)
         baseColorScheme.copy(
             background = musicBg,
             surface = musicBg,

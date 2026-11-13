@@ -136,6 +136,7 @@ import com.example.toolbox.ui.tools.MusicPlayerEngine
 import com.example.toolbox.ui.tools.MusicPlayerScreen
 import com.example.toolbox.ui.tools.MusicTrack
 import com.example.toolbox.ui.tools.NotesScreen
+import com.example.toolbox.ui.tools.Obd2ScannerScreen
 import com.example.toolbox.ui.tools.PdfViewerScreen
 import com.example.toolbox.ui.tools.PlantScheduleScreen
 import com.example.toolbox.ui.tools.RecipeBookScreen
@@ -580,6 +581,16 @@ fun ToolboxScaffold(
             linkedTool = Tool.COLOR_PICKER
             preferencesRepository?.incrementToolUsage(Tool.COLOR_PICKER)
             onSelectTool(Tool.COLOR_PICKER)
+          },
+          onSelectTool = { tool ->
+            selectedColorPickerHex = null
+            linkReturnTool = selectedTool
+            linkedTool = tool
+            preferencesRepository?.incrementToolUsage(tool)
+            onSelectTool(tool)
+            if (sheetValue == SheetValue.Expanded) {
+              sheetValue = SheetValue.PartiallyExpanded
+            }
           },
           preferencesRepository = preferencesRepository,
         )
@@ -2449,6 +2460,7 @@ fun ToolContentView(
   initialDirectory: File? = null,
   initialColorPickerHex: String? = null,
   onOpenColorPicker: ((String) -> Unit)? = null,
+  onSelectTool: ((Tool) -> Unit)? = null,
   modifier: Modifier = Modifier,
   preferencesRepository: NavigationPreferencesRepository? = null,
 ) {
@@ -2545,8 +2557,12 @@ fun ToolContentView(
       Tool.RECIPES -> RecipeBookScreen(
         modifier = Modifier.padding(bottom = bottomPadding),
       )
+      Tool.OBD2_SCANNER -> Obd2ScannerScreen(
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
       Tool.SETTINGS -> SettingsScreen(
         preferencesRepository = preferencesRepository ?: rememberNavigationPreferencesRepository(),
+        onSelectTool = onSelectTool,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
     }

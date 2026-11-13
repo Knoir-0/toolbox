@@ -32,7 +32,7 @@ class FileConverterEngineTest {
 
   @Test
   fun toolEnum_includesFileConverterUnderFilesAndStorage() {
-    assertEquals("Converter", Tool.FILE_CONVERTER.title)
+    assertEquals("Convert", Tool.FILE_CONVERTER.title)
     assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.FILE_CONVERTER.category)
   }
 

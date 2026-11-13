@@ -337,4 +337,121 @@ class GalleryEngineTest {
     assertEquals("photo.png", contents.photos[1].name)
     assertTrue(!contents.photos[1].isVideo)
   }
+
+  @Test
+  fun sortAlbums_andSortPhotos_orderByDateNameAndSize() {
+    assertEquals(GallerySortOrder.DATE_DESC, GallerySortOrder.DEFAULT)
+    assertEquals(GallerySortOrder.DATE_DESC, GallerySortOrder.fromNameOrDefault(null))
+    assertEquals(GallerySortOrder.NAME_ASC, GallerySortOrder.fromNameOrDefault("NAME_ASC"))
+
+    val albums = listOf(
+      GalleryAlbum(
+        directory = File(tempRootDir, "Beta"),
+        name = "Beta",
+        path = "/Beta",
+        mostRecentPhoto = null,
+        directPhotoCount = 5,
+        totalPhotoCount = 5,
+        subAlbumCount = 0,
+        lastModifiedMs = 2_000L,
+      ),
+      GalleryAlbum(
+        directory = File(tempRootDir, "Alpha"),
+        name = "Alpha",
+        path = "/Alpha",
+        mostRecentPhoto = null,
+        directPhotoCount = 12,
+        totalPhotoCount = 12,
+        subAlbumCount = 0,
+        lastModifiedMs = 1_000L,
+      ),
+      GalleryAlbum(
+        directory = File(tempRootDir, "Gamma"),
+        name = "Gamma",
+        path = "/Gamma",
+        mostRecentPhoto = null,
+        directPhotoCount = 2,
+        totalPhotoCount = 2,
+        subAlbumCount = 0,
+        lastModifiedMs = 3_000L,
+      ),
+    )
+
+    assertEquals(
+      listOf("Gamma", "Beta", "Alpha"),
+      GalleryEngine.sortAlbums(albums, GallerySortOrder.DATE_DESC).map { it.name },
+    )
+    assertEquals(
+      listOf("Alpha", "Beta", "Gamma"),
+      GalleryEngine.sortAlbums(albums, GallerySortOrder.DATE_ASC).map { it.name },
+    )
+    assertEquals(
+      listOf("Alpha", "Beta", "Gamma"),
+      GalleryEngine.sortAlbums(albums, GallerySortOrder.NAME_ASC).map { it.name },
+    )
+    assertEquals(
+      listOf("Gamma", "Beta", "Alpha"),
+      GalleryEngine.sortAlbums(albums, GallerySortOrder.NAME_DESC).map { it.name },
+    )
+    assertEquals(
+      listOf("Alpha", "Beta", "Gamma"),
+      GalleryEngine.sortAlbums(albums, GallerySortOrder.SIZE_DESC).map { it.name },
+    )
+    assertEquals(
+      listOf("Gamma", "Beta", "Alpha"),
+      GalleryEngine.sortAlbums(albums, GallerySortOrder.SIZE_ASC).map { it.name },
+    )
+
+    val photos = listOf(
+      GalleryPhoto(
+        file = File(tempRootDir, "b.png"),
+        name = "b.png",
+        path = "/b.png",
+        sizeBytes = 500L,
+        lastModifiedMs = 2_000L,
+        extension = "png",
+      ),
+      GalleryPhoto(
+        file = File(tempRootDir, "a.png"),
+        name = "a.png",
+        path = "/a.png",
+        sizeBytes = 1200L,
+        lastModifiedMs = 1_000L,
+        extension = "png",
+      ),
+      GalleryPhoto(
+        file = File(tempRootDir, "c.png"),
+        name = "c.png",
+        path = "/c.png",
+        sizeBytes = 200L,
+        lastModifiedMs = 3_000L,
+        extension = "png",
+      ),
+    )
+
+    assertEquals(
+      listOf("c.png", "b.png", "a.png"),
+      GalleryEngine.sortPhotos(photos, GallerySortOrder.DATE_DESC).map { it.name },
+    )
+    assertEquals(
+      listOf("a.png", "b.png", "c.png"),
+      GalleryEngine.sortPhotos(photos, GallerySortOrder.DATE_ASC).map { it.name },
+    )
+    assertEquals(
+      listOf("a.png", "b.png", "c.png"),
+      GalleryEngine.sortPhotos(photos, GallerySortOrder.NAME_ASC).map { it.name },
+    )
+    assertEquals(
+      listOf("c.png", "b.png", "a.png"),
+      GalleryEngine.sortPhotos(photos, GallerySortOrder.NAME_DESC).map { it.name },
+    )
+    assertEquals(
+      listOf("a.png", "b.png", "c.png"),
+      GalleryEngine.sortPhotos(photos, GallerySortOrder.SIZE_DESC).map { it.name },
+    )
+    assertEquals(
+      listOf("c.png", "b.png", "a.png"),
+      GalleryEngine.sortPhotos(photos, GallerySortOrder.SIZE_ASC).map { it.name },
+    )
+  }
 }

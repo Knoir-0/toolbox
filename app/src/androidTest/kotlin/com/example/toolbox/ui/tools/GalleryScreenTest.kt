@@ -346,8 +346,13 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithText("No photos or albums found").assertIsDisplayed()
     composeTestRule.onNodeWithText("Create Album").assertIsDisplayed()
 
-    // Open Add Album dialog and verify default location is Pictures
-    composeTestRule.onNodeWithTag("gallery_add_folder_button").performClick()
+    // Open Add Album dialog via FAB menu and verify default location is Pictures
+    composeTestRule.onNodeWithTag("gallery_add_folder_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("gallery_fab_menu_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("New album").assertIsDisplayed()
+    composeTestRule.onNodeWithText("New album here").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_new_album_fab_button").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("gallery_add_folder_dialog").assertIsDisplayed()
@@ -559,5 +564,102 @@ class GalleryScreenTest {
       "Expected all 6 pictures on the same row when zoomed out to 6 per row",
       kotlin.math.abs(rowFirstTop - rowSixthTop) < 5f,
     )
+  }
+
+  @Test
+  fun toolbar_hasSortOption_hasNoManualRefreshButton_andSortsPhotosAndAlbums() {
+    val cameraDir = File(testRootDir, "DCIM/Camera").apply { mkdirs() }
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(cameraDir, "alpha.png"),
+      lastModifiedMs = 1_000_000L,
+    )
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(cameraDir, "zeta.png"),
+      lastModifiedMs = 5_000_000L,
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        GalleryScreen(rootDirectory = testRootDir)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Manual refresh option is removed from the toolbar, and sort option is present
+    composeTestRule.onNodeWithTag("gallery_refresh_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("gallery_sort_button").assertIsDisplayed()
+
+    // Navigate into Camera album
+    composeTestRule.onNodeWithTag("album_tile_item_Camera").performClick()
+    composeTestRule.waitForIdle()
+
+    // Default sort is Date (Newest first): zeta.png is before alpha.png
+    val initialZetaLeft = composeTestRule.onNodeWithTag("photo_tile_zeta.png", useUnmergedTree = true)
+      .fetchSemanticsNode().boundsInRoot.left
+    val initialAlphaLeft = composeTestRule.onNodeWithTag("photo_tile_alpha.png", useUnmergedTree = true)
+      .fetchSemanticsNode().boundsInRoot.left
+    assertTrue(
+      "Expected zeta.png ($initialZetaLeft) before alpha.png ($initialAlphaLeft) when sorted newest first",
+      initialZetaLeft < initialAlphaLeft,
+    )
+
+    // Open sort menu and select Name (A to Z)
+    composeTestRule.onNodeWithTag("gallery_sort_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_sort_option_name_asc").performClick()
+    composeTestRule.waitForIdle()
+
+    val sortedAlphaLeft = composeTestRule.onNodeWithTag("photo_tile_alpha.png", useUnmergedTree = true)
+      .fetchSemanticsNode().boundsInRoot.left
+    val sortedZetaLeft = composeTestRule.onNodeWithTag("photo_tile_zeta.png", useUnmergedTree = true)
+      .fetchSemanticsNode().boundsInRoot.left
+    assertTrue(
+      "Expected alpha.png ($sortedAlphaLeft) before zeta.png ($sortedZetaLeft) when sorted by Name (A to Z)",
+      sortedAlphaLeft < sortedZetaLeft,
+    )
+  }
+
+  @Test
+  fun fabMenu_insideNestedAlbum_providesNewAlbumAtRootAndNewAlbumHere() {
+    val vacationDir = File(testRootDir, "Pictures/Vacation").apply { mkdirs() }
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(vacationDir, "beach.png"),
+      lastModifiedMs = 2_000_000L,
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        GalleryScreen(rootDirectory = testRootDir)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Navigate into Vacation album
+    composeTestRule.onNodeWithTag("album_tile_item_Vacation").performClick()
+    composeTestRule.waitForIdle()
+
+    // Open FAB menu -> "New album here" targets Vacation
+    composeTestRule.onNodeWithTag("gallery_fab_menu_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("New album").assertIsDisplayed()
+    composeTestRule.onNodeWithText("New album here").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_new_album_here_fab_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("gallery_add_folder_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("New Nested Album").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Create a nested folder inside Vacation").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Cancel").performClick()
+    composeTestRule.waitForIdle()
+
+    // Open FAB menu -> "New album" targets root Pictures even when inside Vacation
+    composeTestRule.onNodeWithTag("gallery_fab_menu_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_new_album_fab_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("gallery_add_folder_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Add Album Folder").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Pictures").assertIsDisplayed()
   }
 }

@@ -791,6 +791,50 @@ object TodoListEngine {
   }
 
   /**
+   * Returns the set of task IDs from [previousTasks] whose alarms should be cancelled because
+   * they were deleted, completed, unscheduled, or already notified in [currentTasks].
+   */
+  fun getTaskIdsToCancelAlarms(
+    previousTasks: List<TodoItem>,
+    currentTasks: List<TodoItem>,
+  ): Set<String> {
+    val activePendingAlarmIds = currentTasks
+      .filter { it.scheduledAtMillis != null && it.notifiedAtScheduleMillis != it.scheduledAtMillis }
+      .map { it.id }
+      .toSet()
+    return previousTasks
+      .map { it.id }
+      .filter { it !in activePendingAlarmIds }
+      .toSet()
+  }
+
+  /**
+   * Evaluates a fired scheduled alarm against the active tasks in [repository].
+   * If the task still exists in active tasks, is still scheduled for [scheduledAtMillis] (when provided),
+   * and has not yet been notified for that schedule, marks it notified in [repository] and returns it.
+   * Returns null if the task was deleted, completed, unscheduled, rescheduled, or already notified.
+   */
+  fun consumeScheduledAlarm(
+    repository: TodoListRepository,
+    taskId: String?,
+    scheduledAtMillis: Long? = null,
+  ): TodoItem? {
+    if (taskId.isNullOrBlank()) return null
+    val tasks = repository.loadTasks()
+    val matchingTask = tasks.firstOrNull { it.id == taskId } ?: return null
+    val currentScheduledAt = matchingTask.scheduledAtMillis ?: return null
+    if (scheduledAtMillis != null && scheduledAtMillis > 0L && scheduledAtMillis != currentScheduledAt) {
+      return null
+    }
+    if (matchingTask.notifiedAtScheduleMillis == currentScheduledAt) {
+      return null
+    }
+    val updated = markTaskNotified(tasks, matchingTask.id, currentScheduledAt)
+    repository.saveTasks(updated)
+    return matchingTask
+  }
+
+  /**
    * Formats a scheduled timestamp or date/time range into a concise human-readable label.
    */
   fun formatScheduleLabel(

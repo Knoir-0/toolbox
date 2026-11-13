@@ -796,6 +796,49 @@ class MainScreenTest {
   }
 
   @Test
+  fun toolSettingsSection_tappingToolIconOrText_selectsToolRegardlessOfVisibility() {
+    val repo = DefaultNavigationPreferencesRepository(composeTestRule.activity)
+    // Metronome is hidden by default; Guitar Tuner is visible by default
+    assertTrue(Tool.METRONOME in repo.getHiddenTools())
+    assertTrue(Tool.GUITAR_TUNER !in repo.getHiddenTools())
+
+    // Navigate to Settings
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+    val lastPageIndex = (Tool.entries.size - DEFAULT_HIDDEN_TOOLS.size - 1) / (DEFAULT_TOOLS_PER_ROW * ROWS_PER_PAGE_EXPANDED)
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$lastPageIndex").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
+    composeTestRule.waitForIdle()
+
+    // Expand Music & Instruments category in Tool Settings
+    composeTestRule.onNodeWithTag("category_header_music_and_instruments").performClick()
+    composeTestRule.waitForIdle()
+
+    // Tap the icon of a visible tool (Guitar Tuner) -> selects Guitar Tuner without hiding it
+    composeTestRule.onNodeWithTag("tool_settings_icon_GUITAR_TUNER").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("TARGET").assertExists()
+    assertTrue(Tool.GUITAR_TUNER !in repo.getHiddenTools())
+
+    // Navigate back to Settings and expand Music & Instruments category
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$lastPageIndex").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("category_header_music_and_instruments").performClick()
+    composeTestRule.waitForIdle()
+
+    // Tap the text of a hidden tool (Metronome) -> selects Metronome while keeping it hidden
+    composeTestRule.onNodeWithTag("tool_settings_text_METRONOME").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Play").assertExists()
+    assertTrue(Tool.METRONOME in repo.getHiddenTools())
+  }
+
+  @Test
   fun standaloneTool_launchesWithoutNavigationBar() {
     composeTestRule.setContent {
       MainScreen(standaloneTool = Tool.CALCULATOR)

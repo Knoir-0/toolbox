@@ -200,7 +200,6 @@ fun TodoListScreen(
   var showSchedulePanel by remember { mutableStateOf(false) }
   var schedulingTaskId by remember { mutableStateOf<String?>(null) }
   var scheduleStartMillis by remember { mutableLongStateOf(System.currentTimeMillis() + 3_600_000L) }
-  var scheduleNotesText by remember { mutableStateOf("") }
   var hasPendingSchedule by remember { mutableStateOf(false) }
 
   // Active in-app due notification popups
@@ -256,6 +255,19 @@ fun TodoListScreen(
     }
   }
 
+  fun syncAlarmsForTaskUpdate(previousTasks: List<TodoItem>, nextTasks: List<TodoItem>) {
+    TodoListEngine.getTaskIdsToCancelAlarms(previousTasks, nextTasks).forEach { id ->
+      TodoNotificationHelper.cancelTaskAlarm(context, id)
+    }
+    val activeScheduledIds = nextTasks.filter { it.isScheduled }.map { it.id }.toSet()
+    duePopupTasks = duePopupTasks.filter { it.id in activeScheduledIds }
+    if (schedulingTaskId != null && nextTasks.none { it.id == schedulingTaskId }) {
+      schedulingTaskId = null
+      showSchedulePanel = false
+    }
+    TodoNotificationHelper.syncTaskAlarms(context, nextTasks)
+  }
+
   fun applyAction(
     updatedTasks: List<TodoItem>,
     updatedCompletedToday: Int = completedTodayCount,
@@ -264,6 +276,7 @@ fun TodoListScreen(
     val currentSnapshot = TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)
     val nextSnapshot = TodoHistorySnapshot(updatedTasks, updatedCompletedToday, updatedCompletedTasks)
     if (currentSnapshot == nextSnapshot) return
+    val previousTasks = tasks
     undoStack = listOf(currentSnapshot) + undoStack.take(49)
     redoStack = emptyList()
     historyVersion += 1
@@ -275,6 +288,7 @@ fun TodoListScreen(
     repo.saveTasks(updatedTasks)
     repo.setCompletedTodayCount(updatedCompletedToday, getTodayDateKey())
     repo.saveCompletedTasks(updatedCompletedTasks, getTodayDateKey())
+    syncAlarmsForTaskUpdate(previousTasks, updatedTasks)
   }
 
   fun applySnapshot(nextSnapshot: TodoHistorySnapshot) {
@@ -288,6 +302,7 @@ fun TodoListScreen(
   fun undo() {
     if (undoStack.isEmpty()) return
     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    val previousTasks = tasks
     val previousState = undoStack.first()
     undoStack = undoStack.drop(1)
     redoStack = listOf(TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)) + redoStack
@@ -300,11 +315,13 @@ fun TodoListScreen(
     repo.saveTasks(previousState.tasks)
     repo.setCompletedTodayCount(previousState.completedToday, getTodayDateKey())
     repo.saveCompletedTasks(previousState.completedTasks, getTodayDateKey())
+    syncAlarmsForTaskUpdate(previousTasks, previousState.tasks)
   }
 
   fun redo() {
     if (redoStack.isEmpty()) return
     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    val previousTasks = tasks
     val nextState = redoStack.first()
     redoStack = redoStack.drop(1)
     undoStack = listOf(TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)) + undoStack
@@ -317,6 +334,7 @@ fun TodoListScreen(
     repo.saveTasks(nextState.tasks)
     repo.setCompletedTodayCount(nextState.completedToday, getTodayDateKey())
     repo.saveCompletedTasks(nextState.completedTasks, getTodayDateKey())
+    syncAlarmsForTaskUpdate(previousTasks, nextState.tasks)
   }
 
   fun completeTask(task: TodoItem) {
@@ -354,7 +372,6 @@ fun TodoListScreen(
   fun openScheduleForTask(task: TodoItem) {
     val defaultStart = task.scheduledAtMillis ?: (System.currentTimeMillis() + 3_600_000L)
     scheduleStartMillis = defaultStart
-    scheduleNotesText = task.notes
     schedulingTaskId = task.id
     showSchedulePanel = true
   }
@@ -372,7 +389,6 @@ fun TodoListScreen(
       val startMillis = scheduleStartMillis
       val newItem = TodoItem(
         title = trimmed,
-        notes = scheduleNotesText.trim(),
         scheduledAtMillis = startMillis,
         scheduledEndMillis = null,
       )
@@ -381,7 +397,6 @@ fun TodoListScreen(
       Toast.makeText(context, "Scheduled for $label", Toast.LENGTH_SHORT).show()
       newTaskTitle = ""
       hasPendingSchedule = false
-      scheduleNotesText = ""
       showSchedulePanel = false
     } else {
       haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -455,7 +470,6 @@ fun TodoListScreen(
     taskId: String,
     scheduledAtMillis: Long,
     scheduledEndMillis: Long?,
-    notes: String,
   ) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !TodoNotificationHelper.hasNotificationPermission(context)) {
       notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -466,7 +480,6 @@ fun TodoListScreen(
       taskId = taskId,
       scheduledAtMillis = scheduledAtMillis,
       scheduledEndMillis = scheduledEndMillis,
-      notes = notes,
     )
     duePopupTasks = duePopupTasks.filter { it.id != taskId }
     applyAction(updated)
@@ -631,7 +644,6 @@ fun TodoListScreen(
                 if (!hasPendingSchedule) {
                   val defaultStart = System.currentTimeMillis() + 3_600_000L
                   scheduleStartMillis = defaultStart
-                  scheduleNotesText = ""
                 }
                 showSchedulePanel = true
               }
@@ -659,15 +671,12 @@ fun TodoListScreen(
               onPresetSelected = {
                 taskInputFocusRequester.requestFocus()
               },
-              notesText = scheduleNotesText,
-              onNotesTextChange = { scheduleNotesText = it },
               onConfirmSchedule = {
                 if (taskToSchedule != null) {
                   scheduleTask(
                     taskId = taskToSchedule.id,
                     scheduledAtMillis = scheduleStartMillis,
                     scheduledEndMillis = null,
-                    notes = scheduleNotesText,
                   )
                   schedulingTaskId = null
                   showSchedulePanel = false
@@ -694,7 +703,6 @@ fun TodoListScreen(
                   schedulingTaskId = null
                 } else {
                   hasPendingSchedule = false
-                  scheduleNotesText = ""
                 }
                 showSchedulePanel = false
               },
@@ -3008,7 +3016,7 @@ private fun addCalendarOffset(baseMillis: Long, field: Int, amount: Int): Long {
 
 /**
  * Panel that slides up from below the task input bar for scheduling or rescheduling a task,
- * with multi-row quick shortcuts, custom date/time pickers, and note contents.
+ * with multi-row quick shortcuts and custom date/time pickers.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -3018,8 +3026,6 @@ private fun ScheduleTaskPanel(
   startMillis: Long,
   onStartMillisChange: (Long) -> Unit,
   onPresetSelected: () -> Unit = {},
-  notesText: String,
-  onNotesTextChange: (String) -> Unit,
   onConfirmSchedule: () -> Unit,
   onUnschedule: () -> Unit,
   onDismiss: () -> Unit,
@@ -3073,7 +3079,7 @@ private fun ScheduleTaskPanel(
             color = MaterialTheme.colorScheme.onSurface,
           )
           Text(
-            text = "Set date, time, and notification contents",
+            text = "Set date and time",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -3259,27 +3265,6 @@ private fun ScheduleTaskPanel(
           )
         }
       }
-
-      // Note Contents input for notification body
-      OutlinedTextField(
-        value = notesText,
-        onValueChange = onNotesTextChange,
-        label = { Text("Note contents") },
-        placeholder = { Text("Add details to display in notification...") },
-        shape = RoundedCornerShape(14.dp),
-        minLines = 2,
-        maxLines = 4,
-        trailingIcon = {
-          if (notesText.isNotEmpty()) {
-            IconButton(onClick = { onNotesTextChange("") }) {
-              Icon(Icons.Default.Clear, contentDescription = "Clear contents")
-            }
-          }
-        },
-        modifier = Modifier
-          .fillMaxWidth()
-          .testTag("todo_schedule_notes_input"),
-      )
 
       // Bottom Action Buttons
       Row(

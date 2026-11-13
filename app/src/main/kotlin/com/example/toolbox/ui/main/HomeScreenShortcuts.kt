@@ -27,7 +27,9 @@ import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import com.example.toolbox.MainActivity
 import com.example.toolbox.R
+import com.example.toolbox.ui.theme.MusicPlayerColorOption
 import com.example.toolbox.ui.theme.parseHexColor
+import com.example.toolbox.ui.tools.MusicPlayerEngine
 import java.io.File
 
 const val EXTRA_STANDALONE_TOOL = "extra_standalone_tool"
@@ -105,7 +107,10 @@ fun resolveLauncherIconVariant(themeColor: String?): LauncherIconVariant {
   }
   if (exactMatch != null) return exactMatch
 
-  val parsedColor = parseHexColor(themeColor) ?: return LauncherIconVariant.SYSTEM
+  val parsedColor = MusicPlayerColorOption.fromPrefValue(themeColor)
+    ?.resolveColor(MusicPlayerEngine.activeTrackPalette)
+    ?: parseHexColor(themeColor)
+    ?: return LauncherIconVariant.SYSTEM
   return LauncherIconVariant.entries
     .filter { it != LauncherIconVariant.SYSTEM }
     .minByOrNull { variant ->
@@ -194,6 +199,7 @@ fun resolveToolShortcutAliasClassName(tool: Tool): String {
     Tool.MUSIC -> "com.example.toolbox.MainActivityToolMusicPlayer"
     Tool.PDF_VIEWER -> "com.example.toolbox.MainActivityToolPdfViewer"
     Tool.RECIPES -> "com.example.toolbox.MainActivityToolRecipeBook"
+    Tool.OBD2_SCANNER -> "com.example.toolbox.MainActivityToolObd2Scanner"
     Tool.SETTINGS -> "com.example.toolbox.MainActivityToolSettings"
   }
 }
@@ -352,6 +358,9 @@ fun resolveShortcutBackgroundColor(
   }
 
   if (!effectiveThemeColor.equals(DEFAULT_THEME_COLOR_SYSTEM, ignoreCase = true)) {
+    MusicPlayerColorOption.fromPrefValue(effectiveThemeColor)?.let { musicOption ->
+      return musicOption.resolveColor(MusicPlayerEngine.activeTrackPalette)
+    }
     parseHexColor(effectiveThemeColor)?.let { return it }
   }
 

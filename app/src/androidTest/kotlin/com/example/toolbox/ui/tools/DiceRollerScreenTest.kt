@@ -47,13 +47,13 @@ class DiceRollerScreenTest {
     loadButton.assertIsDisplayed()
     rollButton.assertIsDisplayed()
 
-    // 2. Verify Roll button is to the left of the Save button, and Save is to the left of Load
+    // 2. Verify Load button is to the left of the Roll button, and Roll is to the left of Save
     val rollBounds = rollButton.getUnclippedBoundsInRoot()
     val saveBounds = saveButton.getUnclippedBoundsInRoot()
     val loadBounds = loadButton.getUnclippedBoundsInRoot()
 
+    assertTrue("Load button should be to the left of Roll button", loadBounds.left < rollBounds.left)
     assertTrue("Roll button should be to the left of Save button", rollBounds.left < saveBounds.left)
-    assertTrue("Save button should be to the left of Load button", saveBounds.left < loadBounds.left)
 
     // 3. Click Save button to open save roll dialog
     saveButton.performClick()

@@ -108,7 +108,7 @@ data class NoteItem(
     }
     if (labels.isNotEmpty()) {
       if (sb.isNotEmpty()) sb.append("\n\n")
-      sb.append(labels.joinToString(" ") { "#$it" })
+      sb.append(labels.joinToString(", "))
     }
     return sb.toString()
   }

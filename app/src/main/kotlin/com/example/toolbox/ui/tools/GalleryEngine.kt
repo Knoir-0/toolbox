@@ -19,6 +19,7 @@ const val GALLERY_PREFS_NAME = "gallery_tool_preferences"
 const val PREF_KEY_GALLERY_FOLDERS = "gallery_loaded_folders"
 const val PREF_KEY_GALLERY_VIEW_MODE = "gallery_view_mode"
 const val PREF_KEY_GALLERY_ALBUMS_PER_ROW = "gallery_albums_per_row"
+const val PREF_KEY_GALLERY_SORT_ORDER = "gallery_sort_order"
 
 const val MIN_ALBUMS_PER_ROW = 3
 const val MAX_ALBUMS_PER_ROW = 6
@@ -44,6 +45,28 @@ enum class GalleryViewMode(val displayName: String) {
     val DEFAULT: GalleryViewMode = TILE
 
     fun fromNameOrDefault(name: String?): GalleryViewMode {
+      if (name.isNullOrBlank()) return DEFAULT
+      return entries.find { it.name.equals(name.trim(), ignoreCase = true) } ?: DEFAULT
+    }
+  }
+}
+
+/**
+ * Sorting options for albums and photos in the Gallery tool.
+ */
+enum class GallerySortOrder(val displayName: String) {
+  DATE_DESC("Date (Newest first)"),
+  DATE_ASC("Date (Oldest first)"),
+  NAME_ASC("Name (A to Z)"),
+  NAME_DESC("Name (Z to A)"),
+  SIZE_DESC("Size (Largest first)"),
+  SIZE_ASC("Size (Smallest first)"),
+  ;
+
+  companion object {
+    val DEFAULT: GallerySortOrder = DATE_DESC
+
+    fun fromNameOrDefault(name: String?): GallerySortOrder {
       if (name.isNullOrBlank()) return DEFAULT
       return entries.find { it.name.equals(name.trim(), ignoreCase = true) } ?: DEFAULT
     }
@@ -652,6 +675,64 @@ object GalleryEngine {
       photos = photos,
       directories = distinctDirs,
     )
+  }
+
+  /**
+   * Sorts [albums] according to [sortOrder].
+   */
+  fun sortAlbums(
+    albums: List<GalleryAlbum>,
+    sortOrder: GallerySortOrder,
+  ): List<GalleryAlbum> {
+    val comparator: Comparator<GalleryAlbum> = when (sortOrder) {
+      GallerySortOrder.DATE_DESC ->
+        compareByDescending<GalleryAlbum> { it.lastModifiedMs }
+          .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+      GallerySortOrder.DATE_ASC ->
+        compareBy<GalleryAlbum> { it.lastModifiedMs }
+          .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+      GallerySortOrder.NAME_ASC ->
+        compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+      GallerySortOrder.NAME_DESC ->
+        compareByDescending(String.CASE_INSENSITIVE_ORDER) { it.name }
+      GallerySortOrder.SIZE_DESC ->
+        compareByDescending<GalleryAlbum> { it.totalPhotoCount }
+          .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+      GallerySortOrder.SIZE_ASC ->
+        compareBy<GalleryAlbum> { it.totalPhotoCount }
+          .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+    }
+    return albums.sortedWith(comparator)
+  }
+
+  /**
+   * Sorts [photos] according to [sortOrder].
+   */
+  fun sortPhotos(
+    photos: List<GalleryPhoto>,
+    sortOrder: GallerySortOrder,
+  ): List<GalleryPhoto> {
+    val comparator: Comparator<GalleryPhoto> = when (sortOrder) {
+      GallerySortOrder.DATE_DESC ->
+        compareByDescending<GalleryPhoto> { it.lastModifiedMs }
+          .thenByDescending(String.CASE_INSENSITIVE_ORDER) { it.name }
+      GallerySortOrder.DATE_ASC ->
+        compareBy<GalleryPhoto> { it.lastModifiedMs }
+          .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+      GallerySortOrder.NAME_ASC ->
+        compareBy<GalleryPhoto, String>(String.CASE_INSENSITIVE_ORDER) { it.name }
+          .thenByDescending { it.lastModifiedMs }
+      GallerySortOrder.NAME_DESC ->
+        compareByDescending<GalleryPhoto, String>(String.CASE_INSENSITIVE_ORDER) { it.name }
+          .thenByDescending { it.lastModifiedMs }
+      GallerySortOrder.SIZE_DESC ->
+        compareByDescending<GalleryPhoto> { it.sizeBytes }
+          .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+      GallerySortOrder.SIZE_ASC ->
+        compareBy<GalleryPhoto> { it.sizeBytes }
+          .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+    }
+    return photos.sortedWith(comparator)
   }
 
   /**

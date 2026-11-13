@@ -90,11 +90,13 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -373,7 +375,7 @@ fun NotesScreen(
       }
       NotesFilter.Pinned -> "$pinnedNotesCount pinned"
       NotesFilter.Checklists -> "${filteredResult.totalCount} checklists"
-      is NotesFilter.Label -> "#${filter.name} • ${filteredResult.totalCount}"
+      is NotesFilter.Label -> "${filter.name} • ${filteredResult.totalCount}"
       NotesFilter.Archived -> "Archive • $archivedNotesCount"
       NotesFilter.Trash -> "Trash • $trashedNotesCount"
     }
@@ -1264,7 +1266,7 @@ private fun NotesHeaderTopBar(
               onValueChange = onSearchQueryChange,
               placeholder = {
                 Text(
-                  text = "Search titles, notes, checklists, or #labels",
+                  text = "Search titles, notes, checklists, or labels",
                   style = MaterialTheme.typography.bodyLarge,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                   maxLines = 1,
@@ -1583,7 +1585,7 @@ private fun NotesFilterChipsRow(
       FilterChip(
         selected = isSelected,
         onClick = { onSelectFilter(NotesFilter.Label(label)) },
-        label = { Text("#$label") },
+        label = { Text(label) },
         shape = RoundedCornerShape(20.dp),
         colors = FilterChipDefaults.filterChipColors(
           selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -1991,7 +1993,7 @@ fun NoteCard(
               ),
             ) {
               Text(
-                text = "#$label",
+                text = label,
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2113,7 +2115,7 @@ private fun NotesEmptyState(
     )
     activeFilter is NotesFilter.Label -> Triple(
       Icons.AutoMirrored.Filled.Label,
-      "No notes with #${activeFilter.name}",
+      "No notes with ${activeFilter.name}",
       "Tap 'Take a note...' below to create a note with this label",
     )
     else -> Triple(
@@ -2655,7 +2657,7 @@ private fun NoteEditorSheet(
                     draft.copy(labels = draft.labels + label)
                   }
                 },
-                label = { Text("#$label") },
+                label = { Text(label) },
                 shape = RoundedCornerShape(20.dp),
                 modifier = Modifier.testTag("editor_label_chip_$label"),
               )
@@ -2664,7 +2666,9 @@ private fun NoteEditorSheet(
         }
 
         AnimatedVisibility(visible = showLabelPicker) {
-          val trimmedInlineLabel = newLabelInput.trim().removePrefix("#").trim()
+          val newLabelFocusRequester = remember { FocusRequester() }
+          val keyboardController = LocalSoftwareKeyboardController.current
+          val trimmedInlineLabel = newLabelInput.trim()
           val canAttachInlineLabel = trimmedInlineLabel.isNotEmpty()
           val attachInlineLabel = {
             if (canAttachInlineLabel) {
@@ -2687,7 +2691,7 @@ private fun NoteEditorSheet(
               onValueChange = { newLabelInput = it },
               placeholder = { Text("New label name...") },
               singleLine = true,
-              shape = RoundedCornerShape(14.dp),
+              shape = CircleShape,
               leadingIcon = {
                 Icon(
                   imageVector = Icons.AutoMirrored.Filled.Label,
@@ -2709,22 +2713,35 @@ private fun NoteEditorSheet(
               keyboardActions = KeyboardActions(onDone = { attachInlineLabel() }),
               modifier = Modifier
                 .weight(1f)
+                .focusRequester(newLabelFocusRequester)
                 .testTag("editor_new_label_input"),
             )
-            Button(
+            FilledIconButton(
               onClick = attachInlineLabel,
               enabled = canAttachInlineLabel,
-              shape = RoundedCornerShape(12.dp),
-              modifier = Modifier.testTag("editor_add_label_confirm"),
+              shape = CircleShape,
+              colors = IconButtonDefaults.filledIconButtonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+              ),
+              modifier = Modifier
+                .size(48.dp)
+                .testTag("editor_add_label_confirm"),
             ) {
               Icon(
                 imageVector = Icons.Default.Add,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
+                contentDescription = "Attach label",
+                modifier = Modifier.size(22.dp),
               )
-              Spacer(modifier = Modifier.width(6.dp))
-              Text("Attach")
             }
+          }
+          LaunchedEffect(Unit) {
+            try {
+              newLabelFocusRequester.requestFocus()
+              keyboardController?.show()
+            } catch (_: Exception) {}
           }
         }
       }
@@ -2803,7 +2820,7 @@ private fun ManageLabelsDialog(
 ) {
   var labelText by remember { mutableStateOf("") }
   val focusRequester = remember { FocusRequester() }
-  val trimmed = labelText.trim().removePrefix("#").trim()
+  val trimmed = labelText.trim()
   val isDuplicate = labels.any { it.equals(trimmed, ignoreCase = true) }
   val canAdd = trimmed.isNotEmpty() && !isDuplicate
   val totalTaggedNotes = notesCountByLabel.values.sum()
@@ -2902,7 +2919,7 @@ private fun ManageLabelsDialog(
             Column(modifier = Modifier.weight(1f)) {
               Text(
                 text = if (trimmed.isNotEmpty()) {
-                  "#$trimmed"
+                  trimmed
                 } else {
                   "${labels.size} Active ${if (labels.size == 1) "Label" else "Labels"}"
                 },
@@ -3099,7 +3116,7 @@ private fun ManageLabelsDialog(
                     }
                     Column(modifier = Modifier.weight(1f)) {
                       Text(
-                        text = "#$label",
+                        text = label,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,

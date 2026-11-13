@@ -616,6 +616,26 @@ internal fun DiceRollerScreen(
               horizontalArrangement = Arrangement.spacedBy(8.dp),
               verticalAlignment = Alignment.CenterVertically,
             ) {
+              // Load button: load (folder open) icon, rounded corners, no text
+              FilledTonalIconButton(
+                onClick = { showSavedRollsSheet = true },
+                modifier = Modifier
+                  .size(56.dp)
+                  .semantics { contentDescription = "Load saved rolls" }
+                  .testTag("dice_roller_load_button"),
+                shape = CircleShape,
+                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                  containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                  contentColor = MaterialTheme.colorScheme.primary,
+                ),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.FolderOpen,
+                  contentDescription = "Load saved rolls",
+                  modifier = Modifier.size(24.dp),
+                )
+              }
+
               // Roll button: rounded corners
               Button(
                 onClick = ::performRoll,
@@ -658,26 +678,6 @@ internal fun DiceRollerScreen(
                 Icon(
                   imageVector = Icons.Default.Save,
                   contentDescription = "Save roll",
-                  modifier = Modifier.size(24.dp),
-                )
-              }
-
-              // Load button: load (folder open) icon, rounded corners, no text
-              FilledTonalIconButton(
-                onClick = { showSavedRollsSheet = true },
-                modifier = Modifier
-                  .size(56.dp)
-                  .semantics { contentDescription = "Load saved rolls" }
-                  .testTag("dice_roller_load_button"),
-                shape = CircleShape,
-                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                  containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                  contentColor = MaterialTheme.colorScheme.primary,
-                ),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.FolderOpen,
-                  contentDescription = "Load saved rolls",
                   modifier = Modifier.size(24.dp),
                 )
               }
