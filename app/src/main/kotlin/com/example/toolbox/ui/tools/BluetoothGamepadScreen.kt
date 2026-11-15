@@ -452,7 +452,9 @@ internal fun GamepadControlContent(
               contentDescription = "Left joystick",
               onMove = actions::setLeftJoystick,
               size = 136.dp,
-              modifier = Modifier.testTag("bt_gamepad_left_joystick"),
+              modifier = Modifier
+                .align(Alignment.Bottom)
+                .testTag("bt_gamepad_left_joystick"),
             )
             MinusPlusCluster(actions = actions)
             GamepadJoystick(
@@ -460,7 +462,9 @@ internal fun GamepadControlContent(
               contentDescription = "Right joystick",
               onMove = actions::setRightJoystick,
               size = 136.dp,
-              modifier = Modifier.testTag("bt_gamepad_right_joystick"),
+              modifier = Modifier
+                .align(Alignment.Bottom)
+                .testTag("bt_gamepad_right_joystick"),
             )
             GamepadFaceButtons(
               actions = actions,
@@ -774,7 +778,6 @@ private fun GamepadDPad(
   val housingColor = MaterialTheme.colorScheme.surfaceContainerLow
   val crossColor = MaterialTheme.colorScheme.surfaceContainerHigh
   val outlineColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-  val bridgeTrackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
   val activeBridgeColor = MaterialTheme.colorScheme.primaryContainer
   val primaryColor = MaterialTheme.colorScheme.primary
   val haptics = LocalHapticFeedback.current
@@ -881,14 +884,6 @@ private fun GamepadDPad(
       val bridgeRadius = outerRadius * 0.68f
       val bridgeTopLeft = Offset(center.x - bridgeRadius, center.y - bridgeRadius)
       val bridgeSize = Size(bridgeRadius * 2f, bridgeRadius * 2f)
-
-      // Subtle guide ring connecting cardinal arms through the diagonal corner chevrons
-      drawCircle(
-        color = bridgeTrackColor,
-        radius = bridgeRadius,
-        center = center,
-        style = Stroke(width = 1.5.dp.toPx()),
-      )
 
       val armThickness = this.size.width * 0.34f
       val armLength = this.size.width * 0.88f
@@ -1114,29 +1109,16 @@ private fun BoxScope.GamepadDPadCornerChevron(
   modifier: Modifier = Modifier,
   tag: String,
 ) {
-  val containerColor = when {
-    isPressed -> MaterialTheme.colorScheme.primaryContainer
-    isAdjacentPressed -> MaterialTheme.colorScheme.surfaceContainerHighest
-    else -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.75f)
-  }
-  val borderColor = when {
-    isPressed -> MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
-    isAdjacentPressed -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
-    else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
-  }
   val chevronColor = when {
     isPressed -> MaterialTheme.colorScheme.onPrimaryContainer
-    isAdjacentPressed -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-    else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+    isAdjacentPressed -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+    else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
   }
 
   Box(
     modifier = modifier
       .align(Alignment.Center)
-      .size(28.dp)
-      .clip(RoundedCornerShape(8.dp))
-      .background(containerColor)
-      .border(1.dp, borderColor, RoundedCornerShape(8.dp))
+      .size(24.dp)
       .semantics {
         role = Role.Button
         contentDescription = label
@@ -1149,11 +1131,11 @@ private fun BoxScope.GamepadDPadCornerChevron(
       .testTag(tag),
     contentAlignment = Alignment.Center,
   ) {
-    Canvas(modifier = Modifier.size(14.dp)) {
+    Canvas(modifier = Modifier.size(10.dp)) {
       val cx = this.size.width / 2f
       val cy = this.size.height / 2f
-      val tipOffset = this.size.width * 0.28f
-      val armLength = this.size.width * 0.44f
+      val tipOffset = this.size.width * 0.26f
+      val armLength = this.size.width * 0.42f
       val tipX = cx + dirX * tipOffset
       val tipY = cy + dirY * tipOffset
       val path = Path().apply {
@@ -1165,7 +1147,7 @@ private fun BoxScope.GamepadDPadCornerChevron(
         path = path,
         color = chevronColor,
         style = Stroke(
-          width = if (isPressed) 2.6.dp.toPx() else 2.dp.toPx(),
+          width = if (isPressed) 1.75.dp.toPx() else 1.25.dp.toPx(),
           cap = StrokeCap.Round,
           join = StrokeJoin.Round,
         ),
@@ -1534,6 +1516,20 @@ private fun BluetoothGamepadDeviceListPreview() {
 @Preview(showBackground = true, heightDp = 800)
 @Composable
 private fun BluetoothGamepadControlPreview() {
+  ToolboxTheme {
+    Surface {
+      GamepadControlContent(
+        deviceName = "Living Room TV",
+        actions = NoOpGamepadActions,
+        onDisconnect = {},
+      )
+    }
+  }
+}
+
+@Preview(showBackground = true, widthDp = 800, heightDp = 400)
+@Composable
+private fun BluetoothGamepadControlLandscapePreview() {
   ToolboxTheme {
     Surface {
       GamepadControlContent(

@@ -99,8 +99,10 @@ dependencies {
   // ZXing (QR Code Reader & Barcode Scanner)
   implementation(libs.zxing.core)
 
-  // Google ML Kit Text Recognition v2 (On-device OCR for Document / Note Scanner)
+  // Google ML Kit Text Recognition v2 (On-device OCR for Document / Note Scanner & Gallery Search)
   implementation(libs.mlkit.text.recognition)
+  // Google ML Kit Image Labeling (On-device automatic image tagging for Gallery)
+  implementation(libs.mlkit.image.labeling)
 }
 
 tasks.register<Exec>("runDebug") {

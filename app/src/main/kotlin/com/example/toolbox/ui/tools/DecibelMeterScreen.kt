@@ -391,99 +391,47 @@ fun DecibelMeterScreen(
       .testTag("decibel_meter_screen"),
   ) {
     // 1. Standard Tool Header / Top Bar (DESIGN_LANGUAGE.md 5.1)
-    Surface(
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 1.dp,
-      modifier = Modifier.fillMaxWidth(),
-    ) {
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .heightIn(min = 68.dp),
-        contentAlignment = Alignment.CenterStart,
-      ) {
-        Row(
+    ToolboxTopBar(
+      title = "Decibels",
+      subtext = when {
+        !hasMicPermission -> "Microphone permission required"
+        isPaused -> "Paused • ${DecibelMeterMath.formatCalibrationOffset(calibrationOffsetDb)} offset"
+        else -> "Listening • ${DecibelMeterMath.formatCalibrationOffset(calibrationOffsetDb)} offset"
+      },
+      icon = Icons.Default.Speed,
+      actions = {
+        IconButton(
+          onClick = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            isPaused = !isPaused
+          },
           modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
+            .size(36.dp)
+            .testTag("decibel_pause_resume_button"),
         ) {
-          Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            Box(
-              modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Default.Speed,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-              )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = "Decibels",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              Text(
-                text = when {
-                  !hasMicPermission -> "Microphone permission required"
-                  isPaused -> "Paused • ${DecibelMeterMath.formatCalibrationOffset(calibrationOffsetDb)} offset"
-                  else -> "Listening • ${DecibelMeterMath.formatCalibrationOffset(calibrationOffsetDb)} offset"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-          }
-
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-          ) {
-            IconButton(
-              onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                isPaused = !isPaused
-              },
-              modifier = Modifier.testTag("decibel_pause_resume_button"),
-            ) {
-              Icon(
-                imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                contentDescription = if (isPaused) "Resume meter" else "Pause meter",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-
-            IconButton(
-              onClick = { resetStats() },
-              modifier = Modifier.testTag("decibel_reset_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Refresh,
-                contentDescription = "Reset statistics",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-          }
+          Icon(
+            imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+            contentDescription = if (isPaused) "Resume meter" else "Pause meter",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+          )
         }
-      }
-    }
+
+        IconButton(
+          onClick = { resetStats() },
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("decibel_reset_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Refresh,
+            contentDescription = "Reset statistics",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+          )
+        }
+      },
+    )
 
     LazyColumn(
       modifier = Modifier

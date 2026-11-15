@@ -678,130 +678,71 @@ private fun PdfViewerTopBar(
   onClose: () -> Unit,
   onSave: () -> Unit,
 ) {
-  Surface(
-    tonalElevation = 1.dp,
-    modifier = Modifier.fillMaxWidth().heightIn(min = 68.dp),
-  ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.weight(1f, fill = false),
-      ) {
-        if (onNavigateBack != null) {
-          FilledTonalIconButton(
-            onClick = onNavigateBack,
-            modifier =
-              Modifier.size(36.dp)
-                .testTag("action_navigate_back")
-                .testTag("pdf_back_button"),
-          ) {
-            Icon(
-              Icons.AutoMirrored.Filled.ArrowBack,
-              contentDescription = "Back",
-              modifier = Modifier.size(20.dp),
-            )
-          }
-        } else {
-          Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.size(36.dp),
-          ) {
-            Box(contentAlignment = Alignment.Center) {
-              Icon(
-                Icons.Default.PictureAsPdf,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(20.dp),
-              )
-            }
-          }
-        }
-        Column {
-          Text(
-            "PDF Viewer",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          Text(
-            text = fileName ?: "View, draw & add text to PDFs",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-      }
-
+  ToolboxTopBar(
+    title = "PDF Viewer",
+    subtext = fileName ?: "View, draw & add text to PDFs",
+    icon = Icons.Default.PictureAsPdf,
+    onNavigateBack = onNavigateBack,
+    backButtonTestTag = "action_navigate_back",
+    additionalBackButtonTestTag = "pdf_back_button",
+    actions = {
       if (hasDocument) {
-        Row(
-          horizontalArrangement = Arrangement.spacedBy(2.dp),
-          verticalAlignment = Alignment.CenterVertically,
+        IconButton(
+          onClick = onUndo,
+          enabled = canUndo,
+          modifier = Modifier.size(36.dp).testTag("pdf_undo_button"),
         ) {
-          IconButton(
-            onClick = onUndo,
-            enabled = canUndo,
-            modifier = Modifier.size(36.dp).testTag("pdf_undo_button"),
-          ) {
-            Icon(
-              Icons.AutoMirrored.Filled.Undo,
-              contentDescription = "Undo",
-              modifier = Modifier.size(20.dp),
-            )
-          }
-          IconButton(
-            onClick = onRedo,
-            enabled = canRedo,
-            modifier = Modifier.size(36.dp).testTag("pdf_redo_button"),
-          ) {
-            Icon(
-              Icons.AutoMirrored.Filled.Redo,
-              contentDescription = "Redo",
-              modifier = Modifier.size(20.dp),
-            )
-          }
-          IconButton(
-            onClick = onShare,
-            modifier = Modifier.size(36.dp).testTag("pdf_share_button"),
-          ) {
-            Icon(
-              Icons.Default.Share,
-              contentDescription = "Share PDF",
-              modifier = Modifier.size(20.dp),
-            )
-          }
-          IconButton(
-            onClick = onClose,
-            modifier = Modifier.size(36.dp).testTag("pdf_close_button"),
-          ) {
-            Icon(
-              Icons.Default.Close,
-              contentDescription = "Close PDF",
-              modifier = Modifier.size(20.dp),
-            )
-          }
-          Spacer(Modifier.width(4.dp))
-          Button(
-            onClick = onSave,
-            shape = RoundedCornerShape(10.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            modifier = Modifier.testTag("pdf_save_button"),
-          ) {
-            Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(6.dp))
-            Text("Save", fontWeight = FontWeight.SemiBold)
-          }
+          Icon(
+            Icons.AutoMirrored.Filled.Undo,
+            contentDescription = "Undo",
+            modifier = Modifier.size(20.dp),
+          )
+        }
+        IconButton(
+          onClick = onRedo,
+          enabled = canRedo,
+          modifier = Modifier.size(36.dp).testTag("pdf_redo_button"),
+        ) {
+          Icon(
+            Icons.AutoMirrored.Filled.Redo,
+            contentDescription = "Redo",
+            modifier = Modifier.size(20.dp),
+          )
+        }
+        IconButton(
+          onClick = onShare,
+          modifier = Modifier.size(36.dp).testTag("pdf_share_button"),
+        ) {
+          Icon(
+            Icons.Default.Share,
+            contentDescription = "Share PDF",
+            modifier = Modifier.size(20.dp),
+          )
+        }
+        IconButton(
+          onClick = onClose,
+          modifier = Modifier.size(36.dp).testTag("pdf_close_button"),
+        ) {
+          Icon(
+            Icons.Default.Close,
+            contentDescription = "Close PDF",
+            modifier = Modifier.size(20.dp),
+          )
+        }
+        Spacer(Modifier.width(4.dp))
+        Button(
+          onClick = onSave,
+          shape = RoundedCornerShape(10.dp),
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+          modifier = Modifier.testTag("pdf_save_button"),
+        ) {
+          Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(Modifier.width(6.dp))
+          Text("Save", fontWeight = FontWeight.SemiBold)
         }
       }
-    }
-  }
+    },
+  )
 }
 
 @Composable

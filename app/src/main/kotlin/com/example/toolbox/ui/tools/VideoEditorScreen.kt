@@ -965,139 +965,73 @@ private fun VideoEditorTopBar(
   onExportClick: () -> Unit,
   onNavigateBack: (() -> Unit)? = null,
 ) {
-  Surface(
-    color = MaterialTheme.colorScheme.surface,
-    tonalElevation = 1.dp,
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    Box(
-      modifier = Modifier
-        .fillMaxWidth()
-        .heightIn(min = 68.dp),
-      contentAlignment = Alignment.CenterStart,
-    ) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 12.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-      ) {
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
-          modifier = Modifier.weight(1f),
+  ToolboxTopBar(
+    title = "Video Editor",
+    subtext = if (metadata != null) {
+      "${metadata.file.name} • ${metadata.resolutionLabel} • ${metadata.durationFormatted}"
+    } else {
+      "Fast FFmpeg video trimmer & editor"
+    },
+    icon = Icons.Default.Movie,
+    onNavigateBack = onNavigateBack,
+    backButtonTestTag = "action_navigate_back",
+    actions = {
+      if (metadata != null) {
+        IconButton(
+          onClick = onUndo,
+          enabled = canUndo,
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("editor_undo_button"),
         ) {
-          if (onNavigateBack != null) {
-            IconButton(
-              onClick = onNavigateBack,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("action_navigate_back"),
-            ) {
-              Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-            }
-          } else {
-            Box(
-              modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Default.Movie,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-              )
-            }
-          }
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = "Video Editor",
-              style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurface,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-              text = if (metadata != null) {
-                "${metadata.file.name} • ${metadata.resolutionLabel} • ${metadata.durationFormatted}"
-              } else {
-                "Fast FFmpeg video trimmer & editor"
-              },
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-          }
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Undo,
+            contentDescription = "Undo",
+            modifier = Modifier.size(20.dp),
+          )
         }
-
-        if (metadata != null) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-          ) {
-            IconButton(
-              onClick = onUndo,
-              enabled = canUndo,
-              modifier = Modifier
-                .size(38.dp)
-                .testTag("editor_undo_button"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.Undo,
-                contentDescription = "Undo",
-                modifier = Modifier.size(20.dp),
-              )
-            }
-            IconButton(
-              onClick = onRedo,
-              enabled = canRedo,
-              modifier = Modifier
-                .size(38.dp)
-                .testTag("editor_redo_button"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.Redo,
-                contentDescription = "Redo",
-                modifier = Modifier.size(20.dp),
-              )
-            }
-            IconButton(
-              onClick = onClose,
-              modifier = Modifier
-                .size(38.dp)
-                .testTag("editor_close_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = "Close Video",
-                modifier = Modifier.size(20.dp),
-              )
-            }
-            Spacer(modifier = Modifier.width(4.dp))
-            FilledIconButton(
-              onClick = onExportClick,
-              shape = CircleShape,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("editor_export_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Save,
-                contentDescription = "Save Video",
-                modifier = Modifier.size(18.dp),
-              )
-            }
-          }
+        IconButton(
+          onClick = onRedo,
+          enabled = canRedo,
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("editor_redo_button"),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Redo,
+            contentDescription = "Redo",
+            modifier = Modifier.size(20.dp),
+          )
+        }
+        IconButton(
+          onClick = onClose,
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("editor_close_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = "Close Video",
+            modifier = Modifier.size(20.dp),
+          )
+        }
+        Spacer(modifier = Modifier.width(4.dp))
+        FilledIconButton(
+          onClick = onExportClick,
+          shape = CircleShape,
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("editor_export_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Save,
+            contentDescription = "Save Video",
+            modifier = Modifier.size(18.dp),
+          )
         }
       }
-    }
-  }
+    },
+  )
 }
 
 // ---------------------------------------------------------------------------

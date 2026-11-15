@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -36,6 +38,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -66,9 +70,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Label
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
@@ -78,6 +86,7 @@ import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
@@ -86,6 +95,8 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.VideoFile
@@ -100,6 +111,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -141,6 +153,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
@@ -159,6 +172,7 @@ import androidx.compose.ui.zIndex
 import androidx.core.content.FileProvider
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
+import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -431,10 +445,32 @@ fun GalleryScreen(
   var showBulkDeleteDialog by remember { mutableStateOf(false) }
   var clipboardState by remember { mutableStateOf<GalleryClipboardState?>(null) }
 
+  // Search & Smart Tag Filter state
+  var isSearchActive by rememberSaveable { mutableStateOf(false) }
+  var searchQuery by rememberSaveable { mutableStateOf("") }
+  var selectedTagFilter by rememberSaveable { mutableStateOf<String?>(null) }
+
+  // Background OCR, QR/Barcode & Automatic Tagging Index state
+  val indexCacheFile = remember(context, isInspection) {
+    if (isInspection) null else GalleryEngine.getDefaultIndexCacheFile(context)
+  }
+  var photoIndexMap by remember {
+    mutableStateOf(GalleryEngine.loadIndexCacheFromDisk(indexCacheFile))
+  }
+  var isIndexingPhotos by remember { mutableStateOf(false) }
+  var indexedProgressCount by remember { mutableIntStateOf(0) }
+  var indexedTotalCount by remember { mutableIntStateOf(0) }
+
   fun exitSelectionMode() {
     isSelectionMode = false
     selectedAlbumPaths = emptySet()
     selectedPhotoPaths = emptySet()
+  }
+
+  fun closeSearch() {
+    isSearchActive = false
+    searchQuery = ""
+    selectedTagFilter = null
   }
 
   fun toggleAlbumSelection(album: GalleryAlbum) {
@@ -473,13 +509,16 @@ fun GalleryScreen(
     }
   }
 
-  BackHandler(enabled = isFabExpanded || isSelectionMode || albumStack.isNotEmpty() || onNavigateBack != null) {
+  BackHandler(enabled = isFabExpanded || isSelectionMode || isSearchActive || albumStack.isNotEmpty() || onNavigateBack != null) {
     when {
       isFabExpanded -> {
         isFabExpanded = false
       }
       isSelectionMode -> {
         exitSelectionMode()
+      }
+      isSearchActive -> {
+        closeSearch()
       }
       else -> {
         handleGalleryBack()
@@ -505,13 +544,93 @@ fun GalleryScreen(
     currentAlbumContents?.photos.orEmpty()
   }
 
-  val activeAlbums: List<GalleryAlbum> = remember(rawAlbums, sortOrder) {
-    GalleryEngine.sortAlbums(rawAlbums, sortOrder)
+  // All photos in the gallery (for background indexing) and all photos in the current scope (root or current album subtree)
+  val allGalleryPhotos: List<GalleryPhoto> = remember(rootContents, refreshTrigger) {
+    GalleryEngine.collectAllGalleryPhotos(rootContents)
   }
 
-  val activePhotos: List<GalleryPhoto> = remember(rawPhotos, sortOrder) {
-    GalleryEngine.sortPhotos(rawPhotos, sortOrder)
+  val allScopePhotos: List<GalleryPhoto> = remember(currentAlbum, rootContents, currentAlbumContents, allGalleryPhotos, refreshTrigger) {
+    if (currentAlbum == null) {
+      allGalleryPhotos
+    } else {
+      val subtreeFiles = GalleryEngine.collectMediaFiles(listOf(currentAlbum), emptyList())
+      subtreeFiles.map { file ->
+        GalleryPhoto(
+          file = file,
+          name = file.name,
+          path = file.absolutePath,
+          sizeBytes = file.length(),
+          lastModifiedMs = file.lastModified(),
+          extension = file.extension.lowercase(Locale.ROOT),
+        )
+      }
+    }
   }
+
+  // Background OCR, QR/barcode & ML Kit auto-tagging indexer
+  LaunchedEffect(allGalleryPhotos, isInspection) {
+    if (allGalleryPhotos.isEmpty()) {
+      isIndexingPhotos = false
+      indexedProgressCount = 0
+      indexedTotalCount = 0
+      return@LaunchedEffect
+    }
+    GalleryEngine.indexPhotosInBackground(
+      photos = allGalleryPhotos,
+      cacheFile = indexCacheFile,
+      onProgress = { indexedCount, totalToIndex, snapshot ->
+        photoIndexMap = snapshot
+        if (totalToIndex > 0 && indexedCount < totalToIndex) {
+          isIndexingPhotos = true
+          indexedProgressCount = indexedCount
+          indexedTotalCount = totalToIndex
+        } else {
+          isIndexingPhotos = false
+          indexedProgressCount = totalToIndex
+          indexedTotalCount = totalToIndex
+        }
+      },
+    )
+  }
+
+  val availableAutoTags: List<Pair<String, Int>> = remember(allScopePhotos, photoIndexMap) {
+    GalleryEngine.extractAvailableAutoTags(allScopePhotos, photoIndexMap)
+  }
+
+  val hasActiveSearchQueryOrTag = isSearchActive && (searchQuery.isNotBlank() || selectedTagFilter != null)
+
+  val searchResult: GallerySearchResult = remember(
+    rawAlbums,
+    rawPhotos,
+    allScopePhotos,
+    photoIndexMap,
+    isSearchActive,
+    searchQuery,
+    selectedTagFilter,
+    sortOrder,
+  ) {
+    if (hasActiveSearchQueryOrTag) {
+      GalleryEngine.searchGallery(
+        albums = rawAlbums,
+        directPhotos = rawPhotos,
+        allScopePhotos = allScopePhotos,
+        indexMap = photoIndexMap,
+        searchQuery = searchQuery,
+        selectedTag = selectedTagFilter,
+        sortOrder = sortOrder,
+      )
+    } else {
+      GallerySearchResult(
+        matchingAlbums = GalleryEngine.sortAlbums(rawAlbums, sortOrder),
+        matchingPhotos = GalleryEngine.sortPhotos(rawPhotos, sortOrder),
+        matchSnippetsByPath = emptyMap(),
+      )
+    }
+  }
+
+  val activeAlbums: List<GalleryAlbum> = searchResult.matchingAlbums
+  val activePhotos: List<GalleryPhoto> = searchResult.matchingPhotos
+  val matchSnippetsByPath: Map<String, String> = searchResult.matchSnippetsByPath
 
   val selectedAlbums: List<GalleryAlbum> = remember(activeAlbums, selectedAlbumPaths) {
     activeAlbums.filter { it.path in selectedAlbumPaths }
@@ -599,9 +718,15 @@ fun GalleryScreen(
       modifier = Modifier.fillMaxSize(),
     ) {
       // Top Toolbar following DESIGN_LANGUAGE.md 5.1 & 5.5
+      val indexingStatusSuffix = if (isIndexingPhotos && indexedTotalCount > 0) {
+        " • Indexing $indexedProgressCount/$indexedTotalCount photos…"
+      } else {
+        ""
+      }
+
       GalleryTopBar(
         title = currentAlbum?.name ?: "Gallery",
-        subtext = if (currentAlbum == null) {
+        subtext = (if (currentAlbum == null) {
           val albumWord = if (activeAlbums.size == 1) "1 album" else "${activeAlbums.size} albums"
           val modeInfo = if (viewMode == GalleryViewMode.TILE) "$albumsPerRow per row" else "List view"
           if (activePhotos.isNotEmpty()) {
@@ -620,13 +745,29 @@ fun GalleryScreen(
             }
             append(if (photoCount == 1) "1 photo" else "$photoCount photos")
           }
-        },
+        }) + indexingStatusSuffix,
         canNavigateBack = albumStack.isNotEmpty() || onNavigateBack != null,
         viewMode = viewMode,
         isSelectionMode = isSelectionMode,
         selectedCount = selectedCount,
         totalCount = totalSelectableCount,
         singleSelectedPhoto = if (selectedAlbums.isEmpty() && selectedPhotos.size == 1) selectedPhotos.first() else null,
+        isSearchActive = isSearchActive,
+        searchQuery = searchQuery,
+        searchPlaceholder = if (currentAlbum != null) {
+          "Search ${currentAlbum.name}, OCR text, QR, or tags..."
+        } else {
+          "Search photos, OCR text, QR codes, or tags..."
+        },
+        onSearchToggle = {
+          isSearchActive = !isSearchActive
+          if (!isSearchActive) {
+            searchQuery = ""
+            selectedTagFilter = null
+          }
+        },
+        onCloseSearch = { closeSearch() },
+        onSearchQueryChange = { searchQuery = it },
         onToggleSelectAll = { toggleSelectAll() },
         onCloseSelection = { exitSelectionMode() },
         onBulkShare = {
@@ -684,6 +825,25 @@ fun GalleryScreen(
         onSelectViewMode = { updateViewMode(it) },
       )
 
+      // Smart Tag Filter Chips Row (shown when searching)
+      AnimatedVisibility(
+        visible = isSearchActive && !isSelectionMode,
+        enter = expandVertically() + fadeIn(),
+        exit = shrinkVertically() + fadeOut(),
+      ) {
+        GallerySearchTagFilterBar(
+          availableTags = availableAutoTags,
+          selectedTag = selectedTagFilter,
+          isIndexing = isIndexingPhotos,
+          indexedCount = indexedProgressCount,
+          totalCount = indexedTotalCount,
+          onSelectTag = { tag ->
+            selectedTagFilter = if (selectedTagFilter.equals(tag, ignoreCase = true)) null else tag
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          },
+        )
+      }
+
       // Pill & Filter Controls Bar underneath the toolbar
       GalleryNavigationAndDensityBar(
         albumStack = albumStack.toList(),
@@ -724,75 +884,41 @@ fun GalleryScreen(
       }
 
       // Main Content Area (Tile View with pinch-to-zoom 3..6 per row, or List View)
-      val currentColumnsState by rememberUpdatedState(albumsPerRow)
-      val currentOnColumnsChange by rememberUpdatedState<(Int) -> Unit>({ updateAlbumsPerRow(it) })
-
       Box(
         modifier = Modifier
           .weight(1f)
           .fillMaxWidth()
           .testTag("gallery_content_container")
-          .pointerInput(viewMode) {
-            if (viewMode != GalleryViewMode.TILE) return@pointerInput
-            awaitEachGesture {
-              var cumulativeZoom = 1f
-              var liveColumns = currentColumnsState
-              var multiTouchStarted = false
-
-              do {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                val pressedCount = event.changes.count { it.pressed }
-                if (pressedCount >= 2) {
-                  if (!multiTouchStarted) {
-                    multiTouchStarted = true
-                    cumulativeZoom = 1f
-                    liveColumns = currentColumnsState
-                  }
-                  val zoomChange = event.calculateZoom()
-                  if (zoomChange != 1f && zoomChange > 0f && !zoomChange.isNaN()) {
-                    cumulativeZoom *= zoomChange
-
-                    // Pinching in (fingers moving closer, zoom < 1f) -> increase albums per row up to 6
-                    while (cumulativeZoom <= 0.82f) {
-                      val next = GalleryEngine.coerceAlbumsPerRow(liveColumns + 1)
-                      if (next != liveColumns) {
-                        liveColumns = next
-                        currentOnColumnsChange(next)
-                      }
-                      cumulativeZoom /= 0.82f
-                    }
-
-                    // Pinching out (fingers spreading apart, zoom > 1f) -> decrease albums per row down to 3
-                    while (cumulativeZoom >= 1.22f) {
-                      val next = GalleryEngine.coerceAlbumsPerRow(liveColumns - 1)
-                      if (next != liveColumns) {
-                        liveColumns = next
-                        currentOnColumnsChange(next)
-                      }
-                      cumulativeZoom /= 1.22f
-                    }
-
-                    event.changes.forEach { it.consume() }
-                  }
-                } else {
-                  multiTouchStarted = false
-                  cumulativeZoom = 1f
-                }
-              } while (event.changes.any { it.pressed })
-            }
-          },
+          .pinchToChangeColumns(
+            enabled = viewMode == GalleryViewMode.TILE,
+            columnsPerRow = albumsPerRow,
+            minColumns = MIN_ALBUMS_PER_ROW,
+            maxColumns = MAX_ALBUMS_PER_ROW,
+            onColumnsChange = { updateAlbumsPerRow(it) },
+          ),
       ) {
         if (activeAlbums.isEmpty() && activePhotos.isEmpty()) {
-          EmptyAlbumStateView(
-            folderName = currentAlbum?.name ?: "Gallery",
-            onCreateSubfolder = {
-              addAlbumDialogTarget = if (currentAlbum == null) {
-                AddAlbumTarget.ROOT_ALBUM
-              } else {
-                AddAlbumTarget.NESTED_ALBUM_HERE
-              }
-            },
-          )
+          if (hasActiveSearchQueryOrTag) {
+            GallerySearchEmptyStateView(
+              searchQuery = searchQuery,
+              selectedTag = selectedTagFilter,
+              onClearSearch = {
+                searchQuery = ""
+                selectedTagFilter = null
+              },
+            )
+          } else {
+            EmptyAlbumStateView(
+              folderName = currentAlbum?.name ?: "Gallery",
+              onCreateSubfolder = {
+                addAlbumDialogTarget = if (currentAlbum == null) {
+                  AddAlbumTarget.ROOT_ALBUM
+                } else {
+                  AddAlbumTarget.NESTED_ALBUM_HERE
+                }
+              },
+            )
+          }
         } else if (viewMode == GalleryViewMode.TILE) {
           GalleryTileGridView(
             albums = activeAlbums,
@@ -802,6 +928,8 @@ fun GalleryScreen(
             isSelectionMode = isSelectionMode,
             selectedAlbumPaths = selectedAlbumPaths,
             selectedPhotoPaths = selectedPhotoPaths,
+            photoIndexMap = photoIndexMap,
+            matchSnippetsByPath = matchSnippetsByPath,
             onToggleAlbumSelect = { album ->
               toggleAlbumSelection(album)
             },
@@ -857,6 +985,8 @@ fun GalleryScreen(
             isSelectionMode = isSelectionMode,
             selectedAlbumPaths = selectedAlbumPaths,
             selectedPhotoPaths = selectedPhotoPaths,
+            photoIndexMap = photoIndexMap,
+            matchSnippetsByPath = matchSnippetsByPath,
             onToggleAlbumSelect = { album ->
               toggleAlbumSelection(album)
             },
@@ -1095,6 +1225,11 @@ fun GalleryScreen(
     GalleryPhotoViewerDialog(
       photos = activePhotos,
       initialPhoto = photo,
+      photoIndexMap = photoIndexMap,
+      onPhotoIndexed = { entry ->
+        photoIndexMap = photoIndexMap + (entry.path to entry)
+        GalleryEngine.saveIndexCacheToDisk(indexCacheFile, photoIndexMap)
+      },
       onDismiss = { selectedPhotoForViewer = null },
       onEdit = { editedPhoto ->
         openMediaInEditor(editedPhoto)
@@ -1207,6 +1342,12 @@ private fun GalleryTopBar(
   selectedCount: Int = 0,
   totalCount: Int = 0,
   singleSelectedPhoto: GalleryPhoto? = null,
+  isSearchActive: Boolean = false,
+  searchQuery: String = "",
+  searchPlaceholder: String = "Search photos, OCR text, QR codes, or tags...",
+  onSearchToggle: () -> Unit = {},
+  onCloseSearch: () -> Unit = {},
+  onSearchQueryChange: (String) -> Unit = {},
   onToggleSelectAll: () -> Unit = {},
   onCloseSelection: () -> Unit = {},
   onBulkShare: () -> Unit = {},
@@ -1219,370 +1360,270 @@ private fun GalleryTopBar(
   onToggleViewMode: () -> Unit,
   onSelectViewMode: (GalleryViewMode) -> Unit,
 ) {
-  Surface(
-    color = MaterialTheme.colorScheme.surface,
-    tonalElevation = 1.dp,
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    Box(
-      modifier = Modifier
-        .fillMaxWidth()
-        .heightIn(min = 68.dp),
-      contentAlignment = Alignment.CenterStart,
-    ) {
-      if (isSelectionMode) {
-        // Multi-Selection Header Toolbar following DESIGN_LANGUAGE.md 5.5
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 10.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          // Leading: Close button + Select All Checkbox + "# selected" Text
-          Row(
-            modifier = Modifier.weight(1f, fill = false),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+  val focusManager = LocalFocusManager.current
+
+  ToolboxTopBar(
+    title = title,
+    subtext = subtext,
+    icon = Icons.Default.PhotoLibrary,
+    onNavigateBack = if (canNavigateBack) onBack else null,
+    backContentDescription = "Back",
+    backButtonTestTag = "gallery_back_button",
+    titleTestTag = "gallery_header_title",
+    subtextTestTag = "gallery_header_subtitle",
+    searchState = ToolboxTopBarSearchState(
+      isActive = isSearchActive,
+      query = searchQuery,
+      onQueryChange = onSearchQueryChange,
+      onOpenSearch = onSearchToggle,
+      onCloseSearch = {
+        focusManager.clearFocus()
+        onCloseSearch()
+      },
+      placeholder = searchPlaceholder,
+      searchContentDescription = "Search gallery, OCR text, QR codes, and tags",
+      closeContentDescription = "Close search",
+      clearContentDescription = "Clear search query",
+      toggleButtonTestTag = "gallery_search_toggle",
+      searchBarTestTag = "gallery_toolbar_search_bar",
+      closeButtonTestTag = "gallery_search_close",
+      inputTestTag = "gallery_search_input",
+      clearButtonTestTag = "gallery_search_clear",
+      onSearchImeAction = { focusManager.clearFocus() },
+    ),
+    selectionState = if (isSelectionMode) {
+      ToolboxTopBarSelectionState(
+        selectedCount = selectedCount,
+        totalCount = totalCount,
+        onToggleSelectAll = onToggleSelectAll,
+        onCloseSelection = onCloseSelection,
+        countTextTestTag = "gallery_selection_count_label",
+        actions = {
+          var showOverflowMenu by remember { mutableStateOf(false) }
+          val hasSelection = selectedCount > 0
+
+          IconButton(
+            onClick = onBulkShare,
+            enabled = hasSelection,
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("action_bulk_share"),
           ) {
-            IconButton(
-              onClick = onCloseSelection,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("action_close_selection"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = "Exit selection",
-              )
-            }
-
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(onClick = onToggleSelectAll)
-                .padding(horizontal = 4.dp, vertical = 4.dp)
-                .testTag("action_select_all_checkbox"),
-            ) {
-              Checkbox(
-                checked = totalCount > 0 && selectedCount == totalCount,
-                onCheckedChange = { onToggleSelectAll() },
-                colors = CheckboxDefaults.colors(
-                  checkedColor = MaterialTheme.colorScheme.primary,
-                ),
-                modifier = Modifier.size(32.dp),
-              )
-              Spacer(modifier = Modifier.width(4.dp))
-              Text(
-                text = "$selectedCount selected",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.testTag("gallery_selection_count_label"),
-              )
-            }
-          }
-
-          // Trailing Actions: Share, Info, Cut, Copy, Delete (red), and Overflow "..." Menu
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-          ) {
-            var showOverflowMenu by remember { mutableStateOf(false) }
-            val hasSelection = selectedCount > 0
-
-            IconButton(
-              onClick = onBulkShare,
-              enabled = hasSelection,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("action_bulk_share"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Share,
-                contentDescription = "Share",
-                tint = if (hasSelection) {
-                  MaterialTheme.colorScheme.onSurface
-                } else {
-                  MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                },
-                modifier = Modifier.size(20.dp),
-              )
-            }
-
-            IconButton(
-              onClick = onBulkInfo,
-              enabled = hasSelection,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("action_bulk_info"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Info,
-                contentDescription = "Info",
-                tint = if (hasSelection) {
-                  MaterialTheme.colorScheme.onSurface
-                } else {
-                  MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                },
-                modifier = Modifier.size(20.dp),
-              )
-            }
-
-            IconButton(
-              onClick = onBulkCut,
-              enabled = hasSelection,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("action_bulk_cut"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.ContentCut,
-                contentDescription = "Cut",
-                tint = if (hasSelection) {
-                  MaterialTheme.colorScheme.onSurface
-                } else {
-                  MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                },
-                modifier = Modifier.size(20.dp),
-              )
-            }
-
-            IconButton(
-              onClick = onBulkCopy,
-              enabled = hasSelection,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("action_bulk_copy"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.ContentCopy,
-                contentDescription = "Copy",
-                tint = if (hasSelection) {
-                  MaterialTheme.colorScheme.onSurface
-                } else {
-                  MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                },
-                modifier = Modifier.size(20.dp),
-              )
-            }
-
-            IconButton(
-              onClick = onBulkDelete,
-              enabled = hasSelection,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("action_bulk_delete"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Delete,
-                contentDescription = "Delete",
-                tint = if (hasSelection) {
-                  MaterialTheme.colorScheme.error
-                } else {
-                  MaterialTheme.colorScheme.error.copy(alpha = 0.38f)
-                },
-                modifier = Modifier.size(20.dp),
-              )
-            }
-
-            Box {
-              IconButton(
-                onClick = { showOverflowMenu = true },
-                modifier = Modifier
-                  .size(36.dp)
-                  .testTag("action_selection_overflow"),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.MoreVert,
-                  contentDescription = "More actions",
-                  modifier = Modifier.size(20.dp),
-                )
-              }
-
-              DropdownMenu(
-                expanded = showOverflowMenu,
-                onDismissRequest = { showOverflowMenu = false },
-              ) {
-                DropdownMenuItem(
-                  text = { Text("Share") },
-                  leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
-                  enabled = hasSelection,
-                  onClick = {
-                    showOverflowMenu = false
-                    onBulkShare()
-                  },
-                  modifier = Modifier.testTag("action_selection_share"),
-                )
-                DropdownMenuItem(
-                  text = { Text("Info") },
-                  leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
-                  enabled = hasSelection,
-                  onClick = {
-                    showOverflowMenu = false
-                    onBulkInfo()
-                  },
-                  modifier = Modifier.testTag("action_selection_info"),
-                )
-                DropdownMenuItem(
-                  text = { Text("Cut") },
-                  leadingIcon = { Icon(Icons.Default.ContentCut, contentDescription = null) },
-                  enabled = hasSelection,
-                  onClick = {
-                    showOverflowMenu = false
-                    onBulkCut()
-                  },
-                  modifier = Modifier.testTag("action_selection_cut"),
-                )
-                DropdownMenuItem(
-                  text = { Text("Copy") },
-                  leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-                  enabled = hasSelection,
-                  onClick = {
-                    showOverflowMenu = false
-                    onBulkCopy()
-                  },
-                  modifier = Modifier.testTag("action_selection_copy"),
-                )
-                if (singleSelectedPhoto != null) {
-                  DropdownMenuItem(
-                    text = { Text("Edit") },
-                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                    onClick = {
-                      showOverflowMenu = false
-                      onEditSinglePhoto(singleSelectedPhoto)
-                    },
-                    modifier = Modifier.testTag("action_selection_edit"),
-                  )
-                }
-                DropdownMenuItem(
-                  text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
-                  leadingIcon = {
-                    Icon(
-                      imageVector = Icons.Default.Delete,
-                      contentDescription = null,
-                      tint = MaterialTheme.colorScheme.error,
-                    )
-                  },
-                  enabled = hasSelection,
-                  onClick = {
-                    showOverflowMenu = false
-                    onBulkDelete()
-                  },
-                  modifier = Modifier.testTag("action_selection_delete"),
-                )
-                HorizontalDivider()
-                DropdownMenuItem(
-                  text = {
-                    Text(if (selectedCount == totalCount && totalCount > 0) "Deselect all" else "Select all")
-                  },
-                  leadingIcon = { Icon(Icons.Default.SelectAll, contentDescription = null) },
-                  onClick = {
-                    showOverflowMenu = false
-                    onToggleSelectAll()
-                  },
-                  modifier = Modifier.testTag("action_selection_select_all"),
-                )
-                DropdownMenuItem(
-                  text = { Text("Exit selection") },
-                  leadingIcon = { Icon(Icons.Default.Close, contentDescription = null) },
-                  onClick = {
-                    showOverflowMenu = false
-                    onCloseSelection()
-                  },
-                  modifier = Modifier.testTag("action_selection_exit"),
-                )
-              }
-            }
-          }
-        }
-      } else {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            if (canNavigateBack) {
-              IconButton(
-                onClick = onBack,
-                modifier = Modifier
-                  .size(36.dp)
-                  .testTag("gallery_back_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                  contentDescription = "Back",
-                  tint = MaterialTheme.colorScheme.onSurface,
-                )
-              }
-            } else {
-              Box(
-                modifier = Modifier
-                  .size(36.dp)
-                  .clip(CircleShape)
-                  .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center,
-              ) {
-                Icon(
-                  imageVector = Icons.Default.PhotoLibrary,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.size(20.dp),
-                )
-              }
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.testTag("gallery_header_title"),
-              )
-              Text(
-                text = subtext,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.testTag("gallery_header_subtitle"),
-              )
-            }
-          }
-
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-          ) {
-            ViewModeSegmentedToggle(
-              isListView = viewMode == GalleryViewMode.LIST,
-              onSelectListView = { onSelectViewMode(GalleryViewMode.LIST) },
-              onSelectGridView = { onSelectViewMode(GalleryViewMode.TILE) },
-              onToggle = onToggleViewMode,
-              toggleTestTag = "gallery_view_mode_toggle",
-              listTestTag = "gallery_list_view_button",
-              gridTestTag = "gallery_tile_view_button",
-              listContentDescription = "List view",
-              gridContentDescription = "Tile view",
+            Icon(
+              imageVector = Icons.Default.Share,
+              contentDescription = "Share",
+              tint = if (hasSelection) {
+                MaterialTheme.colorScheme.onSurface
+              } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+              },
+              modifier = Modifier.size(20.dp),
             )
           }
-        }
-      }
-    }
-  }
+
+          IconButton(
+            onClick = onBulkInfo,
+            enabled = hasSelection,
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("action_bulk_info"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Info,
+              contentDescription = "Info",
+              tint = if (hasSelection) {
+                MaterialTheme.colorScheme.onSurface
+              } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+              },
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          IconButton(
+            onClick = onBulkCut,
+            enabled = hasSelection,
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("action_bulk_cut"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.ContentCut,
+              contentDescription = "Cut",
+              tint = if (hasSelection) {
+                MaterialTheme.colorScheme.onSurface
+              } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+              },
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          IconButton(
+            onClick = onBulkCopy,
+            enabled = hasSelection,
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("action_bulk_copy"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.ContentCopy,
+              contentDescription = "Copy",
+              tint = if (hasSelection) {
+                MaterialTheme.colorScheme.onSurface
+              } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+              },
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          IconButton(
+            onClick = onBulkDelete,
+            enabled = hasSelection,
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("action_bulk_delete"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Delete,
+              contentDescription = "Delete",
+              tint = if (hasSelection) {
+                MaterialTheme.colorScheme.error
+              } else {
+                MaterialTheme.colorScheme.error.copy(alpha = 0.38f)
+              },
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          Box {
+            IconButton(
+              onClick = { showOverflowMenu = true },
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("action_selection_overflow"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = "More actions",
+                modifier = Modifier.size(20.dp),
+              )
+            }
+
+            DropdownMenu(
+              expanded = showOverflowMenu,
+              onDismissRequest = { showOverflowMenu = false },
+            ) {
+              DropdownMenuItem(
+                text = { Text("Share") },
+                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkShare()
+                },
+                modifier = Modifier.testTag("action_selection_share"),
+              )
+              DropdownMenuItem(
+                text = { Text("Info") },
+                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkInfo()
+                },
+                modifier = Modifier.testTag("action_selection_info"),
+              )
+              DropdownMenuItem(
+                text = { Text("Cut") },
+                leadingIcon = { Icon(Icons.Default.ContentCut, contentDescription = null) },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkCut()
+                },
+                modifier = Modifier.testTag("action_selection_cut"),
+              )
+              DropdownMenuItem(
+                text = { Text("Copy") },
+                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkCopy()
+                },
+                modifier = Modifier.testTag("action_selection_copy"),
+              )
+              if (singleSelectedPhoto != null) {
+                DropdownMenuItem(
+                  text = { Text("Edit") },
+                  leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    onEditSinglePhoto(singleSelectedPhoto)
+                  },
+                  modifier = Modifier.testTag("action_selection_edit"),
+                )
+              }
+              DropdownMenuItem(
+                text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                leadingIcon = {
+                  Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                  )
+                },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkDelete()
+                },
+                modifier = Modifier.testTag("action_selection_delete"),
+              )
+              HorizontalDivider()
+              DropdownMenuItem(
+                text = {
+                  Text(if (selectedCount == totalCount && totalCount > 0) "Deselect all" else "Select all")
+                },
+                leadingIcon = { Icon(Icons.Default.SelectAll, contentDescription = null) },
+                onClick = {
+                  showOverflowMenu = false
+                  onToggleSelectAll()
+                },
+                modifier = Modifier.testTag("action_selection_select_all"),
+              )
+              DropdownMenuItem(
+                text = { Text("Exit selection") },
+                leadingIcon = { Icon(Icons.Default.Close, contentDescription = null) },
+                onClick = {
+                  showOverflowMenu = false
+                  onCloseSelection()
+                },
+                modifier = Modifier.testTag("action_selection_exit"),
+              )
+            }
+          }
+        },
+      )
+    } else {
+      null
+    },
+    actions = {
+      ViewModeSegmentedToggle(
+        isListView = viewMode == GalleryViewMode.LIST,
+        onSelectListView = { onSelectViewMode(GalleryViewMode.LIST) },
+        onSelectGridView = { onSelectViewMode(GalleryViewMode.TILE) },
+        onToggle = onToggleViewMode,
+        toggleTestTag = "gallery_view_mode_toggle",
+        listTestTag = "gallery_list_view_button",
+        gridTestTag = "gallery_tile_view_button",
+        listContentDescription = "List view",
+        gridContentDescription = "Tile view",
+      )
+    },
+  )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1600,11 +1641,6 @@ private fun GalleryNavigationAndDensityBar(
   onDismissSortMenu: () -> Unit,
   onSelectSortOrder: (GallerySortOrder) -> Unit,
 ) {
-  val cyclePerRow = {
-    val next = if (albumsPerRow >= MAX_ALBUMS_PER_ROW) MIN_ALBUMS_PER_ROW else albumsPerRow + 1
-    onAlbumsPerRowChange(next)
-  }
-
   Surface(
     color = MaterialTheme.colorScheme.surface,
     modifier = Modifier.fillMaxWidth(),
@@ -1619,190 +1655,155 @@ private fun GalleryNavigationAndDensityBar(
       Row(
         modifier = Modifier
           .fillMaxWidth()
+          .fadingPillRowUnderFloatingControls(hasColumnsButton = viewMode == GalleryViewMode.TILE)
           .horizontalScroll(rememberScrollState())
-          .padding(start = 12.dp, end = 56.dp, top = 6.dp, bottom = 6.dp),
+          .padding(
+            start = 12.dp,
+            end = if (viewMode == GalleryViewMode.TILE) 96.dp else 56.dp,
+            top = 6.dp,
+            bottom = 6.dp,
+          ),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        // Tile albums-per-row pill button on the left (3..6)
-        if (viewMode == GalleryViewMode.TILE) {
+        // Breadcrumb path pills (always shows root "Albums" pill, plus nested folders when inside an album)
+        Row(
+          modifier = Modifier.testTag("gallery_breadcrumbs"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+          val isAtRoot = albumStack.isEmpty()
           Surface(
             shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.primaryContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
+            color = if (isAtRoot) {
+              MaterialTheme.colorScheme.primaryContainer
+            } else {
+              MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f)
+            },
             modifier = Modifier
-              .heightIn(min = 32.dp)
               .clip(RoundedCornerShape(20.dp))
-              .testTag("gallery_density_indicator"),
+              .clickable(onClick = onNavigateToRoot)
+              .testTag("gallery_breadcrumb_root"),
           ) {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-              modifier = Modifier.padding(start = 10.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
-            ) {
-              Icon(
-                imageVector = Icons.Default.GridView,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                  .size(16.dp)
-                  .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = cyclePerRow,
-                  ),
-              )
-              Text(
-                text = "$albumsPerRow per row",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier
-                  .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = cyclePerRow,
-                  )
-                  .testTag("gallery_albums_per_row_label")
-                  .semantics {
-                    contentDescription = "$albumsPerRow albums per row"
-                  },
-              )
-              // Compact badge displaying exact numeric count (3..6)
-              Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                modifier = Modifier
-                  .clip(CircleShape)
-                  .clickable(onClick = cyclePerRow)
-                  .testTag("gallery_albums_per_row_count"),
-              ) {
-                Text(
-                  text = albumsPerRow.toString(),
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                )
-              }
-            }
+            Text(
+              text = "Albums",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = if (isAtRoot) FontWeight.Bold else FontWeight.Medium,
+              color = if (isAtRoot) {
+                MaterialTheme.colorScheme.onPrimaryContainer
+              } else {
+                MaterialTheme.colorScheme.onSecondaryContainer
+              },
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            )
           }
-        }
 
-        // Breadcrumb path pills when inside nested albums/folders
-        if (albumStack.isNotEmpty()) {
-          Row(
-            modifier = Modifier.testTag("gallery_breadcrumbs"),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-          ) {
+          albumStack.forEachIndexed { index, album ->
+            Icon(
+              imageVector = Icons.Default.ChevronRight,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(16.dp),
+            )
+            val isCurrent = index == albumStack.lastIndex
             Surface(
               shape = RoundedCornerShape(20.dp),
-              color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f),
+              color = if (isCurrent) {
+                MaterialTheme.colorScheme.primaryContainer
+              } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+              },
               modifier = Modifier
                 .clip(RoundedCornerShape(20.dp))
-                .clickable(onClick = onNavigateToRoot)
-                .testTag("gallery_breadcrumb_root"),
+                .clickable { onNavigateToIndex(index) }
+                .testTag("gallery_breadcrumb_${album.name}"),
             ) {
               Text(
-                text = "Albums",
+                text = album.name,
                 style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                color = if (isCurrent) {
+                  MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
               )
-            }
-
-            albumStack.forEachIndexed { index, album ->
-              Icon(
-                imageVector = Icons.Default.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp),
-              )
-              val isCurrent = index == albumStack.lastIndex
-              Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = if (isCurrent) {
-                  MaterialTheme.colorScheme.primaryContainer
-                } else {
-                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                },
-                modifier = Modifier
-                  .clip(RoundedCornerShape(20.dp))
-                  .clickable { onNavigateToIndex(index) }
-                  .testTag("gallery_breadcrumb_${album.name}"),
-              ) {
-                Text(
-                  text = album.name,
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                  color = if (isCurrent) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                  } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                  },
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                )
-              }
             }
           }
         }
       }
 
-      // Pinned floating sort/filter button on the right edge of the pill bar
-      Box(
+      // Pinned floating [# per row] and [Sort/Filter] buttons on the right edge of the pill bar
+      Row(
         modifier = Modifier
           .align(Alignment.CenterEnd)
+          .pillBarFloatingControlsBackdrop(backgroundColor = MaterialTheme.colorScheme.surface)
           .padding(end = 12.dp)
           .zIndex(10f),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
       ) {
-        Surface(
-          onClick = onOpenSortMenu,
-          shape = CircleShape,
-          color = MaterialTheme.colorScheme.surfaceContainerHigh,
-          tonalElevation = 3.dp,
-          shadowElevation = 4.dp,
-          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-          modifier = Modifier
-            .size(34.dp)
-            .testTag("gallery_sort_button"),
-        ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.Sort,
-              contentDescription = "Sort gallery",
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier.size(18.dp),
-            )
-          }
+        if (viewMode == GalleryViewMode.TILE) {
+          ToolboxFloatingColumnsButton(
+            columnsPerRow = albumsPerRow,
+            minColumns = MIN_ALBUMS_PER_ROW,
+            maxColumns = MAX_ALBUMS_PER_ROW,
+            onColumnsChange = onAlbumsPerRowChange,
+            buttonTestTag = "gallery_density_indicator",
+            countTestTag = "gallery_albums_per_row_count",
+            contentDescription = "$albumsPerRow albums per row",
+          )
         }
 
-        DropdownMenu(
-          expanded = showSortMenu,
-          onDismissRequest = onDismissSortMenu,
-          modifier = Modifier.testTag("gallery_sort_menu"),
-        ) {
-          GallerySortOrder.entries.forEach { option ->
-            DropdownMenuItem(
-              text = {
-                Text(
-                  text = option.displayName,
-                  fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
-                )
-              },
-              leadingIcon = {
-                if (option == sortOrder) {
-                  Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+        Box {
+          Surface(
+            onClick = onOpenSortMenu,
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 3.dp,
+            shadowElevation = 4.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+            modifier = Modifier
+              .size(34.dp)
+              .testTag("gallery_sort_button"),
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.Sort,
+                contentDescription = "Sort gallery",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+              )
+            }
+          }
+
+          DropdownMenu(
+            expanded = showSortMenu,
+            onDismissRequest = onDismissSortMenu,
+            modifier = Modifier.testTag("gallery_sort_menu"),
+          ) {
+            GallerySortOrder.entries.forEach { option ->
+              DropdownMenuItem(
+                text = {
+                  Text(
+                    text = option.displayName,
+                    fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
                   )
-                }
-              },
-              onClick = { onSelectSortOrder(option) },
-              modifier = Modifier.testTag("gallery_sort_option_${option.name.lowercase()}"),
-            )
+                },
+                leadingIcon = {
+                  if (option == sortOrder) {
+                    Icon(
+                      imageVector = Icons.Default.Check,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                    )
+                  }
+                },
+                onClick = { onSelectSortOrder(option) },
+                modifier = Modifier.testTag("gallery_sort_option_${option.name.lowercase()}"),
+              )
+            }
           }
         }
       }
@@ -1856,6 +1857,162 @@ private fun GalleryPermissionBanner(
 }
 
 @Composable
+private fun GallerySearchTagFilterBar(
+  availableTags: List<Pair<String, Int>>,
+  selectedTag: String?,
+  isIndexing: Boolean,
+  indexedCount: Int,
+  totalCount: Int,
+  onSelectTag: (String) -> Unit,
+) {
+  Surface(
+    color = MaterialTheme.colorScheme.surface,
+    tonalElevation = 1.dp,
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("gallery_search_tag_filter_bar"),
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .horizontalScroll(rememberScrollState())
+        .padding(horizontal = 12.dp, vertical = 6.dp)
+        .testTag("gallery_search_tag_chips_row"),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+        imageVector = Icons.Default.AutoAwesome,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.size(16.dp),
+      )
+      Text(
+        text = "Smart Tags:",
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+
+      if (availableTags.isEmpty()) {
+        Text(
+          text = if (isIndexing && totalCount > 0) {
+            "Scanning photos ($indexedCount/$totalCount)…"
+          } else {
+            "No tags detected yet"
+          },
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.testTag("gallery_search_tags_empty_label"),
+        )
+      } else {
+        availableTags.forEach { (tag, count) ->
+          val isSelected = selectedTag != null && selectedTag.equals(tag, ignoreCase = true)
+          FilterChip(
+            selected = isSelected,
+            onClick = { onSelectTag(tag) },
+            label = {
+              Text(
+                text = "$tag ($count)",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+              )
+            },
+            leadingIcon = {
+              Icon(
+                imageVector = when {
+                  tag.equals("QR Code", ignoreCase = true) || tag.equals("Barcode", ignoreCase = true) ->
+                    Icons.Default.QrCode2
+                  tag.equals("Text", ignoreCase = true) ||
+                    tag.equals("Document", ignoreCase = true) ||
+                    tag.equals("Receipt", ignoreCase = true) ||
+                    tag.equals("Notes", ignoreCase = true) ->
+                    Icons.Default.DocumentScanner
+                  else -> Icons.AutoMirrored.Filled.Label
+                },
+                contentDescription = null,
+                modifier = Modifier.size(15.dp),
+              )
+            },
+            shape = CircleShape,
+            colors = FilterChipDefaults.filterChipColors(
+              selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+              selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            ),
+            modifier = Modifier.testTag("gallery_tag_filter_$tag"),
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun GallerySearchEmptyStateView(
+  searchQuery: String,
+  selectedTag: String?,
+  onClearSearch: () -> Unit,
+) {
+  Column(
+    modifier = Modifier
+      .fillMaxSize()
+      .padding(24.dp)
+      .testTag("gallery_search_empty_state"),
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.Center,
+  ) {
+    Box(
+      modifier = Modifier
+        .size(72.dp)
+        .clip(CircleShape)
+        .background(MaterialTheme.colorScheme.surfaceVariant),
+      contentAlignment = Alignment.Center,
+    ) {
+      Icon(
+        imageVector = Icons.Default.Search,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.size(36.dp),
+      )
+    }
+    Spacer(modifier = Modifier.height(14.dp))
+    Text(
+      text = "No matching photos or albums",
+      style = MaterialTheme.typography.titleMedium,
+      fontWeight = FontWeight.Bold,
+      color = MaterialTheme.colorScheme.onSurface,
+    )
+    Spacer(modifier = Modifier.height(4.dp))
+    Text(
+      text = buildString {
+        append("Nothing matched ")
+        if (searchQuery.isNotBlank()) {
+          append("\"${searchQuery.trim()}\"")
+        }
+        if (selectedTag != null) {
+          if (searchQuery.isNotBlank()) append(" with ")
+          append("tag \"$selectedTag\"")
+        }
+        append(" across filenames, OCR text, QR codes, or smart tags.")
+      },
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      textAlign = TextAlign.Center,
+    )
+    Spacer(modifier = Modifier.height(16.dp))
+    OutlinedButton(
+      onClick = onClearSearch,
+      shape = RoundedCornerShape(12.dp),
+      modifier = Modifier.testTag("gallery_clear_search_filter_button"),
+    ) {
+      Icon(Icons.Default.Clear, contentDescription = null, modifier = Modifier.size(16.dp))
+      Spacer(modifier = Modifier.width(6.dp))
+      Text("Clear filter")
+    }
+  }
+}
+
+@Composable
 private fun GalleryTileGridView(
   albums: List<GalleryAlbum>,
   photos: List<GalleryPhoto>,
@@ -1864,6 +2021,8 @@ private fun GalleryTileGridView(
   isSelectionMode: Boolean = false,
   selectedAlbumPaths: Set<String> = emptySet(),
   selectedPhotoPaths: Set<String> = emptySet(),
+  photoIndexMap: Map<String, GalleryPhotoIndexEntry> = emptyMap(),
+  matchSnippetsByPath: Map<String, String> = emptyMap(),
   onToggleAlbumSelect: (GalleryAlbum) -> Unit = {},
   onTogglePhotoSelect: (GalleryPhoto) -> Unit = {},
   onAlbumLongClick: (GalleryAlbum) -> Unit = {},
@@ -1930,6 +2089,8 @@ private fun GalleryTileGridView(
         isCompact = isCompactTile,
         isSelectionMode = isSelectionMode,
         isSelected = photo.path in selectedPhotoPaths,
+        indexEntry = photoIndexMap[photo.path],
+        matchSnippet = matchSnippetsByPath[photo.path],
         onToggleSelect = { onTogglePhotoSelect(photo) },
         onLongClick = { onPhotoLongClick(photo) },
         onClick = { onPhotoClick(photo) },
@@ -2099,6 +2260,8 @@ private fun PhotoTileCard(
   isCompact: Boolean,
   isSelectionMode: Boolean = false,
   isSelected: Boolean = false,
+  indexEntry: GalleryPhotoIndexEntry? = null,
+  matchSnippet: String? = null,
   onToggleSelect: () -> Unit = {},
   onLongClick: () -> Unit = {},
   onClick: () -> Unit,
@@ -2187,6 +2350,60 @@ private fun PhotoTileCard(
           }
         }
       }
+
+      // Match snippet or OCR / QR badge on bottom of tile
+      if (!matchSnippet.isNullOrBlank()) {
+        Surface(
+          shape = RoundedCornerShape(6.dp),
+          color = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f),
+          modifier = Modifier
+            .align(Alignment.BottomStart)
+            .padding(4.dp)
+            .testTag("photo_tile_match_snippet_${photo.name}"),
+        ) {
+          Text(
+            text = matchSnippet,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+          )
+        }
+      } else if (!isCompact && indexEntry != null && (indexEntry.hasOcrText || indexEntry.hasBarcodes)) {
+        Surface(
+          shape = RoundedCornerShape(6.dp),
+          color = MaterialTheme.colorScheme.surface.copy(alpha = 0.84f),
+          modifier = Modifier
+            .align(Alignment.BottomStart)
+            .padding(4.dp)
+            .testTag("photo_tile_recognition_badge_${photo.name}"),
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            if (indexEntry.hasBarcodes) {
+              Icon(
+                imageVector = Icons.Default.QrCode2,
+                contentDescription = "Contains QR or barcode",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(11.dp),
+              )
+            }
+            if (indexEntry.hasOcrText) {
+              Icon(
+                imageVector = Icons.Default.DocumentScanner,
+                contentDescription = "Contains recognized text",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(11.dp),
+              )
+            }
+          }
+        }
+      }
     }
   }
 }
@@ -2201,6 +2418,8 @@ private fun GalleryListView(
   isSelectionMode: Boolean = false,
   selectedAlbumPaths: Set<String> = emptySet(),
   selectedPhotoPaths: Set<String> = emptySet(),
+  photoIndexMap: Map<String, GalleryPhotoIndexEntry> = emptyMap(),
+  matchSnippetsByPath: Map<String, String> = emptyMap(),
   onToggleAlbumSelect: (GalleryAlbum) -> Unit = {},
   onTogglePhotoSelect: (GalleryPhoto) -> Unit = {},
   onAlbumLongClick: (GalleryAlbum) -> Unit = {},
@@ -2253,6 +2472,8 @@ private fun GalleryListView(
         photo = photo,
         isSelectionMode = isSelectionMode,
         isSelected = photo.path in selectedPhotoPaths,
+        indexEntry = photoIndexMap[photo.path],
+        matchSnippet = matchSnippetsByPath[photo.path],
         onToggleSelect = { onTogglePhotoSelect(photo) },
         onLongClick = { onPhotoLongClick(photo) },
         onClick = { onPhotoClick(photo) },
@@ -2377,6 +2598,8 @@ private fun PhotoListRow(
   photo: GalleryPhoto,
   isSelectionMode: Boolean = false,
   isSelected: Boolean = false,
+  indexEntry: GalleryPhotoIndexEntry? = null,
+  matchSnippet: String? = null,
   onToggleSelect: () -> Unit = {},
   onLongClick: () -> Unit = {},
   onClick: () -> Unit,
@@ -2466,6 +2689,26 @@ private fun PhotoListRow(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
+        if (!matchSnippet.isNullOrBlank()) {
+          Text(
+            text = matchSnippet,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.testTag("photo_list_match_snippet_${photo.name}"),
+          )
+        } else if (indexEntry != null && indexEntry.autoTags.isNotEmpty()) {
+          Text(
+            text = indexEntry.autoTags.joinToString(" • "),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.testTag("photo_list_tags_${photo.name}"),
+          )
+        }
       }
 
       if (!isSelectionMode) {
@@ -2673,14 +2916,18 @@ private fun EmptyAlbumStateView(
   }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun GalleryPhotoViewerDialog(
   photos: List<GalleryPhoto>,
   initialPhoto: GalleryPhoto,
+  photoIndexMap: Map<String, GalleryPhotoIndexEntry> = emptyMap(),
+  onPhotoIndexed: (GalleryPhotoIndexEntry) -> Unit = {},
   onDismiss: () -> Unit,
   onEdit: (GalleryPhoto) -> Unit = {},
   onShare: (GalleryPhoto) -> Unit,
 ) {
+  val context = LocalContext.current
   val viewerPhotos = remember(photos, initialPhoto) {
     if (photos.isNotEmpty() && photos.any { it.path == initialPhoto.path }) {
       photos
@@ -2702,6 +2949,7 @@ private fun GalleryPhotoViewerDialog(
 
   // Controls whether the bottom preview scroll bar is visible (dismissed/restored with a tap on the image)
   var showPreviewBar by rememberSaveable { mutableStateOf(true) }
+  var showRecognitionInfoSheet by rememberSaveable { mutableStateOf(false) }
 
   // Current active page's zoom scale (1f..5f)
   var currentZoomScale by remember { mutableFloatStateOf(MIN_PHOTO_ZOOM) }
@@ -2715,6 +2963,15 @@ private fun GalleryPhotoViewerDialog(
   }
 
   val currentPhoto = viewerPhotos.getOrElse(pagerState.currentPage) { initialPhoto }
+  val currentIndexEntry = photoIndexMap[currentPhoto.path]
+
+  // Ensure the active photo is indexed immediately if it hasn't been indexed yet
+  LaunchedEffect(currentPhoto.path, currentPhoto.lastModifiedMs) {
+    if (currentIndexEntry == null) {
+      val entry = GalleryEngine.indexSinglePhoto(currentPhoto.file)
+      onPhotoIndexed(entry)
+    }
+  }
 
   Dialog(
     onDismissRequest = onDismiss,
@@ -2758,7 +3015,7 @@ private fun GalleryPhotoViewerDialog(
         )
       }
 
-      // Top overlay bar with Close, current photo title & index, zoom indicator, and Share
+      // Top overlay bar with Close, current photo title & index, zoom indicator, Info/OCR, Edit, and Share
       Row(
         modifier = Modifier
           .align(Alignment.TopCenter)
@@ -2825,6 +3082,17 @@ private fun GalleryPhotoViewerDialog(
 
         Spacer(modifier = Modifier.width(4.dp))
 
+        IconButton(
+          onClick = { showRecognitionInfoSheet = true },
+          modifier = Modifier.testTag("photo_viewer_info_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Info,
+            contentDescription = "Photo info, OCR text & smart tags",
+            tint = Color.White,
+          )
+        }
+
         TextButton(
           onClick = { onEdit(currentPhoto) },
           modifier = Modifier.testTag("photo_viewer_edit_button"),
@@ -2855,64 +3123,490 @@ private fun GalleryPhotoViewerDialog(
         }
       }
 
-      // Bottom preview scroll bar with images in the same album, dismissible with a tap on the image
+      // Bottom preview scroll bar + Auto-Tag & OCR/QR quick bar, dismissible with a tap on the image
       AnimatedVisibility(
         visible = showPreviewBar,
         enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
         exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 }),
         modifier = Modifier.align(Alignment.BottomCenter),
       ) {
-        Surface(
-          color = Color.Black.copy(alpha = 0.76f),
-          modifier = Modifier
-            .fillMaxWidth()
-            .testTag("photo_viewer_preview_bar"),
+        Column(
+          modifier = Modifier.fillMaxWidth(),
         ) {
-          LazyRow(
-            state = previewListState,
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-              .fillMaxWidth()
-              .testTag("photo_viewer_preview_scroll_bar"),
+          if (currentIndexEntry != null &&
+            (currentIndexEntry.autoTags.isNotEmpty() || currentIndexEntry.hasOcrText || currentIndexEntry.hasBarcodes)
           ) {
-            itemsIndexed(
-              items = viewerPhotos,
-              key = { _, item -> "preview_${item.path}" },
-            ) { index, itemPhoto ->
-              val isSelected = index == pagerState.currentPage
-              Box(
+            Surface(
+              color = Color.Black.copy(alpha = 0.68f),
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("photo_viewer_recognition_bar"),
+            ) {
+              Row(
                 modifier = Modifier
-                  .size(if (isSelected) 64.dp else 54.dp)
-                  .clip(RoundedCornerShape(10.dp))
-                  .border(
-                    width = if (isSelected) 2.5.dp else 1.dp,
-                    color = if (isSelected) Color.White else Color.White.copy(alpha = 0.3f),
-                    shape = RoundedCornerShape(10.dp),
-                  )
-                  .alpha(if (isSelected) 1f else 0.65f)
-                  .clickable {
-                    coroutineScope.launch {
-                      pagerState.animateScrollToPage(index)
+                  .fillMaxWidth()
+                  .horizontalScroll(rememberScrollState())
+                  .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                if (currentIndexEntry.hasOcrText) {
+                  Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier
+                      .clip(CircleShape)
+                      .clickable { showRecognitionInfoSheet = true }
+                      .testTag("photo_viewer_ocr_pill"),
+                  ) {
+                    Row(
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.DocumentScanner,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(14.dp),
+                      )
+                      Text(
+                        text = "OCR Text",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                      )
                     }
                   }
-                  .testTag("photo_viewer_preview_thumb_${itemPhoto.name}"),
-                contentAlignment = Alignment.Center,
-              ) {
-                PhotoThumbnailBox(
-                  photoFile = itemPhoto.file,
-                  contentDescription = "Preview ${itemPhoto.name}",
-                  iconSize = 22.dp,
-                  modifier = Modifier.fillMaxSize(),
-                )
+                }
+
+                if (currentIndexEntry.hasBarcodes) {
+                  Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier
+                      .clip(CircleShape)
+                      .clickable { showRecognitionInfoSheet = true }
+                      .testTag("photo_viewer_barcode_pill"),
+                  ) {
+                    Row(
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.QrCode2,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(14.dp),
+                      )
+                      Text(
+                        text = currentIndexEntry.barcodePayloads.first().take(28),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                      )
+                    }
+                  }
+                }
+
+                currentIndexEntry.autoTags.forEach { tag ->
+                  Surface(
+                    shape = CircleShape,
+                    color = Color.White.copy(alpha = 0.16f),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
+                    modifier = Modifier
+                      .clip(CircleShape)
+                      .clickable { showRecognitionInfoSheet = true }
+                      .testTag("photo_viewer_tag_$tag"),
+                  ) {
+                    Text(
+                      text = tag,
+                      style = MaterialTheme.typography.labelSmall,
+                      fontWeight = FontWeight.Medium,
+                      color = Color.White,
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    )
+                  }
+                }
+              }
+            }
+          }
+
+          Surface(
+            color = Color.Black.copy(alpha = 0.76f),
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("photo_viewer_preview_bar"),
+          ) {
+            LazyRow(
+              state = previewListState,
+              contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("photo_viewer_preview_scroll_bar"),
+            ) {
+              itemsIndexed(
+                items = viewerPhotos,
+                key = { _, item -> "preview_${item.path}" },
+              ) { index, itemPhoto ->
+                val isSelected = index == pagerState.currentPage
+                Box(
+                  modifier = Modifier
+                    .size(if (isSelected) 64.dp else 54.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .border(
+                      width = if (isSelected) 2.5.dp else 1.dp,
+                      color = if (isSelected) Color.White else Color.White.copy(alpha = 0.3f),
+                      shape = RoundedCornerShape(10.dp),
+                    )
+                    .alpha(if (isSelected) 1f else 0.65f)
+                    .clickable {
+                      coroutineScope.launch {
+                        pagerState.animateScrollToPage(index)
+                      }
+                    }
+                    .testTag("photo_viewer_preview_thumb_${itemPhoto.name}"),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  PhotoThumbnailBox(
+                    photoFile = itemPhoto.file,
+                    contentDescription = "Preview ${itemPhoto.name}",
+                    iconSize = 22.dp,
+                    modifier = Modifier.fillMaxSize(),
+                  )
+                }
               }
             }
           }
         }
       }
+
+      if (showRecognitionInfoSheet) {
+        GalleryPhotoRecognitionInfoDialog(
+          photo = currentPhoto,
+          indexEntry = currentIndexEntry,
+          onDismiss = { showRecognitionInfoSheet = false },
+          onCopyText = { label, text ->
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
+            Toast.makeText(context, "$label copied to clipboard", Toast.LENGTH_SHORT).show()
+          },
+          onSaveOcrToNotes = { ocrText ->
+            val doc = CameraEngine.analyzeScannedDocumentText(
+              rawText = ocrText,
+              fallbackTitle = currentPhoto.name.substringBeforeLast('.').ifBlank { "Gallery Scan" },
+            )
+            val notesRepo = SharedPreferencesNotesRepository(context)
+            CameraEngine.saveScannedDocumentToNotes(
+              repository = notesRepo,
+              document = doc,
+              labels = (listOf("Gallery", "Scanned") + currentIndexEntry?.autoTags.orEmpty()).distinct(),
+            )
+            Toast.makeText(context, "Saved recognized text to Notes", Toast.LENGTH_SHORT).show()
+          },
+          onOpenUrl = { url ->
+            try {
+              val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+              }
+              context.startActivity(intent)
+            } catch (_: Exception) {
+              Toast.makeText(context, "Unable to open link", Toast.LENGTH_SHORT).show()
+            }
+          },
+        )
+      }
     }
   }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun GalleryPhotoRecognitionInfoDialog(
+  photo: GalleryPhoto,
+  indexEntry: GalleryPhotoIndexEntry?,
+  onDismiss: () -> Unit,
+  onCopyText: (label: String, text: String) -> Unit,
+  onSaveOcrToNotes: (String) -> Unit,
+  onOpenUrl: (String) -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    modifier = Modifier.testTag("photo_viewer_info_dialog"),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.AutoAwesome,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "Photo Info & Recognition",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "${photo.name} • ${photo.sizeFormatted}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        // 1. Auto-Tags Card
+        Card(
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+          ),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Text(
+              text = "Automatic Tags",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.primary,
+            )
+            val tags = indexEntry?.autoTags.orEmpty()
+            if (tags.isEmpty()) {
+              Text(
+                text = "No automatic tags detected",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            } else {
+              FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+              ) {
+                tags.forEach { tag ->
+                  Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.testTag("photo_info_tag_$tag"),
+                  ) {
+                    Text(
+                      text = tag,
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = FontWeight.SemiBold,
+                      color = MaterialTheme.colorScheme.onPrimaryContainer,
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    )
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // 2. Recognized Text (OCR) Card
+        if (indexEntry?.hasOcrText == true) {
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            ),
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("photo_info_ocr_card"),
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.DocumentScanner,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(18.dp),
+                )
+                Text(
+                  text = "Recognized Text (OCR)",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.primary,
+                )
+              }
+
+              Text(
+                text = indexEntry.ocrText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .testTag("photo_info_ocr_text"),
+              )
+
+              Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                OutlinedButton(
+                  onClick = { onCopyText("OCR text", indexEntry.ocrText) },
+                  shape = RoundedCornerShape(10.dp),
+                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                  modifier = Modifier.testTag("photo_info_copy_ocr_button"),
+                ) {
+                  Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text("Copy Text", style = MaterialTheme.typography.labelMedium)
+                }
+
+                Button(
+                  onClick = { onSaveOcrToNotes(indexEntry.ocrText) },
+                  shape = RoundedCornerShape(10.dp),
+                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                  modifier = Modifier.testTag("photo_info_save_to_notes_button"),
+                ) {
+                  Icon(Icons.AutoMirrored.Filled.StickyNote2, contentDescription = null, modifier = Modifier.size(15.dp))
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text("Save to Notes", style = MaterialTheme.typography.labelMedium)
+                }
+              }
+            }
+          }
+        }
+
+        // 3. Decoded QR / Barcode Card
+        if (indexEntry?.hasBarcodes == true) {
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            ),
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("photo_info_barcode_card"),
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.QrCode2,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(18.dp),
+                )
+                Text(
+                  text = "QR & Barcodes",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.primary,
+                )
+              }
+
+              indexEntry.barcodePayloads.forEachIndexed { idx, payload ->
+                val summary = indexEntry.barcodeSummaries.getOrNull(idx)
+                if (!summary.isNullOrBlank()) {
+                  Text(
+                    text = summary,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+                Text(
+                  text = payload,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  modifier = Modifier.testTag("photo_info_barcode_payload"),
+                )
+                Row(
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  OutlinedButton(
+                    onClick = { onCopyText("Barcode", payload) },
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("photo_info_copy_barcode_button"),
+                  ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Copy Code", style = MaterialTheme.typography.labelMedium)
+                  }
+                  if (payload.startsWith("http://", ignoreCase = true) ||
+                    payload.startsWith("https://", ignoreCase = true)
+                  ) {
+                    Button(
+                      onClick = { onOpenUrl(payload) },
+                      shape = RoundedCornerShape(10.dp),
+                      contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                      modifier = Modifier.testTag("photo_info_open_url_button"),
+                    ) {
+                      Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(15.dp))
+                      Spacer(modifier = Modifier.width(4.dp))
+                      Text("Open Link", style = MaterialTheme.typography.labelMedium)
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {
+      TextButton(
+        onClick = onDismiss,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.testTag("photo_info_close_button"),
+      ) {
+        Text("Done")
+      }
+    },
+  )
 }
 
 @Composable

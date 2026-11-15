@@ -246,50 +246,26 @@ fun SettingsScreen(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background)
-      .verticalScroll(scrollState)
-      .padding(horizontal = 20.dp, vertical = 16.dp)
-      .testTag("settings_screen"),
-    verticalArrangement = Arrangement.spacedBy(20.dp),
+      .background(MaterialTheme.colorScheme.background),
   ) {
-    // Header
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-      Surface(
-        modifier = Modifier.size(44.dp),
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.Default.Settings,
-            contentDescription = null,
-            modifier = Modifier.size(24.dp),
-          )
-        }
-      }
-      Column {
-        Text(
-          text = "Settings",
-          style = MaterialTheme.typography.headlineMedium,
-          fontWeight = FontWeight.Bold,
-          color = MaterialTheme.colorScheme.onSurface,
-        )
-        Text(
-          text = "Customize theme, colors, and toolbox tools",
-          style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-      }
-    }
+    // Standard Tool Header Bar (DESIGN_LANGUAGE.md Section 5.1)
+    ToolboxTopBar(
+      title = "Settings",
+      subtext = "Customize theme, colors, and toolbox tools",
+      icon = Icons.Default.Settings,
+    )
 
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-    // Section 1: Toolbox Default Sorting
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .verticalScroll(scrollState)
+        .padding(horizontal = 20.dp, vertical = 16.dp)
+        .testTag("settings_screen"),
+      verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+      // Section 1: Toolbox Default Sorting
     Card(
       modifier = Modifier
         .fillMaxWidth()
@@ -2439,6 +2415,7 @@ fun SettingsScreen(
       )
     }
 
-    Spacer(modifier = Modifier.height(24.dp))
+      Spacer(modifier = Modifier.height(24.dp))
+    }
   }
 }

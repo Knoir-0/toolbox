@@ -1183,136 +1183,72 @@ private fun AudioEditorTopBar(
   onClose: () -> Unit,
   onExportClick: () -> Unit,
 ) {
-  Surface(
-    color = MaterialTheme.colorScheme.surface,
-    tonalElevation = 1.dp,
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .heightIn(min = 68.dp)
-        .padding(horizontal = 16.dp, vertical = 10.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.weight(1f),
+  val chLabel = if (buffer.safeChannels == 2) "Stereo" else "Mono"
+  val subtitleText =
+    "$sourceFileName • ${AudioRecorderEngine.formatDurationMs(buffer.durationMs)} • ${buffer.sampleRate / 1000.0}kHz $chLabel"
+  ToolboxTopBar(
+    title = "Audio Editor",
+    subtext = subtitleText,
+    icon = Icons.Default.GraphicEq,
+    onNavigateBack = onNavigateBack,
+    backButtonTestTag = "action_navigate_back",
+    actions = {
+      IconButton(
+        onClick = onUndo,
+        enabled = canUndo,
+        modifier = Modifier
+          .size(36.dp)
+          .testTag("audio_editor_undo_button"),
       ) {
-        if (onNavigateBack != null) {
-          IconButton(
-            onClick = onNavigateBack,
-            modifier = Modifier
-              .size(36.dp)
-              .testTag("action_navigate_back"),
-          ) {
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-              contentDescription = "Back",
-              tint = MaterialTheme.colorScheme.onSurface,
-            )
-          }
-        } else {
-          Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.size(36.dp),
-          ) {
-            Box(contentAlignment = Alignment.Center) {
-              Icon(
-                imageVector = Icons.Default.GraphicEq,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(20.dp),
-              )
-            }
-          }
-        }
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = "Audio Editor",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          val chLabel = if (buffer.safeChannels == 2) "Stereo" else "Mono"
-          val subtitleText =
-            "$sourceFileName • ${AudioRecorderEngine.formatDurationMs(buffer.durationMs)} • ${buffer.sampleRate / 1000.0}kHz $chLabel"
-          Text(
-            text = subtitleText,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.Undo,
+          contentDescription = "Undo",
+          modifier = Modifier.size(20.dp),
+        )
       }
-
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+      IconButton(
+        onClick = onRedo,
+        enabled = canRedo,
+        modifier = Modifier
+          .size(36.dp)
+          .testTag("audio_editor_redo_button"),
       ) {
-        IconButton(
-          onClick = onUndo,
-          enabled = canUndo,
-          modifier = Modifier
-            .size(38.dp)
-            .testTag("audio_editor_undo_button"),
-        ) {
-          Icon(
-            imageVector = Icons.AutoMirrored.Filled.Undo,
-            contentDescription = "Undo",
-            modifier = Modifier.size(20.dp),
-          )
-        }
-        IconButton(
-          onClick = onRedo,
-          enabled = canRedo,
-          modifier = Modifier
-            .size(38.dp)
-            .testTag("audio_editor_redo_button"),
-        ) {
-          Icon(
-            imageVector = Icons.AutoMirrored.Filled.Redo,
-            contentDescription = "Redo",
-            modifier = Modifier.size(20.dp),
-          )
-        }
-        IconButton(
-          onClick = onClose,
-          enabled = !isBusy,
-          modifier = Modifier
-            .size(38.dp)
-            .testTag("audio_editor_close_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Close,
-            contentDescription = "Close audio",
-            modifier = Modifier.size(20.dp),
-          )
-        }
-        Spacer(modifier = Modifier.width(4.dp))
-        FilledIconButton(
-          onClick = onExportClick,
-          enabled = !isBusy,
-          shape = CircleShape,
-          modifier = Modifier
-            .size(36.dp)
-            .testTag("audio_editor_export_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Save,
-            contentDescription = "Save audio",
-            modifier = Modifier.size(18.dp),
-          )
-        }
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.Redo,
+          contentDescription = "Redo",
+          modifier = Modifier.size(20.dp),
+        )
       }
-    }
-  }
+      IconButton(
+        onClick = onClose,
+        enabled = !isBusy,
+        modifier = Modifier
+          .size(36.dp)
+          .testTag("audio_editor_close_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Close,
+          contentDescription = "Close audio",
+          modifier = Modifier.size(20.dp),
+        )
+      }
+      Spacer(modifier = Modifier.width(4.dp))
+      FilledIconButton(
+        onClick = onExportClick,
+        enabled = !isBusy,
+        shape = CircleShape,
+        modifier = Modifier
+          .size(36.dp)
+          .testTag("audio_editor_export_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Save,
+          contentDescription = "Save audio",
+          modifier = Modifier.size(18.dp),
+        )
+      }
+    },
+  )
 }
 
 // ---------------------------------------------------------------------------

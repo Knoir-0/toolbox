@@ -261,10 +261,16 @@ fun MusicPlayerScreen(
 
   // View Mode: List vs Card
   val viewMode = session.viewMode
+  val cardsPerRow = session.cardsPerRow
 
   fun updateViewMode(mode: MusicViewMode) {
     session.updateViewMode(mode)
     sectionFocusVersion++
+  }
+
+  fun updateCardsPerRow(count: Int) {
+    session.updateCardsPerRow(count)
+    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
   }
 
   // Sort Order
@@ -665,6 +671,8 @@ fun MusicPlayerScreen(
       MusicCategoryAndViewBar(
         tabs = tabOrder,
         selectedTab = selectedTab,
+        viewMode = viewMode,
+        cardsPerRow = cardsPerRow,
         sortOrder = sortOrder,
         showSortMenu = showSortMenu,
         onSelectTab = { tab ->
@@ -675,6 +683,7 @@ fun MusicPlayerScreen(
         onMoveTab = { fromIdx, toIdx ->
           moveSectionTab(fromIdx, toIdx)
         },
+        onCardsPerRowChange = { updateCardsPerRow(it) },
         onOpenSortMenu = { showSortMenu = true },
         onDismissSortMenu = { showSortMenu = false },
         onSelectSortOrder = { order ->
@@ -687,13 +696,21 @@ fun MusicPlayerScreen(
       Box(
         modifier = Modifier
           .weight(1f)
-          .fillMaxWidth(),
+          .fillMaxWidth()
+          .pinchToChangeColumns(
+            enabled = viewMode == MusicViewMode.CARD,
+            columnsPerRow = cardsPerRow,
+            minColumns = MIN_MUSIC_CARDS_PER_ROW,
+            maxColumns = MAX_MUSIC_CARDS_PER_ROW,
+            onColumnsChange = { updateCardsPerRow(it) },
+          ),
       ) {
         when {
           activeAlbum != null -> {
             AlbumDetailContent(
               album = activeAlbum,
               viewMode = viewMode,
+              cardsPerRow = cardsPerRow,
               currentTrackId = currentTrack?.id,
               isPlaying = isPlaying,
               favoriteIds = favoriteIds,
@@ -718,6 +735,7 @@ fun MusicPlayerScreen(
             ArtistDetailContent(
               artist = activeArtist,
               viewMode = viewMode,
+              cardsPerRow = cardsPerRow,
               currentTrack = currentTrack,
               currentTrackId = currentTrack?.id,
               isPlaying = isPlaying,
@@ -747,6 +765,7 @@ fun MusicPlayerScreen(
             GenreDetailContent(
               genre = activeGenre,
               viewMode = viewMode,
+              cardsPerRow = cardsPerRow,
               currentTrackId = currentTrack?.id,
               isPlaying = isPlaying,
               favoriteIds = favoriteIds,
@@ -771,6 +790,7 @@ fun MusicPlayerScreen(
             PlaylistDetailContent(
               playlist = activePlaylist,
               viewMode = viewMode,
+              cardsPerRow = cardsPerRow,
               currentTrackId = currentTrack?.id,
               isPlaying = isPlaying,
               favoriteIds = favoriteIds,
@@ -803,6 +823,7 @@ fun MusicPlayerScreen(
                 ArtistsTabContent(
                   artists = allArtists,
                   viewMode = viewMode,
+                  cardsPerRow = cardsPerRow,
                   currentTrack = currentTrack,
                   currentArtistName = currentTrack?.artist,
                   isPlaying = isPlaying,
@@ -842,6 +863,7 @@ fun MusicPlayerScreen(
                 AlbumsTabContent(
                   albums = allAlbums,
                   viewMode = viewMode,
+                  cardsPerRow = cardsPerRow,
                   currentTrack = currentTrack,
                   currentAlbumName = currentTrack?.album,
                   isPlaying = isPlaying,
@@ -881,6 +903,7 @@ fun MusicPlayerScreen(
                 SongsTabContent(
                   tracks = sortedTracks,
                   viewMode = viewMode,
+                  cardsPerRow = cardsPerRow,
                   currentTrackId = currentTrack?.id,
                   isPlaying = isPlaying,
                   favoriteIds = favoriteIds,
@@ -911,6 +934,7 @@ fun MusicPlayerScreen(
                 GenresTabContent(
                   genres = allGenres,
                   viewMode = viewMode,
+                  cardsPerRow = cardsPerRow,
                   currentTrack = currentTrack,
                   currentGenreName = currentTrack?.genre,
                   isPlaying = isPlaying,
@@ -950,6 +974,7 @@ fun MusicPlayerScreen(
                 PlaylistsTabContent(
                   playlists = allPlaylists,
                   viewMode = viewMode,
+                  cardsPerRow = cardsPerRow,
                   currentTrackId = currentTrack?.id,
                   isPlaying = isPlaying,
                   sectionFocusVersion = sectionFocusVersion,
@@ -1176,225 +1201,51 @@ private fun MusicPlayerTopBar(
   onToggleViewMode: () -> Unit,
   onSelectViewMode: (MusicViewMode) -> Unit,
 ) {
-  val focusRequester = remember { FocusRequester() }
   val focusManager = LocalFocusManager.current
-  val keyboardController = LocalSoftwareKeyboardController.current
-
-  LaunchedEffect(isSearchActive) {
-    if (isSearchActive) {
-      try {
-        focusRequester.requestFocus()
-        keyboardController?.show()
-      } catch (_: Throwable) {}
-    } else {
-      keyboardController?.hide()
-    }
-  }
-
   val topBarColor = lerp(MaterialTheme.colorScheme.surface, accentTint, 0.12f)
 
-  Surface(
-    color = topBarColor,
-    tonalElevation = 1.dp,
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    Box(
-      modifier = Modifier
-        .fillMaxWidth()
-        .heightIn(min = 68.dp),
-      contentAlignment = Alignment.CenterStart,
-    ) {
-      // 1. Standard Header Toolbar (icons disappear when searching)
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 12.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Row(
-          modifier = Modifier.weight(1f),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-          if (hasDrillDown) {
-            IconButton(
-              onClick = onBackClick,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("music_back_button"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
-                tint = MaterialTheme.colorScheme.onSurface,
-              )
-            }
-          } else {
-            Box(
-              modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Default.Headphones,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-              )
-            }
-          }
-
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = title,
-              style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurface,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-              text = subtext,
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-          }
-        }
-
-        if (!isSearchActive) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-          ) {
-            IconButton(
-              onClick = onSearchToggle,
-              modifier = Modifier.testTag("music_search_toggle"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Search,
-                contentDescription = "Search music",
-                tint = MaterialTheme.colorScheme.onSurface,
-              )
-            }
-
-            ViewModeSegmentedToggle(
-              isListView = viewMode == MusicViewMode.LIST,
-              onSelectListView = { onSelectViewMode(MusicViewMode.LIST) },
-              onSelectGridView = { onSelectViewMode(MusicViewMode.CARD) },
-              onToggle = onToggleViewMode,
-              accentColor = accentTint,
-              toggleTestTag = "music_view_mode_toggle",
-              listTestTag = "music_view_mode_list",
-              gridTestTag = "music_view_mode_card",
-              listContentDescription = "List view",
-              gridContentDescription = "Card view",
-            )
-          }
-        }
-      }
-
-      // 2. Animated Expanding Search Bar (matches File Manager search bar)
-      AnimatedVisibility(
-        visible = isSearchActive,
-        enter = fadeIn(animationSpec = tween(220)) + expandHorizontally(
-          animationSpec = spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = Spring.StiffnessMediumLow,
-          ),
-          expandFrom = Alignment.End,
-        ),
-        exit = fadeOut(animationSpec = tween(180)) + shrinkHorizontally(
-          animationSpec = tween(200),
-          shrinkTowards = Alignment.End,
-        ),
-        modifier = Modifier.matchParentSize(),
-      ) {
-        Surface(
-          modifier = Modifier
-            .fillMaxSize()
-            .clickable(
-              interactionSource = remember { MutableInteractionSource() },
-              indication = null,
-              onClick = {},
-            ),
-          color = topBarColor,
-          tonalElevation = 2.dp,
-        ) {
-          Row(
-            modifier = Modifier
-              .fillMaxSize()
-              .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            IconButton(
-              onClick = {
-                focusManager.clearFocus()
-                onCloseSearch()
-              },
-              modifier = Modifier.testTag("music_search_toggle"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Close search",
-                tint = MaterialTheme.colorScheme.onSurface,
-              )
-            }
-
-            TextField(
-              value = searchQuery,
-              onValueChange = onSearchQueryChange,
-              placeholder = {
-                Text(
-                  text = searchPlaceholder,
-                  style = MaterialTheme.typography.bodyLarge,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                )
-              },
-              singleLine = true,
-              textStyle = MaterialTheme.typography.bodyLarge.copy(
-                color = MaterialTheme.colorScheme.onSurface,
-              ),
-              colors = TextFieldDefaults.colors(
-                focusedContainerColor = Color.Transparent,
-                unfocusedContainerColor = Color.Transparent,
-                disabledContainerColor = Color.Transparent,
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-                disabledIndicatorColor = Color.Transparent,
-              ),
-              trailingIcon = {
-                if (searchQuery.isNotEmpty()) {
-                  IconButton(
-                    onClick = { onSearchQueryChange("") },
-                    modifier = Modifier.testTag("music_search_clear"),
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.Clear,
-                      contentDescription = "Clear search",
-                      tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                  }
-                }
-              },
-              keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-              keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-              modifier = Modifier
-                .fillMaxWidth()
-                .focusRequester(focusRequester)
-                .testTag("music_search_input"),
-            )
-          }
-        }
-      }
-    }
-  }
+  ToolboxTopBar(
+    title = title,
+    subtext = subtext,
+    icon = Icons.Default.Headphones,
+    containerColor = topBarColor,
+    onNavigateBack = if (hasDrillDown) onBackClick else null,
+    backContentDescription = "Back",
+    backButtonTestTag = "music_back_button",
+    searchState = ToolboxTopBarSearchState(
+      isActive = isSearchActive,
+      query = searchQuery,
+      onQueryChange = onSearchQueryChange,
+      onOpenSearch = onSearchToggle,
+      onCloseSearch = {
+        focusManager.clearFocus()
+        onCloseSearch()
+      },
+      placeholder = searchPlaceholder,
+      searchContentDescription = "Search music",
+      closeContentDescription = "Close search",
+      clearContentDescription = "Clear search",
+      toggleButtonTestTag = "music_search_toggle",
+      closeButtonTestTag = "music_search_toggle",
+      inputTestTag = "music_search_input",
+      clearButtonTestTag = "music_search_clear",
+      onSearchImeAction = { focusManager.clearFocus() },
+    ),
+    actions = {
+      ViewModeSegmentedToggle(
+        isListView = viewMode == MusicViewMode.LIST,
+        onSelectListView = { onSelectViewMode(MusicViewMode.LIST) },
+        onSelectGridView = { onSelectViewMode(MusicViewMode.CARD) },
+        onToggle = onToggleViewMode,
+        accentColor = accentTint,
+        toggleTestTag = "music_view_mode_toggle",
+        listTestTag = "music_view_mode_list",
+        gridTestTag = "music_view_mode_card",
+        listContentDescription = "List view",
+        gridContentDescription = "Card view",
+      )
+    },
+  )
 }
 
 /**
@@ -1492,10 +1343,13 @@ private fun MusicLibraryTab.iconVector() = when (this) {
 private fun MusicCategoryAndViewBar(
   tabs: List<MusicLibraryTab> = MusicLibraryTab.entries.toList(),
   selectedTab: MusicLibraryTab,
+  viewMode: MusicViewMode = MusicViewMode.LIST,
+  cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
   sortOrder: MusicSortOrder = MusicSortOrder.TITLE_ASC,
   showSortMenu: Boolean = false,
   onSelectTab: (MusicLibraryTab) -> Unit,
   onMoveTab: (fromIndex: Int, toIndex: Int) -> Unit = { _, _ -> },
+  onCardsPerRowChange: (Int) -> Unit = {},
   onOpenSortMenu: () -> Unit = {},
   onDismissSortMenu: () -> Unit = {},
   onSelectSortOrder: (MusicSortOrder) -> Unit = {},
@@ -1516,8 +1370,8 @@ private fun MusicCategoryAndViewBar(
 
   val maxHitSlopPx = with(density) { 24.dp.toPx() }
   val leftEdgeScrollZonePx = with(density) { 36.dp.toPx() }
-  val rightEdgeScrollZonePx = with(density) { 72.dp.toPx() }
-  val sortButtonExcludeZonePx = with(density) { 52.dp.toPx() }
+  val rightEdgeScrollZonePx = with(density) { (if (viewMode == MusicViewMode.CARD) 112.dp else 72.dp).toPx() }
+  val sortButtonExcludeZonePx = with(density) { (if (viewMode == MusicViewMode.CARD) 92.dp else 52.dp).toPx() }
   val edgeScrollStepPx = with(density) { 10.dp.toPx() }
 
   Box(
@@ -1617,8 +1471,9 @@ private fun MusicCategoryAndViewBar(
     Row(
       modifier = Modifier
         .fillMaxWidth()
+        .fadingPillRowUnderFloatingControls(hasColumnsButton = viewMode == MusicViewMode.CARD)
         .horizontalScroll(scrollState, enabled = draggedTab == null)
-        .padding(start = 12.dp, end = 56.dp, top = 8.dp, bottom = 8.dp),
+        .padding(start = 12.dp, end = if (viewMode == MusicViewMode.CARD) 96.dp else 56.dp, top = 8.dp, bottom = 8.dp),
       horizontalArrangement = Arrangement.spacedBy(6.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1662,57 +1517,73 @@ private fun MusicCategoryAndViewBar(
       }
     }
 
-    // Pinned floating sort button on the right edge of the pill bar
-    Box(
+    // Pinned floating [# per row] + [Sort] buttons on the right edge of the pill bar
+    Row(
       modifier = Modifier
         .align(Alignment.CenterEnd)
         .padding(end = 12.dp)
         .zIndex(10f),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+      verticalAlignment = Alignment.CenterVertically,
     ) {
-      Surface(
-        onClick = onOpenSortMenu,
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        tonalElevation = 3.dp,
-        shadowElevation = 4.dp,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-        modifier = Modifier
-          .size(34.dp)
-          .testTag("music_sort_button"),
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.AutoMirrored.Filled.Sort,
-            contentDescription = "Sort tracks",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
-          )
-        }
+      if (viewMode == MusicViewMode.CARD) {
+        ToolboxFloatingColumnsButton(
+          columnsPerRow = cardsPerRow,
+          minColumns = MIN_MUSIC_CARDS_PER_ROW,
+          maxColumns = MAX_MUSIC_CARDS_PER_ROW,
+          onColumnsChange = onCardsPerRowChange,
+          buttonTestTag = "music_columns_per_row_button",
+          countTestTag = "music_columns_per_row_count",
+          contentDescription = "$cardsPerRow cards per row",
+        )
       }
 
-      DropdownMenu(
-        expanded = showSortMenu,
-        onDismissRequest = onDismissSortMenu,
-      ) {
-        MusicSortOrder.entries.forEach { option ->
-          DropdownMenuItem(
-            text = {
-              Text(
-                text = option.displayName,
-                fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
-              )
-            },
-            leadingIcon = {
-              if (option == sortOrder) {
-                Icon(
-                  imageVector = Icons.Default.Check,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
+      Box {
+        Surface(
+          onClick = onOpenSortMenu,
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surfaceContainerHigh,
+          tonalElevation = 3.dp,
+          shadowElevation = 4.dp,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+          modifier = Modifier
+            .size(34.dp)
+            .testTag("music_sort_button"),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.Sort,
+              contentDescription = "Sort tracks",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(18.dp),
+            )
+          }
+        }
+
+        DropdownMenu(
+          expanded = showSortMenu,
+          onDismissRequest = onDismissSortMenu,
+        ) {
+          MusicSortOrder.entries.forEach { option ->
+            DropdownMenuItem(
+              text = {
+                Text(
+                  text = option.displayName,
+                  fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
                 )
-              }
-            },
-            onClick = { onSelectSortOrder(option) },
-          )
+              },
+              leadingIcon = {
+                if (option == sortOrder) {
+                  Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                }
+              },
+              onClick = { onSelectSortOrder(option) },
+            )
+          }
         }
       }
     }
@@ -1778,6 +1649,7 @@ private fun LazyGridState.isItemFullyVisible(index: Int): Boolean {
 private fun ArtistsTabContent(
   artists: List<MusicArtist>,
   viewMode: MusicViewMode,
+  cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
   currentTrack: MusicTrack? = null,
   currentArtistName: String?,
   isPlaying: Boolean,
@@ -1935,7 +1807,7 @@ private fun ArtistsTabContent(
 
       LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Fixed(cardsPerRow),
         modifier = Modifier
           .fillMaxSize()
           .testTag("artist_card_view"),
@@ -2024,6 +1896,7 @@ private fun ArtistsTabContent(
 private fun AlbumsTabContent(
   albums: List<MusicAlbum>,
   viewMode: MusicViewMode,
+  cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
   currentTrack: MusicTrack? = null,
   currentAlbumName: String?,
   isPlaying: Boolean,
@@ -2181,7 +2054,7 @@ private fun AlbumsTabContent(
 
       LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Fixed(cardsPerRow),
         modifier = Modifier
           .fillMaxSize()
           .testTag("album_card_view"),
@@ -2275,6 +2148,7 @@ private fun AlbumsTabContent(
 private fun SongsTabContent(
   tracks: List<MusicTrack>,
   viewMode: MusicViewMode,
+  cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
   currentTrackId: String?,
   isPlaying: Boolean,
   favoriteIds: Set<String>,
@@ -2399,7 +2273,7 @@ private fun SongsTabContent(
 
       LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Fixed(cardsPerRow),
         modifier = Modifier
           .fillMaxSize()
           .testTag("song_card_view"),
@@ -2426,6 +2300,7 @@ private fun SongsTabContent(
 private fun GenresTabContent(
   genres: List<MusicGenre>,
   viewMode: MusicViewMode,
+  cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
   currentTrack: MusicTrack? = null,
   currentGenreName: String?,
   isPlaying: Boolean,
@@ -2583,7 +2458,7 @@ private fun GenresTabContent(
 
       LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Fixed(cardsPerRow),
         modifier = Modifier
           .fillMaxSize()
           .testTag("genre_card_view"),
@@ -2688,6 +2563,7 @@ private fun GenresTabContent(
 private fun PlaylistsTabContent(
   playlists: List<MusicPlaylist>,
   viewMode: MusicViewMode,
+  cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
   currentTrackId: String?,
   isPlaying: Boolean,
   sectionFocusVersion: Int = 0,
@@ -2870,7 +2746,7 @@ private fun PlaylistsTabContent(
 
       LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Fixed(cardsPerRow),
         modifier = Modifier
           .fillMaxSize()
           .testTag("playlist_card_view"),
@@ -2979,6 +2855,7 @@ private fun PlaylistsTabContent(
 private fun ArtistDetailContent(
   artist: MusicArtist,
   viewMode: MusicViewMode,
+  cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
   currentTrack: MusicTrack? = null,
   currentTrackId: String?,
   isPlaying: Boolean,
@@ -3169,7 +3046,7 @@ private fun ArtistDetailContent(
 
       LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Fixed(cardsPerRow),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -3194,6 +3071,7 @@ private fun ArtistDetailContent(
 private fun AlbumDetailContent(
   album: MusicAlbum,
   viewMode: MusicViewMode,
+  cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
   currentTrackId: String?,
   isPlaying: Boolean,
   favoriteIds: Set<String>,
@@ -3308,7 +3186,7 @@ private fun AlbumDetailContent(
 
       LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Fixed(cardsPerRow),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -3333,6 +3211,7 @@ private fun AlbumDetailContent(
 private fun GenreDetailContent(
   genre: MusicGenre,
   viewMode: MusicViewMode,
+  cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
   currentTrackId: String?,
   isPlaying: Boolean,
   favoriteIds: Set<String>,
@@ -3447,7 +3326,7 @@ private fun GenreDetailContent(
 
       LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Fixed(cardsPerRow),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -3472,6 +3351,7 @@ private fun GenreDetailContent(
 private fun PlaylistDetailContent(
   playlist: MusicPlaylist,
   viewMode: MusicViewMode,
+  cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
   currentTrackId: String?,
   isPlaying: Boolean,
   favoriteIds: Set<String>,
@@ -3643,7 +3523,7 @@ private fun PlaylistDetailContent(
 
       LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Fixed(cardsPerRow),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),

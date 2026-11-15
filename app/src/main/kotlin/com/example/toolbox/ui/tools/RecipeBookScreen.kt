@@ -244,350 +244,200 @@ fun RecipeBookScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             // ==================== TOP TOOLBAR ====================
-            if (isSelectionMode) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 68.dp)
-                        .testTag("multi_select_toolbar"),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    tonalElevation = 2.dp
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(
-                            onClick = { exitSelectionMode() },
-                            modifier = Modifier.testTag("multi_select_close_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Exit Selection"
-                            )
-                        }
+            val subtitleText = if (savedRecipes.isEmpty()) {
+                "${allCatalog.size} preloaded recipes ready to search"
+            } else if (favoriteCount > 0) {
+                "${savedRecipes.size} saved • $favoriteCount favorite${if (favoriteCount == 1) "" else "s"}"
+            } else {
+                "${savedRecipes.size} saved recipes"
+            }
+            val selectableRecipes = if (savedRecipes.isNotEmpty()) {
+                savedRecipes
+            } else {
+                allCatalog.take(6)
+            }
+            val allSelected = selectableRecipes.isNotEmpty() &&
+                selectableRecipes.all { it.id in selectedIds }
+            val deletableSelected = savedRecipes.filter { it.id in selectedIds }
 
-                        val selectableRecipes = if (savedRecipes.isNotEmpty()) {
-                            savedRecipes
-                        } else {
-                            allCatalog.take(6)
-                        }
-                        val allSelected = selectableRecipes.isNotEmpty() &&
-                            selectableRecipes.all { it.id in selectedIds }
-                        Checkbox(
-                            checked = allSelected,
-                            onCheckedChange = { checked ->
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                selectedIds = if (checked) {
-                                    selectableRecipes.map { it.id }.toSet()
-                                } else {
-                                    emptySet()
-                                }
-                            },
-                            modifier = Modifier.testTag("multi_select_all_checkbox")
-                        )
-
-                        Text(
-                            text = "${selectedIds.size} selected",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(start = 4.dp)
-                                .testTag("multi_select_count_text")
-                        )
-
-                        IconButton(
-                            onClick = {
-                                val selectedRecipe = (savedRecipes + allCatalog)
-                                    .firstOrNull { it.id in selectedIds }
-                                if (selectedRecipe != null) {
-                                    inspectingRecipe = selectedRecipe
-                                }
-                            },
-                            enabled = selectedIds.size == 1,
-                            modifier = Modifier.testTag("multi_select_info_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = "Inspect Selected Recipe"
-                            )
-                        }
-
-                        val deletableSelected = savedRecipes.filter { it.id in selectedIds }
-                        IconButton(
-                            onClick = {
-                                if (deletableSelected.isNotEmpty()) {
-                                    pendingDeleteRecipes = deletableSelected
-                                }
-                            },
-                            enabled = deletableSelected.isNotEmpty(),
-                            modifier = Modifier.testTag("multi_select_delete_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Remove Selected Recipes",
-                                tint = if (deletableSelected.isNotEmpty()) {
-                                    MaterialTheme.colorScheme.error
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                                }
-                            )
-                        }
-
-                        Box {
+            ToolboxTopBar(
+                title = "Recipes",
+                subtext = subtitleText,
+                icon = Icons.Default.RestaurantMenu,
+                selectionState = if (isSelectionMode) {
+                    ToolboxTopBarSelectionState(
+                        selectedCount = selectedIds.size,
+                        totalCount = if (allSelected) selectedIds.size else selectableRecipes.size,
+                        onToggleSelectAll = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            selectedIds = if (allSelected) {
+                                emptySet()
+                            } else {
+                                selectableRecipes.map { it.id }.toSet()
+                            }
+                        },
+                        onCloseSelection = { exitSelectionMode() },
+                        rowTestTag = "multi_select_toolbar",
+                        closeButtonTestTag = "multi_select_close_button",
+                        checkboxTestTag = "multi_select_all_checkbox",
+                        countTextTestTag = "multi_select_count_text",
+                        actions = {
                             IconButton(
-                                onClick = { showMultiSelectOverflow = true },
-                                modifier = Modifier.testTag("multi_select_overflow_button")
+                                onClick = {
+                                    val selectedRecipe = (savedRecipes + allCatalog)
+                                        .firstOrNull { it.id in selectedIds }
+                                    if (selectedRecipe != null) {
+                                        inspectingRecipe = selectedRecipe
+                                    }
+                                },
+                                enabled = selectedIds.size == 1,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .testTag("multi_select_info_button")
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.MoreVert,
-                                    contentDescription = "More Selection Options"
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = "Inspect Selected Recipe",
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
-                            DropdownMenu(
-                                expanded = showMultiSelectOverflow,
-                                onDismissRequest = { showMultiSelectOverflow = false },
-                                shape = RoundedCornerShape(16.dp),
-                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-                            ) {
-                                if (selectedIds.size == 1) {
-                                    DropdownMenuItem(
-                                        text = { Text("Edit Recipe") },
-                                        leadingIcon = {
-                                            Icon(Icons.Default.Edit, contentDescription = null)
-                                        },
-                                        onClick = {
-                                            showMultiSelectOverflow = false
-                                            val target = (savedRecipes + allCatalog)
-                                                .firstOrNull { it.id in selectedIds }
-                                            if (target != null) {
-                                                editingRecipe = target
-                                                exitSelectionMode()
-                                            }
-                                        }
-                                    )
-                                }
-                                DropdownMenuItem(
-                                    text = { Text("Toggle Favorite") },
-                                    leadingIcon = {
-                                        Icon(Icons.Default.Star, contentDescription = null)
-                                    },
-                                    enabled = selectedIds.isNotEmpty(),
-                                    onClick = {
-                                        showMultiSelectOverflow = false
-                                        var updated = savedRecipes
-                                        selectedIds.forEach { id ->
-                                            if (updated.any { it.id == id }) {
-                                                updated = RecipeBookEngine.toggleFavoriteRecipe(updated, id)
-                                            } else {
-                                                val catalogRecipe = allCatalog.firstOrNull { it.id == id }
-                                                if (catalogRecipe != null) {
-                                                    updated = RecipeBookEngine.addRecipeToBook(
-                                                        updated,
-                                                        catalogRecipe.copy(isFavorite = true)
-                                                    )
-                                                }
-                                            }
-                                        }
-                                        persistSaved(updated)
-                                        exitSelectionMode()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Remove Selected") },
-                                    leadingIcon = {
-                                        Icon(
-                                            Icons.Default.Delete,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.error
-                                        )
-                                    },
-                                    colors = MenuDefaults.itemColors(
-                                        textColor = MaterialTheme.colorScheme.error,
-                                        leadingIconColor = MaterialTheme.colorScheme.error
-                                    ),
-                                    enabled = deletableSelected.isNotEmpty(),
-                                    onClick = {
-                                        showMultiSelectOverflow = false
-                                        if (deletableSelected.isNotEmpty()) {
-                                            pendingDeleteRecipes = deletableSelected
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            } else {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 68.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 1.dp
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        contentAlignment = Alignment.CenterStart
-                    ) {
-                        // Normal Header Title & Actions
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = !isSearchActive,
-                            enter = fadeIn(tween(150)),
-                            exit = fadeOut(tween(150))
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(40.dp)
-                                            .clip(CircleShape)
-                                            .background(MaterialTheme.colorScheme.primaryContainer),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.RestaurantMenu,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            modifier = Modifier.size(22.dp)
-                                        )
-                                    }
-                                    Column {
-                                        Text(
-                                            text = "Recipes",
-                                            style = MaterialTheme.typography.titleLarge,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                        val subtitleText = if (savedRecipes.isEmpty()) {
-                                            "${allCatalog.size} preloaded recipes ready to search"
-                                        } else if (favoriteCount > 0) {
-                                            "${savedRecipes.size} saved • $favoriteCount favorite${if (favoriteCount == 1) "" else "s"}"
-                                        } else {
-                                            "${savedRecipes.size} saved recipes"
-                                        }
-                                        Text(
-                                            text = subtitleText,
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
 
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    IconButton(
-                                        onClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                            isSearchActive = true
-                                        },
-                                        modifier = Modifier.testTag("toggle_search_bar_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Search,
-                                            contentDescription = "Search Recipe Catalog",
-                                            tint = MaterialTheme.colorScheme.onSurface
-                                        )
+                            IconButton(
+                                onClick = {
+                                    if (deletableSelected.isNotEmpty()) {
+                                        pendingDeleteRecipes = deletableSelected
                                     }
-                                }
-                            }
-                        }
-
-                        // Animated Expanding Search Bar inside Toolbar (Matches PlantScheduleScreen)
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = isSearchActive,
-                            enter = expandHorizontally(
-                                expandFrom = Alignment.End,
-                                animationSpec = tween(250)
-                            ) + fadeIn(tween(200)),
-                            exit = shrinkHorizontally(
-                                shrinkTowards = Alignment.End,
-                                animationSpec = tween(200)
-                            ) + fadeOut(tween(150))
-                        ) {
-                            LaunchedEffect(Unit) {
-                                delay(50)
-                                runCatching { searchFocusRequester.requestFocus() }
-                                keyboardController?.show()
-                            }
-
-                            Row(
+                                },
+                                enabled = deletableSelected.isNotEmpty(),
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("toolbar_search_bar"),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .size(36.dp)
+                                    .testTag("multi_select_delete_button")
                             ) {
-                                IconButton(
-                                    onClick = {
-                                        isSearchActive = false
-                                        searchQuery = ""
-                                        selectedSearchCategoryName = null
-                                        keyboardController?.hide()
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Remove Selected Recipes",
+                                    tint = if (deletableSelected.isNotEmpty()) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                                     },
-                                    modifier = Modifier.testTag("close_search_button")
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            Box {
+                                IconButton(
+                                    onClick = { showMultiSelectOverflow = true },
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .testTag("multi_select_overflow_button")
                                 ) {
                                     Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                        contentDescription = "Close Search",
-                                        tint = MaterialTheme.colorScheme.onSurface
+                                        imageVector = Icons.Default.MoreVert,
+                                        contentDescription = "More Selection Options",
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
-
-                                TextField(
-                                    value = searchQuery,
-                                    onValueChange = { searchQuery = it },
-                                    placeholder = {
-                                        Text(
-                                            text = "Search recipes, ingredients, tags...",
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    },
-                                    singleLine = true,
-                                    colors = TextFieldDefaults.colors(
-                                        focusedContainerColor = Color.Transparent,
-                                        unfocusedContainerColor = Color.Transparent,
-                                        disabledContainerColor = Color.Transparent,
-                                        focusedIndicatorColor = Color.Transparent,
-                                        unfocusedIndicatorColor = Color.Transparent,
-                                        disabledIndicatorColor = Color.Transparent
-                                    ),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .focusRequester(searchFocusRequester)
-                                        .testTag("recipe_search_input")
-                                )
-
-                                if (searchQuery.isNotEmpty()) {
-                                    IconButton(
-                                        onClick = { searchQuery = "" },
-                                        modifier = Modifier.testTag("recipe_search_clear")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Clear,
-                                            contentDescription = "Clear search",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                DropdownMenu(
+                                    expanded = showMultiSelectOverflow,
+                                    onDismissRequest = { showMultiSelectOverflow = false },
+                                    shape = RoundedCornerShape(16.dp),
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                ) {
+                                    if (selectedIds.size == 1) {
+                                        DropdownMenuItem(
+                                            text = { Text("Edit Recipe") },
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Edit, contentDescription = null)
+                                            },
+                                            onClick = {
+                                                showMultiSelectOverflow = false
+                                                val target = (savedRecipes + allCatalog)
+                                                    .firstOrNull { it.id in selectedIds }
+                                                if (target != null) {
+                                                    editingRecipe = target
+                                                    exitSelectionMode()
+                                                }
+                                            }
                                         )
                                     }
+                                    DropdownMenuItem(
+                                        text = { Text("Toggle Favorite") },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Star, contentDescription = null)
+                                        },
+                                        enabled = selectedIds.isNotEmpty(),
+                                        onClick = {
+                                            showMultiSelectOverflow = false
+                                            var updated = savedRecipes
+                                            selectedIds.forEach { id ->
+                                                if (updated.any { it.id == id }) {
+                                                    updated = RecipeBookEngine.toggleFavoriteRecipe(updated, id)
+                                                } else {
+                                                    val catalogRecipe = allCatalog.firstOrNull { it.id == id }
+                                                    if (catalogRecipe != null) {
+                                                        updated = RecipeBookEngine.addRecipeToBook(
+                                                            updated,
+                                                            catalogRecipe.copy(isFavorite = true)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            persistSaved(updated)
+                                            exitSelectionMode()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Remove Selected") },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.error
+                                            )
+                                        },
+                                        colors = MenuDefaults.itemColors(
+                                            textColor = MaterialTheme.colorScheme.error,
+                                            leadingIconColor = MaterialTheme.colorScheme.error
+                                        ),
+                                        enabled = deletableSelected.isNotEmpty(),
+                                        onClick = {
+                                            showMultiSelectOverflow = false
+                                            if (deletableSelected.isNotEmpty()) {
+                                                pendingDeleteRecipes = deletableSelected
+                                            }
+                                        }
+                                    )
                                 }
                             }
                         }
-                    }
-                }
-            }
+                    )
+                } else {
+                    null
+                },
+                searchState = ToolboxTopBarSearchState(
+                    isActive = isSearchActive,
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    onOpenSearch = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        isSearchActive = true
+                    },
+                    onCloseSearch = {
+                        isSearchActive = false
+                        searchQuery = ""
+                        selectedSearchCategoryName = null
+                        keyboardController?.hide()
+                    },
+                    placeholder = "Search recipes, ingredients, tags...",
+                    searchContentDescription = "Search Recipe Catalog",
+                    toggleButtonTestTag = "toggle_search_bar_button",
+                    searchBarTestTag = "toolbar_search_bar",
+                    closeButtonTestTag = "close_search_button",
+                    inputTestTag = "recipe_search_input",
+                    clearButtonTestTag = "recipe_search_clear",
+                )
+            )
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 

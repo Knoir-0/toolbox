@@ -411,140 +411,73 @@ private fun ImageEditorTopBar(
   onSave: () -> Unit,
   onNavigateBack: (() -> Unit)? = null,
 ) {
-  Surface(
-    color = MaterialTheme.colorScheme.surface,
-    tonalElevation = 1.dp,
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    Box(
-      modifier = Modifier
-        .fillMaxWidth()
-        .heightIn(min = 68.dp),
-      contentAlignment = Alignment.CenterStart,
-    ) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 12.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Row(
-          modifier = Modifier.weight(1f),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
+  ToolboxTopBar(
+    title = "Image Editor",
+    subtext = if (bitmap != null) {
+      "${bitmap.width}×${bitmap.height} px • ${activeMode.label}"
+    } else {
+      "Crop, rotate, tilt, adjust & draw"
+    },
+    icon = Icons.Default.Image,
+    onNavigateBack = onNavigateBack,
+    backButtonTestTag = "action_navigate_back",
+    actions = {
+      if (bitmap != null) {
+        IconButton(
+          onClick = onUndo,
+          enabled = canUndo,
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("editor_undo_button"),
         ) {
-          if (onNavigateBack != null) {
-            IconButton(
-              onClick = onNavigateBack,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("action_navigate_back"),
-            ) {
-              Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-            }
-          } else {
-            Box(
-              modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Default.Image,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-              )
-            }
-          }
-
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = "Image Editor",
-              style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurface,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-              text = if (bitmap != null) {
-                "${bitmap.width}×${bitmap.height} px • ${activeMode.label}"
-              } else {
-                "Crop, rotate, tilt, adjust & draw"
-              },
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-          }
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Undo,
+            contentDescription = "Undo",
+            modifier = Modifier.size(20.dp),
+          )
         }
-
-        if (bitmap != null) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-          ) {
-            IconButton(
-              onClick = onUndo,
-              enabled = canUndo,
-              modifier = Modifier
-                .size(38.dp)
-                .testTag("editor_undo_button"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.Undo,
-                contentDescription = "Undo",
-                modifier = Modifier.size(20.dp),
-              )
-            }
-            IconButton(
-              onClick = onRedo,
-              enabled = canRedo,
-              modifier = Modifier
-                .size(38.dp)
-                .testTag("editor_redo_button"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.Redo,
-                contentDescription = "Redo",
-                modifier = Modifier.size(20.dp),
-              )
-            }
-            IconButton(
-              onClick = onCloseImage,
-              modifier = Modifier
-                .size(38.dp)
-                .testTag("editor_close_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = "Close image",
-                modifier = Modifier.size(20.dp),
-              )
-            }
-            Spacer(modifier = Modifier.width(4.dp))
-            FilledIconButton(
-              onClick = onSave,
-              shape = CircleShape,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("editor_save_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Save,
-                contentDescription = "Save image",
-                modifier = Modifier.size(18.dp),
-              )
-            }
-          }
+        IconButton(
+          onClick = onRedo,
+          enabled = canRedo,
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("editor_redo_button"),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Redo,
+            contentDescription = "Redo",
+            modifier = Modifier.size(20.dp),
+          )
+        }
+        IconButton(
+          onClick = onCloseImage,
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("editor_close_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = "Close image",
+            modifier = Modifier.size(20.dp),
+          )
+        }
+        Spacer(modifier = Modifier.width(4.dp))
+        FilledIconButton(
+          onClick = onSave,
+          shape = CircleShape,
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("editor_save_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Save,
+            contentDescription = "Save image",
+            modifier = Modifier.size(18.dp),
+          )
         }
       }
-    }
-  }
+    },
+  )
 }
 
 /**

@@ -243,71 +243,12 @@ internal fun BluetoothToolToolbar(
   actions: @Composable RowScope.() -> Unit = {},
 ) {
   Column(modifier = modifier.fillMaxWidth()) {
-    Surface(
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 1.dp,
-      modifier = Modifier.fillMaxWidth(),
-    ) {
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .heightIn(min = 68.dp),
-        contentAlignment = Alignment.CenterStart,
-      ) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-          ) {
-            Box(
-              modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-              )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-          }
-
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            content = actions,
-          )
-        }
-      }
-    }
+    ToolboxTopBar(
+      title = title,
+      subtext = subtitle,
+      icon = icon,
+      actions = actions,
+    )
 
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
   }

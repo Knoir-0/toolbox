@@ -77,6 +77,10 @@ enum class FileViewMode {
   GRID,
 }
 
+const val MIN_FILES_GRID_COLUMNS = 3
+const val MAX_FILES_GRID_COLUMNS = 6
+const val DEFAULT_FILES_GRID_COLUMNS = 3
+
 /**
  * Represents a storage volume or device (Root / Internal Storage, SD Card, USB OTG, etc.).
  */
@@ -1258,6 +1262,36 @@ object FileManagerEngine {
     try {
       val prefs = context.getSharedPreferences(FILES_PREFS_NAME, android.content.Context.MODE_PRIVATE)
       prefs.edit().putString(PREF_KEY_DEFAULT_SORT_GROUP, serializeSortGroupConfig(config)).apply()
+    } catch (_: Throwable) {}
+  }
+
+  private const val PREF_KEY_GRID_COLUMNS_PER_ROW = "files_grid_columns_per_row"
+  private var inMemoryGridColumnsPerRow: Int = DEFAULT_FILES_GRID_COLUMNS
+
+  fun coerceGridColumnsPerRow(columns: Int): Int {
+    return columns.coerceIn(MIN_FILES_GRID_COLUMNS, MAX_FILES_GRID_COLUMNS)
+  }
+
+  fun getGridColumnsPerRow(context: android.content.Context? = null): Int {
+    if (context == null) return inMemoryGridColumnsPerRow
+    return try {
+      val prefs = context.getSharedPreferences(FILES_PREFS_NAME, android.content.Context.MODE_PRIVATE)
+      coerceGridColumnsPerRow(prefs.getInt(PREF_KEY_GRID_COLUMNS_PER_ROW, inMemoryGridColumnsPerRow))
+    } catch (_: Throwable) {
+      inMemoryGridColumnsPerRow
+    }
+  }
+
+  fun setGridColumnsPerRow(
+    context: android.content.Context? = null,
+    columns: Int,
+  ) {
+    val coerced = coerceGridColumnsPerRow(columns)
+    inMemoryGridColumnsPerRow = coerced
+    if (context == null) return
+    try {
+      val prefs = context.getSharedPreferences(FILES_PREFS_NAME, android.content.Context.MODE_PRIVATE)
+      prefs.edit().putInt(PREF_KEY_GRID_COLUMNS_PER_ROW, coerced).apply()
     } catch (_: Throwable) {}
   }
 

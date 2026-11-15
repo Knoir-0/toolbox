@@ -11,6 +11,7 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.swipeLeft
@@ -109,7 +110,7 @@ class GalleryScreenTest {
     // 1. Default view is Tile View with 3 albums per row
     composeTestRule.onNodeWithTag("gallery_tile_grid").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("3")
-    composeTestRule.onNodeWithTag("gallery_albums_per_row_label").assertTextEquals("3 per row")
+    composeTestRule.onNodeWithTag("gallery_density_indicator").assertIsDisplayed()
 
     // 2. Contents of Pictures and DCIM are un-nested at the root level as if they were the same folder
     val cameraTile = composeTestRule.onNodeWithTag("album_tile_Camera", useUnmergedTree = true)
@@ -199,7 +200,7 @@ class GalleryScreenTest {
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("6")
-    composeTestRule.onNodeWithTag("gallery_albums_per_row_label").assertTextEquals("6 per row")
+    composeTestRule.onNodeWithTag("gallery_density_indicator").assertIsDisplayed()
 
     // Verify all 6 un-nested albums from Pictures and DCIM are aligned on the same first row
     val firstTileTop = composeTestRule.onNodeWithTag("album_tile_Album_1", useUnmergedTree = true)
@@ -744,5 +745,67 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("photo_tile_item_root_photo_2.png").assertDoesNotExist()
     composeTestRule.onNodeWithTag("album_tile_item_Camera").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_tile_item_root_photo_1.png").assertIsDisplayed()
+  }
+
+  @Test
+  fun smartSearch_searchesByOcrTextAndAutoTagChips_andPhotoViewerDisplaysRecognitionDetails() {
+    GalleryEngine.clearPhotoIndexCache()
+    val picturesDir = File(testRootDir, "Pictures/Receipts").apply { mkdirs() }
+    val cameraDir = File(testRootDir, "DCIM/Camera").apply { mkdirs() }
+
+    GalleryEngine.writeTextDocumentPng(
+      outputFile = File(picturesDir, "bakery_receipt.png"),
+      ocrText = "SUNRISE BAKERY\nSourdough Loaf $8.50\nTotal $8.50",
+      imageLabels = listOf("Food"),
+      lastModifiedMs = 5_000_000L,
+    )
+    GalleryEngine.writeTextDocumentPng(
+      outputFile = File(cameraDir, "trail_map.png"),
+      ocrText = "YOSEMITE VALLEY TRAILHEAD\nElevation 4000ft",
+      imageLabels = listOf("Nature", "Mountain"),
+      lastModifiedMs = 6_000_000L,
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        GalleryScreen(rootDirectory = testRootDir)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Open toolbar search bar
+    composeTestRule.onNodeWithTag("gallery_search_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_toolbar_search_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_search_tag_filter_bar").assertIsDisplayed()
+
+    // Filter by OCR text inside bakery_receipt.png ("Sourdough")
+    composeTestRule.onNodeWithTag("gallery_search_input").performTextInput("Sourdough")
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("photo_tile_item_bakery_receipt.png").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_tile_item_trail_map.png").assertDoesNotExist()
+
+    // Clear text query and filter by automatic tag chip "Receipt"
+    composeTestRule.onNodeWithTag("gallery_search_clear").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_tag_filter_Receipt").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("photo_tile_item_bakery_receipt.png").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_tile_item_trail_map.png").assertDoesNotExist()
+
+    // Open bakery_receipt.png in Photo Viewer and inspect recognition info dialog
+    composeTestRule.onNodeWithTag("photo_tile_item_bakery_receipt.png").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("photo_viewer_recognition_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_ocr_pill").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("photo_viewer_info_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_info_ocr_text").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_info_copy_ocr_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_info_save_to_notes_button").assertIsDisplayed()
   }
 }

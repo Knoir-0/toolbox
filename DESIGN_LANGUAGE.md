@@ -74,94 +74,60 @@ Consistent rounding gives Toolbox its signature modern, friendly, and cohesive a
 - **Text Input Fields (`OutlinedTextField`)**: `RoundedCornerShape(14.dp)` or `RoundedCornerShape(16.dp)`
 - **Buttons (Dialog Confirm / Dismiss)**: `RoundedCornerShape(12.dp)` to `RoundedCornerShape(14.dp)`
 - **Floating Action Buttons (FAB & Mini-FAB)**: `CircleShape`
-- **Header Icon Badges**: `CircleShape` (size: 36.dp to 44.dp)
+- **Header Icon Badges**: `CircleShape` (fixed `40.dp` container in `colorScheme.primaryContainer` with a `20.dp` icon tinted `colorScheme.primary`)
 - **Sliders & Trackbars (`SlimDotSlider`)**: Slim track (`4.dp` to `6.dp` height) with a circular dot drag handle (`CircleShape`, `16.dp` to `20.dp`). Never use the default thick Material 3 vertical bar thumb.
 
 ---
 
 ## 5. Standard Component Patterns
 
-### 5.1 Tool Header / Top Bar
-Every tool toolbar adheres to a consistent height and layout matching `TodoListScreen` and `FilesScreen`:
+### 5.1 Tool Header / Top Bar (`ToolboxTopBar`)
+All tools with a top header bar (including **Settings** and **To Do**, while self-contained full-canvas utilities like **Calculator**, **Unit Converter**, **Dice Roller**, **Metronome**, **Color Picker**, **Ruler**, and **Camera** intentionally omit a top bar) must use the shared `ToolboxTopBar` composable (`com.example.toolbox.ui.tools.ToolboxTopBar`) modeled after `FilesScreen`:
+
+1. **Fixed `68.dp` Height (Never Resizes)**: The outer `Box` uses `Modifier.fillMaxWidth().height(68.dp)` (never `heightIn(min = 68.dp)` with vertical padding that grows or shrinks when actions or search bars toggle). This guarantees zero vertical layout shift when opening/closing the expanding search bar or entering/exiting multi-selection mode.
+2. **Leading Icon Badge vs. Back Navigation**:
+   - **Root Level**: A `40.dp` `CircleShape` badge (`colorScheme.primaryContainer`) containing a `20.dp` tool icon tinted with `colorScheme.primary`.
+   - **Drill-Down / Back Navigation**: When `onNavigateBack != null`, the badge is replaced by a plain `36.dp` `IconButton` with `Icons.AutoMirrored.Filled.ArrowBack` tinted `colorScheme.onSurface` (never wrapped in a colored circular container).
+3. **Title & Subtitle Hierarchy**:
+   - **Title**: `MaterialTheme.typography.titleLarge`, `FontWeight.Bold`, `colorScheme.onSurface`, single-line with `TextOverflow.Ellipsis`.
+   - **Subtext**: `MaterialTheme.typography.bodySmall`, `colorScheme.onSurfaceVariant`, single-line with `TextOverflow.Ellipsis`.
+   - **Horizontal Padding & Spacing**: `12.dp` horizontal padding on the toolbar row, `10.dp` spacing between the leading badge/back button and the title column.
+4. **Search Icon Always on the Far Right**:
+   - Whenever a tool supports toolbar search (`searchState != null`), the search trigger `IconButton` (`Icons.Default.Search`, `36.dp` button with `20.dp` icon tinted `colorScheme.onSurfaceVariant`) is rendered **at the very far right** of the toolbar, after all other trailing action buttons, segmented view toggles, or filter capsules.
 
 ```kotlin
-Surface(
-  color = MaterialTheme.colorScheme.surface,
-  tonalElevation = 1.dp,
-  modifier = Modifier.fillMaxWidth(),
-) {
-  Box(
-    modifier = Modifier
-      .fillMaxWidth()
-      .heightIn(min = 68.dp),
-    contentAlignment = Alignment.CenterStart,
-  ) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(horizontal = 12.dp, vertical = 12.dp),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Row(
-        modifier = Modifier.weight(1f),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        // 36dp - 40dp Circular Icon Badge (at root level)
-        // Note: When showing a drill-down Back button instead of the static tool icon badge,
-        // use a plain IconButton with Icons.AutoMirrored.Filled.ArrowBack and tint = colorScheme.onSurface
-        // (no colored primaryContainer circle background around the back button).
-        Box(
-          modifier = Modifier
-            .size(36.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primaryContainer),
-          contentAlignment = Alignment.Center,
-        ) {
-          Icon(
-            imageVector = Icons.Default.FolderOpen,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
-          )
-        }
-
-        // Title + Subtext Column
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = title,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          Text(
-            text = subtext,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-      }
-
-      // Action Icon Buttons (Search, Sort, ViewMode, etc.)
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = { isSearchActive = true }) {
-          Icon(
-            imageVector = Icons.Default.Search,
-            contentDescription = "Search",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-      }
-    }
-
-    // Optional: Integrated Expanding Search Bar (see Section 5.7)
-  }
-}
+ToolboxTopBar(
+  title = "Files",
+  subtext = subtext,
+  icon = Icons.Default.FolderOpen,
+  onNavigateBack = if (canNavigateUp) ({ navigateUp() }) else null,
+  backButtonTestTag = "action_navigate_up",
+  selectionState = if (isSelectionMode) {
+    ToolboxTopBarSelectionState(
+      selectedCount = selectedPaths.size,
+      totalCount = entries.size,
+      onToggleSelectAll = { toggleSelectAll() },
+      onCloseSelection = { clearSelection() },
+      actions = {
+        // 36.dp IconButtons (20.dp icons) + red Delete + MoreVert overflow DropdownMenu
+      },
+    )
+  } else {
+    null
+  },
+  actions = {
+    // Tool-specific trailing controls (e.g. ViewModeSegmentedToggle, Sort, Capsules)
+    // Placed BEFORE the far-right Search icon button
+  },
+  searchState = ToolboxTopBarSearchState(
+    isActive = isSearchActive,
+    query = searchQuery,
+    onQueryChange = { searchQuery = it },
+    onOpenSearch = { isSearchActive = true },
+    onCloseSearch = { closeSearch() },
+    placeholder = "Search files & folders...",
+  ),
+)
 ```
 
 ---
@@ -275,21 +241,27 @@ AlertDialog(
 
 ---
 
-### 5.4 Lists & Grid Cards
-- Use `CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))` with `RoundedCornerShape(12.dp)` to `14.dp`.
-- Separate secondary metadata items using bullet points (`•` with `colorScheme.outline`).
-- Provide action menus via `IconButton` with `Icons.Default.MoreVert`.
+### 5.4 Lists, Grid Cards & Pill Bar Floating Controls (`ToolboxFloatingColumnsButton` & `pinchToChangeColumns`)
+- **Card Styling**: Use `CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))` with `RoundedCornerShape(12.dp)` to `14.dp`.
+- **Metadata**: Separate secondary metadata items using bullet points (`•` with `colorScheme.outline`).
+- **Pill Bar & Floating Right-Edge Controls**:
+  - Tools with a horizontal pill/filter bar immediately below `ToolboxTopBar` (**Gallery**, **Files**, **Archive**, **Music Player**, and **Notes**) pin their secondary controls as floating `34.dp` circular buttons (`CircleShape`, `surfaceContainerHigh`, `tonalElevation = 3.dp`, `shadowElevation = 4.dp`, `1.dp` `outlineVariant.copy(alpha = 0.6f)` border) at `Alignment.CenterEnd` (`padding(end = 12.dp)`, `zIndex(10f)`, `6.dp` horizontal spacing).
+  - **Faded Edge into Background (`Modifier.fadingPillRowUnderFloatingControls` & `Modifier.pillBarFloatingControlsBackdrop`)**: Never allow scrolling pills/chips to be visible directly underneath or between the floating buttons. Apply `.fadingPillRowUnderFloatingControls(hasColumnsButton = ...)` (offscreen `BlendMode.DstIn` horizontal alpha mask) before `.horizontalScroll(...)` on the pill `Row` and `.pillBarFloatingControlsBackdrop(backgroundColor = ...)` on the floating controls `Row` so pills smoothly dissolve into the background color across a `32.dp` feather zone right before the floating controls.
+  - **Changeable `# per row` Control (`ToolboxFloatingColumnsButton`)**: Whenever a tool is displaying a tile/grid/card layout, place `ToolboxFloatingColumnsButton` immediately to the left of the floating filter/sort/labels button (`[#] [Filter/Sort]`). It displays only the current column count in bold (`typography.labelLarge`, `FontWeight.Bold`, `colorScheme.onSurfaceVariant`); tapping cycles `columnsPerRow` from `minColumns` to `maxColumns` and wraps around.
+  - **Pinch-to-Zoom (`Modifier.pinchToChangeColumns`)**: Attach `.pinchToChangeColumns(...)` to the grid content container so two-finger pinch-out (fewer columns, larger tiles) and pinch-in (more columns, smaller tiles) smoothly adjust `columnsPerRow` within the same range:
+    - **Gallery**, **Files** (Grid view), **Archive** (Grid view): `3..6` per row (default `3`).
+    - **Music Player** (Card view), **Notes** (Grid view): `2..4` per row (default `2`).
 
 ---
 
-### 5.5 Multi-Selection & Bulk Actions Pattern
+### 5.5 Multi-Selection & Bulk Actions Pattern (`ToolboxTopBarSelectionState`)
 - **Activation**: Long-pressing (`combinedClickable(onLongClick = ...)`) on an item enters multi-select mode and pre-selects that item.
 - **Icon Replacement**: All item leading icon boxes are replaced with `Checkbox` components during multi-select mode.
-- **Top Toolbar Transformation**: Replaces title and leading icon with:
-  - An exit selection button (`Icons.Default.Close`).
-  - A "Select All" checkbox paired with `# selected` text (`titleMedium`, `SemiBold`). Tapping toggles select all / deselect all.
-  - Action buttons: Info (`Icons.Default.Info`), Cut (`Icons.Default.ContentCut`), Copy (`Icons.Default.ContentCopy`), and Delete in red (`Icons.Default.Delete`, `colorScheme.error`, enabled when selection > 0).
-  - Overflow `...` menu (`MoreVert`) containing the labeled text options for all actions.
+- **Top Toolbar Transformation (`ToolboxMultiSelectBarRow`)**: Every multi-select tool (**Files**, **Notes**, **Gallery**, **Archive**, **Planting & Harvest**, **Recipes**) uses `ToolboxTopBarSelectionState` inside `ToolboxTopBar` (maintaining the exact `68.dp` height and `surface` background with `1.dp` tonal elevation):
+  - **Exit Selection Button**: A `36.dp` `IconButton` (`Icons.Default.Close`, `20.dp` icon).
+  - **Select All Toggle Area**: A clickable `RoundedCornerShape(8.dp)` row containing a `32.dp` `Checkbox` (`allSelected`) and `"$selectedCount selected"` text (`typography.titleMedium`, `FontWeight.SemiBold`, `colorScheme.onSurface`). Tapping either the checkbox or the row toggles select all / deselect all.
+  - **Compact Action Buttons**: `36.dp` `IconButton`s with `20.dp` icons (`2.dp` spacing) for primary bulk actions—such as Info (`Icons.Default.Info`), Share (`Icons.Default.Share`), Cut (`Icons.Default.ContentCut`), Copy (`Icons.Default.ContentCopy`), Extract (`Icons.Default.Unarchive`), and Delete in red (`Icons.Default.Delete`, `colorScheme.error`, enabled when selection > 0).
+  - **Overflow `...` Menu**: A `36.dp` `IconButton` (`Icons.Default.MoreVert`, `20.dp` icon) opening a `DropdownMenu` with labeled text & leading-icon items for all available bulk actions.
 - **Floating Paste Bar**: When items are cut or copied, display a floating pill above the bottom edge with paste destination action and cancel option.
 
 ---
@@ -348,14 +320,15 @@ fun SlimDotSlider(
 
 ---
 
-### 5.7 Integrated Search Toolbar & Catalog Overlay Pattern
-Tools with searchable catalogs, presets, or collections (such as **Planting & Harvest**, **Recipes**, **Guitar Tuner**, and **Chord Book**) must use an **integrated toolbar search bar** paired with a **top-expanding catalog overlay** rather than standalone dropdown selectors or modal picker dialogs:
+### 5.7 Integrated Search Toolbar & Catalog Overlay Pattern (`ToolboxTopBarSearchState`)
+Tools with searchable catalogs, presets, or collections (such as **Files**, **Music Player**, **Notes**, **Archive**, **Planting & Harvest**, **Recipes**, **Guitar Tuner**, **Chord Book**, and **OBD2 Scanner**) must use `ToolboxTopBarSearchState` on `ToolboxTopBar`:
 
-1. **Toolbar Search Trigger**: Place a trailing `IconButton` (`Icons.Default.Search`) inside the standard `68.dp` tool header (`Section 5.1`) that activates search mode (`isSearchActive = true`).
-2. **Animated Horizontal Search Bar**: Inside the header `Box`, layer an `AnimatedVisibility` container (`enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End)`, `exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End)`) with `Surface(tonalElevation = 2.dp)`:
+1. **Far-Right Toolbar Search Trigger**: `ToolboxTopBar` automatically places the search `IconButton` (`Icons.Default.Search`, `36.dp` button, `20.dp` icon tinted `colorScheme.onSurfaceVariant`) at the **very far right** of the `68.dp` header, after any custom `actions` (such as view-mode segmented toggles, sort menus, or unit/label pills).
+2. **Fixed-Height Animated Horizontal Search Bar**: Inside the `68.dp` header `Box`, `ToolboxTopBar` layers an `AnimatedVisibility` container (`enter = fadeIn(tween(220)) + expandHorizontally(expandFrom = Alignment.End)`, `exit = fadeOut(tween(180)) + shrinkHorizontally(shrinkTowards = Alignment.End)`) with `Modifier.matchParentSize()` and `Surface(color = colorScheme.surface, tonalElevation = 2.dp)`:
+   - Because the outer `Box` is locked to `Modifier.height(68.dp)` and the search overlay uses `Modifier.matchParentSize()`, activating or dismissing search **never resizes the toolbar**.
    - Leading back button (`Icons.AutoMirrored.Filled.ArrowBack`) to exit search and reset filters.
    - Borderless `TextField` (`Color.Transparent` containers and indicators) that auto-focuses via `FocusRequester` and opens the software keyboard on entry.
-   - Trailing clear button (`Icons.Default.Clear`) visible when the query is non-empty.
+   - Trailing clear button (`Icons.Default.Clear`) visible when the query is non-empty, plus optional `trailingContent` before the clear button (e.g. Archive's `Selected` filter chip).
    - `BackHandler(enabled = isSearchActive)` to dismiss search cleanly on system back navigation.
 3. **Top-Expanding Search Overlay & Filter Pills**: Below the header `HorizontalDivider`, layer an `AnimatedVisibility` overlay (`expandVertically(expandFrom = Alignment.Top) + fadeIn()`) over the main content `Box`:
    - **Category & Favorites Filter Row**: A `Surface(tonalElevation = 1.dp)` containing a `LazyRow` of `RoundedCornerShape(20.dp)` `FilterChip` pills (`All`, `Favorites`, and domain categories).
@@ -365,66 +338,23 @@ Tools with searchable catalogs, presets, or collections (such as **Planting & Ha
    - Related tools that operate on the same preset catalog (such as **Guitar Tuner** and **Chord Book**) share a unified favorite tunings repository so favoriting a tuning in one tool immediately surfaces it in the other.
    - In tools with an active preset or instrument configuration (e.g., **Guitar Tuner**), place the browsable/filterable preset list below the primary interactive display so quick-tapping any item immediately switches the active preset with haptic feedback, while favorited items can be filtered or surfaced at the top.
 
-```kotlin
-AnimatedVisibility(
-  visible = isSearchActive,
-  enter = fadeIn(tween(220)) + expandHorizontally(expandFrom = Alignment.End),
-  exit = fadeOut(tween(180)) + shrinkHorizontally(shrinkTowards = Alignment.End),
-  modifier = Modifier.matchParentSize(),
-) {
-  Surface(
-    color = MaterialTheme.colorScheme.surface,
-    tonalElevation = 2.dp,
-    modifier = Modifier.fillMaxSize(),
-  ) {
-    Row(
-      modifier = Modifier
-        .fillMaxSize()
-        .padding(horizontal = 8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      IconButton(onClick = { closeSearch() }) {
-        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search")
-      }
-      TextField(
-        value = searchQuery,
-        onValueChange = { searchQuery = it },
-        placeholder = { Text("Search...") },
-        singleLine = true,
-        colors = TextFieldDefaults.colors(
-          focusedContainerColor = Color.Transparent,
-          unfocusedContainerColor = Color.Transparent,
-          focusedIndicatorColor = Color.Transparent,
-          unfocusedIndicatorColor = Color.Transparent,
-        ),
-        trailingIcon = {
-          if (searchQuery.isNotEmpty()) {
-            IconButton(onClick = { searchQuery = "" }) {
-              Icon(Icons.Default.Clear, contentDescription = "Clear search")
-            }
-          }
-        },
-        modifier = Modifier
-          .fillMaxWidth()
-          .focusRequester(searchFocusRequester),
-      )
-    }
-  }
-}
-```
-
 ---
 
 ## 6. Dos and Don'ts Checklist for AI Agents
 
 - [x] **DO** use `MaterialTheme.colorScheme.*` for all colors; verify dark and light mode contrast.
 - [x] **DO** use standard corner radii: `28.dp` for dialogs/sheets, `14.dp` for fields/cards, `CircleShape` for FABs, icon badges, and slider dot handles.
-- [x] **DO** render header back/up navigation buttons (`Icons.AutoMirrored.Filled.ArrowBack`) as plain `IconButton`s with `MaterialTheme.colorScheme.onSurface` tint and no circular background container.
+- [x] **DO** use `ToolboxTopBar` (`68.dp` fixed height, `12.dp` horizontal padding, `40.dp` `primaryContainer` circular icon badge with `20.dp` `primary`-tinted icon, `titleLarge` Bold title + `bodySmall` `onSurfaceVariant` subtext) for all tool headers.
+- [x] **DO** place the toolbar search icon (`Icons.Default.Search`) at the **very far right** of the top bar (after all other trailing action buttons, toggles, or pills) via `ToolboxTopBarSearchState`.
+- [x] **DO** render header back/up navigation buttons (`Icons.AutoMirrored.Filled.ArrowBack`) as plain `36.dp` `IconButton`s with `MaterialTheme.colorScheme.onSurface` tint and no circular background container.
+- [x] **DO** use `ToolboxTopBarSelectionState` (`ToolboxMultiSelectBarRow`) for all multi-selection toolbars so they share the `FilesScreen` layout (Close button, clickable Select All checkbox + count, `36.dp` action icons, red Delete, and `MoreVert` overflow menu).
 - [x] **DO** use `SlimDotSlider` (slim `4.dp`–`6.dp` track with `16.dp`–`20.dp` circular dot thumb) for all sliders and trackbars.
 - [x] **DO** use the integrated expanding toolbar search & catalog overlay pattern (`Section 5.7`) with `RoundedCornerShape(20.dp)` filter chips and star favoriting for searchable tool catalogs and presets.
 - [x] **DO** provide immediate haptic feedback (`LocalHapticFeedback`) on meaningful actions (duplicate/copy, create, delete, favorite, quick-switch).
 - [x] **DO** support autofocus with `FocusRequester` and pre-select meaningful text in editing dialogs and expanding search bars.
 - [x] **DO** provide clear inline error messages and disable confirm buttons when inputs are invalid or unchanged.
+- [ ] **DON'T** use `heightIn(min = 68.dp)` with variable vertical padding on toolbars that causes the bar to resize when toggling search or multi-selection mode; always keep the top bar locked to `68.dp`.
+- [ ] **DON'T** place the search icon to the left of view-mode toggles, sort buttons, or other toolbar actions.
 - [ ] **DON'T** use raw drop shadows; use Material 3 `tonalElevation`.
 - [ ] **DON'T** use default thick Material 3 sliders with tall vertical bar handles.
 - [ ] **DON'T** use standalone dropdowns for large searchable preset catalogs when an integrated search toolbar and quick-switch list fits the tool workflow.

@@ -520,4 +520,171 @@ class GalleryEngineTest {
     assertTrue(!tripAlbumDir.exists())
     assertTrue(!rootDirectPhoto2.exists())
   }
+
+  @Test
+  fun indexSinglePhoto_andDeriveAutoTags_extractsOcrTextVisualLabelsAndSmartTags() = runBlocking {
+    GalleryEngine.clearPhotoIndexCache()
+    val screenshotsDir = File(tempRootDir, "Pictures/Screenshots").apply { mkdirs() }
+    val receiptsDir = File(tempRootDir, "Pictures/Finance").apply { mkdirs() }
+
+    val receiptFile = GalleryEngine.writeTextDocumentPng(
+      outputFile = File(receiptsDir, "coffee_invoice.png"),
+      ocrText = "BLUE BOTTLE COFFEE\nInvoice #1042\nSubtotal $12.00\nTax $1.08\nTotal $13.08",
+      imageLabels = listOf("Food", "Coffee"),
+      lastModifiedMs = 5_000_000L,
+    )
+    val screenshotNoteFile = GalleryEngine.writeTextDocumentPng(
+      outputFile = File(screenshotsDir, "Screenshot_20261115.png"),
+      ocrText = "Meeting Notes:\n- Ship gallery OCR search\n- Add automatic tagging\n- Cache index on disk",
+      imageLabels = listOf("Screenshot"),
+      lastModifiedMs = 6_000_000L,
+    )
+
+    val receiptEntry = GalleryEngine.indexSinglePhoto(receiptFile)
+    assertTrue(receiptEntry.ocrText.contains("BLUE BOTTLE COFFEE"))
+    assertTrue(receiptEntry.autoTags.contains("Receipt"))
+    assertTrue(receiptEntry.autoTags.contains("Document"))
+    assertTrue(receiptEntry.autoTags.contains("Text"))
+    assertTrue(receiptEntry.autoTags.contains("Food"))
+    assertTrue(receiptEntry.autoTags.contains("Coffee"))
+
+    val screenshotEntry = GalleryEngine.indexSinglePhoto(screenshotNoteFile)
+    assertTrue(screenshotEntry.ocrText.contains("Ship gallery OCR search"))
+    assertTrue(screenshotEntry.autoTags.contains("Screenshot"))
+    assertTrue(screenshotEntry.autoTags.contains("Notes"))
+    assertTrue(screenshotEntry.autoTags.contains("Document"))
+  }
+
+  @Test
+  fun indexCachePersistence_loadsValidEntriesAndInvalidatesModifiedFiles() = runBlocking {
+    val cacheFile = File(tempRootDir, "gallery_smart_index_test.json")
+    GalleryEngine.clearPhotoIndexCache()
+
+    val picturesDir = File(tempRootDir, "Pictures").apply { mkdirs() }
+    val docFile = GalleryEngine.writeTextDocumentPng(
+      outputFile = File(picturesDir, "scan_01.png"),
+      ocrText = "Original Contract Terms 2025",
+      imageLabels = listOf("Document"),
+      lastModifiedMs = 2_000_000L,
+    )
+    val photo = GalleryPhoto(
+      file = docFile,
+      name = docFile.name,
+      path = docFile.absolutePath,
+      sizeBytes = docFile.length(),
+      lastModifiedMs = docFile.lastModified(),
+      extension = "png",
+    )
+
+    val indexedMap = GalleryEngine.indexPhotosInBackground(
+      photos = listOf(photo),
+      cacheFile = cacheFile,
+    )
+    assertEquals(1, indexedMap.size)
+    assertTrue(cacheFile.exists())
+
+    // Clear in-memory cache and reload from disk
+    GalleryEngine.clearPhotoIndexCache()
+    val loadedFromDisk = GalleryEngine.loadIndexCacheFromDisk(cacheFile)
+    assertEquals(1, loadedFromDisk.size)
+    assertEquals("Original Contract Terms 2025", GalleryEngine.getCachedPhotoIndex(docFile)?.ocrText)
+
+    // Modify the file content & timestamp -> cached signature should invalidate and re-index
+    GalleryEngine.writeTextDocumentPng(
+      outputFile = docFile,
+      ocrText = "Updated Contract Addendum 2026",
+      imageLabels = listOf("Document"),
+      lastModifiedMs = 9_000_000L,
+    )
+    assertNull(GalleryEngine.getCachedPhotoIndex(docFile))
+
+    val reindexed = GalleryEngine.indexSinglePhoto(docFile)
+    assertEquals("Updated Contract Addendum 2026", reindexed.ocrText)
+  }
+
+  @Test
+  fun searchGallery_matchesOcrTextQrPayloadsFilenamesAndAutoTagFilters() {
+    GalleryEngine.clearPhotoIndexCache()
+    val picturesDir = File(tempRootDir, "Pictures/Scans").apply { mkdirs() }
+    val receiptFile = GalleryEngine.writeTextDocumentPng(
+      outputFile = File(picturesDir, "dinner_receipt.png"),
+      ocrText = "TRATTORIA ROMA\nTotal $48.50",
+      imageLabels = listOf("Food"),
+      lastModifiedMs = 4_000_000L,
+    )
+    val wifiQrFile = GalleryEngine.writeSolidColorPng(
+      outputFile = File(picturesDir, "guest_wifi.png"),
+      lastModifiedMs = 5_000_000L,
+    )
+
+    GalleryEngine.putCachedPhotoIndex(
+      GalleryPhotoIndexEntry(
+        path = receiptFile.absolutePath,
+        lastModifiedMs = receiptFile.lastModified(),
+        sizeBytes = receiptFile.length(),
+        ocrText = "TRATTORIA ROMA\nTotal $48.50",
+        barcodePayloads = emptyList(),
+        barcodeSummaries = emptyList(),
+        autoTags = listOf("Receipt", "Food", "Text"),
+      )
+    )
+    GalleryEngine.putCachedPhotoIndex(
+      GalleryPhotoIndexEntry(
+        path = wifiQrFile.absolutePath,
+        lastModifiedMs = wifiQrFile.lastModified(),
+        sizeBytes = wifiQrFile.length(),
+        ocrText = "",
+        barcodePayloads = listOf("WIFI:S:CafeGuest;T:WPA;P:espresso123;;"),
+        barcodeSummaries = listOf("Wi-Fi: CafeGuest (WPA)"),
+        autoTags = listOf("QR Code", "Wi-Fi"),
+      )
+    )
+
+    val rootContents = GalleryEngine.loadRootContents(rootDirectory = tempRootDir)
+    val allPhotos = GalleryEngine.collectAllGalleryPhotos(rootContents = rootContents)
+    val indexMap = GalleryEngine.getAllCachedPhotoIndices()
+
+    // 1. Search by OCR text inside image
+    val ocrSearch = GalleryEngine.searchGallery(
+      albums = rootContents.nestedAlbums,
+      directPhotos = rootContents.photos,
+      allScopePhotos = allPhotos,
+      indexMap = indexMap,
+      searchQuery = "trattoria",
+    )
+    assertEquals(1, ocrSearch.matchingPhotos.size)
+    assertEquals("dinner_receipt.png", ocrSearch.matchingPhotos.single().name)
+    assertTrue(ocrSearch.matchSnippetsByPath[receiptFile.absolutePath].orEmpty().contains("OCR:"))
+
+    // 2. Search by QR code payload
+    val qrSearch = GalleryEngine.searchGallery(
+      albums = rootContents.nestedAlbums,
+      directPhotos = rootContents.photos,
+      allScopePhotos = allPhotos,
+      indexMap = indexMap,
+      searchQuery = "CafeGuest",
+    )
+    assertEquals(1, qrSearch.matchingPhotos.size)
+    assertEquals("guest_wifi.png", qrSearch.matchingPhotos.single().name)
+    assertTrue(qrSearch.matchSnippetsByPath[wifiQrFile.absolutePath].orEmpty().contains("Code:"))
+
+    // 3. Filter by automatic tag chip alone ("Receipt")
+    val tagFilterSearch = GalleryEngine.searchGallery(
+      albums = rootContents.nestedAlbums,
+      directPhotos = rootContents.photos,
+      allScopePhotos = allPhotos,
+      indexMap = indexMap,
+      searchQuery = "",
+      selectedTag = "Receipt",
+    )
+    assertEquals(1, tagFilterSearch.matchingPhotos.size)
+    assertEquals("dinner_receipt.png", tagFilterSearch.matchingPhotos.single().name)
+
+    // 4. Available auto-tags list is ordered and contains both photos' tags
+    val availableTagNames = GalleryEngine.extractAvailableAutoTags(
+      photos = allPhotos,
+      indexMap = indexMap,
+    ).map { it.first }
+    assertTrue(availableTagNames.containsAll(listOf("Receipt", "QR Code", "Wi-Fi", "Food", "Text")))
+  }
 }

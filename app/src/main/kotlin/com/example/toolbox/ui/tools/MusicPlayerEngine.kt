@@ -57,6 +57,10 @@ import kotlinx.coroutines.withContext
 
 const val MUSIC_PLAYER_PREFS_NAME = "music_player_preferences"
 const val PREF_KEY_MUSIC_VIEW_MODE = "music_player_view_mode"
+const val PREF_KEY_MUSIC_CARDS_PER_ROW = "music_player_cards_per_row"
+const val MIN_MUSIC_CARDS_PER_ROW = 2
+const val MAX_MUSIC_CARDS_PER_ROW = 4
+const val DEFAULT_MUSIC_CARDS_PER_ROW = 2
 const val PREF_KEY_MUSIC_TAB = "music_player_selected_tab"
 const val PREF_KEY_MUSIC_TAB_ORDER = "music_player_tab_order"
 const val PREF_KEY_MUSIC_SORT_ORDER = "music_player_sort_order"
@@ -2844,6 +2848,18 @@ class MusicPlaybackSession(
   fun updateViewMode(mode: MusicViewMode) {
     viewMode = mode
     prefs?.edit()?.putString(PREF_KEY_MUSIC_VIEW_MODE, mode.name)?.apply()
+  }
+
+  // Card View Columns per Row (2..4)
+  var cardsPerRow by mutableIntStateOf(
+    (prefs?.getInt(PREF_KEY_MUSIC_CARDS_PER_ROW, DEFAULT_MUSIC_CARDS_PER_ROW) ?: DEFAULT_MUSIC_CARDS_PER_ROW)
+      .coerceIn(MIN_MUSIC_CARDS_PER_ROW, MAX_MUSIC_CARDS_PER_ROW)
+  )
+
+  fun updateCardsPerRow(count: Int) {
+    val coerced = count.coerceIn(MIN_MUSIC_CARDS_PER_ROW, MAX_MUSIC_CARDS_PER_ROW)
+    cardsPerRow = coerced
+    prefs?.edit()?.putInt(PREF_KEY_MUSIC_CARDS_PER_ROW, coerced)?.apply()
   }
 
   // Sort Order

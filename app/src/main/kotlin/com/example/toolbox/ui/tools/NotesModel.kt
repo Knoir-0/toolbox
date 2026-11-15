@@ -218,6 +218,10 @@ data class NotesHistorySnapshot(
   val labels: List<String> = emptyList(),
 )
 
+const val MIN_NOTES_GRID_COLUMNS = 2
+const val MAX_NOTES_GRID_COLUMNS = 4
+const val DEFAULT_NOTES_GRID_COLUMNS = 2
+
 /**
  * Repository interface for persisting notes, custom labels, and layout preferences.
  */
@@ -228,6 +232,8 @@ interface NotesRepository {
   fun saveLabels(labels: List<String>)
   fun isGridView(): Boolean
   fun setGridView(isGrid: Boolean)
+  fun getGridColumnsPerRow(): Int = DEFAULT_NOTES_GRID_COLUMNS
+  fun setGridColumnsPerRow(columns: Int) {}
 }
 
 /**
@@ -237,10 +243,12 @@ class InMemoryNotesRepository(
   initialNotes: List<NoteItem> = emptyList(),
   initialLabels: List<String> = emptyList(),
   initialGridView: Boolean = true,
+  initialGridColumnsPerRow: Int = DEFAULT_NOTES_GRID_COLUMNS,
 ) : NotesRepository {
   private val notes = initialNotes.toMutableList()
   private val labels = initialLabels.toMutableList()
   private var gridView = initialGridView
+  private var gridColumnsPerRow = initialGridColumnsPerRow.coerceIn(MIN_NOTES_GRID_COLUMNS, MAX_NOTES_GRID_COLUMNS)
 
   override fun loadNotes(): List<NoteItem> = notes.toList()
 
@@ -261,6 +269,12 @@ class InMemoryNotesRepository(
   override fun setGridView(isGrid: Boolean) {
     gridView = isGrid
   }
+
+  override fun getGridColumnsPerRow(): Int = gridColumnsPerRow
+
+  override fun setGridColumnsPerRow(columns: Int) {
+    gridColumnsPerRow = columns.coerceIn(MIN_NOTES_GRID_COLUMNS, MAX_NOTES_GRID_COLUMNS)
+  }
 }
 
 /**
@@ -275,6 +289,7 @@ class SharedPreferencesNotesRepository(
     const val KEY_NOTES_JSON = "notes_json"
     const val KEY_LABELS_JSON = "labels_json"
     const val KEY_IS_GRID_VIEW = "is_grid_view"
+    const val KEY_GRID_COLUMNS_PER_ROW = "grid_columns_per_row"
   }
 
   constructor(context: Context) : this(
@@ -333,6 +348,17 @@ class SharedPreferencesNotesRepository(
 
   override fun setGridView(isGrid: Boolean) {
     sharedPreferences.edit().putBoolean(KEY_IS_GRID_VIEW, isGrid).apply()
+  }
+
+  override fun getGridColumnsPerRow(): Int {
+    return sharedPreferences
+      .getInt(KEY_GRID_COLUMNS_PER_ROW, DEFAULT_NOTES_GRID_COLUMNS)
+      .coerceIn(MIN_NOTES_GRID_COLUMNS, MAX_NOTES_GRID_COLUMNS)
+  }
+
+  override fun setGridColumnsPerRow(columns: Int) {
+    val coerced = columns.coerceIn(MIN_NOTES_GRID_COLUMNS, MAX_NOTES_GRID_COLUMNS)
+    sharedPreferences.edit().putInt(KEY_GRID_COLUMNS_PER_ROW, coerced).apply()
   }
 }
 

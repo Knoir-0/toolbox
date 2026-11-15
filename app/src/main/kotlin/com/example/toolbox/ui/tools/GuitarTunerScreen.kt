@@ -889,182 +889,36 @@ fun GuitarTunerScreen(
       .testTag("guitar_tuner_screen"),
   ) {
     // Section 5.1 & 5.7: Standard Tool Header Bar with Integrated Search Toolbar
-    Surface(
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 1.dp,
-      modifier = Modifier.fillMaxWidth(),
-    ) {
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .heightIn(min = 68.dp),
-        contentAlignment = Alignment.CenterStart,
-      ) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.weight(1f),
-          ) {
-            Box(
-              modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Default.Tune,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-              )
-            }
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = "Guitar Tuner",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              val subtitleText = if (favoritePresets.isNotEmpty()) {
-                "${selectedPreset.label} (${selectedPreset.subtitle}) • ${favoritePresets.size} favorite${if (favoritePresets.size == 1) "" else "s"}"
-              } else {
-                "${selectedPreset.label} • ${selectedPreset.subtitle}"
-              }
-              Text(
-                text = subtitleText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-          }
-
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-          ) {
-            IconButton(
-              onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                isSearchActive = true
-              },
-              modifier = Modifier.testTag("toggle_search_bar_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Search,
-                contentDescription = "Search tunings",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-          }
-        }
-
-        // Animated Expanding Search Bar integrated into the Toolbar (Section 5.7)
-        androidx.compose.animation.AnimatedVisibility(
-          visible = isSearchActive,
-          enter = fadeIn(animationSpec = tween(220)) + expandHorizontally(
-            animationSpec = spring(
-              dampingRatio = Spring.DampingRatioNoBouncy,
-              stiffness = Spring.StiffnessMediumLow,
-            ),
-            expandFrom = Alignment.End,
-          ),
-          exit = fadeOut(animationSpec = tween(180)) + shrinkHorizontally(
-            animationSpec = tween(200),
-            shrinkTowards = Alignment.End,
-          ),
-          modifier = Modifier.matchParentSize(),
-        ) {
-          Surface(
-            modifier = Modifier
-              .fillMaxSize()
-              .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = {},
-              )
-              .testTag("toolbar_search_bar"),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 2.dp,
-          ) {
-            Row(
-              modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 8.dp),
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              IconButton(
-                onClick = { closeSearch() },
-                modifier = Modifier.testTag("close_search_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                  contentDescription = "Close search",
-                  tint = MaterialTheme.colorScheme.onSurface,
-                )
-              }
-
-              TextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = {
-                  Text(
-                    text = "Search tunings or notes (e.g. Drop D, DADGAD)...",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                  )
-                },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(
-                  color = MaterialTheme.colorScheme.onSurface,
-                ),
-                colors = TextFieldDefaults.colors(
-                  focusedContainerColor = Color.Transparent,
-                  unfocusedContainerColor = Color.Transparent,
-                  disabledContainerColor = Color.Transparent,
-                  focusedIndicatorColor = Color.Transparent,
-                  unfocusedIndicatorColor = Color.Transparent,
-                  disabledIndicatorColor = Color.Transparent,
-                ),
-                trailingIcon = {
-                  if (searchQuery.isNotEmpty()) {
-                    IconButton(
-                      onClick = { searchQuery = "" },
-                      modifier = Modifier.testTag("tuning_search_clear"),
-                    ) {
-                      Icon(
-                        imageVector = Icons.Default.Clear,
-                        contentDescription = "Clear search",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                      )
-                    }
-                  }
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .focusRequester(searchFocusRequester)
-                  .testTag("tuning_search_input"),
-              )
-            }
-          }
-        }
-      }
+    val subtitleText = if (favoritePresets.isNotEmpty()) {
+      "${selectedPreset.label} (${selectedPreset.subtitle}) • ${favoritePresets.size} favorite${if (favoritePresets.size == 1) "" else "s"}"
+    } else {
+      "${selectedPreset.label} • ${selectedPreset.subtitle}"
     }
+    ToolboxTopBar(
+      title = "Guitar Tuner",
+      subtext = subtitleText,
+      icon = Icons.Default.Tune,
+      searchState = ToolboxTopBarSearchState(
+        isActive = isSearchActive,
+        query = searchQuery,
+        onQueryChange = { searchQuery = it },
+        onOpenSearch = {
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          isSearchActive = true
+        },
+        onCloseSearch = { closeSearch() },
+        placeholder = "Search tunings or notes (e.g. Drop D, DADGAD)...",
+        searchContentDescription = "Search tunings",
+        closeContentDescription = "Close search",
+        clearContentDescription = "Clear search",
+        toggleButtonTestTag = "toggle_search_bar_button",
+        searchBarTestTag = "toolbar_search_bar",
+        closeButtonTestTag = "close_search_button",
+        inputTestTag = "tuning_search_input",
+        clearButtonTestTag = "tuning_search_clear",
+        onSearchImeAction = { focusManager.clearFocus() },
+      ),
+    )
 
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 

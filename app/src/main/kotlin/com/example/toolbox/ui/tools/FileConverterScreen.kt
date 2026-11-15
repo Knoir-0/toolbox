@@ -209,93 +209,32 @@ fun FileConverterScreen(
       .testTag("file_converter_screen"),
   ) {
     // Top Toolbar Header (matching DESIGN_LANGUAGE.md Section 5.1)
-    Surface(
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 1.dp,
-      modifier = Modifier.fillMaxWidth(),
-    ) {
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .heightIn(min = 68.dp),
-        contentAlignment = Alignment.CenterStart,
-      ) {
-        Row(
+    ToolboxTopBar(
+      title = "Convert",
+      subtext = if (selectedFile != null && sourceFormat != null) {
+        "${sourceFormat!!.displayName} • ${availableRoutes.size} target formats"
+      } else {
+        "Offline Native & FFmpeg converter"
+      },
+      icon = Icons.Default.SwapHoriz,
+      onNavigateBack = onNavigateBack,
+      backButtonTestTag = "action_navigate_back",
+      actions = {
+        IconButton(
+          onClick = { showCapabilityMapDialog = true },
           modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
+            .size(36.dp)
+            .testTag("open_capability_map_button"),
         ) {
-          Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            if (onNavigateBack != null) {
-              IconButton(
-                onClick = onNavigateBack,
-                modifier = Modifier
-                  .size(36.dp)
-                  .testTag("action_navigate_back"),
-              ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-              }
-            } else {
-              Box(
-                modifier = Modifier
-                  .size(36.dp)
-                  .clip(CircleShape)
-                  .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center,
-              ) {
-                Icon(
-                  imageVector = Icons.Default.SwapHoriz,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.size(20.dp),
-                )
-              }
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = "Convert",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              Text(
-                text = if (selectedFile != null && sourceFormat != null) {
-                  "${sourceFormat!!.displayName} • ${availableRoutes.size} target formats"
-                } else {
-                  "Offline Native & FFmpeg converter"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-          }
-
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(
-              onClick = { showCapabilityMapDialog = true },
-              modifier = Modifier.testTag("open_capability_map_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Hub,
-                contentDescription = "Supported Conversions Map",
-                tint = MaterialTheme.colorScheme.primary,
-              )
-            }
-          }
+          Icon(
+            imageVector = Icons.Default.Hub,
+            contentDescription = "Supported Conversions Map",
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+          )
         }
-      }
-    }
+      },
+    )
 
     val currentFile = selectedFile
     if (currentFile == null) {

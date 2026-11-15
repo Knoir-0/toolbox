@@ -1,9 +1,12 @@
 package com.example.toolbox.ui.tools
 
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
@@ -13,6 +16,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.unit.dp
 import com.example.toolbox.ui.theme.ToolboxTheme
 import junit.framework.TestCase.assertTrue
 import org.junit.Rule
@@ -263,5 +267,31 @@ class BluetoothGamepadScreenTest {
     composeTestRule.onNodeWithText("Demo Gamepad (HID Simulator)").assertIsDisplayed()
     composeTestRule.onNodeWithTag("bt_gamepad_start_demo_button").assertIsDisplayed().performClick()
     assertTrue(demoStarted)
+  }
+
+  @Test
+  fun gamepadControl_landscapeLayout_sticksJoysticksToBottom() {
+    composeTestRule.setContent {
+      ToolboxTheme {
+        Surface {
+          Box(modifier = Modifier.size(width = 800.dp, height = 400.dp)) {
+            GamepadControlContent(
+              deviceName = "Living Room TV",
+              actions = NoOpGamepadActions,
+              onDisconnect = {},
+              showToolbar = false,
+            )
+          }
+        }
+      }
+    }
+
+    val dpadBounds = composeTestRule.onNodeWithTag("bt_gamepad_dpad").fetchSemanticsNode().boundsInRoot
+    val abxyBounds = composeTestRule.onNodeWithTag("bt_gamepad_abxy").fetchSemanticsNode().boundsInRoot
+    val leftJoystickBounds = composeTestRule.onNodeWithTag("bt_gamepad_left_joystick").fetchSemanticsNode().boundsInRoot
+    val rightJoystickBounds = composeTestRule.onNodeWithTag("bt_gamepad_right_joystick").fetchSemanticsNode().boundsInRoot
+
+    assertTrue(leftJoystickBounds.bottom > dpadBounds.bottom)
+    assertTrue(rightJoystickBounds.bottom > abxyBounds.bottom)
   }
 }

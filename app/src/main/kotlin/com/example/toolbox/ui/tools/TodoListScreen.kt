@@ -734,82 +734,53 @@ fun TodoListScreen(
         .background(MaterialTheme.colorScheme.background),
     ) {
       // Top Header Bar
-      Surface(
-        color = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+      ToolboxTopBar(
+        title = "To Do",
+        subtext = "${tasks.size} active • $completedTodayCount completed today",
+        icon = Icons.Default.TaskAlt,
+        titleTestTag = "todo_screen_title",
+        actions = {
+          // Undo Button
+          IconButton(
+            onClick = { undo() },
+            enabled = canUndo,
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("todo_undo_button"),
           ) {
-            Box(
-              modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Default.TaskAlt,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(20.dp),
-              )
-            }
-            Text(
-              text = "To Do",
-              style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurface,
-              modifier = Modifier.testTag("todo_screen_title"),
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.Undo,
+              contentDescription = "Undo",
+              tint = if (canUndo) {
+                MaterialTheme.colorScheme.onSurface
+              } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+              },
+              modifier = Modifier.size(20.dp),
             )
           }
 
-          // Header Actions: Undo and Redo
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            // Undo Button
-            IconButton(
-              onClick = { undo() },
-              enabled = canUndo,
-              modifier = Modifier.testTag("todo_undo_button"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.Undo,
-                contentDescription = "Undo",
-                tint = if (canUndo) {
-                  MaterialTheme.colorScheme.onSurface
-                } else {
-                  MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                },
-              )
-            }
-
-            // Redo Button
-            IconButton(
-              onClick = { redo() },
-              enabled = canRedo,
-              modifier = Modifier.testTag("todo_redo_button"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.Redo,
-                contentDescription = "Redo",
-                tint = if (canRedo) {
-                  MaterialTheme.colorScheme.onSurface
-                } else {
-                  MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                },
-              )
-            }
+          // Redo Button
+          IconButton(
+            onClick = { redo() },
+            enabled = canRedo,
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("todo_redo_button"),
+          ) {
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.Redo,
+              contentDescription = "Redo",
+              tint = if (canRedo) {
+                MaterialTheme.colorScheme.onSurface
+              } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+              },
+              modifier = Modifier.size(20.dp),
+            )
           }
-        }
-      }
+        },
+      )
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
       // Pill Buttons Row (Tasks, Scheduled, Completed), styled like Music and Files

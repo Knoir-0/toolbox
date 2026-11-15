@@ -217,56 +217,12 @@ fun SearchScreen(
       .testTag("search_screen"),
   ) {
     // Standard 68.dp Top Header Bar
-    Surface(
-      tonalElevation = 1.dp,
-      modifier = Modifier.fillMaxWidth(),
-    ) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .heightIn(min = 68.dp)
-          .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-      ) {
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(12.dp),
-          modifier = Modifier.weight(1f),
-        ) {
-          Box(
-            modifier = Modifier
-              .size(36.dp)
-              .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center,
-          ) {
-            Icon(
-              imageVector = Icons.Default.Search,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.onPrimaryContainer,
-              modifier = Modifier.size(20.dp),
-            )
-          }
-
-          Column {
-            Text(
-              text = "Search",
-              style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-              text = statusSubtitle,
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.testTag("search_status_subtitle"),
-            )
-          }
-        }
-
+    ToolboxTopBar(
+      title = "Search",
+      subtext = statusSubtitle,
+      icon = Icons.Default.Search,
+      subtextTestTag = "search_status_subtitle",
+      actions = {
         if (searchQuery.isNotBlank() || selectedCategoryFilter != SearchCategoryFilter.ALL || selectedToolFilter != null) {
           Surface(
             shape = CircleShape,
@@ -300,8 +256,8 @@ fun SearchScreen(
             }
           }
         }
-      }
-    }
+      },
+    )
 
     // Search Input & Filter Chips Header
     Column(

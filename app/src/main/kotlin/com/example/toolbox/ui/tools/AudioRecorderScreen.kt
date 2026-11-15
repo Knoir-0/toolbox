@@ -354,174 +354,130 @@ fun AudioRecorderScreen(
       .testTag("audio_recorder_screen"),
   ) {
     // 1. Standard Tool Header / Top Bar (DESIGN_LANGUAGE.md 5.1)
-    Surface(
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 1.dp,
-      modifier = Modifier.fillMaxWidth(),
-    ) {
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .heightIn(min = 68.dp),
-        contentAlignment = Alignment.CenterStart,
-      ) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ToolboxTopBar(
+      title = "Audio Recorder",
+      subtext = if (isRecording) {
+        val srcLabel = if (activeCaptureSource == AudioCaptureSource.DEVICE_AUDIO) {
+          "Recording device audio"
+        } else {
+          "Recording"
+        }
+        "$srcLabel (${selectedFormat.shortLabel}) • $directoryDisplayPath"
+      } else {
+        "${recordings.size} recordings • ${selectedFormat.shortLabel} • $directoryDisplayPath"
+      },
+      icon = if (isRecording && activeCaptureSource == AudioCaptureSource.DEVICE_AUDIO) {
+        Icons.Default.PhoneAndroid
+      } else {
+        Icons.Default.Mic
+      },
+      badgeContainerColor = if (isRecording) {
+        MaterialTheme.colorScheme.errorContainer
+      } else {
+        MaterialTheme.colorScheme.primaryContainer
+      },
+      badgeIconTint = if (isRecording) {
+        MaterialTheme.colorScheme.error
+      } else {
+        MaterialTheme.colorScheme.primary
+      },
+      subtextColor = if (isRecording) {
+        MaterialTheme.colorScheme.error
+      } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+      },
+      actions = {
+        Box {
+          Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            modifier = Modifier
+              .clip(RoundedCornerShape(20.dp))
+              .clickable(enabled = !isRecording) { showFormatMenu = true }
+              .testTag("format_selector_button"),
           ) {
-            Box(
-              modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(
-                  if (isRecording) MaterialTheme.colorScheme.errorContainer
-                  else MaterialTheme.colorScheme.primaryContainer
-                ),
-              contentAlignment = Alignment.Center,
+            Row(
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
               Icon(
-                imageVector = if (isRecording && activeCaptureSource == AudioCaptureSource.DEVICE_AUDIO) {
-                  Icons.Default.PhoneAndroid
-                } else {
-                  Icons.Default.Mic
-                },
+                imageVector = Icons.Default.Tune,
                 contentDescription = null,
-                tint = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(15.dp),
               )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "Audio Recorder",
-                style = MaterialTheme.typography.titleLarge,
+                text = selectedFormat.shortLabel,
+                style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
               )
-              Text(
-                text = if (isRecording) {
-                  val srcLabel = if (activeCaptureSource == AudioCaptureSource.DEVICE_AUDIO) {
-                    "Recording device audio"
-                  } else {
-                    "Recording"
-                  }
-                  "$srcLabel (${selectedFormat.shortLabel}) • $directoryDisplayPath"
-                } else {
-                  "${recordings.size} recordings • ${selectedFormat.shortLabel} • $directoryDisplayPath"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+              Icon(
+                imageVector = Icons.Default.ExpandMore,
+                contentDescription = "Select audio format",
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(16.dp),
               )
             }
           }
 
-          // Trailing Action Buttons: Format selector & Folder selector
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          DropdownMenu(
+            expanded = showFormatMenu,
+            onDismissRequest = { showFormatMenu = false },
+            modifier = Modifier.testTag("format_dropdown_menu"),
           ) {
-            Box {
-              Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.secondaryContainer,
-                modifier = Modifier
-                  .clip(RoundedCornerShape(20.dp))
-                  .clickable(enabled = !isRecording) { showFormatMenu = true }
-                  .testTag("format_selector_button"),
-              ) {
-                Row(
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                  Icon(
-                    imageVector = Icons.Default.Tune,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.size(15.dp),
-                  )
-                  Text(
-                    text = selectedFormat.shortLabel,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                  )
-                  Icon(
-                    imageVector = Icons.Default.ExpandMore,
-                    contentDescription = "Select audio format",
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.size(16.dp),
-                  )
-                }
-              }
-
-              DropdownMenu(
-                expanded = showFormatMenu,
-                onDismissRequest = { showFormatMenu = false },
-                modifier = Modifier.testTag("format_dropdown_menu"),
-              ) {
-                AudioRecordingFormat.entries.forEach { format ->
-                  val isSelected = format == selectedFormat
-                  DropdownMenuItem(
-                    text = {
-                      Column {
-                        Text(
-                          text = format.displayName,
-                          fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                        )
-                        Text(
-                          text = format.description,
-                          style = MaterialTheme.typography.bodySmall,
-                          color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                      }
-                    },
-                    onClick = {
-                      updateSelectedFormat(format)
-                      showFormatMenu = false
-                    },
-                    trailingIcon = if (isSelected) {
-                      {
-                        Icon(
-                          imageVector = Icons.Default.Check,
-                          contentDescription = null,
-                          tint = MaterialTheme.colorScheme.primary,
-                        )
-                      }
-                    } else null,
-                    modifier = Modifier.testTag("format_option_${format.name}"),
-                  )
-                }
-              }
-            }
-
-            IconButton(
-              onClick = { showFolderDialog = true },
-              enabled = !isRecording,
-              modifier = Modifier.testTag("change_folder_top_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.FolderOpen,
-                contentDescription = "Change recordings folder",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            AudioRecordingFormat.entries.forEach { format ->
+              val isSelected = format == selectedFormat
+              DropdownMenuItem(
+                text = {
+                  Column {
+                    Text(
+                      text = format.displayName,
+                      fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    )
+                    Text(
+                      text = format.description,
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                },
+                onClick = {
+                  updateSelectedFormat(format)
+                  showFormatMenu = false
+                },
+                trailingIcon = if (isSelected) {
+                  {
+                    Icon(
+                      imageVector = Icons.Default.Check,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                    )
+                  }
+                } else null,
+                modifier = Modifier.testTag("format_option_${format.name}"),
               )
             }
           }
         }
-      }
-    }
+
+        IconButton(
+          onClick = { showFolderDialog = true },
+          enabled = !isRecording,
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("change_folder_top_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.FolderOpen,
+            contentDescription = "Change recordings folder",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+          )
+        }
+      },
+    )
 
     // Optional Microphone Permission Banner
     if (!hasMicPermission) {

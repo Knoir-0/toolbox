@@ -325,220 +325,74 @@ fun Obd2ScannerScreen(
       .testTag("obd2_scanner_screen"),
   ) {
     // ==================== TOP TOOLBAR WITH EXPANDING SEARCH ====================
-    Surface(
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 1.dp,
-      modifier = Modifier.fillMaxWidth(),
-    ) {
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .heightIn(min = 68.dp),
-        contentAlignment = Alignment.CenterStart,
-      ) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-          ) {
-            Box(
-              modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Default.DirectionsCar,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-              )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = "OBD2 Scanner",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              val subtitleText = if (isConnected) {
-                statusMessage
-              } else {
-                "Select a paired adapter or tap + to add one"
-              }
-              Text(
-                text = subtitleText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-          }
-
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-          ) {
-            if (isConnected) {
-              // Metric / Imperial quick toggle pill
-              Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
-                modifier = Modifier
-                  .clip(RoundedCornerShape(20.dp))
-                  .clickable {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    useImperialUnits = !useImperialUnits
-                  }
-                  .testTag("obd2_unit_toggle"),
-              ) {
-                Text(
-                  text = if (useImperialUnits) "MPH • °F" else "KM/H • °C",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Medium,
-                  color = MaterialTheme.colorScheme.onSurface,
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                )
-              }
-
-              IconButton(
-                onClick = {
-                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                  controller.disconnect()
-                },
-                modifier = Modifier.testTag("obd2_disconnect_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.LinkOff,
-                  contentDescription = "Disconnect adapter",
-                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-            }
-
-            IconButton(
-              onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                isSearchActive = true
-              },
-              modifier = Modifier.testTag("toggle_search_bar_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Search,
-                contentDescription = "Search DTC codes",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-          }
-        }
-
-        // Animated Expanding Search Bar integrated into the Toolbar (Matches Plants & Recipes)
-        androidx.compose.animation.AnimatedVisibility(
-          visible = isSearchActive,
-          enter = fadeIn(animationSpec = tween(220)) + expandHorizontally(
-            animationSpec = spring(
-              dampingRatio = Spring.DampingRatioNoBouncy,
-              stiffness = Spring.StiffnessMediumLow,
-            ),
-            expandFrom = Alignment.End,
-          ),
-          exit = fadeOut(animationSpec = tween(180)) + shrinkHorizontally(
-            animationSpec = tween(200),
-            shrinkTowards = Alignment.End,
-          ),
-          modifier = Modifier.matchParentSize(),
-        ) {
-          Surface(
-            modifier = Modifier
-              .fillMaxSize()
-              .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = {},
-              )
-              .testTag("toolbar_search_bar"),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 2.dp,
-          ) {
-            Row(
-              modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 8.dp),
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              IconButton(
-                onClick = { closeSearch() },
-                modifier = Modifier.testTag("close_search_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                  contentDescription = "Close search",
-                  tint = MaterialTheme.colorScheme.onSurface,
-                )
-              }
-
-              TextField(
-                value = dtcSearchQuery,
-                onValueChange = { dtcSearchQuery = it },
-                placeholder = {
-                  Text(
-                    text = "Search DTC codes (e.g. P0420, P0300) or symptoms...",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                  )
-                },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(
-                  color = MaterialTheme.colorScheme.onSurface,
-                ),
-                colors = TextFieldDefaults.colors(
-                  focusedContainerColor = Color.Transparent,
-                  unfocusedContainerColor = Color.Transparent,
-                  disabledContainerColor = Color.Transparent,
-                  focusedIndicatorColor = Color.Transparent,
-                  unfocusedIndicatorColor = Color.Transparent,
-                  disabledIndicatorColor = Color.Transparent,
-                ),
-                trailingIcon = {
-                  if (dtcSearchQuery.isNotEmpty()) {
-                    IconButton(
-                      onClick = { dtcSearchQuery = "" },
-                      modifier = Modifier.testTag("obd2_dtc_search_clear"),
-                    ) {
-                      Icon(
-                        imageVector = Icons.Default.Clear,
-                        contentDescription = "Clear search",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                      )
-                    }
-                  }
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .focusRequester(searchFocusRequester)
-                  .testTag("obd2_dtc_search_input"),
-              )
-            }
-          }
-        }
-      }
+    val subtitleText = if (isConnected) {
+      statusMessage
+    } else {
+      "Select a paired adapter or tap + to add one"
     }
+    ToolboxTopBar(
+      title = "OBD2 Scanner",
+      subtext = subtitleText,
+      icon = Icons.Default.DirectionsCar,
+      actions = {
+        if (isConnected) {
+          // Metric / Imperial quick toggle pill
+          Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+            modifier = Modifier
+              .clip(RoundedCornerShape(20.dp))
+              .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                useImperialUnits = !useImperialUnits
+              }
+              .testTag("obd2_unit_toggle"),
+          ) {
+            Text(
+              text = if (useImperialUnits) "MPH • °F" else "KM/H • °C",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.Medium,
+              color = MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+          }
+
+          IconButton(
+            onClick = {
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              controller.disconnect()
+            },
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("obd2_disconnect_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.LinkOff,
+              contentDescription = "Disconnect adapter",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+        }
+      },
+      searchState = ToolboxTopBarSearchState(
+        isActive = isSearchActive,
+        query = dtcSearchQuery,
+        onQueryChange = { dtcSearchQuery = it },
+        onOpenSearch = {
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          isSearchActive = true
+        },
+        onCloseSearch = { closeSearch() },
+        placeholder = "Search DTC codes (e.g. P0420, P0300) or symptoms...",
+        searchContentDescription = "Search DTC codes",
+        toggleButtonTestTag = "toggle_search_bar_button",
+        searchBarTestTag = "toolbar_search_bar",
+        closeButtonTestTag = "close_search_button",
+        inputTestTag = "obd2_dtc_search_input",
+        clearButtonTestTag = "obd2_dtc_search_clear",
+      ),
+    )
 
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 

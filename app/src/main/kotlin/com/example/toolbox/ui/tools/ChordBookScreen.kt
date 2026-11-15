@@ -366,281 +366,132 @@ fun ChordBookScreen(
       .testTag("chord_book_screen"),
   ) {
     // 1. Standard Tool Header with Integrated Tuning Search Bar (Section 5.1 & 5.7)
-    Surface(
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 1.dp,
-      modifier = Modifier.fillMaxWidth(),
-    ) {
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .heightIn(min = 68.dp),
-        contentAlignment = Alignment.CenterStart,
-      ) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
+    val capoText = if (capoFret > 0) " • Capo $capoFret" else ""
+    val favText = if (favoriteTuningsCount > 0) {
+      " • $favoriteTuningsCount favorite${if (favoriteTuningsCount == 1) "" else "s"}"
+    } else {
+      ""
+    }
+    ToolboxTopBar(
+      title = "Chord Book",
+      subtext = "${activeTuning.instrument.shortName} • ${activeTuning.displayLabel} (${activeTuning.formattedNotes(capoFret, enharmonicPref)})$capoText$favText",
+      icon = Icons.Default.LibraryMusic,
+      leadingRowModifier = Modifier
+        .clickable {
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          isSearchActive = true
+        }
+        .testTag("chord_book_tuning_button"),
+      subtextTestTag = "chord_book_header_subtext",
+      searchState = ToolboxTopBarSearchState(
+        isActive = isSearchActive,
+        query = searchQuery,
+        onQueryChange = { searchQuery = it },
+        onOpenSearch = {
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          isSearchActive = true
+        },
+        onCloseSearch = { closeSearch() },
+        placeholder = "Search tunings or notes (e.g. Drop D, DADGAD)...",
+        searchContentDescription = "Search tunings",
+        closeContentDescription = "Close search",
+        clearContentDescription = "Clear search",
+        toggleButtonTestTag = "toggle_search_bar_button",
+        searchBarTestTag = "toolbar_search_bar",
+        closeButtonTestTag = "close_search_button",
+        inputTestTag = "tuning_search_input",
+        clearButtonTestTag = "tuning_search_clear",
+        onSearchImeAction = { focusManager.clearFocus() },
+      ),
+      actions = {
+        // Segmented capsule for Dot Label Mode & Enharmonic Preference
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
         ) {
           Row(
-            modifier = Modifier
-              .weight(1f)
-              .clickable {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                isSearchActive = true
-              }
-              .testTag("chord_book_tuning_button"),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(2.dp),
           ) {
-            Box(
+            // Dot label mode segment cycles Intervals -> Notes -> Fingers
+            Surface(
+              shape = CircleShape,
+              color = MaterialTheme.colorScheme.primaryContainer,
               modifier = Modifier
-                .size(36.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-              contentAlignment = Alignment.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Default.LibraryMusic,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-              )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = "Chord Book",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              val capoText = if (capoFret > 0) " • Capo $capoFret" else ""
-              val favText = if (favoriteTuningsCount > 0) {
-                " • $favoriteTuningsCount favorite${if (favoriteTuningsCount == 1) "" else "s"}"
-              } else {
-                ""
-              }
-              Text(
-                text = "${activeTuning.instrument.shortName} • ${activeTuning.displayLabel} (${activeTuning.formattedNotes(capoFret, enharmonicPref)})$capoText$favText",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.testTag("chord_book_header_subtext"),
-              )
-            }
-          }
-
-          if (!isSearchActive) {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-              // Tuning Search button (matches Files & Music toolbar search icon placement)
-              IconButton(
-                onClick = {
-                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                  isSearchActive = true
-                },
-                modifier = Modifier.testTag("toggle_search_bar_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Search,
-                  contentDescription = "Search tunings",
-                  tint = MaterialTheme.colorScheme.onSurface,
-                )
-              }
-
-              // Segmented capsule for Dot Label Mode & Enharmonic Preference (matches Files & Music toolbar toggle)
-              Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-              ) {
-                Row(
-                  verticalAlignment = Alignment.CenterVertically,
-                  modifier = Modifier.padding(2.dp),
-                ) {
-                  // Dot label mode segment cycles Intervals -> Notes -> Fingers
-                  Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier
-                      .clip(CircleShape)
-                      .clickable {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        val next = when (dotLabelMode) {
-                          DotLabelMode.INTERVALS -> DotLabelMode.NOTES
-                          DotLabelMode.NOTES -> DotLabelMode.FINGERS
-                          DotLabelMode.FINGERS -> DotLabelMode.INTERVALS
-                        }
-                        dotLabelMode = next
-                        repository?.setDotLabelMode(next)
-                      }
-                      .testTag("chord_book_dot_label_toggle"),
-                  ) {
-                    Box(
-                      contentAlignment = Alignment.Center,
-                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    ) {
-                      Text(
-                        text = dotLabelMode.label,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                      )
-                    }
+                .clickable {
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                  val next = when (dotLabelMode) {
+                    DotLabelMode.INTERVALS -> DotLabelMode.NOTES
+                    DotLabelMode.NOTES -> DotLabelMode.FINGERS
+                    DotLabelMode.FINGERS -> DotLabelMode.INTERVALS
                   }
-
-                  // Enharmonic accidental toggle (Auto / # / b)
-                  val isCustomEnharmonic = enharmonicPref != EnharmonicPreference.AUTO
-                  Surface(
-                    shape = CircleShape,
-                    color = if (isCustomEnharmonic) {
-                      MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                      Color.Transparent
-                    },
-                    modifier = Modifier
-                      .clip(CircleShape)
-                      .clickable {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        val next = when (enharmonicPref) {
-                          EnharmonicPreference.AUTO -> EnharmonicPreference.SHARPS
-                          EnharmonicPreference.SHARPS -> EnharmonicPreference.FLATS
-                          EnharmonicPreference.FLATS -> EnharmonicPreference.AUTO
-                        }
-                        enharmonicPref = next
-                        repository?.setEnharmonicPreference(next)
-                      }
-                      .testTag("chord_book_enharmonic_toggle"),
-                  ) {
-                    Box(
-                      contentAlignment = Alignment.Center,
-                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    ) {
-                      Text(
-                        text = when (enharmonicPref) {
-                          EnharmonicPreference.AUTO -> "♯/♭"
-                          EnharmonicPreference.SHARPS -> "♯"
-                          EnharmonicPreference.FLATS -> "♭"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = if (isCustomEnharmonic) {
-                          MaterialTheme.colorScheme.onPrimaryContainer
-                        } else {
-                          MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                      )
-                    }
-                  }
+                  dotLabelMode = next
+                  repository?.setDotLabelMode(next)
                 }
-              }
-            }
-          }
-        }
-
-        // Animated Expanding Search Bar integrated into the Toolbar (Section 5.7)
-        androidx.compose.animation.AnimatedVisibility(
-          visible = isSearchActive,
-          enter = fadeIn(animationSpec = tween(220)) + expandHorizontally(
-            animationSpec = spring(
-              dampingRatio = Spring.DampingRatioNoBouncy,
-              stiffness = Spring.StiffnessMediumLow,
-            ),
-            expandFrom = Alignment.End,
-          ),
-          exit = fadeOut(animationSpec = tween(180)) + shrinkHorizontally(
-            animationSpec = tween(200),
-            shrinkTowards = Alignment.End,
-          ),
-          modifier = Modifier.matchParentSize(),
-        ) {
-          Surface(
-            modifier = Modifier
-              .fillMaxSize()
-              .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = {},
-              )
-              .testTag("toolbar_search_bar"),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 2.dp,
-          ) {
-            Row(
-              modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 8.dp),
-              verticalAlignment = Alignment.CenterVertically,
+                .testTag("chord_book_dot_label_toggle"),
             ) {
-              IconButton(
-                onClick = { closeSearch() },
-                modifier = Modifier.testTag("close_search_button"),
+              Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
               ) {
-                Icon(
-                  imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                  contentDescription = "Close search",
-                  tint = MaterialTheme.colorScheme.onSurface,
+                Text(
+                  text = dotLabelMode.label,
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
               }
+            }
 
-              TextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = {
-                  Text(
-                    text = "Search tunings or notes (e.g. Drop D, DADGAD)...",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                  )
-                },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(
-                  color = MaterialTheme.colorScheme.onSurface,
-                ),
-                colors = TextFieldDefaults.colors(
-                  focusedContainerColor = Color.Transparent,
-                  unfocusedContainerColor = Color.Transparent,
-                  disabledContainerColor = Color.Transparent,
-                  focusedIndicatorColor = Color.Transparent,
-                  unfocusedIndicatorColor = Color.Transparent,
-                  disabledIndicatorColor = Color.Transparent,
-                ),
-                trailingIcon = {
-                  if (searchQuery.isNotEmpty()) {
-                    IconButton(
-                      onClick = { searchQuery = "" },
-                      modifier = Modifier.testTag("tuning_search_clear"),
-                    ) {
-                      Icon(
-                        imageVector = Icons.Default.Clear,
-                        contentDescription = "Clear search",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                      )
-                    }
+            // Enharmonic accidental toggle (Auto / # / b)
+            val isCustomEnharmonic = enharmonicPref != EnharmonicPreference.AUTO
+            Surface(
+              shape = CircleShape,
+              color = if (isCustomEnharmonic) {
+                MaterialTheme.colorScheme.primaryContainer
+              } else {
+                Color.Transparent
+              },
+              modifier = Modifier
+                .clip(CircleShape)
+                .clickable {
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                  val next = when (enharmonicPref) {
+                    EnharmonicPreference.AUTO -> EnharmonicPreference.SHARPS
+                    EnharmonicPreference.SHARPS -> EnharmonicPreference.FLATS
+                    EnharmonicPreference.FLATS -> EnharmonicPreference.AUTO
                   }
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .focusRequester(searchFocusRequester)
-                  .testTag("tuning_search_input"),
-              )
+                  enharmonicPref = next
+                  repository?.setEnharmonicPreference(next)
+                }
+                .testTag("chord_book_enharmonic_toggle"),
+            ) {
+              Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+              ) {
+                Text(
+                  text = when (enharmonicPref) {
+                    EnharmonicPreference.AUTO -> "♯/♭"
+                    EnharmonicPreference.SHARPS -> "♯"
+                    EnharmonicPreference.FLATS -> "♭"
+                  },
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.Bold,
+                  color = if (isCustomEnharmonic) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                )
+              }
             }
           }
         }
-      }
-    }
+      },
+    )
 
     // Content Area + Tuning Search Overlay
     Box(

@@ -151,6 +151,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.zIndex
 import androidx.core.content.FileProvider
 import com.example.toolbox.ui.theme.ToolboxTheme
 import kotlinx.coroutines.Dispatchers
@@ -209,6 +210,18 @@ fun ArchiveScreen(
   // Explorer navigation & view state inside the opened archive
   var currentVirtualDir by rememberSaveable(activeArchiveFile?.absolutePath) { mutableStateOf("") }
   var viewMode by rememberSaveable { mutableStateOf(FileViewMode.LIST) }
+  var gridColumnsPerRow by rememberSaveable {
+    mutableIntStateOf(
+      if (isInspection) DEFAULT_FILES_GRID_COLUMNS else FileManagerEngine.getGridColumnsPerRow(context)
+    )
+  }
+  fun updateGridColumnsPerRow(newColumns: Int) {
+    val coerced = FileManagerEngine.coerceGridColumnsPerRow(newColumns)
+    gridColumnsPerRow = coerced
+    if (!isInspection) {
+      FileManagerEngine.setGridColumnsPerRow(context, coerced)
+    }
+  }
   var groupOption by rememberSaveable { mutableStateOf(FileGroupOption.TYPE) }
   var sortOrder by rememberSaveable { mutableStateOf(FileSortOrder.NAME_ASC) }
   var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -497,19 +510,6 @@ fun ArchiveScreen(
           onToggleViewMode = {
             viewMode = if (viewMode == FileViewMode.LIST) FileViewMode.GRID else FileViewMode.LIST
           },
-          sortOrder = sortOrder,
-          groupOption = groupOption,
-          showSortMenu = showSortMenu,
-          onOpenSortMenu = { showSortMenu = true },
-          onDismissSortMenu = { showSortMenu = false },
-          onSelectSortOrder = {
-            sortOrder = it
-            showSortMenu = false
-          },
-          onSelectGroupOption = {
-            groupOption = it
-            showSortMenu = false
-          },
           onExtractAll = {
             extractPathsTarget = emptySet()
           },
@@ -552,6 +552,22 @@ fun ArchiveScreen(
           archiveName = currentInfo.file.name,
           isAtRoot = !canGoUpInArchive,
           supportsModify = currentInfo.format.supportsMultiEntryWrite,
+          viewMode = viewMode,
+          gridColumnsPerRow = gridColumnsPerRow,
+          onGridColumnsChange = { updateGridColumnsPerRow(it) },
+          sortOrder = sortOrder,
+          groupOption = groupOption,
+          showSortMenu = showSortMenu,
+          onOpenSortMenu = { showSortMenu = true },
+          onDismissSortMenu = { showSortMenu = false },
+          onSelectSortOrder = {
+            sortOrder = it
+            showSortMenu = false
+          },
+          onSelectGroupOption = {
+            groupOption = it
+            showSortMenu = false
+          },
           onNavigateRoot = { navigateToVirtualDir("") },
           onExtractAll = { extractPathsTarget = emptySet() },
           onAddFiles = { showAddFilesDialog = true },
@@ -587,7 +603,14 @@ fun ArchiveScreen(
         Box(
           modifier = Modifier
             .weight(1f)
-            .fillMaxWidth(),
+            .fillMaxWidth()
+            .pinchToChangeColumns(
+              enabled = viewMode == FileViewMode.GRID,
+              columnsPerRow = gridColumnsPerRow,
+              minColumns = MIN_FILES_GRID_COLUMNS,
+              maxColumns = MAX_FILES_GRID_COLUMNS,
+              onColumnsChange = { updateGridColumnsPerRow(it) },
+            ),
         ) {
           if (processedEntries.isEmpty()) {
             EmptyArchiveEntriesView(
@@ -678,14 +701,16 @@ fun ArchiveScreen(
                 }
               }
               FileViewMode.GRID -> {
+                val coercedColumns = FileManagerEngine.coerceGridColumnsPerRow(gridColumnsPerRow)
+                val isCompactGrid = coercedColumns >= 5
                 LazyVerticalGrid(
-                  columns = GridCells.Adaptive(minSize = 104.dp),
+                  columns = GridCells.Fixed(coercedColumns),
                   modifier = Modifier
                     .fillMaxSize()
                     .testTag("archive_grid_view"),
                   contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 88.dp),
-                  verticalArrangement = Arrangement.spacedBy(8.dp),
-                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  verticalArrangement = Arrangement.spacedBy(if (isCompactGrid) 6.dp else 8.dp),
+                  horizontalArrangement = Arrangement.spacedBy(if (isCompactGrid) 6.dp else 8.dp),
                 ) {
                   groupedEntries.forEach { group ->
                     val isCollapsed = group.title.isNotEmpty() && group.title in collapsedGroupTitles
@@ -715,6 +740,7 @@ fun ArchiveScreen(
                       ) { item ->
                         ArchiveEntryGridItem(
                           item = item,
+                          isCompact = isCompactGrid,
                           isSelectionMode = isSelectionMode,
                           isSelected = item.archivePath in selectedArchivePaths,
                           supportsModify = currentInfo.format.supportsMultiEntryWrite,
@@ -1235,73 +1261,14 @@ private fun ArchiveInitialTopBar(
   onCreateZipClick: () -> Unit,
   onNavigateBack: (() -> Unit)? = null,
 ) {
-  Surface(
-    color = MaterialTheme.colorScheme.surface,
-    tonalElevation = 1.dp,
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .heightIn(min = 68.dp)
-        .padding(horizontal = 12.dp, vertical = 10.dp),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Row(
-        modifier = Modifier.weight(1f),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        if (onNavigateBack != null) {
-          IconButton(
-            onClick = onNavigateBack,
-            modifier = Modifier
-              .size(36.dp)
-              .testTag("action_navigate_back"),
-          ) {
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-              contentDescription = "Back",
-              tint = MaterialTheme.colorScheme.onSurface,
-            )
-          }
-        } else {
-          Box(
-            modifier = Modifier
-              .size(36.dp)
-              .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center,
-          ) {
-            Icon(
-              imageVector = Icons.Default.FolderZip,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(20.dp),
-            )
-          }
-        }
-
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = "Archives",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          Text(
-            text = "Tap + to open or zip files",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-      }
-
+  ToolboxTopBar(
+    title = "Archives",
+    subtext = "Tap + to open or zip files",
+    icon = Icons.Default.FolderZip,
+    onNavigateBack = onNavigateBack,
+    backContentDescription = "Back",
+    backButtonTestTag = "action_navigate_back",
+    actions = {
       TextButton(
         onClick = onCreateZipClick,
         shape = RoundedCornerShape(12.dp),
@@ -1315,8 +1282,8 @@ private fun ArchiveInitialTopBar(
         Spacer(modifier = Modifier.width(6.dp))
         Text("New Zip")
       }
-    }
-  }
+    },
+  )
 }
 
 @Composable
@@ -1437,13 +1404,6 @@ private fun ArchiveExplorerHeader(
   onSearchQueryChange: (String) -> Unit,
   viewMode: FileViewMode,
   onToggleViewMode: () -> Unit,
-  sortOrder: FileSortOrder,
-  groupOption: FileGroupOption,
-  showSortMenu: Boolean,
-  onOpenSortMenu: () -> Unit,
-  onDismissSortMenu: () -> Unit,
-  onSelectSortOrder: (FileSortOrder) -> Unit,
-  onSelectGroupOption: (FileGroupOption) -> Unit,
   onExtractAll: () -> Unit,
   onCloseArchive: () -> Unit,
   isSelectionMode: Boolean,
@@ -1455,497 +1415,181 @@ private fun ArchiveExplorerHeader(
   onBulkInfo: () -> Unit,
   onBulkDelete: () -> Unit,
 ) {
-  val focusRequester = remember { FocusRequester() }
+  ToolboxTopBar(
+    title = title,
+    subtext = subtext,
+    icon = Icons.Default.FolderZip,
+    onNavigateBack = when {
+      canNavigateUp -> onNavigateUp
+      onNavigateBack != null -> onNavigateBack
+      else -> null
+    },
+    backContentDescription = if (canNavigateUp) "Up" else "Back",
+    backButtonTestTag = if (canNavigateUp) "action_navigate_up" else "action_navigate_back",
+    searchState = ToolboxTopBarSearchState(
+      isActive = isSearchActive,
+      query = searchQuery,
+      onQueryChange = onSearchQueryChange,
+      onOpenSearch = onToggleSearch,
+      onCloseSearch = onToggleSearch,
+      placeholder = "Search inside archive...",
+      closeContentDescription = "Close Search",
+      toggleButtonTestTag = "action_toggle_search",
+      closeButtonTestTag = "action_close_search",
+      inputTestTag = "archive_search_input",
+    ),
+    selectionState = if (isSelectionMode) {
+      ToolboxTopBarSelectionState(
+        selectedCount = selectedCount,
+        totalCount = totalCount,
+        onToggleSelectAll = onToggleSelectAll,
+        onCloseSelection = onCloseSelection,
+        actions = {
+          var showOverflowMenu by remember { mutableStateOf(false) }
+          val hasSelection = selectedCount > 0
 
-  LaunchedEffect(isSearchActive) {
-    if (isSearchActive) {
-      try {
-        focusRequester.requestFocus()
-      } catch (_: Exception) {}
-    }
-  }
-
-  Surface(
-    color = MaterialTheme.colorScheme.surface,
-    tonalElevation = 1.dp,
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    Box(
-      modifier = Modifier
-        .fillMaxWidth()
-        .heightIn(min = 68.dp),
-      contentAlignment = Alignment.CenterStart,
-    ) {
-      if (isSelectionMode) {
-        // Multi-Selection Header Toolbar (Matching FilesHeader)
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 10.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Row(
-            modifier = Modifier.weight(1f, fill = false),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-          ) {
-            IconButton(
-              onClick = onCloseSelection,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("action_close_selection"),
-            ) {
-              Icon(Icons.Default.Close, contentDescription = "Exit selection")
-            }
-
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(onClick = onToggleSelectAll)
-                .padding(horizontal = 4.dp, vertical = 4.dp)
-                .testTag("action_select_all_checkbox"),
-            ) {
-              Checkbox(
-                checked = totalCount > 0 && selectedCount == totalCount,
-                onCheckedChange = { onToggleSelectAll() },
-                colors = CheckboxDefaults.colors(
-                  checkedColor = MaterialTheme.colorScheme.primary,
-                ),
-                modifier = Modifier.size(32.dp),
-              )
-              Spacer(modifier = Modifier.width(4.dp))
-              Text(
-                text = "$selectedCount selected",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-          }
-
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-          ) {
-            var showOverflowMenu by remember { mutableStateOf(false) }
-            val hasSelection = selectedCount > 0
-
-            IconButton(
-              onClick = onBulkExtract,
-              enabled = hasSelection,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("action_bulk_extract"),
-            ) {
-              Icon(
-                Icons.Default.Unarchive,
-                contentDescription = "Extract selected",
-                tint = if (hasSelection) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                modifier = Modifier.size(20.dp),
-              )
-            }
-
-            IconButton(
-              onClick = onBulkInfo,
-              enabled = hasSelection,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("action_bulk_info"),
-            ) {
-              Icon(
-                Icons.Default.Info,
-                contentDescription = "Info",
-                tint = if (hasSelection) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                modifier = Modifier.size(20.dp),
-              )
-            }
-
-            IconButton(
-              onClick = onBulkDelete,
-              enabled = hasSelection,
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("action_bulk_delete"),
-            ) {
-              Icon(
-                Icons.Default.Delete,
-                contentDescription = "Delete",
-                tint = if (hasSelection) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.error.copy(alpha = 0.38f),
-                modifier = Modifier.size(20.dp),
-              )
-            }
-
-            Box {
-              IconButton(
-                onClick = { showOverflowMenu = true },
-                modifier = Modifier
-                  .size(36.dp)
-                  .testTag("action_selection_overflow"),
-              ) {
-                Icon(
-                  Icons.Default.MoreVert,
-                  contentDescription = "More actions",
-                  modifier = Modifier.size(20.dp),
-                )
-              }
-
-              DropdownMenu(
-                expanded = showOverflowMenu,
-                onDismissRequest = { showOverflowMenu = false },
-              ) {
-                DropdownMenuItem(
-                  text = { Text("Extract selected…") },
-                  leadingIcon = { Icon(Icons.Default.Unarchive, contentDescription = null) },
-                  enabled = hasSelection,
-                  onClick = {
-                    showOverflowMenu = false
-                    onBulkExtract()
-                  },
-                )
-                DropdownMenuItem(
-                  text = { Text("Info") },
-                  leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
-                  enabled = hasSelection,
-                  onClick = {
-                    showOverflowMenu = false
-                    onBulkInfo()
-                  },
-                )
-                DropdownMenuItem(
-                  text = { Text("Delete from archive", color = MaterialTheme.colorScheme.error) },
-                  leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-                  enabled = hasSelection,
-                  onClick = {
-                    showOverflowMenu = false
-                    onBulkDelete()
-                  },
-                )
-                HorizontalDivider()
-                DropdownMenuItem(
-                  text = { Text(if (selectedCount == totalCount && totalCount > 0) "Deselect all" else "Select all") },
-                  leadingIcon = { Icon(Icons.Default.SelectAll, contentDescription = null) },
-                  onClick = {
-                    showOverflowMenu = false
-                    onToggleSelectAll()
-                  },
-                )
-                DropdownMenuItem(
-                  text = { Text("Exit selection") },
-                  leadingIcon = { Icon(Icons.Default.Close, contentDescription = null) },
-                  onClick = {
-                    showOverflowMenu = false
-                    onCloseSelection()
-                  },
-                )
-              }
-            }
-          }
-        }
-      } else {
-        // Standard Explorer Header Toolbar
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            when {
-              canNavigateUp -> {
-                IconButton(
-                  onClick = onNavigateUp,
-                  modifier = Modifier
-                    .size(36.dp)
-                    .testTag("action_navigate_up"),
-                ) {
-                  Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Up")
-                }
-              }
-              onNavigateBack != null -> {
-                IconButton(
-                  onClick = onNavigateBack,
-                  modifier = Modifier
-                    .size(36.dp)
-                    .testTag("action_navigate_back"),
-                ) {
-                  Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                }
-              }
-              else -> {
-                Box(
-                  modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                  contentAlignment = Alignment.Center,
-                ) {
-                  Icon(
-                    Icons.Default.FolderZip,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp),
-                  )
-                }
-              }
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              Text(
-                text = subtext,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-          }
-
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-          ) {
-            IconButton(onClick = onToggleSearch, modifier = Modifier.testTag("action_toggle_search")) {
-              Icon(Icons.Default.Search, contentDescription = "Search")
-            }
-
-            ViewModeSegmentedToggle(
-              isListView = viewMode == FileViewMode.LIST,
-              onSelectListView = { if (viewMode != FileViewMode.LIST) onToggleViewMode() },
-              onSelectGridView = { if (viewMode == FileViewMode.LIST) onToggleViewMode() },
-              onToggle = onToggleViewMode,
-              toggleTestTag = "action_toggle_view_mode",
-              listTestTag = "archive_view_mode_list",
-              gridTestTag = "archive_view_mode_grid",
-              listContentDescription = "List view",
-              gridContentDescription = "Grid view",
-            )
-
-            Box {
-              IconButton(onClick = onOpenSortMenu, modifier = Modifier.testTag("action_sort_menu")) {
-                Icon(Icons.Default.Tune, contentDescription = "Sort and group options")
-              }
-              DropdownMenu(
-                expanded = showSortMenu,
-                onDismissRequest = onDismissSortMenu,
-                modifier = Modifier
-                  .widthIn(min = 320.dp, max = 390.dp)
-                  .testTag("sort_and_group_menu"),
-              ) {
-                Row(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .height(IntrinsicSize.Min)
-                    .padding(vertical = 4.dp),
-                ) {
-                  // Left panel: GROUP BY
-                  Column(
-                    modifier = Modifier
-                      .weight(1f)
-                      .fillMaxHeight(),
-                  ) {
-                    Text(
-                      text = "GROUP BY",
-                      style = MaterialTheme.typography.labelSmall,
-                      fontWeight = FontWeight.Bold,
-                      color = MaterialTheme.colorScheme.primary,
-                      modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                    )
-                    FileGroupOption.entries.forEach { option ->
-                      DropdownMenuItem(
-                        text = {
-                          Text(
-                            text = option.displayName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (option == groupOption) FontWeight.Bold else FontWeight.Normal,
-                            color = if (option == groupOption) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                          )
-                        },
-                        trailingIcon = if (option == groupOption) {
-                          {
-                            Icon(
-                              imageVector = Icons.Default.Check,
-                              contentDescription = null,
-                              tint = MaterialTheme.colorScheme.primary,
-                              modifier = Modifier.size(18.dp),
-                            )
-                          }
-                        } else null,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                        onClick = { onSelectGroupOption(option) },
-                        modifier = Modifier.testTag("group_option_${option.name.lowercase()}"),
-                      )
-                    }
-                  }
-
-                  VerticalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.padding(vertical = 6.dp),
-                  )
-
-                  // Right panel: SORT BY
-                  Column(
-                    modifier = Modifier
-                      .weight(1f)
-                      .fillMaxHeight(),
-                  ) {
-                    Text(
-                      text = "SORT BY",
-                      style = MaterialTheme.typography.labelSmall,
-                      fontWeight = FontWeight.Bold,
-                      color = MaterialTheme.colorScheme.primary,
-                      modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                    )
-                    FileSortOrder.entries.forEach { order ->
-                      DropdownMenuItem(
-                        text = {
-                          Text(
-                            text = order.displayName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (order == sortOrder) FontWeight.Bold else FontWeight.Normal,
-                            color = if (order == sortOrder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                          )
-                        },
-                        trailingIcon = if (order == sortOrder) {
-                          {
-                            Icon(
-                              imageVector = Icons.Default.Check,
-                              contentDescription = null,
-                              tint = MaterialTheme.colorScheme.primary,
-                              modifier = Modifier.size(18.dp),
-                            )
-                          }
-                        } else null,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                        onClick = { onSelectSortOrder(order) },
-                        modifier = Modifier.testTag("sort_order_${order.name.lowercase()}"),
-                      )
-                    }
-                  }
-                }
-              }
-            }
-
-            IconButton(
-              onClick = onExtractAll,
-              modifier = Modifier.testTag("action_extract_all"),
-            ) {
-              Icon(Icons.Default.Unarchive, contentDescription = "Extract All")
-            }
-
-            IconButton(
-              onClick = onCloseArchive,
-              modifier = Modifier.testTag("action_close_archive"),
-            ) {
-              Icon(Icons.Default.Close, contentDescription = "Close Archive")
-            }
-          }
-        }
-      }
-
-      // Animated Expanding Search Bar (Matching FilesHeader)
-      AnimatedVisibility(
-        visible = isSearchActive && !isSelectionMode,
-        enter = fadeIn(animationSpec = tween(220)) + expandHorizontally(
-          animationSpec = spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = Spring.StiffnessMediumLow,
-          ),
-          expandFrom = Alignment.End,
-        ),
-        exit = fadeOut(animationSpec = tween(180)) + shrinkHorizontally(
-          animationSpec = tween(200),
-          shrinkTowards = Alignment.End,
-        ),
-        modifier = Modifier.matchParentSize(),
-      ) {
-        Surface(
-          modifier = Modifier
-            .fillMaxSize()
-            .clickable(
-              interactionSource = remember { MutableInteractionSource() },
-              indication = null,
-              onClick = {},
-            ),
-          color = MaterialTheme.colorScheme.surface,
-          tonalElevation = 2.dp,
-        ) {
-          Row(
+          IconButton(
+            onClick = onBulkExtract,
+            enabled = hasSelection,
             modifier = Modifier
-              .fillMaxSize()
-              .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+              .size(36.dp)
+              .testTag("action_bulk_extract"),
           ) {
+            Icon(
+              Icons.Default.Unarchive,
+              contentDescription = "Extract selected",
+              tint = if (hasSelection) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          IconButton(
+            onClick = onBulkInfo,
+            enabled = hasSelection,
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("action_bulk_info"),
+          ) {
+            Icon(
+              Icons.Default.Info,
+              contentDescription = "Info",
+              tint = if (hasSelection) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          IconButton(
+            onClick = onBulkDelete,
+            enabled = hasSelection,
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("action_bulk_delete"),
+          ) {
+            Icon(
+              Icons.Default.Delete,
+              contentDescription = "Delete",
+              tint = if (hasSelection) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.error.copy(alpha = 0.38f),
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          Box {
             IconButton(
-              onClick = onToggleSearch,
-              modifier = Modifier.testTag("action_close_search"),
+              onClick = { showOverflowMenu = true },
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("action_selection_overflow"),
             ) {
               Icon(
-                Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Close Search",
-                tint = MaterialTheme.colorScheme.onSurface,
+                Icons.Default.MoreVert,
+                contentDescription = "More actions",
+                modifier = Modifier.size(20.dp),
               )
             }
 
-            TextField(
-              value = searchQuery,
-              onValueChange = onSearchQueryChange,
-              placeholder = {
-                Text(
-                  "Search inside archive...",
-                  style = MaterialTheme.typography.bodyLarge,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              },
-              singleLine = true,
-              textStyle = MaterialTheme.typography.bodyLarge.copy(
-                color = MaterialTheme.colorScheme.onSurface,
-              ),
-              colors = TextFieldDefaults.colors(
-                focusedContainerColor = Color.Transparent,
-                unfocusedContainerColor = Color.Transparent,
-                disabledContainerColor = Color.Transparent,
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-                disabledIndicatorColor = Color.Transparent,
-              ),
-              trailingIcon = {
-                if (searchQuery.isNotEmpty()) {
-                  IconButton(onClick = { onSearchQueryChange("") }) {
-                    Icon(
-                      Icons.Default.Clear,
-                      contentDescription = "Clear search",
-                      tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                  }
-                }
-              },
-              modifier = Modifier
-                .fillMaxWidth()
-                .focusRequester(focusRequester)
-                .testTag("archive_search_input"),
-            )
+            DropdownMenu(
+              expanded = showOverflowMenu,
+              onDismissRequest = { showOverflowMenu = false },
+            ) {
+              DropdownMenuItem(
+                text = { Text("Extract selected…") },
+                leadingIcon = { Icon(Icons.Default.Unarchive, contentDescription = null) },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkExtract()
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Info") },
+                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkInfo()
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Delete from archive", color = MaterialTheme.colorScheme.error) },
+                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkDelete()
+                },
+              )
+              HorizontalDivider()
+              DropdownMenuItem(
+                text = { Text(if (selectedCount == totalCount && totalCount > 0) "Deselect all" else "Select all") },
+                leadingIcon = { Icon(Icons.Default.SelectAll, contentDescription = null) },
+                onClick = {
+                  showOverflowMenu = false
+                  onToggleSelectAll()
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Exit selection") },
+                leadingIcon = { Icon(Icons.Default.Close, contentDescription = null) },
+                onClick = {
+                  showOverflowMenu = false
+                  onCloseSelection()
+                },
+              )
+            }
           }
-        }
+        },
+      )
+    } else {
+      null
+    },
+    actions = {
+      ViewModeSegmentedToggle(
+        isListView = viewMode == FileViewMode.LIST,
+        onSelectListView = { if (viewMode != FileViewMode.LIST) onToggleViewMode() },
+        onSelectGridView = { if (viewMode == FileViewMode.LIST) onToggleViewMode() },
+        onToggle = onToggleViewMode,
+        toggleTestTag = "action_toggle_view_mode",
+        listTestTag = "archive_view_mode_list",
+        gridTestTag = "archive_view_mode_grid",
+        listContentDescription = "List view",
+        gridContentDescription = "Grid view",
+      )
+
+      IconButton(
+        onClick = onExtractAll,
+        modifier = Modifier.testTag("action_extract_all"),
+      ) {
+        Icon(Icons.Default.Unarchive, contentDescription = "Extract All")
       }
-    }
-  }
+
+      IconButton(
+        onClick = onCloseArchive,
+        modifier = Modifier.testTag("action_close_archive"),
+      ) {
+        Icon(Icons.Default.Close, contentDescription = "Close Archive")
+      }
+    },
+  )
 }
 
 @Composable
@@ -1953,109 +1597,277 @@ private fun ArchiveActionPillRow(
   archiveName: String,
   isAtRoot: Boolean,
   supportsModify: Boolean,
+  viewMode: FileViewMode = FileViewMode.LIST,
+  gridColumnsPerRow: Int = DEFAULT_FILES_GRID_COLUMNS,
+  onGridColumnsChange: (Int) -> Unit = {},
+  sortOrder: FileSortOrder = FileSortOrder.NAME_ASC,
+  groupOption: FileGroupOption = FileGroupOption.TYPE,
+  showSortMenu: Boolean = false,
+  onOpenSortMenu: () -> Unit = {},
+  onDismissSortMenu: () -> Unit = {},
+  onSelectSortOrder: (FileSortOrder) -> Unit = {},
+  onSelectGroupOption: (FileGroupOption) -> Unit = {},
   onNavigateRoot: () -> Unit,
   onExtractAll: () -> Unit,
   onAddFiles: () -> Unit,
   onNewZip: () -> Unit,
   onShowArchiveInfo: () -> Unit,
 ) {
-  Row(
+  Box(
     modifier = Modifier
       .fillMaxWidth()
-      .horizontalScroll(rememberScrollState())
-      .padding(horizontal = 12.dp, vertical = 6.dp),
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-    verticalAlignment = Alignment.CenterVertically,
+      .testTag("archive_pill_bar"),
   ) {
-    FilterChip(
-      selected = isAtRoot,
-      onClick = onNavigateRoot,
-      shape = RoundedCornerShape(20.dp),
-      leadingIcon = {
-        Icon(
-          imageVector = Icons.Default.FolderZip,
-          contentDescription = null,
-          modifier = Modifier.size(16.dp),
-        )
-      },
-      label = {
-        Text(
-          text = archiveName,
-          fontSize = 13.sp,
-          fontWeight = if (isAtRoot) FontWeight.SemiBold else FontWeight.Normal,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      },
-      colors = FilterChipDefaults.filterChipColors(
-        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-      ),
-      modifier = Modifier.testTag("chip_archive_root"),
-    )
-
-    FilterChip(
-      selected = false,
-      onClick = onExtractAll,
-      shape = RoundedCornerShape(20.dp),
-      leadingIcon = {
-        Icon(
-          imageVector = Icons.Default.Unarchive,
-          contentDescription = null,
-          modifier = Modifier.size(16.dp),
-        )
-      },
-      label = { Text("Extract All", fontSize = 13.sp) },
-      modifier = Modifier.testTag("chip_extract_all"),
-    )
-
-    if (supportsModify) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .fadingPillRowUnderFloatingControls(hasColumnsButton = viewMode == FileViewMode.GRID)
+        .horizontalScroll(rememberScrollState())
+        .padding(
+          start = 12.dp,
+          end = if (viewMode == FileViewMode.GRID) 96.dp else 56.dp,
+          top = 6.dp,
+          bottom = 6.dp,
+        ),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
       FilterChip(
-        selected = false,
-        onClick = onAddFiles,
+        selected = isAtRoot,
+        onClick = onNavigateRoot,
         shape = RoundedCornerShape(20.dp),
         leadingIcon = {
           Icon(
-            imageVector = Icons.Default.Add,
+            imageVector = Icons.Default.FolderZip,
             contentDescription = null,
             modifier = Modifier.size(16.dp),
           )
         },
-        label = { Text("Add Files", fontSize = 13.sp) },
-        modifier = Modifier.testTag("chip_add_to_archive"),
+        label = {
+          Text(
+            text = archiveName,
+            fontSize = 13.sp,
+            fontWeight = if (isAtRoot) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        },
+        colors = FilterChipDefaults.filterChipColors(
+          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+          selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+        ),
+        modifier = Modifier.testTag("chip_archive_root"),
+      )
+
+      FilterChip(
+        selected = false,
+        onClick = onExtractAll,
+        shape = RoundedCornerShape(20.dp),
+        leadingIcon = {
+          Icon(
+            imageVector = Icons.Default.Unarchive,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+        },
+        label = { Text("Extract All", fontSize = 13.sp) },
+        modifier = Modifier.testTag("chip_extract_all"),
+      )
+
+      if (supportsModify) {
+        FilterChip(
+          selected = false,
+          onClick = onAddFiles,
+          shape = RoundedCornerShape(20.dp),
+          leadingIcon = {
+            Icon(
+              imageVector = Icons.Default.Add,
+              contentDescription = null,
+              modifier = Modifier.size(16.dp),
+            )
+          },
+          label = { Text("Add Files", fontSize = 13.sp) },
+          modifier = Modifier.testTag("chip_add_to_archive"),
+        )
+      }
+
+      FilterChip(
+        selected = false,
+        onClick = onNewZip,
+        shape = RoundedCornerShape(20.dp),
+        leadingIcon = {
+          Icon(
+            imageVector = Icons.Default.CreateNewFolder,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+        },
+        label = { Text("New Zip", fontSize = 13.sp) },
+        modifier = Modifier.testTag("chip_new_zip"),
+      )
+
+      FilterChip(
+        selected = false,
+        onClick = onShowArchiveInfo,
+        shape = RoundedCornerShape(20.dp),
+        leadingIcon = {
+          Icon(
+            imageVector = Icons.Default.Info,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+        },
+        label = { Text("Info", fontSize = 13.sp) },
+        modifier = Modifier.testTag("chip_archive_info"),
       )
     }
 
-    FilterChip(
-      selected = false,
-      onClick = onNewZip,
-      shape = RoundedCornerShape(20.dp),
-      leadingIcon = {
-        Icon(
-          imageVector = Icons.Default.CreateNewFolder,
-          contentDescription = null,
-          modifier = Modifier.size(16.dp),
+    // Pinned floating [# per row] and [Sort/Group] buttons on the right edge of the pill bar
+    Row(
+      modifier = Modifier
+        .align(Alignment.CenterEnd)
+        .pillBarFloatingControlsBackdrop(backgroundColor = MaterialTheme.colorScheme.background)
+        .padding(end = 12.dp)
+        .zIndex(10f),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      if (viewMode == FileViewMode.GRID) {
+        ToolboxFloatingColumnsButton(
+          columnsPerRow = gridColumnsPerRow,
+          minColumns = MIN_FILES_GRID_COLUMNS,
+          maxColumns = MAX_FILES_GRID_COLUMNS,
+          onColumnsChange = onGridColumnsChange,
+          buttonTestTag = "archive_columns_per_row_button",
+          countTestTag = "archive_columns_per_row_count",
+          contentDescription = "$gridColumnsPerRow items per row",
         )
-      },
-      label = { Text("New Zip", fontSize = 13.sp) },
-      modifier = Modifier.testTag("chip_new_zip"),
-    )
+      }
 
-    FilterChip(
-      selected = false,
-      onClick = onShowArchiveInfo,
-      shape = RoundedCornerShape(20.dp),
-      leadingIcon = {
-        Icon(
-          imageVector = Icons.Default.Info,
-          contentDescription = null,
-          modifier = Modifier.size(16.dp),
-        )
-      },
-      label = { Text("Info", fontSize = 13.sp) },
-      modifier = Modifier.testTag("chip_archive_info"),
-    )
+      Box {
+        Surface(
+          onClick = onOpenSortMenu,
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surfaceContainerHigh,
+          tonalElevation = 3.dp,
+          shadowElevation = 4.dp,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+          modifier = Modifier
+            .size(34.dp)
+            .testTag("action_sort_menu"),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = Icons.Default.Tune,
+              contentDescription = "Sort and group options",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(18.dp),
+            )
+          }
+        }
+
+        DropdownMenu(
+          expanded = showSortMenu,
+          onDismissRequest = onDismissSortMenu,
+          modifier = Modifier
+            .widthIn(min = 320.dp, max = 390.dp)
+            .testTag("sort_and_group_menu"),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .height(IntrinsicSize.Min)
+              .padding(vertical = 4.dp),
+          ) {
+            // Left panel: GROUP BY
+            Column(
+              modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+            ) {
+              Text(
+                text = "GROUP BY",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+              )
+              FileGroupOption.entries.forEach { option ->
+                DropdownMenuItem(
+                  text = {
+                    Text(
+                      text = option.displayName,
+                      style = MaterialTheme.typography.bodyMedium,
+                      fontWeight = if (option == groupOption) FontWeight.Bold else FontWeight.Normal,
+                      color = if (option == groupOption) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    )
+                  },
+                  trailingIcon = if (option == groupOption) {
+                    {
+                      Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                      )
+                    }
+                  } else null,
+                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                  onClick = { onSelectGroupOption(option) },
+                  modifier = Modifier.testTag("group_option_${option.name.lowercase()}"),
+                )
+              }
+            }
+
+            VerticalDivider(
+              color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+              modifier = Modifier.padding(vertical = 6.dp),
+            )
+
+            // Right panel: SORT BY
+            Column(
+              modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+            ) {
+              Text(
+                text = "SORT BY",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+              )
+              FileSortOrder.entries.forEach { order ->
+                DropdownMenuItem(
+                  text = {
+                    Text(
+                      text = order.displayName,
+                      style = MaterialTheme.typography.bodyMedium,
+                      fontWeight = if (order == sortOrder) FontWeight.Bold else FontWeight.Normal,
+                      color = if (order == sortOrder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    )
+                  },
+                  trailingIcon = if (order == sortOrder) {
+                    {
+                      Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                      )
+                    }
+                  } else null,
+                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                  onClick = { onSelectSortOrder(order) },
+                  modifier = Modifier.testTag("sort_order_${order.name.lowercase()}"),
+                )
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }
 
@@ -2399,6 +2211,7 @@ private fun ArchiveEntryListItem(
 @Composable
 private fun ArchiveEntryGridItem(
   item: ArchiveEntryItem,
+  isCompact: Boolean = false,
   isSelectionMode: Boolean,
   isSelected: Boolean,
   supportsModify: Boolean,
@@ -2415,6 +2228,7 @@ private fun ArchiveEntryGridItem(
   onDelete: () -> Unit,
 ) {
   var showMenu by remember { mutableStateOf(false) }
+  val iconBoxSize = if (isCompact) 32.dp else 44.dp
 
   Card(
     modifier = Modifier
@@ -2431,7 +2245,7 @@ private fun ArchiveEntryGridItem(
         onLongClick = onLongClick,
       )
       .testTag("archive_grid_item_${item.name}"),
-    shape = RoundedCornerShape(14.dp),
+    shape = RoundedCornerShape(if (isCompact) 10.dp else 14.dp),
     colors = CardDefaults.cardColors(
       containerColor = if (isSelected) {
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
@@ -2447,13 +2261,13 @@ private fun ArchiveEntryGridItem(
       Column(
         modifier = Modifier
           .fillMaxSize()
-          .padding(8.dp),
+          .padding(if (isCompact) 4.dp else 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
       ) {
         if (isSelectionMode) {
           Box(
-            modifier = Modifier.size(44.dp),
+            modifier = Modifier.size(iconBoxSize),
             contentAlignment = Alignment.Center,
           ) {
             Checkbox(
@@ -2465,29 +2279,31 @@ private fun ArchiveEntryGridItem(
             )
           }
         } else {
-          ArchiveEntryIconBox(item = item, size = 44.dp)
+          ArchiveEntryIconBox(item = item, size = iconBoxSize)
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(if (isCompact) 4.dp else 8.dp))
 
         Text(
           text = item.name,
-          style = MaterialTheme.typography.bodyMedium,
+          style = if (isCompact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodyMedium,
           fontWeight = FontWeight.Medium,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
 
-        Text(
-          text = if (item.isDirectory) {
-            "${item.childCount ?: 0} items • ${FileManagerEngine.formatFileSize(item.sizeBytes)}"
-          } else {
-            FileManagerEngine.formatFileSize(item.sizeBytes)
-          },
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          maxLines = 1,
-        )
+        if (!isCompact) {
+          Text(
+            text = if (item.isDirectory) {
+              "${item.childCount ?: 0} items • ${FileManagerEngine.formatFileSize(item.sizeBytes)}"
+            } else {
+              FileManagerEngine.formatFileSize(item.sizeBytes)
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+          )
+        }
       }
 
       if (!isSelectionMode) {

@@ -74,11 +74,13 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FormatColorReset
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NewLabel
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.RestoreFromTrash
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.outlined.PushPin
@@ -89,6 +91,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
@@ -111,6 +115,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -234,6 +239,14 @@ fun NotesScreen(
   var notes by remember { mutableStateOf(repo.loadNotes()) }
   var savedLabels by remember { mutableStateOf(repo.loadLabels()) }
   var isGridView by remember { mutableStateOf(repo.isGridView()) }
+  var gridColumnsPerRow by remember { mutableIntStateOf(repo.getGridColumnsPerRow()) }
+
+  fun updateGridColumnsPerRow(columns: Int) {
+    val coerced = columns.coerceIn(MIN_NOTES_GRID_COLUMNS, MAX_NOTES_GRID_COLUMNS)
+    gridColumnsPerRow = coerced
+    repo.setGridColumnsPerRow(coerced)
+    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+  }
 
   var undoStack by remember { mutableStateOf(listOf<NotesHistorySnapshot>()) }
   var redoStack by remember { mutableStateOf(listOf<NotesHistorySnapshot>()) }
@@ -275,7 +288,7 @@ fun NotesScreen(
   var initialDragSnapshot by remember { mutableStateOf<NotesHistorySnapshot?>(null) }
   var autoScrollSpeedPx by remember { mutableFloatStateOf(0f) }
 
-  LaunchedEffect(isGridView, activeFilter) {
+  LaunchedEffect(isGridView, gridColumnsPerRow, activeFilter) {
     cardBounds.clear()
   }
 
@@ -459,7 +472,6 @@ fun NotesScreen(
             isGridView = nextMode
             repo.setGridView(nextMode)
           },
-          onOpenLabelsDialog = { showManageLabelsDialog = true },
           onUndo = ::undo,
           onRedo = ::redo,
         )
@@ -479,12 +491,15 @@ fun NotesScreen(
         )
       }
 
-      // 3. Category & Label Filter Chips Row
+      // 3. Category & Label Filter Chips Row + Pinned Floating [# per row] + [Manage Labels] Buttons
       NotesFilterChipsRow(
         activeFilter = activeFilter,
         labels = allLabels,
         archivedCount = archivedNotesCount,
         trashedCount = trashedNotesCount,
+        isGridView = isGridView,
+        gridColumnsPerRow = gridColumnsPerRow,
+        onGridColumnsPerRowChange = { updateGridColumnsPerRow(it) },
         onSelectFilter = { filter ->
           activeFilter = filter
           selectedNoteIds = emptySet()
@@ -540,7 +555,14 @@ fun NotesScreen(
       Box(
         modifier = Modifier
           .weight(1f)
-          .fillMaxWidth(),
+          .fillMaxWidth()
+          .pinchToChangeColumns(
+            enabled = isGridView,
+            columnsPerRow = gridColumnsPerRow,
+            minColumns = MIN_NOTES_GRID_COLUMNS,
+            maxColumns = MAX_NOTES_GRID_COLUMNS,
+            onColumnsChange = { updateGridColumnsPerRow(it) },
+          ),
       ) {
         if (filteredResult.isEmpty) {
           NotesEmptyState(
@@ -548,7 +570,7 @@ fun NotesScreen(
             hasSearchQuery = isSearchActive && (searchQuery.isNotBlank() || selectedColorFilter != null),
           )
         } else {
-          val columns = if (isGridView) 2 else 1
+          val columns = if (isGridView) gridColumnsPerRow else 1
           val showSectionHeaders = activeFilter !is NotesFilter.Pinned &&
             activeFilter !is NotesFilter.Archived &&
             activeFilter !is NotesFilter.Trash &&
@@ -561,6 +583,7 @@ fun NotesScreen(
           val currentSearchQuery by rememberUpdatedState(searchQuery)
           val currentSelectedColorFilter by rememberUpdatedState(selectedColorFilter)
           val currentIsGridView by rememberUpdatedState(isGridView)
+          val currentColumns by rememberUpdatedState(columns)
 
           Box(
             modifier = Modifier
@@ -661,6 +684,7 @@ fun NotesScreen(
                           cardBounds = cardBounds,
                           isGridView = currentIsGridView,
                           verticalSpacingPx = verticalSpacingPx,
+                          columns = currentColumns,
                         )
                         notes = reordered
                         gridState.requestScrollToItem(firstVisibleIndex, firstVisibleOffset)
@@ -1056,261 +1080,88 @@ private fun NotesHeaderTopBar(
   onToggleSearch: () -> Unit,
   onCloseSearch: () -> Unit,
   onToggleViewMode: () -> Unit,
-  onOpenLabelsDialog: () -> Unit,
   onUndo: () -> Unit,
   onRedo: () -> Unit,
 ) {
-  val searchFocusRequester = remember { FocusRequester() }
-  val keyboardController = LocalSoftwareKeyboardController.current
   val focusManager = LocalFocusManager.current
-
-  LaunchedEffect(isSearchActive) {
-    if (isSearchActive) {
-      kotlinx.coroutines.delay(100)
-      try {
-        searchFocusRequester.requestFocus()
-        keyboardController?.show()
-      } catch (_: Exception) {}
-    } else {
-      keyboardController?.hide()
-    }
-  }
 
   BackHandler(enabled = isSearchActive) {
     focusManager.clearFocus()
     onCloseSearch()
   }
 
-  Surface(
-    color = MaterialTheme.colorScheme.surface,
-    tonalElevation = 1.dp,
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    Box(
-      modifier = Modifier
-        .fillMaxWidth()
-        .heightIn(min = 68.dp),
-      contentAlignment = Alignment.CenterStart,
-    ) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 12.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Row(
-          modifier = Modifier.weight(1f),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
+  ToolboxTopBar(
+    title = "Notes",
+    subtext = subtext,
+    icon = Icons.AutoMirrored.Filled.StickyNote2,
+    subtextTestTag = "notes_header_subtext",
+    searchState = ToolboxTopBarSearchState(
+      isActive = isSearchActive,
+      query = searchQuery,
+      onQueryChange = onSearchQueryChange,
+      onOpenSearch = onToggleSearch,
+      onCloseSearch = {
+        focusManager.clearFocus()
+        onCloseSearch()
+      },
+      placeholder = "Search titles, notes, checklists, or labels",
+      searchContentDescription = "Search notes",
+      closeContentDescription = "Close search",
+      clearContentDescription = "Clear search text",
+      toggleButtonTestTag = "notes_search_toggle",
+      searchBarTestTag = "notes_toolbar_search_bar",
+      closeButtonTestTag = "notes_search_close",
+      inputTestTag = "notes_search_input",
+      clearButtonTestTag = "notes_search_clear",
+      onSearchImeAction = { focusManager.clearFocus() },
+    ),
+    actions = {
+      if (canUndo || canRedo) {
+        IconButton(
+          onClick = onUndo,
+          enabled = canUndo,
+          modifier = Modifier.testTag("notes_undo_button"),
         ) {
-          Box(
-            modifier = Modifier
-              .size(36.dp)
-              .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center,
-          ) {
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.StickyNote2,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(20.dp),
-            )
-          }
-
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = "Notes",
-              style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurface,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-              text = subtext,
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.testTag("notes_header_subtext"),
-            )
-          }
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          if (canUndo || canRedo) {
-            IconButton(
-              onClick = onUndo,
-              enabled = canUndo,
-              modifier = Modifier.testTag("notes_undo_button"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.Undo,
-                contentDescription = "Undo",
-                tint = if (canUndo) {
-                  MaterialTheme.colorScheme.onSurface
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                },
-              )
-            }
-            IconButton(
-              onClick = onRedo,
-              enabled = canRedo,
-              modifier = Modifier.testTag("notes_redo_button"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.Redo,
-                contentDescription = "Redo",
-                tint = if (canRedo) {
-                  MaterialTheme.colorScheme.onSurface
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                },
-              )
-            }
-          }
-
-          IconButton(
-            onClick = onToggleSearch,
-            modifier = Modifier.testTag("notes_search_toggle"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Search,
-              contentDescription = "Search notes",
-              tint = if (isSearchActive) {
-                MaterialTheme.colorScheme.primary
-              } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-              },
-            )
-          }
-
-          ViewModeSegmentedToggle(
-            isListView = !isGridView,
-            onSelectListView = { if (isGridView) onToggleViewMode() },
-            onSelectGridView = { if (!isGridView) onToggleViewMode() },
-            onToggle = onToggleViewMode,
-            toggleTestTag = "notes_view_mode_toggle",
-            listTestTag = "notes_view_mode_list",
-            gridTestTag = "notes_view_mode_grid",
-            listContentDescription = "List view",
-            gridContentDescription = "Grid view",
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Undo,
+            contentDescription = "Undo",
+            tint = if (canUndo) {
+              MaterialTheme.colorScheme.onSurface
+            } else {
+              MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+            },
           )
-
-          IconButton(
-            onClick = onOpenLabelsDialog,
-            modifier = Modifier.testTag("notes_manage_labels_button"),
-          ) {
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.Label,
-              contentDescription = "Manage labels",
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
         }
-      }
-
-      // Animated Expanding Search Bar integrated into the Toolbar
-      AnimatedVisibility(
-        visible = isSearchActive,
-        enter = fadeIn(animationSpec = tween(220)) + expandHorizontally(
-          animationSpec = spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = Spring.StiffnessMediumLow,
-          ),
-          expandFrom = Alignment.End,
-        ),
-        exit = fadeOut(animationSpec = tween(180)) + shrinkHorizontally(
-          animationSpec = tween(200),
-          shrinkTowards = Alignment.End,
-        ),
-        modifier = Modifier.matchParentSize(),
-      ) {
-        Surface(
-          modifier = Modifier
-            .fillMaxSize()
-            .clickable(
-              interactionSource = remember { MutableInteractionSource() },
-              indication = null,
-              onClick = {},
-            )
-            .testTag("notes_toolbar_search_bar"),
-          color = MaterialTheme.colorScheme.surface,
-          tonalElevation = 2.dp,
+        IconButton(
+          onClick = onRedo,
+          enabled = canRedo,
+          modifier = Modifier.testTag("notes_redo_button"),
         ) {
-          Row(
-            modifier = Modifier
-              .fillMaxSize()
-              .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            IconButton(
-              onClick = {
-                focusManager.clearFocus()
-                onCloseSearch()
-              },
-              modifier = Modifier.testTag("notes_search_close"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Close search",
-                tint = MaterialTheme.colorScheme.onSurface,
-              )
-            }
-
-            TextField(
-              value = searchQuery,
-              onValueChange = onSearchQueryChange,
-              placeholder = {
-                Text(
-                  text = "Search titles, notes, checklists, or labels",
-                  style = MaterialTheme.typography.bodyLarge,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                )
-              },
-              singleLine = true,
-              textStyle = MaterialTheme.typography.bodyLarge.copy(
-                color = MaterialTheme.colorScheme.onSurface,
-              ),
-              colors = TextFieldDefaults.colors(
-                focusedContainerColor = Color.Transparent,
-                unfocusedContainerColor = Color.Transparent,
-                disabledContainerColor = Color.Transparent,
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-                disabledIndicatorColor = Color.Transparent,
-              ),
-              trailingIcon = {
-                if (searchQuery.isNotEmpty()) {
-                  IconButton(
-                    onClick = { onSearchQueryChange("") },
-                    modifier = Modifier.testTag("notes_search_clear"),
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.Clear,
-                      contentDescription = "Clear search text",
-                      tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                  }
-                }
-              },
-              keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-              keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-              modifier = Modifier
-                .fillMaxWidth()
-                .focusRequester(searchFocusRequester)
-                .testTag("notes_search_input"),
-            )
-          }
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Redo,
+            contentDescription = "Redo",
+            tint = if (canRedo) {
+              MaterialTheme.colorScheme.onSurface
+            } else {
+              MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+            },
+          )
         }
       }
-    }
-  }
+
+      ViewModeSegmentedToggle(
+        isListView = !isGridView,
+        onSelectListView = { if (isGridView) onToggleViewMode() },
+        onSelectGridView = { if (!isGridView) onToggleViewMode() },
+        onToggle = onToggleViewMode,
+        toggleTestTag = "notes_view_mode_toggle",
+        listTestTag = "notes_view_mode_list",
+        gridTestTag = "notes_view_mode_grid",
+        listContentDescription = "List view",
+        gridContentDescription = "Grid view",
+      )
+    },
+  )
 }
 
 @Composable
@@ -1337,108 +1188,222 @@ private fun NotesSelectionTopBar(
     Box(
       modifier = Modifier
         .fillMaxWidth()
-        .heightIn(min = 68.dp),
+        .height(68.dp),
       contentAlignment = Alignment.CenterStart,
     ) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 8.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-          IconButton(
-            onClick = onClearSelection,
-            modifier = Modifier.testTag("notes_clear_selection"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Close,
-              contentDescription = "Exit selection",
-            )
-          }
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-              .clip(RoundedCornerShape(10.dp))
-              .clickable(onClick = onToggleSelectAll)
-              .padding(end = 8.dp)
-              .testTag("notes_select_all_toggle"),
-          ) {
-            Checkbox(
-              checked = totalVisibleCount > 0 && selectedCount == totalVisibleCount,
-              onCheckedChange = { onToggleSelectAll() },
-            )
-            Text(
-              text = "$selectedCount selected",
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-          }
-        }
+      ToolboxMultiSelectBarRow(
+        selectionState = ToolboxTopBarSelectionState(
+          selectedCount = selectedCount,
+          totalCount = totalVisibleCount,
+          onToggleSelectAll = onToggleSelectAll,
+          onCloseSelection = onClearSelection,
+          closeButtonTestTag = "notes_clear_selection",
+          selectAllRowTestTag = "notes_select_all_toggle",
+          actions = {
+            var showOverflowMenu by remember { mutableStateOf(false) }
+            val hasSelection = selectedCount > 0
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          if (isTrashView) {
-            IconButton(
-              onClick = onRestoreSelected,
-              modifier = Modifier.testTag("notes_bulk_restore"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.RestoreFromTrash,
-                contentDescription = "Restore selected notes",
-                tint = MaterialTheme.colorScheme.primary,
-              )
+            if (isTrashView) {
+              IconButton(
+                onClick = onRestoreSelected,
+                enabled = hasSelection,
+                modifier = Modifier
+                  .size(36.dp)
+                  .testTag("notes_bulk_restore"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.RestoreFromTrash,
+                  contentDescription = "Restore selected notes",
+                  tint = if (hasSelection) {
+                    MaterialTheme.colorScheme.primary
+                  } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                  },
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+            } else {
+              IconButton(
+                onClick = onTogglePinSelected,
+                enabled = hasSelection,
+                modifier = Modifier
+                  .size(36.dp)
+                  .testTag("notes_bulk_pin"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.PushPin,
+                  contentDescription = "Pin or unpin selected",
+                  tint = if (hasSelection) {
+                    MaterialTheme.colorScheme.onSurface
+                  } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                  },
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+              IconButton(
+                onClick = onOpenColorPicker,
+                enabled = hasSelection,
+                modifier = Modifier
+                  .size(36.dp)
+                  .testTag("notes_bulk_color"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Palette,
+                  contentDescription = "Change color",
+                  tint = if (hasSelection) {
+                    MaterialTheme.colorScheme.onSurface
+                  } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                  },
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+              IconButton(
+                onClick = onToggleArchiveSelected,
+                enabled = hasSelection,
+                modifier = Modifier
+                  .size(36.dp)
+                  .testTag("notes_bulk_archive"),
+              ) {
+                Icon(
+                  imageVector = if (isArchiveView) Icons.Default.Unarchive else Icons.Default.Archive,
+                  contentDescription = if (isArchiveView) "Unarchive selected" else "Archive selected",
+                  tint = if (hasSelection) {
+                    MaterialTheme.colorScheme.onSurface
+                  } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                  },
+                  modifier = Modifier.size(20.dp),
+                )
+              }
             }
-          } else {
-            IconButton(
-              onClick = onTogglePinSelected,
-              modifier = Modifier.testTag("notes_bulk_pin"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.PushPin,
-                contentDescription = "Pin or unpin selected",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-            IconButton(
-              onClick = onOpenColorPicker,
-              modifier = Modifier.testTag("notes_bulk_color"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Palette,
-                contentDescription = "Change color",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-            IconButton(
-              onClick = onToggleArchiveSelected,
-              modifier = Modifier.testTag("notes_bulk_archive"),
-            ) {
-              Icon(
-                imageVector = if (isArchiveView) Icons.Default.Unarchive else Icons.Default.Archive,
-                contentDescription = if (isArchiveView) "Unarchive selected" else "Archive selected",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-          }
 
-          IconButton(
-            onClick = onDeleteSelected,
-            enabled = selectedCount > 0,
-            modifier = Modifier.testTag("notes_bulk_delete"),
-          ) {
-            Icon(
-              imageVector = if (isTrashView) Icons.Default.DeleteForever else Icons.Default.Delete,
-              contentDescription = if (isTrashView) "Delete forever" else "Move to trash",
-              tint = MaterialTheme.colorScheme.error,
-            )
-          }
-        }
-      }
+            IconButton(
+              onClick = onDeleteSelected,
+              enabled = hasSelection,
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("notes_bulk_delete"),
+            ) {
+              Icon(
+                imageVector = if (isTrashView) Icons.Default.DeleteForever else Icons.Default.Delete,
+                contentDescription = if (isTrashView) "Delete forever" else "Move to trash",
+                tint = if (hasSelection) {
+                  MaterialTheme.colorScheme.error
+                } else {
+                  MaterialTheme.colorScheme.error.copy(alpha = 0.38f)
+                },
+                modifier = Modifier.size(20.dp),
+              )
+            }
+
+            Box {
+              IconButton(
+                onClick = { showOverflowMenu = true },
+                modifier = Modifier
+                  .size(36.dp)
+                  .testTag("action_selection_overflow"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.MoreVert,
+                  contentDescription = "More actions",
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+
+              DropdownMenu(
+                expanded = showOverflowMenu,
+                onDismissRequest = { showOverflowMenu = false },
+              ) {
+                if (isTrashView) {
+                  DropdownMenuItem(
+                    text = { Text("Restore") },
+                    leadingIcon = { Icon(Icons.Default.RestoreFromTrash, contentDescription = null) },
+                    enabled = hasSelection,
+                    onClick = {
+                      showOverflowMenu = false
+                      onRestoreSelected()
+                    },
+                  )
+                } else {
+                  DropdownMenuItem(
+                    text = { Text("Pin / Unpin") },
+                    leadingIcon = { Icon(Icons.Default.PushPin, contentDescription = null) },
+                    enabled = hasSelection,
+                    onClick = {
+                      showOverflowMenu = false
+                      onTogglePinSelected()
+                    },
+                  )
+                  DropdownMenuItem(
+                    text = { Text("Change color") },
+                    leadingIcon = { Icon(Icons.Default.Palette, contentDescription = null) },
+                    enabled = hasSelection,
+                    onClick = {
+                      showOverflowMenu = false
+                      onOpenColorPicker()
+                    },
+                  )
+                  DropdownMenuItem(
+                    text = { Text(if (isArchiveView) "Unarchive" else "Archive") },
+                    leadingIcon = {
+                      Icon(
+                        if (isArchiveView) Icons.Default.Unarchive else Icons.Default.Archive,
+                        contentDescription = null,
+                      )
+                    },
+                    enabled = hasSelection,
+                    onClick = {
+                      showOverflowMenu = false
+                      onToggleArchiveSelected()
+                    },
+                  )
+                }
+                DropdownMenuItem(
+                  text = {
+                    Text(
+                      if (isTrashView) "Delete forever" else "Move to trash",
+                      color = MaterialTheme.colorScheme.error,
+                    )
+                  },
+                  leadingIcon = {
+                    Icon(
+                      if (isTrashView) Icons.Default.DeleteForever else Icons.Default.Delete,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.error,
+                    )
+                  },
+                  enabled = hasSelection,
+                  onClick = {
+                    showOverflowMenu = false
+                    onDeleteSelected()
+                  },
+                )
+                HorizontalDivider()
+                DropdownMenuItem(
+                  text = {
+                    Text(if (selectedCount == totalVisibleCount && totalVisibleCount > 0) "Deselect all" else "Select all")
+                  },
+                  leadingIcon = { Icon(Icons.Default.SelectAll, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    onToggleSelectAll()
+                  },
+                )
+                DropdownMenuItem(
+                  text = { Text("Exit selection") },
+                  leadingIcon = { Icon(Icons.Default.Close, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    onClearSelection()
+                  },
+                )
+              }
+            }
+          },
+        ),
+      )
     }
   }
 }
@@ -1517,133 +1482,185 @@ private fun NotesFilterChipsRow(
   labels: List<String>,
   archivedCount: Int,
   trashedCount: Int,
+  isGridView: Boolean = true,
+  gridColumnsPerRow: Int = DEFAULT_NOTES_GRID_COLUMNS,
+  onGridColumnsPerRowChange: (Int) -> Unit = {},
   onSelectFilter: (NotesFilter) -> Unit,
   onManageLabels: () -> Unit,
 ) {
-  Row(
-    modifier = Modifier
-      .fillMaxWidth()
-      .horizontalScroll(rememberScrollState())
-      .padding(horizontal = 12.dp, vertical = 6.dp)
-      .testTag("notes_filter_chips_row"),
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-    verticalAlignment = Alignment.CenterVertically,
+  Box(
+    modifier = Modifier.fillMaxWidth(),
   ) {
-    FilterChip(
-      selected = activeFilter == NotesFilter.All,
-      onClick = { onSelectFilter(NotesFilter.All) },
-      label = { Text("All") },
-      shape = RoundedCornerShape(20.dp),
-      colors = FilterChipDefaults.filterChipColors(
-        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-      ),
-      modifier = Modifier.testTag("notes_filter_all"),
-    )
-
-    FilterChip(
-      selected = activeFilter == NotesFilter.Pinned,
-      onClick = { onSelectFilter(NotesFilter.Pinned) },
-      label = { Text("Pinned") },
-      leadingIcon = {
-        Icon(
-          imageVector = Icons.Default.PushPin,
-          contentDescription = null,
-          modifier = Modifier.size(16.dp),
-        )
-      },
-      shape = RoundedCornerShape(20.dp),
-      colors = FilterChipDefaults.filterChipColors(
-        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-      ),
-      modifier = Modifier.testTag("notes_filter_pinned"),
-    )
-
-    FilterChip(
-      selected = activeFilter == NotesFilter.Checklists,
-      onClick = { onSelectFilter(NotesFilter.Checklists) },
-      label = { Text("Checklists") },
-      leadingIcon = {
-        Icon(
-          imageVector = Icons.Default.CheckBox,
-          contentDescription = null,
-          modifier = Modifier.size(16.dp),
-        )
-      },
-      shape = RoundedCornerShape(20.dp),
-      colors = FilterChipDefaults.filterChipColors(
-        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-      ),
-      modifier = Modifier.testTag("notes_filter_checklists"),
-    )
-
-    labels.forEach { label ->
-      val isSelected = activeFilter is NotesFilter.Label &&
-        activeFilter.name.equals(label, ignoreCase = true)
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .fadingPillRowUnderFloatingControls(hasColumnsButton = isGridView)
+        .horizontalScroll(rememberScrollState())
+        .padding(start = 12.dp, end = if (isGridView) 96.dp else 56.dp, top = 6.dp, bottom = 6.dp)
+        .testTag("notes_filter_chips_row"),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
       FilterChip(
-        selected = isSelected,
-        onClick = { onSelectFilter(NotesFilter.Label(label)) },
-        label = { Text(label) },
+        selected = activeFilter == NotesFilter.All,
+        onClick = { onSelectFilter(NotesFilter.All) },
+        label = { Text("All") },
         shape = RoundedCornerShape(20.dp),
         colors = FilterChipDefaults.filterChipColors(
           selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
           selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
         ),
-        modifier = Modifier.testTag("notes_filter_label_$label"),
+        modifier = Modifier.testTag("notes_filter_all"),
+      )
+
+      FilterChip(
+        selected = activeFilter == NotesFilter.Pinned,
+        onClick = { onSelectFilter(NotesFilter.Pinned) },
+        label = { Text("Pinned") },
+        leadingIcon = {
+          Icon(
+            imageVector = Icons.Default.PushPin,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+        },
+        shape = RoundedCornerShape(20.dp),
+        colors = FilterChipDefaults.filterChipColors(
+          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        ),
+        modifier = Modifier.testTag("notes_filter_pinned"),
+      )
+
+      FilterChip(
+        selected = activeFilter == NotesFilter.Checklists,
+        onClick = { onSelectFilter(NotesFilter.Checklists) },
+        label = { Text("Checklists") },
+        leadingIcon = {
+          Icon(
+            imageVector = Icons.Default.CheckBox,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+        },
+        shape = RoundedCornerShape(20.dp),
+        colors = FilterChipDefaults.filterChipColors(
+          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        ),
+        modifier = Modifier.testTag("notes_filter_checklists"),
+      )
+
+      labels.forEach { label ->
+        val isSelected = activeFilter is NotesFilter.Label &&
+          activeFilter.name.equals(label, ignoreCase = true)
+        FilterChip(
+          selected = isSelected,
+          onClick = { onSelectFilter(NotesFilter.Label(label)) },
+          label = { Text(label) },
+          shape = RoundedCornerShape(20.dp),
+          colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+          ),
+          modifier = Modifier.testTag("notes_filter_label_$label"),
+        )
+      }
+
+      FilterChip(
+        selected = activeFilter == NotesFilter.Archived,
+        onClick = { onSelectFilter(NotesFilter.Archived) },
+        label = {
+          Text(if (archivedCount > 0) "Archive ($archivedCount)" else "Archive")
+        },
+        leadingIcon = {
+          Icon(
+            imageVector = Icons.Default.Archive,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+        },
+        shape = RoundedCornerShape(20.dp),
+        colors = FilterChipDefaults.filterChipColors(
+          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        ),
+        modifier = Modifier.testTag("notes_filter_archived"),
+      )
+
+      FilterChip(
+        selected = activeFilter == NotesFilter.Trash,
+        onClick = { onSelectFilter(NotesFilter.Trash) },
+        label = {
+          Text(if (trashedCount > 0) "Trash ($trashedCount)" else "Trash")
+        },
+        leadingIcon = {
+          Icon(
+            imageVector = Icons.Default.Delete,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+        },
+        shape = RoundedCornerShape(20.dp),
+        colors = FilterChipDefaults.filterChipColors(
+          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        ),
+        modifier = Modifier.testTag("notes_filter_trash"),
+      )
+
+      FilterChip(
+        selected = false,
+        onClick = onManageLabels,
+        label = { Text("+ Label") },
+        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier.testTag("notes_add_label_chip"),
       )
     }
 
-    FilterChip(
-      selected = activeFilter == NotesFilter.Archived,
-      onClick = { onSelectFilter(NotesFilter.Archived) },
-      label = {
-        Text(if (archivedCount > 0) "Archive ($archivedCount)" else "Archive")
-      },
-      leadingIcon = {
-        Icon(
-          imageVector = Icons.Default.Archive,
-          contentDescription = null,
-          modifier = Modifier.size(16.dp),
+    // Pinned floating [# per row] + [Manage Labels] buttons on the right edge of the pill bar
+    Row(
+      modifier = Modifier
+        .align(Alignment.CenterEnd)
+        .pillBarFloatingControlsBackdrop(backgroundColor = MaterialTheme.colorScheme.background)
+        .padding(end = 12.dp)
+        .zIndex(10f),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      if (isGridView) {
+        ToolboxFloatingColumnsButton(
+          columnsPerRow = gridColumnsPerRow,
+          minColumns = MIN_NOTES_GRID_COLUMNS,
+          maxColumns = MAX_NOTES_GRID_COLUMNS,
+          onColumnsChange = onGridColumnsPerRowChange,
+          buttonTestTag = "notes_columns_per_row_button",
+          countTestTag = "notes_columns_per_row_count",
+          contentDescription = "$gridColumnsPerRow notes per row",
         )
-      },
-      shape = RoundedCornerShape(20.dp),
-      colors = FilterChipDefaults.filterChipColors(
-        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-      ),
-      modifier = Modifier.testTag("notes_filter_archived"),
-    )
+      }
 
-    FilterChip(
-      selected = activeFilter == NotesFilter.Trash,
-      onClick = { onSelectFilter(NotesFilter.Trash) },
-      label = {
-        Text(if (trashedCount > 0) "Trash ($trashedCount)" else "Trash")
-      },
-      leadingIcon = {
-        Icon(
-          imageVector = Icons.Default.Delete,
-          contentDescription = null,
-          modifier = Modifier.size(16.dp),
-        )
-      },
-      shape = RoundedCornerShape(20.dp),
-      colors = FilterChipDefaults.filterChipColors(
-        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-      ),
-      modifier = Modifier.testTag("notes_filter_trash"),
-    )
-
-    FilterChip(
-      selected = false,
-      onClick = onManageLabels,
-      label = { Text("+ Label") },
-      shape = RoundedCornerShape(20.dp),
-      modifier = Modifier.testTag("notes_add_label_chip"),
-    )
+      Surface(
+        onClick = onManageLabels,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 3.dp,
+        shadowElevation = 4.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        modifier = Modifier
+          .size(34.dp)
+          .testTag("notes_manage_labels_button"),
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Label,
+            contentDescription = "Manage labels",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
+    }
   }
 }
 
@@ -1754,12 +1771,14 @@ internal fun updateSectionCardBoundsOptimistically(
   cardBounds: MutableMap<String, Rect>,
   isGridView: Boolean,
   verticalSpacingPx: Float,
+  columns: Int = 2,
 ) {
   val existingRects = oldSectionNotes.mapNotNull { cardBounds[it.id] }
   if (existingRects.size != oldSectionNotes.size || existingRects.isEmpty()) return
 
   val sectionTop = existingRects.minOf { it.top }
-  if (!isGridView || existingRects.size == 1) {
+  val colCount = if (isGridView) columns.coerceAtLeast(2) else 1
+  if (colCount <= 1 || existingRects.size == 1) {
     val left = existingRects.first().left
     val width = existingRects.first().width
     var currentTop = sectionTop
@@ -1775,22 +1794,33 @@ internal fun updateSectionCardBoundsOptimistically(
     }
   } else {
     val minLeft = existingRects.minOf { it.left }
-    val maxLeft = existingRects.maxOf { it.left }
     val colWidth = existingRects.first().width
-    val colLefts = floatArrayOf(minLeft, if (maxLeft > minLeft + 1f) maxLeft else minLeft + colWidth)
-    val colBottoms = floatArrayOf(sectionTop, sectionTop)
+    val colStep = colWidth + verticalSpacingPx
+    val distinctLefts = existingRects.map { it.left }.sorted().fold(mutableListOf<Float>()) { acc, l ->
+      if (acc.isEmpty() || l - acc.last() > 2f) acc.add(l)
+      acc
+    }
+    val colLefts = FloatArray(colCount) { idx ->
+      distinctLefts.getOrElse(idx) { minLeft + idx * colStep }
+    }
+    val colBottoms = FloatArray(colCount) { sectionTop }
     for (note in newSectionNotes) {
       val h = cardBounds[note.id]?.height ?: continue
-      val col = if (colBottoms[0] <= colBottoms[1]) 0 else 1
-      val top = colBottoms[col]
-      val left = colLefts[col]
+      var minCol = 0
+      for (c in 1 until colCount) {
+        if (colBottoms[c] < colBottoms[minCol]) {
+          minCol = c
+        }
+      }
+      val top = colBottoms[minCol]
+      val left = colLefts[minCol]
       cardBounds[note.id] = Rect(
         left = left,
         top = top,
         right = left + colWidth,
         bottom = top + h,
       )
-      colBottoms[col] = top + h + verticalSpacingPx
+      colBottoms[minCol] = top + h + verticalSpacingPx
     }
   }
 }
