@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -661,5 +662,72 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("gallery_add_folder_dialog").assertIsDisplayed()
     composeTestRule.onNodeWithText("Add Album Folder").assertIsDisplayed()
     composeTestRule.onNodeWithText("Pictures").assertIsDisplayed()
+  }
+
+  @Test
+  fun multiSelection_allowsSelectingMultipleAlbumsAndPhotos_supportsSelectAllInfoAndDelete() {
+    val dcimDir = File(testRootDir, "DCIM").apply { mkdirs() }
+    val picturesDir = File(testRootDir, "Pictures").apply { mkdirs() }
+
+    val cameraAlbum = File(dcimDir, "Camera").apply { mkdirs() }
+    val vacationAlbum = File(picturesDir, "Vacation").apply { mkdirs() }
+
+    GalleryEngine.writeSolidColorPng(File(cameraAlbum, "cam_shot.png"), lastModifiedMs = 1_000_000L)
+    GalleryEngine.writeSolidColorPng(File(vacationAlbum, "vac_shot.png"), lastModifiedMs = 2_000_000L)
+    GalleryEngine.writeSolidColorPng(File(picturesDir, "root_photo_1.png"), lastModifiedMs = 3_000_000L)
+    GalleryEngine.writeSolidColorPng(File(dcimDir, "root_photo_2.png"), lastModifiedMs = 4_000_000L)
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        GalleryScreen(rootDirectory = testRootDir)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Long-press on Camera album tile to enter multi-selection mode
+    composeTestRule.onNodeWithTag("album_tile_item_Camera").performTouchInput {
+      longClick()
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("gallery_selection_count_label", useUnmergedTree = true)
+      .assertTextEquals("1 selected")
+
+    // Tap Vacation album and both root photos to select multiple albums and photos simultaneously
+    composeTestRule.onNodeWithTag("album_tile_item_Vacation").performClick()
+    composeTestRule.onNodeWithTag("photo_tile_item_root_photo_2.png").performClick()
+    composeTestRule.onNodeWithTag("photo_tile_item_root_photo_1.png").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("gallery_selection_count_label", useUnmergedTree = true)
+      .assertTextEquals("4 selected")
+
+    // Open Selection Info dialog and verify breakdown of 2 albums and 2 photos
+    composeTestRule.onNodeWithTag("action_bulk_info").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_bulk_info_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("2 albums, 2 photos").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_close_bulk_info").performClick()
+    composeTestRule.waitForIdle()
+
+    // Deselect Camera and root_photo_1.png, leaving Vacation and root_photo_2.png selected
+    composeTestRule.onNodeWithTag("album_tile_item_Camera").performClick()
+    composeTestRule.onNodeWithTag("photo_tile_item_root_photo_1.png").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_selection_count_label", useUnmergedTree = true)
+      .assertTextEquals("2 selected")
+
+    // Delete selected album (Vacation) and photo (root_photo_2.png)
+    composeTestRule.onNodeWithTag("action_bulk_delete").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_bulk_delete_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_confirm_bulk_delete").performClick()
+    composeTestRule.waitForIdle()
+
+    // Selection mode exits and only Camera and root_photo_1.png remain
+    composeTestRule.onNodeWithTag("album_tile_item_Vacation").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_tile_item_root_photo_2.png").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("album_tile_item_Camera").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_tile_item_root_photo_1.png").assertIsDisplayed()
   }
 }

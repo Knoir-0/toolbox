@@ -396,12 +396,16 @@ fun MainScreen(
 ) {
   val themeMode by preferencesRepository.themeModeFlow.collectAsState()
   val themeColor by preferencesRepository.themeColorFlow.collectAsState()
+  val musicPlayerThemeEnabled by preferencesRepository.musicPlayerThemeEnabledFlow.collectAsState()
+  val musicPlayerColorOption by preferencesRepository.musicPlayerColorOptionFlow.collectAsState()
   val accentColor by preferencesRepository.accentColorFlow.collectAsState()
 
   ToolboxTheme(
     themeMode = themeMode,
     themeColor = themeColor,
     accentColor = accentColor,
+    musicPlayerThemeEnabled = musicPlayerThemeEnabled,
+    musicPlayerColorOption = musicPlayerColorOption,
   ) {
     if (standaloneTool != null) {
       StandaloneToolScreen(

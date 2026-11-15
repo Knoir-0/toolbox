@@ -818,7 +818,6 @@ fun FilesScreen(
           onOpenPdfViewer?.invoke(file)
         },
         onAddFolderToHomeScreen = { folder -> addFolderToHomeScreen(context, folder, themeColor) },
-        onAddCurrentFolderToHomeScreen = { addFolderToHomeScreen(context, currentDirectory, themeColor) },
       )
 
       // 2. Storage Pill Buttons Row:
@@ -1475,7 +1474,6 @@ private fun FilesHeader(
   onOpenSelectedArchive: ((File) -> Unit)? = null,
   onOpenSelectedPdf: ((File) -> Unit)? = null,
   onAddFolderToHomeScreen: ((File) -> Unit)? = null,
-  onAddCurrentFolderToHomeScreen: (() -> Unit)? = null,
 ) {
   val focusRequester = remember { FocusRequester() }
   val keyboardController = LocalSoftwareKeyboardController.current
@@ -1693,13 +1691,18 @@ private fun FilesHeader(
                     modifier = Modifier.testTag("action_selection_file_converter"),
                   )
                 }
-                if (singleSelectedFile != null && onOpenSelectedArchive != null && ArchiveEngine.isSupportedArchive(singleSelectedFile)) {
+                val archiveTarget = when {
+                  singleSelectedFolder != null -> singleSelectedFolder
+                  singleSelectedFile != null && ArchiveEngine.isSupportedArchive(singleSelectedFile) -> singleSelectedFile
+                  else -> null
+                }
+                if (archiveTarget != null && onOpenSelectedArchive != null) {
                   DropdownMenuItem(
                     text = { Text("Archives") },
                     leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
                     onClick = {
                       showOverflowMenu = false
-                      onOpenSelectedArchive(singleSelectedFile)
+                      onOpenSelectedArchive(archiveTarget)
                     },
                     modifier = Modifier.testTag("action_selection_open_archive"),
                   )
@@ -1748,7 +1751,7 @@ private fun FilesHeader(
                 }
                 if (singleSelectedFolder != null && onAddFolderToHomeScreen != null) {
                   DropdownMenuItem(
-                    text = { Text("Add to Home screen") },
+                    text = { Text("Add to Home") },
                     leadingIcon = { Icon(Icons.Default.Home, contentDescription = null) },
                     onClick = {
                       showOverflowMenu = false
@@ -2009,32 +2012,6 @@ private fun FilesHeader(
                       )
                     }
                   }
-                }
-              }
-            }
-
-            if (canNavigateUp && onAddCurrentFolderToHomeScreen != null) {
-              var showFolderMenu by remember { mutableStateOf(false) }
-              Box {
-                IconButton(
-                  onClick = { showFolderMenu = true },
-                  modifier = Modifier.testTag("action_current_folder_menu"),
-                ) {
-                  Icon(Icons.Default.MoreVert, contentDescription = "Folder options")
-                }
-                DropdownMenu(
-                  expanded = showFolderMenu,
-                  onDismissRequest = { showFolderMenu = false },
-                ) {
-                  DropdownMenuItem(
-                    text = { Text("Add to Home screen") },
-                    leadingIcon = { Icon(Icons.Default.Home, contentDescription = null) },
-                    onClick = {
-                      showFolderMenu = false
-                      onAddCurrentFolderToHomeScreen()
-                    },
-                    modifier = Modifier.testTag("action_add_current_folder_to_home"),
-                  )
                 }
               }
             }
@@ -2899,7 +2876,13 @@ private fun FileActionMenu(
     )
     if (item.isDirectory) {
       DropdownMenuItem(
-        text = { Text("Add to Home screen") },
+        text = { Text("Archives") },
+        leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
+        onClick = onOpenArchive,
+        modifier = Modifier.testTag("action_open_archive"),
+      )
+      DropdownMenuItem(
+        text = { Text("Add to Home") },
         leadingIcon = { Icon(Icons.Default.Home, contentDescription = null) },
         onClick = onAddToHomeScreen,
         modifier = Modifier.testTag("action_add_to_home_screen"),

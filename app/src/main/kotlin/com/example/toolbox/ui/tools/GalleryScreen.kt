@@ -22,10 +22,12 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
@@ -61,6 +63,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Sort
@@ -70,19 +73,29 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -409,8 +422,39 @@ fun GalleryScreen(
   }
   val currentAlbum: GalleryAlbum? = albumStack.lastOrNull()
 
+  // Multi-selection state for albums and photos
+  var isSelectionMode by rememberSaveable { mutableStateOf(false) }
+  var selectedAlbumPaths by remember { mutableStateOf(setOf<String>()) }
+  var selectedPhotoPaths by remember { mutableStateOf(setOf<String>()) }
+  var showBulkInfoDialog by remember { mutableStateOf(false) }
+  var showBulkDeleteDialog by remember { mutableStateOf(false) }
+  var clipboardState by remember { mutableStateOf<GalleryClipboardState?>(null) }
+
+  fun exitSelectionMode() {
+    isSelectionMode = false
+    selectedAlbumPaths = emptySet()
+    selectedPhotoPaths = emptySet()
+  }
+
+  fun toggleAlbumSelection(album: GalleryAlbum) {
+    selectedAlbumPaths = if (album.path in selectedAlbumPaths) {
+      selectedAlbumPaths - album.path
+    } else {
+      selectedAlbumPaths + album.path
+    }
+  }
+
+  fun togglePhotoSelection(photo: GalleryPhoto) {
+    selectedPhotoPaths = if (photo.path in selectedPhotoPaths) {
+      selectedPhotoPaths - photo.path
+    } else {
+      selectedPhotoPaths + photo.path
+    }
+  }
+
   fun handleGalleryBack() {
     isFabExpanded = false
+    exitSelectionMode()
     when {
       albumStack.size > 1 -> {
         albumStack.removeAt(albumStack.lastIndex)
@@ -428,11 +472,17 @@ fun GalleryScreen(
     }
   }
 
-  BackHandler(enabled = isFabExpanded || albumStack.isNotEmpty() || onNavigateBack != null) {
-    if (isFabExpanded) {
-      isFabExpanded = false
-    } else {
-      handleGalleryBack()
+  BackHandler(enabled = isFabExpanded || isSelectionMode || albumStack.isNotEmpty() || onNavigateBack != null) {
+    when {
+      isFabExpanded -> {
+        isFabExpanded = false
+      }
+      isSelectionMode -> {
+        exitSelectionMode()
+      }
+      else -> {
+        handleGalleryBack()
+      }
     }
   }
 
@@ -462,6 +512,27 @@ fun GalleryScreen(
     GalleryEngine.sortPhotos(rawPhotos, sortOrder)
   }
 
+  val selectedAlbums: List<GalleryAlbum> = remember(activeAlbums, selectedAlbumPaths) {
+    activeAlbums.filter { it.path in selectedAlbumPaths }
+  }
+
+  val selectedPhotos: List<GalleryPhoto> = remember(activePhotos, selectedPhotoPaths) {
+    activePhotos.filter { it.path in selectedPhotoPaths }
+  }
+
+  val totalSelectableCount = activeAlbums.size + activePhotos.size
+  val selectedCount = selectedAlbums.size + selectedPhotos.size
+
+  fun toggleSelectAll() {
+    if (totalSelectableCount > 0 && selectedCount == totalSelectableCount) {
+      selectedAlbumPaths = emptySet()
+      selectedPhotoPaths = emptySet()
+    } else {
+      selectedAlbumPaths = activeAlbums.map { it.path }.toSet()
+      selectedPhotoPaths = activePhotos.map { it.path }.toSet()
+    }
+  }
+
   // Defer album art pre-decoding to a background coroutine on Dispatchers.IO
   LaunchedEffect(activeAlbums, isInspection) {
     if (!isInspection && activeAlbums.isNotEmpty()) {
@@ -476,6 +547,7 @@ fun GalleryScreen(
 
   fun openMediaInEditor(photo: GalleryPhoto) {
     selectedPhotoForViewer = null
+    exitSelectionMode()
     if (photo.isVideo) {
       fileForVideoEditor = photo.file
       onOpenVideoEditor?.invoke(photo.file)
@@ -512,6 +584,10 @@ fun GalleryScreen(
     return
   }
 
+  val defaultNewAlbumDir = remember(effectiveRootDir, initialFolders) {
+    initialFolders?.firstOrNull() ?: GalleryEngine.getDefaultNewAlbumFolder(effectiveRootDir)
+  }
+
   Box(
     modifier = modifier
       .fillMaxSize()
@@ -521,7 +597,7 @@ fun GalleryScreen(
     Column(
       modifier = Modifier.fillMaxSize(),
     ) {
-      // Top Toolbar following DESIGN_LANGUAGE.md 5.1
+      // Top Toolbar following DESIGN_LANGUAGE.md 5.1 & 5.5
       GalleryTopBar(
         title = currentAlbum?.name ?: "Gallery",
         subtext = if (currentAlbum == null) {
@@ -548,6 +624,59 @@ fun GalleryScreen(
         viewMode = viewMode,
         sortOrder = sortOrder,
         showSortMenu = showSortMenu,
+        isSelectionMode = isSelectionMode,
+        selectedCount = selectedCount,
+        totalCount = totalSelectableCount,
+        singleSelectedPhoto = if (selectedAlbums.isEmpty() && selectedPhotos.size == 1) selectedPhotos.first() else null,
+        onToggleSelectAll = { toggleSelectAll() },
+        onCloseSelection = { exitSelectionMode() },
+        onBulkShare = {
+          val filesToShare = GalleryEngine.collectMediaFiles(selectedAlbums, selectedPhotos)
+          if (filesToShare.isNotEmpty()) {
+            shareMediaFiles(context, filesToShare)
+          } else {
+            Toast.makeText(context, "No media files found in selection", Toast.LENGTH_SHORT).show()
+          }
+        },
+        onBulkInfo = {
+          if (selectedCount > 0) {
+            showBulkInfoDialog = true
+          }
+        },
+        onBulkCut = {
+          if (selectedCount > 0) {
+            clipboardState = GalleryClipboardState(
+              operation = GalleryClipboardOperation.CUT,
+              albums = selectedAlbums,
+              photos = selectedPhotos,
+            )
+            val count = selectedCount
+            exitSelectionMode()
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            Toast.makeText(context, "$count ${if (count == 1) "item" else "items"} cut", Toast.LENGTH_SHORT).show()
+          }
+        },
+        onBulkCopy = {
+          if (selectedCount > 0) {
+            clipboardState = GalleryClipboardState(
+              operation = GalleryClipboardOperation.COPY,
+              albums = selectedAlbums,
+              photos = selectedPhotos,
+            )
+            val count = selectedCount
+            exitSelectionMode()
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            Toast.makeText(context, "$count ${if (count == 1) "item" else "items"} copied", Toast.LENGTH_SHORT).show()
+          }
+        },
+        onBulkDelete = {
+          if (selectedCount > 0) {
+            showBulkDeleteDialog = true
+          }
+        },
+        onEditSinglePhoto = { photo ->
+          openMediaInEditor(photo)
+        },
         onBack = { handleGalleryBack() },
         onToggleViewMode = {
           val next = if (viewMode == GalleryViewMode.TILE) GalleryViewMode.LIST else GalleryViewMode.TILE
@@ -569,11 +698,13 @@ fun GalleryScreen(
         albumsPerRow = albumsPerRow,
         onNavigateToRoot = {
           isFabExpanded = false
+          exitSelectionMode()
           navigatedToRootFromInitial = true
           albumStack.clear()
         },
         onNavigateToIndex = { index ->
           isFabExpanded = false
+          exitSelectionMode()
           while (albumStack.size > index + 1) {
             albumStack.removeAt(albumStack.lastIndex)
           }
@@ -668,13 +799,52 @@ fun GalleryScreen(
             photos = activePhotos,
             albumsPerRow = albumsPerRow,
             isInsideAlbum = currentAlbum != null,
-            onAlbumClick = { album ->
+            isSelectionMode = isSelectionMode,
+            selectedAlbumPaths = selectedAlbumPaths,
+            selectedPhotoPaths = selectedPhotoPaths,
+            onToggleAlbumSelect = { album ->
+              toggleAlbumSelection(album)
+            },
+            onTogglePhotoSelect = { photo ->
+              togglePhotoSelection(photo)
+            },
+            onAlbumLongClick = { album ->
               haptic.performHapticFeedback(HapticFeedbackType.LongPress)
               isFabExpanded = false
-              albumStack.add(album)
+              if (!isSelectionMode) {
+                isSelectionMode = true
+                selectedAlbumPaths = setOf(album.path)
+                selectedPhotoPaths = emptySet()
+              } else {
+                toggleAlbumSelection(album)
+              }
+            },
+            onPhotoLongClick = { photo ->
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              isFabExpanded = false
+              if (!isSelectionMode) {
+                isSelectionMode = true
+                selectedPhotoPaths = setOf(photo.path)
+                selectedAlbumPaths = emptySet()
+              } else {
+                togglePhotoSelection(photo)
+              }
+            },
+            onAlbumClick = { album ->
+              if (isSelectionMode) {
+                toggleAlbumSelection(album)
+              } else {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                isFabExpanded = false
+                albumStack.add(album)
+              }
             },
             onPhotoClick = { photo ->
-              selectedPhotoForViewer = photo
+              if (isSelectionMode) {
+                togglePhotoSelection(photo)
+              } else {
+                selectedPhotoForViewer = photo
+              }
             },
             onPhotoEdit = { photo ->
               openMediaInEditor(photo)
@@ -684,13 +854,52 @@ fun GalleryScreen(
           GalleryListView(
             albums = activeAlbums,
             photos = activePhotos,
-            onAlbumClick = { album ->
+            isSelectionMode = isSelectionMode,
+            selectedAlbumPaths = selectedAlbumPaths,
+            selectedPhotoPaths = selectedPhotoPaths,
+            onToggleAlbumSelect = { album ->
+              toggleAlbumSelection(album)
+            },
+            onTogglePhotoSelect = { photo ->
+              togglePhotoSelection(photo)
+            },
+            onAlbumLongClick = { album ->
               haptic.performHapticFeedback(HapticFeedbackType.LongPress)
               isFabExpanded = false
-              albumStack.add(album)
+              if (!isSelectionMode) {
+                isSelectionMode = true
+                selectedAlbumPaths = setOf(album.path)
+                selectedPhotoPaths = emptySet()
+              } else {
+                toggleAlbumSelection(album)
+              }
+            },
+            onPhotoLongClick = { photo ->
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              isFabExpanded = false
+              if (!isSelectionMode) {
+                isSelectionMode = true
+                selectedPhotoPaths = setOf(photo.path)
+                selectedAlbumPaths = emptySet()
+              } else {
+                togglePhotoSelection(photo)
+              }
+            },
+            onAlbumClick = { album ->
+              if (isSelectionMode) {
+                toggleAlbumSelection(album)
+              } else {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                isFabExpanded = false
+                albumStack.add(album)
+              }
             },
             onPhotoClick = { photo ->
-              selectedPhotoForViewer = photo
+              if (isSelectionMode) {
+                togglePhotoSelection(photo)
+              } else {
+                selectedPhotoForViewer = photo
+              }
             },
             onPhotoEdit = { photo ->
               openMediaInEditor(photo)
@@ -702,7 +911,7 @@ fun GalleryScreen(
 
     // Scrim overlay when speed dial FAB is expanded
     AnimatedVisibility(
-      visible = isFabExpanded,
+      visible = isFabExpanded && !isSelectionMode,
       enter = fadeIn(tween(150)),
       exit = fadeOut(tween(150)),
       modifier = Modifier.fillMaxSize(),
@@ -720,84 +929,163 @@ fun GalleryScreen(
       )
     }
 
-    // Speed dial FAB menu (matches PlantScheduleScreen and RecipeBookScreen)
-    Column(
-      modifier = Modifier
-        .align(Alignment.BottomEnd)
-        .padding(end = 16.dp, bottom = 16.dp),
-      horizontalAlignment = Alignment.End,
-      verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-      // Mini FABs sliding up from underneath
-      AnimatedVisibility(
-        visible = isFabExpanded,
-        enter = fadeIn(tween(160)) + slideInVertically(
-          initialOffsetY = { it },
-          animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMediumLow,
-          ),
-        ) + expandVertically(),
-        exit = fadeOut(tween(120)) + slideOutVertically(
-          targetOffsetY = { it },
-          animationSpec = tween(140),
-        ) + shrinkVertically(),
+    // Speed dial FAB menu (hidden during multi-select, matches PlantScheduleScreen and RecipeBookScreen)
+    if (!isSelectionMode) {
+      Column(
+        modifier = Modifier
+          .align(Alignment.BottomEnd)
+          .padding(end = 16.dp, bottom = 16.dp),
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
-        Column(
-          horizontalAlignment = Alignment.End,
-          verticalArrangement = Arrangement.spacedBy(10.dp),
+        // Mini FABs sliding up from underneath
+        AnimatedVisibility(
+          visible = isFabExpanded,
+          enter = fadeIn(tween(160)) + slideInVertically(
+            initialOffsetY = { it },
+            animationSpec = spring(
+              dampingRatio = Spring.DampingRatioMediumBouncy,
+              stiffness = Spring.StiffnessMediumLow,
+            ),
+          ) + expandVertically(),
+          exit = fadeOut(tween(120)) + slideOutVertically(
+            targetOffsetY = { it },
+            animationSpec = tween(140),
+          ) + shrinkVertically(),
         ) {
-          GalleryMiniFab(
-            label = "New album",
-            icon = Icons.Default.CreateNewFolder,
-            testTag = "gallery_new_album_fab_button",
-            onClick = {
-              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-              isFabExpanded = false
-              addAlbumDialogTarget = AddAlbumTarget.ROOT_ALBUM
-            },
-          )
-          GalleryMiniFab(
-            label = "New album here",
-            icon = Icons.Default.FolderOpen,
-            testTag = "gallery_new_album_here_fab_button",
-            onClick = {
-              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-              isFabExpanded = false
-              addAlbumDialogTarget = AddAlbumTarget.NESTED_ALBUM_HERE
-            },
+          Column(
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            GalleryMiniFab(
+              label = "Select",
+              icon = Icons.Default.Check,
+              testTag = "gallery_select_fab_button",
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                isFabExpanded = false
+                isSelectionMode = true
+                selectedAlbumPaths = emptySet()
+                selectedPhotoPaths = emptySet()
+              },
+            )
+            GalleryMiniFab(
+              label = "New album",
+              icon = Icons.Default.CreateNewFolder,
+              testTag = "gallery_new_album_fab_button",
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                isFabExpanded = false
+                addAlbumDialogTarget = AddAlbumTarget.ROOT_ALBUM
+              },
+            )
+            GalleryMiniFab(
+              label = "New album here",
+              icon = Icons.Default.FolderOpen,
+              testTag = "gallery_new_album_here_fab_button",
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                isFabExpanded = false
+                addAlbumDialogTarget = AddAlbumTarget.NESTED_ALBUM_HERE
+              },
+            )
+          }
+        }
+
+        val addIconRotation by animateFloatAsState(
+          targetValue = if (isFabExpanded) 135f else 0f,
+          label = "gallery_fab_rotation",
+        )
+
+        FloatingActionButton(
+          onClick = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            isFabExpanded = !isFabExpanded
+          },
+          shape = CircleShape,
+          containerColor = if (isFabExpanded) {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+          } else {
+            MaterialTheme.colorScheme.primaryContainer
+          },
+          contentColor = if (isFabExpanded) {
+            MaterialTheme.colorScheme.onSurfaceVariant
+          } else {
+            MaterialTheme.colorScheme.onPrimaryContainer
+          },
+          modifier = Modifier.testTag("gallery_fab_menu_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = if (isFabExpanded) "Close gallery actions" else "Gallery actions",
+            modifier = Modifier.rotate(addIconRotation),
           )
         }
       }
+    }
 
-      val addIconRotation by animateFloatAsState(
-        targetValue = if (isFabExpanded) 135f else 0f,
-        label = "gallery_fab_rotation",
-      )
-
-      FloatingActionButton(
-        onClick = {
-          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-          isFabExpanded = !isFabExpanded
-        },
-        shape = CircleShape,
-        containerColor = if (isFabExpanded) {
-          MaterialTheme.colorScheme.surfaceContainerHighest
-        } else {
-          MaterialTheme.colorScheme.primaryContainer
-        },
-        contentColor = if (isFabExpanded) {
-          MaterialTheme.colorScheme.onSurfaceVariant
-        } else {
-          MaterialTheme.colorScheme.onPrimaryContainer
-        },
-        modifier = Modifier.testTag("gallery_fab_menu_button"),
+    // Floating Paste Bar (shown when albums/photos are in clipboard to copy/cut)
+    clipboardState?.let { clip ->
+      val pasteTargetDir = currentAlbum?.directory ?: defaultNewAlbumDir
+      Surface(
+        shape = RoundedCornerShape(20.dp),
+        tonalElevation = 6.dp,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        modifier = Modifier
+          .align(Alignment.BottomCenter)
+          .padding(bottom = if (isSelectionMode) 16.dp else 76.dp, start = 16.dp, end = 16.dp)
+          .testTag("gallery_paste_bar"),
       ) {
-        Icon(
-          imageVector = Icons.Default.Add,
-          contentDescription = if (isFabExpanded) "Close gallery actions" else "Gallery actions",
-          modifier = Modifier.rotate(addIconRotation),
-        )
+        Row(
+          modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Icon(
+            imageVector = if (clip.operation == GalleryClipboardOperation.CUT) {
+              Icons.Default.ContentCut
+            } else {
+              Icons.Default.ContentCopy
+            },
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+          )
+          Text(
+            text = "${clip.totalCount} ${if (clip.operation == GalleryClipboardOperation.CUT) "cut" else "copied"}",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+          )
+          Button(
+            onClick = {
+              val count = if (clip.operation == GalleryClipboardOperation.CUT) {
+                GalleryEngine.moveSelectedItems(clip.albums, clip.photos, pasteTargetDir)
+              } else {
+                GalleryEngine.copySelectedItems(clip.albums, clip.photos, pasteTargetDir)
+              }
+              clipboardState = null
+              refreshTrigger++
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              Toast.makeText(context, "Pasted $count ${if (count == 1) "item" else "items"}", Toast.LENGTH_SHORT).show()
+            },
+            shape = RoundedCornerShape(12.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier.testTag("action_paste_here"),
+          ) {
+            Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("Paste here")
+          }
+          IconButton(
+            onClick = { clipboardState = null },
+            modifier = Modifier
+              .size(32.dp)
+              .testTag("action_cancel_paste"),
+          ) {
+            Icon(Icons.Default.Close, contentDescription = "Cancel paste")
+          }
+        }
       }
     }
   }
@@ -819,9 +1107,6 @@ fun GalleryScreen(
 
   // Add / Create Folder Dialog
   addAlbumDialogTarget?.let { target ->
-    val defaultNewAlbumDir = remember(effectiveRootDir, initialFolders) {
-      initialFolders?.firstOrNull() ?: GalleryEngine.getDefaultNewAlbumFolder(effectiveRootDir)
-    }
     val isRootTarget = target == AddAlbumTarget.ROOT_ALBUM || currentAlbum == null
     val targetParentDir = if (isRootTarget) {
       defaultNewAlbumDir
@@ -837,6 +1122,34 @@ fun GalleryScreen(
         newDir.mkdirs()
         refreshTrigger++
         addAlbumDialogTarget = null
+      },
+    )
+  }
+
+  if (showBulkInfoDialog) {
+    GalleryBulkInfoDialog(
+      albums = selectedAlbums,
+      photos = selectedPhotos,
+      onDismiss = { showBulkInfoDialog = false },
+    )
+  }
+
+  if (showBulkDeleteDialog) {
+    GalleryBulkDeleteConfirmDialog(
+      albums = selectedAlbums,
+      photos = selectedPhotos,
+      onDismiss = { showBulkDeleteDialog = false },
+      onConfirm = {
+        val deletedCount = GalleryEngine.deleteSelectedItems(selectedAlbums, selectedPhotos)
+        showBulkDeleteDialog = false
+        exitSelectionMode()
+        refreshTrigger++
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        Toast.makeText(
+          context,
+          "Deleted $deletedCount ${if (deletedCount == 1) "item" else "items"}",
+          Toast.LENGTH_SHORT,
+        ).show()
       },
     )
   }
@@ -892,6 +1205,18 @@ private fun GalleryTopBar(
   viewMode: GalleryViewMode,
   sortOrder: GallerySortOrder,
   showSortMenu: Boolean,
+  isSelectionMode: Boolean = false,
+  selectedCount: Int = 0,
+  totalCount: Int = 0,
+  singleSelectedPhoto: GalleryPhoto? = null,
+  onToggleSelectAll: () -> Unit = {},
+  onCloseSelection: () -> Unit = {},
+  onBulkShare: () -> Unit = {},
+  onBulkInfo: () -> Unit = {},
+  onBulkCut: () -> Unit = {},
+  onBulkCopy: () -> Unit = {},
+  onBulkDelete: () -> Unit = {},
+  onEditSinglePhoto: (GalleryPhoto) -> Unit = {},
   onBack: () -> Unit,
   onToggleViewMode: () -> Unit,
   onSelectViewMode: (GalleryViewMode) -> Unit,
@@ -910,121 +1235,392 @@ private fun GalleryTopBar(
         .heightIn(min = 68.dp),
       contentAlignment = Alignment.CenterStart,
     ) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 12.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
+      if (isSelectionMode) {
+        // Multi-Selection Header Toolbar following DESIGN_LANGUAGE.md 5.5
         Row(
-          modifier = Modifier.weight(1f),
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 10.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-          if (canNavigateBack) {
+          // Leading: Close button + Select All Checkbox + "# selected" Text
+          Row(
+            modifier = Modifier.weight(1f, fill = false),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
             IconButton(
-              onClick = onBack,
+              onClick = onCloseSelection,
               modifier = Modifier
                 .size(36.dp)
-                .testTag("gallery_back_button"),
+                .testTag("action_close_selection"),
             ) {
               Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
-                tint = MaterialTheme.colorScheme.onSurface,
+                imageVector = Icons.Default.Close,
+                contentDescription = "Exit selection",
               )
             }
-          } else {
-            Box(
+
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onToggleSelectAll)
+                .padding(horizontal = 4.dp, vertical = 4.dp)
+                .testTag("action_select_all_checkbox"),
+            ) {
+              Checkbox(
+                checked = totalCount > 0 && selectedCount == totalCount,
+                onCheckedChange = { onToggleSelectAll() },
+                colors = CheckboxDefaults.colors(
+                  checkedColor = MaterialTheme.colorScheme.primary,
+                ),
+                modifier = Modifier.size(32.dp),
+              )
+              Spacer(modifier = Modifier.width(4.dp))
+              Text(
+                text = "$selectedCount selected",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("gallery_selection_count_label"),
+              )
+            }
+          }
+
+          // Trailing Actions: Share, Info, Cut, Copy, Delete (red), and Overflow "..." Menu
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+          ) {
+            var showOverflowMenu by remember { mutableStateOf(false) }
+            val hasSelection = selectedCount > 0
+
+            IconButton(
+              onClick = onBulkShare,
+              enabled = hasSelection,
               modifier = Modifier
                 .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-              contentAlignment = Alignment.Center,
+                .testTag("action_bulk_share"),
             ) {
               Icon(
-                imageVector = Icons.Default.PhotoLibrary,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                imageVector = Icons.Default.Share,
+                contentDescription = "Share",
+                tint = if (hasSelection) {
+                  MaterialTheme.colorScheme.onSurface
+                } else {
+                  MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                },
                 modifier = Modifier.size(20.dp),
               )
             }
-          }
 
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = title,
-              style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurface,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.testTag("gallery_header_title"),
-            )
-            Text(
-              text = subtext,
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.testTag("gallery_header_subtitle"),
-            )
-          }
-        }
-
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-          ViewModeSegmentedToggle(
-            isListView = viewMode == GalleryViewMode.LIST,
-            onSelectListView = { onSelectViewMode(GalleryViewMode.LIST) },
-            onSelectGridView = { onSelectViewMode(GalleryViewMode.TILE) },
-            onToggle = onToggleViewMode,
-            toggleTestTag = "gallery_view_mode_toggle",
-            listTestTag = "gallery_list_view_button",
-            gridTestTag = "gallery_tile_view_button",
-            listContentDescription = "List view",
-            gridContentDescription = "Tile view",
-          )
-
-          Box {
             IconButton(
-              onClick = onOpenSortMenu,
-              modifier = Modifier.testTag("gallery_sort_button"),
+              onClick = onBulkInfo,
+              enabled = hasSelection,
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("action_bulk_info"),
             ) {
               Icon(
-                imageVector = Icons.AutoMirrored.Filled.Sort,
-                contentDescription = "Sort gallery",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                imageVector = Icons.Default.Info,
+                contentDescription = "Info",
+                tint = if (hasSelection) {
+                  MaterialTheme.colorScheme.onSurface
+                } else {
+                  MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                },
+                modifier = Modifier.size(20.dp),
               )
             }
-            DropdownMenu(
-              expanded = showSortMenu,
-              onDismissRequest = onDismissSortMenu,
-              modifier = Modifier.testTag("gallery_sort_menu"),
+
+            IconButton(
+              onClick = onBulkCut,
+              enabled = hasSelection,
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("action_bulk_cut"),
             ) {
-              GallerySortOrder.entries.forEach { option ->
+              Icon(
+                imageVector = Icons.Default.ContentCut,
+                contentDescription = "Cut",
+                tint = if (hasSelection) {
+                  MaterialTheme.colorScheme.onSurface
+                } else {
+                  MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                },
+                modifier = Modifier.size(20.dp),
+              )
+            }
+
+            IconButton(
+              onClick = onBulkCopy,
+              enabled = hasSelection,
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("action_bulk_copy"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.ContentCopy,
+                contentDescription = "Copy",
+                tint = if (hasSelection) {
+                  MaterialTheme.colorScheme.onSurface
+                } else {
+                  MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                },
+                modifier = Modifier.size(20.dp),
+              )
+            }
+
+            IconButton(
+              onClick = onBulkDelete,
+              enabled = hasSelection,
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("action_bulk_delete"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Delete,
+                contentDescription = "Delete",
+                tint = if (hasSelection) {
+                  MaterialTheme.colorScheme.error
+                } else {
+                  MaterialTheme.colorScheme.error.copy(alpha = 0.38f)
+                },
+                modifier = Modifier.size(20.dp),
+              )
+            }
+
+            Box {
+              IconButton(
+                onClick = { showOverflowMenu = true },
+                modifier = Modifier
+                  .size(36.dp)
+                  .testTag("action_selection_overflow"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.MoreVert,
+                  contentDescription = "More actions",
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+
+              DropdownMenu(
+                expanded = showOverflowMenu,
+                onDismissRequest = { showOverflowMenu = false },
+              ) {
                 DropdownMenuItem(
-                  text = {
-                    Text(
-                      text = option.displayName,
-                      fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
+                  text = { Text("Share") },
+                  leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                  enabled = hasSelection,
+                  onClick = {
+                    showOverflowMenu = false
+                    onBulkShare()
+                  },
+                  modifier = Modifier.testTag("action_selection_share"),
+                )
+                DropdownMenuItem(
+                  text = { Text("Info") },
+                  leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                  enabled = hasSelection,
+                  onClick = {
+                    showOverflowMenu = false
+                    onBulkInfo()
+                  },
+                  modifier = Modifier.testTag("action_selection_info"),
+                )
+                DropdownMenuItem(
+                  text = { Text("Cut") },
+                  leadingIcon = { Icon(Icons.Default.ContentCut, contentDescription = null) },
+                  enabled = hasSelection,
+                  onClick = {
+                    showOverflowMenu = false
+                    onBulkCut()
+                  },
+                  modifier = Modifier.testTag("action_selection_cut"),
+                )
+                DropdownMenuItem(
+                  text = { Text("Copy") },
+                  leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                  enabled = hasSelection,
+                  onClick = {
+                    showOverflowMenu = false
+                    onBulkCopy()
+                  },
+                  modifier = Modifier.testTag("action_selection_copy"),
+                )
+                if (singleSelectedPhoto != null) {
+                  DropdownMenuItem(
+                    text = { Text("Edit") },
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    onClick = {
+                      showOverflowMenu = false
+                      onEditSinglePhoto(singleSelectedPhoto)
+                    },
+                    modifier = Modifier.testTag("action_selection_edit"),
+                  )
+                }
+                DropdownMenuItem(
+                  text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                  leadingIcon = {
+                    Icon(
+                      imageVector = Icons.Default.Delete,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.error,
                     )
                   },
-                  leadingIcon = {
-                    if (option == sortOrder) {
-                      Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                      )
-                    }
+                  enabled = hasSelection,
+                  onClick = {
+                    showOverflowMenu = false
+                    onBulkDelete()
                   },
-                  onClick = { onSelectSortOrder(option) },
-                  modifier = Modifier.testTag("gallery_sort_option_${option.name.lowercase()}"),
+                  modifier = Modifier.testTag("action_selection_delete"),
                 )
+                HorizontalDivider()
+                DropdownMenuItem(
+                  text = {
+                    Text(if (selectedCount == totalCount && totalCount > 0) "Deselect all" else "Select all")
+                  },
+                  leadingIcon = { Icon(Icons.Default.SelectAll, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    onToggleSelectAll()
+                  },
+                  modifier = Modifier.testTag("action_selection_select_all"),
+                )
+                DropdownMenuItem(
+                  text = { Text("Exit selection") },
+                  leadingIcon = { Icon(Icons.Default.Close, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    onCloseSelection()
+                  },
+                  modifier = Modifier.testTag("action_selection_exit"),
+                )
+              }
+            }
+          }
+        }
+      } else {
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            if (canNavigateBack) {
+              IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                  .size(36.dp)
+                  .testTag("gallery_back_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                  contentDescription = "Back",
+                  tint = MaterialTheme.colorScheme.onSurface,
+                )
+              }
+            } else {
+              Box(
+                modifier = Modifier
+                  .size(36.dp)
+                  .clip(CircleShape)
+                  .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.Default.PhotoLibrary,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("gallery_header_title"),
+              )
+              Text(
+                text = subtext,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("gallery_header_subtitle"),
+              )
+            }
+          }
+
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            ViewModeSegmentedToggle(
+              isListView = viewMode == GalleryViewMode.LIST,
+              onSelectListView = { onSelectViewMode(GalleryViewMode.LIST) },
+              onSelectGridView = { onSelectViewMode(GalleryViewMode.TILE) },
+              onToggle = onToggleViewMode,
+              toggleTestTag = "gallery_view_mode_toggle",
+              listTestTag = "gallery_list_view_button",
+              gridTestTag = "gallery_tile_view_button",
+              listContentDescription = "List view",
+              gridContentDescription = "Tile view",
+            )
+
+            Box {
+              IconButton(
+                onClick = onOpenSortMenu,
+                modifier = Modifier.testTag("gallery_sort_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.AutoMirrored.Filled.Sort,
+                  contentDescription = "Sort gallery",
+                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+              DropdownMenu(
+                expanded = showSortMenu,
+                onDismissRequest = onDismissSortMenu,
+                modifier = Modifier.testTag("gallery_sort_menu"),
+              ) {
+                GallerySortOrder.entries.forEach { option ->
+                  DropdownMenuItem(
+                    text = {
+                      Text(
+                        text = option.displayName,
+                        fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
+                      )
+                    },
+                    leadingIcon = {
+                      if (option == sortOrder) {
+                        Icon(
+                          imageVector = Icons.Default.Check,
+                          contentDescription = null,
+                          tint = MaterialTheme.colorScheme.primary,
+                        )
+                      }
+                    },
+                    onClick = { onSelectSortOrder(option) },
+                    modifier = Modifier.testTag("gallery_sort_option_${option.name.lowercase()}"),
+                  )
+                }
               }
             }
           }
@@ -1219,6 +1815,13 @@ private fun GalleryTileGridView(
   photos: List<GalleryPhoto>,
   albumsPerRow: Int,
   isInsideAlbum: Boolean = false,
+  isSelectionMode: Boolean = false,
+  selectedAlbumPaths: Set<String> = emptySet(),
+  selectedPhotoPaths: Set<String> = emptySet(),
+  onToggleAlbumSelect: (GalleryAlbum) -> Unit = {},
+  onTogglePhotoSelect: (GalleryPhoto) -> Unit = {},
+  onAlbumLongClick: (GalleryAlbum) -> Unit = {},
+  onPhotoLongClick: (GalleryPhoto) -> Unit = {},
   onAlbumClick: (GalleryAlbum) -> Unit,
   onPhotoClick: (GalleryPhoto) -> Unit,
   onPhotoEdit: (GalleryPhoto) -> Unit = {},
@@ -1249,6 +1852,10 @@ private fun GalleryTileGridView(
       AlbumTileCard(
         album = album,
         isCompact = isCompactTile,
+        isSelectionMode = isSelectionMode,
+        isSelected = album.path in selectedAlbumPaths,
+        onToggleSelect = { onToggleAlbumSelect(album) },
+        onLongClick = { onAlbumLongClick(album) },
         onClick = { onAlbumClick(album) },
       )
     }
@@ -1275,6 +1882,10 @@ private fun GalleryTileGridView(
       PhotoTileCard(
         photo = photo,
         isCompact = isCompactTile,
+        isSelectionMode = isSelectionMode,
+        isSelected = photo.path in selectedPhotoPaths,
+        onToggleSelect = { onTogglePhotoSelect(photo) },
+        onLongClick = { onPhotoLongClick(photo) },
         onClick = { onPhotoClick(photo) },
         onEdit = { onPhotoEdit(photo) },
       )
@@ -1287,17 +1898,25 @@ private fun GalleryTileGridView(
  * - Square tile showing the most recent photo from the album
  * - Folder name label positioned directly underneath the tile
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AlbumTileCard(
   album: GalleryAlbum,
   isCompact: Boolean,
+  isSelectionMode: Boolean = false,
+  isSelected: Boolean = false,
+  onToggleSelect: () -> Unit = {},
+  onLongClick: () -> Unit = {},
   onClick: () -> Unit,
 ) {
   Column(
     modifier = Modifier
       .fillMaxWidth()
       .clip(RoundedCornerShape(14.dp))
-      .clickable(onClick = onClick)
+      .combinedClickable(
+        onClick = onClick,
+        onLongClick = onLongClick,
+      )
       .padding(2.dp)
       .testTag("album_tile_item_${album.name}"),
     horizontalAlignment = Alignment.CenterHorizontally,
@@ -1306,9 +1925,17 @@ private fun AlbumTileCard(
     Card(
       shape = RoundedCornerShape(14.dp),
       colors = CardDefaults.cardColors(
-        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        containerColor = if (isSelected) {
+          MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+        } else {
+          MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        },
       ),
-      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+      border = if (isSelected) {
+        BorderStroke(2.5.dp, MaterialTheme.colorScheme.primary)
+      } else {
+        BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+      },
       modifier = Modifier
         .fillMaxWidth()
         .aspectRatio(1f)
@@ -1324,6 +1951,38 @@ private fun AlbumTileCard(
           iconSize = if (isCompact) 24.dp else 36.dp,
           modifier = Modifier.fillMaxSize(),
         )
+
+        if (isSelected) {
+          Box(
+            modifier = Modifier
+              .fillMaxSize()
+              .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)),
+          )
+        }
+
+        if (isSelectionMode) {
+          Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+            modifier = Modifier
+              .align(Alignment.TopEnd)
+              .padding(6.dp)
+              .size(28.dp),
+          ) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+              Checkbox(
+                checked = isSelected,
+                onCheckedChange = { onToggleSelect() },
+                colors = CheckboxDefaults.colors(
+                  checkedColor = MaterialTheme.colorScheme.primary,
+                ),
+                modifier = Modifier
+                  .size(24.dp)
+                  .testTag("album_tile_checkbox_${album.name}"),
+              )
+            }
+          }
+        }
 
         // Nested folders indicator badge
         if (album.hasNestedAlbums && !isCompact) {
@@ -1364,7 +2023,7 @@ private fun AlbumTileCard(
       text = album.name,
       style = if (isCompact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodyMedium,
       fontWeight = FontWeight.SemiBold,
-      color = MaterialTheme.colorScheme.onSurface,
+      color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
       textAlign = TextAlign.Center,
@@ -1387,10 +2046,15 @@ private fun AlbumTileCard(
   }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PhotoTileCard(
   photo: GalleryPhoto,
   isCompact: Boolean,
+  isSelectionMode: Boolean = false,
+  isSelected: Boolean = false,
+  onToggleSelect: () -> Unit = {},
+  onLongClick: () -> Unit = {},
   onClick: () -> Unit,
   onEdit: () -> Unit = {},
 ) {
@@ -1399,8 +2063,18 @@ private fun PhotoTileCard(
       .fillMaxWidth()
       .aspectRatio(1f)
       .clip(RoundedCornerShape(4.dp))
+      .then(
+        if (isSelected) {
+          Modifier.border(2.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp))
+        } else {
+          Modifier
+        }
+      )
       .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-      .clickable(onClick = onClick)
+      .combinedClickable(
+        onClick = onClick,
+        onLongClick = onLongClick,
+      )
       .testTag("photo_tile_item_${photo.name}"),
   ) {
     Box(
@@ -1414,24 +2088,57 @@ private fun PhotoTileCard(
         iconSize = if (isCompact) 22.dp else 32.dp,
         modifier = Modifier.fillMaxSize(),
       )
-      Surface(
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-        modifier = Modifier
-          .align(Alignment.TopEnd)
-          .padding(4.dp)
-          .size(26.dp)
-          .clip(CircleShape)
-          .clickable(onClick = onEdit)
-          .testTag("photo_tile_edit_${photo.name}"),
-      ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-          Icon(
-            imageVector = Icons.Default.Edit,
-            contentDescription = "Edit ${photo.name}",
-            tint = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.size(14.dp),
-          )
+
+      if (isSelected) {
+        Box(
+          modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)),
+        )
+      }
+
+      if (isSelectionMode) {
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+          modifier = Modifier
+            .align(Alignment.TopEnd)
+            .padding(4.dp)
+            .size(26.dp),
+        ) {
+          Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+            Checkbox(
+              checked = isSelected,
+              onCheckedChange = { onToggleSelect() },
+              colors = CheckboxDefaults.colors(
+                checkedColor = MaterialTheme.colorScheme.primary,
+              ),
+              modifier = Modifier
+                .size(22.dp)
+                .testTag("photo_tile_checkbox_${photo.name}"),
+            )
+          }
+        }
+      } else {
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+          modifier = Modifier
+            .align(Alignment.TopEnd)
+            .padding(4.dp)
+            .size(26.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onEdit)
+            .testTag("photo_tile_edit_${photo.name}"),
+        ) {
+          Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+            Icon(
+              imageVector = Icons.Default.Edit,
+              contentDescription = "Edit ${photo.name}",
+              tint = MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier.size(14.dp),
+            )
+          }
         }
       }
     }
@@ -1445,6 +2152,13 @@ private fun PhotoTileCard(
 private fun GalleryListView(
   albums: List<GalleryAlbum>,
   photos: List<GalleryPhoto>,
+  isSelectionMode: Boolean = false,
+  selectedAlbumPaths: Set<String> = emptySet(),
+  selectedPhotoPaths: Set<String> = emptySet(),
+  onToggleAlbumSelect: (GalleryAlbum) -> Unit = {},
+  onTogglePhotoSelect: (GalleryPhoto) -> Unit = {},
+  onAlbumLongClick: (GalleryAlbum) -> Unit = {},
+  onPhotoLongClick: (GalleryPhoto) -> Unit = {},
   onAlbumClick: (GalleryAlbum) -> Unit,
   onPhotoClick: (GalleryPhoto) -> Unit,
   onPhotoEdit: (GalleryPhoto) -> Unit = {},
@@ -1462,6 +2176,10 @@ private fun GalleryListView(
     ) { album ->
       AlbumListRow(
         album = album,
+        isSelectionMode = isSelectionMode,
+        isSelected = album.path in selectedAlbumPaths,
+        onToggleSelect = { onToggleAlbumSelect(album) },
+        onLongClick = { onAlbumLongClick(album) },
         onClick = { onAlbumClick(album) },
       )
     }
@@ -1487,6 +2205,10 @@ private fun GalleryListView(
     ) { photo ->
       PhotoListRow(
         photo = photo,
+        isSelectionMode = isSelectionMode,
+        isSelected = photo.path in selectedPhotoPaths,
+        onToggleSelect = { onTogglePhotoSelect(photo) },
+        onLongClick = { onPhotoLongClick(photo) },
         onClick = { onPhotoClick(photo) },
         onEdit = { onPhotoEdit(photo) },
       )
@@ -1494,21 +2216,37 @@ private fun GalleryListView(
   }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AlbumListRow(
   album: GalleryAlbum,
+  isSelectionMode: Boolean = false,
+  isSelected: Boolean = false,
+  onToggleSelect: () -> Unit = {},
+  onLongClick: () -> Unit = {},
   onClick: () -> Unit,
 ) {
   Card(
     shape = RoundedCornerShape(14.dp),
     colors = CardDefaults.cardColors(
-      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+      containerColor = if (isSelected) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+      } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+      },
     ),
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+    border = if (isSelected) {
+      BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+    } else {
+      BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    },
     modifier = Modifier
       .fillMaxWidth()
       .clip(RoundedCornerShape(14.dp))
-      .clickable(onClick = onClick)
+      .combinedClickable(
+        onClick = onClick,
+        onLongClick = onLongClick,
+      )
       .testTag("album_list_item_${album.name}"),
   ) {
     Row(
@@ -1517,6 +2255,23 @@ private fun AlbumListRow(
         .padding(horizontal = 12.dp, vertical = 10.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
+      if (isSelectionMode) {
+        Box(
+          modifier = Modifier.size(36.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          Checkbox(
+            checked = isSelected,
+            onCheckedChange = { onToggleSelect() },
+            colors = CheckboxDefaults.colors(
+              checkedColor = MaterialTheme.colorScheme.primary,
+            ),
+            modifier = Modifier.testTag("album_list_checkbox_${album.name}"),
+          )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+      }
+
       // Album photo as an icon on the left
       Box(
         modifier = Modifier
@@ -1559,31 +2314,49 @@ private fun AlbumListRow(
         )
       }
 
-      Icon(
-        imageVector = Icons.Default.ChevronRight,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
+      if (!isSelectionMode) {
+        Icon(
+          imageVector = Icons.Default.ChevronRight,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
     }
   }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PhotoListRow(
   photo: GalleryPhoto,
+  isSelectionMode: Boolean = false,
+  isSelected: Boolean = false,
+  onToggleSelect: () -> Unit = {},
+  onLongClick: () -> Unit = {},
   onClick: () -> Unit,
   onEdit: () -> Unit = {},
 ) {
   Card(
     shape = RoundedCornerShape(14.dp),
     colors = CardDefaults.cardColors(
-      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+      containerColor = if (isSelected) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+      } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+      },
     ),
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+    border = if (isSelected) {
+      BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+    } else {
+      BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    },
     modifier = Modifier
       .fillMaxWidth()
       .clip(RoundedCornerShape(14.dp))
-      .clickable(onClick = onClick)
+      .combinedClickable(
+        onClick = onClick,
+        onLongClick = onLongClick,
+      )
       .testTag("photo_list_item_${photo.name}"),
   ) {
     Row(
@@ -1592,6 +2365,23 @@ private fun PhotoListRow(
         .padding(horizontal = 12.dp, vertical = 10.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
+      if (isSelectionMode) {
+        Box(
+          modifier = Modifier.size(36.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          Checkbox(
+            checked = isSelected,
+            onCheckedChange = { onToggleSelect() },
+            colors = CheckboxDefaults.colors(
+              checkedColor = MaterialTheme.colorScheme.primary,
+            ),
+            modifier = Modifier.testTag("photo_list_checkbox_${photo.name}"),
+          )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+      }
+
       Box(
         modifier = Modifier
           .size(56.dp)
@@ -1632,18 +2422,20 @@ private fun PhotoListRow(
         )
       }
 
-      IconButton(
-        onClick = onEdit,
-        modifier = Modifier
-          .size(36.dp)
-          .testTag("photo_list_edit_${photo.name}"),
-      ) {
-        Icon(
-          imageVector = Icons.Default.Edit,
-          contentDescription = "Edit ${photo.name}",
-          tint = MaterialTheme.colorScheme.primary,
-          modifier = Modifier.size(20.dp),
-        )
+      if (!isSelectionMode) {
+        IconButton(
+          onClick = onEdit,
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("photo_list_edit_${photo.name}"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Edit,
+            contentDescription = "Edit ${photo.name}",
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+          )
+        }
       }
     }
   }
@@ -2386,21 +3178,367 @@ private fun AddGalleryFolderDialog(
   )
 }
 
-private fun sharePhotoFile(context: Context, file: File) {
-  try {
-    val uri = FileProvider.getUriForFile(
-      context,
-      "${context.packageName}.fileprovider",
-      file,
+@Composable
+private fun GalleryBulkInfoDialog(
+  albums: List<GalleryAlbum>,
+  photos: List<GalleryPhoto>,
+  onDismiss: () -> Unit,
+) {
+  val info = remember(albums, photos) {
+    GalleryEngine.getBulkSelectionInfo(albums, photos)
+  }
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    modifier = Modifier.testTag("gallery_bulk_info_dialog"),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Info,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "Selection Info",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "${info.totalItems} ${if (info.totalItems == 1) "item" else "items"} selected",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Card(
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+          ),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            GalleryDetailRow("Total Size", info.formattedSize)
+            GalleryDetailRow("Exact Bytes", "${info.totalSizeBytes} bytes")
+            GalleryDetailRow(
+              "Breakdown",
+              "${info.albumCount} ${if (info.albumCount == 1) "album" else "albums"}, " +
+                "${info.photoCount} ${if (info.photoCount == 1) "photo" else "photos"}",
+            )
+            GalleryDetailRow(
+              "Total Media Files",
+              "${info.totalMediaFileCount} ${if (info.totalMediaFileCount == 1) "file" else "files"}",
+            )
+          }
+        }
+
+        if (albums.isNotEmpty()) {
+          Text(
+            text = "Selected Albums",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+          )
+          albums.forEach { album ->
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 3.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Folder,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp),
+              )
+              Text(
+                text = album.name,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+              )
+              Text(
+                text = album.summaryText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
+
+        if (photos.isNotEmpty()) {
+          Text(
+            text = "Selected Photos",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+          )
+          photos.forEach { photo ->
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 3.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Icon(
+                imageVector = if (photo.isVideo) Icons.Default.VideoFile else Icons.Default.Image,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.size(22.dp),
+              )
+              Text(
+                text = photo.name,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+              )
+              Text(
+                text = photo.sizeFormatted,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = onDismiss,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.testTag("gallery_close_bulk_info"),
+      ) {
+        Text("Close")
+      }
+    },
+  )
+}
+
+@Composable
+private fun GalleryBulkDeleteConfirmDialog(
+  albums: List<GalleryAlbum>,
+  photos: List<GalleryPhoto>,
+  onDismiss: () -> Unit,
+  onConfirm: () -> Unit,
+) {
+  val info = remember(albums, photos) {
+    GalleryEngine.getBulkSelectionInfo(albums, photos)
+  }
+  val itemNames = remember(albums, photos) {
+    albums.map { it.name } + photos.map { it.name }
+  }
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    modifier = Modifier.testTag("gallery_bulk_delete_dialog"),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.errorContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Delete,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "Delete ${info.totalItems} ${if (info.totalItems == 1) "item" else "items"}?",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "Total: ${info.formattedSize}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Text(
+          text = "Are you sure you want to permanently delete the selected albums and photos? This action cannot be undone.",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+
+        Card(
+          shape = RoundedCornerShape(12.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f),
+          ),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            itemNames.take(4).forEach { name ->
+              Text(
+                text = "• $name",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+            if (itemNames.size > 4) {
+              Text(
+                text = "...and ${itemNames.size - 4} more",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f),
+              )
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = onConfirm,
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(
+          containerColor = MaterialTheme.colorScheme.error,
+          contentColor = MaterialTheme.colorScheme.onError,
+        ),
+        modifier = Modifier.testTag("gallery_confirm_bulk_delete"),
+      ) {
+        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Delete")
+      }
+    },
+    dismissButton = {
+      TextButton(
+        onClick = onDismiss,
+        shape = RoundedCornerShape(12.dp),
+      ) {
+        Text("Cancel")
+      }
+    },
+  )
+}
+
+@Composable
+private fun GalleryDetailRow(label: String, value: String) {
+  Column(modifier = Modifier.fillMaxWidth()) {
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    val intent = Intent(Intent.ACTION_SEND).apply {
-      type = FileManagerEngine.getMimeType(file)
-      putExtra(Intent.EXTRA_STREAM, uri)
-      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    Text(
+      text = value,
+      style = MaterialTheme.typography.bodySmall,
+      fontWeight = FontWeight.Medium,
+    )
+  }
+}
+
+private fun sharePhotoFile(context: Context, file: File) {
+  shareMediaFiles(context, listOf(file))
+}
+
+private fun shareMediaFiles(context: Context, files: List<File>) {
+  if (files.isEmpty()) return
+  try {
+    if (files.size == 1) {
+      val file = files.first()
+      val uri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file,
+      )
+      val intent = Intent(Intent.ACTION_SEND).apply {
+        type = FileManagerEngine.getMimeType(file)
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      }
+      context.startActivity(Intent.createChooser(intent, "Share ${file.name}"))
+    } else {
+      val uris = ArrayList<Uri>(files.size)
+      for (file in files) {
+        val uri = FileProvider.getUriForFile(
+          context,
+          "${context.packageName}.fileprovider",
+          file,
+        )
+        uris.add(uri)
+      }
+      val allVideos = files.all { VideoEditorEngine.isVideoFile(it) }
+      val allImages = files.all { !VideoEditorEngine.isVideoFile(it) }
+      val mimeType = when {
+        allImages -> "image/*"
+        allVideos -> "video/*"
+        else -> "*/*"
+      }
+      val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+        type = mimeType
+        putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      }
+      context.startActivity(Intent.createChooser(intent, "Share ${files.size} items"))
     }
-    context.startActivity(Intent.createChooser(intent, "Share ${file.name}"))
   } catch (_: Exception) {
-    Toast.makeText(context, "Unable to share ${file.name}", Toast.LENGTH_SHORT).show()
+    Toast.makeText(context, "Unable to share selected items", Toast.LENGTH_SHORT).show()
   }
 }
 

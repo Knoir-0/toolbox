@@ -226,8 +226,20 @@ fun ArchiveScreen(
 
   // Dialog states
   var showOpenArchivePicker by remember { mutableStateOf(false) }
-  var showCreateZipDialog by remember { mutableStateOf(false) }
-  var preselectedFilesForZip by remember { mutableStateOf<List<File>>(emptyList()) }
+  var showCreateZipDialog by remember(initialFile?.absolutePath) {
+    mutableStateOf(
+      initialFile != null && initialFile.exists() && !ArchiveEngine.isSupportedArchive(initialFile)
+    )
+  }
+  var preselectedFilesForZip by remember(initialFile?.absolutePath) {
+    mutableStateOf(
+      if (initialFile != null && initialFile.exists() && !ArchiveEngine.isSupportedArchive(initialFile)) {
+        listOf(initialFile)
+      } else {
+        emptyList()
+      }
+    )
+  }
   var showAddFilesDialog by remember { mutableStateOf(false) }
   var showCreateFolderDialog by remember { mutableStateOf(false) }
   var showArchiveInfoDialog by remember { mutableStateOf(false) }
@@ -3075,7 +3087,12 @@ internal fun CreateZipArchiveDialog(
 
   val defaultStem = remember(initialSelectedFiles) {
     if (initialSelectedFiles.size == 1) {
-      FileConverterEngine.extractFileStem(initialSelectedFiles.first().name)
+      val single = initialSelectedFiles.first()
+      if (single.isDirectory) {
+        single.name.ifEmpty { "archive" }
+      } else {
+        FileConverterEngine.extractFileStem(single.name)
+      }
     } else {
       "archive_${System.currentTimeMillis() / 1000L % 10000}"
     }

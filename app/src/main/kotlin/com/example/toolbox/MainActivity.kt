@@ -44,6 +44,8 @@ class MainActivity : ComponentActivity() {
       val preferencesRepository = rememberNavigationPreferencesRepository()
       val themeMode by preferencesRepository.themeModeFlow.collectAsState()
       val themeColor by preferencesRepository.themeColorFlow.collectAsState()
+      val musicPlayerThemeEnabled by preferencesRepository.musicPlayerThemeEnabledFlow.collectAsState()
+      val musicPlayerColorOption by preferencesRepository.musicPlayerColorOptionFlow.collectAsState()
       val accentColor by preferencesRepository.accentColorFlow.collectAsState()
       val standaloneTool by standaloneToolState
       val initialFolder by initialFolderState
@@ -65,6 +67,8 @@ class MainActivity : ComponentActivity() {
         themeMode = themeMode,
         themeColor = themeColor,
         accentColor = accentColor,
+        musicPlayerThemeEnabled = musicPlayerThemeEnabled,
+        musicPlayerColorOption = musicPlayerColorOption,
       ) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
           MainNavigation(

@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -114,7 +115,9 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -144,7 +147,6 @@ import com.example.toolbox.ui.main.resetAllSettingsToDefaults
 import com.example.toolbox.ui.theme.AccentHarmonyOption
 import com.example.toolbox.ui.theme.MusicPlayerColorOption
 import com.example.toolbox.ui.theme.calculateAccentHarmonyColor
-import com.example.toolbox.ui.theme.calculateComplementaryColor
 import com.example.toolbox.ui.theme.colorToHexString
 import com.example.toolbox.ui.theme.isAutoAccentColorSetting
 import com.example.toolbox.ui.theme.isMusicPlayerThemeColorSetting
@@ -211,6 +213,8 @@ fun SettingsScreen(
 ) {
   val themeMode by preferencesRepository.themeModeFlow.collectAsState()
   val themeColor by preferencesRepository.themeColorFlow.collectAsState()
+  val musicPlayerThemeEnabled by preferencesRepository.musicPlayerThemeEnabledFlow.collectAsState()
+  val musicPlayerColorOption by preferencesRepository.musicPlayerColorOptionFlow.collectAsState()
   val accentColor by preferencesRepository.accentColorFlow.collectAsState()
   val hiddenTools by preferencesRepository.hiddenToolsFlow.collectAsState()
   val toolSorting by preferencesRepository.toolSortingFlow.collectAsState()
@@ -763,28 +767,36 @@ fun SettingsScreen(
     // Section 3: Theme Color (Collapsible)
     val currentMusicPalette = MusicPlayerEngine.activeTrackPalette
     val currentMusicTrack = MusicPlayerEngine.activeTrack
-    val activeMusicThemeOption = remember(themeColor) {
+    val isMusicPlaying = MusicPlayerEngine.isMusicPlaying
+    val selectedMusicColorOption = remember(themeColor, musicPlayerColorOption) {
       MusicPlayerColorOption.fromPrefValue(themeColor)
+        ?: MusicPlayerColorOption.fromPrefValue(musicPlayerColorOption)
+        ?: MusicPlayerColorOption.DOMINANT
     }
-    val activeMusicThemeColor = remember(currentMusicPalette, activeMusicThemeOption) {
-      (activeMusicThemeOption ?: MusicPlayerColorOption.DOMINANT).resolveColor(currentMusicPalette)
+    val activeMusicThemeColor = remember(currentMusicPalette, selectedMusicColorOption) {
+      selectedMusicColorOption.resolveColor(currentMusicPalette)
     }
+    val isMusicThemeCurrentlyActive = musicPlayerThemeEnabled && isMusicPlaying
     val activeThemeColorPreset = PRESET_COLORS.find { it.hex.equals(themeColor, ignoreCase = true) }
-    val themeColorSummary = when {
-      themeColor == DEFAULT_THEME_COLOR_SYSTEM -> "System Preset"
-      activeMusicThemeOption != null -> activeMusicThemeOption.label
+    val fallbackThemeColorSummary = when {
+      themeColor == DEFAULT_THEME_COLOR_SYSTEM || isMusicPlayerThemeColorSetting(themeColor) -> "System Preset"
       activeThemeColorPreset != null -> "${activeThemeColorPreset.name} (${activeThemeColorPreset.hex})"
       else -> "Custom ($themeColor)"
     }
+    val themeColorSummary = if (isMusicThemeCurrentlyActive) {
+      "${selectedMusicColorOption.label} • Fallback: $fallbackThemeColorSummary"
+    } else {
+      fallbackThemeColorSummary
+    }
     val activeThemeColorBadge = when {
-      themeColor == DEFAULT_THEME_COLOR_SYSTEM -> {
+      isMusicThemeCurrentlyActive -> activeMusicThemeColor
+      themeColor == DEFAULT_THEME_COLOR_SYSTEM || isMusicPlayerThemeColorSetting(themeColor) -> {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
           MaterialTheme.colorScheme.primary
         } else {
           Color(0xFF8E66A6)
         }
       }
-      activeMusicThemeOption != null -> activeMusicThemeColor
       else -> parseHexColor(themeColor) ?: MaterialTheme.colorScheme.primary
     }
 
@@ -881,7 +893,8 @@ fun SettingsScreen(
             )
 
             // System Preset Option Card
-            val isSystemSelected = themeColor == DEFAULT_THEME_COLOR_SYSTEM
+            val isSystemSelected =
+              themeColor == DEFAULT_THEME_COLOR_SYSTEM || isMusicPlayerThemeColorSetting(themeColor)
             OutlinedCard(
               onClick = {
                 preferencesRepository.setThemeColor(DEFAULT_THEME_COLOR_SYSTEM)
@@ -972,18 +985,23 @@ fun SettingsScreen(
               }
             }
 
-            // Music Player Colors Option Card & Swatches
-            val isMusicThemeSelected = activeMusicThemeOption != null
+            // Music Player Colors Option Card (Checkbox, checked by default) & Swatches
+            val isMusicThemeSelected = musicPlayerThemeEnabled
             OutlinedCard(
-              onClick = {
-                val targetOption = activeMusicThemeOption ?: MusicPlayerColorOption.DOMINANT
-                preferencesRepository.setThemeColor(targetOption.prefValue)
-                customHexInput = ""
-              },
               modifier = Modifier
                 .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .toggleable(
+                  value = isMusicThemeSelected,
+                  role = Role.Checkbox,
+                  onValueChange = { checked ->
+                    preferencesRepository.setMusicPlayerThemeEnabled(checked)
+                  },
+                )
                 .testTag("color_preset_music_player")
-                .testTag("theme_preset_music_player"),
+                .testTag("theme_preset_music_player")
+                .testTag("music_player_theme_checkbox")
+                .testTag("theme_music_player_checkbox"),
               shape = RoundedCornerShape(12.dp),
               border = CardDefaults.outlinedCardBorder().copy(
                 brush = androidx.compose.ui.graphics.SolidColor(
@@ -1011,6 +1029,14 @@ fun SettingsScreen(
                   horizontalArrangement = Arrangement.spacedBy(10.dp),
                   modifier = Modifier.weight(1f),
                 ) {
+                  Checkbox(
+                    checked = isMusicThemeSelected,
+                    onCheckedChange = null,
+                    colors = CheckboxDefaults.colors(
+                      checkedColor = MaterialTheme.colorScheme.primary,
+                      uncheckedColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
+                  )
                   Box(
                     modifier = Modifier
                       .size(24.dp)
@@ -1019,7 +1045,7 @@ fun SettingsScreen(
                     contentAlignment = Alignment.Center,
                   ) {
                     Icon(
-                      imageVector = if (isMusicThemeSelected) Icons.Default.Check else Icons.Default.MusicNote,
+                      imageVector = Icons.Default.MusicNote,
                       contentDescription = null,
                       tint = Color.White,
                       modifier = Modifier.size(15.dp),
@@ -1027,15 +1053,24 @@ fun SettingsScreen(
                   }
                   Column {
                     Text(
-                      text = activeMusicThemeOption?.label ?: "Music Player Colors",
+                      text = if (isMusicThemeSelected) {
+                        selectedMusicColorOption.label
+                      } else {
+                        "Music Player Colors"
+                      },
                       style = MaterialTheme.typography.titleSmall,
                       fontWeight = FontWeight.Bold,
                     )
                     Text(
-                      text = if (currentMusicTrack != null) {
-                        "Follows ${currentMusicTrack.title} (${activeMusicThemeOption?.swatchLabel ?: "Dominant"})"
-                      } else {
-                        activeMusicThemeOption?.description ?: "Matches main color and background to Music Player album art"
+                      text = when {
+                        !isMusicThemeSelected ->
+                          "When checked, themes app while music is playing (falls back to selected theme color)"
+                        isMusicPlaying && currentMusicTrack != null ->
+                          "Playing ${currentMusicTrack.title} (${selectedMusicColorOption.swatchLabel})"
+                        isMusicPlaying ->
+                          "Active while music is playing (${selectedMusicColorOption.swatchLabel})"
+                        else ->
+                          "Themes app when music is playing • Fallback: $fallbackThemeColorSummary"
                       },
                       style = MaterialTheme.typography.bodySmall,
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1045,14 +1080,14 @@ fun SettingsScreen(
                   }
                 }
 
-                if (isMusicThemeSelected) {
+                if (isMusicThemeCurrentlyActive) {
                   Surface(
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
                   ) {
                     Text(
-                      text = "Active",
+                      text = "Playing",
                       style = MaterialTheme.typography.labelSmall,
                       modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                     )
@@ -1094,12 +1129,12 @@ fun SettingsScreen(
                 MusicPlayerColorOption.entries.forEach { musicOption ->
                   val swatchColor = musicOption.resolveColor(currentMusicPalette)
                   val swatchHex = musicOption.resolveHex(currentMusicPalette)
-                  val isSwatchSelected = activeMusicThemeOption == musicOption
+                  val isSwatchSelected = isMusicThemeSelected && selectedMusicColorOption == musicOption
 
                   Surface(
                     onClick = {
-                      preferencesRepository.setThemeColor(musicOption.prefValue)
-                      customHexInput = ""
+                      preferencesRepository.setMusicPlayerColorOption(musicOption.prefValue)
+                      preferencesRepository.setMusicPlayerThemeEnabled(true)
                     },
                     modifier = Modifier
                       .weight(1f)
@@ -1292,25 +1327,34 @@ fun SettingsScreen(
 
     // Section 4: Accent Color (Collapsible)
     val currentPrimary = MaterialTheme.colorScheme.primary
-    val autoComplementColor = remember(currentPrimary) {
-      calculateComplementaryColor(currentPrimary)
+    val themeBackgroundIsDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val isDarkTheme = when (themeMode) {
+      ThemeMode.LIGHT -> false
+      ThemeMode.DARK -> true
+      ThemeMode.SYSTEM -> themeBackgroundIsDark
     }
-    val activeAutoHarmony = remember(accentColor) {
-      AccentHarmonyOption.fromPrefValue(accentColor)
+    val defaultAutoHarmony = remember(isDarkTheme) {
+      AccentHarmonyOption.defaultForTheme(isDarkTheme)
+    }
+    val defaultAutoAccentColor = remember(currentPrimary, defaultAutoHarmony) {
+      calculateAccentHarmonyColor(currentPrimary, defaultAutoHarmony)
+    }
+    val activeAutoHarmony = remember(accentColor, isDarkTheme) {
+      AccentHarmonyOption.fromPrefValue(accentColor, darkTheme = isDarkTheme)
     }
     var selectedHarmonyMode by rememberSaveable {
-      mutableStateOf(activeAutoHarmony?.harmonyMode ?: HarmonyMode.COMPLEMENTARY)
+      mutableStateOf(activeAutoHarmony?.harmonyMode ?: HarmonyMode.SHADES)
     }
     LaunchedEffect(activeAutoHarmony) {
       if (activeAutoHarmony != null && activeAutoHarmony != AccentHarmonyOption.MONOCHROMATIC) {
         selectedHarmonyMode = activeAutoHarmony.harmonyMode
       }
     }
-    val activeAutoHarmonyColor = remember(currentPrimary, activeAutoHarmony, autoComplementColor) {
+    val activeAutoHarmonyColor = remember(currentPrimary, activeAutoHarmony, defaultAutoAccentColor) {
       if (activeAutoHarmony != null) {
         calculateAccentHarmonyColor(currentPrimary, activeAutoHarmony)
       } else {
-        autoComplementColor
+        defaultAutoAccentColor
       }
     }
     val activeAccentPreset = ACCENT_PRESET_COLORS.find { it.hex.equals(accentColor, ignoreCase = true) }
@@ -1321,7 +1365,7 @@ fun SettingsScreen(
     }
     val activeAccentColorBadge = when {
       activeAutoHarmony != null -> activeAutoHarmonyColor
-      else -> parseHexColor(accentColor) ?: autoComplementColor
+      else -> parseHexColor(accentColor) ?: defaultAutoAccentColor
     }
 
     Card(
@@ -1411,7 +1455,7 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
           ) {
             Text(
-              text = "Accent color used for key tool highlights (action keys, tuning needle, metronome downbeat, calipers). Default complements the main theme color.",
+              text = "Accent color used for key tool highlights (action keys, tuning needle, metronome downbeat, calipers). Defaults to Soft Tint in dark theme and Mid Shade in light theme.",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1421,7 +1465,7 @@ fun SettingsScreen(
             // Auto Option Card
             OutlinedCard(
               onClick = {
-                selectedHarmonyMode = HarmonyMode.COMPLEMENTARY
+                selectedHarmonyMode = HarmonyMode.SHADES
                 preferencesRepository.setAccentColor(DEFAULT_ACCENT_COLOR_AUTO)
                 customAccentHexInput = ""
               },
@@ -1473,12 +1517,12 @@ fun SettingsScreen(
                   }
                   Column {
                     Text(
-                      text = activeAutoHarmony?.label ?: "Auto (Complement)",
+                      text = (activeAutoHarmony ?: defaultAutoHarmony).label,
                       style = MaterialTheme.typography.titleSmall,
                       fontWeight = FontWeight.Bold,
                     )
                     Text(
-                      text = activeAutoHarmony?.description ?: "Automatically complements your main theme color",
+                      text = (activeAutoHarmony ?: defaultAutoHarmony).description,
                       style = MaterialTheme.typography.bodySmall,
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1533,7 +1577,7 @@ fun SettingsScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
               ) {
                 HarmonyMode.entries.forEach { mode ->
-                  val defaultOption = AccentHarmonyOption.defaultForMode(mode)
+                  val defaultOption = AccentHarmonyOption.defaultForMode(mode, isDarkTheme)
                   val isModeSelected = selectedHarmonyMode == mode && isAutoAccentSelected
                   FilterChip(
                     selected = isModeSelected,
@@ -2171,7 +2215,7 @@ fun SettingsScreen(
               ""
             }
             customAccentHexInput = if (!isAutoAccentColorSetting(restoredAccentColor)) restoredAccentColor else ""
-            AccentHarmonyOption.fromPrefValue(restoredAccentColor)?.let { restoredHarmony ->
+            AccentHarmonyOption.fromPrefValue(restoredAccentColor, darkTheme = isDarkTheme)?.let { restoredHarmony ->
               selectedHarmonyMode = restoredHarmony.harmonyMode
             }
             backupRestoreStatus = "Settings restored successfully."
@@ -2367,7 +2411,7 @@ fun SettingsScreen(
               resetAllSettingsToDefaults(preferencesRepository)
               customHexInput = ""
               customAccentHexInput = ""
-              selectedHarmonyMode = HarmonyMode.COMPLEMENTARY
+              selectedHarmonyMode = HarmonyMode.SHADES
               collapsedCategories = ToolCategory.entries.toSet()
               isToolSettingsExpanded = true
               isThemeColorExpanded = false

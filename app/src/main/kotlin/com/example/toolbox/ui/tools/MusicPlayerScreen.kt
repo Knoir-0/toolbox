@@ -31,6 +31,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -50,13 +51,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -71,13 +77,13 @@ import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
-import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -166,7 +172,9 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -226,9 +234,11 @@ fun MusicPlayerScreen(
 
   // Library Tab: Artists, Albums, Songs, Genres, Playlists
   val selectedTab = session.selectedTab
+  var sectionFocusVersion by remember { mutableIntStateOf(0) }
 
   fun updateTab(tab: MusicLibraryTab) {
     session.updateTab(tab)
+    sectionFocusVersion++
   }
 
   // View Mode: List vs Card
@@ -236,6 +246,7 @@ fun MusicPlayerScreen(
 
   fun updateViewMode(mode: MusicViewMode) {
     session.updateViewMode(mode)
+    sectionFocusVersion++
   }
 
   // Sort Order
@@ -243,13 +254,15 @@ fun MusicPlayerScreen(
 
   fun updateSortOrder(order: MusicSortOrder) {
     session.updateSortOrder(order)
+    sectionFocusVersion++
   }
 
   // Shuffle & Repeat
+  val shuffleMode = session.shuffleMode
   val isShuffleEnabled = session.isShuffleEnabled
 
-  fun toggleShuffle() {
-    session.toggleShuffle()
+  fun cycleShuffleMode() {
+    session.cycleShuffleMode()
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
   }
 
@@ -299,6 +312,7 @@ fun MusicPlayerScreen(
 
   fun clearDrillDown() {
     session.clearDrillDown()
+    sectionFocusVersion++
   }
 
   val allTracks = session.allTracks
@@ -375,7 +389,6 @@ fun MusicPlayerScreen(
   var showTrackInfoDialog by rememberSaveable { mutableStateOf(false) }
   var inlineColorPickerHex by rememberSaveable { mutableStateOf<String?>(null) }
   var showSortMenu by remember { mutableStateOf(false) }
-  var showSleepTimerMenu by remember { mutableStateOf(false) }
 
   fun openColorInColorsTool(hex: String) {
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -398,6 +411,13 @@ fun MusicPlayerScreen(
     contextTracks: List<MusicTrack>,
   ) {
     session.playTrackInContext(track, contextTracks)
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+  }
+
+  fun playShuffledContext(
+    contextTracks: List<MusicTrack>,
+  ) {
+    session.playShuffledContext(contextTracks)
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
   }
 
@@ -491,10 +511,14 @@ fun MusicPlayerScreen(
     when {
       showSavePlaylistDialog -> showSavePlaylistDialog = false
       showQueueSheet -> showQueueSheet = false
-      isPlayerExpanded -> isPlayerExpanded = false
+      isPlayerExpanded -> {
+        isPlayerExpanded = false
+        sectionFocusVersion++
+      }
       isSearchActive -> {
         isSearchActive = false
         searchQuery = ""
+        sectionFocusVersion++
       }
       hasDrillDown -> clearDrillDown()
     }
@@ -650,11 +674,14 @@ fun MusicPlayerScreen(
               currentTrackId = currentTrack?.id,
               isPlaying = isPlaying,
               favoriteIds = favoriteIds,
+              sectionFocusVersion = sectionFocusVersion,
               onPlayAlbum = { shuffle ->
-                if (shuffle && !isShuffleEnabled) toggleShuffle()
-                val tracks = if (shuffle) activeAlbum.tracks.shuffled() else activeAlbum.tracks
-                if (tracks.isNotEmpty()) {
-                  playTrackInContext(tracks.first(), tracks)
+                if (activeAlbum.tracks.isNotEmpty()) {
+                  if (shuffle) {
+                    playShuffledContext(activeAlbum.tracks)
+                  } else {
+                    playTrackInContext(activeAlbum.tracks.first(), activeAlbum.tracks)
+                  }
                 }
               },
               onSelectTrack = { track ->
@@ -668,18 +695,23 @@ fun MusicPlayerScreen(
             ArtistDetailContent(
               artist = activeArtist,
               viewMode = viewMode,
+              currentTrack = currentTrack,
               currentTrackId = currentTrack?.id,
               isPlaying = isPlaying,
               favoriteIds = favoriteIds,
+              sectionFocusVersion = sectionFocusVersion,
               onPlayArtist = { shuffle ->
-                if (shuffle && !isShuffleEnabled) toggleShuffle()
-                val tracks = if (shuffle) activeArtist.tracks.shuffled() else activeArtist.tracks
-                if (tracks.isNotEmpty()) {
-                  playTrackInContext(tracks.first(), tracks)
+                if (activeArtist.tracks.isNotEmpty()) {
+                  if (shuffle) {
+                    playShuffledContext(activeArtist.tracks)
+                  } else {
+                    playTrackInContext(activeArtist.tracks.first(), activeArtist.tracks)
+                  }
                 }
               },
               onOpenAlbum = { album ->
                 selectedAlbumKey = "${album.name}|${album.artist}"
+                sectionFocusVersion++
               },
               onSelectTrack = { track ->
                 playTrackInContext(track, activeArtist.tracks)
@@ -695,11 +727,14 @@ fun MusicPlayerScreen(
               currentTrackId = currentTrack?.id,
               isPlaying = isPlaying,
               favoriteIds = favoriteIds,
+              sectionFocusVersion = sectionFocusVersion,
               onPlayGenre = { shuffle ->
-                if (shuffle && !isShuffleEnabled) toggleShuffle()
-                val tracks = if (shuffle) activeGenre.tracks.shuffled() else activeGenre.tracks
-                if (tracks.isNotEmpty()) {
-                  playTrackInContext(tracks.first(), tracks)
+                if (activeGenre.tracks.isNotEmpty()) {
+                  if (shuffle) {
+                    playShuffledContext(activeGenre.tracks)
+                  } else {
+                    playTrackInContext(activeGenre.tracks.first(), activeGenre.tracks)
+                  }
                 }
               },
               onSelectTrack = { track ->
@@ -717,16 +752,20 @@ fun MusicPlayerScreen(
               isPlaying = isPlaying,
               favoriteIds = favoriteIds,
               playStats = playStats,
+              sectionFocusVersion = sectionFocusVersion,
               onPlayPlaylist = { shuffle ->
-                if (shuffle && !isShuffleEnabled) toggleShuffle()
-                val tracks = if (shuffle) activePlaylist.tracks.shuffled() else activePlaylist.tracks
-                if (tracks.isNotEmpty()) {
-                  playTrackInContext(tracks.first(), tracks)
+                if (activePlaylist.tracks.isNotEmpty()) {
+                  if (shuffle) {
+                    playShuffledContext(activePlaylist.tracks)
+                  } else {
+                    playTrackInContext(activePlaylist.tracks.first(), activePlaylist.tracks)
+                  }
                 }
               },
               onDeletePlaylist = {
                 deletePlaylist(activePlaylist.id)
                 selectedPlaylistId = null
+                sectionFocusVersion++
               },
               onSelectTrack = { track ->
                 playTrackInContext(track, activePlaylist.tracks)
@@ -741,8 +780,10 @@ fun MusicPlayerScreen(
                 ArtistsTabContent(
                   artists = allArtists,
                   viewMode = viewMode,
+                  currentTrack = currentTrack,
                   currentArtistName = currentTrack?.artist,
                   isPlaying = isPlaying,
+                  sectionFocusVersion = sectionFocusVersion,
                   onPlayAll = {
                     val tracks = allArtists.flatMap { it.tracks }.ifEmpty { sortedTracks }
                     if (tracks.isNotEmpty()) {
@@ -764,6 +805,7 @@ fun MusicPlayerScreen(
                   },
                   onSelectArtist = { artist ->
                     selectedArtistName = artist.name
+                    sectionFocusVersion++
                   },
                   onPlayArtist = { artist ->
                     if (artist.tracks.isNotEmpty()) {
@@ -777,8 +819,10 @@ fun MusicPlayerScreen(
                 AlbumsTabContent(
                   albums = allAlbums,
                   viewMode = viewMode,
+                  currentTrack = currentTrack,
                   currentAlbumName = currentTrack?.album,
                   isPlaying = isPlaying,
+                  sectionFocusVersion = sectionFocusVersion,
                   onPlayAll = {
                     val tracks = allAlbums.flatMap { it.tracks }.ifEmpty { sortedTracks }
                     if (tracks.isNotEmpty()) {
@@ -800,6 +844,7 @@ fun MusicPlayerScreen(
                   },
                   onSelectAlbum = { album ->
                     selectedAlbumKey = "${album.name}|${album.artist}"
+                    sectionFocusVersion++
                   },
                   onPlayAlbum = { album ->
                     if (album.tracks.isNotEmpty()) {
@@ -817,17 +862,19 @@ fun MusicPlayerScreen(
                   isPlaying = isPlaying,
                   favoriteIds = favoriteIds,
                   showFavoritesOnly = showFavoritesOnly,
-                  onToggleFavoritesOnly = { showFavoritesOnly = !showFavoritesOnly },
+                  sectionFocusVersion = sectionFocusVersion,
+                  onToggleFavoritesOnly = {
+                    showFavoritesOnly = !showFavoritesOnly
+                    sectionFocusVersion++
+                  },
                   onPlayAll = {
                     if (sortedTracks.isNotEmpty()) {
                       playTrackInContext(sortedTracks.first(), sortedTracks)
                     }
                   },
                   onShuffleAll = {
-                    if (!isShuffleEnabled) toggleShuffle()
                     if (sortedTracks.isNotEmpty()) {
-                      val shuffled = sortedTracks.shuffled()
-                      playTrackInContext(shuffled.first(), shuffled)
+                      playShuffledContext(sortedTracks)
                     }
                   },
                   onSelectTrack = { track ->
@@ -841,8 +888,10 @@ fun MusicPlayerScreen(
                 GenresTabContent(
                   genres = allGenres,
                   viewMode = viewMode,
+                  currentTrack = currentTrack,
                   currentGenreName = currentTrack?.genre,
                   isPlaying = isPlaying,
+                  sectionFocusVersion = sectionFocusVersion,
                   onPlayAll = {
                     val tracks = allGenres.flatMap { it.tracks }.ifEmpty { sortedTracks }
                     if (tracks.isNotEmpty()) {
@@ -864,6 +913,7 @@ fun MusicPlayerScreen(
                   },
                   onSelectGenre = { genre ->
                     selectedGenreName = genre.name
+                    sectionFocusVersion++
                   },
                   onPlayGenre = { genre ->
                     if (genre.tracks.isNotEmpty()) {
@@ -879,6 +929,7 @@ fun MusicPlayerScreen(
                   viewMode = viewMode,
                   currentTrackId = currentTrack?.id,
                   isPlaying = isPlaying,
+                  sectionFocusVersion = sectionFocusVersion,
                   onPlayAll = {
                     val tracks = allPlaylists.flatMap { it.tracks }.distinctBy { it.id }.ifEmpty { sortedTracks }
                     if (tracks.isNotEmpty()) {
@@ -898,6 +949,7 @@ fun MusicPlayerScreen(
                   },
                   onSelectPlaylist = { playlist ->
                     selectedPlaylistId = playlist.id
+                    sectionFocusVersion++
                   },
                   onPlayPlaylist = { playlist ->
                     if (playlist.tracks.isNotEmpty()) {
@@ -961,7 +1013,7 @@ fun MusicPlayerScreen(
           track = currentTrack,
           isPlaying = isPlaying,
           isFavorite = currentTrack.id in favoriteIds,
-          isShuffleEnabled = isShuffleEnabled,
+          shuffleMode = shuffleMode,
           repeatMode = repeatMode,
           seekFraction = seekFraction,
           currentPositionMs = if (isDraggingSeek) (dragSeekFraction * trackDurationMs).toLong() else currentPositionMs,
@@ -978,8 +1030,10 @@ fun MusicPlayerScreen(
           deepBackgroundColor = animatedDeepBg,
           dominantHex = activePalette.dominantHex,
           accentHex = activePalette.accentHex,
-          showSleepTimerMenu = showSleepTimerMenu,
-          onCollapse = { isPlayerExpanded = false },
+          onCollapse = {
+            isPlayerExpanded = false
+            sectionFocusVersion++
+          },
           onToggleFavorite = { toggleFavorite(currentTrack.id) },
           onSeekChange = { fraction ->
             session.updateSeekDrag(fraction)
@@ -987,7 +1041,7 @@ fun MusicPlayerScreen(
           onSeekFinished = {
             session.finishSeekDrag()
           },
-          onToggleShuffle = { toggleShuffle() },
+          onToggleShuffle = { cycleShuffleMode() },
           onPrevious = { skipToPrevious() },
           onPlayPause = {
             session.togglePlayPause()
@@ -997,6 +1051,11 @@ fun MusicPlayerScreen(
           onCycleRepeat = { cycleRepeatMode() },
           onCycleSpeed = {
             session.cyclePlaybackSpeed()
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          },
+          onCycleSleepTimer = {
+            session.cycleSleepTimer()
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
           },
           onSelectQueueIndex = { index ->
             stepToTrack(index, autoPlay = true)
@@ -1008,23 +1067,19 @@ fun MusicPlayerScreen(
             showSavePlaylistDialog = true
           },
           onOpenTrackInfo = { showTrackInfoDialog = true },
-          onOpenSleepTimerMenu = { showSleepTimerMenu = true },
-          onDismissSleepTimerMenu = { showSleepTimerMenu = false },
-          onSelectSleepTimer = { preset ->
-            session.selectSleepTimer(preset)
-            showSleepTimerMenu = false
-          },
           onNavigateToArtist = {
             isPlayerExpanded = false
             clearDrillDown()
             updateTab(MusicLibraryTab.ARTISTS)
             selectedArtistName = currentTrack.artist
+            sectionFocusVersion++
           },
           onNavigateToAlbum = {
             isPlayerExpanded = false
             clearDrillDown()
             updateTab(MusicLibraryTab.ALBUMS)
             selectedAlbumKey = "${currentTrack.album}|${currentTrack.artist}"
+            sectionFocusVersion++
           },
         )
       }
@@ -1035,6 +1090,7 @@ fun MusicPlayerScreen(
       PlaybackQueueDialog(
         queue = playbackQueue,
         currentQueueIndex = currentQueueIndex,
+        currentTrackId = currentTrack?.id,
         isPlaying = isPlaying,
         accentColor = animatedDominant,
         onSelectQueueIndex = { index ->
@@ -1209,15 +1265,12 @@ private fun MusicPlayerTopBar(
                 onClick = onBackClick,
                 modifier = Modifier
                   .size(36.dp)
-                  .clip(CircleShape)
-                  .background(MaterialTheme.colorScheme.primaryContainer)
                   .testTag("music_back_button"),
               ) {
                 Icon(
                   imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                   contentDescription = "Back",
-                  tint = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.size(20.dp),
+                  tint = MaterialTheme.colorScheme.onSurface,
                 )
               }
             } else {
@@ -1459,17 +1512,41 @@ private fun MusicCategoryAndViewBar(
   }
 }
 
+private fun LazyListState.isItemFullyVisible(index: Int): Boolean {
+  val info = layoutInfo
+  val item = info.visibleItemsInfo.firstOrNull { it.index == index } ?: return false
+  return item.offset >= info.viewportStartOffset &&
+    (item.offset + item.size) <= info.viewportEndOffset
+}
+
+private fun LazyGridState.isItemFullyVisible(index: Int): Boolean {
+  val info = layoutInfo
+  val item = info.visibleItemsInfo.firstOrNull { it.index == index } ?: return false
+  return item.offset.y >= info.viewportStartOffset &&
+    (item.offset.y + item.size.height) <= info.viewportEndOffset
+}
+
 @Composable
 private fun ArtistsTabContent(
   artists: List<MusicArtist>,
   viewMode: MusicViewMode,
+  currentTrack: MusicTrack? = null,
   currentArtistName: String?,
   isPlaying: Boolean,
+  sectionFocusVersion: Int = 0,
   onPlayAll: () -> Unit,
   onShuffleAll: () -> Unit,
   onSelectArtist: (MusicArtist) -> Unit,
   onPlayArtist: (MusicArtist) -> Unit,
 ) {
+  val focusedIndex = remember(artists, currentTrack?.id, currentArtistName) {
+    MusicPlayerEngine.resolveFocusedArtistIndex(
+      artists = artists,
+      currentTrack = currentTrack,
+      currentArtistName = currentArtistName,
+    )
+  }
+
   Column(modifier = Modifier.fillMaxSize()) {
     // Quick Action Row: Play All, Shuffle
     Row(
@@ -1508,15 +1585,26 @@ private fun ArtistsTabContent(
     }
 
     if (viewMode == MusicViewMode.LIST) {
+      val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = focusedIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedIndex, artists.size) {
+        if (focusedIndex in artists.indices && !listState.isItemFullyVisible(focusedIndex)) {
+          listState.scrollToItem(focusedIndex)
+        }
+      }
+
       LazyColumn(
+        state = listState,
         modifier = Modifier
           .fillMaxSize()
           .testTag("artist_list_view"),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        items(artists, key = { it.name }) { artist ->
-          val isActive = currentArtistName != null && currentArtistName.equals(artist.name, ignoreCase = true)
+        itemsIndexed(artists, key = { _, it -> it.name }) { index, artist ->
+          val isActive = index == focusedIndex ||
+            (currentArtistName != null && currentArtistName.equals(artist.name, ignoreCase = true))
           Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
@@ -1534,6 +1622,7 @@ private fun ArtistsTabContent(
             modifier = Modifier
               .fillMaxWidth()
               .clickable { onSelectArtist(artist) }
+              .semantics { selected = isActive }
               .testTag("artist_item_${artist.name}"),
           ) {
             Row(
@@ -1553,7 +1642,7 @@ private fun ArtistsTabContent(
                   text = artist.name,
                   style = MaterialTheme.typography.bodyLarge,
                   fontWeight = FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.onSurface,
+                  color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis,
                 )
@@ -1587,7 +1676,17 @@ private fun ArtistsTabContent(
         }
       }
     } else {
+      val gridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = focusedIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedIndex, artists.size) {
+        if (focusedIndex in artists.indices && !gridState.isItemFullyVisible(focusedIndex)) {
+          gridState.scrollToItem(focusedIndex)
+        }
+      }
+
       LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Fixed(2),
         modifier = Modifier
           .fillMaxSize()
@@ -1596,8 +1695,9 @@ private fun ArtistsTabContent(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
-        items(artists, key = { it.name }) { artist ->
-          val isActive = currentArtistName != null && currentArtistName.equals(artist.name, ignoreCase = true)
+        gridItemsIndexed(artists, key = { _, it -> it.name }) { index, artist ->
+          val isActive = index == focusedIndex ||
+            (currentArtistName != null && currentArtistName.equals(artist.name, ignoreCase = true))
           Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
@@ -1615,6 +1715,7 @@ private fun ArtistsTabContent(
             modifier = Modifier
               .fillMaxWidth()
               .clickable { onSelectArtist(artist) }
+              .semantics { selected = isActive }
               .testTag("artist_item_${artist.name}"),
           ) {
             Column(
@@ -1640,7 +1741,7 @@ private fun ArtistsTabContent(
                   ),
                 ) {
                   Icon(
-                    imageVector = Icons.Default.PlayArrow,
+                    imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
                     contentDescription = "Play ${artist.name}",
                     modifier = Modifier.size(16.dp),
                   )
@@ -1650,7 +1751,7 @@ private fun ArtistsTabContent(
                 text = artist.name,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
@@ -1675,13 +1776,23 @@ private fun ArtistsTabContent(
 private fun AlbumsTabContent(
   albums: List<MusicAlbum>,
   viewMode: MusicViewMode,
+  currentTrack: MusicTrack? = null,
   currentAlbumName: String?,
   isPlaying: Boolean,
+  sectionFocusVersion: Int = 0,
   onPlayAll: () -> Unit,
   onShuffleAll: () -> Unit,
   onSelectAlbum: (MusicAlbum) -> Unit,
   onPlayAlbum: (MusicAlbum) -> Unit,
 ) {
+  val focusedIndex = remember(albums, currentTrack?.id, currentAlbumName) {
+    MusicPlayerEngine.resolveFocusedAlbumIndex(
+      albums = albums,
+      currentTrack = currentTrack,
+      currentAlbumName = currentAlbumName,
+    )
+  }
+
   Column(modifier = Modifier.fillMaxSize()) {
     // Quick Action Row: Play All, Shuffle
     Row(
@@ -1720,15 +1831,26 @@ private fun AlbumsTabContent(
     }
 
     if (viewMode == MusicViewMode.LIST) {
+      val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = focusedIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedIndex, albums.size) {
+        if (focusedIndex in albums.indices && !listState.isItemFullyVisible(focusedIndex)) {
+          listState.scrollToItem(focusedIndex)
+        }
+      }
+
       LazyColumn(
+        state = listState,
         modifier = Modifier
           .fillMaxSize()
           .testTag("album_list_view"),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        items(albums, key = { "${it.name}|${it.artist}" }) { album ->
-          val isActive = currentAlbumName != null && currentAlbumName.equals(album.name, ignoreCase = true)
+        itemsIndexed(albums, key = { _, it -> "${it.name}|${it.artist}" }) { index, album ->
+          val isActive = index == focusedIndex ||
+            (currentAlbumName != null && currentAlbumName.equals(album.name, ignoreCase = true))
           Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
@@ -1746,6 +1868,7 @@ private fun AlbumsTabContent(
             modifier = Modifier
               .fillMaxWidth()
               .clickable { onSelectAlbum(album) }
+              .semantics { selected = isActive }
               .testTag("album_item_${album.name}"),
           ) {
             Row(
@@ -1765,7 +1888,7 @@ private fun AlbumsTabContent(
                   text = album.name,
                   style = MaterialTheme.typography.bodyLarge,
                   fontWeight = FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.onSurface,
+                  color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis,
                 )
@@ -1799,7 +1922,17 @@ private fun AlbumsTabContent(
         }
       }
     } else {
+      val gridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = focusedIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedIndex, albums.size) {
+        if (focusedIndex in albums.indices && !gridState.isItemFullyVisible(focusedIndex)) {
+          gridState.scrollToItem(focusedIndex)
+        }
+      }
+
       LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Fixed(2),
         modifier = Modifier
           .fillMaxSize()
@@ -1808,8 +1941,9 @@ private fun AlbumsTabContent(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
-        items(albums, key = { "${it.name}|${it.artist}" }) { album ->
-          val isActive = currentAlbumName != null && currentAlbumName.equals(album.name, ignoreCase = true)
+        gridItemsIndexed(albums, key = { _, it -> "${it.name}|${it.artist}" }) { index, album ->
+          val isActive = index == focusedIndex ||
+            (currentAlbumName != null && currentAlbumName.equals(album.name, ignoreCase = true))
           Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
@@ -1827,6 +1961,7 @@ private fun AlbumsTabContent(
             modifier = Modifier
               .fillMaxWidth()
               .clickable { onSelectAlbum(album) }
+              .semantics { selected = isActive }
               .testTag("album_item_${album.name}"),
           ) {
             Column(
@@ -1859,7 +1994,7 @@ private fun AlbumsTabContent(
                   ),
                 ) {
                   Icon(
-                    imageVector = Icons.Default.PlayArrow,
+                    imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
                     contentDescription = "Play ${album.name}",
                     modifier = Modifier.size(18.dp),
                   )
@@ -1869,7 +2004,7 @@ private fun AlbumsTabContent(
                 text = album.name,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
@@ -1896,12 +2031,17 @@ private fun SongsTabContent(
   isPlaying: Boolean,
   favoriteIds: Set<String>,
   showFavoritesOnly: Boolean,
+  sectionFocusVersion: Int = 0,
   onToggleFavoritesOnly: () -> Unit,
   onPlayAll: () -> Unit,
   onShuffleAll: () -> Unit,
   onSelectTrack: (MusicTrack) -> Unit,
   onToggleFavorite: (MusicTrack) -> Unit,
 ) {
+  val focusedIndex = remember(tracks, currentTrackId) {
+    MusicPlayerEngine.resolveFocusedTrackIndex(tracks, currentTrackId)
+  }
+
   Column(modifier = Modifier.fillMaxSize()) {
     // Quick Action Row: Play All, Shuffle, Favorites Filter
     Row(
@@ -1935,20 +2075,32 @@ private fun SongsTabContent(
 
       Spacer(modifier = Modifier.weight(1f))
 
-      FilterChip(
-        selected = showFavoritesOnly,
+      OutlinedButton(
         onClick = onToggleFavoritesOnly,
-        label = { Text("Favorites", style = MaterialTheme.typography.labelSmall) },
-        leadingIcon = {
-          Icon(
-            imageVector = if (showFavoritesOnly) Icons.Default.Star else Icons.Default.StarBorder,
-            contentDescription = null,
-            modifier = Modifier.size(14.dp),
-          )
-        },
         shape = CircleShape,
-        modifier = Modifier.testTag("music_favorites_filter_chip"),
-      )
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        colors = if (showFavoritesOnly) {
+          ButtonDefaults.filledTonalButtonColors()
+        } else {
+          ButtonDefaults.outlinedButtonColors()
+        },
+        border = if (showFavoritesOnly) {
+          null
+        } else {
+          ButtonDefaults.outlinedButtonBorder(enabled = true)
+        },
+        modifier = Modifier
+          .semantics { selected = showFavoritesOnly }
+          .testTag("music_favorites_filter_chip"),
+      ) {
+        Icon(
+          imageVector = if (showFavoritesOnly) Icons.Default.Star else Icons.Default.StarBorder,
+          contentDescription = null,
+          modifier = Modifier.size(16.dp),
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Favorites", style = MaterialTheme.typography.labelMedium)
+      }
     }
 
     if (tracks.isEmpty()) {
@@ -1959,7 +2111,17 @@ private fun SongsTabContent(
     }
 
     if (viewMode == MusicViewMode.LIST) {
+      val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = focusedIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedIndex, tracks.size) {
+        if (focusedIndex in tracks.indices && !listState.isItemFullyVisible(focusedIndex)) {
+          listState.scrollToItem(focusedIndex)
+        }
+      }
+
       LazyColumn(
+        state = listState,
         modifier = Modifier
           .fillMaxSize()
           .testTag("song_list_view"),
@@ -1978,7 +2140,17 @@ private fun SongsTabContent(
         }
       }
     } else {
+      val gridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = focusedIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedIndex, tracks.size) {
+        if (focusedIndex in tracks.indices && !gridState.isItemFullyVisible(focusedIndex)) {
+          gridState.scrollToItem(focusedIndex)
+        }
+      }
+
       LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Fixed(2),
         modifier = Modifier
           .fillMaxSize()
@@ -2006,13 +2178,23 @@ private fun SongsTabContent(
 private fun GenresTabContent(
   genres: List<MusicGenre>,
   viewMode: MusicViewMode,
+  currentTrack: MusicTrack? = null,
   currentGenreName: String?,
   isPlaying: Boolean,
+  sectionFocusVersion: Int = 0,
   onPlayAll: () -> Unit,
   onShuffleAll: () -> Unit,
   onSelectGenre: (MusicGenre) -> Unit,
   onPlayGenre: (MusicGenre) -> Unit,
 ) {
+  val focusedIndex = remember(genres, currentTrack?.id, currentGenreName) {
+    MusicPlayerEngine.resolveFocusedGenreIndex(
+      genres = genres,
+      currentTrack = currentTrack,
+      currentGenreName = currentGenreName,
+    )
+  }
+
   Column(modifier = Modifier.fillMaxSize()) {
     // Quick Action Row: Play All, Shuffle
     Row(
@@ -2051,15 +2233,26 @@ private fun GenresTabContent(
     }
 
     if (viewMode == MusicViewMode.LIST) {
+      val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = focusedIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedIndex, genres.size) {
+        if (focusedIndex in genres.indices && !listState.isItemFullyVisible(focusedIndex)) {
+          listState.scrollToItem(focusedIndex)
+        }
+      }
+
       LazyColumn(
+        state = listState,
         modifier = Modifier
           .fillMaxSize()
           .testTag("genre_list_view"),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        items(genres, key = { it.name }) { genre ->
-          val isActive = currentGenreName != null && currentGenreName.equals(genre.name, ignoreCase = true)
+        itemsIndexed(genres, key = { _, it -> it.name }) { index, genre ->
+          val isActive = index == focusedIndex ||
+            (currentGenreName != null && currentGenreName.equals(genre.name, ignoreCase = true))
           Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
@@ -2077,6 +2270,7 @@ private fun GenresTabContent(
             modifier = Modifier
               .fillMaxWidth()
               .clickable { onSelectGenre(genre) }
+              .semantics { selected = isActive }
               .testTag("genre_item_${genre.name}"),
           ) {
             Row(
@@ -2096,7 +2290,7 @@ private fun GenresTabContent(
                   text = genre.name,
                   style = MaterialTheme.typography.bodyLarge,
                   fontWeight = FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.onSurface,
+                  color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis,
                 )
@@ -2130,7 +2324,17 @@ private fun GenresTabContent(
         }
       }
     } else {
+      val gridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = focusedIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedIndex, genres.size) {
+        if (focusedIndex in genres.indices && !gridState.isItemFullyVisible(focusedIndex)) {
+          gridState.scrollToItem(focusedIndex)
+        }
+      }
+
       LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Fixed(2),
         modifier = Modifier
           .fillMaxSize()
@@ -2139,8 +2343,9 @@ private fun GenresTabContent(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
-        items(genres, key = { it.name }) { genre ->
-          val isActive = currentGenreName != null && currentGenreName.equals(genre.name, ignoreCase = true)
+        gridItemsIndexed(genres, key = { _, it -> it.name }) { index, genre ->
+          val isActive = index == focusedIndex ||
+            (currentGenreName != null && currentGenreName.equals(genre.name, ignoreCase = true))
           val genrePalette = remember(genre.representativeTrack?.id) {
             MusicPlayerEngine.resolveTrackPalette(genre.representativeTrack)
           }
@@ -2161,6 +2366,7 @@ private fun GenresTabContent(
             modifier = Modifier
               .fillMaxWidth()
               .clickable { onSelectGenre(genre) }
+              .semantics { selected = isActive }
               .testTag("genre_item_${genre.name}"),
           ) {
             Column(
@@ -2201,7 +2407,7 @@ private fun GenresTabContent(
                   ),
                 ) {
                   Icon(
-                    imageVector = Icons.Default.PlayArrow,
+                    imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
                     contentDescription = "Play ${genre.name}",
                     modifier = Modifier.size(16.dp),
                   )
@@ -2211,7 +2417,7 @@ private fun GenresTabContent(
                 text = genre.name,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
@@ -2236,6 +2442,7 @@ private fun PlaylistsTabContent(
   viewMode: MusicViewMode,
   currentTrackId: String?,
   isPlaying: Boolean,
+  sectionFocusVersion: Int = 0,
   onPlayAll: () -> Unit,
   onShuffleAll: () -> Unit,
   onSaveQueueAsPlaylist: () -> Unit,
@@ -2243,6 +2450,11 @@ private fun PlaylistsTabContent(
   onPlayPlaylist: (MusicPlaylist) -> Unit,
   onDeletePlaylist: (MusicPlaylist) -> Unit,
 ) {
+  val focusedIndex = remember(playlists, currentTrackId) {
+    MusicPlayerEngine.resolveFocusedPlaylistIndex(playlists, currentTrackId)
+  }
+  val scrollTargetIndex = if (focusedIndex <= 1) 0 else focusedIndex
+
   Column(modifier = Modifier.fillMaxSize()) {
     // Quick Action Row: Play All, Shuffle, Save Queue
     Row(
@@ -2294,7 +2506,17 @@ private fun PlaylistsTabContent(
     }
 
     if (viewMode == MusicViewMode.LIST) {
+      val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = scrollTargetIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, scrollTargetIndex, playlists.size) {
+        if (scrollTargetIndex in playlists.indices && !listState.isItemFullyVisible(scrollTargetIndex)) {
+          listState.scrollToItem(scrollTargetIndex)
+        }
+      }
+
       LazyColumn(
+        state = listState,
         modifier = Modifier
           .fillMaxSize()
           .testTag("playlist_list_view"),
@@ -2320,6 +2542,7 @@ private fun PlaylistsTabContent(
             modifier = Modifier
               .fillMaxWidth()
               .clickable { onSelectPlaylist(playlist) }
+              .semantics { selected = isActive }
               .testTag("playlist_item_${playlist.name}"),
           ) {
             Row(
@@ -2339,7 +2562,7 @@ private fun PlaylistsTabContent(
                   text = playlist.name,
                   style = MaterialTheme.typography.bodyLarge,
                   fontWeight = FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.onSurface,
+                  color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis,
                 )
@@ -2388,7 +2611,17 @@ private fun PlaylistsTabContent(
         }
       }
     } else {
+      val gridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = scrollTargetIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, scrollTargetIndex, playlists.size) {
+        if (scrollTargetIndex in playlists.indices && !gridState.isItemFullyVisible(scrollTargetIndex)) {
+          gridState.scrollToItem(scrollTargetIndex)
+        }
+      }
+
       LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Fixed(2),
         modifier = Modifier
           .fillMaxSize()
@@ -2419,6 +2652,7 @@ private fun PlaylistsTabContent(
             modifier = Modifier
               .fillMaxWidth()
               .clickable { onSelectPlaylist(playlist) }
+              .semantics { selected = isActive }
               .testTag("playlist_item_${playlist.name}"),
           ) {
             Column(
@@ -2463,7 +2697,7 @@ private fun PlaylistsTabContent(
                   ),
                 ) {
                   Icon(
-                    imageVector = Icons.Default.PlayArrow,
+                    imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
                     contentDescription = "Play ${playlist.name}",
                     modifier = Modifier.size(16.dp),
                   )
@@ -2473,7 +2707,7 @@ private fun PlaylistsTabContent(
                 text = playlist.name,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
@@ -2496,14 +2730,28 @@ private fun PlaylistsTabContent(
 private fun ArtistDetailContent(
   artist: MusicArtist,
   viewMode: MusicViewMode,
+  currentTrack: MusicTrack? = null,
   currentTrackId: String?,
   isPlaying: Boolean,
   favoriteIds: Set<String>,
+  sectionFocusVersion: Int = 0,
   onPlayArtist: (shuffle: Boolean) -> Unit,
   onOpenAlbum: (MusicAlbum) -> Unit,
   onSelectTrack: (MusicTrack) -> Unit,
   onToggleFavorite: (MusicTrack) -> Unit,
 ) {
+  val focusedTrackIndex = remember(artist.tracks, currentTrackId) {
+    MusicPlayerEngine.resolveFocusedTrackIndex(artist.tracks, currentTrackId)
+  }
+  val focusedAlbumIndex = remember(artist.albums, currentTrack?.id, currentTrack?.album) {
+    MusicPlayerEngine.resolveFocusedAlbumIndex(
+      albums = artist.albums,
+      currentTrack = currentTrack,
+      currentAlbumName = currentTrack?.album,
+      currentArtistName = currentTrack?.artist,
+    )
+  }
+
   Column(
     modifier = Modifier
       .fillMaxSize()
@@ -2571,17 +2819,41 @@ private fun ArtistDetailContent(
         }
 
         if (artist.albums.isNotEmpty()) {
+          val albumRowState = rememberLazyListState(
+            initialFirstVisibleItemIndex = focusedAlbumIndex.coerceAtLeast(0),
+          )
+          LaunchedEffect(sectionFocusVersion, focusedAlbumIndex, artist.albums.size) {
+            if (focusedAlbumIndex in artist.albums.indices && !albumRowState.isItemFullyVisible(focusedAlbumIndex)) {
+              albumRowState.scrollToItem(focusedAlbumIndex)
+            }
+          }
+
           LazyRow(
+            state = albumRowState,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
           ) {
-            items(artist.albums, key = { it.name }) { album ->
+            itemsIndexed(artist.albums, key = { _, it -> it.name }) { index, album ->
+              val isActiveAlbum = index == focusedAlbumIndex ||
+                (currentTrackId != null && album.tracks.any { it.id == currentTrackId })
               Surface(
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surface,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                color = if (isActiveAlbum) {
+                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                } else {
+                  MaterialTheme.colorScheme.surface
+                },
+                border = BorderStroke(
+                  1.dp,
+                  if (isActiveAlbum) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                  } else {
+                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                  },
+                ),
                 modifier = Modifier
                   .clip(CircleShape)
                   .clickable { onOpenAlbum(album) }
+                  .semantics { selected = isActiveAlbum }
                   .padding(2.dp),
               ) {
                 Row(
@@ -2599,6 +2871,7 @@ private fun ArtistDetailContent(
                     text = "${album.name} (${album.songCount})",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Medium,
+                    color = if (isActiveAlbum) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                   )
                 }
               }
@@ -2609,7 +2882,17 @@ private fun ArtistDetailContent(
     }
 
     if (viewMode == MusicViewMode.LIST) {
+      val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = focusedTrackIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedTrackIndex, artist.tracks.size) {
+        if (focusedTrackIndex in artist.tracks.indices && !listState.isItemFullyVisible(focusedTrackIndex)) {
+          listState.scrollToItem(focusedTrackIndex)
+        }
+      }
+
       LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2626,7 +2909,17 @@ private fun ArtistDetailContent(
         }
       }
     } else {
+      val gridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = focusedTrackIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedTrackIndex, artist.tracks.size) {
+        if (focusedTrackIndex in artist.tracks.indices && !gridState.isItemFullyVisible(focusedTrackIndex)) {
+          gridState.scrollToItem(focusedTrackIndex)
+        }
+      }
+
       LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Fixed(2),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
@@ -2655,10 +2948,15 @@ private fun AlbumDetailContent(
   currentTrackId: String?,
   isPlaying: Boolean,
   favoriteIds: Set<String>,
+  sectionFocusVersion: Int = 0,
   onPlayAlbum: (shuffle: Boolean) -> Unit,
   onSelectTrack: (MusicTrack) -> Unit,
   onToggleFavorite: (MusicTrack) -> Unit,
 ) {
+  val focusedTrackIndex = remember(album.tracks, currentTrackId) {
+    MusicPlayerEngine.resolveFocusedTrackIndex(album.tracks, currentTrackId)
+  }
+
   Column(
     modifier = Modifier
       .fillMaxSize()
@@ -2723,7 +3021,17 @@ private fun AlbumDetailContent(
     }
 
     if (viewMode == MusicViewMode.LIST) {
+      val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = focusedTrackIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedTrackIndex, album.tracks.size) {
+        if (focusedTrackIndex in album.tracks.indices && !listState.isItemFullyVisible(focusedTrackIndex)) {
+          listState.scrollToItem(focusedTrackIndex)
+        }
+      }
+
       LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2740,7 +3048,17 @@ private fun AlbumDetailContent(
         }
       }
     } else {
+      val gridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = focusedTrackIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedTrackIndex, album.tracks.size) {
+        if (focusedTrackIndex in album.tracks.indices && !gridState.isItemFullyVisible(focusedTrackIndex)) {
+          gridState.scrollToItem(focusedTrackIndex)
+        }
+      }
+
       LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Fixed(2),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
@@ -2769,10 +3087,15 @@ private fun GenreDetailContent(
   currentTrackId: String?,
   isPlaying: Boolean,
   favoriteIds: Set<String>,
+  sectionFocusVersion: Int = 0,
   onPlayGenre: (shuffle: Boolean) -> Unit,
   onSelectTrack: (MusicTrack) -> Unit,
   onToggleFavorite: (MusicTrack) -> Unit,
 ) {
+  val focusedTrackIndex = remember(genre.tracks, currentTrackId) {
+    MusicPlayerEngine.resolveFocusedTrackIndex(genre.tracks, currentTrackId)
+  }
+
   Column(
     modifier = Modifier
       .fillMaxSize()
@@ -2837,7 +3160,17 @@ private fun GenreDetailContent(
     }
 
     if (viewMode == MusicViewMode.LIST) {
+      val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = focusedTrackIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedTrackIndex, genre.tracks.size) {
+        if (focusedTrackIndex in genre.tracks.indices && !listState.isItemFullyVisible(focusedTrackIndex)) {
+          listState.scrollToItem(focusedTrackIndex)
+        }
+      }
+
       LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2854,7 +3187,17 @@ private fun GenreDetailContent(
         }
       }
     } else {
+      val gridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = focusedTrackIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedTrackIndex, genre.tracks.size) {
+        if (focusedTrackIndex in genre.tracks.indices && !gridState.isItemFullyVisible(focusedTrackIndex)) {
+          gridState.scrollToItem(focusedTrackIndex)
+        }
+      }
+
       LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Fixed(2),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
@@ -2884,11 +3227,16 @@ private fun PlaylistDetailContent(
   isPlaying: Boolean,
   favoriteIds: Set<String>,
   playStats: Map<String, TrackPlayStats> = emptyMap(),
+  sectionFocusVersion: Int = 0,
   onPlayPlaylist: (shuffle: Boolean) -> Unit,
   onDeletePlaylist: () -> Unit,
   onSelectTrack: (MusicTrack) -> Unit,
   onToggleFavorite: (MusicTrack) -> Unit,
 ) {
+  val focusedTrackIndex = remember(playlist.tracks, currentTrackId) {
+    MusicPlayerEngine.resolveFocusedTrackIndex(playlist.tracks, currentTrackId)
+  }
+
   Column(
     modifier = Modifier
       .fillMaxSize()
@@ -2975,7 +3323,17 @@ private fun PlaylistDetailContent(
     }
 
     if (viewMode == MusicViewMode.LIST) {
+      val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = focusedTrackIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedTrackIndex, playlist.tracks.size) {
+        if (focusedTrackIndex in playlist.tracks.indices && !listState.isItemFullyVisible(focusedTrackIndex)) {
+          listState.scrollToItem(focusedTrackIndex)
+        }
+      }
+
       LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2983,9 +3341,15 @@ private fun PlaylistDetailContent(
         items(playlist.tracks, key = { it.id }) { track ->
           val statBadge = if (playlist.isMostPlayed) {
             val s = playStats[track.id]
-            if (s != null && s.hasBeenPlayed) {
+            if (s != null && s.hasRecordedActivity) {
               val playsLabel = if (s.playCount == 1) "1 play" else "${s.playCount} plays"
-              "$playsLabel • ${s.totalPlayTimeFormatted}"
+              val fullLabel = "${s.formattedFullPlays(track.durationMs)} full"
+              val skipsSuffix = if (s.skipCount > 0) {
+                " • ${s.skipCount} ${if (s.skipCount == 1) "skip" else "skips"}"
+              } else {
+                ""
+              }
+              "$playsLabel • $fullLabel • ${s.totalPlayTimeFormatted}$skipsSuffix"
             } else {
               null
             }
@@ -3004,7 +3368,17 @@ private fun PlaylistDetailContent(
         }
       }
     } else {
+      val gridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = focusedTrackIndex.coerceAtLeast(0),
+      )
+      LaunchedEffect(sectionFocusVersion, focusedTrackIndex, playlist.tracks.size) {
+        if (focusedTrackIndex in playlist.tracks.indices && !gridState.isItemFullyVisible(focusedTrackIndex)) {
+          gridState.scrollToItem(focusedTrackIndex)
+        }
+      }
+
       LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Fixed(2),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
@@ -3014,9 +3388,15 @@ private fun PlaylistDetailContent(
         items(playlist.tracks, key = { it.id }) { track ->
           val statBadge = if (playlist.isMostPlayed) {
             val s = playStats[track.id]
-            if (s != null && s.hasBeenPlayed) {
+            if (s != null && s.hasRecordedActivity) {
               val playsLabel = if (s.playCount == 1) "1 play" else "${s.playCount} plays"
-              "$playsLabel • ${s.totalPlayTimeFormatted}"
+              val fullLabel = "${s.formattedFullPlays(track.durationMs)} full"
+              val skipsSuffix = if (s.skipCount > 0) {
+                " • ${s.skipCount} ${if (s.skipCount == 1) "skip" else "skips"}"
+              } else {
+                ""
+              }
+              "$playsLabel • $fullLabel • ${s.totalPlayTimeFormatted}$skipsSuffix"
             } else {
               null
             }
@@ -3065,6 +3445,7 @@ private fun SongListItemCard(
     modifier = Modifier
       .fillMaxWidth()
       .clickable(onClick = onClick)
+      .semantics { selected = isCurrent }
       .testTag("song_item_${track.id}"),
   ) {
     Row(
@@ -3171,6 +3552,7 @@ private fun SongGridItemCard(
     modifier = Modifier
       .fillMaxWidth()
       .clickable(onClick = onClick)
+      .semantics { selected = isCurrent }
       .testTag("song_item_${track.id}"),
   ) {
     Column(
@@ -3241,7 +3623,7 @@ private fun SongGridItemCard(
         text = track.title,
         style = MaterialTheme.typography.bodyMedium,
         fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onSurface,
+        color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )
@@ -3322,10 +3704,18 @@ private fun CollapsedMiniMusicPlayer(
           track = track,
           size = 44.dp,
           shape = RoundedCornerShape(10.dp),
-          modifier = Modifier.testTag("mini_player_album_art"),
+          modifier = Modifier
+            .clickable(onClick = onExpand)
+            .testTag("mini_player_album_art"),
         )
 
-        Column(modifier = Modifier.weight(1f)) {
+        Column(
+          modifier = Modifier
+            .weight(1f)
+            .clearAndSetSemantics {
+              contentDescription = "${track.title} • ${track.artist} • ${track.album}"
+            },
+        ) {
           Text(
             text = track.title,
             style = MaterialTheme.typography.bodyMedium,
@@ -3408,20 +3798,6 @@ private fun CollapsedMiniMusicPlayer(
             modifier = Modifier.size(22.dp),
           )
         }
-
-        IconButton(
-          onClick = onExpand,
-          modifier = Modifier
-            .size(32.dp)
-            .testTag("music_player_expand_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.ExpandLess,
-            contentDescription = "Expand player",
-            tint = Color.White.copy(alpha = 0.9f),
-            modifier = Modifier.size(20.dp),
-          )
-        }
       }
     }
   }
@@ -3438,7 +3814,7 @@ private fun ExpandedMusicPlayerOverlay(
   track: MusicTrack,
   isPlaying: Boolean,
   isFavorite: Boolean,
-  isShuffleEnabled: Boolean,
+  shuffleMode: MusicShuffleMode,
   repeatMode: MusicRepeatMode,
   seekFraction: Float,
   currentPositionMs: Long,
@@ -3455,7 +3831,6 @@ private fun ExpandedMusicPlayerOverlay(
   deepBackgroundColor: Color,
   dominantHex: String,
   accentHex: String,
-  showSleepTimerMenu: Boolean,
   onCollapse: () -> Unit,
   onToggleFavorite: () -> Unit,
   onSeekChange: (Float) -> Unit,
@@ -3466,13 +3841,11 @@ private fun ExpandedMusicPlayerOverlay(
   onNext: () -> Unit,
   onCycleRepeat: () -> Unit,
   onCycleSpeed: () -> Unit,
+  onCycleSleepTimer: () -> Unit,
   onSelectQueueIndex: (Int) -> Unit,
   onMoveQueueItem: (fromIndex: Int, toIndex: Int) -> Unit,
   onSaveQueueAsPlaylist: () -> Unit,
   onOpenTrackInfo: () -> Unit,
-  onOpenSleepTimerMenu: () -> Unit,
-  onDismissSleepTimerMenu: () -> Unit,
-  onSelectSleepTimer: (SleepTimerPreset) -> Unit,
   onNavigateToArtist: () -> Unit,
   onNavigateToAlbum: () -> Unit,
 ) {
@@ -3493,6 +3866,16 @@ private fun ExpandedMusicPlayerOverlay(
   val sheetPeekHeight = 32.dp
   val isQueueExpanded = sheetState.currentValue == SheetValue.Expanded ||
     sheetState.targetValue == SheetValue.Expanded
+  val isSheetSettledExpanded = sheetState.currentValue == SheetValue.Expanded
+  var queueOpenCount by remember {
+    mutableIntStateOf(if (initialQueueSheetValue == SheetValue.Expanded) 1 else 0)
+  }
+
+  LaunchedEffect(isQueueExpanded) {
+    if (isQueueExpanded) {
+      queueOpenCount++
+    }
+  }
 
   BackHandler(enabled = isQueueExpanded) {
     coroutineScope.launch {
@@ -3503,15 +3886,56 @@ private fun ExpandedMusicPlayerOverlay(
   val topGradientColor = lerp(dominantColor, Color(0xFF12121A), 0.25f)
   val midGradientColor = lerp(secondaryColor, Color(0xFF0E0E16), 0.45f)
 
+  val density = LocalDensity.current
+  val dismissThresholdPx = with(density) { 64.dp.toPx() }
+  var swipeDismissOffsetPx by remember { mutableFloatStateOf(0f) }
+  val animatedDismissOffsetPx by animateFloatAsState(
+    targetValue = swipeDismissOffsetPx,
+    animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+    label = "expandedPlayerSwipeDismissOffset",
+  )
+  val currentOnCollapse by rememberUpdatedState(onCollapse)
+
   Box(
     modifier = Modifier
       .fillMaxSize()
+      .graphicsLayer {
+        translationY = animatedDismissOffsetPx
+      }
       .background(
         Brush.verticalGradient(
           colors = listOf(topGradientColor, midGradientColor, deepBackgroundColor),
         )
       )
-      .clickable(enabled = true, onClick = {}) // Consume touches behind overlay
+      .pointerInput(isQueueExpanded, dismissThresholdPx) {
+        if (!isQueueExpanded) {
+          detectVerticalDragGestures(
+            onDragStart = {
+              swipeDismissOffsetPx = 0f
+            },
+            onVerticalDrag = { change, dragAmount ->
+              val nextOffset = (swipeDismissOffsetPx + dragAmount).coerceAtLeast(0f)
+              if (nextOffset > 0f || dragAmount > 0f) {
+                change.consume()
+              }
+              swipeDismissOffsetPx = nextOffset
+            },
+            onDragEnd = {
+              val shouldDismiss = swipeDismissOffsetPx >= dismissThresholdPx
+              swipeDismissOffsetPx = 0f
+              if (shouldDismiss) {
+                currentOnCollapse()
+              }
+            },
+            onDragCancel = {
+              swipeDismissOffsetPx = 0f
+            },
+          )
+        }
+      }
+      .pointerInput(Unit) {
+        detectTapGestures {}
+      } // Consume touches behind overlay
       .testTag("music_player_expanded")
       .semantics {
         contentDescription = "Expanded player background $dominantHex accent $accentHex"
@@ -3531,14 +3955,19 @@ private fun ExpandedMusicPlayerOverlay(
         PlaybackQueueSheetContent(
           queue = queue,
           currentQueueIndex = currentQueueIndex,
+          currentTrackId = track.id,
           isPlaying = isPlaying,
+          shuffleMode = shuffleMode,
           isExpanded = isQueueExpanded,
+          isSheetSettledExpanded = isSheetSettledExpanded,
+          queueOpenCount = queueOpenCount,
           peekHeight = sheetPeekHeight,
           onToggleSheet = {
             coroutineScope.launch {
               if (sheetState.currentValue == SheetValue.Expanded) {
                 sheetState.partialExpand()
               } else {
+                queueOpenCount++
                 sheetState.expand()
               }
             }
@@ -3556,11 +3985,11 @@ private fun ExpandedMusicPlayerOverlay(
             .padding(
               start = 20.dp,
               end = 20.dp,
-              top = 12.dp,
-              bottom = 12.dp + sheetPeekHeight,
+              top = 6.dp,
+              bottom = 8.dp + sheetPeekHeight,
             ),
           horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.SpaceBetween,
+          verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           // 1. Top Header with Collapse Button, Now Playing Context, and Palette Swatch Pill
           Row(
@@ -3572,8 +4001,6 @@ private fun ExpandedMusicPlayerOverlay(
               onClick = onCollapse,
               modifier = Modifier
                 .size(40.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.14f))
                 .testTag("music_player_collapse_button"),
             ) {
               Icon(
@@ -3615,11 +4042,12 @@ private fun ExpandedMusicPlayerOverlay(
             }
           }
 
-          // 2. Large Album Art Card
+          // 2. Large Album Art Card with Favorite Star in Bottom-Right Corner
           Box(
             modifier = Modifier
-              .weight(1f, fill = false)
-              .padding(vertical = 8.dp),
+              .weight(1f)
+              .fillMaxWidth()
+              .padding(vertical = 2.dp),
             contentAlignment = Alignment.Center,
           ) {
             Card(
@@ -3627,89 +4055,91 @@ private fun ExpandedMusicPlayerOverlay(
               elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
               border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.25f)),
               modifier = Modifier
-                .size(220.dp)
+                .aspectRatio(1f)
+                .fillMaxSize()
                 .scale(artworkScale)
                 .testTag("expanded_player_album_art"),
             ) {
-              TrackArtworkBanner(
-                track = track,
-                modifier = Modifier.fillMaxSize(),
-              )
+              Box(modifier = Modifier.fillMaxSize()) {
+                TrackArtworkBanner(
+                  track = track,
+                  modifier = Modifier.fillMaxSize(),
+                )
+                IconButton(
+                  onClick = onToggleFavorite,
+                  modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp)
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.38f))
+                    .testTag("expanded_player_favorite_button"),
+                ) {
+                  Icon(
+                    imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                    contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
+                    tint = if (isFavorite) accentColor else Color.White,
+                    modifier = Modifier.size(24.dp),
+                  )
+                }
+              }
             }
           }
 
-          // 3. Track Title, Artist, Album, Genre Badge & Favorite Button
-          Row(
+          // 3. Track Title, Artist, Album & Genre Badge
+          Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
           ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = track.title,
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+              color = Color.White,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.testTag("expanded_player_title"),
+            )
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
               Text(
-                text = track.title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
+                text = track.artist,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = accentColor,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.testTag("expanded_player_title"),
+                modifier = Modifier
+                  .clickable(onClick = onNavigateToArtist)
+                  .testTag("expanded_player_artist"),
               )
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-              ) {
-                Text(
-                  text = track.artist,
-                  style = MaterialTheme.typography.bodyMedium,
-                  fontWeight = FontWeight.SemiBold,
-                  color = accentColor,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                  modifier = Modifier
-                    .clickable(onClick = onNavigateToArtist)
-                    .testTag("expanded_player_artist"),
-                )
-                Text(
-                  text = "•",
-                  style = MaterialTheme.typography.bodyMedium,
-                  color = Color.White.copy(alpha = 0.6f),
-                )
-                Text(
-                  text = track.album,
-                  style = MaterialTheme.typography.bodyMedium,
-                  color = Color.White.copy(alpha = 0.85f),
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                  modifier = Modifier
-                    .clickable(onClick = onNavigateToAlbum)
-                    .testTag("expanded_player_album"),
-                )
-              }
-              Spacer(modifier = Modifier.height(4.dp))
-              Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = Color.White.copy(alpha = 0.15f),
-              ) {
-                Text(
-                  text = "${track.genre} • ${track.year}",
-                  style = MaterialTheme.typography.labelSmall,
-                  color = Color.White.copy(alpha = 0.9f),
-                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                )
-              }
+              Text(
+                text = "•",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.6f),
+              )
+              Text(
+                text = track.album,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.85f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                  .clickable(onClick = onNavigateToAlbum)
+                  .testTag("expanded_player_album"),
+              )
             }
-
-            IconButton(
-              onClick = onToggleFavorite,
-              modifier = Modifier
-                .size(44.dp)
-                .testTag("expanded_player_favorite_button"),
+            Spacer(modifier = Modifier.height(2.dp))
+            Surface(
+              shape = RoundedCornerShape(12.dp),
+              color = Color.White.copy(alpha = 0.15f),
             ) {
-              Icon(
-                imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
-                tint = if (isFavorite) accentColor else Color.White,
-                modifier = Modifier.size(26.dp),
+              Text(
+                text = "${track.genre} • ${track.year}",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
               )
             }
           }
@@ -3758,15 +4188,27 @@ private fun ExpandedMusicPlayerOverlay(
               modifier = Modifier
                 .size(40.dp)
                 .clip(CircleShape)
-                .background(if (isShuffleEnabled) accentColor.copy(alpha = 0.25f) else Color.Transparent)
+                .background(if (shuffleMode.isEnabled) accentColor.copy(alpha = 0.25f) else Color.Transparent)
                 .testTag("expanded_player_shuffle_button"),
             ) {
-              Icon(
-                imageVector = Icons.Default.Shuffle,
-                contentDescription = if (isShuffleEnabled) "Shuffle On" else "Shuffle Off",
-                tint = if (isShuffleEnabled) accentColor else Color.White.copy(alpha = 0.7f),
-                modifier = Modifier.size(22.dp),
-              )
+              Box(contentAlignment = Alignment.Center) {
+                Icon(
+                  imageVector = Icons.Default.Shuffle,
+                  contentDescription = shuffleMode.displayName,
+                  tint = if (shuffleMode.isEnabled) accentColor else Color.White.copy(alpha = 0.7f),
+                  modifier = Modifier.size(22.dp),
+                )
+                if (shuffleMode == MusicShuffleMode.SMART_SHUFFLE) {
+                  Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = null,
+                    tint = accentColor,
+                    modifier = Modifier
+                      .size(11.dp)
+                      .align(Alignment.TopEnd),
+                  )
+                }
+              }
             }
 
             IconButton(
@@ -3870,55 +4312,36 @@ private fun ExpandedMusicPlayerOverlay(
               }
             }
 
-            Box {
-              Surface(
-                shape = CircleShape,
-                color = if (sleepTimerPreset != SleepTimerPreset.OFF) accentColor.copy(alpha = 0.28f)
-                else Color.White.copy(alpha = 0.14f),
-                modifier = Modifier
-                  .clip(CircleShape)
-                  .clickable(onClick = onOpenSleepTimerMenu)
-                  .testTag("expanded_player_sleep_button"),
+            Surface(
+              shape = CircleShape,
+              color = if (sleepTimerPreset != SleepTimerPreset.OFF) accentColor.copy(alpha = 0.28f)
+              else Color.White.copy(alpha = 0.14f),
+              modifier = Modifier
+                .clip(CircleShape)
+                .clickable(onClick = onCycleSleepTimer)
+                .testTag("expanded_player_sleep_button"),
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
               ) {
-                Row(
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(6.dp),
-                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                ) {
-                  Icon(
-                    imageVector = Icons.Default.Timer,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(16.dp),
-                  )
-                  Text(
-                    text = if (sleepTimerPreset == SleepTimerPreset.OFF) {
-                      "Sleep"
-                    } else {
-                      AudioRecorderEngine.formatDurationMs(sleepRemainingMs)
-                    },
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White,
-                  )
-                }
-              }
-
-              DropdownMenu(
-                expanded = showSleepTimerMenu,
-                onDismissRequest = onDismissSleepTimerMenu,
-              ) {
-                SleepTimerPreset.entries.forEach { preset ->
-                  DropdownMenuItem(
-                    text = { Text(preset.label) },
-                    leadingIcon = {
-                      if (preset == sleepTimerPreset) {
-                        Icon(Icons.Default.Check, contentDescription = null)
-                      }
-                    },
-                    onClick = { onSelectSleepTimer(preset) },
-                  )
-                }
+                Icon(
+                  imageVector = Icons.Default.Timer,
+                  contentDescription = null,
+                  tint = Color.White,
+                  modifier = Modifier.size(16.dp),
+                )
+                Text(
+                  text = if (sleepTimerPreset == SleepTimerPreset.OFF) {
+                    "Sleep"
+                  } else {
+                    AudioRecorderEngine.formatDurationMs(sleepRemainingMs)
+                  },
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = Color.White,
+                )
               }
             }
           }
@@ -3956,8 +4379,12 @@ private fun ExpandedMusicPlayerOverlay(
 private fun PlaybackQueueSheetContent(
   queue: List<MusicTrack>,
   currentQueueIndex: Int,
+  currentTrackId: String? = null,
   isPlaying: Boolean,
+  shuffleMode: MusicShuffleMode = MusicShuffleMode.OFF,
   isExpanded: Boolean,
+  isSheetSettledExpanded: Boolean = isExpanded,
+  queueOpenCount: Int = 0,
   peekHeight: Dp = 32.dp,
   onToggleSheet: () -> Unit,
   onSelectQueueIndex: (Int) -> Unit,
@@ -3969,6 +4396,17 @@ private fun PlaybackQueueSheetContent(
     label = "QueueChevronRotation",
   )
 
+  val focusedQueueIndex = remember(queue, currentQueueIndex, currentTrackId) {
+    MusicPlayerEngine.resolveFocusedQueueIndex(
+      queue = queue,
+      currentQueueIndex = currentQueueIndex,
+      currentTrackId = currentTrackId,
+    )
+  }
+  val queueListState = rememberLazyListState(
+    initialFirstVisibleItemIndex = focusedQueueIndex.coerceAtLeast(0),
+  )
+
   val density = LocalDensity.current
   val defaultItemHeightPx = with(density) { 64.dp.toPx() }
   val itemSpacingPx = with(density) { 8.dp.toPx() }
@@ -3977,6 +4415,20 @@ private fun PlaybackQueueSheetContent(
   val itemHeightsPx = remember { mutableMapOf<Int, Float>() }
   val currentQueue by rememberUpdatedState(queue)
   val currentOnMoveQueueItem by rememberUpdatedState(onMoveQueueItem)
+
+  LaunchedEffect(isExpanded, isSheetSettledExpanded, queueOpenCount) {
+    if ((isExpanded || isSheetSettledExpanded) && focusedQueueIndex in queue.indices && draggedIndex == null) {
+      queueListState.scrollToItem(focusedQueueIndex)
+    }
+  }
+
+  LaunchedEffect(focusedQueueIndex, queue.size) {
+    if (focusedQueueIndex in queue.indices && draggedIndex == null) {
+      if (!isExpanded || !queueListState.isItemFullyVisible(focusedQueueIndex)) {
+        queueListState.scrollToItem(focusedQueueIndex)
+      }
+    }
+  }
 
   Column(
     modifier = Modifier
@@ -3989,7 +4441,9 @@ private fun PlaybackQueueSheetContent(
       modifier = Modifier
         .fillMaxWidth()
         .height(peekHeight)
-        .clickable(onClick = onToggleSheet)
+        .pointerInput(onToggleSheet) {
+          detectTapGestures { onToggleSheet() }
+        }
         .testTag("music_queue_panel_toggle")
         .padding(horizontal = 20.dp, vertical = 3.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
@@ -4016,6 +4470,7 @@ private fun PlaybackQueueSheetContent(
       Row(
         modifier = Modifier
           .fillMaxWidth()
+          .clickable(onClick = onToggleSheet)
           .testTag("expanded_player_up_next_button"),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
@@ -4092,7 +4547,11 @@ private fun PlaybackQueueSheetContent(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Text(
-          text = "${queue.size} songs in queue",
+          text = if (shuffleMode.isEnabled) {
+            "${queue.size} songs in queue • ${shuffleMode.displayName}"
+          } else {
+            "${queue.size} songs in queue"
+          },
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -4134,6 +4593,7 @@ private fun PlaybackQueueSheetContent(
       }
     } else {
       LazyColumn(
+        state = queueListState,
         userScrollEnabled = draggedIndex == null,
         modifier = Modifier
           .fillMaxWidth()
@@ -4143,11 +4603,15 @@ private fun PlaybackQueueSheetContent(
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         itemsIndexed(queue, key = { idx, t -> "${idx}_${t.id}" }) { index, item ->
-          val isCurrent = index == currentQueueIndex
+          val isCurrent = index == focusedQueueIndex
           val isDragging = draggedIndex == index
           Surface(
             shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceContainer,
+            color = if (isCurrent) {
+              MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+            } else {
+              MaterialTheme.colorScheme.surfaceContainer
+            },
             shadowElevation = if (isDragging) 8.dp else 0.dp,
             border = if (isCurrent || isDragging) {
               BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
@@ -4169,6 +4633,7 @@ private fun PlaybackQueueSheetContent(
               }
               .clip(RoundedCornerShape(14.dp))
               .clickable(enabled = draggedIndex == null) { onSelectQueueIndex(index) }
+              .semantics { selected = isCurrent }
               .testTag("music_queue_item_$index"),
           ) {
             Row(
@@ -4187,6 +4652,7 @@ private fun PlaybackQueueSheetContent(
                   modifier = Modifier
                     .size(32.dp)
                     .clip(CircleShape)
+                    .semantics(mergeDescendants = true) {}
                     .pointerInput(index, queue.size) {
                       detectDragGestures(
                         onDragStart = {
@@ -4475,6 +4941,7 @@ private fun TrackArtworkBanner(
 private fun PlaybackQueueDialog(
   queue: List<MusicTrack>,
   currentQueueIndex: Int,
+  currentTrackId: String? = null,
   isPlaying: Boolean,
   accentColor: Color,
   onSelectQueueIndex: (Int) -> Unit,
@@ -4482,6 +4949,17 @@ private fun PlaybackQueueDialog(
   onSaveQueueAsPlaylist: () -> Unit,
   onDismiss: () -> Unit,
 ) {
+  val focusedQueueIndex = remember(queue, currentQueueIndex, currentTrackId) {
+    MusicPlayerEngine.resolveFocusedQueueIndex(
+      queue = queue,
+      currentQueueIndex = currentQueueIndex,
+      currentTrackId = currentTrackId,
+    )
+  }
+  val queueListState = rememberLazyListState(
+    initialFirstVisibleItemIndex = focusedQueueIndex.coerceAtLeast(0),
+  )
+
   val density = LocalDensity.current
   val defaultItemHeightPx = with(density) { 56.dp.toPx() }
   val itemSpacingPx = with(density) { 6.dp.toPx() }
@@ -4490,6 +4968,18 @@ private fun PlaybackQueueDialog(
   val itemHeightsPx = remember { mutableMapOf<Int, Float>() }
   val currentQueue by rememberUpdatedState(queue)
   val currentOnMoveQueueItem by rememberUpdatedState(onMoveQueueItem)
+
+  LaunchedEffect(Unit) {
+    if (focusedQueueIndex in queue.indices) {
+      queueListState.scrollToItem(focusedQueueIndex)
+    }
+  }
+
+  LaunchedEffect(focusedQueueIndex, queue.size) {
+    if (focusedQueueIndex in queue.indices && draggedIndex == null && !queueListState.isItemFullyVisible(focusedQueueIndex)) {
+      queueListState.scrollToItem(focusedQueueIndex)
+    }
+  }
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -4556,6 +5046,7 @@ private fun PlaybackQueueDialog(
         }
 
         LazyColumn(
+          state = queueListState,
           userScrollEnabled = draggedIndex == null,
           modifier = Modifier
             .fillMaxWidth()
@@ -4564,7 +5055,7 @@ private fun PlaybackQueueDialog(
           verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
           itemsIndexed(queue, key = { idx, t -> "${idx}_${t.id}" }) { index, item ->
-            val isCurrent = index == currentQueueIndex
+            val isCurrent = index == focusedQueueIndex
             val isDragging = draggedIndex == index
             Card(
               shape = RoundedCornerShape(12.dp),
@@ -4575,6 +5066,11 @@ private fun PlaybackQueueDialog(
                   MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
                 },
               ),
+              border = if (isCurrent || isDragging) {
+                BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
+              } else {
+                null
+              },
               modifier = Modifier
                 .fillMaxWidth()
                 .zIndex(if (isDragging) 1f else 0f)
@@ -4588,7 +5084,9 @@ private fun PlaybackQueueDialog(
                   scaleX = if (isDragging) 1.02f else 1f
                   scaleY = if (isDragging) 1.02f else 1f
                 }
-                .clickable(enabled = draggedIndex == null) { onSelectQueueIndex(index) },
+                .clickable(enabled = draggedIndex == null) { onSelectQueueIndex(index) }
+                .semantics { selected = isCurrent }
+                .testTag("music_queue_item_$index"),
             ) {
               Row(
                 modifier = Modifier
@@ -4601,6 +5099,7 @@ private fun PlaybackQueueDialog(
                   modifier = Modifier
                     .size(28.dp)
                     .clip(CircleShape)
+                    .semantics(mergeDescendants = true) {}
                     .pointerInput(index, queue.size) {
                       detectDragGestures(
                         onDragStart = {
@@ -4959,7 +5458,9 @@ private fun TrackDetailsDialog(
         DetailRow(label = "Year", value = track.year.toString(), isMono = true)
         DetailRow(label = "Duration", value = track.durationFormatted, isMono = true)
         DetailRow(label = "Plays", value = playStat.playCount.toString(), isMono = true)
+        DetailRow(label = "Full Plays", value = playStat.formattedFullPlays(track.durationMs), isMono = true)
         DetailRow(label = "Playtime", value = playStat.totalPlayTimeFormatted, isMono = true)
+        DetailRow(label = "Skips", value = playStat.skipCount.toString(), isMono = true)
         DetailRow(label = "Format", value = track.formatLabel, isMono = true)
         DetailRow(label = "Bitrate", value = track.bitrateFormatted, isMono = true)
         DetailRow(label = "Sample Rate", value = track.sampleRateFormatted, isMono = true)

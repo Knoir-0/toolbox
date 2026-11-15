@@ -3,6 +3,7 @@ package com.example.toolbox.ui.tools
 import androidx.compose.ui.graphics.Color
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS_MINUS_30
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_COMPLEMENTARY
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_MONOCHROMATIC
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SHADES
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SHADE_DEEP
@@ -18,6 +19,8 @@ import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_PLAYER
 import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_SECONDARY
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
 import com.example.toolbox.ui.main.DEFAULT_HIDDEN_TOOLS
+import com.example.toolbox.ui.main.DEFAULT_MUSIC_PLAYER_COLOR_OPTION
+import com.example.toolbox.ui.main.DEFAULT_MUSIC_PLAYER_THEME_ENABLED
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
 import com.example.toolbox.ui.main.CategorySortingOption
 import com.example.toolbox.ui.main.CategoryToolSortingOption
@@ -124,10 +127,34 @@ class SettingsScreenTest {
   }
 
   @Test
-  fun resolveEffectiveAccentColor_autoResolvesComplementAndUserSetResolvesCustom() {
-    // AUTO with Ocean blue theme -> complement is orange-ish
-    val autoAccent = resolveEffectiveAccentColor("#00668B", DEFAULT_ACCENT_COLOR_AUTO)
-    assertTrue(autoAccent.red > autoAccent.blue)
+  fun resolveEffectiveAccentColor_autoResolvesThemeDefaultAndUserSetResolvesCustom() {
+    val oceanBlue = Color(0xFF00668B)
+
+    // AUTO in dark theme -> Soft Tint (SHADES)
+    val darkAutoAccent = resolveEffectiveAccentColor(
+      themeColorHex = "#00668B",
+      accentColorSetting = DEFAULT_ACCENT_COLOR_AUTO,
+      darkTheme = true,
+    )
+    assertEquals(
+      calculateAccentHarmonyColor(oceanBlue, AccentHarmonyOption.SHADES),
+      darkAutoAccent,
+    )
+
+    // AUTO in light theme -> Mid Shade (SHADE_MID)
+    val lightAutoAccent = resolveEffectiveAccentColor(
+      themeColorHex = "#00668B",
+      accentColorSetting = DEFAULT_ACCENT_COLOR_AUTO,
+      darkTheme = false,
+    )
+    assertEquals(
+      calculateAccentHarmonyColor(oceanBlue, AccentHarmonyOption.SHADE_MID),
+      lightAutoAccent,
+    )
+
+    // Explicit complementary option -> orange-ish complement
+    val compAccent = resolveEffectiveAccentColor("#00668B", ACCENT_COLOR_AUTO_COMPLEMENTARY)
+    assertTrue(compAccent.red > compAccent.blue)
 
     // User set accent overrides theme color
     val userAccent = resolveEffectiveAccentColor("#00668B", "#386A20")
@@ -141,7 +168,7 @@ class SettingsScreenTest {
     val redColor = Color(0xFFFF0000)
 
     // 1. Complementary (+180 deg -> Cyan)
-    val comp = resolveEffectiveAccentColor(redHex, DEFAULT_ACCENT_COLOR_AUTO)
+    val comp = resolveEffectiveAccentColor(redHex, ACCENT_COLOR_AUTO_COMPLEMENTARY)
     assertEquals(calculateComplementaryColor(redColor), comp)
     assertTrue("Complementary of Red should be cyan (high green & blue, low red)", comp.green > comp.red && comp.blue > comp.red)
 
@@ -179,14 +206,41 @@ class SettingsScreenTest {
 
   @Test
   fun accentHarmonyOptions_mapToAllColorsToolHarmonyModes() {
+    // Tints & Shades is at the front of the list
+    assertEquals(HarmonyMode.SHADES, HarmonyMode.entries.first())
+
+    // Default accent harmony is Soft Tint for dark theme and Mid Shade for light theme
+    assertEquals(AccentHarmonyOption.SHADES, AccentHarmonyOption.defaultForTheme(darkTheme = true))
+    assertEquals(AccentHarmonyOption.SHADE_MID, AccentHarmonyOption.defaultForTheme(darkTheme = false))
+    assertEquals(
+      AccentHarmonyOption.SHADES,
+      AccentHarmonyOption.fromPrefValue(DEFAULT_ACCENT_COLOR_AUTO, darkTheme = true),
+    )
+    assertEquals(
+      AccentHarmonyOption.SHADE_MID,
+      AccentHarmonyOption.fromPrefValue(DEFAULT_ACCENT_COLOR_AUTO, darkTheme = false),
+    )
+    assertEquals(
+      AccentHarmonyOption.SHADES,
+      AccentHarmonyOption.defaultForMode(HarmonyMode.SHADES, darkTheme = true),
+    )
+    assertEquals(
+      AccentHarmonyOption.SHADE_MID,
+      AccentHarmonyOption.defaultForMode(HarmonyMode.SHADES, darkTheme = false),
+    )
+
     for (mode in HarmonyMode.entries) {
-      val defaultOption = AccentHarmonyOption.defaultForMode(mode)
-      assertEquals(mode, defaultOption.harmonyMode)
-      assertTrue(isAutoAccentColorSetting(defaultOption.prefValue))
+      val defaultDarkOption = AccentHarmonyOption.defaultForMode(mode, darkTheme = true)
+      val defaultLightOption = AccentHarmonyOption.defaultForMode(mode, darkTheme = false)
+      assertEquals(mode, defaultDarkOption.harmonyMode)
+      assertEquals(mode, defaultLightOption.harmonyMode)
+      assertTrue(isAutoAccentColorSetting(defaultDarkOption.prefValue))
+      assertTrue(isAutoAccentColorSetting(defaultLightOption.prefValue))
 
       val swatches = AccentHarmonyOption.swatchesForMode(mode)
       assertTrue("Mode $mode should have at least 2 swatches", swatches.size >= 2)
-      assertTrue("Mode $mode swatches should include its default option", swatches.contains(defaultOption))
+      assertTrue("Mode $mode swatches should include its dark default option", swatches.contains(defaultDarkOption))
+      assertTrue("Mode $mode swatches should include its light default option", swatches.contains(defaultLightOption))
 
       // Swatch count matches ColorMath.generateHarmony count
       val baseHsv = HsvColor(200f, 0.8f, 0.85f)
@@ -200,6 +254,7 @@ class SettingsScreenTest {
       assertTrue(isAutoAccentColorSetting(option.prefValue))
     }
 
+    assertTrue(isAutoAccentColorSetting(DEFAULT_ACCENT_COLOR_AUTO))
     assertFalse(isAutoAccentColorSetting("#E65100"))
     assertFalse(isAutoAccentColorSetting(""))
     assertFalse(isAutoAccentColorSetting(null))
@@ -446,6 +501,8 @@ class SettingsScreenTest {
     sourceRepo.setToolsPerRow(5)
     sourceRepo.setThemeMode(ThemeMode.DARK)
     sourceRepo.setThemeColor("#00668B")
+    sourceRepo.setMusicPlayerThemeEnabled(false)
+    sourceRepo.setMusicPlayerColorOption(THEME_COLOR_MUSIC_SECONDARY)
     sourceRepo.setAccentColor("#E65100")
     sourceRepo.setHiddenTools(setOf(Tool.RULER, Tool.METRONOME))
     sourceRepo.setToolSorting(ToolSortingOption.ALPHABETICAL)
@@ -464,6 +521,8 @@ class SettingsScreenTest {
     assertEquals(5, targetRepo.getToolsPerRow())
     assertEquals(ThemeMode.DARK, targetRepo.getThemeMode())
     assertEquals("#00668B", targetRepo.getThemeColor())
+    assertFalse(targetRepo.getMusicPlayerThemeEnabled())
+    assertEquals(THEME_COLOR_MUSIC_SECONDARY, targetRepo.getMusicPlayerColorOption())
     assertEquals("#E65100", targetRepo.getAccentColor())
     assertEquals(setOf(Tool.RULER, Tool.METRONOME), targetRepo.getHiddenTools())
     assertEquals(ToolSortingOption.ALPHABETICAL, targetRepo.getToolSorting())
@@ -487,6 +546,8 @@ class SettingsScreenTest {
     repo.setToolsPerRow(6)
     repo.setThemeMode(ThemeMode.DARK)
     repo.setThemeColor("#386A20")
+    repo.setMusicPlayerThemeEnabled(false)
+    repo.setMusicPlayerColorOption(THEME_COLOR_MUSIC_ACCENT)
     repo.setAccentColor("#B3261E")
     repo.setHiddenTools(setOf(Tool.CALCULATOR))
     repo.setToolSorting(ToolSortingOption.USAGE)
@@ -500,6 +561,9 @@ class SettingsScreenTest {
     assertEquals(com.example.toolbox.ui.main.DEFAULT_TOOLS_PER_ROW, repo.getToolsPerRow())
     assertEquals(ThemeMode.SYSTEM, repo.getThemeMode())
     assertEquals(DEFAULT_THEME_COLOR_SYSTEM, repo.getThemeColor())
+    assertEquals(DEFAULT_MUSIC_PLAYER_THEME_ENABLED, repo.getMusicPlayerThemeEnabled())
+    assertTrue(repo.getMusicPlayerThemeEnabled())
+    assertEquals(DEFAULT_MUSIC_PLAYER_COLOR_OPTION, repo.getMusicPlayerColorOption())
     assertEquals(DEFAULT_ACCENT_COLOR_AUTO, repo.getAccentColor())
     assertEquals(DEFAULT_HIDDEN_TOOLS, repo.getHiddenTools())
     assertEquals(ToolSortingOption.USER_CHOICE, repo.getToolSorting())
@@ -542,21 +606,26 @@ class SettingsScreenTest {
 
     val session = MusicPlaybackSession(
       initialTracks = listOf(track1, track2),
+      initialPlayerExpanded = true,
       isInspection = true,
     )
     try {
       assertEquals(track1.id, MusicPlayerEngine.activeTrack?.id)
       assertEquals(
-        calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.COMPLEMENTARY),
-        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, DEFAULT_ACCENT_COLOR_AUTO),
+        calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.SHADE_MID),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = false),
       )
       assertEquals(
-        calculateAccentHarmonyColor(palette1.secondaryColor, AccentHarmonyOption.COMPLEMENTARY),
-        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_SECONDARY, DEFAULT_ACCENT_COLOR_AUTO),
+        calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.SHADES),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = true),
       )
       assertEquals(
-        calculateAccentHarmonyColor(palette1.accentColor, AccentHarmonyOption.COMPLEMENTARY),
-        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_ACCENT, DEFAULT_ACCENT_COLOR_AUTO),
+        calculateAccentHarmonyColor(palette1.secondaryColor, AccentHarmonyOption.SHADE_MID),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_SECONDARY, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = false),
+      )
+      assertEquals(
+        calculateAccentHarmonyColor(palette1.accentColor, AccentHarmonyOption.SHADE_MID),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_ACCENT, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = false),
       )
       assertEquals(
         calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.TRIADIC),
@@ -575,16 +644,20 @@ class SettingsScreenTest {
       session.skipToNext(userInitiated = true)
       assertEquals(track2.id, MusicPlayerEngine.activeTrack?.id)
       assertEquals(
-        calculateAccentHarmonyColor(palette2.dominantColor, AccentHarmonyOption.COMPLEMENTARY),
-        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, DEFAULT_ACCENT_COLOR_AUTO),
+        calculateAccentHarmonyColor(palette2.dominantColor, AccentHarmonyOption.SHADE_MID),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = false),
       )
       assertEquals(
-        calculateAccentHarmonyColor(palette2.secondaryColor, AccentHarmonyOption.COMPLEMENTARY),
-        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_SECONDARY, DEFAULT_ACCENT_COLOR_AUTO),
+        calculateAccentHarmonyColor(palette2.dominantColor, AccentHarmonyOption.SHADES),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = true),
       )
       assertEquals(
-        calculateAccentHarmonyColor(palette2.accentColor, AccentHarmonyOption.COMPLEMENTARY),
-        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_ACCENT, DEFAULT_ACCENT_COLOR_AUTO),
+        calculateAccentHarmonyColor(palette2.secondaryColor, AccentHarmonyOption.SHADE_MID),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_SECONDARY, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = false),
+      )
+      assertEquals(
+        calculateAccentHarmonyColor(palette2.accentColor, AccentHarmonyOption.SHADE_MID),
+        resolveEffectiveAccentColor(THEME_COLOR_MUSIC_ACCENT, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = false),
       )
       assertEquals(
         calculateAccentHarmonyColor(palette2.dominantColor, AccentHarmonyOption.TRIADIC),
@@ -592,6 +665,72 @@ class SettingsScreenTest {
       )
     } finally {
       session.release()
+      MusicPlayerEngine.resetPlaybackSession()
+    }
+  }
+
+  @Test
+  fun musicPlayerThemeCheckbox_checkedByDefault_themesWhenPlaying_andFallsBackWhenNotPlayingOrUnchecked() {
+    val repo = InMemoryNavigationPreferencesRepository()
+    // 1. Checked by default, with fallback themeColor = SYSTEM
+    assertTrue(repo.getMusicPlayerThemeEnabled())
+    assertEquals(DEFAULT_MUSIC_PLAYER_COLOR_OPTION, repo.getMusicPlayerColorOption())
+    assertEquals(DEFAULT_THEME_COLOR_SYSTEM, repo.getThemeColor())
+
+    // 2. Selecting a user fallback theme color keeps Music Player checkbox checked
+    repo.setThemeColor("#00668B")
+    assertEquals("#00668B", repo.getThemeColor())
+    assertTrue(repo.getMusicPlayerThemeEnabled())
+
+    val track1 = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS[0]
+    val palette1 = MusicPlayerEngine.resolveTrackPalette(track1)
+    MusicPlayerEngine.updateActiveTrackPalette(track1, palette1)
+
+    try {
+      // 3. When checked AND music is playing, themes according to music player
+      assertEquals(
+        calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.SHADE_MID),
+        resolveEffectiveAccentColor(
+          themeColorHex = repo.getThemeColor(),
+          accentColorSetting = DEFAULT_ACCENT_COLOR_AUTO,
+          musicPalette = palette1,
+          musicPlayerThemeEnabled = repo.getMusicPlayerThemeEnabled(),
+          musicPlayerColorOption = repo.getMusicPlayerColorOption(),
+          isMusicPlaying = true,
+          darkTheme = false,
+        ),
+      )
+
+      // 4. When checked and music is NOT playing, falls back to user's selected theme color (#00668B)
+      assertEquals(
+        calculateAccentHarmonyColor(Color(0xFF00668B), AccentHarmonyOption.SHADE_MID),
+        resolveEffectiveAccentColor(
+          themeColorHex = repo.getThemeColor(),
+          accentColorSetting = DEFAULT_ACCENT_COLOR_AUTO,
+          musicPalette = palette1,
+          musicPlayerThemeEnabled = repo.getMusicPlayerThemeEnabled(),
+          musicPlayerColorOption = repo.getMusicPlayerColorOption(),
+          isMusicPlaying = false,
+          darkTheme = false,
+        ),
+      )
+
+      // 5. When unchecked, even if music IS playing, falls back to user's selected theme color (#00668B)
+      repo.setMusicPlayerThemeEnabled(false)
+      assertFalse(repo.getMusicPlayerThemeEnabled())
+      assertEquals(
+        calculateAccentHarmonyColor(Color(0xFF00668B), AccentHarmonyOption.SHADE_MID),
+        resolveEffectiveAccentColor(
+          themeColorHex = repo.getThemeColor(),
+          accentColorSetting = DEFAULT_ACCENT_COLOR_AUTO,
+          musicPalette = palette1,
+          musicPlayerThemeEnabled = repo.getMusicPlayerThemeEnabled(),
+          musicPlayerColorOption = repo.getMusicPlayerColorOption(),
+          isMusicPlaying = true,
+          darkTheme = false,
+        ),
+      )
+    } finally {
       MusicPlayerEngine.resetPlaybackSession()
     }
   }

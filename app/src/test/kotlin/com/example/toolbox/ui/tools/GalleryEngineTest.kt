@@ -454,4 +454,70 @@ class GalleryEngineTest {
       GalleryEngine.sortPhotos(photos, GallerySortOrder.SIZE_ASC).map { it.name },
     )
   }
+
+  @Test
+  fun bulkSelectionOperations_infoCopyMoveAndDeleteMultipleAlbumsAndPhotos() {
+    val picturesDir = File(tempRootDir, "Pictures").apply { mkdirs() }
+    val dcimDir = File(tempRootDir, "DCIM").apply { mkdirs() }
+
+    val tripAlbumDir = File(picturesDir, "Trip").apply { mkdirs() }
+    val cameraAlbumDir = File(dcimDir, "Camera").apply { mkdirs() }
+
+    val tripPhoto1 = GalleryEngine.writeSolidColorPng(File(tripAlbumDir, "trip1.png"), lastModifiedMs = 1_000_000L)
+    val tripPhoto2 = GalleryEngine.writeSolidColorPng(File(tripAlbumDir, "trip2.png"), lastModifiedMs = 2_000_000L)
+    val camPhoto1 = GalleryEngine.writeSolidColorPng(File(cameraAlbumDir, "cam1.png"), lastModifiedMs = 3_000_000L)
+    val rootDirectPhoto1 = GalleryEngine.writeSolidColorPng(File(picturesDir, "direct1.png"), lastModifiedMs = 4_000_000L)
+    val rootDirectPhoto2 = GalleryEngine.writeSolidColorPng(File(dcimDir, "direct2.png"), lastModifiedMs = 5_000_000L)
+
+    val rootContents = GalleryEngine.loadRootContents(rootDirectory = tempRootDir)
+    val selectedAlbums = rootContents.nestedAlbums // Camera, Trip
+    val selectedPhotos = rootContents.photos // direct2.png, direct1.png
+
+    assertEquals(2, selectedAlbums.size)
+    assertEquals(2, selectedPhotos.size)
+
+    // 1. Bulk selection info across multiple albums and photos
+    val info = GalleryEngine.getBulkSelectionInfo(selectedAlbums, selectedPhotos)
+    assertEquals(2, info.albumCount)
+    assertEquals(2, info.photoCount)
+    assertEquals(4, info.totalItems)
+    assertEquals(5, info.totalMediaFileCount)
+    val expectedBytes = listOf(tripPhoto1, tripPhoto2, camPhoto1, rootDirectPhoto1, rootDirectPhoto2).sumOf { it.length() }
+    assertEquals(expectedBytes, info.totalSizeBytes)
+
+    // 2. Copy selected albums and photos into a destination folder
+    val backupDir = File(picturesDir, "Backup").apply { mkdirs() }
+    val copiedCount = GalleryEngine.copySelectedItems(
+      albums = listOf(selectedAlbums.first { it.name == "Trip" }),
+      photos = selectedPhotos,
+      destinationDir = backupDir,
+    )
+    assertEquals(3, copiedCount)
+    assertTrue(File(backupDir, "Trip/trip1.png").exists())
+    assertTrue(File(backupDir, "Trip/trip2.png").exists())
+    assertTrue(File(backupDir, "direct1.png").exists())
+    assertTrue(File(backupDir, "direct2.png").exists())
+
+    // 3. Move selected album and photo into destination folder
+    val archiveDir = File(picturesDir, "Archive").apply { mkdirs() }
+    val movedCount = GalleryEngine.moveSelectedItems(
+      albums = listOf(selectedAlbums.first { it.name == "Camera" }),
+      photos = listOf(selectedPhotos.first { it.name == "direct1.png" }),
+      destinationDir = archiveDir,
+    )
+    assertEquals(2, movedCount)
+    assertTrue(File(archiveDir, "Camera/cam1.png").exists())
+    assertTrue(!cameraAlbumDir.exists())
+    assertTrue(File(archiveDir, "direct1.png").exists())
+    assertTrue(!rootDirectPhoto1.exists())
+
+    // 4. Delete selected albums and photos
+    val deletedCount = GalleryEngine.deleteSelectedItems(
+      albums = listOf(selectedAlbums.first { it.name == "Trip" }),
+      photos = listOf(selectedPhotos.first { it.name == "direct2.png" }),
+    )
+    assertEquals(2, deletedCount)
+    assertTrue(!tripAlbumDir.exists())
+    assertTrue(!rootDirectPhoto2.exists())
+  }
 }

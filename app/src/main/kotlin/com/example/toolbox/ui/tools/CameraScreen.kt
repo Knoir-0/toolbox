@@ -3189,19 +3189,13 @@ private fun DocumentNoteReticleOverlayCanvas(
   val guideLineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)
   val borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
 
-  Box(
-    modifier = modifier.padding(top = topInset + 40.dp, bottom = 190.dp, start = 28.dp, end = 28.dp),
-    contentAlignment = Alignment.Center,
-  ) {
-    Canvas(
-      modifier = Modifier
-        .fillMaxSize()
-        .testTag("camera_note_reticle_overlay"),
-    ) {
-      val docW = (size.width * 0.84f).coerceAtMost(size.height * 0.78f)
-      val docH = (docW * 1.25f).coerceAtMost(size.height * 0.92f)
+  Box(modifier = modifier) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+      val minDim = size.minDimension
+      val docW = (minDim * 0.64f).coerceAtMost(260.dp.toPx())
+      val docH = (docW * 1.25f).coerceAtMost(size.height * 0.78f)
       val left = (size.width - docW) / 2f
-      val top = (size.height - docH) / 2f
+      val top = topInset.toPx().coerceAtMost((size.height - docH).coerceAtLeast(0f))
       val right = left + docW
       val bottom = top + docH
       val armLen = minOf(docW, docH) * 0.14f

@@ -135,6 +135,38 @@ data class AlbumContents(
 )
 
 /**
+ * Aggregated info for a multi-selection of albums and photos in the Gallery.
+ */
+data class GalleryBulkSelectionInfo(
+  val albumCount: Int,
+  val photoCount: Int,
+  val totalMediaFileCount: Int,
+  val totalSizeBytes: Long,
+  val formattedSize: String,
+) {
+  val totalItems: Int get() = albumCount + photoCount
+}
+
+/**
+ * Clipboard operation for multi-selected albums and photos in the Gallery.
+ */
+enum class GalleryClipboardOperation {
+  COPY,
+  CUT,
+}
+
+/**
+ * Holds albums and photos cut or copied from the Gallery for pasting into another album/folder.
+ */
+data class GalleryClipboardState(
+  val operation: GalleryClipboardOperation,
+  val albums: List<GalleryAlbum>,
+  val photos: List<GalleryPhoto>,
+) {
+  val totalCount: Int get() = albums.size + photos.size
+}
+
+/**
  * Core engine for the Gallery tool:
  * - Resolves default gallery folders (`Pictures` and `DCIM`)
  * - Scans albums and nested folders for the most recent photo cover image
@@ -733,6 +765,193 @@ object GalleryEngine {
           .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
     }
     return photos.sortedWith(comparator)
+  }
+
+  /**
+   * Collects all distinct media [File]s across the selected [albums] (recursively up to [maxDepth])
+   * and selected [photos].
+   */
+  fun collectMediaFiles(
+    albums: List<GalleryAlbum>,
+    photos: List<GalleryPhoto>,
+    maxDepth: Int = 8,
+  ): List<File> {
+    val result = LinkedHashMap<String, File>()
+
+    fun scan(dir: File, depth: Int) {
+      if (depth > maxDepth) return
+      if (hasNoMediaFile(dir)) return
+      val children = try {
+        dir.listFiles()
+      } catch (_: Throwable) {
+        null
+      } ?: return
+
+      for (child in children) {
+        if (child.name.startsWith(".")) continue
+        if (child.isFile && isPhotoFile(child)) {
+          result.putIfAbsent(child.absolutePath, child)
+        } else if (child.isDirectory && depth < maxDepth) {
+          scan(child, depth + 1)
+        }
+      }
+    }
+
+    for (album in albums) {
+      for (dir in album.directories) {
+        if (dir.exists() && dir.isDirectory) {
+          scan(dir, 0)
+        }
+      }
+    }
+    for (photo in photos) {
+      if (photo.file.exists() && photo.file.isFile) {
+        result.putIfAbsent(photo.file.absolutePath, photo.file)
+      }
+    }
+    return result.values.toList()
+  }
+
+  /**
+   * Computes aggregated size and count metadata for a multi-selection of [albums] and [photos].
+   */
+  fun getBulkSelectionInfo(
+    albums: List<GalleryAlbum>,
+    photos: List<GalleryPhoto>,
+    maxDepth: Int = 8,
+  ): GalleryBulkSelectionInfo {
+    val mediaFiles = collectMediaFiles(albums, photos, maxDepth = maxDepth)
+    val totalBytes = mediaFiles.sumOf { file ->
+      try {
+        file.length()
+      } catch (_: Throwable) {
+        0L
+      }
+    }
+    return GalleryBulkSelectionInfo(
+      albumCount = albums.size,
+      photoCount = photos.size,
+      totalMediaFileCount = mediaFiles.size,
+      totalSizeBytes = totalBytes,
+      formattedSize = FileManagerEngine.formatFileSize(totalBytes),
+    )
+  }
+
+  /**
+   * Deletes all selected [albums] (including all backing [GalleryAlbum.directories]) and [photos].
+   * Returns the total number of selected items (albums + photos) deleted.
+   */
+  fun deleteSelectedItems(
+    albums: List<GalleryAlbum>,
+    photos: List<GalleryPhoto>,
+  ): Int {
+    var deletedCount = 0
+    for (album in albums) {
+      var anyDeleted = false
+      for (dir in album.directories) {
+        if (FileManagerEngine.deleteFileOrDirectory(dir)) {
+          anyDeleted = true
+        }
+      }
+      if (anyDeleted) deletedCount++
+    }
+    for (photo in photos) {
+      if (FileManagerEngine.deleteFileOrDirectory(photo.file)) {
+        deletedCount++
+      }
+    }
+    return deletedCount
+  }
+
+  /**
+   * Copies all selected [albums] and [photos] into [destinationDir].
+   * Returns the total number of selected items (albums + photos) copied.
+   */
+  fun copySelectedItems(
+    albums: List<GalleryAlbum>,
+    photos: List<GalleryPhoto>,
+    destinationDir: File,
+  ): Int {
+    if (!destinationDir.exists()) {
+      destinationDir.mkdirs()
+    }
+    if (!destinationDir.isDirectory) return 0
+
+    var copiedCount = 0
+    for (album in albums) {
+      val validDirs = album.directories.filter { it.exists() && it.isDirectory }
+      if (validDirs.isEmpty()) continue
+      if (validDirs.size == 1) {
+        copiedCount += FileManagerEngine.copyMultipleFiles(validDirs, destinationDir)
+      } else {
+        try {
+          var targetAlbumDir = File(destinationDir, album.name)
+          if (targetAlbumDir.exists() && validDirs.none { it.absolutePath.equals(targetAlbumDir.absolutePath, ignoreCase = true) }) {
+            var i = 1
+            do {
+              targetAlbumDir = File(destinationDir, "${album.name} (copy $i)")
+              i++
+            } while (targetAlbumDir.exists())
+          }
+          targetAlbumDir.mkdirs()
+          for (srcDir in validDirs) {
+            if (srcDir.absolutePath.equals(targetAlbumDir.absolutePath, ignoreCase = true)) continue
+            val children = srcDir.listFiles().orEmpty().toList()
+            FileManagerEngine.copyMultipleFiles(children, targetAlbumDir)
+          }
+          copiedCount++
+        } catch (_: Throwable) {}
+      }
+    }
+    if (photos.isNotEmpty()) {
+      copiedCount += FileManagerEngine.copyMultipleFiles(photos.map { it.file }, destinationDir)
+    }
+    return copiedCount
+  }
+
+  /**
+   * Moves all selected [albums] and [photos] into [destinationDir].
+   * Returns the total number of selected items (albums + photos) moved.
+   */
+  fun moveSelectedItems(
+    albums: List<GalleryAlbum>,
+    photos: List<GalleryPhoto>,
+    destinationDir: File,
+  ): Int {
+    if (!destinationDir.exists()) {
+      destinationDir.mkdirs()
+    }
+    if (!destinationDir.isDirectory) return 0
+
+    var movedCount = 0
+    for (album in albums) {
+      val validDirs = album.directories.filter { it.exists() && it.isDirectory }
+      if (validDirs.isEmpty()) continue
+      if (validDirs.size == 1) {
+        val singleDir = validDirs.first()
+        if (singleDir.parentFile?.absolutePath.equals(destinationDir.absolutePath, ignoreCase = true)) {
+          movedCount++
+        } else {
+          movedCount += FileManagerEngine.moveMultipleFiles(validDirs, destinationDir)
+        }
+      } else {
+        try {
+          val targetAlbumDir = File(destinationDir, album.name)
+          targetAlbumDir.mkdirs()
+          for (srcDir in validDirs) {
+            if (srcDir.absolutePath.equals(targetAlbumDir.absolutePath, ignoreCase = true)) continue
+            val children = srcDir.listFiles().orEmpty().toList()
+            FileManagerEngine.moveMultipleFiles(children, targetAlbumDir)
+            srcDir.deleteRecursively()
+          }
+          movedCount++
+        } catch (_: Throwable) {}
+      }
+    }
+    if (photos.isNotEmpty()) {
+      movedCount += FileManagerEngine.moveMultipleFiles(photos.map { it.file }, destinationDir)
+    }
+    return movedCount
   }
 
   /**

@@ -394,4 +394,359 @@ class MusicPlayerEngineTest {
       session.release()
     }
   }
+
+  @Test
+  fun resolveFocusedSectionAndQueueIndices_locatesCurrentlyPlayingTrackAcrossSectionsAndQueue() {
+    val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+    val sortedTracks = MusicPlayerEngine.sortTracks(tracks, MusicSortOrder.TITLE_ASC)
+    val artists = MusicPlayerEngine.buildArtists(tracks)
+    val albums = MusicPlayerEngine.buildAlbums(tracks)
+    val genres = MusicPlayerEngine.buildGenres(tracks)
+
+    val activeTrack = tracks.first { it.id == "sample_autumn_coffee" } // "Autumn Leaves & Coffee" by Velvet Trio
+
+    val artistIndex = MusicPlayerEngine.resolveFocusedArtistIndex(
+      artists = artists,
+      currentTrack = activeTrack,
+      currentArtistName = activeTrack.artist,
+    )
+    assertTrue(artistIndex >= 0)
+    assertEquals("Velvet Trio", artists[artistIndex].name)
+
+    val albumIndex = MusicPlayerEngine.resolveFocusedAlbumIndex(
+      albums = albums,
+      currentTrack = activeTrack,
+      currentAlbumName = activeTrack.album,
+      currentArtistName = activeTrack.artist,
+    )
+    assertTrue(albumIndex >= 0)
+    assertEquals("Late Night Sessions", albums[albumIndex].name)
+
+    val genreIndex = MusicPlayerEngine.resolveFocusedGenreIndex(
+      genres = genres,
+      currentTrack = activeTrack,
+      currentGenreName = activeTrack.genre,
+    )
+    assertTrue(genreIndex >= 0)
+    assertEquals("Jazz", genres[genreIndex].name)
+
+    val songIndex = MusicPlayerEngine.resolveFocusedTrackIndex(
+      tracks = sortedTracks,
+      currentTrackId = activeTrack.id,
+    )
+    assertEquals(sortedTracks.indexOfFirst { it.id == activeTrack.id }, songIndex)
+    assertEquals("sample_autumn_coffee", sortedTracks[songIndex].id)
+
+    val favoritesPlaylist = MusicPlayerEngine.buildFavoritesPlaylist(setOf(activeTrack.id), tracks)
+    val mostPlayedPlaylist = MusicPlayerEngine.buildMostPlayedPlaylist(emptyMap(), tracks)
+    val userPlaylists = MusicPlayerEngine.buildPlaylists(
+      entries = listOf(
+        SavedPlaylistEntry(
+          id = "custom_late_night",
+          name = "Late Night",
+          trackIds = listOf(activeTrack.id),
+          createdAtMs = 1_700_000_000_000L,
+        )
+      ),
+      allTracks = tracks,
+    )
+    val playlists = listOf(favoritesPlaylist, mostPlayedPlaylist) + userPlaylists
+
+    // User playlist containing the track is prioritized over built-in playlists
+    val playlistIndex = MusicPlayerEngine.resolveFocusedPlaylistIndex(
+      playlists = playlists,
+      currentTrackId = activeTrack.id,
+    )
+    assertEquals("custom_late_night", playlists[playlistIndex].id)
+
+    // Queue focus resolves the active queue index and falls back to matching track ID if index is out of bounds
+    val expectedQueueIdx = tracks.indexOfFirst { it.id == activeTrack.id }
+    val queueIndex = MusicPlayerEngine.resolveFocusedQueueIndex(
+      queue = tracks,
+      currentQueueIndex = expectedQueueIdx,
+      currentTrackId = activeTrack.id,
+    )
+    assertEquals(expectedQueueIdx, queueIndex)
+    assertEquals(
+      expectedQueueIdx,
+      MusicPlayerEngine.resolveFocusedQueueIndex(
+        queue = tracks,
+        currentQueueIndex = -1,
+        currentTrackId = activeTrack.id,
+      )
+    )
+  }
+
+  @Test
+  fun playStats_calculatedFullPlaysAndSkips_integrateIntoMostPlayedSortWithLightSkipTieBreaker() {
+    val shortTrack = MusicTrack(
+      id = "short_track",
+      title = "Short Anthem",
+      artist = "Artist A",
+      album = "Album A",
+      genre = "Indie",
+      durationMs = 30_000L, // 30s duration
+    )
+    val longTrack = MusicTrack(
+      id = "long_track",
+      title = "Long Epic",
+      artist = "Artist B",
+      album = "Album B",
+      genre = "Indie",
+      durationMs = 120_000L, // 2m duration
+    )
+    val tieTrackLowSkips = MusicTrack(
+      id = "tie_low_skips",
+      title = "Zebra Song",
+      artist = "Artist C",
+      album = "Album C",
+      genre = "Indie",
+      durationMs = 60_000L,
+    )
+    val tieTrackHighSkips = MusicTrack(
+      id = "tie_high_skips",
+      title = "Alpha Song",
+      artist = "Artist C",
+      album = "Album C",
+      genre = "Indie",
+      durationMs = 60_000L,
+    )
+
+    var stats = emptyMap<String, TrackPlayStats>()
+
+    // Both shortTrack and longTrack have 2 plays and 60,000ms listen time:
+    // shortTrack completed 2.0 full plays (60_000 / 30_000), while longTrack completed 0.5 full plays (60_000 / 120_000).
+    stats = MusicPlayerEngine.recordPlayStat(
+      current = stats,
+      trackId = shortTrack.id,
+      incrementPlayCount = true,
+      addedPlayTimeMs = 30_000L,
+      timestampMs = 100L,
+    )
+    stats = MusicPlayerEngine.recordPlayStat(
+      current = stats,
+      trackId = shortTrack.id,
+      incrementPlayCount = true,
+      addedPlayTimeMs = 30_000L,
+      timestampMs = 200L,
+    )
+
+    stats = MusicPlayerEngine.recordPlayStat(
+      current = stats,
+      trackId = longTrack.id,
+      incrementPlayCount = true,
+      addedPlayTimeMs = 30_000L,
+      timestampMs = 100L,
+    )
+    stats = MusicPlayerEngine.recordPlayStat(
+      current = stats,
+      trackId = longTrack.id,
+      incrementPlayCount = true,
+      addedPlayTimeMs = 30_000L,
+      timestampMs = 200L,
+    )
+
+    val shortStat = stats.getValue(shortTrack.id)
+    val longStat = stats.getValue(longTrack.id)
+    assertEquals(2.0, shortStat.calculatedFullPlays(shortTrack.durationMs), 0.001)
+    assertEquals("2", shortStat.formattedFullPlays(shortTrack.durationMs))
+    assertEquals(0.5, longStat.calculatedFullPlays(longTrack.durationMs), 0.001)
+    assertEquals("0.5", longStat.formattedFullPlays(longTrack.durationMs))
+
+    // Even if shortTrack has several skips, its higher calculated full plays (2.0 vs 0.5) dominates
+    repeat(3) {
+      stats = MusicPlayerEngine.recordPlayStat(
+        current = stats,
+        trackId = shortTrack.id,
+        incrementSkipCount = true,
+        timestampMs = 250L,
+      )
+    }
+    assertEquals(3, stats.getValue(shortTrack.id).skipCount)
+
+    // Two tied tracks with identical play count (1), playtime (30_000ms), and duration (60_000ms => 0.5 full plays),
+    // except tieTrackHighSkips was skipped twice and tieTrackLowSkips was skipped once.
+    stats = MusicPlayerEngine.recordPlayStat(
+      current = stats,
+      trackId = tieTrackLowSkips.id,
+      incrementPlayCount = true,
+      addedPlayTimeMs = 30_000L,
+      incrementSkipCount = true,
+      timestampMs = 300L,
+    )
+    stats = MusicPlayerEngine.recordPlayStat(
+      current = stats,
+      trackId = tieTrackHighSkips.id,
+      incrementPlayCount = true,
+      addedPlayTimeMs = 30_000L,
+      incrementSkipCount = true,
+      timestampMs = 300L,
+    )
+    stats = MusicPlayerEngine.recordPlayStat(
+      current = stats,
+      trackId = tieTrackHighSkips.id,
+      incrementSkipCount = true,
+      timestampMs = 300L,
+    )
+
+    val mostPlayed = MusicPlayerEngine.buildMostPlayedPlaylist(
+      playStats = stats,
+      allTracks = listOf(longTrack, tieTrackHighSkips, shortTrack, tieTrackLowSkips),
+    )
+    // Order: shortTrack (2 full plays) > longTrack (2 plays, 0.5 full plays) > tieTrackLowSkips (1 skip) > tieTrackHighSkips (2 skips)
+    assertEquals(
+      listOf(shortTrack.id, longTrack.id, tieTrackLowSkips.id, tieTrackHighSkips.id),
+      mostPlayed.tracks.map { it.id },
+    )
+
+    // Serialization preserves skipCount and remains backward-compatible with 4-column legacy format
+    val serialized = MusicPlayerEngine.serializePlayStats(stats)
+    val deserialized = MusicPlayerEngine.deserializePlayStats(serialized)
+    assertEquals(stats, deserialized)
+
+    val legacyLine = "legacy_id\t2\t45000\t1700000000"
+    val legacyRestored = MusicPlayerEngine.deserializePlayStats(legacyLine)
+    assertEquals(0, legacyRestored.getValue("legacy_id").skipCount)
+    assertEquals(2, legacyRestored.getValue("legacy_id").playCount)
+  }
+
+  @Test
+  fun shuffleQueue_andSmartShuffle_reorderQueueAndWeightMostPlayedTowardsTop() {
+    assertEquals(MusicShuffleMode.SHUFFLE, MusicShuffleMode.OFF.next())
+    assertEquals(MusicShuffleMode.SMART_SHUFFLE, MusicShuffleMode.SHUFFLE.next())
+    assertEquals(MusicShuffleMode.OFF, MusicShuffleMode.SMART_SHUFFLE.next())
+
+    val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+    val activeTrack = tracks[3] // Index 3 in unshuffled queue
+    val deterministicRandom = kotlin.random.Random(42)
+
+    // 1. Standard SHUFFLE pins activeTrack at index 0 and shuffles the remaining tracks in the queue
+    val (shuffledQueue, shuffledIdx) = MusicPlayerEngine.applyShuffleModeToQueue(
+      baseQueue = tracks,
+      currentQueue = tracks,
+      anchorTrackId = activeTrack.id,
+      mode = MusicShuffleMode.SHUFFLE,
+      random = deterministicRandom,
+    )
+    assertEquals(0, shuffledIdx)
+    assertEquals(activeTrack.id, shuffledQueue.first().id)
+    assertEquals(tracks.size, shuffledQueue.size)
+    assertEquals(tracks.map { it.id }.toSet(), shuffledQueue.map { it.id }.toSet())
+    assertNotEquals(tracks.map { it.id }, shuffledQueue.map { it.id })
+
+    // Next track progression steps sequentially through the shuffled queue (0 -> 1 -> 2)
+    assertEquals(
+      1,
+      MusicPlayerEngine.resolveNextTrackIndex(
+        currentIndex = 0,
+        queueSize = shuffledQueue.size,
+        repeatMode = MusicRepeatMode.OFF,
+        shuffleEnabled = true,
+        userInitiated = true,
+      )
+    )
+    assertEquals(
+      2,
+      MusicPlayerEngine.resolveNextTrackIndex(
+        currentIndex = 1,
+        queueSize = shuffledQueue.size,
+        repeatMode = MusicRepeatMode.OFF,
+        shuffleEnabled = true,
+        userInitiated = false,
+      )
+    )
+
+    // 2. Restoring OFF returns the original unshuffled queue and restores activeTrack's original index (3)
+    val (restoredQueue, restoredIdx) = MusicPlayerEngine.applyShuffleModeToQueue(
+      baseQueue = tracks,
+      currentQueue = shuffledQueue,
+      anchorTrackId = activeTrack.id,
+      mode = MusicShuffleMode.OFF,
+    )
+    assertEquals(3, restoredIdx)
+    assertEquals(tracks.map { it.id }, restoredQueue.map { it.id })
+
+    // 3. SMART_SHUFFLE weights the most played songs more towards the top of a shuffle
+    val favoriteHeavyTrack = tracks.last()
+    val mediumPlayedTrack = tracks[tracks.size - 2]
+    var stats = emptyMap<String, TrackPlayStats>()
+    repeat(15) {
+      stats = MusicPlayerEngine.recordPlayStat(
+        current = stats,
+        trackId = favoriteHeavyTrack.id,
+        incrementPlayCount = true,
+        addedPlayTimeMs = favoriteHeavyTrack.durationMs,
+        timestampMs = 1_000L + it,
+      )
+    }
+    repeat(5) {
+      stats = MusicPlayerEngine.recordPlayStat(
+        current = stats,
+        trackId = mediumPlayedTrack.id,
+        incrementPlayCount = true,
+        addedPlayTimeMs = mediumPlayedTrack.durationMs,
+        timestampMs = 2_000L + it,
+      )
+    }
+
+    val heavyWeight = MusicPlayerEngine.smartShuffleWeight(favoriteHeavyTrack, stats)
+    val mediumWeight = MusicPlayerEngine.smartShuffleWeight(mediumPlayedTrack, stats)
+    val unplayedWeight = MusicPlayerEngine.smartShuffleWeight(tracks.first(), stats)
+    assertTrue(heavyWeight > mediumWeight)
+    assertTrue(mediumWeight > unplayedWeight)
+
+    val rng = kotlin.random.Random(12345)
+    val trials = 200
+    var heavyIndexSum = 0
+    var mediumIndexSum = 0
+    var unplayedIndexSum = 0
+    val unplayedReference = tracks[1]
+
+    repeat(trials) {
+      val (smartQueue, smartIdx) = MusicPlayerEngine.applyShuffleModeToQueue(
+        baseQueue = tracks,
+        currentQueue = tracks,
+        anchorTrackId = activeTrack.id,
+        mode = MusicShuffleMode.SMART_SHUFFLE,
+        playStats = stats,
+        random = rng,
+      )
+      assertEquals(0, smartIdx)
+      assertEquals(activeTrack.id, smartQueue.first().id)
+      heavyIndexSum += smartQueue.indexOfFirst { it.id == favoriteHeavyTrack.id }
+      mediumIndexSum += smartQueue.indexOfFirst { it.id == mediumPlayedTrack.id }
+      unplayedIndexSum += smartQueue.indexOfFirst { it.id == unplayedReference.id }
+    }
+
+    val avgHeavyRank = heavyIndexSum.toDouble() / trials
+    val avgMediumRank = mediumIndexSum.toDouble() / trials
+    val avgUnplayedRank = unplayedIndexSum.toDouble() / trials
+    // Heavily played track appears much closer to the top (smaller index) than medium and unplayed tracks
+    assertTrue("Expected avgHeavyRank ($avgHeavyRank) < avgMediumRank ($avgMediumRank)", avgHeavyRank < avgMediumRank)
+    assertTrue("Expected avgMediumRank ($avgMediumRank) < avgUnplayedRank ($avgUnplayedRank)", avgMediumRank < avgUnplayedRank)
+
+    // 4. SleepTimerPreset cycles through Off -> 10 min -> 15 min -> 20 min -> 30 min -> 60 min -> Off
+    assertEquals(
+      listOf(
+        SleepTimerPreset.OFF,
+        SleepTimerPreset.TEN_MIN,
+        SleepTimerPreset.FIFTEEN_MIN,
+        SleepTimerPreset.TWENTY_MIN,
+        SleepTimerPreset.THIRTY_MIN,
+        SleepTimerPreset.SIXTY_MIN,
+      ),
+      SleepTimerPreset.entries,
+    )
+    assertEquals(10 * 60_000L, SleepTimerPreset.TEN_MIN.durationMs)
+    assertEquals(15 * 60_000L, SleepTimerPreset.FIFTEEN_MIN.durationMs)
+    assertEquals(20 * 60_000L, SleepTimerPreset.TWENTY_MIN.durationMs)
+    assertEquals(30 * 60_000L, SleepTimerPreset.THIRTY_MIN.durationMs)
+    assertEquals(60 * 60_000L, SleepTimerPreset.SIXTY_MIN.durationMs)
+    assertEquals(SleepTimerPreset.TEN_MIN, SleepTimerPreset.OFF.next())
+    assertEquals(SleepTimerPreset.FIFTEEN_MIN, SleepTimerPreset.TEN_MIN.next())
+    assertEquals(SleepTimerPreset.TWENTY_MIN, SleepTimerPreset.FIFTEEN_MIN.next())
+    assertEquals(SleepTimerPreset.THIRTY_MIN, SleepTimerPreset.TWENTY_MIN.next())
+    assertEquals(SleepTimerPreset.SIXTY_MIN, SleepTimerPreset.THIRTY_MIN.next())
+    assertEquals(SleepTimerPreset.OFF, SleepTimerPreset.SIXTY_MIN.next())
+  }
 }

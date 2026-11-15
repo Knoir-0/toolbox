@@ -41,6 +41,7 @@ import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 import kotlin.math.sin
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -59,6 +60,7 @@ const val PREF_KEY_MUSIC_VIEW_MODE = "music_player_view_mode"
 const val PREF_KEY_MUSIC_TAB = "music_player_selected_tab"
 const val PREF_KEY_MUSIC_SORT_ORDER = "music_player_sort_order"
 const val PREF_KEY_MUSIC_SHUFFLE = "music_player_shuffle_enabled"
+const val PREF_KEY_MUSIC_SHUFFLE_MODE = "music_player_shuffle_mode"
 const val PREF_KEY_MUSIC_REPEAT = "music_player_repeat_mode"
 const val PREF_KEY_MUSIC_FAVORITES = "music_player_favorite_ids"
 const val PREF_KEY_MUSIC_PLAYLISTS = "music_player_playlists"
@@ -108,6 +110,36 @@ enum class MusicViewMode(
     fun fromNameOrDefault(name: String?): MusicViewMode {
       if (name.isNullOrBlank()) return DEFAULT
       return entries.find { it.name.equals(name.trim(), ignoreCase = true) } ?: DEFAULT
+    }
+  }
+}
+
+/**
+ * Shuffle modes for playback queue ordering.
+ */
+enum class MusicShuffleMode(
+  val displayName: String,
+) {
+  OFF("Shuffle Off"),
+  SHUFFLE("Shuffle"),
+  SMART_SHUFFLE("Smart Shuffle"),
+  ;
+
+  val isEnabled: Boolean
+    get() = this != OFF
+
+  fun next(): MusicShuffleMode = when (this) {
+    OFF -> SHUFFLE
+    SHUFFLE -> SMART_SHUFFLE
+    SMART_SHUFFLE -> OFF
+  }
+
+  companion object {
+    fun fromNameOrDefault(name: String?): MusicShuffleMode {
+      if (name.isNullOrBlank()) return OFF
+      if (name.equals("true", ignoreCase = true)) return SHUFFLE
+      if (name.equals("false", ignoreCase = true)) return OFF
+      return entries.find { it.name.equals(name.trim(), ignoreCase = true) } ?: OFF
     }
   }
 }
@@ -170,10 +202,17 @@ enum class SleepTimerPreset(
   val durationMs: Long,
 ) {
   OFF("Off", 0L),
-  FIVE_MIN("5 min", 5 * 60_000L),
+  TEN_MIN("10 min", 10 * 60_000L),
   FIFTEEN_MIN("15 min", 15 * 60_000L),
+  TWENTY_MIN("20 min", 20 * 60_000L),
   THIRTY_MIN("30 min", 30 * 60_000L),
   SIXTY_MIN("60 min", 60 * 60_000L),
+  ;
+
+  fun next(): SleepTimerPreset {
+    val values = entries
+    return values[(ordinal + 1) % values.size]
+  }
 }
 
 /**
@@ -322,17 +361,55 @@ data class TrackPlayStats(
   val playCount: Int = 0,
   val totalPlayTimeMs: Long = 0L,
   val lastPlayedAtMs: Long = 0L,
+  val skipCount: Int = 0,
 ) {
   /**
    * Combined engagement score blending play count and total listen time:
    * each play contributes 60,000 points (equivalent to 1 minute of listening) plus 1 point per
-   * millisecond of actual listen time.
+   * millisecond of actual listen time, with a very light tie-breaker penalty per skip.
    */
   val engagementScore: Long
-    get() = playCount.toLong() * 60_000L + totalPlayTimeMs
+    get() = playCount.toLong() * 60_000L + totalPlayTimeMs - skipCount.toLong() * 25L
+
+  /**
+   * Number of equivalent full track completions based on [totalPlayTimeMs] divided by [trackDurationMs].
+   */
+  fun calculatedFullPlays(trackDurationMs: Long): Double {
+    if (totalPlayTimeMs <= 0L) return 0.0
+    val safeDurationMs = trackDurationMs.coerceAtLeast(1_000L).toDouble()
+    return totalPlayTimeMs.toDouble() / safeDurationMs
+  }
+
+  /**
+   * Human-friendly formatted value for [calculatedFullPlays] (e.g. "0", "2", or "1.5").
+   */
+  fun formattedFullPlays(trackDurationMs: Long): String {
+    val fullPlays = calculatedFullPlays(trackDurationMs)
+    if (fullPlays < 0.05) return "0"
+    val roundedTenths = (fullPlays * 10.0).roundToLong()
+    return if (roundedTenths % 10L == 0L) {
+      (roundedTenths / 10L).toString()
+    } else {
+      String.format(Locale.US, "%.1f", roundedTenths / 10.0)
+    }
+  }
+
+  /**
+   * Track-aware engagement score used to sort the Most Played playlist:
+   * combines play count, calculated full plays (60,000 points per full play), and total listen time,
+   * with skips weighted very lightly (-25 points per skip) primarily as a tie-breaker.
+   */
+  fun engagementScoreForTrack(trackDurationMs: Long): Long {
+    val fullPlaysScore = (calculatedFullPlays(trackDurationMs) * 60_000.0).roundToLong()
+    val skipPenalty = skipCount.toLong() * 25L
+    return playCount.toLong() * 60_000L + fullPlaysScore + totalPlayTimeMs - skipPenalty
+  }
 
   val hasBeenPlayed: Boolean
     get() = playCount > 0 || totalPlayTimeMs > 0L
+
+  val hasRecordedActivity: Boolean
+    get() = hasBeenPlayed || skipCount > 0
 
   val totalPlayTimeFormatted: String
     get() = AudioRecorderEngine.formatDurationMs(totalPlayTimeMs)
@@ -1722,8 +1799,9 @@ object MusicPlayerEngine {
   }
 
   /**
-   * Sorts [tracks] by combined play statistics (# of plays and total listen time), falling back to
-   * most-recently-played and alphabetical title order for ties.
+   * Sorts [tracks] by combined play statistics (calculated full plays, # of plays, and total listen
+   * time, with skips weighted very lightly as a tie-breaker), falling back to most-recently-played
+   * and alphabetical title order for ties.
    */
   fun sortTracksByPlayStats(
     tracks: List<MusicTrack>,
@@ -1731,9 +1809,11 @@ object MusicPlayerEngine {
   ): List<MusicTrack> {
     if (tracks.isEmpty()) return emptyList()
     return tracks.sortedWith(
-      compareByDescending<MusicTrack> { playStats[it.id]?.engagementScore ?: 0L }
+      compareByDescending<MusicTrack> { playStats[it.id]?.engagementScoreForTrack(it.durationMs) ?: 0L }
+        .thenByDescending { playStats[it.id]?.calculatedFullPlays(it.durationMs) ?: 0.0 }
         .thenByDescending { playStats[it.id]?.playCount ?: 0 }
         .thenByDescending { playStats[it.id]?.totalPlayTimeMs ?: 0L }
+        .thenBy { playStats[it.id]?.skipCount ?: 0 }
         .thenByDescending { playStats[it.id]?.lastPlayedAtMs ?: 0L }
         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
     )
@@ -1741,7 +1821,8 @@ object MusicPlayerEngine {
 
   /**
    * Builds the built-in Most Played [MusicPlaylist], automatically sorting all songs in [allTracks]
-   * by a combination of play count and total playtime. Always returned so it is available by default.
+   * by a combination of play count, calculated full plays, and total playtime (with skips as a light tie-breaker).
+   * Always returned so it is available by default.
    */
   fun buildMostPlayedPlaylist(
     playStats: Map<String, TrackPlayStats>,
@@ -1755,23 +1836,26 @@ object MusicPlayerEngine {
   }
 
   /**
-   * Records a play-count increment and/or additional listening duration for [trackId] inside [current].
+   * Records a play-count increment, additional listening duration, and/or skip-count increment
+   * for [trackId] inside [current].
    */
   fun recordPlayStat(
     current: Map<String, TrackPlayStats>,
     trackId: String,
     incrementPlayCount: Boolean = false,
     addedPlayTimeMs: Long = 0L,
+    incrementSkipCount: Boolean = false,
     timestampMs: Long = System.currentTimeMillis(),
   ): Map<String, TrackPlayStats> {
     if (trackId.isBlank()) return current
     val deltaMs = addedPlayTimeMs.coerceAtLeast(0L)
-    if (!incrementPlayCount && deltaMs == 0L) return current
+    if (!incrementPlayCount && deltaMs == 0L && !incrementSkipCount) return current
     val prev = current[trackId] ?: TrackPlayStats()
     val updated = prev.copy(
       playCount = prev.playCount + if (incrementPlayCount) 1 else 0,
       totalPlayTimeMs = prev.totalPlayTimeMs + deltaMs,
       lastPlayedAtMs = max(prev.lastPlayedAtMs, timestampMs),
+      skipCount = prev.skipCount + if (incrementSkipCount) 1 else 0,
     )
     return current + (trackId to updated)
   }
@@ -1781,10 +1865,10 @@ object MusicPlayerEngine {
    */
   fun serializePlayStats(stats: Map<String, TrackPlayStats>): String {
     return stats.entries
-      .filter { (id, s) -> id.isNotBlank() && s.hasBeenPlayed }
+      .filter { (id, s) -> id.isNotBlank() && s.hasRecordedActivity }
       .joinToString("\n") { (id, s) ->
         val safeId = id.replace("\n", " ").replace("\t", " ").trim()
-        "$safeId\t${s.playCount}\t${s.totalPlayTimeMs}\t${s.lastPlayedAtMs}"
+        "$safeId\t${s.playCount}\t${s.totalPlayTimeMs}\t${s.lastPlayedAtMs}\t${s.skipCount}"
       }
   }
 
@@ -1804,11 +1888,13 @@ object MusicPlayerEngine {
           val count = parts[1].trim().toIntOrNull()?.coerceAtLeast(0) ?: 0
           val timeMs = parts[2].trim().toLongOrNull()?.coerceAtLeast(0L) ?: 0L
           val lastAt = parts.getOrNull(3)?.trim()?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
-          if (id.isNotEmpty() && (count > 0 || timeMs > 0L)) {
+          val skipCount = parts.getOrNull(4)?.trim()?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+          if (id.isNotEmpty() && (count > 0 || timeMs > 0L || skipCount > 0)) {
             result[id] = TrackPlayStats(
               playCount = count,
               totalPlayTimeMs = timeMs,
               lastPlayedAtMs = lastAt,
+              skipCount = skipCount,
             )
           }
         }
@@ -1919,7 +2005,132 @@ object MusicPlayerEngine {
   }
 
   /**
+   * Computes a positive selection weight for [track] used by [MusicShuffleMode.SMART_SHUFFLE]
+   * so more-played songs are weighted more heavily towards the top of a shuffle while every
+   * song retains a non-zero chance of appearing anywhere.
+   */
+  fun smartShuffleWeight(
+    track: MusicTrack,
+    playStats: Map<String, TrackPlayStats>,
+  ): Double {
+    val stat = playStats[track.id] ?: return 1.0
+    val score = stat.engagementScoreForTrack(track.durationMs).coerceAtLeast(0L)
+    val fullPlays = stat.calculatedFullPlays(track.durationMs).coerceAtLeast(0.0)
+    return (1.0 + (score.toDouble() / 30_000.0) + (fullPlays * 2.5) + (stat.playCount * 1.5))
+      .coerceAtLeast(0.25)
+  }
+
+  /**
+   * Performs a weighted random shuffle without replacement on [tracks], weighting tracks with
+   * higher play stats more towards the top of the returned list.
+   */
+  fun smartShuffleTracks(
+    tracks: List<MusicTrack>,
+    playStats: Map<String, TrackPlayStats>,
+    random: kotlin.random.Random = kotlin.random.Random.Default,
+  ): List<MusicTrack> {
+    if (tracks.size <= 1) return tracks.toList()
+    val pool = tracks.toMutableList()
+    val weights = pool.map { smartShuffleWeight(it, playStats) }.toMutableList()
+    val result = ArrayList<MusicTrack>(pool.size)
+    while (pool.isNotEmpty()) {
+      val totalWeight = weights.sum()
+      val chosenIdx = if (totalWeight <= 0.0) {
+        random.nextInt(pool.size)
+      } else {
+        var r = random.nextDouble() * totalWeight
+        var idx = pool.lastIndex
+        for (i in pool.indices) {
+          r -= weights[i]
+          if (r <= 0.0) {
+            idx = i
+            break
+          }
+        }
+        idx
+      }
+      result.add(pool.removeAt(chosenIdx))
+      weights.removeAt(chosenIdx)
+    }
+    return result
+  }
+
+  /**
+   * Reorders [baseQueue] according to [mode] while keeping the track matching [anchorTrackId]
+   * (if present) pinned at index `0` when shuffling so the currently playing track continues
+   * uninterrupted and the remaining tracks in the queue are shuffled behind it.
+   *
+   * - [MusicShuffleMode.OFF]: restores [baseQueue] in its original order and returns the index of
+   *   [anchorTrackId] (or `0` if not found).
+   * - [MusicShuffleMode.SHUFFLE]: pins [anchorTrackId] at index `0` and uniformly shuffles the
+   *   remaining tracks.
+   * - [MusicShuffleMode.SMART_SHUFFLE]: pins [anchorTrackId] at index `0` and weighted-shuffles
+   *   the remaining tracks using [smartShuffleTracks] so most-played songs are weighted towards
+   *   the top of the shuffle.
+   */
+  fun applyShuffleModeToQueue(
+    baseQueue: List<MusicTrack>,
+    currentQueue: List<MusicTrack> = baseQueue,
+    anchorTrackId: String? = null,
+    mode: MusicShuffleMode,
+    playStats: Map<String, TrackPlayStats> = emptyMap(),
+    random: kotlin.random.Random = kotlin.random.Random.Default,
+  ): Pair<List<MusicTrack>, Int> {
+    val source = if (baseQueue.isNotEmpty()) baseQueue else currentQueue
+    if (source.isEmpty()) return emptyList<MusicTrack>() to 0
+    if (mode == MusicShuffleMode.OFF) {
+      val restoredIndex = if (anchorTrackId != null) {
+        source.indexOfFirst { it.id == anchorTrackId }.coerceAtLeast(0)
+      } else {
+        0
+      }
+      return source.toList() to restoredIndex
+    }
+    if (source.size == 1) return source.toList() to 0
+
+    val anchorIdx = if (anchorTrackId != null) source.indexOfFirst { it.id == anchorTrackId } else -1
+    val anchorTrack = if (anchorIdx >= 0) source[anchorIdx] else null
+    val candidates = if (anchorIdx >= 0) {
+      source.filterIndexed { idx, _ -> idx != anchorIdx }
+    } else {
+      source
+    }
+
+    val shuffledCandidates = when (mode) {
+      MusicShuffleMode.OFF -> candidates
+      MusicShuffleMode.SHUFFLE -> {
+        var candidateOrder = candidates.shuffled(random)
+        if (candidates.size > 1 && candidateOrder.map { it.id } == candidates.map { it.id }) {
+          candidateOrder = candidates.drop(1) + candidates.first()
+        }
+        candidateOrder
+      }
+      MusicShuffleMode.SMART_SHUFFLE -> {
+        var candidateOrder = smartShuffleTracks(candidates, playStats, random)
+        if (candidates.size > 1 && candidateOrder.map { it.id } == candidates.map { it.id }) {
+          // Ensure smart shuffle visibly reorders if the initial draw matched the exact input order
+          // unless the input was already strictly sorted by smartShuffleWeight
+          val altOrder = smartShuffleTracks(candidates, playStats, random)
+          if (altOrder.map { it.id } != candidates.map { it.id }) {
+            candidateOrder = altOrder
+          }
+        }
+        candidateOrder
+      }
+    }
+
+    val finalQueue = if (anchorTrack != null) {
+      listOf(anchorTrack) + shuffledCandidates
+    } else {
+      shuffledCandidates
+    }
+    return finalQueue to 0
+  }
+
+  /**
    * Resolves the next track index in a queue of size [queueSize].
+   * Because the playback queue itself is shuffled when [MusicShuffleMode] is enabled,
+   * progression steps sequentially through the queue rather than jumping to a random index.
    *
    * @param userInitiated `true` when the user explicitly tapped the Next button; `false` when a track
    *   finished playing naturally.
@@ -1928,23 +2139,14 @@ object MusicPlayerEngine {
     currentIndex: Int,
     queueSize: Int,
     repeatMode: MusicRepeatMode,
-    shuffleEnabled: Boolean,
+    shuffleEnabled: Boolean = false,
     userInitiated: Boolean = true,
-    randomIndexProvider: (Int) -> Int = { bound -> (0 until bound).random() },
   ): Int? {
     if (queueSize <= 0) return null
     val safeCurrent = currentIndex.coerceIn(0, queueSize - 1)
 
     if (!userInitiated && repeatMode == MusicRepeatMode.REPEAT_ONE) {
       return safeCurrent
-    }
-
-    if (shuffleEnabled && queueSize > 1) {
-      var candidate = randomIndexProvider(queueSize).coerceIn(0, queueSize - 1)
-      if (candidate == safeCurrent) {
-        candidate = (safeCurrent + 1) % queueSize
-      }
-      return candidate
     }
 
     val nextIndex = safeCurrent + 1
@@ -2003,6 +2205,140 @@ object MusicPlayerEngine {
       else -> safeCur
     }
     return mutable.toList() to newCurrentIndex
+  }
+
+  /**
+   * Resolves the index of the artist corresponding to [currentTrack] in [artists], or `-1` if none.
+   */
+  fun resolveFocusedArtistIndex(
+    artists: List<MusicArtist>,
+    currentTrack: MusicTrack? = null,
+    currentArtistName: String? = currentTrack?.artist,
+  ): Int {
+    if (artists.isEmpty()) return -1
+    val trackId = currentTrack?.id
+    if (!trackId.isNullOrBlank()) {
+      val byTrackId = artists.indexOfFirst { artist ->
+        artist.tracks.any { it.id == trackId }
+      }
+      if (byTrackId >= 0) return byTrackId
+    }
+    if (!currentArtistName.isNullOrBlank()) {
+      return artists.indexOfFirst { artist ->
+        artist.name.equals(currentArtistName, ignoreCase = true)
+      }
+    }
+    return -1
+  }
+
+  /**
+   * Resolves the index of the album corresponding to [currentTrack] in [albums], or `-1` if none.
+   */
+  fun resolveFocusedAlbumIndex(
+    albums: List<MusicAlbum>,
+    currentTrack: MusicTrack? = null,
+    currentAlbumName: String? = currentTrack?.album,
+    currentArtistName: String? = currentTrack?.artist,
+  ): Int {
+    if (albums.isEmpty()) return -1
+    val trackId = currentTrack?.id
+    if (!trackId.isNullOrBlank()) {
+      val byTrackId = albums.indexOfFirst { album ->
+        album.tracks.any { it.id == trackId }
+      }
+      if (byTrackId >= 0) return byTrackId
+    }
+    if (!currentAlbumName.isNullOrBlank()) {
+      if (!currentArtistName.isNullOrBlank()) {
+        val byAlbumAndArtist = albums.indexOfFirst { album ->
+          album.name.equals(currentAlbumName, ignoreCase = true) &&
+            album.artist.equals(currentArtistName, ignoreCase = true)
+        }
+        if (byAlbumAndArtist >= 0) return byAlbumAndArtist
+      }
+      return albums.indexOfFirst { album ->
+        album.name.equals(currentAlbumName, ignoreCase = true)
+      }
+    }
+    return -1
+  }
+
+  /**
+   * Resolves the index of the genre corresponding to [currentTrack] in [genres], or `-1` if none.
+   */
+  fun resolveFocusedGenreIndex(
+    genres: List<MusicGenre>,
+    currentTrack: MusicTrack? = null,
+    currentGenreName: String? = currentTrack?.genre,
+  ): Int {
+    if (genres.isEmpty()) return -1
+    val trackId = currentTrack?.id
+    if (!trackId.isNullOrBlank()) {
+      val byTrackId = genres.indexOfFirst { genre ->
+        genre.tracks.any { it.id == trackId }
+      }
+      if (byTrackId >= 0) return byTrackId
+    }
+    if (!currentGenreName.isNullOrBlank()) {
+      return genres.indexOfFirst { genre ->
+        genre.name.equals(currentGenreName, ignoreCase = true)
+      }
+    }
+    return -1
+  }
+
+  /**
+   * Resolves the index of the track matching [currentTrackId] in [tracks], or `-1` if none.
+   */
+  fun resolveFocusedTrackIndex(
+    tracks: List<MusicTrack>,
+    currentTrackId: String?,
+  ): Int {
+    if (currentTrackId.isNullOrBlank() || tracks.isEmpty()) return -1
+    return tracks.indexOfFirst { it.id == currentTrackId }
+  }
+
+  /**
+   * Resolves the index of the playlist containing [currentTrackId] in [playlists], prioritizing
+   * user-saved playlists and Favorites over the catch-all Most Played playlist, or `-1` if none.
+   */
+  fun resolveFocusedPlaylistIndex(
+    playlists: List<MusicPlaylist>,
+    currentTrackId: String?,
+  ): Int {
+    if (currentTrackId.isNullOrBlank() || playlists.isEmpty()) return -1
+    val savedMatch = playlists.indexOfFirst { playlist ->
+      !playlist.isBuiltIn && playlist.tracks.any { it.id == currentTrackId }
+    }
+    if (savedMatch >= 0) return savedMatch
+    val favoritesMatch = playlists.indexOfFirst { playlist ->
+      playlist.isFavorites && playlist.tracks.any { it.id == currentTrackId }
+    }
+    if (favoritesMatch >= 0) return favoritesMatch
+    return playlists.indexOfFirst { playlist ->
+      playlist.tracks.any { it.id == currentTrackId }
+    }
+  }
+
+  /**
+   * Resolves the index of the currently playing track in [queue], or `-1` if [queue] is empty.
+   */
+  fun resolveFocusedQueueIndex(
+    queue: List<MusicTrack>,
+    currentQueueIndex: Int,
+    currentTrackId: String? = null,
+  ): Int {
+    if (queue.isEmpty()) return -1
+    if (currentQueueIndex in queue.indices) {
+      if (currentTrackId.isNullOrBlank() || queue[currentQueueIndex].id == currentTrackId) {
+        return currentQueueIndex
+      }
+    }
+    if (!currentTrackId.isNullOrBlank()) {
+      val byId = queue.indexOfFirst { it.id == currentTrackId }
+      if (byId >= 0) return byId
+    }
+    return currentQueueIndex.coerceIn(0, queue.lastIndex)
   }
 
   /**
@@ -2101,6 +2437,28 @@ object MusicPlayerEngine {
     internal set
 
   /**
+   * Optional test override for [isMusicPlaying]. When `null`, [isMusicPlaying] reflects the active
+   * [MusicPlaybackSession] playback state.
+   */
+  var isMusicPlayingOverride by mutableStateOf<Boolean?>(null)
+    internal set
+
+  /**
+   * Whether the Music Player is currently actively playing a track, observable by Compose UI
+   * (such as [com.example.toolbox.ui.theme.ToolboxTheme] and Settings).
+   */
+  val isMusicPlaying: Boolean
+    get() = isMusicPlayingOverride
+      ?: (activeSessionState?.let { !it.isReleased && it.isPlaying && it.currentTrack != null } == true)
+
+  /**
+   * Sets or clears a test override for [isMusicPlaying].
+   */
+  fun setMusicPlayingForTest(isPlaying: Boolean?) {
+    isMusicPlayingOverride = isPlaying
+  }
+
+  /**
    * Updates the observable [activeTrack] and [activeTrackPalette] for the Music Player.
    */
   fun updateActiveTrackPalette(
@@ -2136,6 +2494,7 @@ object MusicPlayerEngine {
       activeLifecycleObserver = null
     }
     activeSessionState = null
+    isMusicPlayingOverride = null
     if (activity is LifecycleOwner && observer != null) {
       try {
         activity.lifecycle.removeObserver(observer)
@@ -2337,13 +2696,55 @@ class MusicPlaybackSession(
   }
 
   // Shuffle & Repeat
-  var isShuffleEnabled by mutableStateOf(
-    prefs?.getBoolean(PREF_KEY_MUSIC_SHUFFLE, false) ?: false
+  var shuffleMode by mutableStateOf(
+    run {
+      val savedMode = prefs?.getString(PREF_KEY_MUSIC_SHUFFLE_MODE, null)
+      if (!savedMode.isNullOrBlank()) {
+        MusicShuffleMode.fromNameOrDefault(savedMode)
+      } else if (prefs?.getBoolean(PREF_KEY_MUSIC_SHUFFLE, false) == true) {
+        MusicShuffleMode.SHUFFLE
+      } else {
+        MusicShuffleMode.OFF
+      }
+    }
   )
 
+  val isShuffleEnabled: Boolean
+    get() = shuffleMode.isEnabled
+
+  fun setShuffleMode(
+    mode: MusicShuffleMode,
+    random: kotlin.random.Random = kotlin.random.Random.Default,
+  ) {
+    shuffleMode = mode
+    prefs?.edit()
+      ?.putString(PREF_KEY_MUSIC_SHUFFLE_MODE, mode.name)
+      ?.putBoolean(PREF_KEY_MUSIC_SHUFFLE, mode.isEnabled)
+      ?.apply()
+    if (playbackQueue.isNotEmpty()) {
+      val anchorId = currentTrack?.id
+      val base = if (unshuffledQueue.isNotEmpty()) unshuffledQueue else playbackQueue
+      val (reordered, newIdx) = MusicPlayerEngine.applyShuffleModeToQueue(
+        baseQueue = base,
+        currentQueue = playbackQueue,
+        anchorTrackId = anchorId,
+        mode = mode,
+        playStats = playStats,
+        random = random,
+      )
+      playbackQueue = reordered
+      currentQueueIndex = newIdx
+    }
+  }
+
+  fun cycleShuffleMode(
+    random: kotlin.random.Random = kotlin.random.Random.Default,
+  ) {
+    setShuffleMode(shuffleMode.next(), random = random)
+  }
+
   fun toggleShuffle() {
-    isShuffleEnabled = !isShuffleEnabled
-    prefs?.edit()?.putBoolean(PREF_KEY_MUSIC_SHUFFLE, isShuffleEnabled)?.apply()
+    cycleShuffleMode()
   }
 
   var repeatMode by mutableStateOf(
@@ -2382,13 +2783,15 @@ class MusicPlaybackSession(
     trackId: String,
     incrementPlayCount: Boolean = false,
     addedPlayTimeMs: Long = 0L,
-    persistImmediately: Boolean = incrementPlayCount,
+    incrementSkipCount: Boolean = false,
+    persistImmediately: Boolean = incrementPlayCount || incrementSkipCount,
   ) {
     val next = MusicPlayerEngine.recordPlayStat(
       current = playStats,
       trackId = trackId,
       incrementPlayCount = incrementPlayCount,
       addedPlayTimeMs = addedPlayTimeMs,
+      incrementSkipCount = incrementSkipCount,
     )
     if (next !== playStats) {
       playStats = next
@@ -2450,13 +2853,15 @@ class MusicPlaybackSession(
 
   // Library Tracks & Playback Queue State
   var allTracks by mutableStateOf<List<MusicTrack>>(emptyList())
+  var unshuffledQueue by mutableStateOf<List<MusicTrack>>(emptyList())
+    internal set
   var playbackQueue by mutableStateOf<List<MusicTrack>>(emptyList())
   var currentQueueIndex by mutableIntStateOf(0)
 
   val currentTrack: MusicTrack?
     get() = playbackQueue.getOrNull(
       currentQueueIndex.coerceIn(0, maxOf(0, playbackQueue.size - 1))
-    ) ?: allTracks.firstOrNull()
+    )
 
   var activePalette by mutableStateOf(MusicPlayerEngine.resolveTrackPalette(null))
     internal set
@@ -2507,8 +2912,15 @@ class MusicPlaybackSession(
       )
     }
     allTracks = initialLoaded
-    playbackQueue = initialLoaded
-    currentQueueIndex = 0
+    if ((initialPlayerExpanded || initialQueueExpanded) && isInspection) {
+      unshuffledQueue = initialLoaded
+      playbackQueue = initialLoaded
+      currentQueueIndex = 0
+    } else {
+      unshuffledQueue = emptyList()
+      playbackQueue = emptyList()
+      currentQueueIndex = 0
+    }
     trackDurationMs = currentTrack?.durationMs?.coerceAtLeast(1000L) ?: 15_000L
     MusicPlayerEngine.activeSessionState = this
     prepareAndSyncMediaPlayer(forceRestart = false)
@@ -2560,9 +2972,13 @@ class MusicPlaybackSession(
       }
       val activeId = currentTrack?.id
       allTracks = reloaded
-      if (playbackQueue.isEmpty() || !isPlaying) {
-        playbackQueue = reloaded
-        val idx = if (activeId != null) reloaded.indexOfFirst { it.id == activeId } else 0
+      val byId = reloaded.associateBy { it.id }
+      if (unshuffledQueue.isNotEmpty()) {
+        unshuffledQueue = unshuffledQueue.mapNotNull { existing -> byId[existing.id] ?: existing }
+      }
+      if (playbackQueue.isNotEmpty()) {
+        playbackQueue = playbackQueue.mapNotNull { existing -> byId[existing.id] ?: existing }
+        val idx = if (activeId != null) playbackQueue.indexOfFirst { it.id == activeId } else 0
         currentQueueIndex = idx.coerceAtLeast(0)
         prepareAndSyncMediaPlayer(forceRestart = false)
       }
@@ -2587,15 +3003,11 @@ class MusicPlaybackSession(
         val activeId = playbackQueue.getOrNull(currentQueueIndex)?.id
         allTracks = loaded
         val byId = loaded.associateBy { it.id }
-        val updatedQueue = if (playbackQueue.isEmpty()) {
-          loaded
-        } else {
-          playbackQueue.map { existing -> byId[existing.id] ?: existing }
+        if (unshuffledQueue.isNotEmpty()) {
+          unshuffledQueue = unshuffledQueue.map { existing -> byId[existing.id] ?: existing }
         }
-        playbackQueue = if (updatedQueue.size == loaded.size && updatedQueue.zip(loaded).all { (a, b) -> a.id == b.id }) {
-          loaded
-        } else {
-          updatedQueue
+        if (playbackQueue.isNotEmpty()) {
+          playbackQueue = playbackQueue.map { existing -> byId[existing.id] ?: existing }
         }
         if (activeId != null) {
           val newIdx = playbackQueue.indexOfFirst { it.id == activeId }
@@ -2830,17 +3242,33 @@ class MusicPlaybackSession(
     setPlayingState(!isPlaying)
   }
 
+  private fun recordSkipIfEligible(requireActivePlayback: Boolean = false) {
+    val outgoingTrack = currentTrack ?: return
+    val duration = trackDurationMs.coerceAtLeast(1_000L)
+    if (currentPositionMs >= (duration * 95L) / 100L) return
+    if (requireActivePlayback && (!isPlaying || currentPositionMs <= 0L)) return
+    recordTrackPlayStats(
+      trackId = outgoingTrack.id,
+      incrementSkipCount = true,
+      persistImmediately = true,
+    )
+  }
+
   fun stepToTrack(
     newIndex: Int,
     autoPlay: Boolean = isPlaying,
+    recordSkipOnSwitch: Boolean = true,
   ) {
     if (isReleased || playbackQueue.isEmpty()) return
-    activePlayInstanceId++
     val clamped = newIndex.coerceIn(0, playbackQueue.lastIndex)
     val prevId = playbackQueue.getOrNull(currentQueueIndex)?.id
+    val target = playbackQueue[clamped]
+    if (recordSkipOnSwitch && prevId != null && target.id != prevId) {
+      recordSkipIfEligible(requireActivePlayback = true)
+    }
+    activePlayInstanceId++
     currentQueueIndex = clamped
     currentPositionMs = 0L
-    val target = playbackQueue[clamped]
     trackDurationMs = target.durationMs.coerceAtLeast(1000L)
     if (autoPlay) {
       if (target.id == prevId) {
@@ -2859,11 +3287,27 @@ class MusicPlaybackSession(
     contextTracks: List<MusicTrack>,
   ) {
     if (isReleased) return
+    if (currentTrack?.id != null && currentTrack?.id != track.id) {
+      recordSkipIfEligible(requireActivePlayback = true)
+    }
     activePlayInstanceId++
     val queueList = if (contextTracks.isNotEmpty()) contextTracks else listOf(track)
-    playbackQueue = queueList
-    val idx = queueList.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
-    currentQueueIndex = idx
+    unshuffledQueue = queueList
+    if (shuffleMode.isEnabled) {
+      val (shuffled, idx) = MusicPlayerEngine.applyShuffleModeToQueue(
+        baseQueue = queueList,
+        currentQueue = queueList,
+        anchorTrackId = track.id,
+        mode = shuffleMode,
+        playStats = playStats,
+      )
+      playbackQueue = shuffled
+      currentQueueIndex = idx
+    } else {
+      playbackQueue = queueList
+      val idx = queueList.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+      currentQueueIndex = idx
+    }
     currentPositionMs = 0L
     trackDurationMs = track.durationMs.coerceAtLeast(1000L)
     lastCountedPlayTrackId = track.id
@@ -2872,8 +3316,56 @@ class MusicPlaybackSession(
     prepareAndSyncMediaPlayer(forceRestart = true)
   }
 
+  /**
+   * Starts shuffled playback of [contextTracks] while preserving [contextTracks] as [unshuffledQueue]
+   * so turning shuffle off restores the original context order. If [shuffleMode] is currently
+   * [MusicShuffleMode.OFF], activates [MusicShuffleMode.SHUFFLE]; if already in
+   * [MusicShuffleMode.SMART_SHUFFLE], preserves smart shuffle.
+   */
+  fun playShuffledContext(
+    contextTracks: List<MusicTrack>,
+    random: kotlin.random.Random = kotlin.random.Random.Default,
+  ) {
+    if (isReleased || contextTracks.isEmpty()) return
+    val activeMode = if (shuffleMode == MusicShuffleMode.OFF) {
+      shuffleMode = MusicShuffleMode.SHUFFLE
+      prefs?.edit()
+        ?.putString(PREF_KEY_MUSIC_SHUFFLE_MODE, MusicShuffleMode.SHUFFLE.name)
+        ?.putBoolean(PREF_KEY_MUSIC_SHUFFLE, true)
+        ?.apply()
+      MusicShuffleMode.SHUFFLE
+    } else {
+      shuffleMode
+    }
+    val (shuffled, _) = MusicPlayerEngine.applyShuffleModeToQueue(
+      baseQueue = contextTracks,
+      currentQueue = contextTracks,
+      anchorTrackId = null,
+      mode = activeMode,
+      playStats = playStats,
+      random = random,
+    )
+    val startTrack = shuffled.first()
+    if (currentTrack?.id != null && currentTrack?.id != startTrack.id) {
+      recordSkipIfEligible(requireActivePlayback = true)
+    }
+    activePlayInstanceId++
+    unshuffledQueue = contextTracks
+    playbackQueue = shuffled
+    currentQueueIndex = 0
+    currentPositionMs = 0L
+    trackDurationMs = startTrack.durationMs.coerceAtLeast(1000L)
+    lastCountedPlayTrackId = startTrack.id
+    recordTrackPlayStats(trackId = startTrack.id, incrementPlayCount = true, persistImmediately = true)
+    isPlaying = true
+    prepareAndSyncMediaPlayer(forceRestart = true)
+  }
+
   fun skipToNext(userInitiated: Boolean = true) {
     if (isReleased) return
+    if (userInitiated) {
+      recordSkipIfEligible(requireActivePlayback = false)
+    }
     val nextIdx = MusicPlayerEngine.resolveNextTrackIndex(
       currentIndex = currentQueueIndex,
       queueSize = playbackQueue.size,
@@ -2882,7 +3374,7 @@ class MusicPlaybackSession(
       userInitiated = userInitiated,
     )
     if (nextIdx != null) {
-      stepToTrack(nextIdx, autoPlay = if (userInitiated) isPlaying else true)
+      stepToTrack(nextIdx, autoPlay = if (userInitiated) isPlaying else true, recordSkipOnSwitch = false)
     } else {
       activePlayInstanceId++
       isPlaying = false
@@ -2916,7 +3408,8 @@ class MusicPlaybackSession(
       }
       prepareAndSyncMediaPlayer(forceRestart = true)
     } else {
-      stepToTrack(prevIdx, autoPlay = isPlaying)
+      recordSkipIfEligible(requireActivePlayback = false)
+      stepToTrack(prevIdx, autoPlay = isPlaying, recordSkipOnSwitch = false)
     }
   }
 
@@ -2929,6 +3422,9 @@ class MusicPlaybackSession(
     )
     if (updatedQueue !== playbackQueue) {
       playbackQueue = updatedQueue
+      if (!shuffleMode.isEnabled) {
+        unshuffledQueue = updatedQueue
+      }
       currentQueueIndex = updatedCurrentIndex
       return true
     }
@@ -2954,6 +3450,10 @@ class MusicPlaybackSession(
     val nextIdx = if (idx >= 0) (idx + 1) % MusicPlayerEngine.PLAYBACK_SPEED_OPTIONS.size else 2
     playbackSpeed = MusicPlayerEngine.PLAYBACK_SPEED_OPTIONS[nextIdx]
     applyPlaybackSpeed(mediaPlayer)
+  }
+
+  fun cycleSleepTimer() {
+    selectSleepTimer(sleepTimerPreset.next())
   }
 
   fun selectSleepTimer(preset: SleepTimerPreset) {

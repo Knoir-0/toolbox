@@ -3,7 +3,10 @@ package com.example.toolbox.ui.main
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,6 +19,8 @@ const val PREF_KEY_TOOLS_PER_ROW = "tools_per_row"
 const val PREF_KEY_TOOL_ORDER = "tool_order"
 const val PREF_KEY_THEME_MODE = "theme_mode"
 const val PREF_KEY_THEME_COLOR = "theme_color"
+const val PREF_KEY_MUSIC_PLAYER_THEME_ENABLED = "music_player_theme_enabled"
+const val PREF_KEY_MUSIC_PLAYER_COLOR_OPTION = "music_player_color_option"
 const val PREF_KEY_HIDDEN_TOOLS = "hidden_tools"
 const val PREF_KEY_KNOWN_DEFAULT_HIDDEN_TOOLS = "known_default_hidden_tools"
 const val PREF_KEY_TOOL_SORTING = "tool_sorting"
@@ -27,7 +32,7 @@ const val PREF_KEY_TOOL_USAGE = "tool_usage"
 const val DEFAULT_THEME_COLOR_SYSTEM = "SYSTEM"
 const val FALLBACK_THEME_COLOR_HEX = "#8E66A6"
 const val DEFAULT_ACCENT_COLOR_AUTO = "AUTO"
-const val ACCENT_COLOR_AUTO_COMPLEMENTARY = DEFAULT_ACCENT_COLOR_AUTO
+const val ACCENT_COLOR_AUTO_COMPLEMENTARY = "AUTO_COMPLEMENTARY"
 const val ACCENT_COLOR_AUTO_ANALOGOUS = "AUTO_ANALOGOUS"
 const val ACCENT_COLOR_AUTO_ANALOGOUS_MINUS_30 = "AUTO_ANALOGOUS_MINUS_30"
 const val ACCENT_COLOR_AUTO_TRIADIC = "AUTO_TRIADIC"
@@ -43,11 +48,22 @@ const val THEME_COLOR_MUSIC_PLAYER = "MUSIC_PLAYER"
 const val THEME_COLOR_MUSIC_DOMINANT = "MUSIC_PLAYER_DOMINANT"
 const val THEME_COLOR_MUSIC_SECONDARY = "MUSIC_PLAYER_SECONDARY"
 const val THEME_COLOR_MUSIC_ACCENT = "MUSIC_PLAYER_ACCENT"
+const val DEFAULT_MUSIC_PLAYER_THEME_ENABLED = true
+const val DEFAULT_MUSIC_PLAYER_COLOR_OPTION = THEME_COLOR_MUSIC_PLAYER
 const val ACCENT_COLOR_MUSIC_PLAYER = THEME_COLOR_MUSIC_PLAYER
 const val ACCENT_COLOR_MUSIC_DOMINANT = THEME_COLOR_MUSIC_DOMINANT
 const val ACCENT_COLOR_MUSIC_SECONDARY = THEME_COLOR_MUSIC_SECONDARY
 const val ACCENT_COLOR_MUSIC_ACCENT = THEME_COLOR_MUSIC_ACCENT
 const val PREF_KEY_ACCENT_COLOR = "accent_color"
+
+/**
+ * Observable bridge state for Music Player theme settings so [com.example.toolbox.ui.theme.ToolboxTheme]
+ * stays synchronized even when callers do not pass explicit Music Player theme parameters.
+ */
+object NavigationPreferencesBridge {
+  var musicPlayerThemeEnabled by mutableStateOf(DEFAULT_MUSIC_PLAYER_THEME_ENABLED)
+  var musicPlayerColorOption by mutableStateOf(DEFAULT_MUSIC_PLAYER_COLOR_OPTION)
+}
 
 val DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
   Tool.IMAGE_EDITOR,
@@ -354,6 +370,16 @@ interface NavigationPreferencesRepository {
   fun setThemeColor(color: String)
   val themeColorFlow: StateFlow<String>
 
+  fun getMusicPlayerThemeEnabled(): Boolean = DEFAULT_MUSIC_PLAYER_THEME_ENABLED
+  fun setMusicPlayerThemeEnabled(enabled: Boolean) {}
+  val musicPlayerThemeEnabledFlow: StateFlow<Boolean>
+    get() = MutableStateFlow(getMusicPlayerThemeEnabled()).asStateFlow()
+
+  fun getMusicPlayerColorOption(): String = DEFAULT_MUSIC_PLAYER_COLOR_OPTION
+  fun setMusicPlayerColorOption(option: String) {}
+  val musicPlayerColorOptionFlow: StateFlow<String>
+    get() = MutableStateFlow(getMusicPlayerColorOption()).asStateFlow()
+
   fun getAccentColor(): String
   fun setAccentColor(color: String)
   val accentColorFlow: StateFlow<String>
@@ -415,8 +441,19 @@ class DefaultNavigationPreferencesRepository(
   private val _themeColorFlow = MutableStateFlow(getThemeColor())
   override val themeColorFlow: StateFlow<String> = _themeColorFlow.asStateFlow()
 
+  private val _musicPlayerThemeEnabledFlow = MutableStateFlow(getMusicPlayerThemeEnabled())
+  override val musicPlayerThemeEnabledFlow: StateFlow<Boolean> = _musicPlayerThemeEnabledFlow.asStateFlow()
+
+  private val _musicPlayerColorOptionFlow = MutableStateFlow(getMusicPlayerColorOption())
+  override val musicPlayerColorOptionFlow: StateFlow<String> = _musicPlayerColorOptionFlow.asStateFlow()
+
   private val _accentColorFlow = MutableStateFlow(getAccentColor())
   override val accentColorFlow: StateFlow<String> = _accentColorFlow.asStateFlow()
+
+  init {
+    NavigationPreferencesBridge.musicPlayerThemeEnabled = _musicPlayerThemeEnabledFlow.value
+    NavigationPreferencesBridge.musicPlayerColorOption = _musicPlayerColorOptionFlow.value
+  }
 
   private val _hiddenToolsFlow = MutableStateFlow(getHiddenTools())
   override val hiddenToolsFlow: StateFlow<Set<Tool>> = _hiddenToolsFlow.asStateFlow()
@@ -481,6 +518,63 @@ class DefaultNavigationPreferencesRepository(
   override fun setThemeColor(color: String) {
     sharedPreferences.edit().putString(PREF_KEY_THEME_COLOR, color).apply()
     _themeColorFlow.value = color
+    if (
+      color == THEME_COLOR_MUSIC_PLAYER ||
+      color == THEME_COLOR_MUSIC_SECONDARY ||
+      color == THEME_COLOR_MUSIC_ACCENT
+    ) {
+      setMusicPlayerColorOption(color)
+      setMusicPlayerThemeEnabled(true)
+    }
+  }
+
+  override fun getMusicPlayerThemeEnabled(): Boolean {
+    return sharedPreferences.getBoolean(
+      PREF_KEY_MUSIC_PLAYER_THEME_ENABLED,
+      DEFAULT_MUSIC_PLAYER_THEME_ENABLED
+    )
+  }
+
+  override fun setMusicPlayerThemeEnabled(enabled: Boolean) {
+    sharedPreferences.edit().putBoolean(PREF_KEY_MUSIC_PLAYER_THEME_ENABLED, enabled).apply()
+    _musicPlayerThemeEnabledFlow.value = enabled
+    NavigationPreferencesBridge.musicPlayerThemeEnabled = enabled
+  }
+
+  override fun getMusicPlayerColorOption(): String {
+    val raw = sharedPreferences.getString(PREF_KEY_MUSIC_PLAYER_COLOR_OPTION, null)
+    if (
+      raw == THEME_COLOR_MUSIC_PLAYER ||
+      raw == THEME_COLOR_MUSIC_SECONDARY ||
+      raw == THEME_COLOR_MUSIC_ACCENT
+    ) {
+      return raw
+    }
+    val legacyThemeColor = getThemeColor()
+    return if (
+      legacyThemeColor == THEME_COLOR_MUSIC_PLAYER ||
+      legacyThemeColor == THEME_COLOR_MUSIC_SECONDARY ||
+      legacyThemeColor == THEME_COLOR_MUSIC_ACCENT
+    ) {
+      legacyThemeColor
+    } else {
+      DEFAULT_MUSIC_PLAYER_COLOR_OPTION
+    }
+  }
+
+  override fun setMusicPlayerColorOption(option: String) {
+    val sanitized = if (
+      option == THEME_COLOR_MUSIC_PLAYER ||
+      option == THEME_COLOR_MUSIC_SECONDARY ||
+      option == THEME_COLOR_MUSIC_ACCENT
+    ) {
+      option
+    } else {
+      DEFAULT_MUSIC_PLAYER_COLOR_OPTION
+    }
+    sharedPreferences.edit().putString(PREF_KEY_MUSIC_PLAYER_COLOR_OPTION, sanitized).apply()
+    _musicPlayerColorOptionFlow.value = sanitized
+    NavigationPreferencesBridge.musicPlayerColorOption = sanitized
   }
 
   override fun getAccentColor(): String {
@@ -623,6 +717,16 @@ class InMemoryNavigationPreferencesRepository(
   initialToolOrder: List<Tool> = Tool.entries.filter { it != Tool.SETTINGS } + Tool.SETTINGS,
   initialThemeMode: ThemeMode = ThemeMode.SYSTEM,
   initialThemeColor: String = DEFAULT_THEME_COLOR_SYSTEM,
+  initialMusicPlayerThemeEnabled: Boolean = DEFAULT_MUSIC_PLAYER_THEME_ENABLED,
+  initialMusicPlayerColorOption: String = if (
+    initialThemeColor == THEME_COLOR_MUSIC_PLAYER ||
+    initialThemeColor == THEME_COLOR_MUSIC_SECONDARY ||
+    initialThemeColor == THEME_COLOR_MUSIC_ACCENT
+  ) {
+    initialThemeColor
+  } else {
+    DEFAULT_MUSIC_PLAYER_COLOR_OPTION
+  },
   initialAccentColor: String = DEFAULT_ACCENT_COLOR_AUTO,
   initialHiddenTools: Set<Tool> = DEFAULT_HIDDEN_TOOLS,
   initialToolSorting: ToolSortingOption = ToolSortingOption.USER_CHOICE,
@@ -645,8 +749,19 @@ class InMemoryNavigationPreferencesRepository(
   private val _themeColorFlow = MutableStateFlow(initialThemeColor)
   override val themeColorFlow: StateFlow<String> = _themeColorFlow.asStateFlow()
 
+  private val _musicPlayerThemeEnabledFlow = MutableStateFlow(initialMusicPlayerThemeEnabled)
+  override val musicPlayerThemeEnabledFlow: StateFlow<Boolean> = _musicPlayerThemeEnabledFlow.asStateFlow()
+
+  private val _musicPlayerColorOptionFlow = MutableStateFlow(initialMusicPlayerColorOption)
+  override val musicPlayerColorOptionFlow: StateFlow<String> = _musicPlayerColorOptionFlow.asStateFlow()
+
   private val _accentColorFlow = MutableStateFlow(initialAccentColor)
   override val accentColorFlow: StateFlow<String> = _accentColorFlow.asStateFlow()
+
+  init {
+    NavigationPreferencesBridge.musicPlayerThemeEnabled = _musicPlayerThemeEnabledFlow.value
+    NavigationPreferencesBridge.musicPlayerColorOption = _musicPlayerColorOptionFlow.value
+  }
 
   private val _hiddenToolsFlow = MutableStateFlow(initialHiddenTools.filter { it != Tool.SETTINGS }.toSet())
   override val hiddenToolsFlow: StateFlow<Set<Tool>> = _hiddenToolsFlow.asStateFlow()
@@ -688,6 +803,37 @@ class InMemoryNavigationPreferencesRepository(
 
   override fun setThemeColor(color: String) {
     _themeColorFlow.value = color
+    if (
+      color == THEME_COLOR_MUSIC_PLAYER ||
+      color == THEME_COLOR_MUSIC_SECONDARY ||
+      color == THEME_COLOR_MUSIC_ACCENT
+    ) {
+      setMusicPlayerColorOption(color)
+      setMusicPlayerThemeEnabled(true)
+    }
+  }
+
+  override fun getMusicPlayerThemeEnabled(): Boolean = _musicPlayerThemeEnabledFlow.value
+
+  override fun setMusicPlayerThemeEnabled(enabled: Boolean) {
+    _musicPlayerThemeEnabledFlow.value = enabled
+    NavigationPreferencesBridge.musicPlayerThemeEnabled = enabled
+  }
+
+  override fun getMusicPlayerColorOption(): String = _musicPlayerColorOptionFlow.value
+
+  override fun setMusicPlayerColorOption(option: String) {
+    val sanitized = if (
+      option == THEME_COLOR_MUSIC_PLAYER ||
+      option == THEME_COLOR_MUSIC_SECONDARY ||
+      option == THEME_COLOR_MUSIC_ACCENT
+    ) {
+      option
+    } else {
+      DEFAULT_MUSIC_PLAYER_COLOR_OPTION
+    }
+    _musicPlayerColorOptionFlow.value = sanitized
+    NavigationPreferencesBridge.musicPlayerColorOption = sanitized
   }
 
   override fun getAccentColor(): String = _accentColorFlow.value
@@ -769,6 +915,8 @@ private val RECOGNIZED_BACKUP_KEYS = setOf(
   PREF_KEY_TOOL_ORDER,
   PREF_KEY_THEME_MODE,
   PREF_KEY_THEME_COLOR,
+  PREF_KEY_MUSIC_PLAYER_THEME_ENABLED,
+  PREF_KEY_MUSIC_PLAYER_COLOR_OPTION,
   PREF_KEY_ACCENT_COLOR,
   PREF_KEY_HIDDEN_TOOLS,
   PREF_KEY_TOOL_SORTING,
@@ -788,6 +936,8 @@ fun exportSettingsToJson(repository: NavigationPreferencesRepository): String {
   json.put(PREF_KEY_TOOL_ORDER, serializeToolOrder(repository.getToolOrder()))
   json.put(PREF_KEY_THEME_MODE, repository.getThemeMode().name)
   json.put(PREF_KEY_THEME_COLOR, repository.getThemeColor())
+  json.put(PREF_KEY_MUSIC_PLAYER_THEME_ENABLED, repository.getMusicPlayerThemeEnabled())
+  json.put(PREF_KEY_MUSIC_PLAYER_COLOR_OPTION, repository.getMusicPlayerColorOption())
   json.put(PREF_KEY_ACCENT_COLOR, repository.getAccentColor())
   json.put(PREF_KEY_HIDDEN_TOOLS, serializeHiddenTools(repository.getHiddenTools()))
   json.put(PREF_KEY_TOOL_SORTING, repository.getToolSorting().name)
@@ -832,6 +982,18 @@ fun importSettingsFromJson(
       val color = json.optString(PREF_KEY_THEME_COLOR, DEFAULT_THEME_COLOR_SYSTEM)
         .ifBlank { DEFAULT_THEME_COLOR_SYSTEM }
       repository.setThemeColor(color)
+    }
+    if (json.has(PREF_KEY_MUSIC_PLAYER_THEME_ENABLED)) {
+      repository.setMusicPlayerThemeEnabled(
+        json.optBoolean(PREF_KEY_MUSIC_PLAYER_THEME_ENABLED, DEFAULT_MUSIC_PLAYER_THEME_ENABLED)
+      )
+    }
+    if (json.has(PREF_KEY_MUSIC_PLAYER_COLOR_OPTION)) {
+      val option = json.optString(
+        PREF_KEY_MUSIC_PLAYER_COLOR_OPTION,
+        DEFAULT_MUSIC_PLAYER_COLOR_OPTION
+      ).ifBlank { DEFAULT_MUSIC_PLAYER_COLOR_OPTION }
+      repository.setMusicPlayerColorOption(option)
     }
     if (json.has(PREF_KEY_ACCENT_COLOR)) {
       val accent = json.optString(PREF_KEY_ACCENT_COLOR, DEFAULT_ACCENT_COLOR_AUTO)
@@ -893,6 +1055,8 @@ fun resetAllSettingsToDefaults(repository: NavigationPreferencesRepository) {
   repository.setToolsPerRow(DEFAULT_TOOLS_PER_ROW)
   repository.setThemeMode(ThemeMode.SYSTEM)
   repository.setThemeColor(DEFAULT_THEME_COLOR_SYSTEM)
+  repository.setMusicPlayerThemeEnabled(DEFAULT_MUSIC_PLAYER_THEME_ENABLED)
+  repository.setMusicPlayerColorOption(DEFAULT_MUSIC_PLAYER_COLOR_OPTION)
   repository.setAccentColor(DEFAULT_ACCENT_COLOR_AUTO)
   repository.setHiddenTools(DEFAULT_HIDDEN_TOOLS)
   repository.setToolOrder(Tool.entries)

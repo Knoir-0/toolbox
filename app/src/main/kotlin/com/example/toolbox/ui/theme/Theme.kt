@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS_MINUS_30
+import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_COMPLEMENTARY
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_MONOCHROMATIC
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SHADES
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_SHADE_DEEP
@@ -45,8 +46,11 @@ import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_DOMINANT
 import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_PLAYER
 import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_SECONDARY
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
+import com.example.toolbox.ui.main.DEFAULT_MUSIC_PLAYER_COLOR_OPTION
+import com.example.toolbox.ui.main.DEFAULT_MUSIC_PLAYER_THEME_ENABLED
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
 import com.example.toolbox.ui.main.FALLBACK_THEME_COLOR_HEX
+import com.example.toolbox.ui.main.NavigationPreferencesBridge
 import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_ACCENT
 import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_DOMINANT
 import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_PLAYER
@@ -209,8 +213,53 @@ enum class AccentHarmonyOption(
     val harmonyMode: HarmonyMode,
     val hueShiftDegrees: Float = 0f,
 ) {
+    SHADES(
+        prefValue = ACCENT_COLOR_AUTO_SHADES,
+        label = "Auto (Soft Tint)",
+        shortLabel = "Soft Tint",
+        swatchLabel = "Soft",
+        description = "Soft tonal tint of your main theme color for a unified monochromatic palette",
+        harmonyMode = HarmonyMode.SHADES,
+        hueShiftDegrees = 0f,
+    ),
+    TINT_LIGHT(
+        prefValue = ACCENT_COLOR_AUTO_TINT_LIGHT,
+        label = "Auto (Light Tint)",
+        shortLabel = "Light Tint",
+        swatchLabel = "Light",
+        description = "Bright pastel tint of your main theme color",
+        harmonyMode = HarmonyMode.SHADES,
+        hueShiftDegrees = 0f,
+    ),
+    MONOCHROMATIC(
+        prefValue = ACCENT_COLOR_AUTO_MONOCHROMATIC,
+        label = "Auto (Monochromatic)",
+        shortLabel = "Monochromatic",
+        swatchLabel = "Base",
+        description = "Matches your main theme color's hue directly",
+        harmonyMode = HarmonyMode.SHADES,
+        hueShiftDegrees = 0f,
+    ),
+    SHADE_MID(
+        prefValue = ACCENT_COLOR_AUTO_SHADE_MID,
+        label = "Auto (Mid Shade)",
+        shortLabel = "Mid Shade",
+        swatchLabel = "Mid",
+        description = "Deeper tonal shade of your main theme color",
+        harmonyMode = HarmonyMode.SHADES,
+        hueShiftDegrees = 0f,
+    ),
+    SHADE_DEEP(
+        prefValue = ACCENT_COLOR_AUTO_SHADE_DEEP,
+        label = "Auto (Deep Shade)",
+        shortLabel = "Deep Shade",
+        swatchLabel = "Deep",
+        description = "Rich dark shade of your main theme color",
+        harmonyMode = HarmonyMode.SHADES,
+        hueShiftDegrees = 0f,
+    ),
     COMPLEMENTARY(
-        prefValue = DEFAULT_ACCENT_COLOR_AUTO,
+        prefValue = ACCENT_COLOR_AUTO_COMPLEMENTARY,
         label = "Auto (Complement)",
         shortLabel = "Complement (+180°)",
         swatchLabel = "+180°",
@@ -271,72 +320,40 @@ enum class AccentHarmonyOption(
         description = "Flanks the complement (+210° hue shift) for strong contrast with less tension",
         harmonyMode = HarmonyMode.SPLIT_COMPLEMENTARY,
         hueShiftDegrees = 210f,
-    ),
-    SHADES(
-        prefValue = ACCENT_COLOR_AUTO_SHADES,
-        label = "Auto (Soft Tint)",
-        shortLabel = "Soft Tint",
-        swatchLabel = "Soft",
-        description = "Soft tonal tint of your main theme color for a unified monochromatic palette",
-        harmonyMode = HarmonyMode.SHADES,
-        hueShiftDegrees = 0f,
-    ),
-    TINT_LIGHT(
-        prefValue = ACCENT_COLOR_AUTO_TINT_LIGHT,
-        label = "Auto (Light Tint)",
-        shortLabel = "Light Tint",
-        swatchLabel = "Light",
-        description = "Bright pastel tint of your main theme color",
-        harmonyMode = HarmonyMode.SHADES,
-        hueShiftDegrees = 0f,
-    ),
-    MONOCHROMATIC(
-        prefValue = ACCENT_COLOR_AUTO_MONOCHROMATIC,
-        label = "Auto (Monochromatic)",
-        shortLabel = "Monochromatic",
-        swatchLabel = "Base",
-        description = "Matches your main theme color's hue directly",
-        harmonyMode = HarmonyMode.SHADES,
-        hueShiftDegrees = 0f,
-    ),
-    SHADE_MID(
-        prefValue = ACCENT_COLOR_AUTO_SHADE_MID,
-        label = "Auto (Mid Shade)",
-        shortLabel = "Mid Shade",
-        swatchLabel = "Mid",
-        description = "Deeper tonal shade of your main theme color",
-        harmonyMode = HarmonyMode.SHADES,
-        hueShiftDegrees = 0f,
-    ),
-    SHADE_DEEP(
-        prefValue = ACCENT_COLOR_AUTO_SHADE_DEEP,
-        label = "Auto (Deep Shade)",
-        shortLabel = "Deep Shade",
-        swatchLabel = "Deep",
-        description = "Rich dark shade of your main theme color",
-        harmonyMode = HarmonyMode.SHADES,
-        hueShiftDegrees = 0f,
     );
 
     companion object {
-        fun fromPrefValue(value: String?): AccentHarmonyOption? {
+        fun defaultForTheme(darkTheme: Boolean): AccentHarmonyOption =
+            if (darkTheme) SHADES else SHADE_MID
+
+        fun fromPrefValue(value: String?, darkTheme: Boolean = false): AccentHarmonyOption? {
             if (value.isNullOrBlank()) return null
             val trimmed = value.trim()
-            if (trimmed.equals("AUTO_COMPLEMENTARY", ignoreCase = true)) {
+            if (trimmed.equals(DEFAULT_ACCENT_COLOR_AUTO, ignoreCase = true)) {
+                return defaultForTheme(darkTheme)
+            }
+            if (trimmed.equals(ACCENT_COLOR_AUTO_COMPLEMENTARY, ignoreCase = true)) {
                 return COMPLEMENTARY
             }
             return entries.find { it.prefValue.equals(trimmed, ignoreCase = true) }
         }
 
-        fun defaultForMode(mode: HarmonyMode): AccentHarmonyOption = when (mode) {
+        fun defaultForMode(mode: HarmonyMode, darkTheme: Boolean = false): AccentHarmonyOption = when (mode) {
+            HarmonyMode.SHADES -> defaultForTheme(darkTheme)
             HarmonyMode.COMPLEMENTARY -> COMPLEMENTARY
             HarmonyMode.ANALOGOUS -> ANALOGOUS
             HarmonyMode.TRIADIC -> TRIADIC
             HarmonyMode.SPLIT_COMPLEMENTARY -> SPLIT_COMPLEMENTARY
-            HarmonyMode.SHADES -> SHADES
         }
 
         fun swatchesForMode(mode: HarmonyMode): List<AccentHarmonyOption> = when (mode) {
+            HarmonyMode.SHADES -> listOf(
+                TINT_LIGHT,
+                SHADES,
+                MONOCHROMATIC,
+                SHADE_MID,
+                SHADE_DEEP,
+            )
             HarmonyMode.COMPLEMENTARY -> listOf(
                 MONOCHROMATIC,
                 COMPLEMENTARY,
@@ -355,13 +372,6 @@ enum class AccentHarmonyOption(
                 MONOCHROMATIC,
                 SPLIT_COMPLEMENTARY,
                 SPLIT_COMPLEMENTARY_SECONDARY,
-            )
-            HarmonyMode.SHADES -> listOf(
-                TINT_LIGHT,
-                SHADES,
-                MONOCHROMATIC,
-                SHADE_MID,
-                SHADE_DEEP,
             )
         }
     }
@@ -420,14 +430,18 @@ enum class MusicPlayerColorOption(
     }
 }
 
-fun resolveMusicPlayerHarmonyOption(accentColorSetting: String?): AccentHarmonyOption {
-    if (accentColorSetting.isNullOrBlank()) return AccentHarmonyOption.COMPLEMENTARY
+fun resolveMusicPlayerHarmonyOption(
+    accentColorSetting: String?,
+    darkTheme: Boolean = false,
+): AccentHarmonyOption {
+    val defaultOption = AccentHarmonyOption.defaultForTheme(darkTheme)
+    if (accentColorSetting.isNullOrBlank()) return defaultOption
     val trimmed = accentColorSetting.trim()
     if (':' in trimmed) {
         val suffix = trimmed.substringAfter(':').trim()
-        AccentHarmonyOption.fromPrefValue(suffix)?.let { return it }
+        AccentHarmonyOption.fromPrefValue(suffix, darkTheme = darkTheme)?.let { return it }
     }
-    return AccentHarmonyOption.COMPLEMENTARY
+    return defaultOption
 }
 
 fun buildMusicPlayerAccentPrefValue(
@@ -638,23 +652,35 @@ fun resolveEffectiveAccentColor(
     accentColorSetting: String,
     fallbackPrimary: Color = Color(0xFF8E66A6),
     musicPalette: AlbumArtPalette = MusicPlayerEngine.activeTrackPalette,
+    musicPlayerThemeEnabled: Boolean = false,
+    musicPlayerColorOption: String = DEFAULT_MUSIC_PLAYER_COLOR_OPTION,
+    isMusicPlaying: Boolean = false,
+    darkTheme: Boolean = false,
 ): Color {
-    val musicThemeOption = MusicPlayerColorOption.fromPrefValue(themeColorHex)
+    val explicitMusicThemeOption = MusicPlayerColorOption.fromPrefValue(themeColorHex)
+    val musicThemeOption = when {
+        musicPlayerThemeEnabled && isMusicPlaying -> {
+            explicitMusicThemeOption
+                ?: MusicPlayerColorOption.fromPrefValue(musicPlayerColorOption)
+                ?: MusicPlayerColorOption.DOMINANT
+        }
+        else -> explicitMusicThemeOption
+    }
     val primary = musicThemeOption?.resolveColor(musicPalette)
         ?: parseHexColor(themeColorHex)
         ?: fallbackPrimary
-    val harmonyOption = AccentHarmonyOption.fromPrefValue(accentColorSetting)
+    val harmonyOption = AccentHarmonyOption.fromPrefValue(accentColorSetting, darkTheme = darkTheme)
     if (harmonyOption != null) {
         return calculateAccentHarmonyColor(primary, harmonyOption)
     }
     val musicOption = MusicPlayerColorOption.fromPrefValue(accentColorSetting)
     if (musicOption != null) {
-        val musicHarmony = resolveMusicPlayerHarmonyOption(accentColorSetting)
+        val musicHarmony = resolveMusicPlayerHarmonyOption(accentColorSetting, darkTheme = darkTheme)
         return calculateAccentHarmonyColor(musicOption.resolveColor(musicPalette), musicHarmony)
     }
     val parsed = parseHexColor(accentColorSetting)
     if (parsed != null) return parsed
-    return calculateComplementaryColor(primary)
+    return calculateAccentHarmonyColor(primary, AccentHarmonyOption.defaultForTheme(darkTheme))
 }
 
 fun createCustomColorScheme(
@@ -662,7 +688,10 @@ fun createCustomColorScheme(
     darkTheme: Boolean,
     accentColor: Color? = null,
 ): ColorScheme {
-    val accentSeed = accentColor ?: calculateComplementaryColor(seedColor)
+    val accentSeed = accentColor ?: calculateAccentHarmonyColor(
+        seedColor,
+        AccentHarmonyOption.defaultForTheme(darkTheme),
+    )
     val tertiaryTokens = createTertiaryTokens(accentSeed, darkTheme)
     return if (darkTheme) {
         darkColorScheme(
@@ -714,6 +743,9 @@ fun ToolboxTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
     themeColor: String = DEFAULT_THEME_COLOR_SYSTEM,
     accentColor: String = DEFAULT_ACCENT_COLOR_AUTO,
+    musicPlayerThemeEnabled: Boolean = NavigationPreferencesBridge.musicPlayerThemeEnabled,
+    musicPlayerColorOption: String = NavigationPreferencesBridge.musicPlayerColorOption,
+    isMusicPlaying: Boolean = MusicPlayerEngine.isMusicPlaying,
     darkTheme: Boolean = when (themeMode) {
         ThemeMode.SYSTEM -> isSystemInDarkTheme()
         ThemeMode.LIGHT -> false
@@ -723,7 +755,13 @@ fun ToolboxTheme(
     dynamicColor: Boolean = (themeColor == DEFAULT_THEME_COLOR_SYSTEM),
     content: @Composable () -> Unit,
 ) {
-    val musicThemeOption = MusicPlayerColorOption.fromPrefValue(themeColor)
+    val musicThemeOption = if (musicPlayerThemeEnabled && isMusicPlaying) {
+        MusicPlayerColorOption.fromPrefValue(themeColor)
+            ?: MusicPlayerColorOption.fromPrefValue(musicPlayerColorOption)
+            ?: MusicPlayerColorOption.DOMINANT
+    } else {
+        null
+    }
     val musicPalette = MusicPlayerEngine.activeTrackPalette
     val baseColorScheme = when {
         musicThemeOption != null -> {
@@ -753,8 +791,8 @@ fun ToolboxTheme(
         }
     }
 
-    val harmonyOption = AccentHarmonyOption.fromPrefValue(accentColor)
-    val legacyMusicAccentOption = if (musicThemeOption == null) {
+    val harmonyOption = AccentHarmonyOption.fromPrefValue(accentColor, darkTheme = darkTheme)
+    val legacyMusicAccentOption = if (musicThemeOption == null && isMusicPlaying) {
         MusicPlayerColorOption.fromPrefValue(accentColor)
     } else {
         null
@@ -762,10 +800,13 @@ fun ToolboxTheme(
     val resolvedAccentColor = when {
         harmonyOption != null -> calculateAccentHarmonyColor(baseColorScheme.primary, harmonyOption)
         legacyMusicAccentOption != null -> {
-            val musicHarmony = resolveMusicPlayerHarmonyOption(accentColor)
+            val musicHarmony = resolveMusicPlayerHarmonyOption(accentColor, darkTheme = darkTheme)
             calculateAccentHarmonyColor(legacyMusicAccentOption.resolveColor(musicPalette), musicHarmony)
         }
-        else -> parseHexColor(accentColor) ?: calculateComplementaryColor(baseColorScheme.primary)
+        else -> parseHexColor(accentColor) ?: calculateAccentHarmonyColor(
+            baseColorScheme.primary,
+            AccentHarmonyOption.defaultForTheme(darkTheme),
+        )
     }
 
     val tertiaryTokens = createTertiaryTokens(resolvedAccentColor, darkTheme)

@@ -18,7 +18,7 @@ All AI agents and developers implementing new tools, screens, dialogs, or UI enh
 ## 2. Color System & Theming
 
 ### 2.1 Dynamic Material You & Color Tokens
-Toolbox supports system dynamic theming (Android 12+ / API 31+) and custom user-selected themes in **Settings**, falling back to a curated purple-lavender palette (`#8E66A6`) on older systems. The **Accent Color** is also configurable in Settings: it defaults to **Auto (Complement)** (dynamically driven by the 180° hue complement of the active main theme color) and supports automatic color harmonies (**Complementary**, **Analogous**, **Triadic**, **Split-Complementary**, and **Tints & Shades**) as well as preset swatches and custom hex codes.
+Toolbox supports system dynamic theming (Android 12+ / API 31+) and custom user-selected themes in **Settings**, falling back to a curated purple-lavender palette (`#8E66A6`) on older systems. The **Accent Color** is also configurable in Settings: it defaults to **Auto (Soft Tint)** in dark theme and **Auto (Mid Shade)** in light theme, and supports automatic color harmonies (**Tints & Shades**, **Complementary**, **Analogous**, **Triadic**, and **Split-Complementary**) as well as preset swatches and custom hex codes.
 
 > **CRITICAL RULE**: Never hardcode hex values (e.g., `#FFFFFF`, `#1E1E1E`, `#000000`) for surfaces, text, or borders. Always reference `MaterialTheme.colorScheme` tokens so dark mode, light mode, and dynamic palette switches work seamlessly.
 
@@ -108,7 +108,10 @@ Surface(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
       ) {
-        // 36dp - 40dp Circular Icon Badge
+        // 36dp - 40dp Circular Icon Badge (at root level)
+        // Note: When showing a drill-down Back button instead of the static tool icon badge,
+        // use a plain IconButton with Icons.AutoMirrored.Filled.ArrowBack and tint = colorScheme.onSurface
+        // (no colored primaryContainer circle background around the back button).
         Box(
           modifier = Modifier
             .size(36.dp)
@@ -416,6 +419,7 @@ AnimatedVisibility(
 
 - [x] **DO** use `MaterialTheme.colorScheme.*` for all colors; verify dark and light mode contrast.
 - [x] **DO** use standard corner radii: `28.dp` for dialogs/sheets, `14.dp` for fields/cards, `CircleShape` for FABs, icon badges, and slider dot handles.
+- [x] **DO** render header back/up navigation buttons (`Icons.AutoMirrored.Filled.ArrowBack`) as plain `IconButton`s with `MaterialTheme.colorScheme.onSurface` tint and no circular background container.
 - [x] **DO** use `SlimDotSlider` (slim `4.dp`–`6.dp` track with `16.dp`–`20.dp` circular dot thumb) for all sliders and trackbars.
 - [x] **DO** use the integrated expanding toolbar search & catalog overlay pattern (`Section 5.7`) with `RoundedCornerShape(20.dp)` filter chips and star favoriting for searchable tool catalogs and presets.
 - [x] **DO** provide immediate haptic feedback (`LocalHapticFeedback`) on meaningful actions (duplicate/copy, create, delete, favorite, quick-switch).

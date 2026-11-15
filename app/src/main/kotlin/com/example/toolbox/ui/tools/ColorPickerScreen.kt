@@ -110,11 +110,11 @@ enum class ColorSliderMode(val label: String) {
 }
 
 enum class HarmonyMode(val label: String) {
+  SHADES("Tints & Shades"),
   COMPLEMENTARY("Complementary"),
   ANALOGOUS("Analogous"),
   TRIADIC("Triadic"),
   SPLIT_COMPLEMENTARY("Split-Comp"),
-  SHADES("Tints & Shades"),
 }
 
 data class HsvColor(

@@ -10,14 +10,22 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_TRIADIC
+import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
 import com.example.toolbox.ui.main.InMemoryNavigationPreferencesRepository
 import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_ACCENT
 import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_PLAYER
@@ -33,6 +41,7 @@ import com.example.toolbox.ui.theme.createCustomColorScheme
 import com.example.toolbox.ui.theme.createTertiaryTokens
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -150,15 +159,27 @@ class MusicPlayerScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // Mini player is visible at bottom with initial track ("Neon Horizon", #00B4D8)
+    // When first loaded, no queue is loaded until the user chooses
+    val session = MusicPlayerEngine.getActivePlaybackSession()
+    assertNotNull(session)
+    assertTrue(session!!.playbackQueue.isEmpty())
+    composeTestRule.onNodeWithTag("music_player_collapsed").assertDoesNotExist()
+
+    // User chooses to play via Play All -> queue loads and mini player appears with initial track ("Neon Horizon", #00B4D8) and no carat indicator
+    composeTestRule.onNodeWithTag("music_play_all_button").performClick()
+    composeTestRule.waitForIdle()
+    assertFalse(session.playbackQueue.isEmpty())
     composeTestRule.onNodeWithTag("music_player_collapsed").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_player_expand_button").assertDoesNotExist()
     composeTestRule.onNodeWithContentDescription("Mini music player background #00B4D8").assertExists()
 
-    // Expand full music player
-    composeTestRule.onNodeWithTag("music_player_expand_button").performClick()
+    // Expand full music player by tapping the mini player
+    composeTestRule.onNodeWithTag("mini_player_album_art").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("music_player_expanded").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("expanded_player_album_art").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("expanded_player_favorite_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("expanded_player_seek_slider").assertIsDisplayed()
     composeTestRule.onNodeWithTag("expanded_player_shuffle_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("expanded_player_prev_button").assertIsDisplayed()
@@ -188,14 +209,18 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("music_queue_panel_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    // Collapse back down to mini player
-    composeTestRule.onNodeWithTag("music_player_collapse_button").performClick()
+    // Collapse back down to mini player by swiping down on the expanded music player
+    composeTestRule.onNodeWithTag("music_player_expanded").performTouchInput {
+      swipeDown(startY = top + 120f, endY = centerY + 240f)
+    }
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("music_player_collapsed").assertIsDisplayed()
 
     // Switch to Songs tab and select a Jazz track ("Autumn Leaves & Coffee", #D97706)
     composeTestRule.onNodeWithTag("music_tab_SONGS").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("song_list_view")
+      .performScrollToNode(hasTestTag("song_item_sample_autumn_coffee"))
     composeTestRule.onNodeWithTag("song_item_sample_autumn_coffee").performClick()
     composeTestRule.waitForIdle()
 
@@ -203,12 +228,14 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithContentDescription("Mini music player background #D97706").assertExists()
 
     // Expand full player and open Track Details modal
-    composeTestRule.onNodeWithTag("music_player_expand_button").performClick()
+    composeTestRule.onNodeWithTag("mini_player_album_art").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("expanded_player_info_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("track_details_dialog").assertIsDisplayed()
     composeTestRule.onNodeWithText("Colors").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Full Plays").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Skips").assertIsDisplayed()
     composeTestRule.onNodeWithText("Format").assertIsDisplayed()
     composeTestRule.onNodeWithText("Bitrate").assertIsDisplayed()
 
@@ -244,6 +271,8 @@ class MusicPlayerScreenTest {
     // Select a song in the Music tool and start playing
     composeTestRule.onNodeWithTag("music_tab_SONGS").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("song_list_view")
+      .performScrollToNode(hasTestTag("song_item_sample_autumn_coffee"))
     composeTestRule.onNodeWithTag("song_item_sample_autumn_coffee").performClick()
     composeTestRule.waitForIdle()
 
@@ -286,12 +315,16 @@ class MusicPlayerScreenTest {
 
     composeTestRule.setContent {
       val themeColor by prefsRepo.themeColorFlow.collectAsState()
+      val musicPlayerThemeEnabled by prefsRepo.musicPlayerThemeEnabledFlow.collectAsState()
+      val musicPlayerColorOption by prefsRepo.musicPlayerColorOptionFlow.collectAsState()
       val accentColor by prefsRepo.accentColorFlow.collectAsState()
       ToolboxTheme(
         darkTheme = false,
         dynamicColor = false,
         themeColor = themeColor,
         accentColor = accentColor,
+        musicPlayerThemeEnabled = musicPlayerThemeEnabled,
+        musicPlayerColorOption = musicPlayerColorOption,
       ) {
         observedPrimaryColor = MaterialTheme.colorScheme.primary
         observedTertiaryColor = MaterialTheme.colorScheme.tertiary
@@ -306,13 +339,33 @@ class MusicPlayerScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // Select the Music Player Colors option card in Theme Color settings
+    // 1. Verify Music Player checkbox is checked by default, and since music is not playing,
+    // the app falls back to the user's selected theme color (default #8E66A6 fallback when dynamicColor = false)
+    assertTrue(prefsRepo.getMusicPlayerThemeEnabled())
+    assertEquals(DEFAULT_THEME_COLOR_SYSTEM, prefsRepo.getThemeColor())
     composeTestRule.onNodeWithTag("color_preset_music_player")
+      .performScrollTo()
+      .assertIsOn()
+    assertEquals(Color(0xFF8E66A6), observedPrimaryColor)
+
+    // Select a user fallback theme color (#386A20 Forest Green) and verify it applies while music is not playing,
+    // while keeping the Music Player checkbox checked
+    composeTestRule.onNodeWithTag("color_swatch_#386A20")
       .performScrollTo()
       .performClick()
     composeTestRule.waitForIdle()
+    assertEquals("#386A20", prefsRepo.getThemeColor())
+    assertTrue(prefsRepo.getMusicPlayerThemeEnabled())
+    assertEquals(Color(0xFF386A20), observedPrimaryColor)
 
-    assertEquals(THEME_COLOR_MUSIC_PLAYER, prefsRepo.getThemeColor())
+    // 2. Start playing music: since the Music Player checkbox is checked by default,
+    // the app themes according to the music player's active track palette
+    composeTestRule.runOnIdle {
+      MusicPlayerEngine.setMusicPlayingForTest(true)
+    }
+    composeTestRule.waitForIdle()
+
+    assertEquals(THEME_COLOR_MUSIC_PLAYER, prefsRepo.getMusicPlayerColorOption())
     val firstPalette = MusicPlayerEngine.activeTrackPalette
     val customBaseBg = createCustomColorScheme(firstPalette.dominantColor, darkTheme = false).background
     assertEquals(firstPalette.dominantColor, observedPrimaryColor)
@@ -322,7 +375,7 @@ class MusicPlayerScreenTest {
     )
     assertEquals(
       createTertiaryTokens(
-        calculateAccentHarmonyColor(firstPalette.dominantColor, AccentHarmonyOption.COMPLEMENTARY),
+        calculateAccentHarmonyColor(firstPalette.dominantColor, AccentHarmonyOption.SHADE_MID),
         darkTheme = false,
       ).tertiary,
       observedTertiaryColor,
@@ -354,7 +407,8 @@ class MusicPlayerScreenTest {
       .performClick()
     composeTestRule.waitForIdle()
 
-    assertEquals(THEME_COLOR_MUSIC_SECONDARY, prefsRepo.getThemeColor())
+    assertEquals(THEME_COLOR_MUSIC_SECONDARY, prefsRepo.getMusicPlayerColorOption())
+    assertEquals("#386A20", prefsRepo.getThemeColor())
     assertEquals(firstPalette.secondaryColor, observedPrimaryColor)
     assertEquals(
       calculateMusicPlayerBackgroundColor(customBaseBg, firstPalette, MusicPlayerColorOption.SECONDARY),
@@ -374,7 +428,7 @@ class MusicPlayerScreenTest {
       .performClick()
     composeTestRule.waitForIdle()
 
-    assertEquals(THEME_COLOR_MUSIC_ACCENT, prefsRepo.getThemeColor())
+    assertEquals(THEME_COLOR_MUSIC_ACCENT, prefsRepo.getMusicPlayerColorOption())
     assertEquals(firstPalette.accentColor, observedPrimaryColor)
     assertEquals(
       calculateMusicPlayerBackgroundColor(customBaseBg, firstPalette, MusicPlayerColorOption.ACCENT),
@@ -408,6 +462,33 @@ class MusicPlayerScreenTest {
       ).tertiary,
       observedTertiaryColor,
     )
+
+    // 3. Uncheck the Music Player checkbox while music is playing: app falls back to user's selected theme color (#386A20)
+    composeTestRule.onNodeWithTag("color_preset_music_player")
+      .performScrollTo()
+      .performClick()
+    composeTestRule.waitForIdle()
+
+    assertFalse(prefsRepo.getMusicPlayerThemeEnabled())
+    composeTestRule.onNodeWithTag("color_preset_music_player").assertIsOff()
+    assertEquals(Color(0xFF386A20), observedPrimaryColor)
+
+    // Re-check the Music Player checkbox while music is playing: app themes according to the music player again
+    composeTestRule.onNodeWithTag("color_preset_music_player")
+      .performScrollTo()
+      .performClick()
+    composeTestRule.waitForIdle()
+
+    assertTrue(prefsRepo.getMusicPlayerThemeEnabled())
+    composeTestRule.onNodeWithTag("color_preset_music_player").assertIsOn()
+    assertEquals(nextPalette.accentColor, observedPrimaryColor)
+
+    // 4. Stop/pause music playback while checkbox is checked: app falls back to user's selected theme color (#386A20)
+    composeTestRule.runOnIdle {
+      MusicPlayerEngine.setMusicPlayingForTest(false)
+    }
+    composeTestRule.waitForIdle()
+    assertEquals(Color(0xFF386A20), observedPrimaryColor)
   }
 
   @OptIn(ExperimentalMaterial3Api::class)
@@ -435,6 +516,8 @@ class MusicPlayerScreenTest {
     // Start playing a song in the Music tool
     composeTestRule.onNodeWithTag("music_tab_SONGS").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("song_list_view")
+      .performScrollToNode(hasTestTag("song_item_sample_autumn_coffee"))
     composeTestRule.onNodeWithTag("song_item_sample_autumn_coffee").performClick()
     composeTestRule.waitForIdle()
 
@@ -467,5 +550,163 @@ class MusicPlayerScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tools_per_row_control").assertIsDisplayed()
     composeTestRule.onNodeWithTag("navigation_mini_player").assertDoesNotExist()
+  }
+
+  @Test
+  fun musicPlayer_preFocusesCurrentlyPlayingSongWhenSwitchingSectionsAndOpeningQueue() {
+    // Build a larger 20-track library so bottom items are guaranteed off-screen unless pre-focused
+    val extraTracks = (1..10).map { idx ->
+      MusicTrack(
+        id = "extra_track_$idx",
+        title = "AAA Prelude ${idx.toString().padStart(2, '0')}",
+        artist = "AAA Ensemble ${idx.toString().padStart(2, '0')}",
+        album = "AAA Opus ${idx.toString().padStart(2, '0')}",
+        genre = "AAA Genre ${idx.toString().padStart(2, '0')}",
+        durationMs = 180_000L,
+        year = 2025,
+        trackNumber = idx,
+        artworkPrimaryRgb = 0x3B82F6,
+        artworkSecondaryRgb = 0x1D4ED8,
+        artworkAccentRgb = 0x93C5FD,
+      )
+    }
+    val allTracks = extraTracks + MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+    val targetTrack = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS.first { it.id == "sample_starlight_drive" }
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        MusicPlayerScreen(
+          initialTracks = allTracks,
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Start playing "Starlight Drive" (by Aurora Synth, album "Midnight Odyssey", genre "Synthwave")
+    // near the end of the 20-track queue
+    val session = MusicPlayerEngine.getActivePlaybackSession()
+    assertNotNull(session)
+    composeTestRule.runOnIdle {
+      session!!.playTrackInContext(targetTrack, allTracks)
+    }
+    composeTestRule.waitForIdle()
+
+    val expectedQueueIndex = allTracks.indexOfFirst { it.id == targetTrack.id }
+    assertTrue(expectedQueueIndex >= 10)
+
+    // 1. Switch to Songs section -> pre-focused on "Starlight Drive" (alphabetically last in the 20-track list)
+    composeTestRule.onNodeWithTag("music_tab_SONGS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("song_item_sample_starlight_drive")
+      .assertIsDisplayed()
+      .assertIsSelected()
+
+    // Favorites button on Songs quick action row matches the height of Play All and Shuffle buttons
+    val playAllBounds = composeTestRule.onNodeWithTag("music_play_all_button").fetchSemanticsNode().boundsInRoot
+    val shuffleAllBounds = composeTestRule.onNodeWithTag("music_shuffle_all_button").fetchSemanticsNode().boundsInRoot
+    val favoritesButtonBounds = composeTestRule.onNodeWithTag("music_favorites_filter_chip").fetchSemanticsNode().boundsInRoot
+    assertEquals(playAllBounds.height, favoritesButtonBounds.height, 1f)
+    assertEquals(shuffleAllBounds.height, favoritesButtonBounds.height, 1f)
+
+    // Switch to Card view in Songs section -> still pre-focused on "Starlight Drive"
+    composeTestRule.onNodeWithTag("music_view_mode_card").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("song_item_sample_starlight_drive")
+      .assertIsDisplayed()
+      .assertIsSelected()
+
+    // Switch back to List view
+    composeTestRule.onNodeWithTag("music_view_mode_list").performClick()
+    composeTestRule.waitForIdle()
+
+    // 2. Switch to Albums section -> pre-focused on "Midnight Odyssey"
+    composeTestRule.onNodeWithTag("music_tab_ALBUMS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("album_item_Midnight Odyssey")
+      .assertIsDisplayed()
+      .assertIsSelected()
+
+    // 3. Switch to Genres section -> pre-focused on "Synthwave"
+    composeTestRule.onNodeWithTag("music_tab_GENRES").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("genre_item_Synthwave")
+      .assertIsDisplayed()
+      .assertIsSelected()
+
+    // 4. Switch to Artists section -> pre-focused on "Aurora Synth"
+    composeTestRule.onNodeWithTag("music_tab_ARTISTS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("artist_item_Aurora Synth")
+      .assertIsDisplayed()
+      .assertIsSelected()
+
+    // 5. Switch to Playlists section -> Most Played contains the active track and is selected
+    composeTestRule.onNodeWithTag("music_tab_PLAYLISTS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("playlist_item_Most Played")
+      .assertIsDisplayed()
+      .assertIsSelected()
+
+    // 6. Expand the player and open the Queue -> pre-focused on the currently playing song at expectedQueueIndex
+    composeTestRule.onNodeWithTag("mini_player_album_art").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_queue_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_queue_item_$expectedQueueIndex")
+      .assertIsDisplayed()
+      .assertIsSelected()
+
+    // 7. Skipping the track increments its tracked skip count
+    composeTestRule.runOnIdle {
+      session!!.skipToNext(userInitiated = true)
+    }
+    composeTestRule.waitForIdle()
+    assertEquals(1, session!!.playStats[targetTrack.id]?.skipCount)
+
+    // 8. Cycling shuffle button in expanded player cycles OFF -> SHUFFLE -> SMART_SHUFFLE -> OFF
+    // and actually shuffles/restores the currently playing queue with the active song at index 0
+    val activeBeforeShuffle = session!!.currentTrack!!
+    val originalQueueIds = session!!.playbackQueue.map { it.id }
+
+    // Collapse queue sheet so shuffle button is visible and clickable
+    composeTestRule.onNodeWithTag("music_queue_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+
+    // Tap 1: Shuffle
+    composeTestRule.onNodeWithTag("expanded_player_shuffle_button").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(MusicShuffleMode.SHUFFLE, session!!.shuffleMode)
+    assertEquals(0, session!!.currentQueueIndex)
+    assertEquals(activeBeforeShuffle.id, session!!.playbackQueue.first().id)
+
+    // Tap 2: Smart Shuffle
+    composeTestRule.onNodeWithTag("expanded_player_shuffle_button").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(MusicShuffleMode.SMART_SHUFFLE, session!!.shuffleMode)
+    assertEquals(0, session!!.currentQueueIndex)
+    assertEquals(activeBeforeShuffle.id, session!!.playbackQueue.first().id)
+
+    // Tap 3: Shuffle Off (restores unshuffled queue and active track's position)
+    composeTestRule.onNodeWithTag("expanded_player_shuffle_button").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(MusicShuffleMode.OFF, session.shuffleMode)
+    assertEquals(originalQueueIds, session.playbackQueue.map { it.id })
+    assertEquals(activeBeforeShuffle.id, session.currentTrack?.id)
+
+    // 9. Sleep pill toggles directly through Off -> 10m -> 15m -> 20m -> 30m -> 60m -> Off on click
+    assertEquals(SleepTimerPreset.OFF, session.sleepTimerPreset)
+    val expectedSleepPresets = listOf(
+      SleepTimerPreset.TEN_MIN,
+      SleepTimerPreset.FIFTEEN_MIN,
+      SleepTimerPreset.TWENTY_MIN,
+      SleepTimerPreset.THIRTY_MIN,
+      SleepTimerPreset.SIXTY_MIN,
+      SleepTimerPreset.OFF,
+    )
+    for (preset in expectedSleepPresets) {
+      composeTestRule.onNodeWithTag("expanded_player_sleep_button").performClick()
+      composeTestRule.waitForIdle()
+      assertEquals(preset, session.sleepTimerPreset)
+    }
   }
 }
