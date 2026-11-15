@@ -2500,6 +2500,11 @@ fun ToolContentView(
           onOpenAudioEditor = { preferencesRepository?.incrementToolUsage(Tool.AUDIO_EDITOR) },
           onOpenArchive = { preferencesRepository?.incrementToolUsage(Tool.ARCHIVE) },
           onOpenPdfViewer = { preferencesRepository?.incrementToolUsage(Tool.PDF_VIEWER) },
+          onOpenMusicPlayer = { preferencesRepository?.incrementToolUsage(Tool.MUSIC) },
+          onOpenGallery = { preferencesRepository?.incrementToolUsage(Tool.GALLERY) },
+          onOpenColorPicker = { preferencesRepository?.incrementToolUsage(Tool.COLOR_PICKER) },
+          onOpenNotes = { preferencesRepository?.incrementToolUsage(Tool.NOTES) },
+          onOpenTodoList = { preferencesRepository?.incrementToolUsage(Tool.TODO_LIST) },
           modifier = Modifier.padding(bottom = bottomPadding),
         )
       }

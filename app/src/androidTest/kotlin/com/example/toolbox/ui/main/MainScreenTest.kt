@@ -1183,4 +1183,69 @@ class MainScreenTest {
     val savedOrder = repo.getToolOrder()
     assertTrue(savedOrder.indexOf(Tool.UNIT_CONVERTER) < savedOrder.indexOf(Tool.CALCULATOR))
   }
+
+  @Test
+  fun filesTool_contextMenuUnifierActions_openMusicGalleryColorsAndImportNotesTodoAndClipboard() {
+    val tempDir = java.io.File(composeTestRule.activity.cacheDir, "unifier_menu_test_${System.currentTimeMillis()}").apply {
+      mkdirs()
+    }
+    try {
+      com.example.toolbox.ui.tools.GalleryEngine.writeSolidColorPng(
+        outputFile = java.io.File(tempDir, "swatch.png"),
+        red = 0x2E,
+        green = 0x8B,
+        blue = 0x57,
+      )
+      com.example.toolbox.ui.tools.AudioEditorEngine.writeWavFile(
+        buffer = com.example.toolbox.ui.tools.AudioEditorEngine.createSampleAudioBuffer(durationMs = 800L),
+        outputFile = java.io.File(tempDir, "song.wav"),
+      )
+      java.io.File(tempDir, "checklist.md").writeText("# Tasks\n- [x] First item\n- [ ] Second item")
+
+      composeTestRule.setContent {
+        com.example.toolbox.ui.tools.FilesScreen(initialDirectory = tempDir)
+      }
+      composeTestRule.waitForIdle()
+
+      // 1. Image file menu shows Open in Gallery & Inspect Color, and Inspect Color opens ColorPickerScreen
+      composeTestRule.onNodeWithTag("file_options_swatch.png").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("action_open_gallery").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_inspect_color").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_cut").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_copy").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_duplicate").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_inspect_color").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("color_picker_screen").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()
+
+      // 2. Audio file menu shows Play in Music and opens MusicPlayerScreen
+      composeTestRule.onNodeWithTag("file_options_song.wav").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("action_play_music").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_play_music").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("music_player_screen").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()
+
+      // 3. Text/Markdown file menu shows Save to Notes & Import to To Do, and single-item Copy populates Paste bar
+      composeTestRule.onNodeWithTag("file_options_checklist.md").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("action_save_to_notes").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_import_to_todo").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_copy").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("files_paste_bar").assertIsDisplayed()
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
 }

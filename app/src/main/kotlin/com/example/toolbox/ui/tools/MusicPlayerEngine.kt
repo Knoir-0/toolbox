@@ -68,6 +68,9 @@ const val PREF_KEY_MUSIC_SHUFFLE = "music_player_shuffle_enabled"
 const val PREF_KEY_MUSIC_SHUFFLE_MODE = "music_player_shuffle_mode"
 const val PREF_KEY_MUSIC_REPEAT = "music_player_repeat_mode"
 const val PREF_KEY_MUSIC_FAVORITES = "music_player_favorite_ids"
+const val PREF_KEY_MUSIC_FAVORITE_ARTISTS = "music_player_favorite_artists"
+const val PREF_KEY_MUSIC_FAVORITE_ALBUMS = "music_player_favorite_albums"
+const val PREF_KEY_MUSIC_FAVORITE_GENRES = "music_player_favorite_genres"
 const val PREF_KEY_MUSIC_PLAYLISTS = "music_player_playlists"
 const val PREF_KEY_MUSIC_PLAY_STATS = "music_player_play_stats"
 const val PREF_KEY_MUSIC_INCLUDE_SAMPLES = "music_player_include_samples"
@@ -304,6 +307,7 @@ data class MusicAlbum(
   val genre: String,
   val tracks: List<MusicTrack>,
 ) {
+  val key: String get() = "$name|$artist"
   val songCount: Int get() = tracks.size
   val totalDurationMs: Long get() = tracks.sumOf { it.durationMs }
   val totalDurationFormatted: String get() = AudioRecorderEngine.formatDurationMs(totalDurationMs)
@@ -430,14 +434,16 @@ data class TrackPlayStats(
   /**
    * Track-aware engagement score used to sort the Most Played playlist:
    * combines play count, calculated full plays (60,000 points per full play), and total listen time,
-   * with a light recency bonus from [lastPlayedAtMs] and skips weighted very lightly (-25 points per skip).
+   * with a light recency bonus from [lastPlayedAtMs] and skips weighted very lightly (-25 points per skip,
+   * or `0` when [ignoreSkips] is `true`).
    */
   fun engagementScoreForTrack(
     trackDurationMs: Long,
     referenceTimeMs: Long = 0L,
+    ignoreSkips: Boolean = false,
   ): Long {
     val fullPlaysScore = (calculatedFullPlays(trackDurationMs) * 60_000.0).roundToLong()
-    val skipPenalty = skipCount.toLong() * 25L
+    val skipPenalty = if (ignoreSkips) 0L else skipCount.toLong() * 25L
     val recencyBonus = recencyBonusPoints(referenceTimeMs)
     return playCount.toLong() * 60_000L + fullPlaysScore + totalPlayTimeMs + recencyBonus - skipPenalty
   }
@@ -1834,6 +1840,8 @@ object MusicPlayerEngine {
 
   /**
    * Builds the built-in Favorites [MusicPlaylist] from [favoriteIds], preserving library order.
+   * Only favorited song IDs ([favoriteIds]) are included; favorited artists, albums, and genres
+   * are intentionally excluded from the default Favorites playlist.
    * Always returned (even when empty) so it is available by default.
    */
   fun buildFavoritesPlaylist(
@@ -1848,24 +1856,245 @@ object MusicPlayerEngine {
   }
 
   /**
+   * Serializes a set of favorite entity keys/names into a newline-delimited string for `SharedPreferences`.
+   */
+  fun serializeFavoriteSet(values: Set<String>): String {
+    return values
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .joinToString("\n")
+  }
+
+  /**
+   * Deserializes a newline-delimited `SharedPreferences` string produced by [serializeFavoriteSet].
+   */
+  fun deserializeFavoriteSet(raw: String?): Set<String> {
+    if (raw.isNullOrBlank()) return emptySet()
+    return raw.lineSequence()
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .toSet()
+  }
+
+  /**
+   * Returns `true` if [artistName] is present in [favoriteArtists] (case-insensitive).
+   */
+  fun isArtistFavorite(
+    artistName: String,
+    favoriteArtists: Set<String>,
+  ): Boolean {
+    val target = artistName.trim()
+    return target.isNotEmpty() && favoriteArtists.any { it.equals(target, ignoreCase = true) }
+  }
+
+  /**
+   * Returns `true` if [artist] is present in [favoriteArtists] (case-insensitive).
+   */
+  fun isArtistFavorite(
+    artist: MusicArtist,
+    favoriteArtists: Set<String>,
+  ): Boolean = isArtistFavorite(artist.name, favoriteArtists)
+
+  /**
+   * Toggles [artistName] in [current] favorite artists set (case-insensitive) and returns the updated set.
+   */
+  fun toggleFavoriteArtist(
+    current: Set<String>,
+    artistName: String,
+  ): Set<String> {
+    val trimmed = artistName.trim()
+    if (trimmed.isEmpty()) return current
+    val existing = current.filter { it.equals(trimmed, ignoreCase = true) }.toSet()
+    return if (existing.isNotEmpty()) current - existing else current + trimmed
+  }
+
+  /**
+   * Toggles [artist] in [current] favorite artists set and returns the updated set.
+   */
+  fun toggleFavoriteArtist(
+    current: Set<String>,
+    artist: MusicArtist,
+  ): Set<String> = toggleFavoriteArtist(current, artist.name)
+
+  /**
+   * Builds the canonical favorite key for an album from [albumName] and optional [artistName].
+   */
+  fun albumFavoriteKey(
+    albumName: String,
+    artistName: String = "",
+  ): String {
+    val trimmedAlbum = albumName.trim()
+    val trimmedArtist = artistName.trim()
+    return if (trimmedArtist.isNotEmpty() && !trimmedAlbum.contains("|")) {
+      "$trimmedAlbum|$trimmedArtist"
+    } else {
+      trimmedAlbum
+    }
+  }
+
+  /**
+   * Builds the canonical favorite key for [album].
+   */
+  fun albumFavoriteKey(album: MusicAlbum): String = albumFavoriteKey(album.name, album.artist)
+
+  /**
+   * Returns `true` if the album identified by [albumName] and optional [artistName] is in [favoriteAlbums]
+   * (case-insensitive).
+   */
+  fun isAlbumFavorite(
+    albumName: String,
+    artistName: String = "",
+    favoriteAlbums: Set<String>,
+  ): Boolean {
+    val trimmedAlbum = albumName.trim()
+    if (trimmedAlbum.isEmpty()) return false
+    val trimmedArtist = artistName.trim()
+    val key = albumFavoriteKey(trimmedAlbum, trimmedArtist)
+    return favoriteAlbums.any { entry ->
+      entry.equals(key, ignoreCase = true) ||
+        entry.equals(trimmedAlbum, ignoreCase = true) ||
+        (trimmedArtist.isEmpty() && entry.substringBefore("|").equals(trimmedAlbum, ignoreCase = true))
+    }
+  }
+
+  /**
+   * Returns `true` if [album] is in [favoriteAlbums] (case-insensitive).
+   */
+  fun isAlbumFavorite(
+    album: MusicAlbum,
+    favoriteAlbums: Set<String>,
+  ): Boolean = isAlbumFavorite(album.name, album.artist, favoriteAlbums)
+
+  /**
+   * Toggles the album identified by [albumName] and optional [artistName] in [current] favorite albums set
+   * (case-insensitive) and returns the updated set.
+   */
+  fun toggleFavoriteAlbum(
+    current: Set<String>,
+    albumName: String,
+    artistName: String = "",
+  ): Set<String> {
+    val trimmedAlbum = albumName.trim()
+    if (trimmedAlbum.isEmpty()) return current
+    val trimmedArtist = artistName.trim()
+    val key = albumFavoriteKey(trimmedAlbum, trimmedArtist)
+    val existing = current.filter { entry ->
+      entry.equals(key, ignoreCase = true) ||
+        entry.equals(trimmedAlbum, ignoreCase = true) ||
+        (trimmedArtist.isEmpty() && entry.substringBefore("|").equals(trimmedAlbum, ignoreCase = true))
+    }.toSet()
+    return if (existing.isNotEmpty()) current - existing else current + key
+  }
+
+  /**
+   * Toggles [album] in [current] favorite albums set and returns the updated set.
+   */
+  fun toggleFavoriteAlbum(
+    current: Set<String>,
+    album: MusicAlbum,
+  ): Set<String> = toggleFavoriteAlbum(current, album.name, album.artist)
+
+  /**
+   * Returns `true` if [genreName] is present in [favoriteGenres] (case-insensitive).
+   */
+  fun isGenreFavorite(
+    genreName: String,
+    favoriteGenres: Set<String>,
+  ): Boolean {
+    val target = genreName.trim()
+    return target.isNotEmpty() && favoriteGenres.any { it.equals(target, ignoreCase = true) }
+  }
+
+  /**
+   * Returns `true` if [genre] is present in [favoriteGenres] (case-insensitive).
+   */
+  fun isGenreFavorite(
+    genre: MusicGenre,
+    favoriteGenres: Set<String>,
+  ): Boolean = isGenreFavorite(genre.name, favoriteGenres)
+
+  /**
+   * Toggles [genreName] in [current] favorite genres set (case-insensitive) and returns the updated set.
+   */
+  fun toggleFavoriteGenre(
+    current: Set<String>,
+    genreName: String,
+  ): Set<String> {
+    val trimmed = genreName.trim()
+    if (trimmed.isEmpty()) return current
+    val existing = current.filter { it.equals(trimmed, ignoreCase = true) }.toSet()
+    return if (existing.isNotEmpty()) current - existing else current + trimmed
+  }
+
+  /**
+   * Toggles [genre] in [current] favorite genres set and returns the updated set.
+   */
+  fun toggleFavoriteGenre(
+    current: Set<String>,
+    genre: MusicGenre,
+  ): Set<String> = toggleFavoriteGenre(current, genre.name)
+
+  /**
+   * Returns `true` if [track] is favorited directly (`track.id in favoriteIds`) or belongs to a
+   * favorited artist, album, or genre.
+   */
+  fun isTrackOrCategoryFavorite(
+    track: MusicTrack,
+    favoriteIds: Set<String> = activeSessionState?.favoriteIds ?: emptySet(),
+    favoriteArtists: Set<String> = activeSessionState?.favoriteArtists ?: emptySet(),
+    favoriteAlbums: Set<String> = activeSessionState?.favoriteAlbums ?: emptySet(),
+    favoriteGenres: Set<String> = activeSessionState?.favoriteGenres ?: emptySet(),
+  ): Boolean {
+    return track.id in favoriteIds ||
+      isArtistFavorite(track.artist, favoriteArtists) ||
+      isAlbumFavorite(track.album, track.artist, favoriteAlbums) ||
+      isGenreFavorite(track.genre, favoriteGenres)
+  }
+
+  /**
    * Sorts [tracks] by combined play statistics (calculated full plays, # of plays, and total listen
    * time, with a light recency weight from [TrackPlayStats.lastPlayedAtMs] and skips as a light
-   * tie-breaker), falling back to most-recently-played and alphabetical title order for ties.
+   * tie-breaker unless the song or its artist/album/genre is favorited), falling back to
+   * most-recently-played and alphabetical title order for ties.
    */
   fun sortTracksByPlayStats(
     tracks: List<MusicTrack>,
     playStats: Map<String, TrackPlayStats>,
+    favoriteIds: Set<String> = activeSessionState?.favoriteIds ?: emptySet(),
+    favoriteArtists: Set<String> = activeSessionState?.favoriteArtists ?: emptySet(),
+    favoriteAlbums: Set<String> = activeSessionState?.favoriteAlbums ?: emptySet(),
+    favoriteGenres: Set<String> = activeSessionState?.favoriteGenres ?: emptySet(),
   ): List<MusicTrack> {
     if (tracks.isEmpty()) return emptyList()
     val referenceTimeMs = playStats.values.maxOfOrNull { it.lastPlayedAtMs } ?: 0L
     return tracks.sortedWith(
-      compareByDescending<MusicTrack> {
-        playStats[it.id]?.engagementScoreForTrack(it.durationMs, referenceTimeMs) ?: 0L
+      compareByDescending<MusicTrack> { track ->
+        val ignoreSkips = isTrackOrCategoryFavorite(
+          track = track,
+          favoriteIds = favoriteIds,
+          favoriteArtists = favoriteArtists,
+          favoriteAlbums = favoriteAlbums,
+          favoriteGenres = favoriteGenres,
+        )
+        playStats[track.id]?.engagementScoreForTrack(
+          trackDurationMs = track.durationMs,
+          referenceTimeMs = referenceTimeMs,
+          ignoreSkips = ignoreSkips,
+        ) ?: 0L
       }
         .thenByDescending { playStats[it.id]?.calculatedFullPlays(it.durationMs) ?: 0.0 }
         .thenByDescending { playStats[it.id]?.playCount ?: 0 }
         .thenByDescending { playStats[it.id]?.totalPlayTimeMs ?: 0L }
-        .thenBy { playStats[it.id]?.skipCount ?: 0 }
+        .thenBy { track ->
+          val ignoreSkips = isTrackOrCategoryFavorite(
+            track = track,
+            favoriteIds = favoriteIds,
+            favoriteArtists = favoriteArtists,
+            favoriteAlbums = favoriteAlbums,
+            favoriteGenres = favoriteGenres,
+          )
+          if (ignoreSkips) 0 else (playStats[track.id]?.skipCount ?: 0)
+        }
         .thenByDescending { playStats[it.id]?.lastPlayedAtMs ?: 0L }
         .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
     )
@@ -1874,17 +2103,29 @@ object MusicPlayerEngine {
   /**
    * Builds the built-in Most Played [MusicPlaylist], automatically sorting all songs in [allTracks]
    * by a combination of play count, calculated full plays, total playtime, and a light recency weight
-   * from when each song was last played (with skips as a light tie-breaker).
+   * from when each song was last played (with skips as a light tie-breaker, cancelled out when the
+   * song or its artist/album/genre is favorited).
    * Always returned so it is available by default.
    */
   fun buildMostPlayedPlaylist(
     playStats: Map<String, TrackPlayStats>,
     allTracks: List<MusicTrack>,
+    favoriteIds: Set<String> = activeSessionState?.favoriteIds ?: emptySet(),
+    favoriteArtists: Set<String> = activeSessionState?.favoriteArtists ?: emptySet(),
+    favoriteAlbums: Set<String> = activeSessionState?.favoriteAlbums ?: emptySet(),
+    favoriteGenres: Set<String> = activeSessionState?.favoriteGenres ?: emptySet(),
   ): MusicPlaylist {
     return MusicPlaylist(
       id = MOST_PLAYED_PLAYLIST_ID,
       name = MOST_PLAYED_PLAYLIST_NAME,
-      tracks = sortTracksByPlayStats(allTracks, playStats),
+      tracks = sortTracksByPlayStats(
+        tracks = allTracks,
+        playStats = playStats,
+        favoriteIds = favoriteIds,
+        favoriteArtists = favoriteArtists,
+        favoriteAlbums = favoriteAlbums,
+        favoriteGenres = favoriteGenres,
+      ),
     )
   }
 
@@ -2068,6 +2309,10 @@ object MusicPlayerEngine {
     tracks: List<MusicTrack>,
     sortOrder: MusicSortOrder,
     playStats: Map<String, TrackPlayStats> = emptyMap(),
+    favoriteIds: Set<String> = activeSessionState?.favoriteIds ?: emptySet(),
+    favoriteArtists: Set<String> = activeSessionState?.favoriteArtists ?: emptySet(),
+    favoriteAlbums: Set<String> = activeSessionState?.favoriteAlbums ?: emptySet(),
+    favoriteGenres: Set<String> = activeSessionState?.favoriteGenres ?: emptySet(),
   ): List<MusicTrack> {
     return when (sortOrder) {
       MusicSortOrder.TITLE_ASC -> tracks.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
@@ -2090,7 +2335,14 @@ object MusicPlayerEngine {
         compareBy<MusicTrack> { it.durationMs }
           .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
       )
-      MusicSortOrder.MOST_PLAYED -> sortTracksByPlayStats(tracks, playStats)
+      MusicSortOrder.MOST_PLAYED -> sortTracksByPlayStats(
+        tracks = tracks,
+        playStats = playStats,
+        favoriteIds = favoriteIds,
+        favoriteArtists = favoriteArtists,
+        favoriteAlbums = favoriteAlbums,
+        favoriteGenres = favoriteGenres,
+      )
       MusicSortOrder.RECENTLY_PLAYED -> sortTracksByRecentlyPlayed(tracks, playStats)
     }
   }
@@ -2933,7 +3185,7 @@ class MusicPlaybackSession(
     prefs?.edit()?.putString(PREF_KEY_MUSIC_REPEAT, repeatMode.name)?.apply()
   }
 
-  // Favorites
+  // Favorites (Songs, Artists, Albums, and Genres — only song favoriteIds populate the default Favorites playlist)
   var favoriteIds by mutableStateOf(
     prefs?.getString(PREF_KEY_MUSIC_FAVORITES, "")
       .orEmpty()
@@ -2949,7 +3201,101 @@ class MusicPlaybackSession(
     prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITES, next.joinToString("|"))?.apply()
   }
 
-  var showFavoritesOnly by mutableStateOf(false)
+  var favoriteArtists by mutableStateOf(
+    MusicPlayerEngine.deserializeFavoriteSet(prefs?.getString(PREF_KEY_MUSIC_FAVORITE_ARTISTS, ""))
+  )
+
+  fun isArtistFavorite(artistName: String): Boolean =
+    MusicPlayerEngine.isArtistFavorite(artistName, favoriteArtists)
+
+  fun isArtistFavorite(artist: MusicArtist): Boolean =
+    MusicPlayerEngine.isArtistFavorite(artist, favoriteArtists)
+
+  fun toggleFavoriteArtist(artistName: String) {
+    val next = MusicPlayerEngine.toggleFavoriteArtist(favoriteArtists, artistName)
+    favoriteArtists = next
+    prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_ARTISTS, MusicPlayerEngine.serializeFavoriteSet(next))?.apply()
+  }
+
+  fun toggleFavoriteArtist(artist: MusicArtist) {
+    toggleFavoriteArtist(artist.name)
+  }
+
+  var favoriteAlbums by mutableStateOf(
+    MusicPlayerEngine.deserializeFavoriteSet(prefs?.getString(PREF_KEY_MUSIC_FAVORITE_ALBUMS, ""))
+  )
+
+  fun isAlbumFavorite(albumName: String, artistName: String = ""): Boolean =
+    MusicPlayerEngine.isAlbumFavorite(albumName, artistName, favoriteAlbums)
+
+  fun isAlbumFavorite(album: MusicAlbum): Boolean =
+    MusicPlayerEngine.isAlbumFavorite(album, favoriteAlbums)
+
+  fun toggleFavoriteAlbum(albumName: String, artistName: String = "") {
+    val next = MusicPlayerEngine.toggleFavoriteAlbum(favoriteAlbums, albumName, artistName)
+    favoriteAlbums = next
+    prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_ALBUMS, MusicPlayerEngine.serializeFavoriteSet(next))?.apply()
+  }
+
+  fun toggleFavoriteAlbum(album: MusicAlbum) {
+    toggleFavoriteAlbum(album.name, album.artist)
+  }
+
+  var favoriteGenres by mutableStateOf(
+    MusicPlayerEngine.deserializeFavoriteSet(prefs?.getString(PREF_KEY_MUSIC_FAVORITE_GENRES, ""))
+  )
+
+  fun isGenreFavorite(genreName: String): Boolean =
+    MusicPlayerEngine.isGenreFavorite(genreName, favoriteGenres)
+
+  fun isGenreFavorite(genre: MusicGenre): Boolean =
+    MusicPlayerEngine.isGenreFavorite(genre, favoriteGenres)
+
+  fun toggleFavoriteGenre(genreName: String) {
+    val next = MusicPlayerEngine.toggleFavoriteGenre(favoriteGenres, genreName)
+    favoriteGenres = next
+    prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_GENRES, MusicPlayerEngine.serializeFavoriteSet(next))?.apply()
+  }
+
+  fun toggleFavoriteGenre(genre: MusicGenre) {
+    toggleFavoriteGenre(genre.name)
+  }
+
+  var favoriteFilterTabs by mutableStateOf<Set<MusicLibraryTab>>(emptySet())
+
+  fun isFavoritesOnlyEnabled(tab: MusicLibraryTab): Boolean = tab in favoriteFilterTabs
+
+  fun setFavoritesOnly(tab: MusicLibraryTab, enabled: Boolean) {
+    favoriteFilterTabs = if (enabled) {
+      favoriteFilterTabs + tab
+    } else {
+      favoriteFilterTabs - tab
+    }
+  }
+
+  fun toggleFavoritesOnly(tab: MusicLibraryTab = selectedTab) {
+    setFavoritesOnly(tab, !isFavoritesOnlyEnabled(tab))
+  }
+
+  var showFavoriteArtistsOnly: Boolean
+    get() = isFavoritesOnlyEnabled(MusicLibraryTab.ARTISTS)
+    set(value) = setFavoritesOnly(MusicLibraryTab.ARTISTS, value)
+
+  var showFavoriteAlbumsOnly: Boolean
+    get() = isFavoritesOnlyEnabled(MusicLibraryTab.ALBUMS)
+    set(value) = setFavoritesOnly(MusicLibraryTab.ALBUMS, value)
+
+  var showFavoriteSongsOnly: Boolean
+    get() = isFavoritesOnlyEnabled(MusicLibraryTab.SONGS)
+    set(value) = setFavoritesOnly(MusicLibraryTab.SONGS, value)
+
+  var showFavoriteGenresOnly: Boolean
+    get() = isFavoritesOnlyEnabled(MusicLibraryTab.GENRES)
+    set(value) = setFavoritesOnly(MusicLibraryTab.GENRES, value)
+
+  var showFavoritesOnly: Boolean
+    get() = isFavoritesOnlyEnabled(selectedTab)
+    set(value) = setFavoritesOnly(selectedTab, value)
 
   // Play Statistics (persisted in SharedPreferences: play count + total playtime per track)
   var playStats by mutableStateOf(
@@ -3011,6 +3357,60 @@ class MusicPlaybackSession(
     updateSavedPlaylists(savedPlaylistEntries.filterNot { it.id == playlistId })
   }
 
+  fun renamePlaylist(playlistId: String, newName: String): Boolean {
+    if (playlistId in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS) return false
+    val trimmed = newName.trim()
+    if (trimmed.isEmpty()) return false
+    var changed = false
+    val updated = savedPlaylistEntries.map { entry ->
+      if (entry.id == playlistId) {
+        changed = true
+        entry.copy(name = trimmed)
+      } else {
+        entry
+      }
+    }
+    if (changed) {
+      updateSavedPlaylists(updated)
+    }
+    return changed
+  }
+
+  fun addTracksToPlaylist(playlistId: String, tracks: List<MusicTrack>): Boolean {
+    if (playlistId in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS || tracks.isEmpty()) return false
+    val idsToAdd = tracks.map { it.id }
+    var changed = false
+    val updated = savedPlaylistEntries.map { entry ->
+      if (entry.id == playlistId) {
+        changed = true
+        entry.copy(trackIds = (entry.trackIds + idsToAdd).distinct())
+      } else {
+        entry
+      }
+    }
+    if (changed) {
+      updateSavedPlaylists(updated)
+    }
+    return changed
+  }
+
+  fun removeTrackFromPlaylist(playlistId: String, trackId: String): Boolean {
+    if (playlistId in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS) return false
+    var changed = false
+    val updated = savedPlaylistEntries.map { entry ->
+      if (entry.id == playlistId && trackId in entry.trackIds) {
+        changed = true
+        entry.copy(trackIds = entry.trackIds.filterNot { it == trackId })
+      } else {
+        entry
+      }
+    }
+    if (changed) {
+      updateSavedPlaylists(updated)
+    }
+    return changed
+  }
+
   // Search state
   var isSearchActive by mutableStateOf(false)
   var searchQuery by mutableStateOf("")
@@ -3026,6 +3426,20 @@ class MusicPlaybackSession(
     selectedAlbumKey = null
     selectedGenreName = null
     selectedPlaylistId = null
+  }
+
+  fun navigateToArtist(artistName: String) {
+    if (artistName.isBlank()) return
+    clearDrillDown()
+    selectedTab = MusicLibraryTab.ARTISTS
+    selectedArtistName = artistName
+  }
+
+  fun navigateToAlbum(albumKey: String) {
+    if (albumKey.isBlank()) return
+    clearDrillDown()
+    selectedTab = MusicLibraryTab.ALBUMS
+    selectedAlbumKey = albumKey
   }
 
   // Library Tracks & Playback Queue State
@@ -3606,6 +4020,144 @@ class MusicPlaybackSession(
       return true
     }
     return false
+  }
+
+  fun playNext(tracks: List<MusicTrack>) {
+    if (isReleased || tracks.isEmpty()) return
+    if (playbackQueue.isEmpty()) {
+      playTrackInContext(tracks.first(), tracks)
+      return
+    }
+    val insertIdx = (currentQueueIndex + 1).coerceIn(0, playbackQueue.size)
+    val mutableQueue = playbackQueue.toMutableList()
+    mutableQueue.addAll(insertIdx, tracks)
+    playbackQueue = mutableQueue
+    val mutableUnshuffled = unshuffledQueue.toMutableList()
+    val unshuffledInsertIdx = (unshuffledQueue.indexOfFirst { it.id == currentTrack?.id } + 1)
+      .coerceIn(0, mutableUnshuffled.size)
+    mutableUnshuffled.addAll(unshuffledInsertIdx, tracks)
+    unshuffledQueue = mutableUnshuffled
+  }
+
+  fun addToQueue(tracks: List<MusicTrack>) {
+    if (isReleased || tracks.isEmpty()) return
+    if (playbackQueue.isEmpty()) {
+      playTrackInContext(tracks.first(), tracks)
+      return
+    }
+    playbackQueue = playbackQueue + tracks
+    unshuffledQueue = unshuffledQueue + tracks
+  }
+
+  fun resolveTrackFile(track: MusicTrack, context: Context? = appContext): File? {
+    val existing = track.file
+    if (existing != null && existing.exists()) {
+      return existing
+    }
+    return try {
+      when {
+        context != null -> FileManagerEngine.getOrCreateSampleMusicFile(track, context)
+        cacheDir != null -> MusicPlayerEngine.ensurePlayableSampleWavFile(cacheDir, track)
+        else -> existing
+      }
+    } catch (_: Throwable) {
+      existing
+    }
+  }
+
+  fun resolveCollectionFiles(tracks: List<MusicTrack>, context: Context? = appContext): List<File> {
+    return tracks.mapNotNull { resolveTrackFile(it, context) }.filter { it.exists() }
+  }
+
+  fun duplicateTrack(track: MusicTrack, context: Context? = appContext): MusicTrack {
+    val resolvedFile = resolveTrackFile(track, context)
+    val dupFile = if (resolvedFile != null && resolvedFile.exists()) {
+      FileManagerEngine.duplicateFile(resolvedFile).getOrNull()
+    } else {
+      null
+    }
+    val newTitle = if (dupFile != null) {
+      dupFile.nameWithoutExtension
+    } else {
+      "${track.title} (Copy)"
+    }
+    val duplicatedTrack = track.copy(
+      id = dupFile?.absolutePath ?: "${track.id}_copy_${System.currentTimeMillis()}",
+      title = newTitle,
+      file = dupFile ?: track.file,
+    )
+    val idx = allTracks.indexOfFirst { it.id == track.id }
+    val updatedAll = allTracks.toMutableList()
+    if (idx >= 0) {
+      updatedAll.add(idx + 1, duplicatedTrack)
+    } else {
+      updatedAll.add(0, duplicatedTrack)
+    }
+    allTracks = updatedAll
+    MusicPlayerEngine.clearTrackMetadataCache()
+    return duplicatedTrack
+  }
+
+  fun renameTrack(track: MusicTrack, newNameInput: String, context: Context? = appContext): MusicTrack? {
+    val trimmed = newNameInput.trim()
+    if (trimmed.isEmpty()) return null
+    val existingFile = track.file
+    var renamedFile: File? = existingFile
+    if (existingFile != null && existingFile.exists()) {
+      val ext = existingFile.extension
+      val targetFileName = if (ext.isNotEmpty() && !trimmed.contains(".")) {
+        "$trimmed.$ext"
+      } else {
+        trimmed
+      }
+      val renameResult = FileManagerEngine.renameFile(existingFile, targetFileName)
+      if (renameResult.isSuccess) {
+        renamedFile = renameResult.getOrNull()
+      }
+    }
+    val newTitle = if (renamedFile != null && trimmed.contains(".")) {
+      renamedFile.nameWithoutExtension
+    } else {
+      trimmed.substringBeforeLast(".")
+    }.ifEmpty { trimmed }
+    val updatedTrack = track.copy(
+      id = renamedFile?.absolutePath ?: track.id,
+      title = newTitle,
+      file = renamedFile,
+    )
+    allTracks = allTracks.map { if (it.id == track.id) updatedTrack else it }
+    unshuffledQueue = unshuffledQueue.map { if (it.id == track.id) updatedTrack else it }
+    playbackQueue = playbackQueue.map { if (it.id == track.id) updatedTrack else it }
+    MusicPlayerEngine.clearTrackMetadataCache()
+    return updatedTrack
+  }
+
+  fun deleteTrack(track: MusicTrack) {
+    track.file?.let { file ->
+      if (file.exists()) {
+        FileManagerEngine.deleteFileOrDirectory(file)
+      }
+    }
+    val wasCurrent = currentTrack?.id == track.id
+    val oldQueueIdx = currentQueueIndex
+    val removedBeforeCurrent = playbackQueue.take(oldQueueIdx).count { it.id == track.id }
+    allTracks = allTracks.filterNot { it.id == track.id }
+    unshuffledQueue = unshuffledQueue.filterNot { it.id == track.id }
+    val newPlaybackQueue = playbackQueue.filterNot { it.id == track.id }
+    playbackQueue = newPlaybackQueue
+    if (newPlaybackQueue.isEmpty()) {
+      currentQueueIndex = 0
+      isPlaying = false
+      currentPositionMs = 0L
+      releaseMediaPlayer()
+    } else {
+      currentQueueIndex = (oldQueueIdx - removedBeforeCurrent).coerceIn(0, newPlaybackQueue.lastIndex)
+      if (wasCurrent) {
+        currentPositionMs = 0L
+        prepareAndSyncMediaPlayer(forceRestart = true)
+      }
+    }
+    MusicPlayerEngine.clearTrackMetadataCache()
   }
 
   fun updateSeekDrag(fraction: Float) {

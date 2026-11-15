@@ -54,6 +54,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AccessTime
@@ -65,15 +66,20 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material.icons.filled.Update
 import androidx.compose.material3.AlertDialog
@@ -111,7 +117,9 @@ import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -166,6 +174,37 @@ private enum class TodoFilterTab {
   TASKS,
   SCHEDULED,
   COMPLETED,
+}
+
+internal class TodoItemActionDispatcher(
+  val onDuplicateTask: (TodoItem) -> Unit = {},
+  val onUnscheduleTask: (TodoItem) -> Unit = {},
+  val onDeleteTask: (TodoItem) -> Unit = {},
+  val onSaveToNotes: (TodoItem) -> Unit = {},
+  val onCopyTask: (TodoItem) -> Unit = {},
+  val onShareTask: (TodoItem) -> Unit = {},
+)
+
+internal val LocalTodoItemActions = compositionLocalOf { TodoItemActionDispatcher() }
+
+private fun formatTodoTaskPlainText(task: TodoItem): String {
+  return buildString {
+    appendLine(task.title)
+    if (task.notes.isNotBlank()) {
+      appendLine(task.notes)
+    }
+    if (task.scheduledAtMillis != null) {
+      val sched = TodoListEngine.formatScheduleLabel(task.scheduledAtMillis, task.scheduledEndMillis)
+      appendLine("Scheduled: $sched")
+    }
+    if (task.subtasks.isNotEmpty()) {
+      appendLine()
+      task.subtasks.forEach { sub ->
+        val box = if (sub.isCompleted) "[x]" else "[ ]"
+        appendLine("$box ${sub.title}")
+      }
+    }
+  }.trim()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -617,6 +656,54 @@ fun TodoListScreen(
   val taskToSchedule = schedulingTaskId?.let { id -> tasks.firstOrNull { it.id == id } }
   val isSchedulePanelOpen = showSchedulePanel || taskToSchedule != null
 
+  val todoActionDispatcher = remember(tasks, completedTasks, completedTodayCount, context) {
+    TodoItemActionDispatcher(
+      onDuplicateTask = { task ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        val duplicate = TodoItem(
+          title = "${task.title} (Copy)",
+          notes = task.notes,
+          subtasks = task.subtasks.map { TodoSubTask(title = it.title, isCompleted = it.isCompleted) },
+          isSubtasksCollapsed = false,
+          scheduledAtMillis = task.scheduledAtMillis,
+          scheduledEndMillis = task.scheduledEndMillis,
+        )
+        applyAction(listOf(duplicate) + tasks)
+        Toast.makeText(context, "Duplicated \"${task.title}\"", Toast.LENGTH_SHORT).show()
+      },
+      onUnscheduleTask = { task ->
+        unscheduleTask(task.id)
+      },
+      onDeleteTask = { task ->
+        deleteTask(task)
+      },
+      onSaveToNotes = { task ->
+        CrossToolActions.saveTextToNotes(
+          context = context,
+          title = task.title,
+          content = formatTodoTaskPlainText(task),
+          isChecklist = task.subtasks.isNotEmpty(),
+          checklistItems = task.subtasks.map { NoteChecklistItem(text = it.title, isChecked = it.isCompleted) },
+        )
+      },
+      onCopyTask = { task ->
+        CrossToolActions.copyTextToClipboard(
+          context = context,
+          label = task.title,
+          text = formatTodoTaskPlainText(task),
+        )
+      },
+      onShareTask = { task ->
+        CrossToolActions.shareText(
+          context = context,
+          title = task.title,
+          text = formatTodoTaskPlainText(task),
+        )
+      },
+    )
+  }
+
+  CompositionLocalProvider(LocalTodoItemActions provides todoActionDispatcher) {
   Scaffold(
     modifier = modifier
       .fillMaxSize()
@@ -956,6 +1043,7 @@ fun TodoListScreen(
       )
     }
   }
+  }
 }
 
 /**
@@ -1183,6 +1271,8 @@ private fun TaskCardContent(
   var newSubtaskInput by remember { mutableStateOf("") }
   var showAddSubtaskInput by remember { mutableStateOf(false) }
   var editingSubtaskId by remember { mutableStateOf<String?>(null) }
+  var showContextMenu by remember { mutableStateOf(false) }
+  val todoActions = LocalTodoItemActions.current
   val newSubtaskFocusRequester = remember { FocusRequester() }
 
   val currentOnScheduleClick by rememberUpdatedState(onScheduleClick)
@@ -1398,8 +1488,6 @@ private fun TaskCardContent(
               .testTag("todo_edit_title"),
           )
         } else {
-          var showContextMenu by remember { mutableStateOf(false) }
-
           Column(
             modifier = Modifier
               .weight(1f)
@@ -1486,80 +1574,14 @@ private fun TaskCardContent(
                 }
               }
             }
-
-            DropdownMenu(
-              expanded = showContextMenu,
-              onDismissRequest = { showContextMenu = false },
-            ) {
-              DropdownMenuItem(
-                text = { Text(if (task.isScheduled) "Reschedule" else "Schedule") },
-                leadingIcon = {
-                  Icon(
-                    imageVector = if (task.isScheduled) Icons.Default.Update else Icons.Default.Schedule,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                  )
-                },
-                onClick = {
-                  showContextMenu = false
-                  currentOnScheduleClick()
-                },
-                modifier = Modifier.testTag("todo_menu_schedule_${task.id}"),
-              )
-              DropdownMenuItem(
-                text = { Text("Complete Task") },
-                leadingIcon = {
-                  Icon(
-                    imageVector = Icons.Default.CheckCircle,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                  )
-                },
-                onClick = {
-                  showContextMenu = false
-                  currentOnCheckboxClick()
-                },
-                modifier = Modifier.testTag("todo_menu_complete_${task.id}"),
-              )
-              DropdownMenuItem(
-                text = { Text("Save as Template") },
-                leadingIcon = {
-                  Icon(
-                    imageVector = Icons.Default.BookmarkAdd,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                  )
-                },
-                onClick = {
-                  showContextMenu = false
-                  onSaveAsTemplate()
-                },
-                modifier = Modifier.testTag("todo_menu_save_template_${task.id}"),
-              )
-            }
           }
         }
 
-        // Subtasks progress counter & Add subtask (+) button & Save as template button (when editing)
+        // Subtasks progress counter, Add subtask (+) button & MoreVert (...) menu
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp),
+          horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-          if (isEditingInline) {
-            IconButton(
-              onClick = onSaveAsTemplate,
-              modifier = Modifier
-                .size(32.dp)
-                .testTag("todo_save_template_inline_${task.id}"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.BookmarkAdd,
-                contentDescription = "Save as template",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-              )
-            }
-          }
           if (subtasksCount > 0) {
             val caretRotation by animateFloatAsState(
               targetValue = if (task.isSubtasksCollapsed) 0f else 180f,
@@ -1642,6 +1664,151 @@ private fun TaskCardContent(
               },
               modifier = Modifier.size(20.dp),
             )
+          }
+
+          Box {
+            IconButton(
+              onClick = { showContextMenu = true },
+              modifier = Modifier
+                .size(32.dp)
+                .testTag("todo_task_more_${task.id}"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = "More options for ${task.title}",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                modifier = Modifier.size(18.dp),
+              )
+            }
+
+            DropdownMenu(
+              expanded = showContextMenu,
+              onDismissRequest = { showContextMenu = false },
+              modifier = Modifier.testTag("todo_task_menu_${task.id}"),
+            ) {
+              DropdownMenuItem(
+                text = { Text("Edit Title") },
+                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                onClick = {
+                  showContextMenu = false
+                  onStartInlineEdit()
+                },
+              )
+              DropdownMenuItem(
+                text = { Text(if (task.isScheduled) "Reschedule" else "Schedule") },
+                leadingIcon = {
+                  Icon(
+                    imageVector = if (task.isScheduled) Icons.Default.Update else Icons.Default.Schedule,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = {
+                  showContextMenu = false
+                  currentOnScheduleClick()
+                },
+                modifier = Modifier.testTag("todo_menu_schedule_${task.id}"),
+              )
+              if (task.isScheduled) {
+                DropdownMenuItem(
+                  text = { Text("Unschedule") },
+                  leadingIcon = { Icon(Icons.Default.EventBusy, contentDescription = null) },
+                  onClick = {
+                    showContextMenu = false
+                    todoActions.onUnscheduleTask(task)
+                  },
+                )
+              }
+              DropdownMenuItem(
+                text = { Text("Complete Task") },
+                leadingIcon = {
+                  Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = {
+                  showContextMenu = false
+                  currentOnCheckboxClick()
+                },
+                modifier = Modifier.testTag("todo_menu_complete_${task.id}"),
+              )
+              DropdownMenuItem(
+                text = { Text("Add Subtask") },
+                leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                onClick = {
+                  showContextMenu = false
+                  if (task.isSubtasksCollapsed) {
+                    onToggleCollapseSubtasks()
+                  }
+                  showAddSubtaskInput = true
+                },
+              )
+              HorizontalDivider()
+              DropdownMenuItem(
+                text = { Text("Duplicate Task") },
+                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                onClick = {
+                  showContextMenu = false
+                  todoActions.onDuplicateTask(task)
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Save as Template") },
+                leadingIcon = {
+                  Icon(
+                    imageVector = Icons.Default.BookmarkAdd,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = {
+                  showContextMenu = false
+                  onSaveAsTemplate()
+                },
+                modifier = Modifier.testTag("todo_menu_save_template_${task.id}"),
+              )
+              DropdownMenuItem(
+                text = { Text("Save to Notes") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
+                onClick = {
+                  showContextMenu = false
+                  todoActions.onSaveToNotes(task)
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Copy") },
+                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                onClick = {
+                  showContextMenu = false
+                  todoActions.onCopyTask(task)
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Share") },
+                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                onClick = {
+                  showContextMenu = false
+                  todoActions.onShareTask(task)
+                },
+              )
+              HorizontalDivider()
+              DropdownMenuItem(
+                text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                leadingIcon = {
+                  Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                  )
+                },
+                onClick = {
+                  showContextMenu = false
+                  todoActions.onDeleteTask(task)
+                },
+              )
+            }
           }
         }
       }
@@ -2558,6 +2725,76 @@ private fun CompletedTasksListContent(
                             .rotate(caretRotation),
                         )
                       }
+                    }
+                  }
+
+                  var completedMenuExpanded by remember { mutableStateOf(false) }
+                  val completedActions = LocalTodoItemActions.current
+                  Box {
+                    IconButton(
+                      onClick = { completedMenuExpanded = true },
+                      modifier = Modifier
+                        .size(32.dp)
+                        .testTag("todo_completed_task_more_${task.id}"),
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "More options for ${task.title}",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                        modifier = Modifier.size(18.dp),
+                      )
+                    }
+                    DropdownMenu(
+                      expanded = completedMenuExpanded,
+                      onDismissRequest = { completedMenuExpanded = false },
+                    ) {
+                      DropdownMenuItem(
+                        text = { Text("Uncomplete Task") },
+                        leadingIcon = { Icon(Icons.Default.RadioButtonUnchecked, contentDescription = null) },
+                        onClick = {
+                          completedMenuExpanded = false
+                          currentOnUncompleteTask(task)
+                        },
+                      )
+                      DropdownMenuItem(
+                        text = { Text("Save to Notes") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
+                        onClick = {
+                          completedMenuExpanded = false
+                          completedActions.onSaveToNotes(task)
+                        },
+                      )
+                      DropdownMenuItem(
+                        text = { Text("Copy") },
+                        leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                        onClick = {
+                          completedMenuExpanded = false
+                          completedActions.onCopyTask(task)
+                        },
+                      )
+                      DropdownMenuItem(
+                        text = { Text("Share") },
+                        leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                        onClick = {
+                          completedMenuExpanded = false
+                          completedActions.onShareTask(task)
+                        },
+                      )
+                      HorizontalDivider()
+                      DropdownMenuItem(
+                        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = {
+                          Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                          )
+                        },
+                        onClick = {
+                          completedMenuExpanded = false
+                          currentOnRemoveCompletedTask(task)
+                        },
+                      )
                     }
                   }
                 }

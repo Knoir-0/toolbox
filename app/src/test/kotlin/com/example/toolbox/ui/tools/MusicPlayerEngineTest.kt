@@ -831,4 +831,221 @@ class MusicPlayerEngineTest {
     assertEquals(SleepTimerPreset.SIXTY_MIN, SleepTimerPreset.THIRTY_MIN.next())
     assertEquals(SleepTimerPreset.OFF, SleepTimerPreset.SIXTY_MIN.next())
   }
+
+  @Test
+  fun favoriteArtistsAlbumsAndGenres_toggleAndSerialize_andDoNotModifyDefaultFavoritesPlaylist() {
+    val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+    val artists = MusicPlayerEngine.buildArtists(tracks)
+    val albums = MusicPlayerEngine.buildAlbums(tracks)
+    val genres = MusicPlayerEngine.buildGenres(tracks)
+
+    val artist = artists.first()
+    val album = albums.first()
+    val genre = genres.first()
+
+    // 1. Toggle artist favorite
+    var favoriteArtists = emptySet<String>()
+    assertFalse(MusicPlayerEngine.isArtistFavorite(artist, favoriteArtists))
+    favoriteArtists = MusicPlayerEngine.toggleFavoriteArtist(favoriteArtists, artist)
+    assertTrue(MusicPlayerEngine.isArtistFavorite(artist, favoriteArtists))
+    assertTrue(MusicPlayerEngine.isArtistFavorite(artist.name, favoriteArtists))
+    favoriteArtists = MusicPlayerEngine.toggleFavoriteArtist(favoriteArtists, artist.name)
+    assertFalse(MusicPlayerEngine.isArtistFavorite(artist, favoriteArtists))
+
+    // 2. Toggle album favorite (uses name|artist composite key)
+    var favoriteAlbums = emptySet<String>()
+    assertFalse(MusicPlayerEngine.isAlbumFavorite(album, favoriteAlbums))
+    favoriteAlbums = MusicPlayerEngine.toggleFavoriteAlbum(favoriteAlbums, album)
+    assertTrue(MusicPlayerEngine.isAlbumFavorite(album, favoriteAlbums))
+    assertTrue(MusicPlayerEngine.isAlbumFavorite(album.name, album.artist, favoriteAlbums))
+    assertEquals("${album.name}|${album.artist}", album.key)
+    // Round-trip serialization preserves "|" inside album keys
+    val serializedAlbums = MusicPlayerEngine.serializeFavoriteSet(favoriteAlbums)
+    val deserializedAlbums = MusicPlayerEngine.deserializeFavoriteSet(serializedAlbums)
+    assertEquals(favoriteAlbums, deserializedAlbums)
+    favoriteAlbums = MusicPlayerEngine.toggleFavoriteAlbum(favoriteAlbums, album.name, album.artist)
+    assertFalse(MusicPlayerEngine.isAlbumFavorite(album, favoriteAlbums))
+
+    // 3. Toggle genre favorite
+    var favoriteGenres = emptySet<String>()
+    assertFalse(MusicPlayerEngine.isGenreFavorite(genre, favoriteGenres))
+    favoriteGenres = MusicPlayerEngine.toggleFavoriteGenre(favoriteGenres, genre)
+    assertTrue(MusicPlayerEngine.isGenreFavorite(genre, favoriteGenres))
+    assertTrue(MusicPlayerEngine.isGenreFavorite(genre.name, favoriteGenres))
+    favoriteGenres = MusicPlayerEngine.toggleFavoriteGenre(favoriteGenres, genre.name)
+    assertFalse(MusicPlayerEngine.isGenreFavorite(genre, favoriteGenres))
+
+    // 4. Favoriting artists, albums, and genres in MusicPlaybackSession does NOT add tracks to the default Favorites playlist
+    val session = MusicPlaybackSession(context = null, initialTracks = tracks)
+    session.toggleFavoriteArtist(artist.name)
+    session.toggleFavoriteAlbum(album)
+    session.toggleFavoriteGenre(genre.name)
+
+    assertTrue(session.isArtistFavorite(artist.name))
+    assertTrue(session.isAlbumFavorite(album))
+    assertTrue(session.isGenreFavorite(genre.name))
+    assertTrue(session.favoriteIds.isEmpty())
+
+    val favoritesPlaylist = MusicPlayerEngine.buildFavoritesPlaylist(session.favoriteIds, tracks)
+    assertTrue(favoritesPlaylist.tracks.isEmpty())
+
+    // Only explicitly favorited songs appear in the default Favorites playlist
+    val explicitSong = tracks.last()
+    session.toggleFavorite(explicitSong.id)
+    val updatedFavoritesPlaylist = MusicPlayerEngine.buildFavoritesPlaylist(session.favoriteIds, tracks)
+    assertEquals(listOf(explicitSong.id), updatedFavoritesPlaylist.tracks.map { it.id })
+
+    // 5. Per-tab Favorites filter state is independent across Artists, Albums, Songs, and Genres
+    assertFalse(session.showFavoriteArtistsOnly)
+    assertFalse(session.showFavoriteAlbumsOnly)
+    assertFalse(session.showFavoriteSongsOnly)
+    assertFalse(session.showFavoriteGenresOnly)
+
+    session.toggleFavoritesOnly(MusicLibraryTab.ARTISTS)
+    assertTrue(session.showFavoriteArtistsOnly)
+    assertFalse(session.showFavoriteAlbumsOnly)
+    assertFalse(session.showFavoriteSongsOnly)
+    assertFalse(session.showFavoriteGenresOnly)
+
+    session.toggleFavoritesOnly(MusicLibraryTab.ALBUMS)
+    session.toggleFavoritesOnly(MusicLibraryTab.GENRES)
+    assertTrue(session.showFavoriteArtistsOnly)
+    assertTrue(session.showFavoriteAlbumsOnly)
+    assertFalse(session.showFavoriteSongsOnly)
+    assertTrue(session.showFavoriteGenresOnly)
+
+    session.release()
+
+    // 6. Favoriting a song, artist, album, or genre cancels out the skip statistic weighting in Most Played
+    val trackLowSkips = MusicTrack(
+      id = "low_skips",
+      title = "Beta Track",
+      artist = "Artist One",
+      album = "Album One",
+      genre = "Genre One",
+      durationMs = 60_000L,
+    )
+    val trackHighSkips = MusicTrack(
+      id = "high_skips",
+      title = "Alpha Track",
+      artist = "Artist Two",
+      album = "Album Two",
+      genre = "Genre Two",
+      durationMs = 60_000L,
+    )
+    val playStats = mapOf(
+      trackLowSkips.id to TrackPlayStats(playCount = 2, totalPlayTimeMs = 60_000L, lastPlayedAtMs = 1_000L, skipCount = 1),
+      trackHighSkips.id to TrackPlayStats(playCount = 2, totalPlayTimeMs = 60_000L, lastPlayedAtMs = 1_000L, skipCount = 10),
+    )
+
+    // Without favorites, trackLowSkips ranks higher than trackHighSkips due to fewer skips
+    val unfavoredOrder = MusicPlayerEngine.buildMostPlayedPlaylist(
+      playStats = playStats,
+      allTracks = listOf(trackLowSkips, trackHighSkips),
+    ).tracks.map { it.id }
+    assertEquals(listOf(trackLowSkips.id, trackHighSkips.id), unfavoredOrder)
+
+    // When trackHighSkips is favorited by song, artist, album, or genre, its skip penalty is cancelled out
+    assertEquals(
+      listOf(trackHighSkips.id, trackLowSkips.id),
+      MusicPlayerEngine.buildMostPlayedPlaylist(
+        playStats = playStats,
+        allTracks = listOf(trackLowSkips, trackHighSkips),
+        favoriteIds = setOf(trackHighSkips.id),
+      ).tracks.map { it.id },
+    )
+    assertEquals(
+      listOf(trackHighSkips.id, trackLowSkips.id),
+      MusicPlayerEngine.buildMostPlayedPlaylist(
+        playStats = playStats,
+        allTracks = listOf(trackLowSkips, trackHighSkips),
+        favoriteArtists = setOf(trackHighSkips.artist),
+      ).tracks.map { it.id },
+    )
+    assertEquals(
+      listOf(trackHighSkips.id, trackLowSkips.id),
+      MusicPlayerEngine.buildMostPlayedPlaylist(
+        playStats = playStats,
+        allTracks = listOf(trackLowSkips, trackHighSkips),
+        favoriteAlbums = setOf("${trackHighSkips.album}|${trackHighSkips.artist}"),
+      ).tracks.map { it.id },
+    )
+    assertEquals(
+      listOf(trackHighSkips.id, trackLowSkips.id),
+      MusicPlayerEngine.buildMostPlayedPlaylist(
+        playStats = playStats,
+        allTracks = listOf(trackLowSkips, trackHighSkips),
+        favoriteGenres = setOf(trackHighSkips.genre),
+      ).tracks.map { it.id },
+    )
+  }
+
+  @Test
+  fun playbackSession_contextMenuQueuePlaylistNavigationAndFileActions_workCorrectly() {
+    val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+    val session = MusicPlaybackSession(context = null, initialTracks = tracks)
+    try {
+      val t0 = tracks[0]
+      val t1 = tracks[1]
+      val t2 = tracks[2]
+      val t3 = tracks[3]
+
+      // Start playing t0..t1
+      session.playTrackInContext(t0, listOf(t0, t1))
+      assertEquals(listOf(t0.id, t1.id), session.playbackQueue.map { it.id })
+      assertEquals(0, session.currentQueueIndex)
+
+      // Play Next inserts t2 right after current track (index 1)
+      session.playNext(listOf(t2))
+      assertEquals(listOf(t0.id, t2.id, t1.id), session.playbackQueue.map { it.id })
+
+      // Add to Queue appends t3 at the end
+      session.addToQueue(listOf(t3))
+      assertEquals(listOf(t0.id, t2.id, t1.id, t3.id), session.playbackQueue.map { it.id })
+
+      // Create playlist, add tracks, remove track, rename playlist
+      session.saveQueueAsPlaylist("Road Trip", listOf(t0, t1))
+      val created = session.savedPlaylistEntries.firstOrNull { it.name == "Road Trip" }
+      assertNotNull(created)
+      val playlistId = created!!.id
+      val addedOk = session.addTracksToPlaylist(playlistId, listOf(t1, t2))
+      assertTrue(addedOk)
+      assertEquals(listOf(t0.id, t1.id, t2.id), session.savedPlaylistEntries.first { it.id == playlistId }.trackIds)
+
+      val removedOk = session.removeTrackFromPlaylist(playlistId, t1.id)
+      assertTrue(removedOk)
+      assertEquals(listOf(t0.id, t2.id), session.savedPlaylistEntries.first { it.id == playlistId }.trackIds)
+
+      val renamedOk = session.renamePlaylist(playlistId, "Evening Drive")
+      assertTrue(renamedOk)
+      assertEquals("Evening Drive", session.savedPlaylistEntries.first { it.id == playlistId }.name)
+
+      // Navigation helpers
+      session.navigateToArtist(t0.artist)
+      assertEquals(MusicLibraryTab.ARTISTS, session.selectedTab)
+      assertEquals(t0.artist, session.selectedArtistName)
+
+      val albumKey = "${t0.album}|${t0.artist}"
+      session.navigateToAlbum(albumKey)
+      assertEquals(MusicLibraryTab.ALBUMS, session.selectedTab)
+      assertEquals(albumKey, session.selectedAlbumKey)
+
+      // Duplicate, rename, and delete track
+      val initialCount = session.allTracks.size
+      val duplicated = session.duplicateTrack(t0)
+      assertEquals(initialCount + 1, session.allTracks.size)
+      assertTrue(duplicated.title.contains(t0.title))
+
+      val renamedTrack = session.renameTrack(duplicated, "Neon Horizon Remix")
+      assertNotNull(renamedTrack)
+      assertEquals("Neon Horizon Remix", renamedTrack!!.title)
+      assertTrue(session.allTracks.any { it.title == "Neon Horizon Remix" })
+
+      session.deleteTrack(renamedTrack)
+      assertEquals(initialCount, session.allTracks.size)
+      assertFalse(session.allTracks.any { it.id == renamedTrack.id })
+    } finally {
+      session.release()
+    }
+  }
 }

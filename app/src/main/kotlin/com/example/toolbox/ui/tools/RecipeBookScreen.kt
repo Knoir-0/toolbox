@@ -1,5 +1,6 @@
 package com.example.toolbox.ui.tools
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
@@ -45,12 +46,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BakeryDining
 import androidx.compose.material.icons.filled.BreakfastDining
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DinnerDining
 import androidx.compose.material.icons.filled.Edit
@@ -65,6 +69,7 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.RestaurantMenu
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SoupKitchen
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
@@ -93,7 +98,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -132,6 +139,33 @@ fun RecipeCategory.icon(): ImageVector = when (this) {
     RecipeCategory.SIDES_AND_SNACKS -> Icons.Default.LunchDining
     RecipeCategory.BAKING_AND_DESSERTS -> Icons.Default.BakeryDining
     RecipeCategory.SAUCES_AND_DRINKS -> Icons.Default.LocalCafe
+}
+
+internal class RecipeCardActionDispatcher(
+    val onDuplicateRecipe: (RecipeItem) -> Unit = {},
+    val onAddIngredientsToTodo: (RecipeItem) -> Unit = {},
+    val onSaveRecipeToNotes: (RecipeItem) -> Unit = {},
+    val onCopyRecipe: (RecipeItem) -> Unit = {},
+    val onShareRecipe: (RecipeItem) -> Unit = {},
+)
+
+internal val LocalRecipeCardActions = compositionLocalOf { RecipeCardActionDispatcher() }
+
+private fun formatRecipePlainText(recipe: RecipeItem): String {
+    return buildString {
+        appendLine(recipe.name)
+        appendLine("${recipe.subtitle} • ${recipe.category.displayName} • ${recipe.formattedTotalTime()} • ${recipe.servings} servings")
+        appendLine()
+        appendLine("Ingredients:")
+        recipe.ingredients.forEach { ing ->
+            appendLine("• $ing")
+        }
+        appendLine()
+        appendLine("Instructions:")
+        recipe.instructions.forEachIndexed { idx, step ->
+            appendLine("${idx + 1}. $step")
+        }
+    }.trim()
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -234,6 +268,53 @@ fun RecipeBookScreen(
         }
     }
 
+    val recipeCardDispatcher = remember(savedRecipes, customCatalog, context) {
+        RecipeCardActionDispatcher(
+            onDuplicateRecipe = { recipe ->
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                val copy = recipe.copy(
+                    id = "custom_${java.util.UUID.randomUUID()}",
+                    name = "${recipe.name} (Copy)",
+                    isCustom = true,
+                )
+                persistCustomCatalog(customCatalog + copy)
+                persistSaved(RecipeBookEngine.addRecipeToBook(savedRecipes, copy))
+                Toast.makeText(context, "Duplicated \"${recipe.name}\"", Toast.LENGTH_SHORT).show()
+            },
+            onAddIngredientsToTodo = { recipe ->
+                CrossToolActions.saveTaskToTodoList(
+                    context = context,
+                    title = "Ingredients for ${recipe.name}",
+                    notes = "${recipe.category.displayName} • ${recipe.servings} servings",
+                    subtasks = recipe.ingredients,
+                )
+            },
+            onSaveRecipeToNotes = { recipe ->
+                CrossToolActions.saveTextToNotes(
+                    context = context,
+                    title = recipe.name,
+                    content = formatRecipePlainText(recipe),
+                    labels = listOf("Recipes"),
+                )
+            },
+            onCopyRecipe = { recipe ->
+                CrossToolActions.copyTextToClipboard(
+                    context = context,
+                    label = recipe.name,
+                    text = formatRecipePlainText(recipe),
+                )
+            },
+            onShareRecipe = { recipe ->
+                CrossToolActions.shareText(
+                    context = context,
+                    title = recipe.name,
+                    text = formatRecipePlainText(recipe),
+                )
+            },
+        )
+    }
+
+    CompositionLocalProvider(LocalRecipeCardActions provides recipeCardDispatcher) {
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -819,6 +900,7 @@ fun RecipeBookScreen(
             }
         )
     }
+    }
 }
 
 @Composable
@@ -1186,6 +1268,7 @@ private fun CatalogRecipeResultCard(
                             shape = RoundedCornerShape(16.dp),
                             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
                         ) {
+                            val recipeActions = LocalRecipeCardActions.current
                             DropdownMenuItem(
                                 text = { Text("Info") },
                                 leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
@@ -1225,6 +1308,47 @@ private fun CatalogRecipeResultCard(
                                 onClick = {
                                     showMenu = false
                                     onToggle()
+                                }
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("Duplicate as Custom Recipe") },
+                                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                                onClick = {
+                                    showMenu = false
+                                    recipeActions.onDuplicateRecipe(recipe)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Add Ingredients to To Do") },
+                                leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) },
+                                onClick = {
+                                    showMenu = false
+                                    recipeActions.onAddIngredientsToTodo(recipe)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Save Recipe to Notes") },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
+                                onClick = {
+                                    showMenu = false
+                                    recipeActions.onSaveRecipeToNotes(recipe)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Copy Recipe") },
+                                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                                onClick = {
+                                    showMenu = false
+                                    recipeActions.onCopyRecipe(recipe)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Share") },
+                                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                                onClick = {
+                                    showMenu = false
+                                    recipeActions.onShareRecipe(recipe)
                                 }
                             )
                         }
@@ -1600,6 +1724,7 @@ private fun SavedRecipeCard(
                             shape = RoundedCornerShape(16.dp),
                             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
                         ) {
+                            val recipeActions = LocalRecipeCardActions.current
                             DropdownMenuItem(
                                 text = { Text("Cook") },
                                 leadingIcon = {
@@ -1608,6 +1733,19 @@ private fun SavedRecipeCard(
                                 onClick = {
                                     showOverflow = false
                                     onClick()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (recipe.isFavorite) "Remove from Favorites" else "Add to Favorites") },
+                                leadingIcon = {
+                                    Icon(
+                                        if (recipe.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                                        contentDescription = null
+                                    )
+                                },
+                                onClick = {
+                                    showOverflow = false
+                                    onToggleFavorite()
                                 }
                             )
                             DropdownMenuItem(
@@ -1620,6 +1758,58 @@ private fun SavedRecipeCard(
                                     onEdit()
                                 }
                             )
+                            DropdownMenuItem(
+                                text = { Text("Duplicate Recipe") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = null)
+                                },
+                                onClick = {
+                                    showOverflow = false
+                                    recipeActions.onDuplicateRecipe(recipe)
+                                }
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("Add Ingredients to To Do") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Checklist, contentDescription = null)
+                                },
+                                onClick = {
+                                    showOverflow = false
+                                    recipeActions.onAddIngredientsToTodo(recipe)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Save Recipe to Notes") },
+                                leadingIcon = {
+                                    Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null)
+                                },
+                                onClick = {
+                                    showOverflow = false
+                                    recipeActions.onSaveRecipeToNotes(recipe)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Copy Recipe") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = null)
+                                },
+                                onClick = {
+                                    showOverflow = false
+                                    recipeActions.onCopyRecipe(recipe)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Share") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Share, contentDescription = null)
+                                },
+                                onClick = {
+                                    showOverflow = false
+                                    recipeActions.onShareRecipe(recipe)
+                                }
+                            )
+                            HorizontalDivider()
                             DropdownMenuItem(
                                 text = { Text("Remove") },
                                 leadingIcon = {

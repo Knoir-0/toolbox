@@ -1,6 +1,8 @@
 package com.example.toolbox.ui.tools
 
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -70,11 +72,13 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
@@ -87,15 +91,19 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FileCopy
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FolderShared
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SdCard
@@ -189,6 +197,12 @@ fun FilesScreen(
   onOpenAudioEditor: ((File) -> Unit)? = null,
   onOpenArchive: ((File) -> Unit)? = null,
   onOpenPdfViewer: ((File) -> Unit)? = null,
+  onOpenMusicPlayer: ((File) -> Unit)? = null,
+  onOpenGallery: ((File) -> Unit)? = null,
+  onOpenColorPicker: ((String) -> Unit)? = null,
+  onOpenNotes: ((File) -> Unit)? = null,
+  onOpenTodoList: ((File) -> Unit)? = null,
+  onNavigateBack: (() -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
@@ -472,8 +486,19 @@ fun FilesScreen(
   var fileForVideoEditor by remember { mutableStateOf<File?>(null) }
   var fileForAudioEditor by remember { mutableStateOf<File?>(null) }
   var fileForArchive by remember { mutableStateOf<File?>(null) }
+  var filesForArchiveCompression by remember { mutableStateOf<List<File>?>(null) }
   var fileForPdfViewer by remember { mutableStateOf<File?>(null) }
+  var fileForMusicPlayer by remember { mutableStateOf<File?>(null) }
+  var fileForGallery by remember { mutableStateOf<File?>(null) }
+  var colorHexForColorPicker by remember { mutableStateOf<String?>(null) }
   var showSortMenu by remember { mutableStateOf(false) }
+
+  val previewIndexCacheFile = remember(context, isInspection) {
+    if (isInspection) null else GalleryEngine.getDefaultIndexCacheFile(context)
+  }
+  var previewPhotoIndexMap by remember {
+    mutableStateOf(GalleryEngine.loadIndexCacheFromDisk(previewIndexCacheFile))
+  }
 
   // Multi-selection state
   var isSelectionMode by rememberSaveable { mutableStateOf(false) }
@@ -512,9 +537,16 @@ fun FilesScreen(
   }
 
   fun navigateUp(): Boolean {
-    val parent = FileManagerEngine.navigateUpDirectory(currentDirectory, activeRoot) ?: return false
-    navigateTo(parent)
-    return true
+    val parent = FileManagerEngine.navigateUpDirectory(currentDirectory, activeRoot)
+    if (parent != null) {
+      navigateTo(parent)
+      return true
+    }
+    if (onNavigateBack != null) {
+      onNavigateBack()
+      return true
+    }
+    return false
   }
 
   fun openFile(file: File, chooseApp: Boolean = false) {
@@ -542,6 +574,69 @@ fun FilesScreen(
     } catch (e: Exception) {
       Toast.makeText(context, "Could not share file: ${e.message}", Toast.LENGTH_SHORT).show()
     }
+  }
+
+  fun shareMultipleItems(filesToShare: List<File>) {
+    val resolvedFiles = FileManagerEngine.collectShareableFiles(filesToShare)
+    if (resolvedFiles.isEmpty()) {
+      Toast.makeText(context, "No files to share", Toast.LENGTH_SHORT).show()
+    } else if (resolvedFiles.size == 1) {
+      shareFile(resolvedFiles.first())
+    } else {
+      try {
+        val uris = ArrayList<Uri>(resolvedFiles.size)
+        for (f in resolvedFiles) {
+          uris.add(
+            FileProvider.getUriForFile(
+              context,
+              "${context.packageName}.fileprovider",
+              f,
+            )
+          )
+        }
+        val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+          type = "*/*"
+          putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(shareIntent, "Share ${resolvedFiles.size} files"))
+      } catch (e: Exception) {
+        Toast.makeText(context, "Could not share files: ${e.message}", Toast.LENGTH_SHORT).show()
+      }
+    }
+  }
+
+  fun saveFileToNotes(file: File) {
+    val repo = SharedPreferencesNotesRepository(context)
+    val imported = FileManagerEngine.importFileToNotes(file, repo)
+    if (imported != null) {
+      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+      onOpenNotes?.invoke(file)
+      Toast.makeText(context, "Saved \"${imported.title}\" to Notes", Toast.LENGTH_SHORT).show()
+    } else {
+      Toast.makeText(context, "Could not import ${file.name} to Notes", Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  fun importFileToTodo(file: File) {
+    val repo = SharedPreferencesTodoListRepository(context)
+    val imported = FileManagerEngine.importFileToTodoList(file, repo)
+    if (imported != null) {
+      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+      onOpenTodoList?.invoke(file)
+      val subCount = imported.subtasks.size
+      val detail = if (subCount > 0) " ($subCount items)" else ""
+      Toast.makeText(context, "Imported \"${imported.title}\"$detail to To Do", Toast.LENGTH_SHORT).show()
+    } else {
+      Toast.makeText(context, "Could not import ${file.name} to To Do", Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  fun inspectImageColor(file: File) {
+    val hex = FileManagerEngine.extractDominantColorHex(file) ?: "#10B981"
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    colorHexForColorPicker = hex
+    onOpenColorPicker?.invoke(hex)
   }
 
   val activeConverterFile = fileForConverter
@@ -613,6 +708,20 @@ fun FilesScreen(
     return
   }
 
+  val activeCompressionFiles = filesForArchiveCompression
+  if (!activeCompressionFiles.isNullOrEmpty()) {
+    ArchiveScreen(
+      modifier = modifier,
+      initialFilesToCompress = activeCompressionFiles,
+      initialDirectory = currentDirectory,
+      onNavigateBack = {
+        filesForArchiveCompression = null
+        refreshTrigger++
+      },
+    )
+    return
+  }
+
   val activePdfViewerFile = fileForPdfViewer
   if (activePdfViewerFile != null) {
     PdfViewerScreen(
@@ -627,7 +736,54 @@ fun FilesScreen(
     return
   }
 
-  val canGoUp = canNavigateUp()
+  val activeMusicFile = fileForMusicPlayer
+  if (activeMusicFile != null) {
+    val isDir = activeMusicFile.isDirectory
+    MusicPlayerScreen(
+      modifier = modifier,
+      initialFile = if (isDir) null else activeMusicFile,
+      initialDirectory = if (isDir) activeMusicFile else (activeMusicFile.parentFile ?: currentDirectory),
+      initialTab = MusicLibraryTab.SONGS,
+      onNavigateBack = {
+        fileForMusicPlayer = null
+        refreshTrigger++
+      },
+    )
+    return
+  }
+
+  val activeGalleryTarget = fileForGallery
+  if (activeGalleryTarget != null) {
+    val isDir = activeGalleryTarget.isDirectory
+    val targetAlbumDir = if (isDir) activeGalleryTarget else (activeGalleryTarget.parentFile ?: currentDirectory)
+    GalleryScreen(
+      modifier = modifier,
+      rootDirectory = targetAlbumDir,
+      initialAlbumDirectory = targetAlbumDir,
+      initialPhotoFile = if (isDir) null else activeGalleryTarget,
+      onNavigateBack = {
+        fileForGallery = null
+        refreshTrigger++
+      },
+      onOpenImageEditor = onOpenImageEditor,
+      onOpenVideoEditor = onOpenVideoEditor,
+    )
+    return
+  }
+
+  val activeColorHex = colorHexForColorPicker
+  if (activeColorHex != null) {
+    ColorPickerScreen(
+      modifier = modifier,
+      initialHexColor = activeColorHex,
+      onNavigateBack = {
+        colorHexForColorPicker = null
+      },
+    )
+    return
+  }
+
+  val canGoUp = canNavigateUp() || onNavigateBack != null
 
   BackHandler(enabled = isFabExpanded || isSelectionMode || isSearchActive || canGoUp) {
     when {
@@ -728,7 +884,7 @@ fun FilesScreen(
           viewMode = if (viewMode == FileViewMode.LIST) FileViewMode.GRID else FileViewMode.LIST
         },
         onNavigateUp = { navigateUp() },
-        canNavigateUp = canNavigateUp(),
+        canNavigateUp = canNavigateUp() || onNavigateBack != null,
         singleSelectedFolder = if (selectedItems.size == 1 && selectedItems.first().isDirectory) selectedItems.first().file else null,
         singleSelectedFile = if (selectedItems.size == 1 && !selectedItems.first().isDirectory) selectedItems.first().file else null,
         onOpenSelectedFile = { file, chooseApp ->
@@ -771,6 +927,50 @@ fun FilesScreen(
           selectedPaths = emptySet()
           fileForPdfViewer = file
           onOpenPdfViewer?.invoke(file)
+        },
+        onPlaySelectedMusic = { file ->
+          isSelectionMode = false
+          selectedPaths = emptySet()
+          fileForMusicPlayer = file
+          onOpenMusicPlayer?.invoke(file)
+        },
+        onOpenSelectedGallery = { file ->
+          isSelectionMode = false
+          selectedPaths = emptySet()
+          fileForGallery = file
+          onOpenGallery?.invoke(file)
+        },
+        onInspectSelectedColor = { file ->
+          isSelectionMode = false
+          selectedPaths = emptySet()
+          inspectImageColor(file)
+        },
+        onSaveSelectedToNotes = { file ->
+          isSelectionMode = false
+          selectedPaths = emptySet()
+          saveFileToNotes(file)
+        },
+        onImportSelectedToTodo = { file ->
+          isSelectionMode = false
+          selectedPaths = emptySet()
+          importFileToTodo(file)
+        },
+        onBulkShare = {
+          if (selectedItems.isNotEmpty()) {
+            val files = selectedItems.map { it.file }
+            isSelectionMode = false
+            selectedPaths = emptySet()
+            shareMultipleItems(files)
+          }
+        },
+        onCompressSelectedItems = {
+          if (selectedItems.isNotEmpty()) {
+            val files = selectedItems.map { it.file }
+            isSelectionMode = false
+            selectedPaths = emptySet()
+            filesForArchiveCompression = files
+            files.firstOrNull()?.let { onOpenArchive?.invoke(it) }
+          }
         },
         onAddFolderToHomeScreen = { folder -> addFolderToHomeScreen(context, folder, themeColor) },
       )
@@ -985,9 +1185,42 @@ fun FilesScreen(
                           fileForPdfViewer = item.file
                           onOpenPdfViewer?.invoke(item.file)
                         },
+                        onPlayMusic = {
+                          fileForMusicPlayer = item.file
+                          onOpenMusicPlayer?.invoke(item.file)
+                        },
+                        onOpenGallery = {
+                          fileForGallery = item.file
+                          onOpenGallery?.invoke(item.file)
+                        },
+                        onInspectColor = {
+                          inspectImageColor(item.file)
+                        },
+                        onSaveToNotes = {
+                          saveFileToNotes(item.file)
+                        },
+                        onImportToTodo = {
+                          importFileToTodo(item.file)
+                        },
                         onOpenText = { fileForTextEdit = item },
                         onOpenImage = { fileForImagePreview = item },
-                        onShare = { shareFile(item.file) },
+                        onShare = {
+                          if (item.isDirectory) {
+                            shareMultipleItems(listOf(item.file))
+                          } else {
+                            shareFile(item.file)
+                          }
+                        },
+                        onCut = {
+                          clipboardState = ClipboardState(ClipboardOperation.CUT, listOf(item))
+                          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                          Toast.makeText(context, "\"${item.name}\" cut", Toast.LENGTH_SHORT).show()
+                        },
+                        onCopy = {
+                          clipboardState = ClipboardState(ClipboardOperation.COPY, listOf(item))
+                          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                          Toast.makeText(context, "\"${item.name}\" copied", Toast.LENGTH_SHORT).show()
+                        },
                         onDuplicate = {
                           FileManagerEngine.duplicateFile(item.file)
                           refreshTrigger++
@@ -1106,9 +1339,42 @@ fun FilesScreen(
                         fileForPdfViewer = item.file
                         onOpenPdfViewer?.invoke(item.file)
                       },
+                      onPlayMusic = {
+                        fileForMusicPlayer = item.file
+                        onOpenMusicPlayer?.invoke(item.file)
+                      },
+                      onOpenGallery = {
+                        fileForGallery = item.file
+                        onOpenGallery?.invoke(item.file)
+                      },
+                      onInspectColor = {
+                        inspectImageColor(item.file)
+                      },
+                      onSaveToNotes = {
+                        saveFileToNotes(item.file)
+                      },
+                      onImportToTodo = {
+                        importFileToTodo(item.file)
+                      },
                       onOpenText = { fileForTextEdit = item },
                       onOpenImage = { fileForImagePreview = item },
-                      onShare = { shareFile(item.file) },
+                      onShare = {
+                        if (item.isDirectory) {
+                          shareMultipleItems(listOf(item.file))
+                        } else {
+                          shareFile(item.file)
+                        }
+                      },
+                      onCut = {
+                        clipboardState = ClipboardState(ClipboardOperation.CUT, listOf(item))
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        Toast.makeText(context, "\"${item.name}\" cut", Toast.LENGTH_SHORT).show()
+                      },
+                      onCopy = {
+                        clipboardState = ClipboardState(ClipboardOperation.COPY, listOf(item))
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        Toast.makeText(context, "\"${item.name}\" copied", Toast.LENGTH_SHORT).show()
+                      },
                       onDuplicate = {
                         FileManagerEngine.duplicateFile(item.file)
                         refreshTrigger++
@@ -1423,10 +1689,65 @@ fun FilesScreen(
     }
 
     fileForImagePreview?.let { item ->
-      ImageViewerDialog(
-        file = item.file,
+      val siblingPhotos = remember(processedItems, item.path) {
+        val mediaItems = processedItems.filter {
+          !it.isDirectory && (FileManagerEngine.isImageFile(it.file) || VideoEditorEngine.isVideoFile(it.file))
+        }.map { mediaItem ->
+          GalleryPhoto(
+            file = mediaItem.file,
+            name = mediaItem.name,
+            path = mediaItem.path,
+            sizeBytes = mediaItem.sizeBytes,
+            lastModifiedMs = mediaItem.lastModifiedMs,
+            extension = mediaItem.extension.lowercase(Locale.ROOT),
+          )
+        }
+        val initialPhoto = GalleryPhoto(
+          file = item.file,
+          name = item.name,
+          path = item.path,
+          sizeBytes = item.sizeBytes,
+          lastModifiedMs = item.lastModifiedMs,
+          extension = item.extension.lowercase(Locale.ROOT),
+        )
+        if (mediaItems.any { it.path == initialPhoto.path }) {
+          mediaItems
+        } else {
+          listOf(initialPhoto) + mediaItems
+        }
+      }
+      val initialGalleryPhoto = remember(item.path) {
+        GalleryPhoto(
+          file = item.file,
+          name = item.name,
+          path = item.path,
+          sizeBytes = item.sizeBytes,
+          lastModifiedMs = item.lastModifiedMs,
+          extension = item.extension.lowercase(Locale.ROOT),
+        )
+      }
+      GalleryPhotoViewerDialog(
+        photos = siblingPhotos,
+        initialPhoto = initialGalleryPhoto,
+        photoIndexMap = previewPhotoIndexMap,
+        onPhotoIndexed = { entry ->
+          previewPhotoIndexMap = previewPhotoIndexMap + (entry.path to entry)
+          if (!isInspection) {
+            GalleryEngine.saveIndexCacheToDisk(previewIndexCacheFile, previewPhotoIndexMap)
+          }
+        },
         onDismiss = { fileForImagePreview = null },
-        onShare = { shareFile(item.file) },
+        onEdit = { photo ->
+          fileForImagePreview = null
+          if (photo.isVideo) {
+            fileForVideoEditor = photo.file
+            onOpenVideoEditor?.invoke(photo.file)
+          } else {
+            fileForImageEditor = photo.file
+            onOpenImageEditor?.invoke(photo.file)
+          }
+        },
+        onShare = { photo -> shareFile(photo.file) },
       )
     }
 
@@ -1490,6 +1811,13 @@ private fun FilesHeader(
   onEditSelectedAudio: ((File) -> Unit)? = null,
   onOpenSelectedArchive: ((File) -> Unit)? = null,
   onOpenSelectedPdf: ((File) -> Unit)? = null,
+  onPlaySelectedMusic: ((File) -> Unit)? = null,
+  onOpenSelectedGallery: ((File) -> Unit)? = null,
+  onInspectSelectedColor: ((File) -> Unit)? = null,
+  onSaveSelectedToNotes: ((File) -> Unit)? = null,
+  onImportSelectedToTodo: ((File) -> Unit)? = null,
+  onBulkShare: () -> Unit = {},
+  onCompressSelectedItems: () -> Unit = {},
   onAddFolderToHomeScreen: ((File) -> Unit)? = null,
 ) {
   ToolboxTopBar(
@@ -1631,6 +1959,16 @@ private fun FilesHeader(
                   onBulkCopy()
                 },
               )
+              DropdownMenuItem(
+                text = { Text("Share") },
+                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkShare()
+                },
+                modifier = Modifier.testTag("action_selection_share"),
+              )
               if (singleSelectedFile != null && onOpenSelectedFile != null) {
                 DropdownMenuItem(
                   text = { Text("Open with…") },
@@ -1668,6 +2006,16 @@ private fun FilesHeader(
                   },
                   modifier = Modifier.testTag("action_selection_open_archive"),
                 )
+              } else if (hasSelection) {
+                DropdownMenuItem(
+                  text = { Text("Archives") },
+                  leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    onCompressSelectedItems()
+                  },
+                  modifier = Modifier.testTag("action_selection_open_archive"),
+                )
               }
               if (singleSelectedFile != null && onOpenSelectedPdf != null && FileManagerEngine.isPdfFile(singleSelectedFile)) {
                 DropdownMenuItem(
@@ -1679,6 +2027,63 @@ private fun FilesHeader(
                   },
                   modifier = Modifier.testTag("action_selection_open_pdf"),
                 )
+              }
+              if (singleSelectedFile != null && onPlaySelectedMusic != null && FileManagerEngine.isAudioFile(singleSelectedFile) && !VideoEditorEngine.isVideoFile(singleSelectedFile)) {
+                DropdownMenuItem(
+                  text = { Text("Play in Music") },
+                  leadingIcon = { Icon(Icons.Default.Headphones, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    onPlaySelectedMusic(singleSelectedFile)
+                  },
+                  modifier = Modifier.testTag("action_selection_play_music"),
+                )
+              }
+              if (singleSelectedFile != null && onOpenSelectedGallery != null && (FileManagerEngine.isImageFile(singleSelectedFile) || VideoEditorEngine.isVideoFile(singleSelectedFile))) {
+                DropdownMenuItem(
+                  text = { Text("Open in Gallery") },
+                  leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    onOpenSelectedGallery(singleSelectedFile)
+                  },
+                  modifier = Modifier.testTag("action_selection_open_gallery"),
+                )
+              }
+              if (singleSelectedFile != null && onInspectSelectedColor != null && FileManagerEngine.isImageFile(singleSelectedFile)) {
+                DropdownMenuItem(
+                  text = { Text("Inspect Color") },
+                  leadingIcon = { Icon(Icons.Default.Palette, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    onInspectSelectedColor(singleSelectedFile)
+                  },
+                  modifier = Modifier.testTag("action_selection_inspect_color"),
+                )
+              }
+              if (singleSelectedFile != null && FileManagerEngine.isTextFile(singleSelectedFile)) {
+                if (onSaveSelectedToNotes != null) {
+                  DropdownMenuItem(
+                    text = { Text("Save to Notes") },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.StickyNote2, contentDescription = null) },
+                    onClick = {
+                      showOverflowMenu = false
+                      onSaveSelectedToNotes(singleSelectedFile)
+                    },
+                    modifier = Modifier.testTag("action_selection_save_to_notes"),
+                  )
+                }
+                if (onImportSelectedToTodo != null) {
+                  DropdownMenuItem(
+                    text = { Text("Import to To Do") },
+                    leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) },
+                    onClick = {
+                      showOverflowMenu = false
+                      onImportSelectedToTodo(singleSelectedFile)
+                    },
+                    modifier = Modifier.testTag("action_selection_import_to_todo"),
+                  )
+                }
               }
               if (singleSelectedFile != null && onEditSelectedImage != null && FileManagerEngine.isImageFile(singleSelectedFile)) {
                 DropdownMenuItem(
@@ -1709,6 +2114,28 @@ private fun FilesHeader(
                     onEditSelectedAudio(singleSelectedFile)
                   },
                   modifier = Modifier.testTag("action_selection_edit_audio"),
+                )
+              }
+              if (singleSelectedFolder != null && onOpenSelectedGallery != null) {
+                DropdownMenuItem(
+                  text = { Text("Open in Gallery") },
+                  leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    onOpenSelectedGallery(singleSelectedFolder)
+                  },
+                  modifier = Modifier.testTag("action_selection_open_gallery"),
+                )
+              }
+              if (singleSelectedFolder != null && onPlaySelectedMusic != null) {
+                DropdownMenuItem(
+                  text = { Text("Open in Music") },
+                  leadingIcon = { Icon(Icons.Default.Headphones, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    onPlaySelectedMusic(singleSelectedFolder)
+                  },
+                  modifier = Modifier.testTag("action_selection_open_music"),
                 )
               }
               if (singleSelectedFolder != null && onAddFolderToHomeScreen != null) {
@@ -2240,9 +2667,16 @@ private fun FileListItem(
   onEditAudio: () -> Unit = {},
   onOpenArchive: () -> Unit = {},
   onOpenPdf: () -> Unit = {},
+  onPlayMusic: () -> Unit = {},
+  onOpenGallery: () -> Unit = {},
+  onInspectColor: () -> Unit = {},
+  onSaveToNotes: () -> Unit = {},
+  onImportToTodo: () -> Unit = {},
   onOpenText: () -> Unit,
   onOpenImage: () -> Unit,
   onShare: () -> Unit,
+  onCut: () -> Unit = {},
+  onCopy: () -> Unit = {},
   onDuplicate: () -> Unit,
   onRename: () -> Unit,
   onDetails: () -> Unit,
@@ -2377,6 +2811,26 @@ private fun FileListItem(
               showMenu = false
               onOpenPdf()
             },
+            onPlayMusic = {
+              showMenu = false
+              onPlayMusic()
+            },
+            onOpenGallery = {
+              showMenu = false
+              onOpenGallery()
+            },
+            onInspectColor = {
+              showMenu = false
+              onInspectColor()
+            },
+            onSaveToNotes = {
+              showMenu = false
+              onSaveToNotes()
+            },
+            onImportToTodo = {
+              showMenu = false
+              onImportToTodo()
+            },
             onOpenText = {
               showMenu = false
               onOpenText()
@@ -2388,6 +2842,14 @@ private fun FileListItem(
             onShare = {
               showMenu = false
               onShare()
+            },
+            onCut = {
+              showMenu = false
+              onCut()
+            },
+            onCopy = {
+              showMenu = false
+              onCopy()
             },
             onDuplicate = {
               showMenu = false
@@ -2433,9 +2895,16 @@ private fun FileGridItem(
   onEditAudio: () -> Unit = {},
   onOpenArchive: () -> Unit = {},
   onOpenPdf: () -> Unit = {},
+  onPlayMusic: () -> Unit = {},
+  onOpenGallery: () -> Unit = {},
+  onInspectColor: () -> Unit = {},
+  onSaveToNotes: () -> Unit = {},
+  onImportToTodo: () -> Unit = {},
   onOpenText: () -> Unit = {},
   onOpenImage: () -> Unit = {},
   onShare: () -> Unit,
+  onCut: () -> Unit = {},
+  onCopy: () -> Unit = {},
   onDuplicate: () -> Unit,
   onRename: () -> Unit,
   onDetails: () -> Unit,
@@ -2568,6 +3037,26 @@ private fun FileGridItem(
               showMenu = false
               onOpenPdf()
             },
+            onPlayMusic = {
+              showMenu = false
+              onPlayMusic()
+            },
+            onOpenGallery = {
+              showMenu = false
+              onOpenGallery()
+            },
+            onInspectColor = {
+              showMenu = false
+              onInspectColor()
+            },
+            onSaveToNotes = {
+              showMenu = false
+              onSaveToNotes()
+            },
+            onImportToTodo = {
+              showMenu = false
+              onImportToTodo()
+            },
             onOpenText = {
               showMenu = false
               onOpenText()
@@ -2579,6 +3068,14 @@ private fun FileGridItem(
             onShare = {
               showMenu = false
               onShare()
+            },
+            onCut = {
+              showMenu = false
+              onCut()
+            },
+            onCopy = {
+              showMenu = false
+              onCopy()
             },
             onDuplicate = {
               showMenu = false
@@ -2648,9 +3145,16 @@ private fun FileActionMenu(
   onEditAudio: () -> Unit = {},
   onOpenArchive: () -> Unit = {},
   onOpenPdf: () -> Unit = {},
+  onPlayMusic: () -> Unit = {},
+  onOpenGallery: () -> Unit = {},
+  onInspectColor: () -> Unit = {},
+  onSaveToNotes: () -> Unit = {},
+  onImportToTodo: () -> Unit = {},
   onOpenText: () -> Unit,
   onOpenImage: () -> Unit,
   onShare: () -> Unit,
+  onCut: () -> Unit = {},
+  onCopy: () -> Unit = {},
   onDuplicate: () -> Unit,
   onRename: () -> Unit,
   onDetails: () -> Unit,
@@ -2705,12 +3209,37 @@ private fun FileActionMenu(
           onClick = onOpenImage,
           modifier = Modifier.testTag("action_preview_image"),
         )
+        DropdownMenuItem(
+          text = { Text("Open in Gallery") },
+          leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
+          onClick = onOpenGallery,
+          modifier = Modifier.testTag("action_open_gallery"),
+        )
+        DropdownMenuItem(
+          text = { Text("Inspect Color") },
+          leadingIcon = { Icon(Icons.Default.Palette, contentDescription = null) },
+          onClick = onInspectColor,
+          modifier = Modifier.testTag("action_inspect_color"),
+        )
       } else if (AudioEditorEngine.isSupportedAudioFile(item.file) && !VideoEditorEngine.isVideoFile(item.file)) {
+        DropdownMenuItem(
+          text = { Text("Play in Music") },
+          leadingIcon = { Icon(Icons.Default.Headphones, contentDescription = null) },
+          onClick = onPlayMusic,
+          modifier = Modifier.testTag("action_play_music"),
+        )
         DropdownMenuItem(
           text = { Text("Edit") },
           leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
           onClick = onEditAudio,
           modifier = Modifier.testTag("action_edit_audio"),
+        )
+      } else if (FileManagerEngine.isAudioFile(item.file) && !VideoEditorEngine.isVideoFile(item.file)) {
+        DropdownMenuItem(
+          text = { Text("Play in Music") },
+          leadingIcon = { Icon(Icons.Default.Headphones, contentDescription = null) },
+          onClick = onPlayMusic,
+          modifier = Modifier.testTag("action_play_music"),
         )
       } else if (VideoEditorEngine.isVideoFile(item.file)) {
         DropdownMenuItem(
@@ -2719,6 +3248,12 @@ private fun FileActionMenu(
           onClick = onEditVideo,
           modifier = Modifier.testTag("action_edit_video"),
         )
+        DropdownMenuItem(
+          text = { Text("Open in Gallery") },
+          leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
+          onClick = onOpenGallery,
+          modifier = Modifier.testTag("action_open_gallery"),
+        )
       } else if (FileManagerEngine.isTextFile(item.file)) {
         DropdownMenuItem(
           text = { Text("Edit / View") },
@@ -2726,30 +3261,40 @@ private fun FileActionMenu(
           onClick = onOpenText,
           modifier = Modifier.testTag("action_edit_text"),
         )
+        DropdownMenuItem(
+          text = { Text("Save to Notes") },
+          leadingIcon = { Icon(Icons.AutoMirrored.Filled.StickyNote2, contentDescription = null) },
+          onClick = onSaveToNotes,
+          modifier = Modifier.testTag("action_save_to_notes"),
+        )
+        DropdownMenuItem(
+          text = { Text("Import to To Do") },
+          leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) },
+          onClick = onImportToTodo,
+          modifier = Modifier.testTag("action_import_to_todo"),
+        )
       }
       DropdownMenuItem(
         text = { Text("Share") },
         leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
         onClick = onShare,
+        modifier = Modifier.testTag("action_share"),
       )
     }
 
-    DropdownMenuItem(
-      text = { Text("Copy") },
-      leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-      onClick = onDuplicate,
-    )
-    DropdownMenuItem(
-      text = { Text("Rename") },
-      leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null) },
-      onClick = onRename,
-    )
-    DropdownMenuItem(
-      text = { Text("Info") },
-      leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
-      onClick = onDetails,
-    )
     if (item.isDirectory) {
+      DropdownMenuItem(
+        text = { Text("Open in Gallery") },
+        leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
+        onClick = onOpenGallery,
+        modifier = Modifier.testTag("action_open_gallery"),
+      )
+      DropdownMenuItem(
+        text = { Text("Open in Music") },
+        leadingIcon = { Icon(Icons.Default.Headphones, contentDescription = null) },
+        onClick = onPlayMusic,
+        modifier = Modifier.testTag("action_open_music"),
+      )
       DropdownMenuItem(
         text = { Text("Archives") },
         leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
@@ -2762,12 +3307,51 @@ private fun FileActionMenu(
         onClick = onAddToHomeScreen,
         modifier = Modifier.testTag("action_add_to_home_screen"),
       )
+      DropdownMenuItem(
+        text = { Text("Share") },
+        leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+        onClick = onShare,
+        modifier = Modifier.testTag("action_share"),
+      )
     }
+
+    HorizontalDivider()
+    DropdownMenuItem(
+      text = { Text("Cut") },
+      leadingIcon = { Icon(Icons.Default.ContentCut, contentDescription = null) },
+      onClick = onCut,
+      modifier = Modifier.testTag("action_cut"),
+    )
+    DropdownMenuItem(
+      text = { Text("Copy") },
+      leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+      onClick = onCopy,
+      modifier = Modifier.testTag("action_copy"),
+    )
+    DropdownMenuItem(
+      text = { Text("Duplicate") },
+      leadingIcon = { Icon(Icons.Default.FileCopy, contentDescription = null) },
+      onClick = onDuplicate,
+      modifier = Modifier.testTag("action_duplicate"),
+    )
+    DropdownMenuItem(
+      text = { Text("Rename") },
+      leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null) },
+      onClick = onRename,
+      modifier = Modifier.testTag("action_rename"),
+    )
+    DropdownMenuItem(
+      text = { Text("Info") },
+      leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+      onClick = onDetails,
+      modifier = Modifier.testTag("action_details"),
+    )
     HorizontalDivider()
     DropdownMenuItem(
       text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
       leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
       onClick = onDelete,
+      modifier = Modifier.testTag("action_delete"),
     )
   }
 }
@@ -2982,7 +3566,7 @@ private fun CreateFileDialog(
 }
 
 @Composable
-private fun RenameFileDialog(
+internal fun RenameFileDialog(
   item: FileItem,
   onDismiss: () -> Unit,
   onConfirm: (String) -> Unit,
@@ -3233,7 +3817,7 @@ private fun RenameFileDialog(
 }
 
 @Composable
-private fun DeleteConfirmDialog(
+internal fun DeleteConfirmDialog(
   item: FileItem,
   onDismiss: () -> Unit,
   onConfirm: () -> Unit,
@@ -3271,7 +3855,7 @@ private fun DeleteConfirmDialog(
 }
 
 @Composable
-private fun BulkInfoDialog(
+internal fun BulkInfoDialog(
   items: List<FileItem>,
   onDismiss: () -> Unit,
 ) {
@@ -3388,7 +3972,7 @@ private fun BulkInfoDialog(
 }
 
 @Composable
-private fun BulkDeleteConfirmDialog(
+internal fun BulkDeleteConfirmDialog(
   items: List<FileItem>,
   onDismiss: () -> Unit,
   onConfirm: () -> Unit,
@@ -3505,15 +4089,24 @@ private fun BulkDeleteConfirmDialog(
 }
 
 @Composable
-private fun FileDetailsDialog(
+internal fun FileDetailsDialog(
   item: FileItem,
   onDismiss: () -> Unit,
   onOpen: () -> Unit = {},
   onOpenWith: () -> Unit = {},
   onShare: () -> Unit,
 ) {
+  val context = LocalContext.current
   val details = remember(item) {
     FileManagerEngine.getFileDetails(item.file)
+  }
+
+  fun copyDetailToClipboard(label: String, value: String) {
+    try {
+      val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+      clipboard?.setPrimaryClip(ClipData.newPlainText(label, value))
+      Toast.makeText(context, "Copied $label", Toast.LENGTH_SHORT).show()
+    } catch (_: Throwable) {}
   }
 
   AlertDialog(
@@ -3536,7 +4129,12 @@ private fun FileDetailsDialog(
           .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        DetailRow("Location", details.parentPath)
+        DetailRow(
+          label = "Location",
+          value = details.parentPath,
+          onCopy = { copyDetailToClipboard("Path", item.path) },
+          copyTestTag = "details_copy_path",
+        )
         DetailRow("Size", details.sizeFormatted)
         if (!details.isDirectory) {
           DetailRow("Exact bytes", "${details.sizeBytes} bytes")
@@ -3547,7 +4145,12 @@ private fun FileDetailsDialog(
           DetailRow("Line count", "${details.lineCount} lines")
         }
         if (details.md5Checksum != null) {
-          DetailRow("MD5 Hash", details.md5Checksum)
+          DetailRow(
+            label = "MD5 Hash",
+            value = details.md5Checksum,
+            onCopy = { copyDetailToClipboard("MD5 Hash", details.md5Checksum) },
+            copyTestTag = "details_copy_md5",
+          )
         }
         DetailRow("Permissions", "Read: ${details.canRead} • Write: ${details.canWrite}")
       }
@@ -3583,18 +4186,45 @@ private fun FileDetailsDialog(
 }
 
 @Composable
-private fun DetailRow(label: String, value: String) {
-  Column(modifier = Modifier.fillMaxWidth()) {
-    Text(
-      text = label,
-      style = MaterialTheme.typography.labelSmall,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    Text(
-      text = value,
-      style = MaterialTheme.typography.bodySmall,
-      fontWeight = FontWeight.Medium,
-    )
+internal fun DetailRow(
+  label: String,
+  value: String,
+  onCopy: (() -> Unit)? = null,
+  copyTestTag: String? = null,
+) {
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .let { mod -> if (onCopy != null) mod.clickable { onCopy() } else mod },
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Column(modifier = Modifier.weight(1f)) {
+      Text(
+        text = label,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Text(
+        text = value,
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.Medium,
+      )
+    }
+    if (onCopy != null) {
+      IconButton(
+        onClick = onCopy,
+        modifier = Modifier
+          .size(28.dp)
+          .let { mod -> if (copyTestTag != null) mod.testTag(copyTestTag) else mod },
+      ) {
+        Icon(
+          Icons.Default.ContentCopy,
+          contentDescription = "Copy $label",
+          modifier = Modifier.size(15.dp),
+          tint = MaterialTheme.colorScheme.primary,
+        )
+      }
+    }
   }
 }
 
@@ -3604,7 +4234,7 @@ private fun DetailRow(label: String, value: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TextEditorDialog(
+internal fun TextEditorDialog(
   file: File,
   onDismiss: () -> Unit,
   onSaved: () -> Unit,

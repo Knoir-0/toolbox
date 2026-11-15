@@ -1616,4 +1616,334 @@ object FileManagerEngine {
       } catch (_: Throwable) {}
     }
   }
+
+  // =========================================================================
+  // Cross-Tool Unifier Helpers (Notes, To-Do List, Colors & Bulk Share)
+  // =========================================================================
+
+  private val CHECKBOX_LINE_REGEX = Regex("""^\s*(?:[-*•]|\d+\.)?\s*\[([ xX])]\s*(.+)$""")
+  private val BULLET_LINE_REGEX = Regex("""^\s*(?:[-*•]|\d+\.)\s+(.+)$""")
+
+  /**
+   * Parses a text/markdown [file] into a [NoteItem] suitable for saving in the Notes tool.
+   * - Extracts a `# Heading` title if present; otherwise uses the filename without extension.
+   * - Automatically converts Markdown checklists (`- [ ]` / `- [x]`) into a [NoteFormat.CHECKLIST] note.
+   * - Tags the imported note with the `"Files"` label.
+   */
+  fun parseFileToNoteItem(
+    file: File,
+    nowMs: Long = System.currentTimeMillis(),
+  ): NoteItem? {
+    if (!file.exists() || !file.isFile) return null
+    val rawContent = readTextContent(file) ?: return null
+    val lines = rawContent.lines()
+
+    val firstNonBlankIdx = lines.indexOfFirst { it.isNotBlank() }
+    val defaultTitle = file.nameWithoutExtension.ifBlank { file.name }
+    val title: String
+    val bodyLines: List<String>
+
+    if (firstNonBlankIdx >= 0 && lines[firstNonBlankIdx].trim().startsWith("# ")) {
+      title = lines[firstNonBlankIdx].trim().removePrefix("# ").trim().ifBlank { defaultTitle }
+      bodyLines = lines.drop(firstNonBlankIdx + 1)
+    } else {
+      title = defaultTitle
+      bodyLines = lines
+    }
+
+    val nonBlankBody = bodyLines.map { it.trim() }.filter { it.isNotEmpty() }
+    val hasCheckboxLines = nonBlankBody.any { CHECKBOX_LINE_REGEX.matches(it) }
+    val allChecklistCompatible = nonBlankBody.isNotEmpty() && nonBlankBody.all { line ->
+      CHECKBOX_LINE_REGEX.matches(line) || BULLET_LINE_REGEX.matches(line)
+    }
+
+    return if (hasCheckboxLines && allChecklistCompatible) {
+      val checklistItems = nonBlankBody.mapIndexed { idx, line ->
+        val checkboxMatch = CHECKBOX_LINE_REGEX.matchEntire(line)
+        if (checkboxMatch != null) {
+          val isChecked = checkboxMatch.groupValues[1].equals("x", ignoreCase = true)
+          val itemText = checkboxMatch.groupValues[2].trim()
+          NoteChecklistItem(
+            id = "file_chk_${nowMs}_$idx",
+            text = itemText,
+            isChecked = isChecked,
+          )
+        } else {
+          val bulletMatch = BULLET_LINE_REGEX.matchEntire(line)
+          val itemText = bulletMatch?.groupValues?.get(1)?.trim() ?: line
+          NoteChecklistItem(
+            id = "file_chk_${nowMs}_$idx",
+            text = itemText,
+            isChecked = false,
+          )
+        }
+      }
+      NoteItem(
+        id = "note_from_file_${nowMs}_${file.name.hashCode()}",
+        title = title,
+        content = "",
+        isChecklist = true,
+        checklistItems = checklistItems,
+        labels = listOf("Files"),
+        createdAt = nowMs,
+        updatedAt = nowMs,
+      )
+    } else {
+      val bodyText = bodyLines.joinToString("\n").trim()
+      if (title.isBlank() && bodyText.isBlank()) return null
+      NoteItem(
+        id = "note_from_file_${nowMs}_${file.name.hashCode()}",
+        title = title,
+        content = bodyText,
+        isChecklist = false,
+        checklistItems = emptyList(),
+        labels = listOf("Files"),
+        createdAt = nowMs,
+        updatedAt = nowMs,
+      )
+    }
+  }
+
+  /**
+   * Imports a text/markdown [file] into [repository] as a new [NoteItem] and ensures the `"Files"`
+   * label is registered.
+   */
+  fun importFileToNotes(
+    file: File,
+    repository: NotesRepository,
+    nowMs: Long = System.currentTimeMillis(),
+  ): NoteItem? {
+    val note = parseFileToNoteItem(file, nowMs) ?: return null
+    val updatedNotes = NotesEngine.saveOrDiscardNote(repository.loadNotes(), note, nowMs)
+    repository.saveNotes(updatedNotes)
+    val existingLabels = repository.loadLabels()
+    if (existingLabels.none { it.equals("Files", ignoreCase = true) }) {
+      repository.saveLabels((existingLabels + "Files").sorted())
+    }
+    return note
+  }
+
+  /**
+   * Parses a text/markdown [file] into a [TodoItem] with [TodoSubTask] items suitable for the To Do tool.
+   * - Extracts a `# Heading` title if present; otherwise uses the filename without extension.
+   * - Converts checklist lines (`- [ ]`, `- [x]`), bullet lines (`- `, `* `, `• `), or multi-line
+   *   lists into interactive [TodoSubTask]s.
+   */
+  fun parseFileToTodoItem(
+    file: File,
+    nowMs: Long = System.currentTimeMillis(),
+  ): TodoItem? {
+    if (!file.exists() || !file.isFile) return null
+    val rawContent = readTextContent(file) ?: return null
+    val lines = rawContent.lines()
+
+    val firstNonBlankIdx = lines.indexOfFirst { it.isNotBlank() }
+    val defaultTitle = file.nameWithoutExtension.ifBlank { file.name }
+    val title: String
+    val bodyLines: List<String>
+
+    if (firstNonBlankIdx >= 0 && lines[firstNonBlankIdx].trim().startsWith("# ")) {
+      title = lines[firstNonBlankIdx].trim().removePrefix("# ").trim().ifBlank { defaultTitle }
+      bodyLines = lines.drop(firstNonBlankIdx + 1)
+    } else {
+      title = defaultTitle
+      bodyLines = lines
+    }
+
+    val nonBlankBody = bodyLines.map { it.trim() }.filter { it.isNotEmpty() }
+    if (title.isBlank() && nonBlankBody.isEmpty()) return null
+
+    val hasStructuredList = nonBlankBody.any {
+      CHECKBOX_LINE_REGEX.matches(it) || BULLET_LINE_REGEX.matches(it)
+    }
+
+    val subtasks: List<TodoSubTask>
+    val notes: String
+
+    if (hasStructuredList || nonBlankBody.size > 1) {
+      subtasks = nonBlankBody.mapIndexedNotNull { idx, line ->
+        val cleanLine = line.removePrefix("#").trim()
+        if (cleanLine.isEmpty()) return@mapIndexedNotNull null
+        val checkboxMatch = CHECKBOX_LINE_REGEX.matchEntire(line)
+        if (checkboxMatch != null) {
+          TodoSubTask(
+            id = "todo_sub_${nowMs}_$idx",
+            title = checkboxMatch.groupValues[2].trim(),
+            isCompleted = checkboxMatch.groupValues[1].equals("x", ignoreCase = true),
+          )
+        } else {
+          val bulletMatch = BULLET_LINE_REGEX.matchEntire(line)
+          val itemText = bulletMatch?.groupValues?.get(1)?.trim() ?: line
+          TodoSubTask(
+            id = "todo_sub_${nowMs}_$idx",
+            title = itemText,
+            isCompleted = false,
+          )
+        }
+      }
+      notes = "Imported from ${file.name}"
+    } else if (nonBlankBody.size == 1) {
+      subtasks = emptyList()
+      notes = nonBlankBody.first()
+    } else {
+      subtasks = emptyList()
+      notes = "Imported from ${file.name}"
+    }
+
+    return TodoItem(
+      id = "todo_from_file_${nowMs}_${file.name.hashCode()}",
+      title = title.ifBlank { "Imported Task" },
+      notes = notes,
+      subtasks = subtasks,
+      createdAt = nowMs,
+    )
+  }
+
+  /**
+   * Imports a text/markdown [file] into [repository] as a new [TodoItem].
+   */
+  fun importFileToTodoList(
+    file: File,
+    repository: TodoListRepository,
+    nowMs: Long = System.currentTimeMillis(),
+  ): TodoItem? {
+    val todo = parseFileToTodoItem(file, nowMs) ?: return null
+    val existing = repository.loadTasks()
+    repository.saveTasks(listOf(todo) + existing)
+    return todo
+  }
+
+  /**
+   * Extracts the dominant `#RRGGBB` hex color from an image [file] for opening in the Colors tool.
+   * Uses Android [android.graphics.BitmapFactory] + [MusicPlayerEngine.extractPaletteFromBitmap]
+   * at runtime, with a pure-JVM PNG `IDAT` scanline inflater fallback so unit tests and headless
+   * environments work identically.
+   */
+  fun extractDominantColorHex(file: File): String? {
+    if (!file.exists() || !file.isFile || !isImageFile(file)) return null
+
+    // 1. Try Android BitmapFactory + MusicPlayerEngine palette extractor
+    val bitmap = try {
+      val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+      android.graphics.BitmapFactory.decodeFile(file.absolutePath, bounds)
+      var sampleSize = 1
+      val maxDim = maxOf(bounds.outWidth, bounds.outHeight)
+      while (maxDim / sampleSize > 256) {
+        sampleSize *= 2
+      }
+      val opts = android.graphics.BitmapFactory.Options().apply {
+        inSampleSize = sampleSize
+        inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+      }
+      android.graphics.BitmapFactory.decodeFile(file.absolutePath, opts)
+    } catch (_: Throwable) {
+      null
+    }
+
+    if (bitmap != null && bitmap.width > 0 && bitmap.height > 0) {
+      return MusicPlayerEngine.extractPaletteFromBitmap(bitmap).dominantHex
+    }
+
+    // 2. Pure-JVM fallback: parse PNG IHDR + IDAT scanline bytes
+    extractColorHexFromPngBytes(file)?.let { return it }
+
+    return null
+  }
+
+  private fun extractColorHexFromPngBytes(file: File): String? {
+    if (file.length() < 33L) return null
+    return try {
+      val bytes = file.readBytes()
+      val pngSig = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+      for (i in pngSig.indices) {
+        if (bytes[i] != pngSig[i]) return null
+      }
+      var offset = 8
+      var width = 0
+      var height = 0
+      var colorType = 2
+      val idatStream = java.io.ByteArrayOutputStream()
+
+      while (offset + 8 <= bytes.size) {
+        val length = java.nio.ByteBuffer.wrap(bytes, offset, 4).int
+        val type = String(bytes, offset + 4, 4, Charsets.US_ASCII)
+        val dataStart = offset + 8
+        if (length < 0 || dataStart + length > bytes.size) break
+        when (type) {
+          "IHDR" -> {
+            if (length >= 10) {
+              val buf = java.nio.ByteBuffer.wrap(bytes, dataStart, length)
+              width = buf.int
+              height = buf.int
+              buf.get() // bit depth
+              colorType = buf.get().toInt() and 0xFF
+            }
+          }
+          "IDAT" -> {
+            if (length > 0) {
+              idatStream.write(bytes, dataStart, length)
+            }
+          }
+          "IEND" -> break
+        }
+        offset = dataStart + length + 4
+      }
+
+      val compressed = idatStream.toByteArray()
+      if (compressed.isEmpty() || width <= 0 || height <= 0) return null
+
+      val channels = when (colorType) {
+        2 -> 3 // RGB
+        6 -> 4 // RGBA
+        else -> return null
+      }
+      val inflater = java.util.zip.Inflater()
+      inflater.setInput(compressed)
+      val rowBytes = 1 + width * channels
+      val outBuf = ByteArray(rowBytes)
+      val count = inflater.inflate(outBuf)
+      inflater.end()
+      if (count >= 1 + channels) {
+        val r = outBuf[1].toInt() and 0xFF
+        val g = outBuf[2].toInt() and 0xFF
+        val b = outBuf[3].toInt() and 0xFF
+        String.format(Locale.US, "#%02X%02X%02X", r, g, b)
+      } else {
+        null
+      }
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  /**
+   * Collects all regular files from [items] (expanding directories recursively up to [maxDepth])
+   * for bulk sharing via `Intent.ACTION_SEND_MULTIPLE`.
+   */
+  fun collectShareableFiles(
+    items: List<File>,
+    maxDepth: Int = 6,
+  ): List<File> {
+    val result = LinkedHashMap<String, File>()
+
+    fun scan(current: File, depth: Int) {
+      if (depth > maxDepth || !current.exists()) return
+      if (current.name.startsWith(".")) return
+      if (current.isFile) {
+        result.putIfAbsent(current.absolutePath, current)
+      } else if (current.isDirectory) {
+        val children = try {
+          current.listFiles()
+        } catch (_: Throwable) {
+          null
+        } ?: return
+        children
+          .sortedBy { it.name.lowercase(Locale.ROOT) }
+          .forEach { child -> scan(child, depth + 1) }
+      }
+    }
+
+    items.forEach { scan(it, 0) }
+    return result.values.toList()
+  }
 }

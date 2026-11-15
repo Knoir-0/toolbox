@@ -71,6 +71,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
@@ -88,9 +89,14 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.VideoFile
@@ -121,7 +127,9 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -160,6 +168,20 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 
+internal class ArchiveEntryCrossToolDispatcher(
+  val onOpenInGallery: (ArchiveEntryItem) -> Unit = {},
+  val onEditMedia: (ArchiveEntryItem) -> Unit = {},
+  val onInspectColor: (ArchiveEntryItem) -> Unit = {},
+  val onPlayInMusic: (ArchiveEntryItem) -> Unit = {},
+  val onOpenInPdfViewer: (ArchiveEntryItem) -> Unit = {},
+  val onConvertEntry: (ArchiveEntryItem) -> Unit = {},
+  val onSaveToNotes: (ArchiveEntryItem) -> Unit = {},
+  val onImportToTodo: (ArchiveEntryItem) -> Unit = {},
+  val onOpenArchiveFolderInFiles: () -> Unit = {},
+)
+
+internal val LocalArchiveEntryCrossToolActions = compositionLocalOf { ArchiveEntryCrossToolDispatcher() }
+
 /**
  * Archive tool screen:
  * - Simple initial screen (similar to Audio / Image / Video Editor tools) with `+` to open an archive
@@ -172,6 +194,7 @@ import java.util.Locale
 fun ArchiveScreen(
   modifier: Modifier = Modifier,
   initialFile: File? = null,
+  initialFilesToCompress: List<File>? = null,
   initialDirectory: File? = null,
   onNavigateBack: (() -> Unit)? = null,
 ) {
@@ -239,17 +262,19 @@ fun ArchiveScreen(
 
   // Dialog states
   var showOpenArchivePicker by remember { mutableStateOf(false) }
-  var showCreateZipDialog by remember(initialFile?.absolutePath) {
+  var showCreateZipDialog by remember(initialFile?.absolutePath, initialFilesToCompress) {
     mutableStateOf(
-      initialFile != null && initialFile.exists() && !ArchiveEngine.isSupportedArchive(initialFile)
+      (!initialFilesToCompress.isNullOrEmpty() && initialFilesToCompress.any { it.exists() }) ||
+        (initialFile != null && initialFile.exists() && !ArchiveEngine.isSupportedArchive(initialFile))
     )
   }
-  var preselectedFilesForZip by remember(initialFile?.absolutePath) {
+  var preselectedFilesForZip by remember(initialFile?.absolutePath, initialFilesToCompress) {
     mutableStateOf(
-      if (initialFile != null && initialFile.exists() && !ArchiveEngine.isSupportedArchive(initialFile)) {
-        listOf(initialFile)
-      } else {
-        emptyList()
+      when {
+        !initialFilesToCompress.isNullOrEmpty() -> initialFilesToCompress.filter { it.exists() }
+        initialFile != null && initialFile.exists() && !ArchiveEngine.isSupportedArchive(initialFile) ->
+          listOf(initialFile)
+        else -> emptyList()
       }
     )
   }
@@ -267,11 +292,18 @@ fun ArchiveScreen(
   var entryToDelete by remember { mutableStateOf<ArchiveEntryItem?>(null) }
 
   var lastOperationBanner by remember { mutableStateOf<ArchiveOperationResult?>(null) }
+  val crossToolHostState = rememberCrossToolFileHostState()
 
-  // If initialFile was passed and is NOT an archive (e.g., user opened a regular file or folder to zip),
-  // pre-open the Create Zip dialog with that file selected.
-  LaunchedEffect(initialFile?.absolutePath) {
-    if (initialFile != null && initialFile.exists() && !ArchiveEngine.isSupportedArchive(initialFile)) {
+  // If initialFile or initialFilesToCompress was passed and is NOT an archive,
+  // pre-open the Create Zip dialog with those files selected.
+  LaunchedEffect(initialFile?.absolutePath, initialFilesToCompress) {
+    if (!initialFilesToCompress.isNullOrEmpty()) {
+      val valid = initialFilesToCompress.filter { it.exists() }
+      if (valid.isNotEmpty()) {
+        preselectedFilesForZip = valid
+        showCreateZipDialog = true
+      }
+    } else if (initialFile != null && initialFile.exists() && !ArchiveEngine.isSupportedArchive(initialFile)) {
       preselectedFilesForZip = listOf(initialFile)
       showCreateZipDialog = true
     }
@@ -373,6 +405,92 @@ fun ArchiveScreen(
     }
   }
 
+  fun withExtractedEntryTempFile(
+    info: ArchiveInfo,
+    entry: ArchiveEntryItem,
+    onExtracted: (File) -> Unit,
+  ) {
+    coroutineScope.launch {
+      val extractedTemp = withContext(Dispatchers.IO) {
+        ArchiveEngine.extractEntryToTempFile(context, info.file, entry)
+      }
+      if (extractedTemp != null) {
+        onExtracted(extractedTemp)
+      } else {
+        Toast.makeText(context, "Could not extract ${entry.name}", Toast.LENGTH_SHORT).show()
+      }
+    }
+  }
+
+  if (crossToolHostState.RenderSubScreen(
+      modifier = modifier,
+      onRefreshNeeded = { archiveRevision++ },
+    )
+  ) {
+    return
+  }
+
+  val crossToolDispatcher = remember(archiveInfo, crossToolHostState) {
+    ArchiveEntryCrossToolDispatcher(
+      onOpenInGallery = { entry ->
+        val info = archiveInfo ?: return@ArchiveEntryCrossToolDispatcher
+        withExtractedEntryTempFile(info, entry) { file ->
+          crossToolHostState.fileForGallery = file
+        }
+      },
+      onEditMedia = { entry ->
+        val info = archiveInfo ?: return@ArchiveEntryCrossToolDispatcher
+        withExtractedEntryTempFile(info, entry) { file ->
+          when {
+            ArchiveEngine.isImageEntry(entry) -> crossToolHostState.fileForImageEditor = file
+            ArchiveEngine.isVideoEntry(entry) -> crossToolHostState.fileForVideoEditor = file
+            ArchiveEngine.isAudioEntry(entry) -> crossToolHostState.fileForAudioEditor = file
+          }
+        }
+      },
+      onInspectColor = { entry ->
+        val info = archiveInfo ?: return@ArchiveEntryCrossToolDispatcher
+        withExtractedEntryTempFile(info, entry) { file ->
+          crossToolHostState.fileForColorPicker = file
+        }
+      },
+      onPlayInMusic = { entry ->
+        val info = archiveInfo ?: return@ArchiveEntryCrossToolDispatcher
+        withExtractedEntryTempFile(info, entry) { file ->
+          crossToolHostState.fileForMusicPlayer = file
+        }
+      },
+      onOpenInPdfViewer = { entry ->
+        val info = archiveInfo ?: return@ArchiveEntryCrossToolDispatcher
+        withExtractedEntryTempFile(info, entry) { file ->
+          crossToolHostState.fileForPdfViewer = file
+        }
+      },
+      onConvertEntry = { entry ->
+        val info = archiveInfo ?: return@ArchiveEntryCrossToolDispatcher
+        withExtractedEntryTempFile(info, entry) { file ->
+          crossToolHostState.fileForConverter = file
+        }
+      },
+      onSaveToNotes = { entry ->
+        val info = archiveInfo ?: return@ArchiveEntryCrossToolDispatcher
+        withExtractedEntryTempFile(info, entry) { file ->
+          CrossToolActions.saveFileToNotes(context, file)
+        }
+      },
+      onImportToTodo = { entry ->
+        val info = archiveInfo ?: return@ArchiveEntryCrossToolDispatcher
+        withExtractedEntryTempFile(info, entry) { file ->
+          CrossToolActions.importFileToTodo(context, file)
+        }
+      },
+      onOpenArchiveFolderInFiles = {
+        val info = archiveInfo ?: return@ArchiveEntryCrossToolDispatcher
+        crossToolHostState.directoryForFiles = info.file.parentFile ?: defaultBrowseDir
+      },
+    )
+  }
+
   BackHandler(
     enabled = isFabExpanded ||
       isSelectionMode ||
@@ -401,12 +519,13 @@ fun ArchiveScreen(
     }
   }
 
-  Box(
-    modifier = modifier
-      .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background)
-      .testTag("archive_screen"),
-  ) {
+  CompositionLocalProvider(LocalArchiveEntryCrossToolActions provides crossToolDispatcher) {
+    Box(
+      modifier = modifier
+        .fillMaxSize()
+        .background(MaterialTheme.colorScheme.background)
+        .testTag("archive_screen"),
+    ) {
     val currentInfo = archiveInfo
     if (currentInfo == null) {
       // ====================================================================
@@ -916,6 +1035,7 @@ fun ArchiveScreen(
         }
       }
     }
+  }
   }
 
   // ============================================================================
@@ -2440,6 +2560,9 @@ private fun ArchiveEntryActionMenu(
   onDetails: () -> Unit,
   onDelete: () -> Unit,
 ) {
+  val crossToolActions = LocalArchiveEntryCrossToolActions.current
+  val isPdfEntry = item.extension.equals("pdf", ignoreCase = true)
+
   DropdownMenu(
     expanded = expanded,
     onDismissRequest = onDismiss,
@@ -2452,6 +2575,24 @@ private fun ArchiveEntryActionMenu(
           onClick = onPreviewText,
           modifier = Modifier.testTag("action_preview_text_entry"),
         )
+        DropdownMenuItem(
+          text = { Text("Save to Notes") },
+          leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
+          onClick = {
+            onDismiss()
+            crossToolActions.onSaveToNotes(item)
+          },
+          modifier = Modifier.testTag("action_save_entry_to_notes"),
+        )
+        DropdownMenuItem(
+          text = { Text("Import to To Do") },
+          leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) },
+          onClick = {
+            onDismiss()
+            crossToolActions.onImportToTodo(item)
+          },
+          modifier = Modifier.testTag("action_import_entry_to_todo"),
+        )
       } else if (ArchiveEngine.isImageEntry(item)) {
         DropdownMenuItem(
           text = { Text("Preview image") },
@@ -2459,7 +2600,102 @@ private fun ArchiveEntryActionMenu(
           onClick = onPreviewImage,
           modifier = Modifier.testTag("action_preview_image_entry"),
         )
+        DropdownMenuItem(
+          text = { Text("Open in Gallery") },
+          leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
+          onClick = {
+            onDismiss()
+            crossToolActions.onOpenInGallery(item)
+          },
+          modifier = Modifier.testTag("action_open_entry_in_gallery"),
+        )
+        DropdownMenuItem(
+          text = { Text("Edit in Image Editor") },
+          leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+          onClick = {
+            onDismiss()
+            crossToolActions.onEditMedia(item)
+          },
+          modifier = Modifier.testTag("action_edit_image_entry"),
+        )
+        DropdownMenuItem(
+          text = { Text("Inspect Color") },
+          leadingIcon = { Icon(Icons.Default.Palette, contentDescription = null) },
+          onClick = {
+            onDismiss()
+            crossToolActions.onInspectColor(item)
+          },
+          modifier = Modifier.testTag("action_inspect_color_entry"),
+        )
+      } else if (ArchiveEngine.isAudioEntry(item)) {
+        DropdownMenuItem(
+          text = { Text("Play in Music") },
+          leadingIcon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
+          onClick = {
+            onDismiss()
+            crossToolActions.onPlayInMusic(item)
+          },
+          modifier = Modifier.testTag("action_play_entry_in_music"),
+        )
+        DropdownMenuItem(
+          text = { Text("Edit in Audio Editor") },
+          leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+          onClick = {
+            onDismiss()
+            crossToolActions.onEditMedia(item)
+          },
+          modifier = Modifier.testTag("action_edit_audio_entry"),
+        )
+      } else if (ArchiveEngine.isVideoEntry(item)) {
+        DropdownMenuItem(
+          text = { Text("Open in Gallery") },
+          leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
+          onClick = {
+            onDismiss()
+            crossToolActions.onOpenInGallery(item)
+          },
+          modifier = Modifier.testTag("action_open_entry_in_gallery"),
+        )
+        DropdownMenuItem(
+          text = { Text("Edit in Video Editor") },
+          leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+          onClick = {
+            onDismiss()
+            crossToolActions.onEditMedia(item)
+          },
+          modifier = Modifier.testTag("action_edit_video_entry"),
+        )
+      } else if (isPdfEntry) {
+        DropdownMenuItem(
+          text = { Text("Open in PDF Viewer") },
+          leadingIcon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null) },
+          onClick = {
+            onDismiss()
+            crossToolActions.onOpenInPdfViewer(item)
+          },
+          modifier = Modifier.testTag("action_open_entry_pdf"),
+        )
       }
+
+      DropdownMenuItem(
+        text = { Text("Convert") },
+        leadingIcon = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
+        onClick = {
+          onDismiss()
+          crossToolActions.onConvertEntry(item)
+        },
+        modifier = Modifier.testTag("action_convert_entry"),
+      )
+
+      DropdownMenuItem(
+        text = { Text("Open Archive Folder in Files") },
+        leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
+        onClick = {
+          onDismiss()
+          crossToolActions.onOpenArchiveFolderInFiles()
+        },
+        modifier = Modifier.testTag("action_open_archive_in_files"),
+      )
 
       DropdownMenuItem(
         text = { Text("Open with…") },

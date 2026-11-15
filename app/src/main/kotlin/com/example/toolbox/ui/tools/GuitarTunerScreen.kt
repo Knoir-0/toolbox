@@ -50,11 +50,15 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Tune
@@ -62,6 +66,8 @@ import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -1592,25 +1598,115 @@ private fun TuningPresetCard(
         }
       }
 
-      IconButton(
-        onClick = onToggleFavorite,
-        modifier = Modifier
-          .size(36.dp)
-          .testTag(favoriteButtonTestTag),
-      ) {
-        Icon(
-          imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-          contentDescription = if (isFavorite) {
-            "Remove ${preset.label} from favorites"
-          } else {
-            "Add ${preset.label} to favorites"
-          },
-          tint = if (isFavorite) {
-            MaterialTheme.colorScheme.primary
-          } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-          },
-        )
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        IconButton(
+          onClick = onToggleFavorite,
+          modifier = Modifier
+            .size(36.dp)
+            .testTag(favoriteButtonTestTag),
+        ) {
+          Icon(
+            imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+            contentDescription = if (isFavorite) {
+              "Remove ${preset.label} from favorites"
+            } else {
+              "Add ${preset.label} to favorites"
+            },
+            tint = if (isFavorite) {
+              MaterialTheme.colorScheme.primary
+            } else {
+              MaterialTheme.colorScheme.onSurfaceVariant
+            },
+          )
+        }
+
+        var showTuningMenu by remember { mutableStateOf(false) }
+        val context = LocalContext.current
+        val tuningNotesSummary = remember(preset) {
+          val notes = preset.strings.joinToString(" – ") { "${it.noteName} (${it.frequencyHz.roundToInt()} Hz)" }
+          "${preset.label} (${preset.category.displayName})\n${preset.subtitle}\nStrings (6th to 1st): $notes"
+        }
+
+        Box {
+          IconButton(
+            onClick = { showTuningMenu = true },
+            modifier = Modifier
+              .size(32.dp)
+              .testTag("tuning_more_${preset.name}"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.MoreVert,
+              contentDescription = "More options for ${preset.label}",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(18.dp),
+            )
+          }
+
+          DropdownMenu(
+            expanded = showTuningMenu,
+            onDismissRequest = { showTuningMenu = false },
+          ) {
+            DropdownMenuItem(
+              text = { Text("Select Tuning") },
+              leadingIcon = { Icon(Icons.Default.Check, contentDescription = null) },
+              onClick = {
+                showTuningMenu = false
+                onSelect()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text(if (isFavorite) "Remove from Favorites" else "Add to Favorites") },
+              leadingIcon = {
+                Icon(
+                  imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                  contentDescription = null,
+                )
+              },
+              onClick = {
+                showTuningMenu = false
+                onToggleFavorite()
+              },
+            )
+            HorizontalDivider()
+            DropdownMenuItem(
+              text = { Text("Copy Tuning Notes") },
+              leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+              onClick = {
+                showTuningMenu = false
+                CrossToolActions.copyTextToClipboard(
+                  context = context,
+                  label = preset.label,
+                  text = tuningNotesSummary,
+                )
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("Save Tuning to Notes") },
+              leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
+              onClick = {
+                showTuningMenu = false
+                CrossToolActions.saveTextToNotes(
+                  context = context,
+                  title = "Guitar Tuning: ${preset.label}",
+                  content = tuningNotesSummary,
+                  labels = listOf("Music"),
+                )
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("Share") },
+              leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+              onClick = {
+                showTuningMenu = false
+                CrossToolActions.shareText(
+                  context = context,
+                  title = preset.label,
+                  text = tuningNotesSummary,
+                )
+              },
+            )
+          }
+        }
       }
     }
   }

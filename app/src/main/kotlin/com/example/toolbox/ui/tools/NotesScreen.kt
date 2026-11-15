@@ -63,14 +63,17 @@ import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FormatColorReset
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Lightbulb
@@ -81,6 +84,7 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.RestoreFromTrash
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.outlined.PushPin
@@ -111,8 +115,10 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -222,6 +228,22 @@ private fun noteColorHue(noteColor: NoteColor): Float = when (noteColor) {
   NoteColor.BLOSSOM -> 325f
   NoteColor.CLAY -> 22f
 }
+
+internal class NoteCardActionDispatcher(
+  val onEdit: (NoteItem) -> Unit = {},
+  val onTogglePin: (NoteItem) -> Unit = {},
+  val onChangeColor: (NoteItem) -> Unit = {},
+  val onDuplicate: (NoteItem) -> Unit = {},
+  val onCopyText: (NoteItem) -> Unit = {},
+  val onSendToTodo: (NoteItem) -> Unit = {},
+  val onExportAsFile: (NoteItem) -> Unit = {},
+  val onShare: (NoteItem) -> Unit = {},
+  val onToggleArchive: (NoteItem) -> Unit = {},
+  val onDeleteOrTrash: (NoteItem) -> Unit = {},
+  val onRestoreFromTrash: (NoteItem) -> Unit = {},
+)
+
+internal val LocalNoteCardActions = compositionLocalOf { NoteCardActionDispatcher() }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -394,6 +416,79 @@ fun NotesScreen(
     }
   }
 
+  val noteCardActionDispatcher = remember(notes, savedLabels, context) {
+    NoteCardActionDispatcher(
+      onEdit = { note -> editingNote = note },
+      onTogglePin = { note ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        applyStateChange(NotesEngine.togglePin(notes, note.id))
+      },
+      onChangeColor = { note ->
+        selectedNoteIds = setOf(note.id)
+        showBulkColorDialog = true
+      },
+      onDuplicate = { note ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        val now = System.currentTimeMillis()
+        val copy = note.copy(
+          id = java.util.UUID.randomUUID().toString(),
+          title = if (note.title.isNotBlank()) "${note.title} (Copy)" else "",
+          createdAt = now,
+          updatedAt = now,
+        )
+        applyStateChange(listOf(copy) + notes)
+        Toast.makeText(context, "Duplicated note", Toast.LENGTH_SHORT).show()
+      },
+      onCopyText = { note ->
+        copyNoteToClipboard(context, note)
+      },
+      onSendToTodo = { note ->
+        if (note.isChecklist && note.checklistItems.isNotEmpty()) {
+          val subtasks = note.checklistItems.map { it.text }
+          CrossToolActions.saveTaskToTodoList(
+            context = context,
+            title = note.title.ifBlank { "Checklist Note" },
+            subtasks = subtasks,
+          )
+        } else {
+          CrossToolActions.saveTaskToTodoList(
+            context = context,
+            title = note.title.ifBlank { note.content.lineSequence().firstOrNull()?.take(60) ?: "Note Task" },
+            notes = if (note.title.isNotBlank()) note.content else "",
+          )
+        }
+      },
+      onExportAsFile = { note ->
+        val baseName = note.title.ifBlank { "Note_${note.id.take(6)}" }
+        CrossToolActions.exportTextAsFile(context, baseName, note.toPlainText())
+      },
+      onShare = { note ->
+        CrossToolActions.shareText(
+          context = context,
+          title = note.title.ifBlank { "Note" },
+          text = note.toPlainText(),
+        )
+      },
+      onToggleArchive = { note ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        applyStateChange(NotesEngine.setArchived(notes, setOf(note.id), !note.isArchived))
+      },
+      onDeleteOrTrash = { note ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        if (note.isTrashed) {
+          applyStateChange(NotesEngine.deletePermanently(notes, setOf(note.id)))
+        } else {
+          applyStateChange(NotesEngine.moveToTrash(notes, setOf(note.id)))
+        }
+      },
+      onRestoreFromTrash = { note ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        applyStateChange(NotesEngine.restoreFromTrash(notes, setOf(note.id)))
+      },
+    )
+  }
+
+  CompositionLocalProvider(LocalNoteCardActions provides noteCardActionDispatcher) {
   Box(
     modifier = modifier
       .fillMaxSize()
@@ -961,6 +1056,7 @@ fun NotesScreen(
         }
       }
     }
+  }
   }
 
   // Note Editor Sheet
@@ -1907,25 +2003,192 @@ fun NoteCard(
           }
         }
 
-        if (!note.isTrashed && !isSelectionMode) {
-          Box(
-            modifier = Modifier
-              .size(28.dp)
-              .clip(CircleShape)
-              .clickable(onClick = onTogglePin)
-              .testTag("note_card_pin_${note.id}"),
-            contentAlignment = Alignment.Center,
+        if (!isSelectionMode) {
+          val noteActions = LocalNoteCardActions.current
+          var noteMenuExpanded by remember { mutableStateOf(false) }
+
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
           ) {
-            Icon(
-              imageVector = if (note.isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
-              contentDescription = if (note.isPinned) "Unpin note" else "Pin note",
-              tint = if (note.isPinned) {
-                MaterialTheme.colorScheme.primary
-              } else {
-                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-              },
-              modifier = Modifier.size(16.dp),
-            )
+            if (!note.isTrashed) {
+              Box(
+                modifier = Modifier
+                  .size(28.dp)
+                  .clip(CircleShape)
+                  .clickable(onClick = onTogglePin)
+                  .testTag("note_card_pin_${note.id}"),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = if (note.isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+                  contentDescription = if (note.isPinned) "Unpin note" else "Pin note",
+                  tint = if (note.isPinned) {
+                    MaterialTheme.colorScheme.primary
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                  },
+                  modifier = Modifier.size(16.dp),
+                )
+              }
+            }
+
+            Box {
+              Box(
+                modifier = Modifier
+                  .size(28.dp)
+                  .clip(CircleShape)
+                  .clickable { noteMenuExpanded = true }
+                  .testTag("note_more_${note.id}"),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.Default.MoreVert,
+                  contentDescription = "More options for ${note.title.ifBlank { "note" }}",
+                  tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                  modifier = Modifier.size(16.dp),
+                )
+              }
+
+              DropdownMenu(
+                expanded = noteMenuExpanded,
+                onDismissRequest = { noteMenuExpanded = false },
+                modifier = Modifier.testTag("note_menu_${note.id}"),
+              ) {
+                if (note.isTrashed) {
+                  DropdownMenuItem(
+                    text = { Text("Restore") },
+                    leadingIcon = { Icon(Icons.Default.RestoreFromTrash, contentDescription = null) },
+                    onClick = {
+                      noteMenuExpanded = false
+                      noteActions.onRestoreFromTrash(note)
+                    },
+                  )
+                  DropdownMenuItem(
+                    text = { Text("Copy Text") },
+                    leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                    onClick = {
+                      noteMenuExpanded = false
+                      noteActions.onCopyText(note)
+                    },
+                  )
+                  HorizontalDivider()
+                  DropdownMenuItem(
+                    text = { Text("Delete forever", color = MaterialTheme.colorScheme.error) },
+                    leadingIcon = {
+                      Icon(
+                        Icons.Default.DeleteForever,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                      )
+                    },
+                    onClick = {
+                      noteMenuExpanded = false
+                      noteActions.onDeleteOrTrash(note)
+                    },
+                  )
+                } else {
+                  DropdownMenuItem(
+                    text = { Text("Edit") },
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    onClick = {
+                      noteMenuExpanded = false
+                      noteActions.onEdit(note)
+                    },
+                  )
+                  DropdownMenuItem(
+                    text = { Text(if (note.isPinned) "Unpin" else "Pin") },
+                    leadingIcon = {
+                      Icon(
+                        if (note.isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+                        contentDescription = null,
+                      )
+                    },
+                    onClick = {
+                      noteMenuExpanded = false
+                      onTogglePin()
+                    },
+                  )
+                  DropdownMenuItem(
+                    text = { Text("Change Color") },
+                    leadingIcon = { Icon(Icons.Default.Palette, contentDescription = null) },
+                    onClick = {
+                      noteMenuExpanded = false
+                      noteActions.onChangeColor(note)
+                    },
+                  )
+                  DropdownMenuItem(
+                    text = { Text("Duplicate Note") },
+                    leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                    onClick = {
+                      noteMenuExpanded = false
+                      noteActions.onDuplicate(note)
+                    },
+                  )
+                  HorizontalDivider()
+                  DropdownMenuItem(
+                    text = { Text("Copy Text") },
+                    leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                    onClick = {
+                      noteMenuExpanded = false
+                      noteActions.onCopyText(note)
+                    },
+                  )
+                  DropdownMenuItem(
+                    text = { Text("Add to To Do") },
+                    leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) },
+                    onClick = {
+                      noteMenuExpanded = false
+                      noteActions.onSendToTodo(note)
+                    },
+                  )
+                  DropdownMenuItem(
+                    text = { Text("Export as File") },
+                    leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
+                    onClick = {
+                      noteMenuExpanded = false
+                      noteActions.onExportAsFile(note)
+                    },
+                  )
+                  DropdownMenuItem(
+                    text = { Text("Share") },
+                    leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                    onClick = {
+                      noteMenuExpanded = false
+                      noteActions.onShare(note)
+                    },
+                  )
+                  HorizontalDivider()
+                  DropdownMenuItem(
+                    text = { Text(if (note.isArchived) "Unarchive" else "Archive") },
+                    leadingIcon = {
+                      Icon(
+                        if (note.isArchived) Icons.Default.Unarchive else Icons.Default.Archive,
+                        contentDescription = null,
+                      )
+                    },
+                    onClick = {
+                      noteMenuExpanded = false
+                      noteActions.onToggleArchive(note)
+                    },
+                  )
+                  DropdownMenuItem(
+                    text = { Text("Move to trash", color = MaterialTheme.colorScheme.error) },
+                    leadingIcon = {
+                      Icon(
+                        Icons.Default.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                      )
+                    },
+                    onClick = {
+                      noteMenuExpanded = false
+                      noteActions.onDeleteOrTrash(note)
+                    },
+                  )
+                }
+              }
+            }
           }
         }
       }

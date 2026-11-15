@@ -76,6 +76,7 @@ import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
@@ -86,20 +87,27 @@ import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DocumentScanner
+import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FileCopy
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.VideoFile
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -125,7 +133,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -183,6 +193,35 @@ private enum class AddAlbumTarget {
   NESTED_ALBUM_HERE,
 }
 
+internal data class GalleryItemActionDispatcher(
+  val onOpenAlbum: (GalleryAlbum) -> Unit = {},
+  val onArchiveAlbum: (GalleryAlbum) -> Unit = {},
+  val onOpenAlbumInFiles: (GalleryAlbum) -> Unit = {},
+  val onShareAlbum: (GalleryAlbum) -> Unit = {},
+  val onCutAlbum: (GalleryAlbum) -> Unit = {},
+  val onCopyAlbum: (GalleryAlbum) -> Unit = {},
+  val onRenameAlbum: (GalleryAlbum) -> Unit = {},
+  val onAlbumInfo: (GalleryAlbum) -> Unit = {},
+  val onDeleteAlbum: (GalleryAlbum) -> Unit = {},
+  val onViewPhoto: (GalleryPhoto) -> Unit = {},
+  val onEditPhoto: (GalleryPhoto) -> Unit = {},
+  val onInspectPhotoColor: (GalleryPhoto) -> Unit = {},
+  val onConvertPhoto: (GalleryPhoto) -> Unit = {},
+  val onArchivePhoto: (GalleryPhoto) -> Unit = {},
+  val onSavePhotoToNotes: (GalleryPhoto, GalleryPhotoIndexEntry?) -> Unit = { _, _ -> },
+  val onOpenPhotoInFiles: (GalleryPhoto) -> Unit = {},
+  val onOpenPhotoWith: (GalleryPhoto) -> Unit = {},
+  val onSharePhoto: (GalleryPhoto) -> Unit = {},
+  val onCutPhoto: (GalleryPhoto) -> Unit = {},
+  val onCopyPhoto: (GalleryPhoto) -> Unit = {},
+  val onDuplicatePhoto: (GalleryPhoto) -> Unit = {},
+  val onRenamePhoto: (GalleryPhoto) -> Unit = {},
+  val onPhotoInfo: (GalleryPhoto) -> Unit = {},
+  val onDeletePhoto: (GalleryPhoto) -> Unit = {},
+)
+
+internal val LocalGalleryItemActions = compositionLocalOf { GalleryItemActionDispatcher() }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GalleryScreen(
@@ -190,6 +229,7 @@ fun GalleryScreen(
   rootDirectory: File? = null,
   initialFolders: List<File>? = null,
   initialAlbumDirectory: File? = null,
+  initialPhotoFile: File? = null,
   initialAlbumsPerRow: Int? = null,
   initialViewMode: GalleryViewMode? = null,
   initialSortOrder: GallerySortOrder? = null,
@@ -660,7 +700,20 @@ fun GalleryScreen(
     }
   }
 
-  var selectedPhotoForViewer by remember { mutableStateOf<GalleryPhoto?>(null) }
+  var selectedPhotoForViewer by remember(initialPhotoFile?.absolutePath) {
+    mutableStateOf(
+      initialPhotoFile?.takeIf { it.exists() && it.isFile }?.let { file ->
+        GalleryPhoto(
+          file = file,
+          name = file.name,
+          path = file.absolutePath,
+          sizeBytes = file.length(),
+          lastModifiedMs = file.lastModified(),
+          extension = file.extension.lowercase(Locale.ROOT),
+        )
+      }
+    )
+  }
   var addAlbumDialogTarget by remember { mutableStateOf<AddAlbumTarget?>(null) }
   var fileForImageEditor by remember { mutableStateOf<File?>(null) }
   var fileForVideoEditor by remember { mutableStateOf<File?>(null) }
@@ -704,10 +757,161 @@ fun GalleryScreen(
     return
   }
 
+  val crossToolHostState = rememberCrossToolFileHostState()
+  if (crossToolHostState.hasActiveSubScreen) {
+    crossToolHostState.RenderSubScreen(
+      modifier = modifier,
+      defaultDirectory = currentAlbum?.directory ?: effectiveRootDir,
+      onReturnedFromSubScreen = { refreshTrigger++ },
+    )
+    return
+  }
+
   val defaultNewAlbumDir = remember(effectiveRootDir, initialFolders) {
     initialFolders?.firstOrNull() ?: GalleryEngine.getDefaultNewAlbumFolder(effectiveRootDir)
   }
 
+  val galleryItemActions = remember(context) {
+    GalleryItemActionDispatcher(
+      onOpenAlbum = { album ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        isFabExpanded = false
+        albumStack.add(album)
+      },
+      onArchiveAlbum = { album ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        crossToolHostState.filesForArchiveCompression = listOf(album.directory)
+      },
+      onOpenAlbumInFiles = { album ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        crossToolHostState.openInFiles(album.directory)
+      },
+      onShareAlbum = { album ->
+        val files = GalleryEngine.collectMediaFiles(listOf(album), emptyList())
+        if (files.isNotEmpty()) {
+          shareMediaFiles(context, files)
+        } else {
+          Toast.makeText(context, "No media files found in ${album.name}", Toast.LENGTH_SHORT).show()
+        }
+      },
+      onCutAlbum = { album ->
+        clipboardState = GalleryClipboardState(
+          operation = GalleryClipboardOperation.CUT,
+          albums = listOf(album),
+          photos = emptyList(),
+        )
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        Toast.makeText(context, "\"${album.name}\" cut", Toast.LENGTH_SHORT).show()
+      },
+      onCopyAlbum = { album ->
+        clipboardState = GalleryClipboardState(
+          operation = GalleryClipboardOperation.COPY,
+          albums = listOf(album),
+          photos = emptyList(),
+        )
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        Toast.makeText(context, "\"${album.name}\" copied", Toast.LENGTH_SHORT).show()
+      },
+      onRenameAlbum = { album ->
+        crossToolHostState.fileToRename = album.directory
+      },
+      onAlbumInfo = { album ->
+        crossToolHostState.fileForDetails = album.directory
+      },
+      onDeleteAlbum = { album ->
+        crossToolHostState.fileToDelete = album.directory
+      },
+      onViewPhoto = { photo ->
+        selectedPhotoForViewer = photo
+      },
+      onEditPhoto = { photo ->
+        openMediaInEditor(photo)
+      },
+      onInspectPhotoColor = { photo ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        crossToolHostState.inspectImageColor(photo.file)
+      },
+      onConvertPhoto = { photo ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        crossToolHostState.fileForConverter = photo.file
+      },
+      onArchivePhoto = { photo ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        crossToolHostState.filesForArchiveCompression = listOf(photo.file)
+      },
+      onSavePhotoToNotes = { photo, indexEntry ->
+        val body = buildString {
+          appendLine("File: ${photo.name}")
+          appendLine("Size: ${photo.sizeFormatted} • ${photo.timestampFormatted}")
+          if (indexEntry != null) {
+            if (indexEntry.autoTags.isNotEmpty()) {
+              appendLine("Tags: ${indexEntry.autoTags.joinToString(", ")}")
+            }
+            if (indexEntry.barcodeSummaries.isNotEmpty()) {
+              appendLine("QR / Barcodes: ${indexEntry.barcodeSummaries.joinToString(", ")}")
+            }
+            if (indexEntry.ocrText.isNotBlank()) {
+              appendLine()
+              appendLine("Recognized Text:")
+              append(indexEntry.ocrText.trim())
+            }
+          }
+        }.trim()
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        CrossToolActions.saveTextToNotes(
+          context = context,
+          title = photo.name,
+          content = body,
+          label = "Gallery",
+        )
+      },
+      onOpenPhotoInFiles = { photo ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        crossToolHostState.openInFiles(photo.file)
+      },
+      onOpenPhotoWith = { photo ->
+        FileManagerEngine.openFile(context, photo.file, chooseApp = true)
+      },
+      onSharePhoto = { photo ->
+        sharePhotoFile(context, photo.file)
+      },
+      onCutPhoto = { photo ->
+        clipboardState = GalleryClipboardState(
+          operation = GalleryClipboardOperation.CUT,
+          albums = emptyList(),
+          photos = listOf(photo),
+        )
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        Toast.makeText(context, "\"${photo.name}\" cut", Toast.LENGTH_SHORT).show()
+      },
+      onCopyPhoto = { photo ->
+        clipboardState = GalleryClipboardState(
+          operation = GalleryClipboardOperation.COPY,
+          albums = emptyList(),
+          photos = listOf(photo),
+        )
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        Toast.makeText(context, "\"${photo.name}\" copied", Toast.LENGTH_SHORT).show()
+      },
+      onDuplicatePhoto = { photo ->
+        FileManagerEngine.duplicateFile(photo.file)
+        refreshTrigger++
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        Toast.makeText(context, "Duplicated \"${photo.name}\"", Toast.LENGTH_SHORT).show()
+      },
+      onRenamePhoto = { photo ->
+        crossToolHostState.fileToRename = photo.file
+      },
+      onPhotoInfo = { photo ->
+        crossToolHostState.fileForDetails = photo.file
+      },
+      onDeletePhoto = { photo ->
+        crossToolHostState.fileToDelete = photo.file
+      },
+    )
+  }
+
+  CompositionLocalProvider(LocalGalleryItemActions provides galleryItemActions) {
   Box(
     modifier = modifier
       .fillMaxSize()
@@ -1287,6 +1491,11 @@ fun GalleryScreen(
         ).show()
       },
     )
+  }
+
+  crossToolHostState.RenderFileDialogs(
+    onFileMutated = { refreshTrigger++ },
+  )
   }
 }
 
@@ -2189,6 +2398,20 @@ private fun AlbumTileCard(
               )
             }
           }
+        } else {
+          Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+            modifier = Modifier
+              .align(Alignment.TopEnd)
+              .padding(4.dp)
+              .size(26.dp),
+          ) {
+            GalleryAlbumContextMenuButton(
+              album = album,
+              onOpen = onClick,
+            )
+          }
         }
 
         // Nested folders indicator badge
@@ -2329,6 +2552,21 @@ private fun PhotoTileCard(
           }
         }
       } else {
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+          modifier = Modifier
+            .align(Alignment.TopStart)
+            .padding(4.dp)
+            .size(26.dp),
+        ) {
+          GalleryPhotoContextMenuButton(
+            photo = photo,
+            indexEntry = indexEntry,
+            onView = onClick,
+            onEdit = onEdit,
+          )
+        }
         Surface(
           shape = CircleShape,
           color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
@@ -2582,6 +2820,10 @@ private fun AlbumListRow(
       }
 
       if (!isSelectionMode) {
+        GalleryAlbumContextMenuButton(
+          album = album,
+          onOpen = onClick,
+        )
         Icon(
           imageVector = Icons.Default.ChevronRight,
           contentDescription = null,
@@ -2725,7 +2967,313 @@ private fun PhotoListRow(
             modifier = Modifier.size(20.dp),
           )
         }
+        GalleryPhotoContextMenuButton(
+          photo = photo,
+          indexEntry = indexEntry,
+          onView = onClick,
+          onEdit = onEdit,
+        )
       }
+    }
+  }
+}
+
+@Composable
+private fun GalleryAlbumContextMenuButton(
+  album: GalleryAlbum,
+  onOpen: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val actions = LocalGalleryItemActions.current
+  var expanded by remember { mutableStateOf(false) }
+
+  Box(modifier = modifier, contentAlignment = Alignment.Center) {
+    IconButton(
+      onClick = { expanded = true },
+      modifier = Modifier
+        .size(32.dp)
+        .testTag("album_more_${album.name}"),
+    ) {
+      Icon(
+        imageVector = Icons.Default.MoreVert,
+        contentDescription = "More options for ${album.name}",
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(18.dp),
+      )
+    }
+
+    DropdownMenu(
+      expanded = expanded,
+      onDismissRequest = { expanded = false },
+      modifier = Modifier.testTag("album_menu_${album.name}"),
+    ) {
+      DropdownMenuItem(
+        text = { Text("Open Album") },
+        leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
+        onClick = {
+          expanded = false
+          onOpen()
+        },
+        modifier = Modifier.testTag("album_menu_open_${album.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Compress to Archive") },
+        leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onArchiveAlbum(album)
+        },
+        modifier = Modifier.testTag("album_menu_archive_${album.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Open in Files") },
+        leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onOpenAlbumInFiles(album)
+        },
+        modifier = Modifier.testTag("album_menu_open_in_files_${album.name}"),
+      )
+      HorizontalDivider()
+      DropdownMenuItem(
+        text = { Text("Share") },
+        leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onShareAlbum(album)
+        },
+        modifier = Modifier.testTag("album_menu_share_${album.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Cut") },
+        leadingIcon = { Icon(Icons.Default.ContentCut, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onCutAlbum(album)
+        },
+        modifier = Modifier.testTag("album_menu_cut_${album.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Copy") },
+        leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onCopyAlbum(album)
+        },
+        modifier = Modifier.testTag("album_menu_copy_${album.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Rename") },
+        leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onRenameAlbum(album)
+        },
+        modifier = Modifier.testTag("album_menu_rename_${album.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Info") },
+        leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onAlbumInfo(album)
+        },
+        modifier = Modifier.testTag("album_menu_info_${album.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+        leadingIcon = {
+          Icon(
+            Icons.Default.Delete,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+          )
+        },
+        onClick = {
+          expanded = false
+          actions.onDeleteAlbum(album)
+        },
+        modifier = Modifier.testTag("album_menu_delete_${album.name}"),
+      )
+    }
+  }
+}
+
+@Composable
+private fun GalleryPhotoContextMenuButton(
+  photo: GalleryPhoto,
+  indexEntry: GalleryPhotoIndexEntry? = null,
+  onView: () -> Unit,
+  onEdit: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val actions = LocalGalleryItemActions.current
+  var expanded by remember { mutableStateOf(false) }
+
+  Box(modifier = modifier, contentAlignment = Alignment.Center) {
+    IconButton(
+      onClick = { expanded = true },
+      modifier = Modifier
+        .size(32.dp)
+        .testTag("photo_more_${photo.name}"),
+    ) {
+      Icon(
+        imageVector = Icons.Default.MoreVert,
+        contentDescription = "More options for ${photo.name}",
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(18.dp),
+      )
+    }
+
+    DropdownMenu(
+      expanded = expanded,
+      onDismissRequest = { expanded = false },
+      modifier = Modifier.testTag("photo_menu_${photo.name}"),
+    ) {
+      DropdownMenuItem(
+        text = { Text("View") },
+        leadingIcon = { Icon(Icons.Default.Visibility, contentDescription = null) },
+        onClick = {
+          expanded = false
+          onView()
+        },
+        modifier = Modifier.testTag("photo_menu_view_${photo.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text(if (photo.isVideo) "Edit in Video Editor" else "Edit in Image Editor") },
+        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+        onClick = {
+          expanded = false
+          onEdit()
+        },
+        modifier = Modifier.testTag("photo_menu_edit_${photo.name}"),
+      )
+      if (!photo.isVideo) {
+        DropdownMenuItem(
+          text = { Text("Inspect Color") },
+          leadingIcon = { Icon(Icons.Default.Palette, contentDescription = null) },
+          onClick = {
+            expanded = false
+            actions.onInspectPhotoColor(photo)
+          },
+          modifier = Modifier.testTag("photo_menu_inspect_color_${photo.name}"),
+        )
+      }
+      DropdownMenuItem(
+        text = { Text("Convert") },
+        leadingIcon = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onConvertPhoto(photo)
+        },
+        modifier = Modifier.testTag("photo_menu_convert_${photo.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Compress to Archive") },
+        leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onArchivePhoto(photo)
+        },
+        modifier = Modifier.testTag("photo_menu_archive_${photo.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Save to Notes") },
+        leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onSavePhotoToNotes(photo, indexEntry)
+        },
+        modifier = Modifier.testTag("photo_menu_save_to_notes_${photo.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Open in Files") },
+        leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onOpenPhotoInFiles(photo)
+        },
+        modifier = Modifier.testTag("photo_menu_open_in_files_${photo.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Open with…") },
+        leadingIcon = { Icon(Icons.Default.Apps, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onOpenPhotoWith(photo)
+        },
+        modifier = Modifier.testTag("photo_menu_open_with_${photo.name}"),
+      )
+      HorizontalDivider()
+      DropdownMenuItem(
+        text = { Text("Share") },
+        leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onSharePhoto(photo)
+        },
+        modifier = Modifier.testTag("photo_menu_share_${photo.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Cut") },
+        leadingIcon = { Icon(Icons.Default.ContentCut, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onCutPhoto(photo)
+        },
+        modifier = Modifier.testTag("photo_menu_cut_${photo.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Copy") },
+        leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onCopyPhoto(photo)
+        },
+        modifier = Modifier.testTag("photo_menu_copy_${photo.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Duplicate") },
+        leadingIcon = { Icon(Icons.Default.FileCopy, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onDuplicatePhoto(photo)
+        },
+        modifier = Modifier.testTag("photo_menu_duplicate_${photo.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Rename") },
+        leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onRenamePhoto(photo)
+        },
+        modifier = Modifier.testTag("photo_menu_rename_${photo.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Info") },
+        leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+        onClick = {
+          expanded = false
+          actions.onPhotoInfo(photo)
+        },
+        modifier = Modifier.testTag("photo_menu_info_${photo.name}"),
+      )
+      DropdownMenuItem(
+        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+        leadingIcon = {
+          Icon(
+            Icons.Default.Delete,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+          )
+        },
+        onClick = {
+          expanded = false
+          actions.onDeletePhoto(photo)
+        },
+        modifier = Modifier.testTag("photo_menu_delete_${photo.name}"),
+      )
     }
   }
 }
@@ -2918,7 +3466,7 @@ private fun EmptyAlbumStateView(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun GalleryPhotoViewerDialog(
+internal fun GalleryPhotoViewerDialog(
   photos: List<GalleryPhoto>,
   initialPhoto: GalleryPhoto,
   photoIndexMap: Map<String, GalleryPhotoIndexEntry> = emptyMap(),

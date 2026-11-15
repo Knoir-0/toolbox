@@ -502,133 +502,146 @@ fun ColorPickerScreen(
     lastCopiedLabel = "$label ($text)"
   }
 
-  LazyColumn(
+  Column(
     modifier = modifier
       .fillMaxSize()
       .testTag("color_picker_screen"),
-    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-    verticalArrangement = Arrangement.spacedBy(14.dp),
   ) {
-    // 1. Hero Color Preview & WCAG Contrast Card
-    item {
-      ColorHeroCard(
-        hsvColor = currentHsv,
-        r = r,
-        g = g,
-        b = b,
-        hexCode = hexCode,
-        colorName = colorName,
-        lastCopiedLabel = lastCopiedLabel,
-        isSaved = savedPalette.contains(hexCode),
-        onCopyHex = { copyToClipboard("HEX", hexCode) },
-        onRandomize = {
-          updateFromHsv(
-            newH = Random.nextFloat() * 360f,
-            newS = Random.nextFloat() * 0.65f + 0.35f,
-            newV = Random.nextFloat() * 0.55f + 0.45f,
-          )
-        },
-        onSaveSwatch = {
-          if (!savedPalette.contains(hexCode)) {
-            savedPalette.add(0, hexCode)
-          }
-        },
+    if (onNavigateBack != null) {
+      ToolboxTopBar(
+        title = "Colors",
+        subtext = "$hexCode • $colorName",
+        icon = Icons.Default.Palette,
+        onNavigateBack = onNavigateBack,
       )
     }
 
-    // 2. Interactive 2D Saturation/Value Canvas & Hue Spectrum Bar
-    item {
-      InteractiveCanvasPickerCard(
-        hue = hue,
-        saturation = saturation,
-        value = value,
-        onSaturationValueChange = { newS, newV ->
-          updateFromHsv(hue, newS, newV)
-        },
-        onHueChange = { newH ->
-          updateFromHsv(newH, saturation, value)
-        },
-      )
-    }
-
-    // 3. Precision Sliders Card (HSV / RGB)
-    item {
-      PrecisionSlidersCard(
-        sliderMode = sliderMode,
-        onSelectSliderMode = { sliderMode = it },
-        hue = hue,
-        saturation = saturation,
-        value = value,
-        r = r,
-        g = g,
-        b = b,
-        onUpdateHsv = ::updateFromHsv,
-        onUpdateRgb = ::updateFromRgb,
-      )
-    }
-
-    // 4. Direct HEX Input & Multi-Format Code Table (HEX, RGB, HSL, HSV, CMYK)
-    item {
-      ColorFormatsCard(
-        hexInput = hexInput,
-        currentHex = hexCode,
-        r = r,
-        g = g,
-        b = b,
-        hsv = currentHsv,
-        hsl = hsl,
-        cmyk = cmyk,
-        onHexInputChange = { newText ->
-          val filtered = newText.uppercase().take(7)
-          hexInput = filtered
-          ColorMath.parseHex(filtered)?.let { (pr, pg, pb) ->
-            if (filtered.removePrefix("#").length == 6) {
-              val converted = ColorMath.rgbToHsv(pr, pg, pb)
-              hue = converted.hue
-              saturation = converted.saturation
-              value = converted.value
+    LazyColumn(
+      modifier = Modifier.fillMaxSize(),
+      contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+      verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+      // 1. Hero Color Preview & WCAG Contrast Card
+      item {
+        ColorHeroCard(
+          hsvColor = currentHsv,
+          r = r,
+          g = g,
+          b = b,
+          hexCode = hexCode,
+          colorName = colorName,
+          lastCopiedLabel = lastCopiedLabel,
+          isSaved = savedPalette.contains(hexCode),
+          onCopyHex = { copyToClipboard("HEX", hexCode) },
+          onRandomize = {
+            updateFromHsv(
+              newH = Random.nextFloat() * 360f,
+              newS = Random.nextFloat() * 0.65f + 0.35f,
+              newV = Random.nextFloat() * 0.55f + 0.45f,
+            )
+          },
+          onSaveSwatch = {
+            if (!savedPalette.contains(hexCode)) {
+              savedPalette.add(0, hexCode)
             }
-          }
-        },
-        onApplyHex = {
-          ColorMath.parseHex(hexInput)?.let { (pr, pg, pb) ->
-            updateFromRgb(pr, pg, pb)
-          }
-        },
-        onCopyFormat = ::copyToClipboard,
-      )
-    }
+          },
+        )
+      }
 
-    // 5. Color Harmonies Generator Card
-    item {
-      ColorHarmoniesCard(
-        harmonyMode = harmonyMode,
-        onSelectHarmonyMode = { harmonyMode = it },
-        harmonies = harmonies,
-        activeHex = hexCode,
-        onSelectHarmonyColor = { selected ->
-          updateFromHsv(selected.hue, selected.saturation, selected.value)
-        },
-      )
-    }
+      // 2. Interactive 2D Saturation/Value Canvas & Hue Spectrum Bar
+      item {
+        InteractiveCanvasPickerCard(
+          hue = hue,
+          saturation = saturation,
+          value = value,
+          onSaturationValueChange = { newS, newV ->
+            updateFromHsv(hue, newS, newV)
+          },
+          onHueChange = { newH ->
+            updateFromHsv(newH, saturation, value)
+          },
+        )
+      }
 
-    // 6. Saved Palette Card
-    item {
-      SavedPaletteCard(
-        savedPalette = savedPalette,
-        activeHex = hexCode,
-        onSelectHex = { selectedHex ->
-          ColorMath.parseHex(selectedHex)?.let { (pr, pg, pb) ->
-            updateFromRgb(pr, pg, pb)
-          }
-        },
-        onSaveCurrent = {
-          if (!savedPalette.contains(hexCode)) {
-            savedPalette.add(0, hexCode)
-          }
-        },
-        onClearSaved = { savedPalette.clear() },
-      )
+      // 3. Precision Sliders Card (HSV / RGB)
+      item {
+        PrecisionSlidersCard(
+          sliderMode = sliderMode,
+          onSelectSliderMode = { sliderMode = it },
+          hue = hue,
+          saturation = saturation,
+          value = value,
+          r = r,
+          g = g,
+          b = b,
+          onUpdateHsv = ::updateFromHsv,
+          onUpdateRgb = ::updateFromRgb,
+        )
+      }
+
+      // 4. Direct HEX Input & Multi-Format Code Table (HEX, RGB, HSL, HSV, CMYK)
+      item {
+        ColorFormatsCard(
+          hexInput = hexInput,
+          currentHex = hexCode,
+          r = r,
+          g = g,
+          b = b,
+          hsv = currentHsv,
+          hsl = hsl,
+          cmyk = cmyk,
+          onHexInputChange = { newText ->
+            val filtered = newText.uppercase().take(7)
+            hexInput = filtered
+            ColorMath.parseHex(filtered)?.let { (pr, pg, pb) ->
+              if (filtered.removePrefix("#").length == 6) {
+                val converted = ColorMath.rgbToHsv(pr, pg, pb)
+                hue = converted.hue
+                saturation = converted.saturation
+                value = converted.value
+              }
+            }
+          },
+          onApplyHex = {
+            ColorMath.parseHex(hexInput)?.let { (pr, pg, pb) ->
+              updateFromRgb(pr, pg, pb)
+            }
+          },
+          onCopyFormat = ::copyToClipboard,
+        )
+      }
+
+      // 5. Color Harmonies Generator Card
+      item {
+        ColorHarmoniesCard(
+          harmonyMode = harmonyMode,
+          onSelectHarmonyMode = { harmonyMode = it },
+          harmonies = harmonies,
+          activeHex = hexCode,
+          onSelectHarmonyColor = { selected ->
+            updateFromHsv(selected.hue, selected.saturation, selected.value)
+          },
+        )
+      }
+
+      // 6. Saved Palette Card
+      item {
+        SavedPaletteCard(
+          savedPalette = savedPalette,
+          activeHex = hexCode,
+          onSelectHex = { selectedHex ->
+            ColorMath.parseHex(selectedHex)?.let { (pr, pg, pb) ->
+              updateFromRgb(pr, pg, pb)
+            }
+          },
+          onSaveCurrent = {
+            if (!savedPalette.contains(hexCode)) {
+              savedPalette.add(0, hexCode)
+            }
+          },
+          onClearSaved = { savedPalette.clear() },
+        )
+      }
     }
   }
 }

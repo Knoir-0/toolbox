@@ -1,5 +1,6 @@
 package com.example.toolbox.ui.tools
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
@@ -48,9 +49,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
@@ -62,6 +65,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Yard
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -89,7 +93,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -123,6 +129,41 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.util.UUID
+
+internal class PlantCardActionDispatcher(
+  val onEditOrCustomize: (PlantItem) -> Unit = {},
+  val onDuplicatePlant: (PlantItem) -> Unit = {},
+  val onAddScheduleToTodo: (PlantItem) -> Unit = {},
+  val onSaveGuideToNotes: (PlantItem) -> Unit = {},
+  val onCopyGuide: (PlantItem) -> Unit = {},
+  val onShareGuide: (PlantItem) -> Unit = {},
+)
+
+internal val LocalPlantCardActions = compositionLocalOf { PlantCardActionDispatcher() }
+
+private fun formatPlantGuidePlainText(plant: PlantItem): String {
+  return buildString {
+    appendLine("${plant.name} (${plant.category.displayName})")
+    if (plant.scientificName.isNotBlank()) {
+      appendLine("Scientific Name: ${plant.scientificName}")
+    }
+    appendLine("Planting Months: ${plant.plantingSummary()}")
+    appendLine("Harvest Months: ${plant.harvestSummary()}")
+    if (plant.sunRequirement.isNotBlank()) {
+      appendLine("Sun: ${plant.sunRequirement}")
+    }
+    if (plant.spacing.isNotBlank()) {
+      appendLine("Spacing: ${plant.spacing}")
+    }
+    if (plant.daysToMaturity.isNotBlank()) {
+      appendLine("Days to Maturity: ${plant.daysToMaturity}")
+    }
+    if (plant.notes.isNotBlank()) {
+      appendLine()
+      appendLine(plant.notes)
+    }
+  }.trim()
+}
 
 @OptIn(
   ExperimentalMaterial3Api::class,
@@ -301,6 +342,53 @@ fun PlantScheduleScreen(
     }
   }
 
+  val plantCardDispatcher = remember(scheduledPlants, customPlants, context) {
+    PlantCardActionDispatcher(
+      onEditOrCustomize = { plant ->
+        editingPlant = plant
+        showEditorDialog = true
+      },
+      onDuplicatePlant = { plant ->
+        duplicatePlantsAsCustom(listOf(plant))
+        Toast.makeText(context, "Duplicated \"${plant.name}\"", Toast.LENGTH_SHORT).show()
+      },
+      onAddScheduleToTodo = { plant ->
+        CrossToolActions.saveTaskToTodoList(
+          context = context,
+          title = "Garden: ${plant.name}",
+          notes = formatPlantGuidePlainText(plant),
+          subtasks = listOf(
+            "Plant ${plant.name} (${plant.plantingSummary()})",
+            "Harvest ${plant.name} (${plant.harvestSummary()})",
+          ),
+        )
+      },
+      onSaveGuideToNotes = { plant ->
+        CrossToolActions.saveTextToNotes(
+          context = context,
+          title = "${plant.name} Planting Guide",
+          content = formatPlantGuidePlainText(plant),
+          labels = listOf("Plants"),
+        )
+      },
+      onCopyGuide = { plant ->
+        CrossToolActions.copyTextToClipboard(
+          context = context,
+          label = plant.name,
+          text = formatPlantGuidePlainText(plant),
+        )
+      },
+      onShareGuide = { plant ->
+        CrossToolActions.shareText(
+          context = context,
+          title = "${plant.name} Planting Guide",
+          text = formatPlantGuidePlainText(plant),
+        )
+      },
+    )
+  }
+
+  CompositionLocalProvider(LocalPlantCardActions provides plantCardDispatcher) {
   Box(
     modifier = modifier
       .fillMaxSize()
@@ -718,6 +806,7 @@ fun PlantScheduleScreen(
         }
       }
     }
+  }
   }
 
   // Section 5.2: Add / Edit Custom Plant Dialog
@@ -1145,6 +1234,7 @@ private fun CatalogPlantItemCard(
               expanded = showItemMenu,
               onDismissRequest = { showItemMenu = false },
             ) {
+              val plantActions = LocalPlantCardActions.current
               DropdownMenuItem(
                 text = { Text("Info") },
                 leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
@@ -1153,6 +1243,48 @@ private fun CatalogPlantItemCard(
                   onInspect()
                 },
               )
+              DropdownMenuItem(
+                text = { Text("Customize Schedule") },
+                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                onClick = {
+                  showItemMenu = false
+                  plantActions.onEditOrCustomize(plant)
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Copy") },
+                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                onClick = {
+                  showItemMenu = false
+                  plantActions.onDuplicatePlant(plant)
+                },
+              )
+              HorizontalDivider()
+              DropdownMenuItem(
+                text = { Text("Add Planting & Harvest to To Do") },
+                leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) },
+                onClick = {
+                  showItemMenu = false
+                  plantActions.onAddScheduleToTodo(plant)
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Save Plant Guide to Notes") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
+                onClick = {
+                  showItemMenu = false
+                  plantActions.onSaveGuideToNotes(plant)
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Share") },
+                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                onClick = {
+                  showItemMenu = false
+                  plantActions.onShareGuide(plant)
+                },
+              )
+              HorizontalDivider()
               DropdownMenuItem(
                 text = { Text(if (isScheduled) "Remove" else "Add to Schedule") },
                 leadingIcon = {
@@ -1720,6 +1852,7 @@ private fun ScheduledPlantYearRow(
             expanded = showItemMenu,
             onDismissRequest = { showItemMenu = false },
           ) {
+            val plantActions = LocalPlantCardActions.current
             DropdownMenuItem(
               text = { Text("Info") },
               leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
@@ -1745,6 +1878,32 @@ private fun ScheduledPlantYearRow(
                 onDuplicate()
               },
             )
+            HorizontalDivider()
+            DropdownMenuItem(
+              text = { Text("Add Planting & Harvest to To Do") },
+              leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) },
+              onClick = {
+                showItemMenu = false
+                plantActions.onAddScheduleToTodo(plant)
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("Save Plant Guide to Notes") },
+              leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
+              onClick = {
+                showItemMenu = false
+                plantActions.onSaveGuideToNotes(plant)
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("Share") },
+              leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+              onClick = {
+                showItemMenu = false
+                plantActions.onShareGuide(plant)
+              },
+            )
+            HorizontalDivider()
             DropdownMenuItem(
               text = {
                 Text(

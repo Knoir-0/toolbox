@@ -35,21 +35,27 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Launch
+import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -1071,6 +1077,86 @@ private fun SearchDiscoveryHomeView(
               modifier = Modifier.size(20.dp),
             )
           }
+
+          var toolMenuExpanded by remember { mutableStateOf(false) }
+          val toolContext = LocalContext.current
+          Box {
+            IconButton(
+              onClick = { toolMenuExpanded = true },
+              modifier = Modifier
+                .size(34.dp)
+                .testTag("search_tool_more_${tool.name}"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = "More options for ${tool.title}",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+              )
+            }
+            DropdownMenu(
+              expanded = toolMenuExpanded,
+              onDismissRequest = { toolMenuExpanded = false },
+            ) {
+              DropdownMenuItem(
+                text = { Text("Open ${tool.title}") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.Launch, contentDescription = null) },
+                onClick = {
+                  toolMenuExpanded = false
+                  onOpenTool(tool)
+                },
+              )
+              DropdownMenuItem(
+                text = { Text(if (isPinned) "Unpin from Quick Launch" else "Pin to Quick Launch") },
+                leadingIcon = {
+                  Icon(
+                    imageVector = if (isPinned) Icons.Default.Star else Icons.Default.StarBorder,
+                    contentDescription = null,
+                  )
+                },
+                onClick = {
+                  toolMenuExpanded = false
+                  onTogglePinTool(tool)
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Copy Tool Info") },
+                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                onClick = {
+                  toolMenuExpanded = false
+                  CrossToolActions.copyTextToClipboard(
+                    toolContext,
+                    tool.title,
+                    "${tool.title} (${tool.category.title}) — ${meta?.summary ?: ""}",
+                  )
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Save to Notes") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
+                onClick = {
+                  toolMenuExpanded = false
+                  CrossToolActions.saveTextToNotes(
+                    toolContext,
+                    tool.title,
+                    "Category: ${tool.category.title}\n\n${meta?.summary ?: ""}",
+                  )
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Share") },
+                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                onClick = {
+                  toolMenuExpanded = false
+                  CrossToolActions.shareText(
+                    toolContext,
+                    tool.title,
+                    "${tool.title} (${tool.category.title})\n${meta?.summary ?: ""}",
+                  )
+                },
+              )
+            }
+          }
         }
       }
     }
@@ -1175,6 +1261,98 @@ private fun SearchResultCard(
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
               )
+            }
+            var resultMenuExpanded by remember { mutableStateOf(false) }
+            val resultContext = LocalContext.current
+            Box {
+              IconButton(
+                onClick = { resultMenuExpanded = true },
+                modifier = Modifier
+                  .size(30.dp)
+                  .testTag("search_result_more_${item.id}"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.MoreVert,
+                  contentDescription = "More options for ${item.title}",
+                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.size(18.dp),
+                )
+              }
+              DropdownMenu(
+                expanded = resultMenuExpanded,
+                onDismissRequest = { resultMenuExpanded = false },
+              ) {
+                DropdownMenuItem(
+                  text = { Text("Open ${item.tool.title}") },
+                  leadingIcon = { Icon(Icons.AutoMirrored.Filled.Launch, contentDescription = null) },
+                  onClick = {
+                    resultMenuExpanded = false
+                    onOpenToolClick()
+                  },
+                )
+                if (item.detailRows.isNotEmpty() && item.resultType != SearchResultType.TOOL) {
+                  DropdownMenuItem(
+                    text = { Text("Inspect Details") },
+                    leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                    onClick = {
+                      resultMenuExpanded = false
+                      onInspectClick()
+                    },
+                  )
+                }
+                DropdownMenuItem(
+                  text = { Text("Copy") },
+                  leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                  onClick = {
+                    resultMenuExpanded = false
+                    onCopyClick(item.copyableValue ?: "${item.title}\n${item.subtitle}")
+                  },
+                )
+                DropdownMenuItem(
+                  text = { Text("Save to Notes") },
+                  leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
+                  onClick = {
+                    resultMenuExpanded = false
+                    val body = buildString {
+                      appendLine(item.subtitle)
+                      if (item.snippet.isNotBlank()) {
+                        appendLine()
+                        appendLine(item.snippet)
+                      }
+                      if (item.detailRows.isNotEmpty()) {
+                        appendLine()
+                        item.detailRows.forEach { row ->
+                          appendLine("• ${row.label}: ${row.value}")
+                        }
+                      }
+                    }.trim()
+                    CrossToolActions.saveTextToNotes(resultContext, item.title, body)
+                  },
+                )
+                DropdownMenuItem(
+                  text = { Text("Add to To Do") },
+                  leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) },
+                  onClick = {
+                    resultMenuExpanded = false
+                    CrossToolActions.saveTaskToTodoList(
+                      resultContext,
+                      "${item.title} (${item.subtitle})",
+                    )
+                  },
+                )
+                DropdownMenuItem(
+                  text = { Text("Share") },
+                  leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                  onClick = {
+                    resultMenuExpanded = false
+                    CrossToolActions.shareText(
+                      resultContext,
+                      item.title,
+                      "${item.title}\n${item.subtitle}\n${item.snippet}".trim(),
+                    )
+                  },
+                )
+              }
             }
           }
 

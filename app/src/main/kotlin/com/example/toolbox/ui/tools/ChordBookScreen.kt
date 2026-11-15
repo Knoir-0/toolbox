@@ -1,5 +1,6 @@
 package com.example.toolbox.ui.tools
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
@@ -46,17 +47,22 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Tune
@@ -64,6 +70,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -83,7 +91,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -152,6 +162,15 @@ enum class ReverseSearchMode(val title: String) {
   CHORDS("Reverse Chord"),
   SCALES("Reverse Scale"),
 }
+
+internal class ChordBookActionDispatcher(
+  val onPinChord: (root: Int, quality: ChordQuality, bass: Int, preferredFrets: List<Int>?) -> Unit = { _, _, _, _ -> },
+  val onCopyText: (label: String, text: String) -> Unit = { _, _ -> },
+  val onSaveToNotes: (title: String, content: String) -> Unit = { _, _ -> },
+  val onShareText: (title: String, text: String) -> Unit = { _, _ -> },
+)
+
+internal val LocalChordBookActions = compositionLocalOf { ChordBookActionDispatcher() }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -359,6 +378,30 @@ fun ChordBookScreen(
     updateProgressions(updatedList)
   }
 
+  val chordBookDispatcher = remember(progressions, activeProgressionId, context) {
+    ChordBookActionDispatcher(
+      onPinChord = { root, quality, bass, preferredFrets ->
+        pinChordToActiveProgression(root, quality, bass, preferredFrets)
+        Toast.makeText(context, "Pinned to Songbook", Toast.LENGTH_SHORT).show()
+      },
+      onCopyText = { label, text ->
+        CrossToolActions.copyTextToClipboard(context, label, text)
+      },
+      onSaveToNotes = { title, content ->
+        CrossToolActions.saveTextToNotes(
+          context = context,
+          title = title,
+          content = content,
+          labels = listOf("Music"),
+        )
+      },
+      onShareText = { title, text ->
+        CrossToolActions.shareText(context, title, text)
+      },
+    )
+  }
+
+  CompositionLocalProvider(LocalChordBookActions provides chordBookDispatcher) {
   Column(
     modifier = modifier
       .fillMaxSize()
@@ -885,6 +928,7 @@ fun ChordBookScreen(
         )
       }
     }
+  }
   }
 
   // --- Dialogs ---
@@ -2472,7 +2516,10 @@ private fun ScalesAndKeyTabContent(
               }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+              horizontalArrangement = Arrangement.spacedBy(4.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
               FilledTonalIconButton(
                 onClick = { onPinDiatonicChord(diatonic.rootPitchClass, quality) },
                 modifier = Modifier
@@ -2492,6 +2539,71 @@ private fun ScalesAndKeyTabContent(
                 modifier = Modifier.testTag("view_diatonic_chord_$idx"),
               ) {
                 Text("Voicings", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+              }
+
+              var diatonicMenuExpanded by remember { mutableStateOf(false) }
+              val chordActions = LocalChordBookActions.current
+              val diatonicSummary = "$symbol (${quality.fullName}) — ${diatonic.romanNumeral}, Degree ${diatonic.degreeNumber} (${diatonic.intervalLabel})"
+              Box {
+                IconButton(
+                  onClick = { diatonicMenuExpanded = true },
+                  modifier = Modifier
+                    .size(30.dp)
+                    .testTag("diatonic_chord_more_$idx"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.MoreVert,
+                    contentDescription = "More options for $symbol",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                  )
+                }
+                DropdownMenu(
+                  expanded = diatonicMenuExpanded,
+                  onDismissRequest = { diatonicMenuExpanded = false },
+                ) {
+                  DropdownMenuItem(
+                    text = { Text("View Voicings") },
+                    leadingIcon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
+                    onClick = {
+                      diatonicMenuExpanded = false
+                      onJumpToDiatonicChord(diatonic.rootPitchClass, quality)
+                    },
+                  )
+                  DropdownMenuItem(
+                    text = { Text("Pin to Songbook") },
+                    leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null) },
+                    onClick = {
+                      diatonicMenuExpanded = false
+                      onPinDiatonicChord(diatonic.rootPitchClass, quality)
+                    },
+                  )
+                  HorizontalDivider()
+                  DropdownMenuItem(
+                    text = { Text("Copy Chord Info") },
+                    leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                    onClick = {
+                      diatonicMenuExpanded = false
+                      chordActions.onCopyText(symbol, diatonicSummary)
+                    },
+                  )
+                  DropdownMenuItem(
+                    text = { Text("Save to Notes") },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
+                    onClick = {
+                      diatonicMenuExpanded = false
+                      chordActions.onSaveToNotes("Chord: $symbol", diatonicSummary)
+                    },
+                  )
+                  DropdownMenuItem(
+                    text = { Text("Share") },
+                    leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                    onClick = {
+                      diatonicMenuExpanded = false
+                      chordActions.onShareText(symbol, diatonicSummary)
+                    },
+                  )
+                }
               }
             }
           }
@@ -2748,17 +2860,113 @@ private fun SongbookTabContent(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
                   )
-                  IconButton(
-                    onClick = { onRemoveChord(savedChord.id) },
-                    modifier = Modifier.size(26.dp),
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.Clear,
-                      contentDescription = "Remove chord",
-                      tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                      modifier = Modifier.size(16.dp),
-                    )
+                  Row(verticalAlignment = Alignment.CenterVertically) {
+                    var progChordMenuExpanded by remember { mutableStateOf(false) }
+                    val chordActions = LocalChordBookActions.current
+                    val chordLabel = savedChord.formatName(enharmonicPref)
+                    val notationText = resolvedVoicing?.let { "$chordLabel — ${it.compactNotation}" } ?: chordLabel
+                    Box {
+                      IconButton(
+                        onClick = { progChordMenuExpanded = true },
+                        modifier = Modifier
+                          .size(26.dp)
+                          .testTag("progression_chord_more_$chordIdx"),
+                      ) {
+                        Icon(
+                          imageVector = Icons.Default.MoreVert,
+                          contentDescription = "More options for $chordLabel",
+                          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                          modifier = Modifier.size(16.dp),
+                        )
+                      }
+                      DropdownMenu(
+                        expanded = progChordMenuExpanded,
+                        onDismissRequest = { progChordMenuExpanded = false },
+                      ) {
+                        DropdownMenuItem(
+                          text = { Text("View Voicings") },
+                          leadingIcon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
+                          onClick = {
+                            progChordMenuExpanded = false
+                            onJumpToChordVoicings(savedChord)
+                          },
+                        )
+                        if (chordIdx > 0) {
+                          DropdownMenuItem(
+                            text = { Text("Move Earlier") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) },
+                            onClick = {
+                              progChordMenuExpanded = false
+                              onMoveChord(chordIdx, -1)
+                            },
+                          )
+                        }
+                        if (chordIdx < chords.lastIndex) {
+                          DropdownMenuItem(
+                            text = { Text("Move Later") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null) },
+                            onClick = {
+                              progChordMenuExpanded = false
+                              onMoveChord(chordIdx, 1)
+                            },
+                          )
+                        }
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                          text = { Text("Copy Notation") },
+                          leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                          onClick = {
+                            progChordMenuExpanded = false
+                            chordActions.onCopyText(chordLabel, notationText)
+                          },
+                        )
+                        DropdownMenuItem(
+                          text = { Text("Save to Notes") },
+                          leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
+                          onClick = {
+                            progChordMenuExpanded = false
+                            chordActions.onSaveToNotes("Chord: $chordLabel", notationText)
+                          },
+                        )
+                        DropdownMenuItem(
+                          text = { Text("Share") },
+                          leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                          onClick = {
+                            progChordMenuExpanded = false
+                            chordActions.onShareText(chordLabel, notationText)
+                          },
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                          text = { Text("Remove", color = MaterialTheme.colorScheme.error) },
+                          leadingIcon = {
+                            Icon(
+                              Icons.Default.Delete,
+                              contentDescription = null,
+                              tint = MaterialTheme.colorScheme.error,
+                            )
+                          },
+                          onClick = {
+                            progChordMenuExpanded = false
+                            onRemoveChord(savedChord.id)
+                          },
+                        )
+                      }
+                    }
+
+                    IconButton(
+                      onClick = { onRemoveChord(savedChord.id) },
+                      modifier = Modifier.size(26.dp),
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.Clear,
+                        contentDescription = "Remove chord",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp),
+                      )
+                    }
                   }
                 }
 
@@ -3051,23 +3259,106 @@ private fun VoicingDiagramCard(
           fontWeight = FontWeight.SemiBold,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (voicing.isSlashOrInversion) {
-          val bassNote = ChordBookEngine.formatPitchClass(
-            voicing.bassPitchClass,
-            enharmonicPref,
-            voicing.rootPitchClass,
-          )
-          Surface(
-            shape = RoundedCornerShape(10.dp),
-            color = MaterialTheme.colorScheme.tertiaryContainer,
-          ) {
-            Text(
-              text = "/$bassNote",
-              style = MaterialTheme.typography.labelSmall,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onTertiaryContainer,
-              modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+          if (voicing.isSlashOrInversion) {
+            val bassNote = ChordBookEngine.formatPitchClass(
+              voicing.bassPitchClass,
+              enharmonicPref,
+              voicing.rootPitchClass,
             )
+            Surface(
+              shape = RoundedCornerShape(10.dp),
+              color = MaterialTheme.colorScheme.tertiaryContainer,
+            ) {
+              Text(
+                text = "/$bassNote",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+              )
+            }
+          }
+
+          var voicingMenuExpanded by remember { mutableStateOf(false) }
+          val chordActions = LocalChordBookActions.current
+          val chordSymbol = ChordBookEngine.formatChordSymbol(
+            rootPitchClass = voicing.rootPitchClass,
+            quality = voicing.quality,
+            bassPitchClass = if (voicing.isSlashOrInversion) voicing.bassPitchClass else null,
+            preference = enharmonicPref,
+          )
+          val voicingSummary = "$chordSymbol ($posLabel) — Frets: ${voicing.compactNotation}"
+
+          Box {
+            IconButton(
+              onClick = { voicingMenuExpanded = true },
+              modifier = Modifier
+                .size(24.dp)
+                .testTag("voicing_more_$index"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = "More options for voicing #${index + 1}",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+              )
+            }
+
+            DropdownMenu(
+              expanded = voicingMenuExpanded,
+              onDismissRequest = { voicingMenuExpanded = false },
+            ) {
+              DropdownMenuItem(
+                text = { Text("Inspect Voicing") },
+                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                onClick = {
+                  voicingMenuExpanded = false
+                  onClick()
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Pin to Songbook") },
+                leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null) },
+                onClick = {
+                  voicingMenuExpanded = false
+                  chordActions.onPinChord(
+                    voicing.rootPitchClass,
+                    voicing.quality,
+                    voicing.bassPitchClass,
+                    voicing.frets,
+                  )
+                },
+              )
+              HorizontalDivider()
+              DropdownMenuItem(
+                text = { Text("Copy Notation") },
+                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                onClick = {
+                  voicingMenuExpanded = false
+                  chordActions.onCopyText(chordSymbol, voicingSummary)
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Save to Notes") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
+                onClick = {
+                  voicingMenuExpanded = false
+                  chordActions.onSaveToNotes("Chord Voicing: $chordSymbol", voicingSummary)
+                },
+              )
+              DropdownMenuItem(
+                text = { Text("Share") },
+                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                onClick = {
+                  voicingMenuExpanded = false
+                  chordActions.onShareText(chordSymbol, voicingSummary)
+                },
+              )
+            }
           }
         }
       }

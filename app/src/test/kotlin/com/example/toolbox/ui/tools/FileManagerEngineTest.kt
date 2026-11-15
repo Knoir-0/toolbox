@@ -656,4 +656,95 @@ class FileManagerEngineTest {
     assertFalse(FileManagerEngine.canNavigateUp(root, root))
     assertNull(FileManagerEngine.navigateUpDirectory(root, root))
   }
+
+  @Test
+  fun parseAndImportFileToNotes_handlesChecklistAndPlainTextFiles() {
+    val checklistFile = File(tempFolder.root, "QuickNotes.md").apply {
+      writeText(
+        """
+        # Release Checklist
+        - [x] Build file unifier menu
+        - [ ] Run unit tests
+        """.trimIndent()
+      )
+    }
+
+    val repo = InMemoryNotesRepository(initialLabels = listOf("Personal"))
+
+    val importedChecklist = FileManagerEngine.importFileToNotes(checklistFile, repo, nowMs = 1_700_000_000_000L)
+    assertNotNull(importedChecklist)
+    assertEquals("Release Checklist", importedChecklist!!.title)
+    assertTrue(importedChecklist.isChecklist)
+    assertEquals(2, importedChecklist.checklistItems.size)
+    assertTrue(importedChecklist.checklistItems[0].isChecked)
+    assertEquals("Build file unifier menu", importedChecklist.checklistItems[0].text)
+    assertFalse(importedChecklist.checklistItems[1].isChecked)
+    assertEquals("Run unit tests", importedChecklist.checklistItems[1].text)
+    assertTrue(importedChecklist.labels.contains("Files"))
+    assertTrue(repo.loadLabels().contains("Files"))
+    assertEquals(1, repo.loadNotes().size)
+
+    val proseFile = File(tempFolder.root, "MeetingSummary.txt").apply {
+      writeText("Discussed cross-tool context menu actions and clipboard integration.")
+    }
+    val importedProse = FileManagerEngine.importFileToNotes(proseFile, repo, nowMs = 1_700_000_005_000L)
+    assertNotNull(importedProse)
+    assertEquals("MeetingSummary", importedProse!!.title)
+    assertFalse(importedProse.isChecklist)
+    assertEquals(
+      "Discussed cross-tool context menu actions and clipboard integration.",
+      importedProse.content,
+    )
+    assertEquals(2, repo.loadNotes().size)
+  }
+
+  @Test
+  fun parseAndImportFileToTodoList_createsTaskWithSubtasks() {
+    val shoppingFile = File(tempFolder.root, "ShoppingList.txt").apply {
+      writeText(
+        """
+        - [x] Apples
+        - Coffee beans
+        - USB-C cable
+        """.trimIndent()
+      )
+    }
+
+    val repo = InMemoryTodoListRepository()
+
+    val importedTodo = FileManagerEngine.importFileToTodoList(shoppingFile, repo, nowMs = 1_700_000_000_000L)
+    assertNotNull(importedTodo)
+    assertEquals("ShoppingList", importedTodo!!.title)
+    assertEquals(3, importedTodo.subtasks.size)
+    assertTrue(importedTodo.subtasks[0].isCompleted)
+    assertEquals("Apples", importedTodo.subtasks[0].title)
+    assertFalse(importedTodo.subtasks[1].isCompleted)
+    assertEquals("Coffee beans", importedTodo.subtasks[1].title)
+    assertFalse(importedTodo.subtasks[2].isCompleted)
+    assertEquals("USB-C cable", importedTodo.subtasks[2].title)
+    assertEquals(1, repo.loadTasks().size)
+  }
+
+  @Test
+  fun extractDominantColorHex_andCollectShareableFiles_workCorrectly() {
+    val pngFile = File(tempFolder.root, "swatch.png")
+    GalleryEngine.writeSolidColorPng(
+      outputFile = pngFile,
+      red = 0x2E,
+      green = 0x8B,
+      blue = 0x57,
+    )
+    val hex = FileManagerEngine.extractDominantColorHex(pngFile)
+    assertEquals("#2E8B57", hex)
+
+    val nonImage = File(tempFolder.root, "notes.txt").apply { writeText("hello") }
+    assertNull(FileManagerEngine.extractDominantColorHex(nonImage))
+
+    val nestedDir = File(tempFolder.root, "FolderA").apply { mkdirs() }
+    val nestedFile = File(nestedDir, "inside.txt").apply { writeText("inside") }
+    val hiddenFile = File(nestedDir, ".secret").apply { writeText("hidden") }
+
+    val shareable = FileManagerEngine.collectShareableFiles(listOf(pngFile, nestedDir, hiddenFile))
+    assertEquals(listOf(pngFile.absolutePath, nestedFile.absolutePath), shareable.map { it.absolutePath })
+  }
 }

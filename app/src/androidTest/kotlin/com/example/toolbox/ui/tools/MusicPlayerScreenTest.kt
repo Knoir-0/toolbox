@@ -763,4 +763,63 @@ class MusicPlayerScreenTest {
       assertEquals(preset, session.sleepTimerPreset)
     }
   }
+
+  @Test
+  fun musicPlayer_supportsFavoritingArtistsAlbumsAndGenres_withoutAddingToDefaultFavoritesPlaylist() {
+    composeTestRule.setContent {
+      ToolboxTheme {
+        MusicPlayerScreen(
+          initialTracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS,
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    val session = MusicPlayerEngine.getActivePlaybackSession()
+    assertNotNull(session)
+
+    // 1. Favorite an artist ("Aurora Synth") and filter Artists by Favorites
+    composeTestRule.onNodeWithTag("music_tab_ARTISTS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("favorite_artist_Aurora Synth").performClick()
+    composeTestRule.waitForIdle()
+    assertTrue(session!!.isArtistFavorite("Aurora Synth"))
+
+    composeTestRule.onNodeWithTag("music_favorites_filter_chip").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Aurora Synth").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Velvet Trio").assertDoesNotExist()
+
+    // 2. Favorite an album ("Blue Note Sessions") and filter Albums by Favorites
+    composeTestRule.onNodeWithTag("music_tab_ALBUMS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("favorite_album_Blue Note Sessions").performClick()
+    composeTestRule.waitForIdle()
+    assertTrue(session.isAlbumFavorite("Blue Note Sessions", "Velvet Trio"))
+
+    composeTestRule.onNodeWithTag("music_favorites_filter_chip").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Blue Note Sessions").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Midnight Odyssey").assertDoesNotExist()
+
+    // 3. Favorite a genre ("Synthwave") and filter Genres by Favorites
+    composeTestRule.onNodeWithTag("music_tab_GENRES").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("favorite_genre_Synthwave").performClick()
+    composeTestRule.waitForIdle()
+    assertTrue(session.isGenreFavorite("Synthwave"))
+
+    composeTestRule.onNodeWithTag("music_favorites_filter_chip").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Synthwave").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Jazz").assertDoesNotExist()
+
+    // 4. Verify the default Favorites playlist in Playlists tab remains empty (0 songs)
+    composeTestRule.onNodeWithTag("music_tab_PLAYLISTS").performClick()
+    composeTestRule.waitForIdle()
+    assertTrue(session.favoriteIds.isEmpty())
+    composeTestRule.onNodeWithTag("playlist_item_Favorites").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("No tracks in this playlist yet").assertIsDisplayed()
+  }
 }

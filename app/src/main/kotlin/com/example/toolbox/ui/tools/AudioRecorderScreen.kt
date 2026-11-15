@@ -48,24 +48,32 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.NoteAdd
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -298,6 +306,7 @@ fun AudioRecorderScreen(
   var recordingToRename by remember { mutableStateOf<AudioRecordingItem?>(null) }
   var recordingToDelete by remember { mutableStateOf<AudioRecordingItem?>(null) }
   var fileForAudioEditor by remember { mutableStateOf<File?>(null) }
+  val crossToolHostState = rememberCrossToolFileHostState()
 
   fun startRecording(source: AudioCaptureSource = AudioCaptureSource.MICROPHONE) {
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -344,6 +353,14 @@ fun AudioRecorderScreen(
         refreshTrigger++
       },
     )
+    return
+  }
+
+  if (crossToolHostState.RenderSubScreen(
+      modifier = modifier,
+      onRefreshNeeded = { refreshTrigger++ },
+    )
+  ) {
     return
   }
 
@@ -955,13 +972,45 @@ fun AudioRecorderScreen(
               onClick = {
                 activePlaybackRecording = item
               },
+              onPlayInMusic = {
+                activePlaybackRecording = null
+                crossToolHostState.fileForMusicPlayer = item.file
+              },
               onEdit = {
                 activePlaybackRecording = null
                 fileForAudioEditor = item.file
                 onOpenAudioEditor?.invoke(item.file)
               },
+              onConvert = {
+                crossToolHostState.fileForConverter = item.file
+              },
+              onCompress = {
+                crossToolHostState.filesForCompression = listOf(item.file)
+              },
+              onSaveToNotes = {
+                CrossToolActions.saveFileToNotes(context, item.file)
+              },
+              onOpenInFiles = {
+                crossToolHostState.directoryForFiles = item.file.parentFile ?: recordingsDirectory
+              },
+              onOpenWith = {
+                FileManagerEngine.openFile(context, item.file, chooseApp = true)
+              },
+              onShare = {
+                CrossToolActions.shareFile(context, item.file)
+              },
+              onDuplicate = {
+                val res = FileManagerEngine.duplicateFile(item.file)
+                if (res.isSuccess) {
+                  refreshTrigger++
+                  Toast.makeText(context, "Duplicated ${item.name}", Toast.LENGTH_SHORT).show()
+                }
+              },
               onRename = {
                 recordingToRename = item
+              },
+              onInfo = {
+                crossToolHostState.fileForDetails = item.file
               },
               onDelete = {
                 recordingToDelete = item
@@ -972,6 +1021,10 @@ fun AudioRecorderScreen(
       }
     }
   }
+
+  crossToolHostState.RenderFileDialogs(
+    onRefreshNeeded = { refreshTrigger++ },
+  )
 
   // Miniature Player Modal (pops up and starts playing when a recording is tapped)
   activePlaybackRecording?.let { recording ->
@@ -1038,8 +1091,17 @@ fun AudioRecorderScreen(
 private fun RecordingListItemCard(
   item: AudioRecordingItem,
   onClick: () -> Unit,
+  onPlayInMusic: () -> Unit = {},
   onEdit: () -> Unit = {},
+  onConvert: () -> Unit = {},
+  onCompress: () -> Unit = {},
+  onSaveToNotes: () -> Unit = {},
+  onOpenInFiles: () -> Unit = {},
+  onOpenWith: () -> Unit = {},
+  onShare: () -> Unit = {},
+  onDuplicate: () -> Unit = {},
   onRename: () -> Unit,
+  onInfo: () -> Unit = {},
   onDelete: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -1164,6 +1226,15 @@ private fun RecordingListItemCard(
             modifier = Modifier.testTag("recording_play_${item.name}"),
           )
           DropdownMenuItem(
+            text = { Text("Play in Music") },
+            leadingIcon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
+            onClick = {
+              menuExpanded = false
+              onPlayInMusic()
+            },
+            modifier = Modifier.testTag("action_play_in_music"),
+          )
+          DropdownMenuItem(
             text = { Text("Edit") },
             leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
             onClick = {
@@ -1173,6 +1244,71 @@ private fun RecordingListItemCard(
             modifier = Modifier.testTag("action_edit_audio"),
           )
           DropdownMenuItem(
+            text = { Text("Convert") },
+            leadingIcon = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
+            onClick = {
+              menuExpanded = false
+              onConvert()
+            },
+            modifier = Modifier.testTag("action_convert_file"),
+          )
+          DropdownMenuItem(
+            text = { Text("Compress to Archive") },
+            leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
+            onClick = {
+              menuExpanded = false
+              onCompress()
+            },
+            modifier = Modifier.testTag("action_compress_to_archive"),
+          )
+          DropdownMenuItem(
+            text = { Text("Save to Notes") },
+            leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
+            onClick = {
+              menuExpanded = false
+              onSaveToNotes()
+            },
+            modifier = Modifier.testTag("action_save_to_notes"),
+          )
+          HorizontalDivider()
+          DropdownMenuItem(
+            text = { Text("Open in Files") },
+            leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
+            onClick = {
+              menuExpanded = false
+              onOpenInFiles()
+            },
+            modifier = Modifier.testTag("action_open_in_files"),
+          )
+          DropdownMenuItem(
+            text = { Text("Open with…") },
+            leadingIcon = { Icon(Icons.Default.Apps, contentDescription = null) },
+            onClick = {
+              menuExpanded = false
+              onOpenWith()
+            },
+            modifier = Modifier.testTag("action_open_with"),
+          )
+          DropdownMenuItem(
+            text = { Text("Share") },
+            leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+            onClick = {
+              menuExpanded = false
+              onShare()
+            },
+            modifier = Modifier.testTag("action_share"),
+          )
+          HorizontalDivider()
+          DropdownMenuItem(
+            text = { Text("Duplicate") },
+            leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+            onClick = {
+              menuExpanded = false
+              onDuplicate()
+            },
+            modifier = Modifier.testTag("action_duplicate"),
+          )
+          DropdownMenuItem(
             text = { Text("Rename") },
             leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null) },
             onClick = {
@@ -1180,6 +1316,16 @@ private fun RecordingListItemCard(
               onRename()
             },
           )
+          DropdownMenuItem(
+            text = { Text("Info") },
+            leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+            onClick = {
+              menuExpanded = false
+              onInfo()
+            },
+            modifier = Modifier.testTag("action_info"),
+          )
+          HorizontalDivider()
           DropdownMenuItem(
             text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
             leadingIcon = {
