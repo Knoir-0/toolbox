@@ -141,6 +141,7 @@ import com.example.toolbox.ui.tools.PdfViewerScreen
 import com.example.toolbox.ui.tools.PlantScheduleScreen
 import com.example.toolbox.ui.tools.RecipeBookScreen
 import com.example.toolbox.ui.tools.RulerScreen
+import com.example.toolbox.ui.tools.SearchScreen
 import com.example.toolbox.ui.tools.SettingsScreen
 import com.example.toolbox.ui.tools.TodoListScreen
 import com.example.toolbox.ui.tools.TrackArtworkThumbnail
@@ -2562,6 +2563,18 @@ fun ToolContentView(
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.OBD2_SCANNER -> Obd2ScannerScreen(
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.SEARCH -> SearchScreen(
+        onSelectTool = onSelectTool,
+        onOpenColorPicker = { hex ->
+          if (hex != null && onOpenColorPicker != null) {
+            onOpenColorPicker(hex)
+          } else {
+            onSelectTool?.invoke(Tool.COLOR_PICKER)
+          }
+        },
+        preferencesRepository = preferencesRepository,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.SETTINGS -> SettingsScreen(

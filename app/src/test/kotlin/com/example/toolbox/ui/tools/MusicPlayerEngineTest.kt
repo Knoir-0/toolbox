@@ -66,6 +66,26 @@ class MusicPlayerEngineTest {
     assertEquals(MusicLibraryTab.SONGS, MusicLibraryTab.fromNameOrDefault("SONGS"))
     assertEquals(MusicLibraryTab.GENRES, MusicLibraryTab.fromNameOrDefault("genres"))
     assertEquals(MusicLibraryTab.PLAYLISTS, MusicLibraryTab.fromNameOrDefault("playlists"))
+
+    // Section tab order parsing, serialization, and reordering
+    assertEquals(MusicLibraryTab.entries.toList(), MusicPlayerEngine.parseTabOrder(null))
+    val reordered = MusicPlayerEngine.reorderTabs(
+      tabs = MusicLibraryTab.entries.toList(),
+      fromIndex = 2, // SONGS
+      toIndex = 0,
+    )
+    assertEquals(
+      listOf(
+        MusicLibraryTab.SONGS,
+        MusicLibraryTab.ARTISTS,
+        MusicLibraryTab.ALBUMS,
+        MusicLibraryTab.GENRES,
+        MusicLibraryTab.PLAYLISTS,
+      ),
+      reordered,
+    )
+    val serializedOrder = MusicPlayerEngine.serializeTabOrder(reordered)
+    assertEquals(reordered, MusicPlayerEngine.parseTabOrder(serializedOrder))
   }
 
   @Test
@@ -143,6 +163,67 @@ class MusicPlayerEngineTest {
     // Sort order MOST_PLAYED produces the same ranking
     val sortedByMostPlayed = MusicPlayerEngine.sortTracks(tracks, MusicSortOrder.MOST_PLAYED, stats)
     assertEquals(mostPlayed.tracks.map { it.id }, sortedByMostPlayed.map { it.id })
+
+    // Built-in Recently Played playlist sorts by lastPlayedAtMs descending (trackA @ 500 > trackC @ 400 > trackB @ 300)
+    val recentlyPlayed = MusicPlayerEngine.buildRecentlyPlayedPlaylist(stats, tracks)
+    assertEquals(MusicPlayerEngine.RECENTLY_PLAYED_PLAYLIST_NAME, recentlyPlayed.name)
+    assertTrue(recentlyPlayed.isRecentlyPlayed)
+    assertTrue(recentlyPlayed.isBuiltIn)
+    assertEquals(tracks.size, recentlyPlayed.songCount)
+    assertEquals(listOf(trackA.id, trackC.id, trackB.id), recentlyPlayed.tracks.take(3).map { it.id })
+
+    // Sort order RECENTLY_PLAYED produces the same ranking
+    val sortedByRecentlyPlayed = MusicPlayerEngine.sortTracks(tracks, MusicSortOrder.RECENTLY_PLAYED, stats)
+    assertEquals(recentlyPlayed.tracks.map { it.id }, sortedByRecentlyPlayed.map { it.id })
+
+    // lastPlayedFormatted returns "Never" for unplayed stats and formatted date for played tracks
+    assertEquals("Never", TrackPlayStats().lastPlayedFormatted)
+    assertNotEquals("Never", stats.getValue(trackA.id).lastPlayedFormatted)
+
+    // Light recency weight in Most Played: nudges a recently played track ahead of a nearly-tied older track,
+    // without overpowering a track that has an additional play.
+    val equalDurationTracks = listOf(
+      trackA.copy(durationMs = 180_000L),
+      trackB.copy(durationMs = 180_000L),
+      trackC.copy(durationMs = 180_000L),
+    )
+    var recencyStats = emptyMap<String, TrackPlayStats>()
+    val olderPlayedAt = 1_700_000_000_000L
+    val recentPlayedAt = olderPlayedAt + 7 * 24 * 60 * 60_000L // 1 week later
+    recencyStats = MusicPlayerEngine.recordPlayStat(
+      current = recencyStats,
+      trackId = trackA.id,
+      incrementPlayCount = true,
+      addedPlayTimeMs = 12_000L,
+      timestampMs = olderPlayedAt,
+    )
+    recencyStats = MusicPlayerEngine.recordPlayStat(
+      current = recencyStats,
+      trackId = trackB.id,
+      incrementPlayCount = true,
+      addedPlayTimeMs = 10_000L,
+      timestampMs = recentPlayedAt,
+    )
+    recencyStats = MusicPlayerEngine.recordPlayStat(
+      current = recencyStats,
+      trackId = trackC.id,
+      incrementPlayCount = true,
+      addedPlayTimeMs = 10_000L,
+      timestampMs = olderPlayedAt,
+    )
+    recencyStats = MusicPlayerEngine.recordPlayStat(
+      current = recencyStats,
+      trackId = trackC.id,
+      incrementPlayCount = true,
+      addedPlayTimeMs = 10_000L,
+      timestampMs = olderPlayedAt + 1_000L,
+    )
+    val weightedMostPlayed = MusicPlayerEngine.buildMostPlayedPlaylist(
+      playStats = recencyStats,
+      allTracks = equalDurationTracks,
+    )
+    // trackC (2 plays) > trackB (1 play, very recent) > trackA (1 play, 1 week older)
+    assertEquals(listOf(trackC.id, trackB.id, trackA.id), weightedMostPlayed.tracks.map { it.id })
 
     // Serialization & deserialization round-trip
     val raw = MusicPlayerEngine.serializePlayStats(stats)
@@ -369,11 +450,12 @@ class MusicPlayerEngineTest {
     )
     try {
       assertFalse(session.isPlaying)
-      assertEquals(sampleTracks[0].id, session.currentTrack?.id)
+      assertNull(session.currentTrack)
 
       // Start playing first track
       session.playTrackInContext(sampleTracks[0], sampleTracks)
       assertTrue(session.isPlaying)
+      assertEquals(sampleTracks[0].id, session.currentTrack?.id)
       assertEquals(0, session.currentQueueIndex)
       assertEquals(0L, session.currentPositionMs)
       assertEquals(1, session.playStats[sampleTracks[0].id]?.playCount)

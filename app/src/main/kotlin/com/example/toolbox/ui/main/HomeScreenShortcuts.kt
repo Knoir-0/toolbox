@@ -200,6 +200,7 @@ fun resolveToolShortcutAliasClassName(tool: Tool): String {
     Tool.PDF_VIEWER -> "com.example.toolbox.MainActivityToolPdfViewer"
     Tool.RECIPES -> "com.example.toolbox.MainActivityToolRecipeBook"
     Tool.OBD2_SCANNER -> "com.example.toolbox.MainActivityToolObd2Scanner"
+    Tool.SEARCH -> "com.example.toolbox.MainActivityToolSearch"
     Tool.SETTINGS -> "com.example.toolbox.MainActivityToolSettings"
   }
 }

@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -153,6 +154,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -229,29 +231,182 @@ internal fun hasAllPermissions(context: Context): Boolean =
   }
 
 // =================================================================================================
+// Shared Top Toolbar (matching Obd2ScannerScreen & DESIGN_LANGUAGE.md Section 5.1)
+// =================================================================================================
+
+@Composable
+internal fun BluetoothToolToolbar(
+  title: String,
+  subtitle: String,
+  icon: ImageVector,
+  modifier: Modifier = Modifier,
+  actions: @Composable RowScope.() -> Unit = {},
+) {
+  Column(modifier = modifier.fillMaxWidth()) {
+    Surface(
+      color = MaterialTheme.colorScheme.surface,
+      tonalElevation = 1.dp,
+      modifier = Modifier.fillMaxWidth(),
+    ) {
+      Box(
+        modifier = Modifier
+          .fillMaxWidth()
+          .heightIn(min = 68.dp),
+        contentAlignment = Alignment.CenterStart,
+      ) {
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            Box(
+              modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+              )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
+
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            content = actions,
+          )
+        }
+      }
+    }
+
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+  }
+}
+
+@Composable
+internal fun BluetoothConnectedToolbarActions(
+  isDemo: Boolean,
+  onDisconnect: () -> Unit,
+) {
+  Surface(
+    shape = RoundedCornerShape(20.dp),
+    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+    modifier = Modifier.testTag("bt_connection_mode_pill"),
+  ) {
+    Text(
+      text = if (isDemo) "Simulator" else "HID Active",
+      style = MaterialTheme.typography.labelMedium,
+      fontWeight = FontWeight.Medium,
+      color = MaterialTheme.colorScheme.onSurface,
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+    )
+  }
+
+  IconButton(
+    onClick = onDisconnect,
+    modifier = Modifier.testTag("bt_disconnect"),
+  ) {
+    Icon(
+      imageVector = Icons.Default.LinkOff,
+      contentDescription = "Disconnect",
+      tint = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+}
+
+// =================================================================================================
 // Entry point
 // =================================================================================================
 
 @Composable
 fun BluetoothRemoteScreen(modifier: Modifier = Modifier) {
+  val haptic = LocalHapticFeedback.current
   if (LocalInspectionMode.current) {
-    DeviceListContent(
-      state = BluetoothRemoteUiState(
-        isBluetoothEnabled = true,
-        isHidRegistered = true,
-        devices = previewDevices,
-      ),
-      hasPermissions = true,
-      onRequestPermissions = {},
-      onEnableBluetooth = {},
-      onMakeDiscoverable = {},
-      onScan = {},
-      onStopScan = {},
-      onConnect = {},
-      onCancelConnect = {},
-      onDismissMessage = {},
-      modifier = modifier,
-    )
+    var previewDemoConnected by remember { mutableStateOf(false) }
+    Column(
+      modifier = modifier
+        .fillMaxSize()
+        .background(MaterialTheme.colorScheme.background)
+        .testTag("bt_remote_screen"),
+    ) {
+      BluetoothToolToolbar(
+        title = "Bluetooth Remote",
+        subtitle = if (previewDemoConnected) {
+          "Connected • Demo Remote (HID Simulator)"
+        } else {
+          "Select a paired device or tap + to add a new one"
+        },
+        icon = Icons.Default.SettingsRemote,
+        actions = {
+          if (previewDemoConnected) {
+            BluetoothConnectedToolbarActions(
+              isDemo = true,
+              onDisconnect = { previewDemoConnected = false },
+            )
+          }
+        },
+      )
+      if (previewDemoConnected) {
+        RemoteControlContent(
+          deviceName = "Demo Remote (HID Simulator)",
+          actions = NoOpRemoteActions,
+          onDisconnect = { previewDemoConnected = false },
+          isDemo = true,
+          showToolbar = false,
+          modifier = Modifier.weight(1f),
+        )
+      } else {
+        DeviceListContent(
+          state = BluetoothRemoteUiState(
+            isBluetoothEnabled = true,
+            isHidRegistered = true,
+            devices = previewDevices,
+          ),
+          hasPermissions = true,
+          onRequestPermissions = {},
+          onEnableBluetooth = {},
+          onMakeDiscoverable = {},
+          onScan = {},
+          onStopScan = {},
+          onConnect = {},
+          onCancelConnect = {},
+          onDismissMessage = {},
+          onStartDemo = { previewDemoConnected = true },
+          showToolbar = false,
+          modifier = Modifier.weight(1f),
+        )
+      }
+    }
     return
   }
 
@@ -285,40 +440,83 @@ fun BluetoothRemoteScreen(modifier: Modifier = Modifier) {
   }
 
   val connection = state.connection
-  AnimatedContent(
-    targetState = connection is RemoteConnection.Connected,
-    transitionSpec = { fadeIn() togetherWith fadeOut() },
-    modifier = modifier.fillMaxSize(),
-    label = "remote_screen",
-  ) { connected ->
-    if (connected && connection is RemoteConnection.Connected) {
-      RemoteControlContent(
-        deviceName = connection.device.name,
-        actions = actions,
-        onDisconnect = viewModel::disconnect,
-      )
-    } else {
-      DeviceListContent(
-        state = state,
-        hasPermissions = hasPermissions,
-        onRequestPermissions = { permissionLauncher.launch(requiredBluetoothPermissions()) },
-        onEnableBluetooth = {
-          runCatching { enableBluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) }
-        },
-        onMakeDiscoverable = {
-          runCatching {
-            discoverableLauncher.launch(
-              Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
-                .putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120),
+  val connectedState = connection as? RemoteConnection.Connected
+
+  Column(
+    modifier = modifier
+      .fillMaxSize()
+      .background(MaterialTheme.colorScheme.background)
+      .testTag("bt_remote_screen"),
+  ) {
+    BluetoothToolToolbar(
+      title = "Bluetooth Remote",
+      subtitle = if (connectedState != null) {
+        "Connected • ${connectedState.device.name}"
+      } else {
+        "Select a paired device or tap + to add a new one"
+      },
+      icon = Icons.Default.SettingsRemote,
+      actions = {
+        if (connectedState != null) {
+          BluetoothConnectedToolbarActions(
+            isDemo = connectedState.isDemo,
+            onDisconnect = {
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              viewModel.disconnect()
+            },
+          )
+        }
+      },
+    )
+
+    AnimatedContent(
+      targetState = connectedState != null,
+      transitionSpec = { fadeIn() togetherWith fadeOut() },
+      modifier = Modifier
+        .fillMaxSize()
+        .weight(1f),
+      label = "remote_screen",
+    ) { connected ->
+      val currentConnected = state.connection as? RemoteConnection.Connected
+      if (connected && currentConnected != null) {
+        RemoteControlContent(
+          deviceName = currentConnected.device.name,
+          actions = actions,
+          onDisconnect = viewModel::disconnect,
+          isDemo = currentConnected.isDemo,
+          showToolbar = false,
+        )
+      } else {
+        DeviceListContent(
+          state = state,
+          hasPermissions = hasPermissions,
+          onRequestPermissions = { permissionLauncher.launch(requiredBluetoothPermissions()) },
+          onEnableBluetooth = {
+            runCatching { enableBluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) }
+          },
+          onMakeDiscoverable = {
+            runCatching {
+              discoverableLauncher.launch(
+                Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
+                  .putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120),
+              )
+            }
+          },
+          onScan = viewModel::startScan,
+          onStopScan = viewModel::stopScan,
+          onConnect = { viewModel.connect(it.address) },
+          onCancelConnect = viewModel::disconnect,
+          onDismissMessage = viewModel::dismissMessage,
+          onStartDemo = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            viewModel.startDemoMode(
+              deviceName = "Demo Remote (HID Simulator)",
+              kind = BtDeviceKind.TV,
             )
-          }
-        },
-        onScan = viewModel::startScan,
-        onStopScan = viewModel::stopScan,
-        onConnect = { viewModel.connect(it.address) },
-        onCancelConnect = viewModel::disconnect,
-        onDismissMessage = viewModel::dismissMessage,
-      )
+          },
+          showToolbar = false,
+        )
+      }
     }
   }
 }
@@ -342,184 +540,254 @@ internal fun DeviceListContent(
   modifier: Modifier = Modifier,
   title: String = "Bluetooth Remote",
   icon: ImageVector = Icons.Default.SettingsRemote,
+  onStartDemo: () -> Unit = {},
+  demoTitle: String = if (title.contains("Gamepad", ignoreCase = true)) {
+    "Demo Gamepad (HID Simulator)"
+  } else {
+    "Demo Remote (HID Simulator)"
+  },
+  demoSubtitle: String = if (title.contains("Gamepad", ignoreCase = true)) {
+    "Simulated Game Console • Test 8-way D-pad, analog sticks & buttons"
+  } else {
+    "Simulated Smart TV • Test D-pad, media, keyboard & air mouse"
+  },
+  demoButtonTag: String = if (title.contains("Gamepad", ignoreCase = true)) {
+    "bt_gamepad_start_demo_button"
+  } else {
+    "bt_remote_start_demo_button"
+  },
+  showToolbar: Boolean = true,
 ) {
   var showScanModal by rememberSaveable { mutableStateOf(false) }
   val connecting = state.connection as? RemoteConnection.Connecting
   val paired = state.devices.filter { it.isBonded }
   val nearby = state.devices.filterNot { it.isBonded }
 
-  Box(
-    modifier = modifier.fillMaxSize(),
+  Column(
+    modifier = modifier
+      .fillMaxSize()
+      .background(MaterialTheme.colorScheme.background),
   ) {
-    LazyColumn(
-      modifier = Modifier
-        .fillMaxSize()
-        .testTag("bt_device_list"),
-      contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 96.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      item {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(32.dp),
-          )
-          Spacer(Modifier.width(12.dp))
-          Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text(
-              "Select a paired device or tap + to add a new one",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-        }
-      }
-
-      val hasDeviceError = state.message != null &&
-        state.messageDeviceAddress != null &&
-        paired.any { it.address == state.messageDeviceAddress }
-      if (state.message != null && !hasDeviceError) {
-        item {
-          MessageCard(message = state.message, onDismiss = onDismissMessage)
-        }
-      }
-
-      when {
-        state.support == BluetoothSupport.API_TOO_OLD -> item {
-          StatusCard(
-            icon = Icons.Default.BluetoothDisabled,
-            title = "Android 9 or newer required",
-            body = "Acting as a Bluetooth remote uses the HID Device profile, which was added in Android 9 (Pie).",
-          )
-        }
-
-        state.support == BluetoothSupport.NO_ADAPTER -> item {
-          StatusCard(
-            icon = Icons.Default.BluetoothDisabled,
-            title = "Bluetooth unavailable",
-            body = "This device doesn't have a Bluetooth adapter.",
-          )
-        }
-
-        !hasPermissions -> item {
-          StatusCard(
-            icon = Icons.Default.Bluetooth,
-            title = "Allow Nearby devices",
-            body = "Bluetooth permission is needed to find, pair with and control your TV.",
-            actionLabel = "Grant permission",
-            onAction = onRequestPermissions,
-          )
-        }
-
-        !state.isBluetoothEnabled -> item {
-          StatusCard(
-            icon = Icons.Default.BluetoothDisabled,
-            title = "Bluetooth is off",
-            body = "Turn on Bluetooth to connect to a TV.",
-            actionLabel = "Turn on",
-            onAction = onEnableBluetooth,
-          )
-        }
-
-        else -> {
-          val isConnectingPaired = connecting != null && paired.any { it.address == connecting.device.address }
-          if (connecting != null && !isConnectingPaired) {
-            item {
-              ConnectingCard(connecting = connecting, onCancel = onCancelConnect)
-            }
-          }
-
-          item {
-            Text(
-              text = "Paired devices",
-              style = MaterialTheme.typography.labelLarge,
-              color = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.padding(top = 8.dp, start = 4.dp),
-            )
-          }
-
-          if (paired.isEmpty()) {
-            item {
-              Card(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .padding(top = 8.dp),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-              ) {
-                Column(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(32.dp),
-                  horizontalAlignment = Alignment.CenterHorizontally,
-                  verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                  Box(
-                    modifier = Modifier
-                      .size(56.dp)
-                      .clip(CircleShape)
-                      .background(MaterialTheme.colorScheme.primaryContainer),
-                    contentAlignment = Alignment.Center,
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.Tv,
-                      contentDescription = null,
-                      modifier = Modifier.size(28.dp),
-                      tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
-                  }
-                  Text(
-                    text = "No paired devices",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                  )
-                  Text(
-                    text = "Tap the + button below to scan for and connect an Android TV or media device.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                  )
-                }
-              }
-            }
-          } else {
-            items(paired, key = { "paired_${it.address}" }) { device ->
-              DeviceRow(
-                device = device,
-                connecting = if (connecting?.device?.address == device.address) connecting else null,
-                errorMessage = if (state.messageDeviceAddress == device.address) state.message else null,
-                enabled = connecting == null,
-                onClick = { onConnect(device) },
-                onCancelConnect = onCancelConnect,
-                onDismissError = onDismissMessage,
-              )
-            }
-          }
-        }
-      }
+    if (showToolbar) {
+      BluetoothToolToolbar(
+        title = title,
+        subtitle = "Select a paired device or tap + to add a new one",
+        icon = icon,
+      )
     }
 
-    // Single + button at the bottom right (circular, floating above the scrollable list)
-    FloatingActionButton(
-      onClick = {
-        when {
-          !hasPermissions -> onRequestPermissions()
-          !state.isBluetoothEnabled -> onEnableBluetooth()
-          else -> showScanModal = true
-        }
-      },
-      shape = CircleShape,
-      containerColor = MaterialTheme.colorScheme.primary,
-      contentColor = MaterialTheme.colorScheme.onPrimary,
+    Box(
       modifier = Modifier
-        .align(Alignment.BottomEnd)
-        .padding(end = 16.dp, bottom = 16.dp)
-        .testTag("bt_add_device_fab"),
+        .fillMaxSize()
+        .weight(1f),
     ) {
-      Icon(Icons.Default.Add, contentDescription = "Add device", modifier = Modifier.size(28.dp))
+      LazyColumn(
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag("bt_device_list"),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 96.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        val hasDeviceError = state.message != null &&
+          state.messageDeviceAddress != null &&
+          paired.any { it.address == state.messageDeviceAddress }
+        if (state.message != null && !hasDeviceError) {
+          item {
+            MessageCard(message = state.message, onDismiss = onDismissMessage)
+          }
+        }
+
+        when {
+          state.support == BluetoothSupport.API_TOO_OLD -> item {
+            StatusCard(
+              icon = Icons.Default.BluetoothDisabled,
+              title = "Android 9 or newer required",
+              body = "Acting as a Bluetooth HID device requires Android 9 (Pie) or newer. You can still test the controls using the offline simulator below.",
+            )
+          }
+
+          state.support == BluetoothSupport.NO_ADAPTER -> item {
+            StatusCard(
+              icon = Icons.Default.BluetoothDisabled,
+              title = "Bluetooth unavailable",
+              body = "This device doesn't have a Bluetooth adapter. You can still test the controls using the offline simulator below.",
+            )
+          }
+
+          !hasPermissions -> item {
+            StatusCard(
+              icon = Icons.Default.Bluetooth,
+              title = "Allow Nearby devices",
+              body = "Bluetooth permission is needed to find, pair with and control your TV or console.",
+              actionLabel = "Grant permission",
+              onAction = onRequestPermissions,
+            )
+          }
+
+          !state.isBluetoothEnabled -> item {
+            StatusCard(
+              icon = Icons.Default.BluetoothDisabled,
+              title = "Bluetooth is off",
+              body = "Turn on Bluetooth to connect to a TV or console.",
+              actionLabel = "Turn on",
+              onAction = onEnableBluetooth,
+            )
+          }
+
+          else -> {
+            val isConnectingPaired = connecting != null && paired.any { it.address == connecting.device.address }
+            if (connecting != null && !isConnectingPaired) {
+              item {
+                ConnectingCard(connecting = connecting, onCancel = onCancelConnect)
+              }
+            }
+
+            item {
+              Text(
+                text = "Paired devices",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 4.dp, start = 4.dp),
+              )
+            }
+
+            if (paired.isEmpty()) {
+              item {
+                Card(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                  shape = RoundedCornerShape(20.dp),
+                  colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                ) {
+                  Column(
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                  ) {
+                    Box(
+                      modifier = Modifier
+                        .size(56.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                      contentAlignment = Alignment.Center,
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.Tv,
+                        contentDescription = null,
+                        modifier = Modifier.size(28.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                      )
+                    }
+                    Text(
+                      text = "No paired devices",
+                      style = MaterialTheme.typography.titleMedium,
+                      fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                      text = "Tap the + button below to scan for and connect an Android TV or media device.",
+                      style = MaterialTheme.typography.bodyMedium,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      textAlign = TextAlign.Center,
+                    )
+                  }
+                }
+              }
+            } else {
+              items(paired, key = { "paired_${it.address}" }) { device ->
+                DeviceRow(
+                  device = device,
+                  connecting = if (connecting?.device?.address == device.address) connecting else null,
+                  errorMessage = if (state.messageDeviceAddress == device.address) state.message else null,
+                  enabled = connecting == null,
+                  onClick = { onConnect(device) },
+                  onCancelConnect = onCancelConnect,
+                  onDismissError = onDismissMessage,
+                )
+              }
+            }
+          }
+        }
+
+        // Offline Demo Simulator item (matching Obd2ScannerScreen's Demo Vehicle)
+        item {
+          Text(
+            text = "Offline simulator",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(top = 12.dp, start = 4.dp),
+          )
+        }
+
+        item {
+          Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            ),
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag(demoButtonTag),
+          ) {
+            ListItem(
+              colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+              modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .clickable(enabled = connecting == null, onClick = onStartDemo),
+              leadingContent = {
+                Box(
+                  modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                  )
+                }
+              },
+              headlineContent = {
+                Text(demoTitle, fontWeight = FontWeight.Medium)
+              },
+              supportingContent = {
+                Text(
+                  text = demoSubtitle,
+                  style = MaterialTheme.typography.bodySmall,
+                )
+              },
+              trailingContent = {
+                Icon(Icons.Default.ChevronRight, contentDescription = "Start $demoTitle")
+              },
+            )
+          }
+        }
+      }
+
+      // Single + button at the bottom right (circular, floating above the scrollable list)
+      FloatingActionButton(
+        onClick = {
+          when {
+            !hasPermissions -> onRequestPermissions()
+            !state.isBluetoothEnabled -> onEnableBluetooth()
+            else -> showScanModal = true
+          }
+        },
+        shape = CircleShape,
+        containerColor = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        modifier = Modifier
+          .align(Alignment.BottomEnd)
+          .padding(end = 16.dp, bottom = 16.dp)
+          .testTag("bt_add_device_fab"),
+      ) {
+        Icon(Icons.Default.Add, contentDescription = "Add device", modifier = Modifier.size(28.dp))
+      }
     }
   }
 
@@ -915,20 +1183,24 @@ private fun StatusCard(
   actionLabel: String? = null,
   onAction: () -> Unit = {},
 ) {
-  Card(modifier = Modifier.fillMaxWidth()) {
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(24.dp),
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      Icon(icon, contentDescription = null, modifier = Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
-      Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
-      Text(body, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+  Card(
+    shape = RoundedCornerShape(16.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    Column(modifier = Modifier.padding(16.dp)) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(12.dp))
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+      }
+      Spacer(Modifier.height(6.dp))
+      Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
       if (actionLabel != null) {
-        Spacer(Modifier.height(4.dp))
-        Button(onClick = onAction) { Text(actionLabel) }
+        Spacer(Modifier.height(12.dp))
+        Button(onClick = onAction) {
+          Text(actionLabel)
+        }
       }
     }
   }
@@ -938,9 +1210,13 @@ private fun StatusCard(
 private fun MessageCard(message: String, onDismiss: () -> Unit) {
   Card(
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+    shape = RoundedCornerShape(12.dp),
     modifier = Modifier.fillMaxWidth(),
   ) {
-    Row(Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+      modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
       Text(
         message,
         style = MaterialTheme.typography.bodyMedium,
@@ -980,6 +1256,8 @@ internal fun RemoteControlContent(
   actions: RemoteInputActions,
   onDisconnect: () -> Unit,
   modifier: Modifier = Modifier,
+  isDemo: Boolean = false,
+  showToolbar: Boolean = true,
 ) {
   var keyboardOpen by rememberSaveable { mutableStateOf(false) }
   var mouseMode by rememberSaveable { mutableStateOf(false) }
@@ -1004,45 +1282,47 @@ internal fun RemoteControlContent(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .verticalScroll(rememberScrollState(), enabled = !mouseMode)
-      .padding(horizontal = 16.dp, vertical = 8.dp)
-      .testTag("bt_remote_view"),
-    horizontalAlignment = Alignment.CenterHorizontally,
-    verticalArrangement = Arrangement.spacedBy(12.dp),
+      .background(MaterialTheme.colorScheme.background),
   ) {
-    // ---- Header ----
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-      Box(
-        Modifier
-          .size(10.dp)
-          .clip(CircleShape)
-          .background(Color(0xFF34A853)),
+    if (showToolbar) {
+      BluetoothToolToolbar(
+        title = "Bluetooth Remote",
+        subtitle = "Connected • $deviceName",
+        icon = Icons.Default.SettingsRemote,
+        actions = {
+          BluetoothConnectedToolbarActions(
+            isDemo = isDemo,
+            onDisconnect = onDisconnect,
+          )
+        },
       )
-      Spacer(Modifier.width(8.dp))
-      Column(Modifier.weight(1f)) {
-        Text(deviceName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1)
-        Text("Connected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-      }
-      IconButton(onClick = onDisconnect, modifier = Modifier.testTag("bt_disconnect")) {
-        Icon(Icons.Default.LinkOff, contentDescription = "Disconnect")
-      }
     }
 
-    // ---- Top row: power / keyboard / mouse ----
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically,
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .weight(1f)
+        .verticalScroll(rememberScrollState(), enabled = !mouseMode)
+        .padding(horizontal = 16.dp, vertical = 12.dp)
+        .testTag("bt_remote_view"),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-      ConsumerButton(
-        key = ConsumerKey.POWER,
-        icon = Icons.Default.PowerSettingsNew,
-        label = "Power",
-        actions = actions,
-        containerColor = MaterialTheme.colorScheme.errorContainer,
-        contentColor = MaterialTheme.colorScheme.onErrorContainer,
-        modifier = Modifier.testTag("bt_power"),
-      )
+      // ---- Top row: power / keyboard / mouse ----
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        ConsumerButton(
+          key = ConsumerKey.POWER,
+          icon = Icons.Default.PowerSettingsNew,
+          label = "Power",
+          actions = actions,
+          containerColor = MaterialTheme.colorScheme.errorContainer,
+          contentColor = MaterialTheme.colorScheme.onErrorContainer,
+          modifier = Modifier.testTag("bt_power"),
+        )
       Row(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1123,6 +1403,7 @@ internal fun RemoteControlContent(
     // ---- Volume bar (volume down, mute, volume up) ----
     VolumeBar(actions = actions)
     Spacer(Modifier.height(8.dp))
+    }
   }
 }
 

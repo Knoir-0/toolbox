@@ -93,6 +93,12 @@ class VideoEditorScreenTest {
     composeTestRule.onNodeWithTag("filter_preset_warm").performClick()
     composeTestRule.waitForIdle()
 
+    // Switch to Data tab and verify metadata controls are displayed
+    composeTestRule.onNodeWithTag("mode_tab_data").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("video_metadata_panel").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("video_metadata_title_input").assertIsDisplayed()
+
     // Open Export Dialog
     composeTestRule.onNodeWithTag("editor_export_button").performClick()
     composeTestRule.waitForIdle()

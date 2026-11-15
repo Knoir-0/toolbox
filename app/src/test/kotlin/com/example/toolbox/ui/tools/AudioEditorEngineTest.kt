@@ -264,4 +264,76 @@ class AudioEditorEngineTest {
     assertEquals(AudioExportFormat.MP3, AudioExportFormat.fromFileName("song.mp3"))
     assertEquals(AudioExportFormat.WAV, AudioExportFormat.fromFileName("unknown.xyz"))
   }
+
+  @Test
+  fun `AudioEditorMode includes Data tool and AudioMetadataTags sanitizes and builds FFmpeg args`() {
+    assertEquals("Data", AudioEditorMode.DATA.displayName)
+    assertTrue(AudioEditorMode.entries.contains(AudioEditorMode.DATA))
+
+    val rawTags = AudioMetadataTags(
+      title = "  Morning Synth  ",
+      artist = " Null Studio\n",
+      album = "  Field Sessions ",
+      genre = "Ambient",
+      year = "2026",
+      trackNumber = "03",
+      comment = "  Recorded outdoors  ",
+    )
+    val sanitized = rawTags.sanitized()
+    assertEquals("Morning Synth", sanitized.title)
+    assertEquals("Null Studio", sanitized.artist)
+    assertEquals("Field Sessions", sanitized.album)
+    assertEquals(7, sanitized.populatedFieldCount)
+    assertEquals(false, sanitized.isEmpty)
+
+    val ffmpegArgs = AudioEditorEngine.buildFfmpegMetadataArgs(sanitized)
+    assertTrue(ffmpegArgs.containsAll(listOf("-metadata", "title=Morning Synth")))
+    assertTrue(ffmpegArgs.containsAll(listOf("-metadata", "artist=Null Studio")))
+    assertTrue(ffmpegArgs.containsAll(listOf("-metadata", "album=Field Sessions")))
+    assertTrue(ffmpegArgs.containsAll(listOf("-metadata", "genre=Ambient")))
+    assertTrue(ffmpegArgs.containsAll(listOf("-metadata", "date=2026")))
+    assertTrue(ffmpegArgs.containsAll(listOf("-metadata", "track=03")))
+    assertTrue(ffmpegArgs.containsAll(listOf("-metadata", "comment=Recorded outdoors")))
+  }
+
+  @Test
+  fun `writeWavFile and readWavMetadata round-trip RIFF INFO tags while preserving PCM samples and duration`() {
+    val samples = ShortArray(8820) { idx -> ((idx * 17) % 16000 - 8000).toShort() }
+    val buffer = AudioSampleBuffer(samples = samples, sampleRate = 4410, channels = 1)
+    val tags = AudioMetadataTags(
+      title = "Podcast Intro",
+      artist = "Toolbox Audio",
+      album = "Season 4",
+      genre = "Podcast",
+      year = "2026",
+      trackNumber = "1",
+      comment = "Mastered in Audio Editor",
+    )
+
+    val tempFile = Files.createTempFile("test_audio_meta_", ".wav").toFile()
+    try {
+      assertTrue(AudioEditorEngine.writeWavFile(buffer, tempFile, tags))
+      val decodedBuffer = AudioEditorEngine.readWavFile(tempFile)
+      assertNotNull(decodedBuffer)
+      assertEquals(buffer, decodedBuffer)
+      assertEquals(2000L, decodedBuffer!!.durationMs)
+
+      // Verify AudioRecorderEngine duration uses the data subchunk size rather than including LIST/INFO bytes
+      assertEquals(2000L, AudioRecorderEngine.readWavDurationMs(tempFile))
+
+      val readBack = AudioEditorEngine.readAudioMetadata(tempFile)
+      assertEquals(tags, readBack)
+
+      // Update tags in-place via writeAudioMetadata
+      val updatedTags = tags.copy(title = "Podcast Outro", trackNumber = "2")
+      assertTrue(AudioEditorEngine.writeAudioMetadata(tempFile, updatedTags))
+      assertEquals(updatedTags, AudioEditorEngine.readAudioMetadata(tempFile))
+
+      // Verify AudioEditSnapshot preserves metadata across undo/redo snapshots
+      val snapshot = AudioEditSnapshot(buffer = decodedBuffer, actionLabel = "Metadata", metadata = updatedTags)
+      assertEquals("Podcast Outro", snapshot.metadata.title)
+    } finally {
+      tempFile.delete()
+    }
+  }
 }

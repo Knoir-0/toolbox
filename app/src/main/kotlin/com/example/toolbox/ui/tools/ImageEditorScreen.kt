@@ -47,6 +47,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.res.painterResource
 import com.example.toolbox.R
 import androidx.compose.material.icons.Icons
@@ -65,6 +66,7 @@ import androidx.compose.material.icons.filled.CropLandscape
 import androidx.compose.material.icons.filled.CropPortrait
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Straighten
@@ -101,6 +103,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -132,6 +135,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -144,6 +148,7 @@ import androidx.core.content.FileProvider
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
 import kotlin.math.roundToInt
 
 enum class ImageEditorMode(val label: String) {
@@ -152,6 +157,7 @@ enum class ImageEditorMode(val label: String) {
   TILT("Tilt"),
   ADJUST("Adjust"),
   DRAW("Draw"),
+  DATA("Data"),
 }
 
 @Composable
@@ -174,18 +180,34 @@ fun ImageEditorScreen(
     }
   }
 
+  val resolvedInitialMetadata = remember(initialFile?.absolutePath) {
+    initialFile?.let { file ->
+      if (file.exists()) ImageMetadataOperations.readImageMetadata(file) else ImageMetadata()
+    } ?: ImageMetadata()
+  }
+
   var currentBitmap by remember(resolvedInitialBitmap) { mutableStateOf<Bitmap?>(resolvedInitialBitmap) }
   var originalBitmap by remember(resolvedInitialBitmap) { mutableStateOf<Bitmap?>(resolvedInitialBitmap) }
+  var originalMetadata by remember(resolvedInitialMetadata) { mutableStateOf(resolvedInitialMetadata) }
+  var currentMetadata by remember(resolvedInitialMetadata) { mutableStateOf(resolvedInitialMetadata) }
+  var draftMetadata by remember(resolvedInitialMetadata) { mutableStateOf(resolvedInitialMetadata) }
 
-  val history = remember { ImageEditorHistory<Bitmap>() }
+  val history = remember { ImageEditorHistory<ImageEditSnapshot>() }
+  var historyVersion by remember { mutableIntStateOf(0) }
   var activeMode by rememberSaveable { mutableStateOf(ImageEditorMode.CROP) }
+
+  val canUndo = remember(historyVersion) { history.canUndo }
+  val canRedo = remember(historyVersion) { history.canRedo }
+  val hasMetadataChanges =
+    draftMetadata.sanitized() != originalMetadata.sanitized() ||
+      currentMetadata.sanitized() != originalMetadata.sanitized()
 
   // Unsaved changes confirmation dialog state
   var showDiscardDialog by remember { mutableStateOf(false) }
   var pendingDiscardAction by remember { mutableStateOf<(() -> Unit)?>(null) }
 
   fun performActionWithDiscardCheck(action: () -> Unit) {
-    if (history.canUndo) {
+    if (canUndo || hasMetadataChanges) {
       pendingDiscardAction = action
       showDiscardDialog = true
     } else {
@@ -206,9 +228,14 @@ fun ImageEditorScreen(
     if (uri != null) {
       val loaded = decodeBitmapFromUri(context, uri)
       if (loaded != null) {
+        val loadedMeta = ImageMetadataOperations.readImageMetadataFromUri(context, uri)
         originalBitmap = loaded
         currentBitmap = loaded
+        originalMetadata = loadedMeta
+        currentMetadata = loadedMeta
+        draftMetadata = loadedMeta
         history.clear()
+        historyVersion++
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
       } else {
         Toast.makeText(context, "Failed to load selected image", Toast.LENGTH_SHORT).show()
@@ -251,20 +278,26 @@ fun ImageEditorScreen(
     ImageEditorTopBar(
       bitmap = currentBitmap,
       activeMode = activeMode,
-      canUndo = history.canUndo,
-      canRedo = history.canRedo,
+      canUndo = canUndo,
+      canRedo = canRedo,
       onUndo = {
         currentBitmap?.let { bmp ->
-          history.undo(bmp)?.let { prev ->
-            currentBitmap = prev
+          history.undo(ImageEditSnapshot(bmp, draftMetadata.sanitized()))?.let { prev ->
+            currentBitmap = prev.bitmap
+            currentMetadata = prev.metadata
+            draftMetadata = prev.metadata
+            historyVersion++
             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
           }
         }
       },
       onRedo = {
         currentBitmap?.let { bmp ->
-          history.redo(bmp)?.let { next ->
-            currentBitmap = next
+          history.redo(ImageEditSnapshot(bmp, draftMetadata.sanitized()))?.let { next ->
+            currentBitmap = next.bitmap
+            currentMetadata = next.metadata
+            draftMetadata = next.metadata
+            historyVersion++
             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
           }
         }
@@ -273,12 +306,24 @@ fun ImageEditorScreen(
         performActionWithDiscardCheck {
           currentBitmap = null
           originalBitmap = null
+          originalMetadata = ImageMetadata()
+          currentMetadata = ImageMetadata()
+          draftMetadata = ImageMetadata()
           history.clear()
+          historyVersion++
         }
       },
       onSave = {
         currentBitmap?.let { bmp ->
-          val uri = saveBitmapToGallery(context, bmp)
+          val effectiveMeta = draftMetadata.sanitized()
+          currentMetadata = effectiveMeta
+          draftMetadata = effectiveMeta
+          initialFile?.let { file ->
+            if (file.exists()) {
+              ImageMetadataOperations.writeImageMetadata(file, effectiveMeta)
+            }
+          }
+          val uri = saveBitmapToGallery(context, bmp, effectiveMeta)
           if (uri != null) {
             Toast.makeText(context, "Image saved to Photos!", Toast.LENGTH_SHORT).show()
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -303,9 +348,14 @@ fun ImageEditorScreen(
         onUseSample = {
           val sampleFile = FileManagerEngine.getOrCreateSampleImageFile(context)
           val sample = decodeBitmapFromFile(sampleFile) ?: BitmapOperations.createSampleBitmap()
+          val sampleMeta = ImageMetadataOperations.readImageMetadata(sampleFile)
           originalBitmap = sample
           currentBitmap = sample
+          originalMetadata = sampleMeta
+          currentMetadata = sampleMeta
+          draftMetadata = sampleMeta
           history.clear()
+          historyVersion++
           haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         },
         modifier = Modifier.weight(1f),
@@ -321,8 +371,26 @@ fun ImageEditorScreen(
           haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         },
         onApplyBitmapChange = { newBmp ->
-          history.push(bmp)
+          history.push(ImageEditSnapshot(bmp, currentMetadata))
           currentBitmap = newBmp
+          historyVersion++
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        },
+        metadata = draftMetadata,
+        originalMetadata = originalMetadata,
+        committedMetadata = currentMetadata,
+        onMetadataChange = { updated -> draftMetadata = updated },
+        onApplyMetadataChange = { newMeta ->
+          val clean = newMeta.sanitized()
+          history.push(ImageEditSnapshot(bmp, currentMetadata))
+          currentMetadata = clean
+          draftMetadata = clean
+          initialFile?.let { file ->
+            if (file.exists()) {
+              ImageMetadataOperations.writeImageMetadata(file, clean)
+            }
+          }
+          historyVersion++
           haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         },
         modifier = Modifier.weight(1f),
@@ -571,6 +639,11 @@ fun ImageEditorContent(
   onModeSelected: (ImageEditorMode) -> Unit,
   onApplyBitmapChange: (Bitmap) -> Unit,
   modifier: Modifier = Modifier,
+  metadata: ImageMetadata = ImageMetadata(),
+  originalMetadata: ImageMetadata = ImageMetadata(),
+  committedMetadata: ImageMetadata = ImageMetadata(),
+  onMetadataChange: (ImageMetadata) -> Unit = {},
+  onApplyMetadataChange: (ImageMetadata) -> Unit = {},
 ) {
   val haptic = LocalHapticFeedback.current
 
@@ -758,6 +831,9 @@ fun ImageEditorContent(
             }
             ImageEditorMode.ROTATE -> {
               // Rotation preview handled by graphicsLayer
+            }
+            ImageEditorMode.DATA -> {
+              // Metadata inspection & editing handled in the Data control panel
             }
           }
         }
@@ -999,16 +1075,38 @@ fun ImageEditorContent(
               },
             )
           }
+          ImageEditorMode.DATA -> {
+            ImageDataControls(
+              bitmap = bitmap,
+              metadata = metadata,
+              originalMetadata = originalMetadata,
+              committedMetadata = committedMetadata,
+              onMetadataChange = onMetadataChange,
+              onClearMetadata = {
+                onMetadataChange(ImageMetadata())
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              },
+              onResetMetadata = {
+                onMetadataChange(originalMetadata)
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              },
+              onApplyMetadata = {
+                onApplyMetadataChange(metadata.sanitized())
+              },
+            )
+          }
         }
       }
     }
 
     Spacer(modifier = Modifier.height(6.dp))
 
-    // Bottom Mode Selector: Crop, Rotate, Tilt, Adjust, Draw
+    // Bottom Mode Selector: Crop, Rotate, Tilt, Adjust, Draw, Data
     ModeSelectorRow(
       activeMode = activeMode,
       onModeSelected = onModeSelected,
+      hasDataEdits = metadata.sanitized() != originalMetadata.sanitized() ||
+        committedMetadata.sanitized() != originalMetadata.sanitized(),
     )
   }
 
@@ -1059,13 +1157,14 @@ fun ImageEditorContent(
 }
 
 /**
- * Bottom segmented row to toggle between Crop, Rotate, Tilt, Adjust, Draw.
+ * Bottom segmented row to toggle between Crop, Rotate, Tilt, Adjust, Draw, Data.
  */
 @Composable
 fun ModeSelectorRow(
   activeMode: ImageEditorMode,
   onModeSelected: (ImageEditorMode) -> Unit,
   modifier: Modifier = Modifier,
+  hasDataEdits: Boolean = false,
 ) {
   val modes = ImageEditorMode.entries
   SingleChoiceSegmentedButtonRow(
@@ -1075,11 +1174,13 @@ fun ModeSelectorRow(
       .testTag("mode_selector_row"),
   ) {
     modes.forEachIndexed { index, mode ->
+      val hasEdits = mode == ImageEditorMode.DATA && hasDataEdits
       SegmentedButton(
         shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
         onClick = { onModeSelected(mode) },
         selected = activeMode == mode,
         icon = {},
+        modifier = Modifier.testTag("image_editor_mode_${mode.name.lowercase(Locale.ROOT)}"),
         label = {
           Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -1091,6 +1192,7 @@ fun ModeSelectorRow(
               ImageEditorMode.TILT -> Icons.Default.Straighten
               ImageEditorMode.ADJUST -> Icons.Default.Tune
               ImageEditorMode.DRAW -> Icons.Default.Brush
+              ImageEditorMode.DATA -> Icons.Default.Info
             }
             Icon(
               imageVector = icon,
@@ -1098,10 +1200,235 @@ fun ModeSelectorRow(
               modifier = Modifier.size(15.dp),
             )
             Spacer(modifier = Modifier.width(3.dp))
-            Text(mode.label, style = MaterialTheme.typography.labelSmall)
+            Text(
+              text = if (hasEdits) "${mode.label}•" else mode.label,
+              style = MaterialTheme.typography.labelSmall,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
           }
         },
       )
+    }
+  }
+}
+
+@Composable
+fun ImageDataControls(
+  bitmap: Bitmap,
+  metadata: ImageMetadata,
+  originalMetadata: ImageMetadata,
+  committedMetadata: ImageMetadata,
+  onMetadataChange: (ImageMetadata) -> Unit,
+  onClearMetadata: () -> Unit,
+  onResetMetadata: () -> Unit,
+  onApplyMetadata: () -> Unit,
+) {
+  val hasUncommittedMetadata = metadata.sanitized() != committedMetadata.sanitized()
+  val canResetToOriginal = metadata.sanitized() != originalMetadata.sanitized()
+  val canClear = !metadata.isEmpty
+
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("image_metadata_panel"),
+    verticalArrangement = Arrangement.spacedBy(6.dp),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(max = 175.dp)
+        .verticalScroll(rememberScrollState()),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(
+          value = metadata.title,
+          onValueChange = { onMetadataChange(metadata.copy(title = it)) },
+          label = { Text("Title / Caption", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("image_metadata_title_input"),
+        )
+        OutlinedTextField(
+          value = metadata.artist,
+          onValueChange = { onMetadataChange(metadata.copy(artist = it)) },
+          label = { Text("Author / Artist", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("image_metadata_artist_input"),
+        )
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(
+          value = metadata.copyright,
+          onValueChange = { onMetadataChange(metadata.copy(copyright = it)) },
+          label = { Text("Copyright", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("image_metadata_copyright_input"),
+        )
+        OutlinedTextField(
+          value = metadata.dateTaken,
+          onValueChange = { onMetadataChange(metadata.copy(dateTaken = it)) },
+          label = { Text("Date Taken", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("image_metadata_date_input"),
+        )
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(
+          value = metadata.cameraMake,
+          onValueChange = { onMetadataChange(metadata.copy(cameraMake = it)) },
+          label = { Text("Camera Make", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("image_metadata_make_input"),
+        )
+        OutlinedTextField(
+          value = metadata.cameraModel,
+          onValueChange = { onMetadataChange(metadata.copy(cameraModel = it)) },
+          label = { Text("Camera Model", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("image_metadata_model_input"),
+        )
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(
+          value = metadata.software,
+          onValueChange = { onMetadataChange(metadata.copy(software = it)) },
+          label = { Text("Software", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("image_metadata_software_input"),
+        )
+        OutlinedTextField(
+          value = metadata.location,
+          onValueChange = { onMetadataChange(metadata.copy(location = it)) },
+          label = { Text("Location (Lat, Lon)", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("image_metadata_location_input"),
+        )
+      }
+    }
+
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(
+          text = "${bitmap.width}×${bitmap.height} px • EXIF",
+          style = MaterialTheme.typography.labelSmall,
+          fontFamily = FontFamily.Monospace,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(
+          onClick = onClearMetadata,
+          enabled = canClear,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("image_metadata_clear_button"),
+        ) {
+          Text(
+            text = "Clear",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+      }
+
+      Spacer(modifier = Modifier.width(8.dp))
+
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        OutlinedButton(
+          onClick = onResetMetadata,
+          enabled = canResetToOriginal,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("image_metadata_reset_button"),
+        ) {
+          Text(
+            text = "Reset",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+
+        Button(
+          onClick = onApplyMetadata,
+          enabled = hasUncommittedMetadata,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("image_metadata_apply_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(
+            text = "Apply",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+      }
     }
   }
 }
@@ -2230,11 +2557,19 @@ fun decodeBitmapFromUri(context: Context, uri: Uri, maxDimension: Int = 2048): B
   }
 }
 
-fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Uri? {
+fun saveBitmapToGallery(
+  context: Context,
+  bitmap: Bitmap,
+  metadata: ImageMetadata = ImageMetadata(),
+): Uri? {
+  val cleanMeta = metadata.sanitized()
   val filename = "Toolbox_${System.currentTimeMillis()}.png"
   val values = ContentValues().apply {
     put(MediaStore.Images.Media.DISPLAY_NAME, filename)
     put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+    if (cleanMeta.title.isNotEmpty()) {
+      put(MediaStore.Images.Media.DESCRIPTION, cleanMeta.title)
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       put(MediaStore.Images.Media.IS_PENDING, 1)
       put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Toolbox")
@@ -2244,8 +2579,21 @@ fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Uri? {
   val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
   if (uri != null) {
     try {
-      context.contentResolver.openOutputStream(uri)?.use { out ->
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+      val tempStageFile = File.createTempFile("toolbox_img_save_", ".png", context.cacheDir)
+      try {
+        FileOutputStream(tempStageFile).use { out ->
+          bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+        }
+        if (!cleanMeta.isEmpty) {
+          ImageMetadataOperations.writeImageMetadata(tempStageFile, cleanMeta)
+        }
+        context.contentResolver.openOutputStream(uri)?.use { out ->
+          tempStageFile.inputStream().use { input ->
+            input.copyTo(out)
+          }
+        }
+      } finally {
+        tempStageFile.delete()
       }
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         values.clear()
@@ -2260,13 +2608,20 @@ fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Uri? {
   return null
 }
 
-fun shareBitmap(context: Context, bitmap: Bitmap) {
+fun shareBitmap(
+  context: Context,
+  bitmap: Bitmap,
+  metadata: ImageMetadata = ImageMetadata(),
+) {
   try {
     val cachePath = File(context.cacheDir, "images")
     cachePath.mkdirs()
     val file = File(cachePath, "shared_image.png")
     FileOutputStream(file).use { out ->
       bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+    }
+    if (!metadata.sanitized().isEmpty) {
+      ImageMetadataOperations.writeImageMetadata(file, metadata.sanitized())
     }
     val contentUri = FileProvider.getUriForFile(
       context,

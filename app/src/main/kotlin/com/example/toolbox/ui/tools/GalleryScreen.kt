@@ -155,6 +155,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.zIndex
 import androidx.core.content.FileProvider
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
@@ -622,8 +623,6 @@ fun GalleryScreen(
         },
         canNavigateBack = albumStack.isNotEmpty() || onNavigateBack != null,
         viewMode = viewMode,
-        sortOrder = sortOrder,
-        showSortMenu = showSortMenu,
         isSelectionMode = isSelectionMode,
         selectedCount = selectedCount,
         totalCount = totalSelectableCount,
@@ -683,19 +682,15 @@ fun GalleryScreen(
           updateViewMode(next)
         },
         onSelectViewMode = { updateViewMode(it) },
-        onOpenSortMenu = { showSortMenu = true },
-        onDismissSortMenu = { showSortMenu = false },
-        onSelectSortOrder = {
-          updateSortOrder(it)
-          showSortMenu = false
-        },
       )
 
-      // Breadcrumb & View/Density Controls Bar
+      // Pill & Filter Controls Bar underneath the toolbar
       GalleryNavigationAndDensityBar(
         albumStack = albumStack.toList(),
         viewMode = viewMode,
         albumsPerRow = albumsPerRow,
+        sortOrder = sortOrder,
+        showSortMenu = showSortMenu,
         onNavigateToRoot = {
           isFabExpanded = false
           exitSelectionMode()
@@ -709,8 +704,13 @@ fun GalleryScreen(
             albumStack.removeAt(albumStack.lastIndex)
           }
         },
-        onSelectViewMode = { updateViewMode(it) },
         onAlbumsPerRowChange = { updateAlbumsPerRow(it) },
+        onOpenSortMenu = { showSortMenu = true },
+        onDismissSortMenu = { showSortMenu = false },
+        onSelectSortOrder = {
+          updateSortOrder(it)
+          showSortMenu = false
+        },
       )
 
       HorizontalDivider(
@@ -1203,8 +1203,6 @@ private fun GalleryTopBar(
   subtext: String,
   canNavigateBack: Boolean,
   viewMode: GalleryViewMode,
-  sortOrder: GallerySortOrder,
-  showSortMenu: Boolean,
   isSelectionMode: Boolean = false,
   selectedCount: Int = 0,
   totalCount: Int = 0,
@@ -1220,9 +1218,6 @@ private fun GalleryTopBar(
   onBack: () -> Unit,
   onToggleViewMode: () -> Unit,
   onSelectViewMode: (GalleryViewMode) -> Unit,
-  onOpenSortMenu: () -> Unit,
-  onDismissSortMenu: () -> Unit,
-  onSelectSortOrder: (GallerySortOrder) -> Unit,
 ) {
   Surface(
     color = MaterialTheme.colorScheme.surface,
@@ -1583,46 +1578,6 @@ private fun GalleryTopBar(
               listContentDescription = "List view",
               gridContentDescription = "Tile view",
             )
-
-            Box {
-              IconButton(
-                onClick = onOpenSortMenu,
-                modifier = Modifier.testTag("gallery_sort_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.AutoMirrored.Filled.Sort,
-                  contentDescription = "Sort gallery",
-                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-              DropdownMenu(
-                expanded = showSortMenu,
-                onDismissRequest = onDismissSortMenu,
-                modifier = Modifier.testTag("gallery_sort_menu"),
-              ) {
-                GallerySortOrder.entries.forEach { option ->
-                  DropdownMenuItem(
-                    text = {
-                      Text(
-                        text = option.displayName,
-                        fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
-                      )
-                    },
-                    leadingIcon = {
-                      if (option == sortOrder) {
-                        Icon(
-                          imageVector = Icons.Default.Check,
-                          contentDescription = null,
-                          tint = MaterialTheme.colorScheme.primary,
-                        )
-                      }
-                    },
-                    onClick = { onSelectSortOrder(option) },
-                    modifier = Modifier.testTag("gallery_sort_option_${option.name.lowercase()}"),
-                  )
-                }
-              }
-            }
           }
         }
       }
@@ -1636,127 +1591,218 @@ private fun GalleryNavigationAndDensityBar(
   albumStack: List<GalleryAlbum>,
   viewMode: GalleryViewMode,
   albumsPerRow: Int,
+  sortOrder: GallerySortOrder,
+  showSortMenu: Boolean,
   onNavigateToRoot: () -> Unit,
   onNavigateToIndex: (Int) -> Unit,
-  onSelectViewMode: (GalleryViewMode) -> Unit,
   onAlbumsPerRowChange: (Int) -> Unit,
+  onOpenSortMenu: () -> Unit,
+  onDismissSortMenu: () -> Unit,
+  onSelectSortOrder: (GallerySortOrder) -> Unit,
 ) {
+  val cyclePerRow = {
+    val next = if (albumsPerRow >= MAX_ALBUMS_PER_ROW) MIN_ALBUMS_PER_ROW else albumsPerRow + 1
+    onAlbumsPerRowChange(next)
+  }
+
   Surface(
     color = MaterialTheme.colorScheme.surface,
     modifier = Modifier.fillMaxWidth(),
   ) {
-    Column(
+    Box(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(horizontal = 12.dp, vertical = 6.dp),
-      verticalArrangement = Arrangement.spacedBy(6.dp),
+        .heightIn(min = 46.dp)
+        .testTag("gallery_pill_bar"),
+      contentAlignment = Alignment.CenterStart,
     ) {
-      // Breadcrumb path row when inside nested albums/folders
-      if (albumStack.isNotEmpty()) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .testTag("gallery_breadcrumbs"),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .horizontalScroll(rememberScrollState())
+          .padding(start = 12.dp, end = 56.dp, top = 6.dp, bottom = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        // Tile albums-per-row pill button on the left (3..6)
+        if (viewMode == GalleryViewMode.TILE) {
           Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.primaryContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
             modifier = Modifier
-              .clip(RoundedCornerShape(16.dp))
-              .clickable(onClick = onNavigateToRoot)
-              .testTag("gallery_breadcrumb_root"),
+              .heightIn(min = 32.dp)
+              .clip(RoundedCornerShape(20.dp))
+              .testTag("gallery_density_indicator"),
           ) {
-            Text(
-              text = "Albums",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.Medium,
-              color = MaterialTheme.colorScheme.onSecondaryContainer,
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-            )
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+              modifier = Modifier.padding(start = 10.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Default.GridView,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                  .size(16.dp)
+                  .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = cyclePerRow,
+                  ),
+              )
+              Text(
+                text = "$albumsPerRow per row",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier
+                  .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = cyclePerRow,
+                  )
+                  .testTag("gallery_albums_per_row_label")
+                  .semantics {
+                    contentDescription = "$albumsPerRow albums per row"
+                  },
+              )
+              // Compact badge displaying exact numeric count (3..6)
+              Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                modifier = Modifier
+                  .clip(CircleShape)
+                  .clickable(onClick = cyclePerRow)
+                  .testTag("gallery_albums_per_row_count"),
+              ) {
+                Text(
+                  text = albumsPerRow.toString(),
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                )
+              }
+            }
           }
+        }
 
-          albumStack.forEachIndexed { index, album ->
-            Icon(
-              imageVector = Icons.Default.ChevronRight,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier.size(16.dp),
-            )
-            val isCurrent = index == albumStack.lastIndex
+        // Breadcrumb path pills when inside nested albums/folders
+        if (albumStack.isNotEmpty()) {
+          Row(
+            modifier = Modifier.testTag("gallery_breadcrumbs"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
             Surface(
-              shape = RoundedCornerShape(16.dp),
-              color = if (isCurrent) {
-                MaterialTheme.colorScheme.primaryContainer
-              } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-              },
+              shape = RoundedCornerShape(20.dp),
+              color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f),
               modifier = Modifier
-                .clip(RoundedCornerShape(16.dp))
-                .clickable { onNavigateToIndex(index) }
-                .testTag("gallery_breadcrumb_${album.name}"),
+                .clip(RoundedCornerShape(20.dp))
+                .clickable(onClick = onNavigateToRoot)
+                .testTag("gallery_breadcrumb_root"),
             ) {
               Text(
-                text = album.name,
+                text = "Albums",
                 style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                color = if (isCurrent) {
-                  MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
               )
+            }
+
+            albumStack.forEachIndexed { index, album ->
+              Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+              )
+              val isCurrent = index == albumStack.lastIndex
+              Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = if (isCurrent) {
+                  MaterialTheme.colorScheme.primaryContainer
+                } else {
+                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                },
+                modifier = Modifier
+                  .clip(RoundedCornerShape(20.dp))
+                  .clickable { onNavigateToIndex(index) }
+                  .testTag("gallery_breadcrumb_${album.name}"),
+              ) {
+                Text(
+                  text = album.name,
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                  color = if (isCurrent) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                )
+              }
             }
           }
         }
       }
 
-      // Tile albums-per-row indicator (3..6)
-      if (viewMode == GalleryViewMode.TILE) {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.End,
-          verticalAlignment = Alignment.CenterVertically,
+      // Pinned floating sort/filter button on the right edge of the pill bar
+      Box(
+        modifier = Modifier
+          .align(Alignment.CenterEnd)
+          .padding(end = 12.dp)
+          .zIndex(10f),
+      ) {
+        Surface(
+          onClick = onOpenSortMenu,
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surfaceContainerHigh,
+          tonalElevation = 3.dp,
+          shadowElevation = 4.dp,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+          modifier = Modifier
+            .size(34.dp)
+            .testTag("gallery_sort_button"),
         ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.testTag("gallery_density_indicator"),
-          ) {
-            Text(
-              text = "$albumsPerRow per row",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.primary,
-              modifier = Modifier
-                .testTag("gallery_albums_per_row_label")
-                .semantics {
-                  contentDescription = "$albumsPerRow albums per row"
-                },
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.Sort,
+              contentDescription = "Sort gallery",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(18.dp),
             )
-            // Compact badge displaying exact numeric count (3..6)
-            Surface(
-              shape = CircleShape,
-              color = MaterialTheme.colorScheme.primaryContainer,
-              modifier = Modifier
-                .clip(CircleShape)
-                .clickable {
-                  val next = if (albumsPerRow >= MAX_ALBUMS_PER_ROW) MIN_ALBUMS_PER_ROW else albumsPerRow + 1
-                  onAlbumsPerRowChange(next)
+          }
+        }
+
+        DropdownMenu(
+          expanded = showSortMenu,
+          onDismissRequest = onDismissSortMenu,
+          modifier = Modifier.testTag("gallery_sort_menu"),
+        ) {
+          GallerySortOrder.entries.forEach { option ->
+            DropdownMenuItem(
+              text = {
+                Text(
+                  text = option.displayName,
+                  fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
+                )
+              },
+              leadingIcon = {
+                if (option == sortOrder) {
+                  Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
                 }
-                .testTag("gallery_albums_per_row_count"),
-            ) {
-              Text(
-                text = albumsPerRow.toString(),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-              )
-            }
+              },
+              onClick = { onSelectSortOrder(option) },
+              modifier = Modifier.testTag("gallery_sort_option_${option.name.lowercase()}"),
+            )
           }
         }
       }

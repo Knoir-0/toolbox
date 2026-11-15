@@ -16,8 +16,43 @@ import java.util.Locale
 const val AUDIO_RECORDER_PREFS_NAME = "audio_recorder_preferences"
 const val PREF_KEY_AUDIO_FORMAT = "selected_audio_format"
 const val PREF_KEY_AUDIO_DIRECTORY = "selected_audio_directory"
+const val PREF_KEY_AUDIO_CAPTURE_SOURCE = "selected_audio_capture_source"
 const val DEFAULT_AUDIO_FOLDER_NAME = "Audio"
 const val DEFAULT_AUDIO_FOLDER_DISPLAY = "/Audio"
+
+/**
+ * Audio input source for the Audio Recorder tool.
+ */
+enum class AudioCaptureSource(
+  val displayName: String,
+  val shortLabel: String,
+  val description: String,
+) {
+  MICROPHONE(
+    displayName = "Microphone",
+    shortLabel = "Mic",
+    description = "Record external audio from the microphone",
+  ),
+  DEVICE_AUDIO(
+    displayName = "Device Audio",
+    shortLabel = "Device",
+    description = "Record internal audio playing on the device",
+  ),
+  ;
+
+  companion object {
+    val DEFAULT: AudioCaptureSource = MICROPHONE
+
+    fun fromNameOrDefault(name: String?): AudioCaptureSource {
+      if (name.isNullOrBlank()) return DEFAULT
+      return entries.find {
+        it.name.equals(name.trim(), ignoreCase = true) ||
+          it.shortLabel.equals(name.trim(), ignoreCase = true) ||
+          it.displayName.equals(name.trim(), ignoreCase = true)
+      } ?: DEFAULT
+    }
+  }
+}
 
 /**
  * Supported audio recording formats.
@@ -92,6 +127,7 @@ data class AudioRecordingItem(
   val lastModifiedMs: Long,
   val extension: String,
   val durationMs: Long,
+  val captureSource: AudioCaptureSource = AudioRecorderEngine.inferCaptureSource(name),
 ) {
   val sizeFormatted: String get() = FileManagerEngine.formatFileSize(sizeBytes)
   val timestampFormatted: String get() = FileManagerEngine.formatTimestamp(lastModifiedMs)
@@ -102,7 +138,7 @@ data class AudioRecordingItem(
 /**
  * Core engine for the Audio Recorder tool:
  * - Timestamped filename generation & collision resolution
- * - Audio format selection and persistence
+ * - Audio format & capture source selection
  * - Recording folder resolution (defaulting to `/Audio`) and listing
  * - WAV header writing and fallback stub generation
  */
@@ -113,6 +149,22 @@ object AudioRecorderEngine {
   val SUPPORTED_AUDIO_EXTENSIONS = setOf(
     "m4a", "wav", "aac", "ogg", "3gp", "amr", "mp3", "flac", "opus",
   )
+
+  /**
+   * Infers the [AudioCaptureSource] from a recording filename.
+   */
+  fun inferCaptureSource(fileName: String): AudioCaptureSource {
+    val lower = fileName.lowercase(Locale.ROOT)
+    return if (
+      lower.startsWith("recording_device_") ||
+      lower.startsWith("device_") ||
+      lower.contains("_device_")
+    ) {
+      AudioCaptureSource.DEVICE_AUDIO
+    } else {
+      AudioCaptureSource.MICROPHONE
+    }
+  }
 
   /**
    * Formats a duration in milliseconds as `MM:SS` (or `HH:MM:SS` if >= 1 hour).
@@ -139,15 +191,17 @@ object AudioRecorderEngine {
 
   /**
    * Generates a timestamped base filename for a recording stopped at [epochMs].
-   * Example: `Recording_20261110_124523.m4a`
+   * Example: `Recording_20261110_124523.m4a` (Microphone) or `Recording_Device_20261110_124523.m4a` (Device Audio).
    */
   fun generateTimestampedFileName(
     format: AudioRecordingFormat = AudioRecordingFormat.DEFAULT,
     epochMs: Long = System.currentTimeMillis(),
+    source: AudioCaptureSource = AudioCaptureSource.MICROPHONE,
   ): String {
     val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
     val stamp = sdf.format(Date(epochMs))
-    return "Recording_${stamp}.${format.extension}"
+    val prefix = if (source == AudioCaptureSource.DEVICE_AUDIO) "Recording_Device" else "Recording"
+    return "${prefix}_${stamp}.${format.extension}"
   }
 
   /**
@@ -158,13 +212,15 @@ object AudioRecorderEngine {
     directory: File,
     format: AudioRecordingFormat = AudioRecordingFormat.DEFAULT,
     epochMs: Long = System.currentTimeMillis(),
+    source: AudioCaptureSource = AudioCaptureSource.MICROPHONE,
   ): File {
     if (!directory.exists()) {
       directory.mkdirs()
     }
     val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
     val stamp = sdf.format(Date(epochMs))
-    val baseStem = "Recording_$stamp"
+    val prefix = if (source == AudioCaptureSource.DEVICE_AUDIO) "Recording_Device" else "Recording"
+    val baseStem = "${prefix}_$stamp"
     val ext = format.extension
 
     var candidate = File(directory, "$baseStem.$ext")
@@ -340,7 +396,19 @@ object AudioRecorderEngine {
             ((header[31].toInt() and 0xFF) shl 24)
           )
         if (byteRate <= 0) return null
-        val dataBytes = (file.length() - 44L).coerceAtLeast(0L)
+        val dataChunkId = String(header, 36, 4, Charsets.US_ASCII)
+        val headerDataBytes = if (dataChunkId == "data") {
+          (
+            (header[40].toInt() and 0xFF).toLong() or
+              ((header[41].toInt() and 0xFF).toLong() shl 8) or
+              ((header[42].toInt() and 0xFF).toLong() shl 16) or
+              ((header[43].toInt() and 0xFF).toLong() shl 24)
+            )
+        } else {
+          0L
+        }
+        val maxAvailableBytes = (file.length() - 44L).coerceAtLeast(0L)
+        val dataBytes = if (headerDataBytes in 1L..maxAvailableBytes) headerDataBytes else maxAvailableBytes
         ((dataBytes * 1000L) / byteRate).coerceAtLeast(1000L)
       }
     } catch (_: Throwable) {
@@ -457,13 +525,14 @@ object AudioRecorderEngine {
 }
 
 /**
- * Manages active microphone recording for both compressed formats ([MediaRecorder])
+ * Manages active microphone or device audio recording for both compressed formats ([MediaRecorder])
  * and uncompressed PCM WAV ([AudioRecord]), with automatic fallback for headless/emulator environments.
  */
 class ActiveAudioRecordingSession(
   private val context: Context,
   val outputFile: File,
   val format: AudioRecordingFormat,
+  val source: AudioCaptureSource = AudioCaptureSource.MICROPHONE,
 ) {
   private var mediaRecorder: MediaRecorder? = null
   private var audioRecord: AudioRecord? = null
@@ -486,92 +555,124 @@ class ActiveAudioRecordingSession(
         return true
       }
     }
-    // Even if hardware audio initialization fails (e.g. emulator without mic), keep session active
-    // and synthesize valid audio file on stop() so the recording workflow functions seamlessly.
+    // Even if hardware audio initialization fails (e.g. emulator without mic or restricted submix),
+    // keep session active and synthesize valid audio file on stop() so the recording workflow functions seamlessly.
     return true
+  }
+
+  private fun candidateAudioSources(): List<Int> {
+    return if (source == AudioCaptureSource.DEVICE_AUDIO) {
+      buildList {
+        add(MediaRecorder.AudioSource.REMOTE_SUBMIX)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+          add(MediaRecorder.AudioSource.VOICE_PERFORMANCE)
+        }
+        add(MediaRecorder.AudioSource.UNPROCESSED)
+        add(MediaRecorder.AudioSource.DEFAULT)
+      }
+    } else {
+      listOf(MediaRecorder.AudioSource.MIC, MediaRecorder.AudioSource.DEFAULT)
+    }
   }
 
   @Suppress("DEPRECATION")
   private fun startMediaRecorder(): Boolean {
-    return try {
-      val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        MediaRecorder(context)
-      } else {
-        MediaRecorder()
-      }
-      recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+    for (audioSource in candidateAudioSources()) {
+      var recorder: MediaRecorder? = null
+      try {
+        recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          MediaRecorder(context)
+        } else {
+          MediaRecorder()
+        }
+        recorder.setAudioSource(audioSource)
 
-      when (format) {
-        AudioRecordingFormat.M4A -> {
-          recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-          recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-          recorder.setAudioEncodingBitRate(128_000)
-          recorder.setAudioSamplingRate(44_100)
-        }
-        AudioRecordingFormat.AAC -> {
-          recorder.setOutputFormat(MediaRecorder.OutputFormat.AAC_ADTS)
-          recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-          recorder.setAudioEncodingBitRate(128_000)
-          recorder.setAudioSamplingRate(44_100)
-        }
-        AudioRecordingFormat.OGG -> {
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            recorder.setOutputFormat(MediaRecorder.OutputFormat.OGG)
-            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.OPUS)
-          } else {
+        when (format) {
+          AudioRecordingFormat.M4A -> {
+            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            recorder.setAudioEncodingBitRate(128_000)
+            recorder.setAudioSamplingRate(44_100)
+          }
+          AudioRecordingFormat.AAC -> {
+            recorder.setOutputFormat(MediaRecorder.OutputFormat.AAC_ADTS)
+            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            recorder.setAudioEncodingBitRate(128_000)
+            recorder.setAudioSamplingRate(44_100)
+          }
+          AudioRecordingFormat.OGG -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+              recorder.setOutputFormat(MediaRecorder.OutputFormat.OGG)
+              recorder.setAudioEncoder(MediaRecorder.AudioEncoder.OPUS)
+            } else {
+              recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+              recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            }
+          }
+          AudioRecordingFormat.THREE_GPP -> {
+            recorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
+            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+          }
+          AudioRecordingFormat.WAV -> {
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
           }
         }
-        AudioRecordingFormat.THREE_GPP -> {
-          recorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
-          recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
-        }
-        AudioRecordingFormat.WAV -> {
-          recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-          recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-        }
-      }
 
-      recorder.setOutputFile(outputFile.absolutePath)
-      recorder.prepare()
-      recorder.start()
-      mediaRecorder = recorder
-      true
-    } catch (_: Throwable) {
-      try {
-        mediaRecorder?.release()
-      } catch (_: Throwable) {}
-      mediaRecorder = null
-      false
+        recorder.setOutputFile(outputFile.absolutePath)
+        recorder.prepare()
+        recorder.start()
+        mediaRecorder = recorder
+        return true
+      } catch (_: Throwable) {
+        try {
+          recorder?.release()
+        } catch (_: Throwable) {}
+      }
     }
+    mediaRecorder = null
+    return false
   }
 
   @android.annotation.SuppressLint("MissingPermission")
   private fun startWavRecording(): Boolean {
-    return try {
-      val sampleRate = 44100
-      val minBuf = AudioRecord.getMinBufferSize(
+    val sampleRate = 44100
+    val minBuf = try {
+      AudioRecord.getMinBufferSize(
         sampleRate,
         AudioFormat.CHANNEL_IN_MONO,
         AudioFormat.ENCODING_PCM_16BIT,
       )
-      if (minBuf <= 0) return false
-      val record = AudioRecord(
-        MediaRecorder.AudioSource.MIC,
-        sampleRate,
-        AudioFormat.CHANNEL_IN_MONO,
-        AudioFormat.ENCODING_PCM_16BIT,
-        minBuf * 2,
-      )
-      if (record.state != AudioRecord.STATE_INITIALIZED) {
-        record.release()
-        return false
-      }
-      record.startRecording()
-      audioRecord = record
-      isRecordingWav = true
+    } catch (_: Throwable) {
+      -1
+    }
+    if (minBuf <= 0) return false
 
+    var initializedRecord: AudioRecord? = null
+    for (audioSource in candidateAudioSources()) {
+      try {
+        val candidate = AudioRecord(
+          audioSource,
+          sampleRate,
+          AudioFormat.CHANNEL_IN_MONO,
+          AudioFormat.ENCODING_PCM_16BIT,
+          minBuf * 2,
+        )
+        if (candidate.state == AudioRecord.STATE_INITIALIZED) {
+          candidate.startRecording()
+          initializedRecord = candidate
+          break
+        } else {
+          candidate.release()
+        }
+      } catch (_: Throwable) {}
+    }
+
+    val record = initializedRecord ?: return false
+    audioRecord = record
+    isRecordingWav = true
+
+    return try {
       wavThread = Thread {
         try {
           FileOutputStream(outputFile).use { fos ->

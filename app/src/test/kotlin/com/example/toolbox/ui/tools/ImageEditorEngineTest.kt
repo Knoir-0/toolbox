@@ -1,7 +1,9 @@
 package com.example.toolbox.ui.tools
 
+import java.nio.file.Files
 import junit.framework.TestCase.assertEquals
 import junit.framework.TestCase.assertFalse
+import junit.framework.TestCase.assertNotNull
 import junit.framework.TestCase.assertNull
 import junit.framework.TestCase.assertTrue
 import org.junit.Test
@@ -442,5 +444,61 @@ class ImageEditorEngineTest {
     assertEquals(AspectRatioPreset.FREE, swappedBackFree)
     val backAspect = (rectBackFree.width * 2000f) / (rectBackFree.height * 1000f)
     assertEquals(2.0f, backAspect, 1e-3f)
+  }
+
+  @Test
+  fun imageEditorMode_includesDataTool_andImageMetadataRoundTripsAndParsesGps() {
+    assertEquals("Data", ImageEditorMode.DATA.label)
+    assertTrue(ImageEditorMode.entries.contains(ImageEditorMode.DATA))
+
+    // Verify GPS coordinate parsing and EXIF DMS conversion
+    val coords = ImageMetadataOperations.parseGpsCoordinates("37.7749, -122.4194")
+    assertNotNull(coords)
+    assertEquals(37.7749, coords!!.first, 1e-4)
+    assertEquals(-122.4194, coords.second, 1e-4)
+
+    val latDms = ImageMetadataOperations.formatDecimalToExifDms(coords.first)
+    val lonDms = ImageMetadataOperations.formatDecimalToExifDms(coords.second)
+    val parsedLat = ImageMetadataOperations.parseExifDmsToDecimal(latDms, "N")
+    val parsedLon = ImageMetadataOperations.parseExifDmsToDecimal(lonDms, "W")
+    assertNotNull(parsedLat)
+    assertNotNull(parsedLon)
+    assertEquals(37.7749, parsedLat!!, 1e-3)
+    assertEquals(-122.4194, parsedLon!!, 1e-3)
+
+    // Verify ImageMetadata sanitization and file round-trip
+    val tempFile = Files.createTempFile("test_image_meta_", ".jpg").toFile()
+    try {
+      val originalBytes = ByteArray(128) { (it * 3).toByte() }
+      tempFile.writeBytes(originalBytes)
+
+      val metadata = ImageMetadata(
+        title = "  Golden Gate Sunset  ",
+        artist = " Jane Doe ",
+        copyright = "Copyright 2026 Jane Doe",
+        dateTaken = "2026:11:15 17:45:00",
+        cameraMake = "Google",
+        cameraModel = "Pixel 9 Pro",
+        software = "Toolbox Image Editor",
+        location = "37.7749, -122.4194",
+      ).sanitized()
+
+      assertEquals("Golden Gate Sunset", metadata.title)
+      assertEquals("Jane Doe", metadata.artist)
+      assertEquals(8, metadata.populatedFieldCount)
+      assertFalse(metadata.isEmpty)
+
+      assertTrue(ImageMetadataOperations.writeImageMetadata(tempFile, metadata))
+      val readBack = ImageMetadataOperations.readImageMetadata(tempFile)
+      assertEquals(metadata, readBack)
+
+      // Clearing metadata removes the trailer and returns empty metadata
+      assertTrue(ImageMetadataOperations.writeImageMetadata(tempFile, ImageMetadata()))
+      val cleared = ImageMetadataOperations.readImageMetadata(tempFile)
+      assertTrue(cleared.isEmpty)
+      assertEquals(originalBytes.toList(), tempFile.readBytes().toList())
+    } finally {
+      tempFile.delete()
+    }
   }
 }

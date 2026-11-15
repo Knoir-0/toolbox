@@ -140,26 +140,65 @@ internal object NoOpGamepadActions : GamepadInputActions {
 
 @Composable
 fun BluetoothGamepadScreen(modifier: Modifier = Modifier) {
+  val haptic = LocalHapticFeedback.current
   if (LocalInspectionMode.current) {
-    DeviceListContent(
-      state = BluetoothRemoteUiState(
-        isBluetoothEnabled = true,
-        isHidRegistered = true,
-        devices = previewDevices,
-      ),
-      hasPermissions = true,
-      onRequestPermissions = {},
-      onEnableBluetooth = {},
-      onMakeDiscoverable = {},
-      onScan = {},
-      onStopScan = {},
-      onConnect = {},
-      onCancelConnect = {},
-      onDismissMessage = {},
-      modifier = modifier,
-      title = "Bluetooth Gamepad",
-      icon = Icons.Default.SportsEsports,
-    )
+    var previewDemoConnected by remember { mutableStateOf(false) }
+    Column(
+      modifier = modifier
+        .fillMaxSize()
+        .background(MaterialTheme.colorScheme.background)
+        .testTag("bt_gamepad_screen"),
+    ) {
+      BluetoothToolToolbar(
+        title = "Bluetooth Gamepad",
+        subtitle = if (previewDemoConnected) {
+          "Connected • Demo Gamepad (HID Simulator)"
+        } else {
+          "Select a paired device or tap + to add a new one"
+        },
+        icon = Icons.Default.SportsEsports,
+        actions = {
+          if (previewDemoConnected) {
+            BluetoothConnectedToolbarActions(
+              isDemo = true,
+              onDisconnect = { previewDemoConnected = false },
+            )
+          }
+        },
+      )
+      if (previewDemoConnected) {
+        GamepadControlContent(
+          deviceName = "Demo Gamepad (HID Simulator)",
+          actions = NoOpGamepadActions,
+          onDisconnect = { previewDemoConnected = false },
+          isDemo = true,
+          showToolbar = false,
+          modifier = Modifier.weight(1f),
+        )
+      } else {
+        DeviceListContent(
+          state = BluetoothRemoteUiState(
+            isBluetoothEnabled = true,
+            isHidRegistered = true,
+            devices = previewDevices,
+          ),
+          hasPermissions = true,
+          onRequestPermissions = {},
+          onEnableBluetooth = {},
+          onMakeDiscoverable = {},
+          onScan = {},
+          onStopScan = {},
+          onConnect = {},
+          onCancelConnect = {},
+          onDismissMessage = {},
+          modifier = Modifier.weight(1f),
+          title = "Bluetooth Gamepad",
+          icon = Icons.Default.SportsEsports,
+          onStartDemo = { previewDemoConnected = true },
+          showToolbar = false,
+        )
+      }
+    }
     return
   }
 
@@ -193,42 +232,85 @@ fun BluetoothGamepadScreen(modifier: Modifier = Modifier) {
   }
 
   val connection = state.connection
-  AnimatedContent(
-    targetState = connection is RemoteConnection.Connected,
-    transitionSpec = { fadeIn() togetherWith fadeOut() },
-    modifier = modifier.fillMaxSize(),
-    label = "gamepad_screen",
-  ) { connected ->
-    if (connected && connection is RemoteConnection.Connected) {
-      GamepadControlContent(
-        deviceName = connection.device.name,
-        actions = actions,
-        onDisconnect = viewModel::disconnect,
-      )
-    } else {
-      DeviceListContent(
-        state = state,
-        hasPermissions = hasPermissions,
-        onRequestPermissions = { permissionLauncher.launch(requiredBluetoothPermissions()) },
-        onEnableBluetooth = {
-          runCatching { enableBluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) }
-        },
-        onMakeDiscoverable = {
-          runCatching {
-            discoverableLauncher.launch(
-              Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
-                .putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120),
+  val connectedState = connection as? RemoteConnection.Connected
+
+  Column(
+    modifier = modifier
+      .fillMaxSize()
+      .background(MaterialTheme.colorScheme.background)
+      .testTag("bt_gamepad_screen"),
+  ) {
+    BluetoothToolToolbar(
+      title = "Bluetooth Gamepad",
+      subtitle = if (connectedState != null) {
+        "Connected • ${connectedState.device.name}"
+      } else {
+        "Select a paired device or tap + to add a new one"
+      },
+      icon = Icons.Default.SportsEsports,
+      actions = {
+        if (connectedState != null) {
+          BluetoothConnectedToolbarActions(
+            isDemo = connectedState.isDemo,
+            onDisconnect = {
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              viewModel.disconnect()
+            },
+          )
+        }
+      },
+    )
+
+    AnimatedContent(
+      targetState = connectedState != null,
+      transitionSpec = { fadeIn() togetherWith fadeOut() },
+      modifier = Modifier
+        .fillMaxSize()
+        .weight(1f),
+      label = "gamepad_screen",
+    ) { connected ->
+      val currentConnected = state.connection as? RemoteConnection.Connected
+      if (connected && currentConnected != null) {
+        GamepadControlContent(
+          deviceName = currentConnected.device.name,
+          actions = actions,
+          onDisconnect = viewModel::disconnect,
+          isDemo = currentConnected.isDemo,
+          showToolbar = false,
+        )
+      } else {
+        DeviceListContent(
+          state = state,
+          hasPermissions = hasPermissions,
+          onRequestPermissions = { permissionLauncher.launch(requiredBluetoothPermissions()) },
+          onEnableBluetooth = {
+            runCatching { enableBluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) }
+          },
+          onMakeDiscoverable = {
+            runCatching {
+              discoverableLauncher.launch(
+                Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
+                  .putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120),
+              )
+            }
+          },
+          onScan = viewModel::startScan,
+          onStopScan = viewModel::stopScan,
+          onConnect = { viewModel.connect(it.address) },
+          onCancelConnect = viewModel::disconnect,
+          onDismissMessage = viewModel::dismissMessage,
+          title = "Bluetooth Gamepad",
+          icon = Icons.Default.SportsEsports,
+          onStartDemo = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            viewModel.startDemoMode(
+              deviceName = "Demo Gamepad (HID Simulator)",
+              kind = BtDeviceKind.TV,
             )
-          }
-        },
-        onScan = viewModel::startScan,
-        onStopScan = viewModel::stopScan,
-        onConnect = { viewModel.connect(it.address) },
-        onCancelConnect = viewModel::disconnect,
-        onDismissMessage = viewModel::dismissMessage,
-        title = "Bluetooth Gamepad",
-        icon = Icons.Default.SportsEsports,
-      )
+          },
+          showToolbar = false,
+        )
+      }
     }
   }
 }
@@ -243,6 +325,8 @@ internal fun GamepadControlContent(
   actions: GamepadInputActions,
   onDisconnect: () -> Unit,
   modifier: Modifier = Modifier,
+  isDemo: Boolean = false,
+  showToolbar: Boolean = true,
 ) {
   BackHandler {
     onDisconnect()
@@ -257,280 +341,247 @@ internal fun GamepadControlContent(
     }
   }
 
-  BoxWithConstraints(
+  Column(
     modifier = modifier
       .fillMaxSize()
-      .padding(horizontal = 16.dp, vertical = 8.dp)
-      .testTag("bt_gamepad_view"),
+      .background(MaterialTheme.colorScheme.background),
   ) {
-    val isLandscape = maxWidth > maxHeight * 1.2f
-
-    if (isLandscape) {
-      Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.SpaceBetween,
-      ) {
-        // Top bar: Left shoulder + Center (Minus, Header, Plus) + Right shoulder
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            TriggerButton(
-              label = "LT",
-              contentDescription = "Left trigger",
-              button = GamepadButton.LEFT_TRIGGER,
-              isLeft = true,
-              actions = actions,
-              modifier = Modifier
-                .width(76.dp)
-                .height(44.dp)
-                .testTag("bt_gamepad_lt"),
-            )
-            BumperButton(
-              label = "LB",
-              contentDescription = "Left bumper",
-              button = GamepadButton.LEFT_BUMPER,
-              actions = actions,
-              modifier = Modifier
-                .width(76.dp)
-                .height(44.dp)
-                .testTag("bt_gamepad_lb"),
-            )
-          }
-
-          GamepadConnectionHeader(
-            deviceName = deviceName,
+    if (showToolbar) {
+      BluetoothToolToolbar(
+        title = "Bluetooth Gamepad",
+        subtitle = "Connected • $deviceName",
+        icon = Icons.Default.SportsEsports,
+        actions = {
+          BluetoothConnectedToolbarActions(
+            isDemo = isDemo,
             onDisconnect = onDisconnect,
-            modifier = Modifier
-              .weight(1f)
-              .padding(horizontal = 12.dp),
           )
-
-          Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            BumperButton(
-              label = "RB",
-              contentDescription = "Right bumper",
-              button = GamepadButton.RIGHT_BUMPER,
-              actions = actions,
-              modifier = Modifier
-                .width(76.dp)
-                .height(44.dp)
-                .testTag("bt_gamepad_rb"),
-            )
-            TriggerButton(
-              label = "RT",
-              contentDescription = "Right trigger",
-              button = GamepadButton.RIGHT_TRIGGER,
-              isLeft = false,
-              actions = actions,
-              modifier = Modifier
-                .width(76.dp)
-                .height(44.dp)
-                .testTag("bt_gamepad_rt"),
-            )
-          }
-        }
-
-        // Main landscape controls: Left D-Pad + Left Joystick + Minus/Plus + Right Joystick + ABXY
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .weight(1f),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          GamepadDPad(
-            actions = actions,
-            size = 144.dp,
-          )
-          GamepadJoystick(
-            label = "L",
-            contentDescription = "Left joystick",
-            onMove = actions::setLeftJoystick,
-            size = 136.dp,
-            modifier = Modifier.testTag("bt_gamepad_left_joystick"),
-          )
-          MinusPlusCluster(actions = actions)
-          GamepadJoystick(
-            label = "R",
-            contentDescription = "Right joystick",
-            onMove = actions::setRightJoystick,
-            size = 136.dp,
-            modifier = Modifier.testTag("bt_gamepad_right_joystick"),
-          )
-          GamepadFaceButtons(
-            actions = actions,
-            size = 144.dp,
-          )
-        }
-      }
-    } else {
-      Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.SpaceBetween,
-        horizontalAlignment = Alignment.CenterHorizontally,
-      ) {
-        // ---- Header ----
-        GamepadConnectionHeader(
-          deviceName = deviceName,
-          onDisconnect = onDisconnect,
-          modifier = Modifier.fillMaxWidth(),
-        )
-
-        // ---- Shoulder Section: Triggers (LT / RT), Bumpers (LB / RB), and Minus / Plus ----
-        Column(
-          modifier = Modifier.fillMaxWidth(),
-          verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          // Triggers Row (LT & RT)
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            TriggerButton(
-              label = "LT",
-              contentDescription = "Left trigger",
-              button = GamepadButton.LEFT_TRIGGER,
-              isLeft = true,
-              actions = actions,
-              modifier = Modifier
-                .width(124.dp)
-                .height(46.dp)
-                .testTag("bt_gamepad_lt"),
-            )
-            TriggerButton(
-              label = "RT",
-              contentDescription = "Right trigger",
-              button = GamepadButton.RIGHT_TRIGGER,
-              isLeft = false,
-              actions = actions,
-              modifier = Modifier
-                .width(124.dp)
-                .height(46.dp)
-                .testTag("bt_gamepad_rt"),
-            )
-          }
-
-          // Bumpers Row (LB & RB) with Minus (-) and Plus (+) in the center
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            BumperButton(
-              label = "LB",
-              contentDescription = "Left bumper",
-              button = GamepadButton.LEFT_BUMPER,
-              actions = actions,
-              modifier = Modifier
-                .width(104.dp)
-                .height(42.dp)
-                .testTag("bt_gamepad_lb"),
-            )
-
-            MinusPlusCluster(actions = actions)
-
-            BumperButton(
-              label = "RB",
-              contentDescription = "Right bumper",
-              button = GamepadButton.RIGHT_BUMPER,
-              actions = actions,
-              modifier = Modifier
-                .width(104.dp)
-                .height(42.dp)
-                .testTag("bt_gamepad_rb"),
-            )
-          }
-        }
-
-        // ---- Middle Row: Left D-Pad & Right A / B / X / Y Diamond ----
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          GamepadDPad(
-            actions = actions,
-            size = 156.dp,
-          )
-          GamepadFaceButtons(
-            actions = actions,
-            size = 156.dp,
-          )
-        }
-
-        // ---- Bottom Row: Left Joystick & Right Joystick ----
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 4.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          GamepadJoystick(
-            label = "L",
-            contentDescription = "Left joystick",
-            onMove = actions::setLeftJoystick,
-            size = 148.dp,
-            modifier = Modifier.testTag("bt_gamepad_left_joystick"),
-          )
-          GamepadJoystick(
-            label = "R",
-            contentDescription = "Right joystick",
-            onMove = actions::setRightJoystick,
-            size = 148.dp,
-            modifier = Modifier.testTag("bt_gamepad_right_joystick"),
-          )
-        }
-      }
-    }
-  }
-}
-
-@Composable
-private fun GamepadConnectionHeader(
-  deviceName: String,
-  onDisconnect: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  Row(
-    verticalAlignment = Alignment.CenterVertically,
-    modifier = modifier,
-  ) {
-    Box(
-      Modifier
-        .size(10.dp)
-        .clip(CircleShape)
-        .background(Color(0xFF34A853)),
-    )
-    Spacer(Modifier.width(8.dp))
-    Column(Modifier.weight(1f)) {
-      Text(
-        text = deviceName,
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold,
-        maxLines = 1,
-      )
-      Text(
-        text = "Connected",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        },
       )
     }
-    IconButton(
-      onClick = onDisconnect,
-      modifier = Modifier.testTag("bt_disconnect"),
+
+    BoxWithConstraints(
+      modifier = Modifier
+        .fillMaxSize()
+        .weight(1f)
+        .padding(horizontal = 16.dp, vertical = 12.dp)
+        .testTag("bt_gamepad_view"),
     ) {
-      Icon(Icons.Default.LinkOff, contentDescription = "Disconnect")
+      val isLandscape = maxWidth > maxHeight * 1.2f
+
+      if (isLandscape) {
+        Column(
+          modifier = Modifier.fillMaxSize(),
+          verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+          // Top bar: Left shoulder (LT + LB) & Right shoulder (RB + RT)
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Row(
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              TriggerButton(
+                label = "LT",
+                contentDescription = "Left trigger",
+                button = GamepadButton.LEFT_TRIGGER,
+                isLeft = true,
+                actions = actions,
+                modifier = Modifier
+                  .width(76.dp)
+                  .height(44.dp)
+                  .testTag("bt_gamepad_lt"),
+              )
+              BumperButton(
+                label = "LB",
+                contentDescription = "Left bumper",
+                button = GamepadButton.LEFT_BUMPER,
+                actions = actions,
+                modifier = Modifier
+                  .width(76.dp)
+                  .height(44.dp)
+                  .testTag("bt_gamepad_lb"),
+              )
+            }
+
+            Row(
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              BumperButton(
+                label = "RB",
+                contentDescription = "Right bumper",
+                button = GamepadButton.RIGHT_BUMPER,
+                actions = actions,
+                modifier = Modifier
+                  .width(76.dp)
+                  .height(44.dp)
+                  .testTag("bt_gamepad_rb"),
+              )
+              TriggerButton(
+                label = "RT",
+                contentDescription = "Right trigger",
+                button = GamepadButton.RIGHT_TRIGGER,
+                isLeft = false,
+                actions = actions,
+                modifier = Modifier
+                  .width(76.dp)
+                  .height(44.dp)
+                  .testTag("bt_gamepad_rt"),
+              )
+            }
+          }
+
+          // Main landscape controls: Left D-Pad + Left Joystick + Minus/Plus + Right Joystick + ABXY
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .weight(1f),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            GamepadDPad(
+              actions = actions,
+              size = 144.dp,
+            )
+            GamepadJoystick(
+              label = "L",
+              contentDescription = "Left joystick",
+              onMove = actions::setLeftJoystick,
+              size = 136.dp,
+              modifier = Modifier.testTag("bt_gamepad_left_joystick"),
+            )
+            MinusPlusCluster(actions = actions)
+            GamepadJoystick(
+              label = "R",
+              contentDescription = "Right joystick",
+              onMove = actions::setRightJoystick,
+              size = 136.dp,
+              modifier = Modifier.testTag("bt_gamepad_right_joystick"),
+            )
+            GamepadFaceButtons(
+              actions = actions,
+              size = 144.dp,
+            )
+          }
+        }
+      } else {
+        Column(
+          modifier = Modifier.fillMaxSize(),
+          verticalArrangement = Arrangement.SpaceBetween,
+          horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+          // ---- Shoulder Section: Triggers (LT / RT), Bumpers (LB / RB), and Minus / Plus ----
+          Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            // Triggers Row (LT & RT)
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              TriggerButton(
+                label = "LT",
+                contentDescription = "Left trigger",
+                button = GamepadButton.LEFT_TRIGGER,
+                isLeft = true,
+                actions = actions,
+                modifier = Modifier
+                  .width(124.dp)
+                  .height(46.dp)
+                  .testTag("bt_gamepad_lt"),
+              )
+              TriggerButton(
+                label = "RT",
+                contentDescription = "Right trigger",
+                button = GamepadButton.RIGHT_TRIGGER,
+                isLeft = false,
+                actions = actions,
+                modifier = Modifier
+                  .width(124.dp)
+                  .height(46.dp)
+                  .testTag("bt_gamepad_rt"),
+              )
+            }
+
+            // Bumpers Row (LB & RB) with Minus (-) and Plus (+) in the center
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              BumperButton(
+                label = "LB",
+                contentDescription = "Left bumper",
+                button = GamepadButton.LEFT_BUMPER,
+                actions = actions,
+                modifier = Modifier
+                  .width(104.dp)
+                  .height(42.dp)
+                  .testTag("bt_gamepad_lb"),
+              )
+
+              MinusPlusCluster(actions = actions)
+
+              BumperButton(
+                label = "RB",
+                contentDescription = "Right bumper",
+                button = GamepadButton.RIGHT_BUMPER,
+                actions = actions,
+                modifier = Modifier
+                  .width(104.dp)
+                  .height(42.dp)
+                  .testTag("bt_gamepad_rb"),
+              )
+            }
+          }
+
+          // ---- Middle Row: Left D-Pad & Right A / B / X / Y Diamond ----
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            GamepadDPad(
+              actions = actions,
+              size = 156.dp,
+            )
+            GamepadFaceButtons(
+              actions = actions,
+              size = 156.dp,
+            )
+          }
+
+          // ---- Bottom Row: Left Joystick & Right Joystick ----
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(bottom = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            GamepadJoystick(
+              label = "L",
+              contentDescription = "Left joystick",
+              onMove = actions::setLeftJoystick,
+              size = 148.dp,
+              modifier = Modifier.testTag("bt_gamepad_left_joystick"),
+            )
+            GamepadJoystick(
+              label = "R",
+              contentDescription = "Right joystick",
+              onMove = actions::setRightJoystick,
+              size = 148.dp,
+              modifier = Modifier.testTag("bt_gamepad_right_joystick"),
+            )
+          }
+        }
+      }
     }
   }
 }

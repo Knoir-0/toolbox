@@ -337,4 +337,62 @@ class VideoEditorEngineTest {
       tempDir.deleteRecursively()
     }
   }
+
+  @Test
+  fun videoEditorMode_includesDataTool_andVideoMetadataTagsBuildFfmpegArgsAndRoundTrip() {
+    assertEquals("Data", VideoEditorMode.DATA.label)
+    assertTrue(VideoEditorMode.entries.contains(VideoEditorMode.DATA))
+
+    val tags = VideoMetadataTags(
+      title = "  Mountain Time-Lapse ",
+      artist = " Toolbox Studio ",
+      album = "Nature Reels",
+      genre = "Documentary",
+      year = "2026",
+      comment = "Shot at 4K 60fps",
+      location = "46.8523, -121.7603",
+    ).sanitized()
+
+    assertEquals("Mountain Time-Lapse", tags.title)
+    assertEquals("Toolbox Studio", tags.artist)
+    assertEquals(7, tags.populatedFieldCount)
+    assertFalse(tags.isEmpty)
+
+    val meta = VideoMetadata(
+      file = File("/tmp/clip.mp4"),
+      durationMs = 8_000L,
+      width = 1920,
+      height = 1080,
+      tags = tags,
+    )
+    val initialState = VideoEditState.initialForDuration(8_000L, tags = tags)
+    assertFalse(initialState.hasMetadataChanges)
+
+    val editedTags = tags.copy(title = "Updated Time-Lapse")
+    val editedState = initialState.copy(metadataTags = editedTags)
+    assertTrue(editedState.hasMetadataChanges)
+    assertTrue(editedState.hasAnyChanges)
+
+    val copyArgs = VideoEditorEngine.buildFfmpegArguments(
+      inputPath = "/tmp/clip.mp4",
+      outputPath = "/tmp/out.mp4",
+      metadata = meta,
+      editState = editedState,
+      options = VideoExportOptions(),
+      strategy = VideoProcessingStrategy.STREAM_COPY,
+    )
+    assertTrue(copyArgs.containsAll(listOf("-metadata", "title=Updated Time-Lapse")))
+    assertTrue(copyArgs.containsAll(listOf("-metadata", "artist=Toolbox Studio")))
+    assertTrue(copyArgs.containsAll(listOf("-metadata", "location=46.8523, -121.7603")))
+
+    val tempFile = Files.createTempFile("test_video_meta_", ".mp4").toFile()
+    try {
+      tempFile.writeBytes(ByteArray(256) { (it + 1).toByte() })
+      assertTrue(VideoEditorEngine.writeVideoMetadataTags(tempFile, editedTags))
+      val readBack = VideoEditorEngine.readVideoMetadataTags(tempFile)
+      assertEquals(editedTags, readBack)
+    } finally {
+      tempFile.delete()
+    }
+  }
 }

@@ -88,6 +88,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -161,6 +162,12 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
+private enum class TodoFilterTab {
+  TASKS,
+  SCHEDULED,
+  COMPLETED,
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TodoListScreen(
@@ -177,6 +184,7 @@ fun TodoListScreen(
   var tasks by remember { mutableStateOf(repo.loadTasks()) }
   var completedTodayCount by remember { mutableIntStateOf(repo.getCompletedTodayCount(getTodayDateKey())) }
   var completedTasks by remember { mutableStateOf(repo.loadCompletedTasks(getTodayDateKey())) }
+  var selectedTab by remember { mutableStateOf(TodoFilterTab.TASKS) }
   var showCompletedTasksSheet by remember { mutableStateOf(false) }
 
   var savedTasks by remember { mutableStateOf(repo.loadSavedTasks()) }
@@ -755,62 +763,13 @@ fun TodoListScreen(
                 modifier = Modifier.size(20.dp),
               )
             }
-            Column {
-              val scheduledCount = tasks.count { it.isScheduled }
-              Text(
-                text = "To Do",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.testTag("todo_screen_title"),
-              )
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-              ) {
-                Text(
-                  text = if (tasks.size == 1) "1 task" else "${tasks.size} tasks",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier.testTag("todo_task_count_label"),
-                )
-                Text(
-                  text = "•",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                )
-                Text(
-                  text = "$scheduledCount scheduled",
-                  style = MaterialTheme.typography.bodySmall,
-                  fontWeight = if (scheduledCount > 0) FontWeight.SemiBold else FontWeight.Normal,
-                  color = if (scheduledCount > 0) {
-                    MaterialTheme.colorScheme.tertiary
-                  } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                  },
-                  modifier = Modifier.testTag("todo_scheduled_count_label"),
-                )
-                Text(
-                  text = "•",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                )
-                Text(
-                  text = "$completedTodayCount completed",
-                  style = MaterialTheme.typography.bodySmall,
-                  fontWeight = FontWeight.SemiBold,
-                  color = if (completedTodayCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .clickable {
-                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                      showCompletedTasksSheet = true
-                    }
-                    .padding(horizontal = 2.dp, vertical = 2.dp)
-                    .testTag("todo_completed_today_counter"),
-                )
-              }
-            }
+            Text(
+              text = "To Do",
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier.testTag("todo_screen_title"),
+            )
           }
 
           // Header Actions: Undo and Redo
@@ -853,6 +812,21 @@ fun TodoListScreen(
       }
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
+      // Pill Buttons Row (Tasks, Scheduled, Completed), styled like Music and Files
+      val scheduledTasksCount = tasks.count { it.isScheduled }
+      TodoFilterPillRow(
+        selectedTab = selectedTab,
+        tasksCount = tasks.size,
+        scheduledCount = scheduledTasksCount,
+        completedCount = completedTodayCount,
+        onSelectTab = { tab ->
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          selectedTab = tab
+        },
+      )
+
+      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
       // In-app Notification Popup Banner when a scheduled note's date/time is reached
       AnimatedVisibility(
         visible = duePopupTasks.isNotEmpty(),
@@ -874,125 +848,104 @@ fun TodoListScreen(
         }
       }
 
-      // Scheduled Notes Label Bar (shown when there are scheduled notes)
-      val scheduledTasksCount = tasks.count { it.isScheduled }
-      AnimatedVisibility(
-        visible = scheduledTasksCount > 0,
-        enter = expandVertically() + fadeIn(),
-        exit = shrinkVertically() + fadeOut(),
-      ) {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .testTag("todo_scheduled_notes_label"),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          Surface(
-            color = MaterialTheme.colorScheme.primaryContainer,
-            shape = CircleShape,
-          ) {
-            Row(
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Schedule,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(14.dp),
-              )
-              Text(
-                text = if (scheduledTasksCount == 1) {
-                  "Scheduled Notes • 1 active"
-                } else {
-                  "Scheduled Notes • $scheduledTasksCount active"
-                },
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-              )
-            }
-          }
+      // Main Content Area based on active pill button
+      when (selectedTab) {
+        TodoFilterTab.COMPLETED -> {
+          CompletedTasksListContent(
+            completedTasks = completedTasks,
+            completedCount = completedTodayCount,
+            historyVersion = historyVersion,
+            onUncompleteTask = { task -> uncompleteTask(task) },
+            onRemoveCompletedTask = { task -> deleteCompletedTask(task) },
+          )
         }
-      }
+        TodoFilterTab.TASKS,
+        TodoFilterTab.SCHEDULED -> {
+          val displayedTasks = if (selectedTab == TodoFilterTab.SCHEDULED) {
+            tasks.filter { it.isScheduled }
+          } else {
+            tasks
+          }
 
-      // Main Task List with Drag Handles, Subtasks, and Swipe Gestures
-      if (tasks.isEmpty()) {
-        EmptyTasksState()
-      } else {
-        LazyColumn(
-          state = listState,
-          modifier = Modifier
-            .fillMaxSize()
-            .testTag("todo_tasks_list"),
-          contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-          verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-          items(
-            items = tasks,
-            key = { it.id },
-          ) { task ->
-            val isBeingDragged = draggedTaskId == task.id
-            val isEditingInline = inlineEditingTaskId == task.id
-            SwipeableTaskItem(
-              task = task,
-              historyVersion = historyVersion,
-              isBeingDragged = isBeingDragged,
-              dragOffsetY = if (isBeingDragged) dragOffsetY else 0f,
-              isEditingInline = isEditingInline,
-              onScheduleClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                openScheduleForTask(task)
-              },
-              onComplete = { completeTask(task) },
-              onDelete = { deleteTask(task) },
-              onStartInlineEdit = { inlineEditingTaskId = task.id },
-              onSaveInlineEdit = { newTitle ->
-                val trimmed = newTitle.trim()
-                if (trimmed.isNotEmpty() && trimmed != task.title) {
-                  val updated = tasks.map { if (it.id == task.id) it.copy(title = trimmed) else it }
-                  applyAction(updated)
-                }
-                inlineEditingTaskId = null
-              },
-              onToggleSubTask = { subtaskId -> toggleSubTask(task.id, subtaskId) },
-              onToggleCollapseSubtasks = { toggleCollapseSubtasks(task.id) },
-              onSaveAsTemplate = { saveTaskTemplate(task) },
-              onAddSubTask = { subtaskTitle -> addSubTask(task.id, subtaskTitle) },
-              onDeleteSubTask = { subtaskId -> deleteSubTask(task.id, subtaskId) },
-              onUpdateSubTask = { subtaskId, newTitle -> updateSubTask(task.id, subtaskId, newTitle) },
-              draggedSubtaskId = draggedSubtaskId,
-              subtaskDragOffsetY = subtaskDragOffsetY,
-              onStartDragSubTask = { subtaskId -> startDraggingSubTask(subtaskId) },
-              onDragSubTask = { subtaskId, deltaY -> onDragSubTaskDelta(task.id, subtaskId, deltaY) },
-              onEndDragSubTask = { endDraggingSubTask() },
-              onSubtaskHeightMeasured = { subtaskId, heightPx ->
-                if (heightPx > 0f) {
-                  subtaskHeightsPx[subtaskId] = heightPx
-                }
-              },
-              onStartDrag = { startDragging(task.id) },
-              onDrag = { deltaY -> onDragDelta(task.id, deltaY) },
-              onEndDrag = { endDragging() },
-              onItemHeightMeasured = { heightPx ->
-                if (heightPx > 0f) {
-                  taskHeightsPx[task.id] = heightPx
-                }
-              },
-              modifier = Modifier.animateItem(
-                placementSpec = if (isBeingDragged) {
-                  null
-                } else {
-                  spring(
-                    stiffness = Spring.StiffnessMediumLow,
-                    visibilityThreshold = IntOffset.VisibilityThreshold,
-                  )
-                },
-              ),
-            )
+          if (displayedTasks.isEmpty()) {
+            if (selectedTab == TodoFilterTab.SCHEDULED) {
+              EmptyScheduledTasksState()
+            } else {
+              EmptyTasksState()
+            }
+          } else {
+            LazyColumn(
+              state = listState,
+              modifier = Modifier
+                .fillMaxSize()
+                .testTag("todo_tasks_list"),
+              contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+              verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              items(
+                items = displayedTasks,
+                key = { it.id },
+              ) { task ->
+                val isBeingDragged = draggedTaskId == task.id
+                val isEditingInline = inlineEditingTaskId == task.id
+                SwipeableTaskItem(
+                  task = task,
+                  historyVersion = historyVersion,
+                  isBeingDragged = isBeingDragged,
+                  dragOffsetY = if (isBeingDragged) dragOffsetY else 0f,
+                  isEditingInline = isEditingInline,
+                  onScheduleClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    openScheduleForTask(task)
+                  },
+                  onComplete = { completeTask(task) },
+                  onDelete = { deleteTask(task) },
+                  onStartInlineEdit = { inlineEditingTaskId = task.id },
+                  onSaveInlineEdit = { newTitle ->
+                    val trimmed = newTitle.trim()
+                    if (trimmed.isNotEmpty() && trimmed != task.title) {
+                      val updated = tasks.map { if (it.id == task.id) it.copy(title = trimmed) else it }
+                      applyAction(updated)
+                    }
+                    inlineEditingTaskId = null
+                  },
+                  onToggleSubTask = { subtaskId -> toggleSubTask(task.id, subtaskId) },
+                  onToggleCollapseSubtasks = { toggleCollapseSubtasks(task.id) },
+                  onSaveAsTemplate = { saveTaskTemplate(task) },
+                  onAddSubTask = { subtaskTitle -> addSubTask(task.id, subtaskTitle) },
+                  onDeleteSubTask = { subtaskId -> deleteSubTask(task.id, subtaskId) },
+                  onUpdateSubTask = { subtaskId, newTitle -> updateSubTask(task.id, subtaskId, newTitle) },
+                  draggedSubtaskId = draggedSubtaskId,
+                  subtaskDragOffsetY = subtaskDragOffsetY,
+                  onStartDragSubTask = { subtaskId -> startDraggingSubTask(subtaskId) },
+                  onDragSubTask = { subtaskId, deltaY -> onDragSubTaskDelta(task.id, subtaskId, deltaY) },
+                  onEndDragSubTask = { endDraggingSubTask() },
+                  onSubtaskHeightMeasured = { subtaskId, heightPx ->
+                    if (heightPx > 0f) {
+                      subtaskHeightsPx[subtaskId] = heightPx
+                    }
+                  },
+                  onStartDrag = { startDragging(task.id) },
+                  onDrag = { deltaY -> onDragDelta(task.id, deltaY) },
+                  onEndDrag = { endDragging() },
+                  onItemHeightMeasured = { heightPx ->
+                    if (heightPx > 0f) {
+                      taskHeightsPx[task.id] = heightPx
+                    }
+                  },
+                  modifier = Modifier.animateItem(
+                    placementSpec = if (isBeingDragged) {
+                      null
+                    } else {
+                      spring(
+                        stiffness = Spring.StiffnessMediumLow,
+                        visibilityThreshold = IntOffset.VisibilityThreshold,
+                      )
+                    },
+                  ),
+                )
+              }
+            }
           }
         }
       }
@@ -2122,14 +2075,14 @@ private fun RoundedQuickAddBar(
         .testTag("todo_schedule_button"),
     ) {
       Icon(
-        imageVector = Icons.Default.Schedule,
-        contentDescription = "Schedule task",
+        imageVector = if (isScheduleOpen) Icons.Default.KeyboardArrowDown else Icons.Default.Schedule,
+        contentDescription = if (isScheduleOpen) "Dismiss schedule task" else "Schedule task",
         tint = if (isScheduleOpen || hasPendingSchedule) {
           MaterialTheme.colorScheme.onPrimaryContainer
         } else {
           MaterialTheme.colorScheme.primary
         },
-        modifier = Modifier.size(22.dp),
+        modifier = Modifier.size(if (isScheduleOpen) 24.dp else 22.dp),
       )
     }
 
@@ -2189,6 +2142,110 @@ private fun RoundedQuickAddBar(
 }
 
 /**
+ * Pill buttons row for switching between Tasks, Scheduled, and Completed views,
+ * styled consistently with Music and Files.
+ */
+@Composable
+private fun TodoFilterPillRow(
+  selectedTab: TodoFilterTab,
+  tasksCount: Int,
+  scheduledCount: Int,
+  completedCount: Int,
+  onSelectTab: (TodoFilterTab) -> Unit,
+) {
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .horizontalScroll(rememberScrollState())
+      .padding(horizontal = 12.dp, vertical = 6.dp)
+      .testTag("todo_pill_bar"),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    val isTasksSelected = selectedTab == TodoFilterTab.TASKS
+    FilterChip(
+      selected = isTasksSelected,
+      onClick = { onSelectTab(TodoFilterTab.TASKS) },
+      shape = CircleShape,
+      leadingIcon = {
+        Icon(
+          imageVector = Icons.Default.TaskAlt,
+          contentDescription = null,
+          modifier = Modifier.size(16.dp),
+        )
+      },
+      label = {
+        Text(
+          text = if (tasksCount == 1) "1 task" else "$tasksCount tasks",
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = if (isTasksSelected) FontWeight.Bold else FontWeight.Medium,
+        )
+      },
+      colors = FilterChipDefaults.filterChipColors(
+        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+      ),
+      modifier = Modifier.testTag("todo_task_count_label"),
+    )
+
+    val isScheduledSelected = selectedTab == TodoFilterTab.SCHEDULED
+    FilterChip(
+      selected = isScheduledSelected,
+      onClick = { onSelectTab(TodoFilterTab.SCHEDULED) },
+      shape = CircleShape,
+      leadingIcon = {
+        Icon(
+          imageVector = Icons.Default.Schedule,
+          contentDescription = null,
+          modifier = Modifier.size(16.dp),
+        )
+      },
+      label = {
+        Text(
+          text = "$scheduledCount scheduled",
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = if (isScheduledSelected) FontWeight.Bold else FontWeight.Medium,
+        )
+      },
+      colors = FilterChipDefaults.filterChipColors(
+        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+      ),
+      modifier = Modifier.testTag("todo_scheduled_count_label"),
+    )
+
+    val isCompletedSelected = selectedTab == TodoFilterTab.COMPLETED
+    FilterChip(
+      selected = isCompletedSelected,
+      onClick = { onSelectTab(TodoFilterTab.COMPLETED) },
+      shape = CircleShape,
+      leadingIcon = {
+        Icon(
+          imageVector = Icons.Default.CheckCircle,
+          contentDescription = null,
+          modifier = Modifier.size(16.dp),
+        )
+      },
+      label = {
+        Text(
+          text = "$completedCount completed",
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = if (isCompletedSelected) FontWeight.Bold else FontWeight.Medium,
+        )
+      },
+      colors = FilterChipDefaults.filterChipColors(
+        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+      ),
+      modifier = Modifier.testTag("todo_completed_today_counter"),
+    )
+  }
+}
+
+/**
  * Empty tasks illustration and encouragement.
  */
 @Composable
@@ -2237,6 +2294,349 @@ private fun EmptyTasksState() {
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
+    }
+  }
+}
+
+/**
+ * Empty state when filtering by scheduled tasks.
+ */
+@Composable
+private fun EmptyScheduledTasksState() {
+  Box(
+    modifier = Modifier
+      .fillMaxSize()
+      .padding(32.dp),
+    contentAlignment = Alignment.Center,
+  ) {
+    Column(
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Box(
+        modifier = Modifier
+          .size(80.dp)
+          .clip(CircleShape)
+          .background(MaterialTheme.colorScheme.primaryContainer),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Default.Schedule,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.onPrimaryContainer,
+          modifier = Modifier.size(44.dp),
+        )
+      }
+
+      Text(
+        text = "No scheduled tasks",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurface,
+      )
+
+      Text(
+        text = "Tap the schedule icon below or long-press a task to set a reminder.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+  }
+}
+
+/**
+ * Inline view displaying tasks completed today, supporting uncomplete and swipe-to-remove.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CompletedTasksListContent(
+  completedTasks: List<TodoItem>,
+  completedCount: Int,
+  historyVersion: Int = 0,
+  onUncompleteTask: (TodoItem) -> Unit = {},
+  onRemoveCompletedTask: (TodoItem) -> Unit = {},
+) {
+  val uncollapsedTaskIds = remember { mutableStateMapOf<String, Boolean>() }
+  val currentOnUncompleteTask by rememberUpdatedState(onUncompleteTask)
+  val currentOnRemoveCompletedTask by rememberUpdatedState(onRemoveCompletedTask)
+
+  if (completedTasks.isEmpty()) {
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(32.dp),
+      contentAlignment = Alignment.Center,
+    ) {
+      Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(80.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.CheckCircle,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.size(44.dp),
+          )
+        }
+        Text(
+          text = if (completedCount > 0) "$completedCount task(s) completed today" else "No completed tasks yet today",
+          style = MaterialTheme.typography.titleMedium,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+          text = "Completed tasks appear here and reset each day.",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+  } else {
+    LazyColumn(
+      modifier = Modifier
+        .fillMaxSize()
+        .testTag("todo_completed_tasks_list"),
+      contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      items(completedTasks, key = { it.id }) { task ->
+        val isUncollapsed = uncollapsedTaskIds[task.id] == true
+        val dismissState = remember(task.id, historyVersion) {
+          SwipeToDismissBoxState(
+            initialValue = SwipeToDismissBoxValue.Settled,
+            positionalThreshold = { it * 0.35f },
+          )
+        }
+        var hasDismissTriggered by remember(dismissState) { mutableStateOf(false) }
+
+        LaunchedEffect(dismissState, dismissState.currentValue) {
+          if (!hasDismissTriggered) {
+            when (dismissState.currentValue) {
+              SwipeToDismissBoxValue.StartToEnd,
+              SwipeToDismissBoxValue.EndToStart -> {
+                hasDismissTriggered = true
+                currentOnRemoveCompletedTask(task)
+                dismissState.snapTo(SwipeToDismissBoxValue.Settled)
+              }
+              SwipeToDismissBoxValue.Settled -> {}
+            }
+          }
+        }
+
+        SwipeToDismissBox(
+          state = dismissState,
+          enableDismissFromStartToEnd = true,
+          enableDismissFromEndToStart = true,
+          backgroundContent = {
+            val direction = dismissState.dismissDirection
+            val isSwiping = direction == SwipeToDismissBoxValue.StartToEnd ||
+              direction == SwipeToDismissBoxValue.EndToStart
+
+            val backgroundColor by animateColorAsState(
+              targetValue = if (isSwiping) MaterialTheme.colorScheme.error else Color.Transparent,
+              label = "completed_swipe_bg_${task.id}",
+            )
+
+            val iconScale by animateFloatAsState(
+              targetValue = if (dismissState.targetValue != SwipeToDismissBoxValue.Settled) 1.25f else 0.85f,
+              animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+              label = "completed_swipe_icon_scale_${task.id}",
+            )
+
+            Box(
+              modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(12.dp))
+                .background(backgroundColor)
+                .padding(horizontal = 20.dp),
+              contentAlignment = if (direction == SwipeToDismissBoxValue.StartToEnd) {
+                Alignment.CenterStart
+              } else {
+                Alignment.CenterEnd
+              },
+            ) {
+              if (direction == SwipeToDismissBoxValue.StartToEnd) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  modifier = Modifier.scale(iconScale),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint = MaterialTheme.colorScheme.onError,
+                    modifier = Modifier.size(22.dp),
+                  )
+                  Text(
+                    text = "Delete",
+                    color = MaterialTheme.colorScheme.onError,
+                    fontWeight = FontWeight.Bold,
+                  )
+                }
+              } else if (direction == SwipeToDismissBoxValue.EndToStart) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  modifier = Modifier.scale(iconScale),
+                ) {
+                  Text(
+                    text = "Delete",
+                    color = MaterialTheme.colorScheme.onError,
+                    fontWeight = FontWeight.Bold,
+                  )
+                  Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint = MaterialTheme.colorScheme.onError,
+                    modifier = Modifier.size(22.dp),
+                  )
+                }
+              }
+            }
+          },
+          content = {
+            Card(
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("todo_completed_item_card_${task.id}"),
+              shape = RoundedCornerShape(12.dp),
+              colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+              ),
+              elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            ) {
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(horizontal = 12.dp, vertical = 10.dp),
+              ) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  Box(
+                    modifier = Modifier
+                      .size(32.dp)
+                      .clip(CircleShape)
+                      .clickable { currentOnUncompleteTask(task) }
+                      .testTag("todo_completed_item_checkbox_${task.id}"),
+                    contentAlignment = Alignment.Center,
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.CheckCircle,
+                      contentDescription = "Uncomplete task",
+                      tint = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.size(22.dp),
+                    )
+                  }
+
+                  Spacer(modifier = Modifier.width(6.dp))
+
+                  Text(
+                    text = task.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    textDecoration = TextDecoration.LineThrough,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    modifier = Modifier.weight(1f),
+                  )
+
+                  if (task.subtasks.isNotEmpty()) {
+                    val caretRotation by animateFloatAsState(
+                      targetValue = if (isUncollapsed) 180f else 0f,
+                      animationSpec = tween(durationMillis = 250),
+                      label = "completed_caret_${task.id}",
+                    )
+
+                    Box(
+                      modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable {
+                          uncollapsedTaskIds[task.id] = !isUncollapsed
+                        }
+                        .background(
+                          MaterialTheme.colorScheme.primaryContainer,
+                          CircleShape,
+                        )
+                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                        .testTag("todo_completed_subtask_indicator_${task.id}"),
+                      contentAlignment = Alignment.Center,
+                    ) {
+                      Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                      ) {
+                        Text(
+                          text = "${task.subtasks.count { it.isCompleted }}/${task.subtasks.size}",
+                          style = MaterialTheme.typography.labelSmall,
+                          fontWeight = FontWeight.Bold,
+                          color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                        Icon(
+                          imageVector = Icons.Default.KeyboardArrowDown,
+                          contentDescription = if (isUncollapsed) "Collapse subtasks" else "Expand subtasks",
+                          tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                          modifier = Modifier
+                            .size(15.dp)
+                            .rotate(caretRotation),
+                        )
+                      }
+                    }
+                  }
+                }
+
+                AnimatedVisibility(
+                  visible = isUncollapsed && task.subtasks.isNotEmpty(),
+                  enter = fadeIn(animationSpec = tween(250)) +
+                    slideInVertically(animationSpec = tween(250), initialOffsetY = { -it / 3 }) +
+                    expandVertically(animationSpec = tween(250)),
+                  exit = fadeOut(animationSpec = tween(200)) +
+                    slideOutVertically(animationSpec = tween(200), targetOffsetY = { -it / 3 }) +
+                    shrinkVertically(animationSpec = tween(200)),
+                ) {
+                  Column(
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .padding(start = 32.dp, top = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                  ) {
+                    task.subtasks.forEach { subtask ->
+                      Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                      ) {
+                        Icon(
+                          imageVector = Icons.Default.CheckCircle,
+                          contentDescription = null,
+                          tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                          modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                          text = subtask.title,
+                          style = MaterialTheme.typography.bodySmall,
+                          textDecoration = TextDecoration.LineThrough,
+                          color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                        )
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          modifier = Modifier
+            .fillMaxWidth()
+            .animateItem()
+            .testTag("todo_completed_item_${task.id}"),
+        )
+      }
     }
   }
 }
@@ -3051,52 +3451,6 @@ private fun ScheduleTaskPanel(
         .padding(horizontal = 16.dp, vertical = 12.dp),
       verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      // Header Row
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Box(
-          modifier = Modifier
-            .size(38.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primaryContainer),
-          contentAlignment = Alignment.Center,
-        ) {
-          Icon(
-            imageVector = if (isExistingScheduled) Icons.Default.Update else Icons.Default.Schedule,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
-          )
-        }
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = "Schedule Task",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
-          Text(
-            text = "Set date and time",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-        IconButton(
-          onClick = onDismiss,
-          modifier = Modifier.size(32.dp),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Close,
-            contentDescription = "Close schedule task",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp),
-          )
-        }
-      }
-
       // Context Preview Card
       Card(
         shape = RoundedCornerShape(14.dp),
@@ -3167,6 +3521,7 @@ private fun ScheduleTaskPanel(
             Triple("1 mo", Calendar.MONTH, 1),
             Triple("2 mo", Calendar.MONTH, 2),
             Triple("3 mo", Calendar.MONTH, 3),
+            Triple("4 mo", Calendar.MONTH, 4),
             Triple("6 mo", Calendar.MONTH, 6),
           ),
         )
@@ -3228,7 +3583,7 @@ private fun ScheduleTaskPanel(
       ) {
         OutlinedButton(
           onClick = { showStartDatePicker = true },
-          shape = RoundedCornerShape(14.dp),
+          shape = CircleShape,
           modifier = Modifier
             .weight(1f)
             .testTag("todo_schedule_start_date_button"),
@@ -3249,7 +3604,7 @@ private fun ScheduleTaskPanel(
 
         OutlinedButton(
           onClick = { showStartTimePicker = true },
-          shape = RoundedCornerShape(14.dp),
+          shape = CircleShape,
           modifier = Modifier
             .testTag("todo_schedule_start_time_button"),
         ) {
@@ -3276,7 +3631,7 @@ private fun ScheduleTaskPanel(
           if (isExistingScheduled) {
             TextButton(
               onClick = onUnschedule,
-              shape = RoundedCornerShape(12.dp),
+              shape = CircleShape,
               modifier = Modifier.testTag("todo_schedule_clear_button"),
             ) {
               Text("Unschedule", color = MaterialTheme.colorScheme.error)
@@ -3284,7 +3639,7 @@ private fun ScheduleTaskPanel(
           }
           TextButton(
             onClick = onDismiss,
-            shape = RoundedCornerShape(12.dp),
+            shape = CircleShape,
             modifier = Modifier.testTag("todo_schedule_cancel_button"),
           ) {
             Text("Cancel")
@@ -3293,7 +3648,7 @@ private fun ScheduleTaskPanel(
 
         Button(
           onClick = onConfirmSchedule,
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
           modifier = Modifier.testTag("todo_schedule_confirm_button"),
         ) {
           Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))

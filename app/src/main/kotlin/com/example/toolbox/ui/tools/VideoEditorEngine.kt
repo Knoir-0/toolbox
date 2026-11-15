@@ -19,9 +19,16 @@ import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.FFmpegSession
 import com.arthenica.ffmpegkit.FFprobeKit
 import com.arthenica.ffmpegkit.ReturnCode
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -47,6 +54,64 @@ enum class VideoEditorMode(val label: String) {
   TRANSFORM("Rotate"),
   SPEED("Speed"),
   ADJUST("Filters"),
+  DATA("Data"),
+}
+
+/**
+ * Editable container metadata tags supported by the Video Editor's `Data` tool.
+ */
+data class VideoMetadataTags(
+  val title: String = "",
+  val artist: String = "",
+  val album: String = "",
+  val genre: String = "",
+  val year: String = "",
+  val comment: String = "",
+  val location: String = "",
+) {
+  val isEmpty: Boolean
+    get() = title.isBlank() &&
+      artist.isBlank() &&
+      album.isBlank() &&
+      genre.isBlank() &&
+      year.isBlank() &&
+      comment.isBlank() &&
+      location.isBlank()
+
+  val populatedFieldCount: Int
+    get() = listOf(title, artist, album, genre, year, comment, location).count { it.isNotBlank() }
+
+  fun sanitized(): VideoMetadataTags {
+    fun clean(value: String, maxLen: Int = 256): String =
+      value.replace("\u0000", "")
+        .replace("\r", " ")
+        .replace("\n", " ")
+        .trim()
+        .take(maxLen)
+
+    return VideoMetadataTags(
+      title = clean(title),
+      artist = clean(artist),
+      album = clean(album),
+      genre = clean(genre, 128),
+      year = clean(year, 32),
+      comment = clean(comment, 512),
+      location = clean(location, 128),
+    )
+  }
+
+  fun toFfmpegMetadataMap(): Map<String, String> {
+    val clean = sanitized()
+    return buildMap {
+      if (clean.title.isNotEmpty()) put("title", clean.title)
+      if (clean.artist.isNotEmpty()) put("artist", clean.artist)
+      if (clean.album.isNotEmpty()) put("album", clean.album)
+      if (clean.genre.isNotEmpty()) put("genre", clean.genre)
+      if (clean.year.isNotEmpty()) put("date", clean.year)
+      if (clean.comment.isNotEmpty()) put("comment", clean.comment)
+      if (clean.location.isNotEmpty()) put("location", clean.location)
+    }
+  }
 }
 
 /**
@@ -160,6 +225,7 @@ data class VideoMetadata(
   val hasAudio: Boolean = true,
   val videoCodec: String? = null,
   val sizeBytes: Long = file.length(),
+  val tags: VideoMetadataTags = VideoMetadataTags(),
 ) {
   val displayWidth: Int
     get() = if (rotationDegrees == 90 || rotationDegrees == 270) height else width
@@ -198,6 +264,8 @@ data class VideoEditState(
   val contrast: Float = 1f, // 0.5f..1.5f
   val saturation: Float = 1f, // 0f..2f
   val filterPreset: VideoFilterPreset = VideoFilterPreset.NONE,
+  val metadataTags: VideoMetadataTags = VideoMetadataTags(),
+  val initialMetadataTags: VideoMetadataTags = VideoMetadataTags(),
 ) {
   val normalizedRotation: Int
     get() = ((rotationDegrees % 360) + 360) % 360
@@ -238,6 +306,9 @@ data class VideoEditState(
       abs(contrast - 1.0f) > 0.01f ||
       abs(saturation - 1.0f) > 0.01f
 
+  val hasMetadataChanges: Boolean
+    get() = metadataTags.sanitized() != initialMetadataTags.sanitized()
+
   val hasVisualReencodeChanges: Boolean
     get() = hasCropChanges ||
       hasTransformChanges ||
@@ -253,7 +324,8 @@ data class VideoEditState(
       isMuted ||
       abs(volume - 1.0f) > 0.01f ||
       fadeInOut ||
-      hasColorChanges
+      hasColorChanges ||
+      hasMetadataChanges
 
   fun coerceForDuration(totalDurationMs: Long): VideoEditState {
     if (totalDurationMs <= 0L) return copy(durationMs = 0L, trimStartMs = 0L, trimEndMs = 0L)
@@ -272,16 +344,24 @@ data class VideoEditState(
       brightness = brightness.coerceIn(-100f, 100f),
       contrast = contrast.coerceIn(0.5f, 1.5f),
       saturation = saturation.coerceIn(0f, 2.0f),
+      metadataTags = metadataTags.sanitized(),
+      initialMetadataTags = initialMetadataTags.sanitized(),
     )
   }
 
   companion object {
-    fun initialForDuration(durationMs: Long): VideoEditState {
+    fun initialForDuration(
+      durationMs: Long,
+      tags: VideoMetadataTags = VideoMetadataTags(),
+    ): VideoEditState {
       val safeDuration = durationMs.coerceAtLeast(0L)
+      val cleanTags = tags.sanitized()
       return VideoEditState(
         durationMs = safeDuration,
         trimStartMs = 0L,
         trimEndMs = safeDuration,
+        metadataTags = cleanTags,
+        initialMetadataTags = cleanTags,
       )
     }
   }
@@ -756,6 +836,37 @@ object VideoEditorEngine {
     return filters
   }
 
+  private const val VIDEO_METADATA_TRAILER_MAGIC = "TBXVIDMD"
+
+  /**
+   * Builds FFmpeg `-metadata key=value` argument pairs when [editState] has metadata changes
+   * or non-empty metadata tags.
+   */
+  fun buildMetadataFfmpegArgs(editState: VideoEditState): List<String> {
+    if (!editState.hasMetadataChanges && editState.metadataTags.isEmpty) {
+      return emptyList()
+    }
+    val current = editState.metadataTags.sanitized()
+    val initial = editState.initialMetadataTags.sanitized()
+    val entries = listOf(
+      Triple("title", current.title, initial.title),
+      Triple("artist", current.artist, initial.artist),
+      Triple("album", current.album, initial.album),
+      Triple("genre", current.genre, initial.genre),
+      Triple("date", current.year, initial.year),
+      Triple("comment", current.comment, initial.comment),
+      Triple("location", current.location, initial.location),
+    )
+    return buildList {
+      for ((key, curVal, initVal) in entries) {
+        if (curVal.isNotEmpty() || initVal.isNotEmpty()) {
+          add("-metadata")
+          add("$key=$curVal")
+        }
+      }
+    }
+  }
+
   /**
    * Builds the complete FFmpeg CLI argument list for [strategy].
    */
@@ -781,6 +892,7 @@ object VideoEditorEngine {
 
     val hasSourceAudio = metadata?.hasAudio ?: true
     val muteAudio = editState.isMuted || editState.volume <= 0.001f || !hasSourceAudio
+    val metadataArgs = buildMetadataFfmpegArgs(editState)
 
     when (options.format) {
       VideoExportFormat.GIF -> {
@@ -795,13 +907,17 @@ object VideoEditorEngine {
       VideoExportFormat.M4A -> {
         args.add("-vn")
         if (strategy == VideoProcessingStrategy.STREAM_COPY && !muteAudio) {
-          args.addAll(listOf("-c:a", "copy", "-movflags", "+faststart", outputPath))
+          args.addAll(listOf("-c:a", "copy"))
+          args.addAll(metadataArgs)
+          args.addAll(listOf("-movflags", "+faststart", outputPath))
         } else {
           val af = buildAudioFilterStages(editState).joinToString(",")
           if (af.isNotEmpty()) {
             args.addAll(listOf("-af", af))
           }
-          args.addAll(listOf("-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", outputPath))
+          args.addAll(listOf("-c:a", "aac", "-b:a", "192k"))
+          args.addAll(metadataArgs)
+          args.addAll(listOf("-movflags", "+faststart", outputPath))
         }
         return args
       }
@@ -814,6 +930,7 @@ object VideoEditorEngine {
           } else {
             args.addAll(listOf("-c:a", "copy"))
           }
+          args.addAll(metadataArgs)
           args.addAll(listOf("-movflags", "+faststart", outputPath))
           return args
         }
@@ -862,6 +979,7 @@ object VideoEditorEngine {
           }
         }
 
+        args.addAll(metadataArgs)
         args.addAll(listOf("-movflags", "+faststart", outputPath))
         return args
       }
@@ -903,6 +1021,213 @@ object VideoEditorEngine {
           )
         }
       }
+    }
+  }
+
+  /**
+   * Reads container metadata tags from [file] via [MediaMetadataRetriever], [FFprobeKit],
+   * and the lossless metadata trailer.
+   */
+  fun readVideoMetadataTags(file: File): VideoMetadataTags {
+    if (!file.exists() || !file.isFile || file.length() <= 0L) return VideoMetadataTags()
+
+    var tags = readVideoTrailerMetadata(file) ?: VideoMetadataTags()
+
+    val retriever = try {
+      MediaMetadataRetriever()
+    } catch (_: Throwable) {
+      null
+    }
+    if (retriever != null) {
+      try {
+        retriever.setDataSource(file.absolutePath)
+        val mmrTitle = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)?.trim().orEmpty()
+        val mmrArtist = (
+          retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+            ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_AUTHOR)
+            ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
+          )?.trim().orEmpty()
+        val mmrAlbum = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)?.trim().orEmpty()
+        val mmrGenre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE)?.trim().orEmpty()
+        val mmrYear = (
+          retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)
+            ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
+          )?.trim().orEmpty()
+        val mmrLocation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION)?.trim().orEmpty()
+
+        tags = tags.copy(
+          title = tags.title.ifBlank { mmrTitle },
+          artist = tags.artist.ifBlank { mmrArtist },
+          album = tags.album.ifBlank { mmrAlbum },
+          genre = tags.genre.ifBlank { mmrGenre },
+          year = tags.year.ifBlank { mmrYear },
+          location = tags.location.ifBlank { mmrLocation },
+        )
+      } catch (_: Throwable) {
+      } finally {
+        try {
+          retriever.release()
+        } catch (_: Throwable) {}
+      }
+    }
+
+    try {
+      val infoSession = FFprobeKit.getMediaInformation(file.absolutePath)
+      val formatTags = infoSession?.mediaInformation?.tags
+      if (formatTags != null) {
+        fun optTag(vararg keys: String): String {
+          for (k in keys) {
+            val v = formatTags.optString(k, "").trim()
+            if (v.isNotEmpty()) return v
+            val upper = formatTags.optString(k.uppercase(Locale.ROOT), "").trim()
+            if (upper.isNotEmpty()) return upper
+          }
+          return ""
+        }
+        tags = tags.copy(
+          title = tags.title.ifBlank { optTag("title") },
+          artist = tags.artist.ifBlank { optTag("artist", "author", "album_artist") },
+          album = tags.album.ifBlank { optTag("album", "show") },
+          genre = tags.genre.ifBlank { optTag("genre") },
+          year = tags.year.ifBlank { optTag("date", "year", "creation_time") },
+          comment = tags.comment.ifBlank { optTag("comment", "description", "synopsis") },
+          location = tags.location.ifBlank { optTag("location", "com.apple.quicktime.location.ISO6709") },
+        )
+      }
+    } catch (_: Throwable) {}
+
+    return tags.sanitized()
+  }
+
+  /**
+   * Writes [tags] to [file] via FFmpeg stream copy (when available) and updates the lossless trailer.
+   */
+  fun writeVideoMetadataTags(file: File, tags: VideoMetadataTags): Boolean {
+    if (!file.exists() || !file.isFile) return false
+    val clean = tags.sanitized()
+    return try {
+      stripVideoTrailerMetadata(file)
+
+      try {
+        val tempOut = File(file.parentFile ?: File("."), ".vmeta_${System.nanoTime()}_${file.name}")
+        try {
+          val state = VideoEditState(
+            metadataTags = clean,
+            initialMetadataTags = VideoMetadataTags(),
+          )
+          val args = mutableListOf(
+            "-y",
+            "-i",
+            file.absolutePath,
+            "-c",
+            "copy",
+          )
+          args.addAll(buildMetadataFfmpegArgs(state))
+          args.addAll(listOf("-movflags", "+faststart", tempOut.absolutePath))
+          val session = FFmpegKit.executeWithArguments(args.toTypedArray())
+          if (ReturnCode.isSuccess(session.returnCode) && tempOut.exists() && tempOut.length() > 0L) {
+            tempOut.copyTo(file, overwrite = true)
+          }
+        } finally {
+          tempOut.delete()
+        }
+      } catch (_: Throwable) {
+        // FFmpegKit native libraries may not be loaded in local JVM tests
+      }
+
+      if (!clean.isEmpty) {
+        appendVideoTrailerMetadata(file, clean)
+      }
+      true
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  private fun stripVideoTrailerMetadata(file: File) {
+    val magicBytes = VIDEO_METADATA_TRAILER_MAGIC.toByteArray(Charsets.US_ASCII)
+    val footerLen = 4 + magicBytes.size
+    if (file.length() < footerLen + magicBytes.size) return
+    RandomAccessFile(file, "rw").use { raf ->
+      val len = raf.length()
+      raf.seek(len - footerLen)
+      val sizeBytes = ByteArray(4)
+      val tailMagic = ByteArray(magicBytes.size)
+      raf.readFully(sizeBytes)
+      raf.readFully(tailMagic)
+      if (!tailMagic.contentEquals(magicBytes)) return
+      val payloadSize = ByteBuffer.wrap(sizeBytes).order(ByteOrder.BIG_ENDIAN).int
+      val blockStart = len - footerLen - payloadSize - magicBytes.size
+      if (payloadSize in 0..65536 && blockStart >= 0L) {
+        raf.seek(blockStart)
+        val headMagic = ByteArray(magicBytes.size)
+        raf.readFully(headMagic)
+        if (headMagic.contentEquals(magicBytes)) {
+          raf.setLength(blockStart)
+        }
+      }
+    }
+  }
+
+  private fun appendVideoTrailerMetadata(file: File, tags: VideoMetadataTags) {
+    val magicBytes = VIDEO_METADATA_TRAILER_MAGIC.toByteArray(Charsets.US_ASCII)
+    val payloadBos = ByteArrayOutputStream()
+    DataOutputStream(payloadBos).use { dos ->
+      dos.writeUTF(tags.title)
+      dos.writeUTF(tags.artist)
+      dos.writeUTF(tags.album)
+      dos.writeUTF(tags.genre)
+      dos.writeUTF(tags.year)
+      dos.writeUTF(tags.comment)
+      dos.writeUTF(tags.location)
+    }
+    val payload = payloadBos.toByteArray()
+    RandomAccessFile(file, "rw").use { raf ->
+      raf.seek(raf.length())
+      raf.write(magicBytes)
+      raf.write(payload)
+      val sizeBytes = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(payload.size).array()
+      raf.write(sizeBytes)
+      raf.write(magicBytes)
+    }
+  }
+
+  private fun readVideoTrailerMetadata(file: File): VideoMetadataTags? {
+    val magicBytes = VIDEO_METADATA_TRAILER_MAGIC.toByteArray(Charsets.US_ASCII)
+    val footerLen = 4 + magicBytes.size
+    if (file.length() < footerLen + magicBytes.size) return null
+    return try {
+      RandomAccessFile(file, "r").use { raf ->
+        val len = raf.length()
+        raf.seek(len - footerLen)
+        val sizeBytes = ByteArray(4)
+        val tailMagic = ByteArray(magicBytes.size)
+        raf.readFully(sizeBytes)
+        raf.readFully(tailMagic)
+        if (!tailMagic.contentEquals(magicBytes)) return null
+        val payloadSize = ByteBuffer.wrap(sizeBytes).order(ByteOrder.BIG_ENDIAN).int
+        val blockStart = len - footerLen - payloadSize - magicBytes.size
+        if (payloadSize !in 1..65536 || blockStart < 0L) return null
+        raf.seek(blockStart)
+        val headMagic = ByteArray(magicBytes.size)
+        raf.readFully(headMagic)
+        if (!headMagic.contentEquals(magicBytes)) return null
+        val payload = ByteArray(payloadSize)
+        raf.readFully(payload)
+        DataInputStream(ByteArrayInputStream(payload)).use { dis ->
+          VideoMetadataTags(
+            title = dis.readUTF(),
+            artist = dis.readUTF(),
+            album = dis.readUTF(),
+            genre = dis.readUTF(),
+            year = dis.readUTF(),
+            comment = dis.readUTF(),
+            location = dis.readUTF(),
+          ).sanitized()
+        }
+      }
+    } catch (_: Throwable) {
+      null
     }
   }
 
@@ -983,6 +1308,8 @@ object VideoEditorEngine {
       return@withContext null
     }
 
+    val probedTags = readVideoMetadataTags(file)
+
     VideoMetadata(
       file = file,
       durationMs = durationMs.coerceAtLeast(500L),
@@ -994,6 +1321,7 @@ object VideoEditorEngine {
       hasAudio = hasAudio,
       videoCodec = videoCodec,
       sizeBytes = file.length(),
+      tags = probedTags,
     )
   }
 
@@ -1232,6 +1560,12 @@ object VideoEditorEngine {
       }
 
       if (succeeded && outputFile.exists() && outputFile.length() > 0L) {
+        if (options.format != VideoExportFormat.GIF && !editState.metadataTags.isEmpty) {
+          try {
+            stripVideoTrailerMetadata(outputFile)
+            appendVideoTrailerMetadata(outputFile, editState.metadataTags.sanitized())
+          } catch (_: Throwable) {}
+        }
         onProgress(1f)
         val galleryUri = if (context != null) {
           publishOutputToMediaStoreIfNeeded(

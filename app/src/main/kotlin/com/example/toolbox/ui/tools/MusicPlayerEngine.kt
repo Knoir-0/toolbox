@@ -58,6 +58,7 @@ import kotlinx.coroutines.withContext
 const val MUSIC_PLAYER_PREFS_NAME = "music_player_preferences"
 const val PREF_KEY_MUSIC_VIEW_MODE = "music_player_view_mode"
 const val PREF_KEY_MUSIC_TAB = "music_player_selected_tab"
+const val PREF_KEY_MUSIC_TAB_ORDER = "music_player_tab_order"
 const val PREF_KEY_MUSIC_SORT_ORDER = "music_player_sort_order"
 const val PREF_KEY_MUSIC_SHUFFLE = "music_player_shuffle_enabled"
 const val PREF_KEY_MUSIC_SHUFFLE_MODE = "music_player_shuffle_mode"
@@ -182,6 +183,7 @@ enum class MusicSortOrder(
   DURATION_DESC("Duration (Longest)"),
   DURATION_ASC("Duration (Shortest)"),
   MOST_PLAYED("Most Played"),
+  RECENTLY_PLAYED("Recently Played"),
   ;
 
   companion object {
@@ -363,13 +365,40 @@ data class TrackPlayStats(
   val lastPlayedAtMs: Long = 0L,
   val skipCount: Int = 0,
 ) {
+  companion object {
+    /**
+     * Maximum points contributed by recency (1/4 of a single play's 60,000 points),
+     * weighting recent plays into Most Played without overpowering play count or full plays.
+     */
+    const val MAX_RECENCY_BONUS_POINTS = 15_000L
+  }
+
+  /**
+   * Computes a bounded recency bonus (`0..MAX_RECENCY_BONUS_POINTS`) from [lastPlayedAtMs]
+   * relative to [referenceTimeMs] so recently played tracks receive a light boost in Most Played
+   * without overpowering play count, calculated full plays, or total listen time.
+   */
+  fun recencyBonusPoints(referenceTimeMs: Long = 0L): Long {
+    if (lastPlayedAtMs <= 0L || !hasBeenPlayed) return 0L
+    return if (referenceTimeMs > 0L) {
+      val ref = max(referenceTimeMs, lastPlayedAtMs)
+      val ageMs = (ref - lastPlayedAtMs).coerceAtLeast(0L)
+      val decay = 1.0 / (1.0 + kotlin.math.ln(1.0 + ageMs.toDouble()) / 10.0)
+      (MAX_RECENCY_BONUS_POINTS.toDouble() * decay).roundToLong()
+    } else {
+      val scale = kotlin.math.ln(1.0 + lastPlayedAtMs.toDouble()) /
+        kotlin.math.ln(1.0 + 2_000_000_000_000.0)
+      (MAX_RECENCY_BONUS_POINTS.toDouble() * scale.coerceIn(0.0, 1.0)).roundToLong()
+    }
+  }
+
   /**
    * Combined engagement score blending play count and total listen time:
    * each play contributes 60,000 points (equivalent to 1 minute of listening) plus 1 point per
-   * millisecond of actual listen time, with a very light tie-breaker penalty per skip.
+   * millisecond of actual listen time, a light recency bonus, and a tie-breaker penalty per skip.
    */
   val engagementScore: Long
-    get() = playCount.toLong() * 60_000L + totalPlayTimeMs - skipCount.toLong() * 25L
+    get() = playCount.toLong() * 60_000L + totalPlayTimeMs + recencyBonusPoints() - skipCount.toLong() * 25L
 
   /**
    * Number of equivalent full track completions based on [totalPlayTimeMs] divided by [trackDurationMs].
@@ -397,22 +426,29 @@ data class TrackPlayStats(
   /**
    * Track-aware engagement score used to sort the Most Played playlist:
    * combines play count, calculated full plays (60,000 points per full play), and total listen time,
-   * with skips weighted very lightly (-25 points per skip) primarily as a tie-breaker.
+   * with a light recency bonus from [lastPlayedAtMs] and skips weighted very lightly (-25 points per skip).
    */
-  fun engagementScoreForTrack(trackDurationMs: Long): Long {
+  fun engagementScoreForTrack(
+    trackDurationMs: Long,
+    referenceTimeMs: Long = 0L,
+  ): Long {
     val fullPlaysScore = (calculatedFullPlays(trackDurationMs) * 60_000.0).roundToLong()
     val skipPenalty = skipCount.toLong() * 25L
-    return playCount.toLong() * 60_000L + fullPlaysScore + totalPlayTimeMs - skipPenalty
+    val recencyBonus = recencyBonusPoints(referenceTimeMs)
+    return playCount.toLong() * 60_000L + fullPlaysScore + totalPlayTimeMs + recencyBonus - skipPenalty
   }
 
   val hasBeenPlayed: Boolean
-    get() = playCount > 0 || totalPlayTimeMs > 0L
+    get() = playCount > 0 || totalPlayTimeMs > 0L || lastPlayedAtMs > 0L
 
   val hasRecordedActivity: Boolean
     get() = hasBeenPlayed || skipCount > 0
 
   val totalPlayTimeFormatted: String
     get() = AudioRecorderEngine.formatDurationMs(totalPlayTimeMs)
+
+  val lastPlayedFormatted: String
+    get() = if (lastPlayedAtMs > 0L) FileManagerEngine.formatTimestamp(lastPlayedAtMs) else "Never"
 }
 
 /**
@@ -436,7 +472,8 @@ data class MusicPlaylist(
 ) {
   val isFavorites: Boolean get() = id == MusicPlayerEngine.FAVORITES_PLAYLIST_ID
   val isMostPlayed: Boolean get() = id == MusicPlayerEngine.MOST_PLAYED_PLAYLIST_ID
-  val isBuiltIn: Boolean get() = isFavorites || isMostPlayed
+  val isRecentlyPlayed: Boolean get() = id == MusicPlayerEngine.RECENTLY_PLAYED_PLAYLIST_ID
+  val isBuiltIn: Boolean get() = isFavorites || isMostPlayed || isRecentlyPlayed
   val songCount: Int get() = tracks.size
   val totalDurationMs: Long get() = tracks.sumOf { it.durationMs }
   val totalDurationFormatted: String get() = AudioRecorderEngine.formatDurationMs(totalDurationMs)
@@ -1777,8 +1814,16 @@ object MusicPlayerEngine {
   const val MOST_PLAYED_PLAYLIST_ID = "playlist_most_played"
   const val MOST_PLAYED_PLAYLIST_NAME = "Most Played"
 
+  /** Identifier of the built-in, always-present Recently Played playlist. */
+  const val RECENTLY_PLAYED_PLAYLIST_ID = "playlist_recently_played"
+  const val RECENTLY_PLAYED_PLAYLIST_NAME = "Recently Played"
+
   /** IDs of built-in playlists that are dynamically generated rather than persisted as user entries. */
-  val BUILT_IN_PLAYLIST_IDS: Set<String> = setOf(FAVORITES_PLAYLIST_ID, MOST_PLAYED_PLAYLIST_ID)
+  val BUILT_IN_PLAYLIST_IDS: Set<String> = setOf(
+    FAVORITES_PLAYLIST_ID,
+    MOST_PLAYED_PLAYLIST_ID,
+    RECENTLY_PLAYED_PLAYLIST_ID,
+  )
 
   /** IDs of sample playlists shipped by older versions; stripped from persisted playlists on load. */
   val LEGACY_SAMPLE_PLAYLIST_IDS: Set<String> = setOf("playlist_synth_night", "playlist_chill_focus")
@@ -1800,16 +1845,19 @@ object MusicPlayerEngine {
 
   /**
    * Sorts [tracks] by combined play statistics (calculated full plays, # of plays, and total listen
-   * time, with skips weighted very lightly as a tie-breaker), falling back to most-recently-played
-   * and alphabetical title order for ties.
+   * time, with a light recency weight from [TrackPlayStats.lastPlayedAtMs] and skips as a light
+   * tie-breaker), falling back to most-recently-played and alphabetical title order for ties.
    */
   fun sortTracksByPlayStats(
     tracks: List<MusicTrack>,
     playStats: Map<String, TrackPlayStats>,
   ): List<MusicTrack> {
     if (tracks.isEmpty()) return emptyList()
+    val referenceTimeMs = playStats.values.maxOfOrNull { it.lastPlayedAtMs } ?: 0L
     return tracks.sortedWith(
-      compareByDescending<MusicTrack> { playStats[it.id]?.engagementScoreForTrack(it.durationMs) ?: 0L }
+      compareByDescending<MusicTrack> {
+        playStats[it.id]?.engagementScoreForTrack(it.durationMs, referenceTimeMs) ?: 0L
+      }
         .thenByDescending { playStats[it.id]?.calculatedFullPlays(it.durationMs) ?: 0.0 }
         .thenByDescending { playStats[it.id]?.playCount ?: 0 }
         .thenByDescending { playStats[it.id]?.totalPlayTimeMs ?: 0L }
@@ -1821,7 +1869,8 @@ object MusicPlayerEngine {
 
   /**
    * Builds the built-in Most Played [MusicPlaylist], automatically sorting all songs in [allTracks]
-   * by a combination of play count, calculated full plays, and total playtime (with skips as a light tie-breaker).
+   * by a combination of play count, calculated full plays, total playtime, and a light recency weight
+   * from when each song was last played (with skips as a light tie-breaker).
    * Always returned so it is available by default.
    */
   fun buildMostPlayedPlaylist(
@@ -1832,6 +1881,43 @@ object MusicPlayerEngine {
       id = MOST_PLAYED_PLAYLIST_ID,
       name = MOST_PLAYED_PLAYLIST_NAME,
       tracks = sortTracksByPlayStats(allTracks, playStats),
+    )
+  }
+
+  /**
+   * Sorts [tracks] by when each song was last played ([TrackPlayStats.lastPlayedAtMs] descending),
+   * falling back to engagement score and alphabetical title order for ties or unplayed songs.
+   */
+  fun sortTracksByRecentlyPlayed(
+    tracks: List<MusicTrack>,
+    playStats: Map<String, TrackPlayStats>,
+  ): List<MusicTrack> {
+    if (tracks.isEmpty()) return emptyList()
+    val referenceTimeMs = playStats.values.maxOfOrNull { it.lastPlayedAtMs } ?: 0L
+    return tracks.sortedWith(
+      compareByDescending<MusicTrack> { playStats[it.id]?.lastPlayedAtMs ?: 0L }
+        .thenByDescending {
+          playStats[it.id]?.engagementScoreForTrack(it.durationMs, referenceTimeMs) ?: 0L
+        }
+        .thenByDescending { playStats[it.id]?.playCount ?: 0 }
+        .thenByDescending { playStats[it.id]?.totalPlayTimeMs ?: 0L }
+        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
+    )
+  }
+
+  /**
+   * Builds the built-in Recently Played [MusicPlaylist], automatically sorting songs in [allTracks]
+   * by when each song was last played ([TrackPlayStats.lastPlayedAtMs] descending).
+   * Always returned so it is available by default.
+   */
+  fun buildRecentlyPlayedPlaylist(
+    playStats: Map<String, TrackPlayStats>,
+    allTracks: List<MusicTrack>,
+  ): MusicPlaylist {
+    return MusicPlaylist(
+      id = RECENTLY_PLAYED_PLAYLIST_ID,
+      name = RECENTLY_PLAYED_PLAYLIST_NAME,
+      tracks = sortTracksByRecentlyPlayed(allTracks, playStats),
     )
   }
 
@@ -1889,7 +1975,7 @@ object MusicPlayerEngine {
           val timeMs = parts[2].trim().toLongOrNull()?.coerceAtLeast(0L) ?: 0L
           val lastAt = parts.getOrNull(3)?.trim()?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
           val skipCount = parts.getOrNull(4)?.trim()?.toIntOrNull()?.coerceAtLeast(0) ?: 0
-          if (id.isNotEmpty() && (count > 0 || timeMs > 0L || skipCount > 0)) {
+          if (id.isNotEmpty() && (count > 0 || timeMs > 0L || lastAt > 0L || skipCount > 0)) {
             result[id] = TrackPlayStats(
               playCount = count,
               totalPlayTimeMs = timeMs,
@@ -2001,6 +2087,7 @@ object MusicPlayerEngine {
           .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
       )
       MusicSortOrder.MOST_PLAYED -> sortTracksByPlayStats(tracks, playStats)
+      MusicSortOrder.RECENTLY_PLAYED -> sortTracksByRecentlyPlayed(tracks, playStats)
     }
   }
 
@@ -2014,7 +2101,8 @@ object MusicPlayerEngine {
     playStats: Map<String, TrackPlayStats>,
   ): Double {
     val stat = playStats[track.id] ?: return 1.0
-    val score = stat.engagementScoreForTrack(track.durationMs).coerceAtLeast(0L)
+    val referenceTimeMs = playStats.values.maxOfOrNull { it.lastPlayedAtMs } ?: 0L
+    val score = stat.engagementScoreForTrack(track.durationMs, referenceTimeMs).coerceAtLeast(0L)
     val fullPlays = stat.calculatedFullPlays(track.durationMs).coerceAtLeast(0.0)
     return (1.0 + (score.toDouble() / 30_000.0) + (fullPlays * 2.5) + (stat.playCount * 1.5))
       .coerceAtLeast(0.25)
@@ -2205,6 +2293,50 @@ object MusicPlayerEngine {
       else -> safeCur
     }
     return mutable.toList() to newCurrentIndex
+  }
+
+  /**
+   * Parses a persisted `|`-separated list of [MusicLibraryTab] names, deduplicating entries and
+   * appending any missing tabs in their default order so all library sections are always present.
+   */
+  fun parseTabOrder(raw: String?): List<MusicLibraryTab> {
+    if (raw.isNullOrBlank()) return MusicLibraryTab.entries.toList()
+    val parsed = raw
+      .split("|", ",")
+      .mapNotNull { token ->
+        val trimmed = token.trim()
+        if (trimmed.isEmpty()) null
+        else MusicLibraryTab.entries.find { it.name.equals(trimmed, ignoreCase = true) }
+      }
+      .distinct()
+    val missing = MusicLibraryTab.entries.filterNot { it in parsed }
+    return parsed + missing
+  }
+
+  /**
+   * Serializes an ordered list of [MusicLibraryTab]s for `SharedPreferences`.
+   */
+  fun serializeTabOrder(tabs: List<MusicLibraryTab>): String {
+    val normalized = (tabs.distinct() + MusicLibraryTab.entries.filterNot { it in tabs })
+    return normalized.joinToString("|") { it.name }
+  }
+
+  /**
+   * Moves the library section tab at [fromIndex] to [toIndex] in [tabs], returning the new order.
+   */
+  fun reorderTabs(
+    tabs: List<MusicLibraryTab>,
+    fromIndex: Int,
+    toIndex: Int,
+  ): List<MusicLibraryTab> {
+    val base = if (tabs.isEmpty()) MusicLibraryTab.entries.toList() else tabs
+    if (fromIndex !in base.indices || toIndex !in base.indices || fromIndex == toIndex) {
+      return base
+    }
+    val mutable = base.toMutableList()
+    val moved = mutable.removeAt(fromIndex)
+    mutable.add(toIndex, moved)
+    return mutable.toList()
   }
 
   /**
@@ -2665,9 +2797,38 @@ class MusicPlaybackSession(
   internal var configuredInitialQueueExpanded: Boolean = initialQueueExpanded
     private set
 
-  // Library Tab: Artists, Albums, Songs, Genres, Playlists
+  // Library Tab Order & Selected Tab: Artists, Albums, Songs, Genres, Playlists
+  var tabOrder by mutableStateOf(
+    MusicPlayerEngine.parseTabOrder(prefs?.getString(PREF_KEY_MUSIC_TAB_ORDER, null))
+  )
+
+  fun reorderTabs(fromIndex: Int, toIndex: Int): Boolean {
+    val updated = MusicPlayerEngine.reorderTabs(tabOrder, fromIndex, toIndex)
+    if (updated != tabOrder) {
+      tabOrder = updated
+      prefs?.edit()?.putString(PREF_KEY_MUSIC_TAB_ORDER, MusicPlayerEngine.serializeTabOrder(updated))?.apply()
+      return true
+    }
+    return false
+  }
+
+  fun updateTabOrder(newOrder: List<MusicLibraryTab>) {
+    val normalized = MusicPlayerEngine.parseTabOrder(MusicPlayerEngine.serializeTabOrder(newOrder))
+    if (normalized != tabOrder) {
+      tabOrder = normalized
+      prefs?.edit()?.putString(PREF_KEY_MUSIC_TAB_ORDER, MusicPlayerEngine.serializeTabOrder(normalized))?.apply()
+    }
+  }
+
   var selectedTab by mutableStateOf(
-    initialTab ?: MusicLibraryTab.fromNameOrDefault(prefs?.getString(PREF_KEY_MUSIC_TAB, null))
+    initialTab ?: run {
+      val savedTab = prefs?.getString(PREF_KEY_MUSIC_TAB, null)
+      if (!savedTab.isNullOrBlank()) {
+        MusicLibraryTab.fromNameOrDefault(savedTab)
+      } else {
+        tabOrder.firstOrNull() ?: MusicLibraryTab.DEFAULT
+      }
+    }
   )
 
   fun updateTab(tab: MusicLibraryTab) {

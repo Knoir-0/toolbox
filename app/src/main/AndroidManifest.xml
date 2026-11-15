@@ -578,6 +578,20 @@
         </activity-alias>
 
         <activity-alias
+            android:name=".MainActivityToolSearch"
+            android:targetActivity=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_search"
+            android:roundIcon="@mipmap/ic_tool_search"
+            android:label="Search">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
             android:name=".MainActivityToolSettings"
             android:targetActivity=".MainActivity"
             android:enabled="true"

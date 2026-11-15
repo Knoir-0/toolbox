@@ -225,4 +225,18 @@ class BluetoothHidProtocolTest {
       ),
     )
   }
+
+  @Test
+  fun demoConnection_createsConnectedStateWithSimulatorFlag() {
+    val demoDevice = BtDeviceInfo(
+      address = BluetoothRemoteViewModel.DEMO_DEVICE_ADDRESS,
+      name = "Demo Remote (HID Simulator)",
+      isBonded = true,
+      kind = BtDeviceKind.TV,
+    )
+    val connected = RemoteConnection.Connected(device = demoDevice, isDemo = true)
+    assertTrue(connected.isDemo)
+    assertEquals("Demo Remote (HID Simulator)", connected.device.name)
+    assertEquals(BluetoothRemoteViewModel.DEMO_DEVICE_ADDRESS, connected.device.address)
+  }
 }

@@ -586,9 +586,24 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // Manual refresh option is removed from the toolbar, and sort option is present
+    // Manual refresh option is removed from the toolbar, and sort option + per-row pill button are in the bar underneath
     composeTestRule.onNodeWithTag("gallery_refresh_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("gallery_pill_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_density_indicator").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_sort_button").assertIsDisplayed()
+
+    val headerBottom = composeTestRule.onNodeWithTag("gallery_header_title").fetchSemanticsNode().boundsInRoot.bottom
+    val densityBounds = composeTestRule.onNodeWithTag("gallery_density_indicator").fetchSemanticsNode().boundsInRoot
+    val sortBounds = composeTestRule.onNodeWithTag("gallery_sort_button").fetchSemanticsNode().boundsInRoot
+
+    assertTrue(
+      "Expected sort button (${sortBounds.top}) to be in the bar underneath the toolbar ($headerBottom)",
+      sortBounds.top >= headerBottom,
+    )
+    assertTrue(
+      "Expected per-row pill button (${densityBounds.right}) to be on the left of the sort button (${sortBounds.left})",
+      densityBounds.right <= sortBounds.left,
+    )
 
     // Navigate into Camera album
     composeTestRule.onNodeWithTag("album_tile_item_Camera").performClick()

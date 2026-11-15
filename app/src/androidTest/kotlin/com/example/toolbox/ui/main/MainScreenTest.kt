@@ -517,21 +517,21 @@ class MainScreenTest {
     // With 6 tools per row:
     // Row 0: Math & Measurement (3 tools) + Productivity (2 tools) + Files (1 tool) = 6 tools
     // Row 1: Photo & Video (2 tools) + Audio & Sound (2 tools) + Music & Instruments (2 tools) = 6 tools
-    // Row 2: Remotes & Devices (2 tools) + Miscellaneous (3 tools) + System (1 tool: Settings) = 6 tools on 1 row!
+    // Row 2: Remotes & Devices (2 tools) + Miscellaneous (3 tools) = 5 tools on 1 row!
+    // Row 3: System (2 tools: Search, Settings)
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
     composeTestRule.waitForIdle()
 
-    // Remotes & Devices, Miscellaneous, and System fit on Page 2 as one row
+    // Remotes & Devices and Miscellaneous fit on Page 2 as one row
     composeTestRule.onNodeWithText("Remotes & Devices").assertIsDisplayed()
     composeTestRule.onNodeWithText("Miscellaneous").assertIsDisplayed()
     composeTestRule.onNodeWithText("Dice").assertIsDisplayed()
-    composeTestRule.onNodeWithText("System").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
 
-    // Pull up the panel to reveal the tools per row slider
+    // Pull up the panel to reveal the second row (System) and the tools per row slider
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("System").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Search").assertIsDisplayed()
     composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tools_per_row_slider").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tools_per_row_count").assertTextEquals("6")
@@ -547,8 +547,9 @@ class MainScreenTest {
     // With 6 tools per row:
     // Row 0: Math & Measurement (3 tools) + Productivity (2 tools) + Files (1 tool) = 6 tools
     // Row 1: Photo & Video (2 tools) + Audio & Sound (2 tools) + Music & Instruments (2 tools) = 6 tools
-    // Row 2: Remotes & Devices (2 tools) + Miscellaneous (3 tools) + System (1 tool: Settings) = 6 tools
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
+    // Row 2: Remotes & Devices (2 tools) + Miscellaneous (3 tools) = 5 tools
+    // Row 3: System (2 tools: Search, Settings)
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_3").performClick()
     composeTestRule.waitForIdle()
 
     // Verify Settings tool icon is displayed and has sufficient width

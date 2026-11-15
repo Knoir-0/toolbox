@@ -488,4 +488,40 @@ class BluetoothRemoteScreenTest {
     }
     assert(recordedConsumerDown.count { it == ConsumerKey.VOLUME_UP } >= initialUpCount + 1)
   }
+
+  @Test
+  fun deviceList_displaysDemoRemoteOptionAndTriggersCallback() {
+    var demoStarted = false
+    val state = BluetoothRemoteUiState(
+      isBluetoothEnabled = false,
+      isHidRegistered = false,
+      devices = emptyList(),
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        Surface {
+          DeviceListContent(
+            state = state,
+            hasPermissions = false,
+            onRequestPermissions = {},
+            onEnableBluetooth = {},
+            onMakeDiscoverable = {},
+            onScan = {},
+            onStopScan = {},
+            onConnect = {},
+            onCancelConnect = {},
+            onDismissMessage = {},
+            onStartDemo = { demoStarted = true },
+          )
+        }
+      }
+    }
+
+    composeTestRule.onNodeWithText("Bluetooth Remote").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Offline simulator").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Demo Remote (HID Simulator)").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("bt_remote_start_demo_button").assertIsDisplayed().performClick()
+    assert(demoStarted)
+  }
 }

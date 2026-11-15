@@ -1,5 +1,6 @@
 package com.example.toolbox.ui.tools
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -15,9 +16,21 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.Rect as AndroidRect
 import android.graphics.RectF
 import android.graphics.Shader
+import android.media.ExifInterface
+import android.net.Uri
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.File
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -901,5 +914,383 @@ object BitmapOperations {
     canvas.drawText("Toolbox Image Editor", width / 2f, height * 0.9f, textPaint)
 
     return bitmap
+  }
+}
+
+/**
+ * Editable image metadata fields supported by the Image Editor's `Data` tool.
+ */
+data class ImageMetadata(
+  val title: String = "",
+  val artist: String = "",
+  val copyright: String = "",
+  val dateTaken: String = "",
+  val cameraMake: String = "",
+  val cameraModel: String = "",
+  val software: String = "",
+  val location: String = "",
+) {
+  val isEmpty: Boolean
+    get() = title.isBlank() &&
+      artist.isBlank() &&
+      copyright.isBlank() &&
+      dateTaken.isBlank() &&
+      cameraMake.isBlank() &&
+      cameraModel.isBlank() &&
+      software.isBlank() &&
+      location.isBlank()
+
+  val populatedFieldCount: Int
+    get() = listOf(
+      title,
+      artist,
+      copyright,
+      dateTaken,
+      cameraMake,
+      cameraModel,
+      software,
+      location,
+    ).count { it.isNotBlank() }
+
+  fun sanitized(): ImageMetadata {
+    fun clean(value: String, maxLen: Int = 256): String =
+      value.replace("\u0000", "")
+        .replace("\r", " ")
+        .replace("\n", " ")
+        .trim()
+        .take(maxLen)
+
+    return ImageMetadata(
+      title = clean(title, 512),
+      artist = clean(artist),
+      copyright = clean(copyright),
+      dateTaken = clean(dateTaken, 64),
+      cameraMake = clean(cameraMake, 128),
+      cameraModel = clean(cameraModel, 128),
+      software = clean(software, 128),
+      location = clean(location, 128),
+    )
+  }
+}
+
+/**
+ * Snapshot stored in [ImageEditorHistory] to support undo/redo across both bitmap and metadata edits.
+ */
+data class ImageEditSnapshot(
+  val bitmap: Bitmap,
+  val metadata: ImageMetadata = ImageMetadata(),
+)
+
+/**
+ * Reads and writes image metadata (EXIF attributes + lossless binary metadata trailer for PNG/WebP/JVM).
+ */
+object ImageMetadataOperations {
+
+  private const val TRAILER_MAGIC = "TBXIMGMD"
+
+  /**
+   * Parses a GPS coordinate string such as `"37.7749, -122.4194"` or `"+37.7749-122.4194"`
+   * into `(latitude, longitude)` in decimal degrees.
+   */
+  fun parseGpsCoordinates(location: String): Pair<Double, Double>? {
+    val trimmed = location.trim()
+    if (trimmed.isEmpty()) return null
+
+    if (',' in trimmed) {
+      val parts = trimmed.split(',').map { it.trim() }
+      if (parts.size >= 2) {
+        val lat = parts[0].toDoubleOrNull()
+        val lon = parts[1].toDoubleOrNull()
+        if (lat != null && lon != null && lat in -90.0..90.0 && lon in -180.0..180.0) {
+          return lat to lon
+        }
+      }
+    }
+
+    val isoRegex = Regex("""([+-]?\d+(?:\.\d+)?)\s*([+-]\d+(?:\.\d+)?)""")
+    val match = isoRegex.find(trimmed)
+    if (match != null) {
+      val lat = match.groupValues[1].toDoubleOrNull()
+      val lon = match.groupValues[2].toDoubleOrNull()
+      if (lat != null && lon != null && lat in -90.0..90.0 && lon in -180.0..180.0) {
+        return lat to lon
+      }
+    }
+
+    return null
+  }
+
+  /**
+   * Formats a decimal degree coordinate into EXIF rational DMS format (`"deg/1,min/1,secMicro/10000"`).
+   */
+  fun formatDecimalToExifDms(coordinate: Double): String {
+    val absCoord = abs(coordinate).coerceIn(0.0, 180.0)
+    val degrees = absCoord.toInt()
+    val minutesFull = (absCoord - degrees) * 60.0
+    val minutes = minutesFull.toInt()
+    val secondsMicro = ((minutesFull - minutes) * 60.0 * 10000.0).roundToInt().coerceAtLeast(0)
+    return "$degrees/1,$minutes/1,$secondsMicro/10000"
+  }
+
+  /**
+   * Parses an EXIF rational DMS string (`"deg/1,min/1,sec/10000"`) and reference (`"N"`, `"S"`, `"E"`, `"W"`)
+   * back into signed decimal degrees.
+   */
+  fun parseExifDmsToDecimal(dms: String?, ref: String?): Double? {
+    if (dms.isNullOrBlank()) return null
+    val parts = dms.split(',')
+    if (parts.size < 3) return null
+    fun parseRational(token: String): Double? {
+      val trimmed = token.trim()
+      if ('/' in trimmed) {
+        val numDen = trimmed.split('/')
+        val num = numDen.getOrNull(0)?.trim()?.toDoubleOrNull() ?: return null
+        val den = numDen.getOrNull(1)?.trim()?.toDoubleOrNull() ?: return null
+        return if (den != 0.0) num / den else 0.0
+      }
+      return trimmed.toDoubleOrNull()
+    }
+    val deg = parseRational(parts[0]) ?: return null
+    val min = parseRational(parts[1]) ?: return null
+    val sec = parseRational(parts[2]) ?: return null
+    val unsigned = deg + (min / 60.0) + (sec / 3600.0)
+    val isNegative = ref.equals("S", ignoreCase = true) || ref.equals("W", ignoreCase = true)
+    return if (isNegative) -unsigned else unsigned
+  }
+
+  /**
+   * Reads [ImageMetadata] from [file] using both Android [ExifInterface] and the lossless
+   * binary trailer chunk (supporting JPEG, PNG, WebP, and local JVM unit tests).
+   */
+  fun readImageMetadata(file: File): ImageMetadata {
+    if (!file.exists() || !file.isFile || file.length() <= 0L) return ImageMetadata()
+
+    var metadata = readTrailerMetadata(file) ?: ImageMetadata()
+
+    try {
+      val exif = ExifInterface(file.absolutePath)
+      val exifTitle = exif.getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION)?.trim().orEmpty()
+      val exifArtist = exif.getAttribute(ExifInterface.TAG_ARTIST)?.trim().orEmpty()
+      val exifCopyright = exif.getAttribute(ExifInterface.TAG_COPYRIGHT)?.trim().orEmpty()
+      val exifDate = (
+        exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+          ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
+        )?.trim().orEmpty()
+      val exifMake = exif.getAttribute(ExifInterface.TAG_MAKE)?.trim().orEmpty()
+      val exifModel = exif.getAttribute(ExifInterface.TAG_MODEL)?.trim().orEmpty()
+      val exifSoftware = exif.getAttribute(ExifInterface.TAG_SOFTWARE)?.trim().orEmpty()
+
+      val latDms = exif.getAttribute(ExifInterface.TAG_GPS_LATITUDE)
+      val latRef = exif.getAttribute(ExifInterface.TAG_GPS_LATITUDE_REF)
+      val lonDms = exif.getAttribute(ExifInterface.TAG_GPS_LONGITUDE)
+      val lonRef = exif.getAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF)
+      val latDec = parseExifDmsToDecimal(latDms, latRef)
+      val lonDec = parseExifDmsToDecimal(lonDms, lonRef)
+      val exifLocation = if (latDec != null && lonDec != null) {
+        String.format(Locale.US, "%.4f, %.4f", latDec, lonDec)
+      } else {
+        exif.getAttribute(ExifInterface.TAG_USER_COMMENT)?.trim().orEmpty()
+      }
+
+      metadata = metadata.copy(
+        title = metadata.title.ifBlank { exifTitle },
+        artist = metadata.artist.ifBlank { exifArtist },
+        copyright = metadata.copyright.ifBlank { exifCopyright },
+        dateTaken = metadata.dateTaken.ifBlank { exifDate },
+        cameraMake = metadata.cameraMake.ifBlank { exifMake },
+        cameraModel = metadata.cameraModel.ifBlank { exifModel },
+        software = metadata.software.ifBlank { exifSoftware },
+        location = metadata.location.ifBlank { exifLocation },
+      )
+    } catch (_: Throwable) {
+      // ExifInterface may be stubbed in local JVM unit tests
+    }
+
+    return metadata.sanitized()
+  }
+
+  /**
+   * Reads [ImageMetadata] from a content [uri] via [ExifInterface].
+   */
+  fun readImageMetadataFromUri(context: Context, uri: Uri): ImageMetadata {
+    return try {
+      context.contentResolver.openInputStream(uri)?.use { stream ->
+        val exif = ExifInterface(stream)
+        val exifTitle = exif.getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION)?.trim().orEmpty()
+        val exifArtist = exif.getAttribute(ExifInterface.TAG_ARTIST)?.trim().orEmpty()
+        val exifCopyright = exif.getAttribute(ExifInterface.TAG_COPYRIGHT)?.trim().orEmpty()
+        val exifDate = (
+          exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+            ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
+          )?.trim().orEmpty()
+        val exifMake = exif.getAttribute(ExifInterface.TAG_MAKE)?.trim().orEmpty()
+        val exifModel = exif.getAttribute(ExifInterface.TAG_MODEL)?.trim().orEmpty()
+        val exifSoftware = exif.getAttribute(ExifInterface.TAG_SOFTWARE)?.trim().orEmpty()
+        val latDec = parseExifDmsToDecimal(
+          exif.getAttribute(ExifInterface.TAG_GPS_LATITUDE),
+          exif.getAttribute(ExifInterface.TAG_GPS_LATITUDE_REF),
+        )
+        val lonDec = parseExifDmsToDecimal(
+          exif.getAttribute(ExifInterface.TAG_GPS_LONGITUDE),
+          exif.getAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF),
+        )
+        val exifLocation = if (latDec != null && lonDec != null) {
+          String.format(Locale.US, "%.4f, %.4f", latDec, lonDec)
+        } else {
+          exif.getAttribute(ExifInterface.TAG_USER_COMMENT)?.trim().orEmpty()
+        }
+        ImageMetadata(
+          title = exifTitle,
+          artist = exifArtist,
+          copyright = exifCopyright,
+          dateTaken = exifDate,
+          cameraMake = exifMake,
+          cameraModel = exifModel,
+          software = exifSoftware,
+          location = exifLocation,
+        ).sanitized()
+      } ?: ImageMetadata()
+    } catch (_: Throwable) {
+      ImageMetadata()
+    }
+  }
+
+  /**
+   * Writes [metadata] into [file] using Android [ExifInterface] (when supported by the container)
+   * and updates the lossless metadata trailer chunk.
+   */
+  fun writeImageMetadata(file: File, metadata: ImageMetadata): Boolean {
+    if (!file.exists() || !file.isFile) return false
+    val clean = metadata.sanitized()
+    return try {
+      stripTrailerMetadata(file)
+
+      try {
+        val exif = ExifInterface(file.absolutePath)
+        exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, clean.title.ifEmpty { null })
+        exif.setAttribute(ExifInterface.TAG_ARTIST, clean.artist.ifEmpty { null })
+        exif.setAttribute(ExifInterface.TAG_COPYRIGHT, clean.copyright.ifEmpty { null })
+        exif.setAttribute(ExifInterface.TAG_DATETIME, clean.dateTaken.ifEmpty { null })
+        exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, clean.dateTaken.ifEmpty { null })
+        exif.setAttribute(ExifInterface.TAG_MAKE, clean.cameraMake.ifEmpty { null })
+        exif.setAttribute(ExifInterface.TAG_MODEL, clean.cameraModel.ifEmpty { null })
+        exif.setAttribute(ExifInterface.TAG_SOFTWARE, clean.software.ifEmpty { null })
+
+        val coords = parseGpsCoordinates(clean.location)
+        if (coords != null) {
+          val (lat, lon) = coords
+          exif.setAttribute(ExifInterface.TAG_GPS_LATITUDE, formatDecimalToExifDms(lat))
+          exif.setAttribute(ExifInterface.TAG_GPS_LATITUDE_REF, if (lat >= 0.0) "N" else "S")
+          exif.setAttribute(ExifInterface.TAG_GPS_LONGITUDE, formatDecimalToExifDms(lon))
+          exif.setAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF, if (lon >= 0.0) "E" else "W")
+          exif.setAttribute(ExifInterface.TAG_USER_COMMENT, null)
+        } else {
+          exif.setAttribute(ExifInterface.TAG_GPS_LATITUDE, null)
+          exif.setAttribute(ExifInterface.TAG_GPS_LATITUDE_REF, null)
+          exif.setAttribute(ExifInterface.TAG_GPS_LONGITUDE, null)
+          exif.setAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF, null)
+          exif.setAttribute(ExifInterface.TAG_USER_COMMENT, clean.location.ifEmpty { null })
+        }
+        exif.saveAttributes()
+      } catch (_: Throwable) {
+        // ExifInterface may throw on unsupported container formats or in JVM unit tests
+      }
+
+      if (!clean.isEmpty) {
+        appendTrailerMetadata(file, clean)
+      }
+      true
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  private fun stripTrailerMetadata(file: File) {
+    val magicBytes = TRAILER_MAGIC.toByteArray(Charsets.US_ASCII)
+    val footerLen = 4 + magicBytes.size // 12 bytes
+    if (file.length() < footerLen + magicBytes.size) return
+    RandomAccessFile(file, "rw").use { raf ->
+      val len = raf.length()
+      raf.seek(len - footerLen)
+      val sizeBytes = ByteArray(4)
+      val tailMagic = ByteArray(magicBytes.size)
+      raf.readFully(sizeBytes)
+      raf.readFully(tailMagic)
+      if (!tailMagic.contentEquals(magicBytes)) return
+      val payloadSize = ByteBuffer.wrap(sizeBytes).order(ByteOrder.BIG_ENDIAN).int
+      val blockStart = len - footerLen - payloadSize - magicBytes.size
+      if (payloadSize in 0..65536 && blockStart >= 0L) {
+        raf.seek(blockStart)
+        val headMagic = ByteArray(magicBytes.size)
+        raf.readFully(headMagic)
+        if (headMagic.contentEquals(magicBytes)) {
+          raf.setLength(blockStart)
+        }
+      }
+    }
+  }
+
+  private fun appendTrailerMetadata(file: File, metadata: ImageMetadata) {
+    val magicBytes = TRAILER_MAGIC.toByteArray(Charsets.US_ASCII)
+    val payloadBos = ByteArrayOutputStream()
+    DataOutputStream(payloadBos).use { dos ->
+      dos.writeUTF(metadata.title)
+      dos.writeUTF(metadata.artist)
+      dos.writeUTF(metadata.copyright)
+      dos.writeUTF(metadata.dateTaken)
+      dos.writeUTF(metadata.cameraMake)
+      dos.writeUTF(metadata.cameraModel)
+      dos.writeUTF(metadata.software)
+      dos.writeUTF(metadata.location)
+    }
+    val payload = payloadBos.toByteArray()
+    RandomAccessFile(file, "rw").use { raf ->
+      raf.seek(raf.length())
+      raf.write(magicBytes)
+      raf.write(payload)
+      val sizeBytes = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(payload.size).array()
+      raf.write(sizeBytes)
+      raf.write(magicBytes)
+    }
+  }
+
+  private fun readTrailerMetadata(file: File): ImageMetadata? {
+    val magicBytes = TRAILER_MAGIC.toByteArray(Charsets.US_ASCII)
+    val footerLen = 4 + magicBytes.size
+    if (file.length() < footerLen + magicBytes.size) return null
+    return try {
+      RandomAccessFile(file, "r").use { raf ->
+        val len = raf.length()
+        raf.seek(len - footerLen)
+        val sizeBytes = ByteArray(4)
+        val tailMagic = ByteArray(magicBytes.size)
+        raf.readFully(sizeBytes)
+        raf.readFully(tailMagic)
+        if (!tailMagic.contentEquals(magicBytes)) return null
+        val payloadSize = ByteBuffer.wrap(sizeBytes).order(ByteOrder.BIG_ENDIAN).int
+        val blockStart = len - footerLen - payloadSize - magicBytes.size
+        if (payloadSize !in 1..65536 || blockStart < 0L) return null
+        raf.seek(blockStart)
+        val headMagic = ByteArray(magicBytes.size)
+        raf.readFully(headMagic)
+        if (!headMagic.contentEquals(magicBytes)) return null
+        val payload = ByteArray(payloadSize)
+        raf.readFully(payload)
+        DataInputStream(ByteArrayInputStream(payload)).use { dis ->
+          ImageMetadata(
+            title = dis.readUTF(),
+            artist = dis.readUTF(),
+            copyright = dis.readUTF(),
+            dateTaken = dis.readUTF(),
+            cameraMake = dis.readUTF(),
+            cameraModel = dis.readUTF(),
+            software = dis.readUTF(),
+            location = dis.readUTF(),
+          ).sanitized()
+        }
+      }
+    } catch (_: Throwable) {
+      null
+    }
   }
 }

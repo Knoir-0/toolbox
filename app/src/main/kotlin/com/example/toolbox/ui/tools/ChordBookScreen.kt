@@ -135,7 +135,14 @@ enum class ChordBookTab(val title: String) {
   CHORDS("Chords"),
   SCALES("Scales"),
   REVERSE("Reverse"),
-  SONGBOOK("Songbook"),
+  SONGBOOK("Songs"),
+}
+
+private fun ChordBookTab.iconVector() = when (this) {
+  ChordBookTab.CHORDS -> Icons.Default.LibraryMusic
+  ChordBookTab.SCALES -> Icons.Default.Tune
+  ChordBookTab.REVERSE -> Icons.Default.Search
+  ChordBookTab.SONGBOOK -> Icons.Default.MusicNote
 }
 
 /**
@@ -429,81 +436,112 @@ fun ChordBookScreen(
             }
           }
 
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-          ) {
-            // Dot label mode pill cycles Intervals -> Notes -> Fingers
-            Surface(
-              shape = RoundedCornerShape(20.dp),
-              color = MaterialTheme.colorScheme.secondaryContainer,
-              modifier = Modifier
-                .clip(RoundedCornerShape(20.dp))
-                .clickable {
-                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                  val next = when (dotLabelMode) {
-                    DotLabelMode.INTERVALS -> DotLabelMode.NOTES
-                    DotLabelMode.NOTES -> DotLabelMode.FINGERS
-                    DotLabelMode.FINGERS -> DotLabelMode.INTERVALS
-                  }
-                  dotLabelMode = next
-                  repository?.setDotLabelMode(next)
-                }
-                .testTag("chord_book_dot_label_toggle"),
+          if (!isSearchActive) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-              Text(
-                text = dotLabelMode.label,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-              )
-            }
-
-            // Enharmonic accidental toggle (Auto / # / b)
-            Surface(
-              shape = RoundedCornerShape(20.dp),
-              color = MaterialTheme.colorScheme.surfaceVariant,
-              modifier = Modifier
-                .clip(RoundedCornerShape(20.dp))
-                .clickable {
-                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                  val next = when (enharmonicPref) {
-                    EnharmonicPreference.AUTO -> EnharmonicPreference.SHARPS
-                    EnharmonicPreference.SHARPS -> EnharmonicPreference.FLATS
-                    EnharmonicPreference.FLATS -> EnharmonicPreference.AUTO
-                  }
-                  enharmonicPref = next
-                  repository?.setEnharmonicPreference(next)
-                }
-                .testTag("chord_book_enharmonic_toggle"),
-            ) {
-              Text(
-                text = when (enharmonicPref) {
-                  EnharmonicPreference.AUTO -> "♯/♭"
-                  EnharmonicPreference.SHARPS -> "♯"
-                  EnharmonicPreference.FLATS -> "♭"
+              // Tuning Search button (matches Files & Music toolbar search icon placement)
+              IconButton(
+                onClick = {
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  isSearchActive = true
                 },
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-              )
-            }
+                modifier = Modifier.testTag("toggle_search_bar_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Search,
+                  contentDescription = "Search tunings",
+                  tint = MaterialTheme.colorScheme.onSurface,
+                )
+              }
 
-            // Tuning Search button (similar to Guitar Tuner, Plants & Recipes)
-            IconButton(
-              onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                isSearchActive = true
-              },
-              modifier = Modifier.testTag("toggle_search_bar_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Search,
-                contentDescription = "Search tunings",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
+              // Segmented capsule for Dot Label Mode & Enharmonic Preference (matches Files & Music toolbar toggle)
+              Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier.padding(2.dp),
+                ) {
+                  // Dot label mode segment cycles Intervals -> Notes -> Fingers
+                  Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier
+                      .clip(CircleShape)
+                      .clickable {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        val next = when (dotLabelMode) {
+                          DotLabelMode.INTERVALS -> DotLabelMode.NOTES
+                          DotLabelMode.NOTES -> DotLabelMode.FINGERS
+                          DotLabelMode.FINGERS -> DotLabelMode.INTERVALS
+                        }
+                        dotLabelMode = next
+                        repository?.setDotLabelMode(next)
+                      }
+                      .testTag("chord_book_dot_label_toggle"),
+                  ) {
+                    Box(
+                      contentAlignment = Alignment.Center,
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    ) {
+                      Text(
+                        text = dotLabelMode.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                      )
+                    }
+                  }
+
+                  // Enharmonic accidental toggle (Auto / # / b)
+                  val isCustomEnharmonic = enharmonicPref != EnharmonicPreference.AUTO
+                  Surface(
+                    shape = CircleShape,
+                    color = if (isCustomEnharmonic) {
+                      MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                      Color.Transparent
+                    },
+                    modifier = Modifier
+                      .clip(CircleShape)
+                      .clickable {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        val next = when (enharmonicPref) {
+                          EnharmonicPreference.AUTO -> EnharmonicPreference.SHARPS
+                          EnharmonicPreference.SHARPS -> EnharmonicPreference.FLATS
+                          EnharmonicPreference.FLATS -> EnharmonicPreference.AUTO
+                        }
+                        enharmonicPref = next
+                        repository?.setEnharmonicPreference(next)
+                      }
+                      .testTag("chord_book_enharmonic_toggle"),
+                  ) {
+                    Box(
+                      contentAlignment = Alignment.Center,
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    ) {
+                      Text(
+                        text = when (enharmonicPref) {
+                          EnharmonicPreference.AUTO -> "♯/♭"
+                          EnharmonicPreference.SHARPS -> "♯"
+                          EnharmonicPreference.FLATS -> "♭"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isCustomEnharmonic) {
+                          MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                          MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                      )
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -604,8 +642,6 @@ fun ChordBookScreen(
       }
     }
 
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-
     // Content Area + Tuning Search Overlay
     Box(
       modifier = Modifier
@@ -613,59 +649,48 @@ fun ChordBookScreen(
         .weight(1f),
     ) {
       Column(modifier = Modifier.fillMaxSize()) {
-        // 2. Mode Switcher Pill Bar
-        Surface(
-          color = MaterialTheme.colorScheme.surface,
-          tonalElevation = 1.dp,
-          modifier = Modifier.fillMaxWidth(),
+        // 2. Mode Switcher Pill Bar (styled in line with Files & Music pill selectors)
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .testTag("chord_book_pill_bar"),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalAlignment = Alignment.CenterVertically,
         ) {
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            ChordBookTab.entries.forEach { tab ->
-              val isSelected = activeTab == tab
-              Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = if (isSelected) {
-                  MaterialTheme.colorScheme.primaryContainer
-                } else {
-                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                },
-                modifier = Modifier
-                  .weight(1f)
-                  .clip(RoundedCornerShape(20.dp))
-                  .clickable {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    activeTab = tab
-                  }
-                  .testTag("chord_book_tab_${tab.name}"),
-              ) {
-                Box(
-                  contentAlignment = Alignment.Center,
-                  modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-                ) {
-                  Text(
-                    text = if (tab == ChordBookTab.SONGBOOK && activeProgression != null) {
-                      "Songbook (${activeProgression.chords.size})"
-                    } else {
-                      tab.title
-                    },
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                    color = if (isSelected) {
-                      MaterialTheme.colorScheme.onPrimaryContainer
-                    } else {
-                      MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                  )
-                }
-              }
-            }
+          ChordBookTab.entries.forEach { tab ->
+            val isSelected = activeTab == tab
+            FilterChip(
+              selected = isSelected,
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                activeTab = tab
+              },
+              shape = RoundedCornerShape(20.dp),
+              leadingIcon = {
+                Icon(
+                  imageVector = tab.iconVector(),
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+              },
+              label = {
+                Text(
+                  text = tab.title,
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              },
+              colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+              ),
+              modifier = Modifier.testTag("chord_book_tab_${tab.name}"),
+            )
           }
         }
 

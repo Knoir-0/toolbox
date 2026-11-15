@@ -62,6 +62,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
@@ -230,6 +231,7 @@ fun AudioRecorderScreen(
 
   // Recording state
   var isRecording by remember { mutableStateOf(false) }
+  var activeCaptureSource by rememberSaveable { mutableStateOf(AudioCaptureSource.MICROPHONE) }
   var elapsedRecordingMs by remember { mutableLongStateOf(0L) }
   var liveAmplitude by remember { mutableFloatStateOf(0f) }
   var activeSession by remember { mutableStateOf<ActiveAudioRecordingSession?>(null) }
@@ -297,16 +299,21 @@ fun AudioRecorderScreen(
   var recordingToDelete by remember { mutableStateOf<AudioRecordingItem?>(null) }
   var fileForAudioEditor by remember { mutableStateOf<File?>(null) }
 
-  fun startRecording() {
+  fun startRecording(source: AudioCaptureSource = AudioCaptureSource.MICROPHONE) {
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    activeSession?.stop()
+    activeSession = null
+    activeCaptureSource = source
     val outputFile = AudioRecorderEngine.createTimestampedOutputFile(
       directory = recordingsDirectory,
       format = selectedFormat,
+      source = source,
     )
     val session = ActiveAudioRecordingSession(
       context = context,
       outputFile = outputFile,
       format = selectedFormat,
+      source = source,
     )
     session.start()
     activeSession = session
@@ -381,7 +388,11 @@ fun AudioRecorderScreen(
               contentAlignment = Alignment.Center,
             ) {
               Icon(
-                imageVector = Icons.Default.Mic,
+                imageVector = if (isRecording && activeCaptureSource == AudioCaptureSource.DEVICE_AUDIO) {
+                  Icons.Default.PhoneAndroid
+                } else {
+                  Icons.Default.Mic
+                },
                 contentDescription = null,
                 tint = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(20.dp),
@@ -399,7 +410,12 @@ fun AudioRecorderScreen(
               )
               Text(
                 text = if (isRecording) {
-                  "Recording (${selectedFormat.shortLabel}) • $directoryDisplayPath"
+                  val srcLabel = if (activeCaptureSource == AudioCaptureSource.DEVICE_AUDIO) {
+                    "Recording device audio"
+                  } else {
+                    "Recording"
+                  }
+                  "$srcLabel (${selectedFormat.shortLabel}) • $directoryDisplayPath"
                 } else {
                   "${recordings.size} recordings • ${selectedFormat.shortLabel} • $directoryDisplayPath"
                 },
@@ -568,7 +584,10 @@ fun AudioRecorderScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
       ) {
-        // Status Pill & Elapsed Timer above the floating FAB
+        // Status Pill & Elapsed Timer above the floating FABs
+        val isRecordingMic = isRecording && activeCaptureSource == AudioCaptureSource.MICROPHONE
+        val isRecordingDevice = isRecording && activeCaptureSource == AudioCaptureSource.DEVICE_AUDIO
+
         Badge(
           containerColor = if (isRecording) {
             MaterialTheme.colorScheme.errorContainer
@@ -583,7 +602,11 @@ fun AudioRecorderScreen(
           modifier = Modifier.testTag("recording_status_badge"),
         ) {
           Text(
-            text = if (isRecording) "● RECORDING" else "READY TO RECORD",
+            text = when {
+              isRecordingDevice -> "● RECORDING DEVICE AUDIO"
+              isRecording -> "● RECORDING"
+              else -> "READY TO RECORD"
+            },
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
@@ -603,7 +626,7 @@ fun AudioRecorderScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Floating Microphone / Stop FAB in the middle of the screen
+        // Floating Microphone FAB in the middle + smaller Device Audio FAB to the right
         val infiniteTransition = rememberInfiniteTransition(label = "RecordingPulse")
         val pulseScale by infiniteTransition.animateFloat(
           initialValue = 1.0f,
@@ -632,68 +655,167 @@ fun AudioRecorderScreen(
           label = "FabContentColor",
         )
 
-        Box(
-          contentAlignment = Alignment.Center,
-          modifier = Modifier.size(116.dp),
+        val deviceFabContainerColor by animateColorAsState(
+          targetValue = if (isRecordingDevice) {
+            MaterialTheme.colorScheme.error
+          } else {
+            MaterialTheme.colorScheme.secondaryContainer
+          },
+          label = "DeviceFabContainerColor",
+        )
+        val deviceFabContentColor by animateColorAsState(
+          targetValue = if (isRecordingDevice) {
+            MaterialTheme.colorScheme.onError
+          } else {
+            MaterialTheme.colorScheme.onSecondaryContainer
+          },
+          label = "DeviceFabContentColor",
+        )
+
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.Center,
         ) {
-          // Outer animated pulse ring while recording
-          if (isRecording) {
-            val dynamicBoost = (liveAmplitude * 0.15f).coerceIn(0f, 0.15f)
-            Box(
+          // Left balancing spacer so the primary Microphone FAB remains centered
+          Spacer(modifier = Modifier.width(84.dp))
+
+          // Primary Microphone / Stop FAB
+          Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.size(116.dp),
+          ) {
+            // Outer animated pulse ring while recording microphone audio
+            if (isRecordingMic) {
+              val dynamicBoost = (liveAmplitude * 0.15f).coerceIn(0f, 0.15f)
+              Box(
+                modifier = Modifier
+                  .size(104.dp)
+                  .scale(pulseScale + dynamicBoost)
+                  .clip(CircleShape)
+                  .background(MaterialTheme.colorScheme.error.copy(alpha = 0.2f)),
+              )
+            }
+
+            FloatingActionButton(
+              onClick = {
+                if (isRecording) {
+                  stopRecording()
+                } else {
+                  startRecording(AudioCaptureSource.MICROPHONE)
+                }
+              },
+              shape = CircleShape,
+              containerColor = fabContainerColor,
+              contentColor = fabContentColor,
+              elevation = FloatingActionButtonDefaults.elevation(
+                defaultElevation = 6.dp,
+                pressedElevation = 10.dp,
+              ),
               modifier = Modifier
-                .size(104.dp)
-                .scale(pulseScale + dynamicBoost)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.error.copy(alpha = 0.2f)),
-            )
+                .size(88.dp)
+                .testTag("audio_recorder_fab")
+                .semantics {
+                  contentDescription = if (isRecording) "Stop recording" else "Start recording"
+                },
+            ) {
+              AnimatedContent(
+                targetState = isRecording,
+                transitionSpec = {
+                  (scaleIn(animationSpec = spring(stiffness = Spring.StiffnessMedium)) + fadeIn())
+                    .togetherWith(scaleOut() + fadeOut())
+                },
+                label = "MicToStopTransition",
+              ) { recording ->
+                if (recording) {
+                  Icon(
+                    imageVector = Icons.Default.Stop,
+                    contentDescription = null,
+                    modifier = Modifier
+                      .size(40.dp)
+                      .testTag("fab_stop_icon"),
+                  )
+                } else {
+                  Icon(
+                    imageVector = Icons.Default.Mic,
+                    contentDescription = null,
+                    modifier = Modifier
+                      .size(40.dp)
+                      .testTag("fab_mic_icon"),
+                  )
+                }
+              }
+            }
           }
 
-          FloatingActionButton(
-            onClick = {
-              if (isRecording) {
-                stopRecording()
-              } else {
-                startRecording()
-              }
-            },
-            shape = CircleShape,
-            containerColor = fabContainerColor,
-            contentColor = fabContentColor,
-            elevation = FloatingActionButtonDefaults.elevation(
-              defaultElevation = 6.dp,
-              pressedElevation = 10.dp,
-            ),
-            modifier = Modifier
-              .size(88.dp)
-              .testTag("audio_recorder_fab")
-              .semantics {
-                contentDescription = if (isRecording) "Stop recording" else "Start recording"
-              },
+          Spacer(modifier = Modifier.width(12.dp))
+
+          // Smaller Device Audio FAB to the right with a phone screen icon
+          Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.size(72.dp),
           ) {
-            AnimatedContent(
-              targetState = isRecording,
-              transitionSpec = {
-                (scaleIn(animationSpec = spring(stiffness = Spring.StiffnessMedium)) + fadeIn())
-                  .togetherWith(scaleOut() + fadeOut())
+            if (isRecordingDevice) {
+              val dynamicBoost = (liveAmplitude * 0.15f).coerceIn(0f, 0.15f)
+              Box(
+                modifier = Modifier
+                  .size(64.dp)
+                  .scale(pulseScale + dynamicBoost)
+                  .clip(CircleShape)
+                  .background(MaterialTheme.colorScheme.error.copy(alpha = 0.2f)),
+              )
+            }
+
+            SmallFloatingActionButton(
+              onClick = {
+                if (isRecordingDevice) {
+                  stopRecording()
+                } else {
+                  startRecording(AudioCaptureSource.DEVICE_AUDIO)
+                }
               },
-              label = "MicToStopTransition",
-            ) { recording ->
-              if (recording) {
-                Icon(
-                  imageVector = Icons.Default.Stop,
-                  contentDescription = "Stop",
-                  modifier = Modifier
-                    .size(40.dp)
-                    .testTag("fab_stop_icon"),
-                )
-              } else {
-                Icon(
-                  imageVector = Icons.Default.Mic,
-                  contentDescription = "Record",
-                  modifier = Modifier
-                    .size(40.dp)
-                    .testTag("fab_mic_icon"),
-                )
+              shape = CircleShape,
+              containerColor = deviceFabContainerColor,
+              contentColor = deviceFabContentColor,
+              elevation = FloatingActionButtonDefaults.elevation(
+                defaultElevation = 4.dp,
+                pressedElevation = 8.dp,
+              ),
+              modifier = Modifier
+                .size(56.dp)
+                .testTag("device_audio_recorder_fab")
+                .semantics {
+                  contentDescription = if (isRecordingDevice) {
+                    "Stop device audio recording"
+                  } else {
+                    "Record device audio"
+                  }
+                },
+            ) {
+              AnimatedContent(
+                targetState = isRecordingDevice,
+                transitionSpec = {
+                  (scaleIn(animationSpec = spring(stiffness = Spring.StiffnessMedium)) + fadeIn())
+                    .togetherWith(scaleOut() + fadeOut())
+                },
+                label = "DeviceToStopTransition",
+              ) { recordingDevice ->
+                if (recordingDevice) {
+                  Icon(
+                    imageVector = Icons.Default.Stop,
+                    contentDescription = null,
+                    modifier = Modifier
+                      .size(26.dp)
+                      .testTag("fab_device_stop_icon"),
+                  )
+                } else {
+                  Icon(
+                    imageVector = Icons.Default.PhoneAndroid,
+                    contentDescription = null,
+                    modifier = Modifier
+                      .size(26.dp)
+                      .testTag("fab_device_audio_icon"),
+                  )
+                }
               }
             }
           }
@@ -702,10 +824,10 @@ fun AudioRecorderScreen(
         Spacer(modifier = Modifier.height(10.dp))
 
         Text(
-          text = if (isRecording) {
-            "Tap Stop to save .${selectedFormat.extension} recording"
-          } else {
-            "Tap microphone to start recording (${selectedFormat.displayName})"
+          text = when {
+            isRecordingDevice -> "Recording device audio • Tap Stop to save .${selectedFormat.extension} recording"
+            isRecording -> "Tap Stop to save .${selectedFormat.extension} recording"
+            else -> "Tap microphone or phone button to record (${selectedFormat.displayName})"
           },
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -995,7 +1117,11 @@ private fun RecordingListItemCard(
         contentAlignment = Alignment.Center,
       ) {
         Icon(
-          imageVector = Icons.Default.GraphicEq,
+          imageVector = if (item.captureSource == AudioCaptureSource.DEVICE_AUDIO) {
+            Icons.Default.PhoneAndroid
+          } else {
+            Icons.Default.GraphicEq
+          },
           contentDescription = null,
           tint = MaterialTheme.colorScheme.primary,
           modifier = Modifier.size(20.dp),
@@ -1028,6 +1154,20 @@ private fun RecordingListItemCard(
               color = MaterialTheme.colorScheme.onSecondaryContainer,
               modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
             )
+          }
+          if (item.captureSource == AudioCaptureSource.DEVICE_AUDIO) {
+            Surface(
+              shape = RoundedCornerShape(6.dp),
+              color = MaterialTheme.colorScheme.tertiaryContainer,
+            ) {
+              Text(
+                text = "DEVICE",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+              )
+            }
           }
           Text(
             text = "${item.durationFormatted} • ${item.sizeFormatted} • ${item.timestampFormatted}",

@@ -30,6 +30,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
@@ -63,6 +64,8 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -157,6 +160,8 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -165,12 +170,15 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -184,9 +192,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -232,13 +243,20 @@ fun MusicPlayerScreen(
     )
   }
 
-  // Library Tab: Artists, Albums, Songs, Genres, Playlists
+  // Library Tab Order & Selected Tab: Artists, Albums, Songs, Genres, Playlists
+  val tabOrder = session.tabOrder
   val selectedTab = session.selectedTab
   var sectionFocusVersion by remember { mutableIntStateOf(0) }
 
   fun updateTab(tab: MusicLibraryTab) {
     session.updateTab(tab)
     sectionFocusVersion++
+  }
+
+  fun moveSectionTab(fromIndex: Int, toIndex: Int) {
+    if (session.reorderTabs(fromIndex, toIndex)) {
+      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    }
   }
 
   // View Mode: List vs Card
@@ -286,7 +304,7 @@ fun MusicPlayerScreen(
   // Play Statistics (persisted in SharedPreferences: play count + total playtime per track)
   val playStats = session.playStats
 
-  // Playlists (persisted in SharedPreferences; Favorites & Most Played are built-in dynamic playlists)
+  // Playlists (persisted in SharedPreferences; Favorites, Most Played & Recently Played are built-in dynamic playlists)
   val savedPlaylistEntries = session.savedPlaylistEntries
 
   fun saveQueueAsPlaylist(name: String, tracksToSave: List<MusicTrack>) {
@@ -360,6 +378,7 @@ fun MusicPlayerScreen(
     listOf(
       MusicPlayerEngine.buildFavoritesPlaylist(favoriteIds, allTracks),
       MusicPlayerEngine.buildMostPlayedPlaylist(playStats, allTracks),
+      MusicPlayerEngine.buildRecentlyPlayedPlaylist(playStats, allTracks),
     ) + MusicPlayerEngine.buildPlaylists(savedPlaylistEntries, allTracks)
   }
   val allPlaylists = remember(basePlaylists, searchQuery, selectedTab, selectedArtistName, selectedAlbumKey, selectedGenreName, selectedPlaylistId) {
@@ -621,8 +640,6 @@ fun MusicPlayerScreen(
         isSearchActive = isSearchActive,
         searchQuery = searchQuery,
         viewMode = viewMode,
-        sortOrder = sortOrder,
-        showSortMenu = showSortMenu,
         accentTint = animatedDominant,
         onBackClick = { clearDrillDown() },
         onSearchToggle = {
@@ -642,21 +659,27 @@ fun MusicPlayerScreen(
           updateViewMode(mode)
           haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         },
+      )
+
+      // 2. Category Tabs (Artists, Albums, Songs, Genres, Playlists; reorderable on press and hold) + Pinned Floating Sort Button
+      MusicCategoryAndViewBar(
+        tabs = tabOrder,
+        selectedTab = selectedTab,
+        sortOrder = sortOrder,
+        showSortMenu = showSortMenu,
+        onSelectTab = { tab ->
+          clearDrillDown()
+          updateTab(tab)
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        },
+        onMoveTab = { fromIdx, toIdx ->
+          moveSectionTab(fromIdx, toIdx)
+        },
         onOpenSortMenu = { showSortMenu = true },
         onDismissSortMenu = { showSortMenu = false },
         onSelectSortOrder = { order ->
           updateSortOrder(order)
           showSortMenu = false
-        },
-      )
-
-      // 2. Category Tabs (Artists, Albums, Songs, Genres, Playlists)
-      MusicCategoryAndViewBar(
-        selectedTab = selectedTab,
-        onSelectTab = { tab ->
-          clearDrillDown()
-          updateTab(tab)
-          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         },
       )
 
@@ -1145,8 +1168,6 @@ private fun MusicPlayerTopBar(
   isSearchActive: Boolean,
   searchQuery: String,
   viewMode: MusicViewMode,
-  sortOrder: MusicSortOrder,
-  showSortMenu: Boolean,
   accentTint: Color,
   onBackClick: () -> Unit,
   onSearchToggle: () -> Unit,
@@ -1154,23 +1175,26 @@ private fun MusicPlayerTopBar(
   onSearchQueryChange: (String) -> Unit,
   onToggleViewMode: () -> Unit,
   onSelectViewMode: (MusicViewMode) -> Unit,
-  onOpenSortMenu: () -> Unit,
-  onDismissSortMenu: () -> Unit,
-  onSelectSortOrder: (MusicSortOrder) -> Unit,
 ) {
   val focusRequester = remember { FocusRequester() }
   val focusManager = LocalFocusManager.current
+  val keyboardController = LocalSoftwareKeyboardController.current
 
   LaunchedEffect(isSearchActive) {
     if (isSearchActive) {
       try {
         focusRequester.requestFocus()
+        keyboardController?.show()
       } catch (_: Throwable) {}
+    } else {
+      keyboardController?.hide()
     }
   }
 
+  val topBarColor = lerp(MaterialTheme.colorScheme.surface, accentTint, 0.12f)
+
   Surface(
-    color = lerp(MaterialTheme.colorScheme.surface, accentTint, 0.12f),
+    color = topBarColor,
     tonalElevation = 1.dp,
     modifier = Modifier.fillMaxWidth(),
   ) {
@@ -1180,16 +1204,131 @@ private fun MusicPlayerTopBar(
         .heightIn(min = 68.dp),
       contentAlignment = Alignment.CenterStart,
     ) {
+      // 1. Standard Header Toolbar (icons disappear when searching)
       Row(
         modifier = Modifier
           .fillMaxWidth()
-          .padding(horizontal = 12.dp, vertical = 8.dp),
+          .padding(horizontal = 12.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        if (isSearchActive) {
+        Row(
+          modifier = Modifier.weight(1f),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          if (hasDrillDown) {
+            IconButton(
+              onClick = onBackClick,
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("music_back_button"),
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                tint = MaterialTheme.colorScheme.onSurface,
+              )
+            }
+          } else {
+            Box(
+              modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Default.Headphones,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+              )
+            }
+          }
+
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = title,
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+              text = subtext,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+        }
+
+        if (!isSearchActive) {
           Row(
-            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+          ) {
+            IconButton(
+              onClick = onSearchToggle,
+              modifier = Modifier.testTag("music_search_toggle"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Search,
+                contentDescription = "Search music",
+                tint = MaterialTheme.colorScheme.onSurface,
+              )
+            }
+
+            ViewModeSegmentedToggle(
+              isListView = viewMode == MusicViewMode.LIST,
+              onSelectListView = { onSelectViewMode(MusicViewMode.LIST) },
+              onSelectGridView = { onSelectViewMode(MusicViewMode.CARD) },
+              onToggle = onToggleViewMode,
+              accentColor = accentTint,
+              toggleTestTag = "music_view_mode_toggle",
+              listTestTag = "music_view_mode_list",
+              gridTestTag = "music_view_mode_card",
+              listContentDescription = "List view",
+              gridContentDescription = "Card view",
+            )
+          }
+        }
+      }
+
+      // 2. Animated Expanding Search Bar (matches File Manager search bar)
+      AnimatedVisibility(
+        visible = isSearchActive,
+        enter = fadeIn(animationSpec = tween(220)) + expandHorizontally(
+          animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+          ),
+          expandFrom = Alignment.End,
+        ),
+        exit = fadeOut(animationSpec = tween(180)) + shrinkHorizontally(
+          animationSpec = tween(200),
+          shrinkTowards = Alignment.End,
+        ),
+        modifier = Modifier.matchParentSize(),
+      ) {
+        Surface(
+          modifier = Modifier
+            .fillMaxSize()
+            .clickable(
+              interactionSource = remember { MutableInteractionSource() },
+              indication = null,
+              onClick = {},
+            ),
+          color = topBarColor,
+          tonalElevation = 2.dp,
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxSize()
+              .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
           ) {
             IconButton(
@@ -1197,9 +1336,7 @@ private fun MusicPlayerTopBar(
                 focusManager.clearFocus()
                 onCloseSearch()
               },
-              modifier = Modifier
-                .size(36.dp)
-                .testTag("music_search_toggle"),
+              modifier = Modifier.testTag("music_search_toggle"),
             ) {
               Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -1214,14 +1351,14 @@ private fun MusicPlayerTopBar(
               placeholder = {
                 Text(
                   text = searchPlaceholder,
-                  style = MaterialTheme.typography.bodyMedium,
+                  style = MaterialTheme.typography.bodyLarge,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis,
                 )
               },
               singleLine = true,
-              textStyle = MaterialTheme.typography.bodyMedium.copy(
+              textStyle = MaterialTheme.typography.bodyLarge.copy(
                 color = MaterialTheme.colorScheme.onSurface,
               ),
               colors = TextFieldDefaults.colors(
@@ -1249,133 +1386,10 @@ private fun MusicPlayerTopBar(
               keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
               keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
               modifier = Modifier
-                .weight(1f)
+                .fillMaxWidth()
                 .focusRequester(focusRequester)
                 .testTag("music_search_input"),
             )
-          }
-        } else {
-          Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            if (hasDrillDown) {
-              IconButton(
-                onClick = onBackClick,
-                modifier = Modifier
-                  .size(36.dp)
-                  .testTag("music_back_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                  contentDescription = "Back",
-                  tint = MaterialTheme.colorScheme.onSurface,
-                )
-              }
-            } else {
-              Box(
-                modifier = Modifier
-                  .size(36.dp)
-                  .clip(CircleShape)
-                  .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center,
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Headphones,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.size(20.dp),
-                )
-              }
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              Text(
-                text = subtext,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-          }
-        }
-
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-          if (!isSearchActive) {
-            IconButton(
-              onClick = onSearchToggle,
-              modifier = Modifier.testTag("music_search_toggle"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Search,
-                contentDescription = "Search music",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-          }
-
-          ViewModeSegmentedToggle(
-            isListView = viewMode == MusicViewMode.LIST,
-            onSelectListView = { onSelectViewMode(MusicViewMode.LIST) },
-            onSelectGridView = { onSelectViewMode(MusicViewMode.CARD) },
-            onToggle = onToggleViewMode,
-            accentColor = accentTint,
-            toggleTestTag = "music_view_mode_toggle",
-            listTestTag = "music_view_mode_list",
-            gridTestTag = "music_view_mode_card",
-            listContentDescription = "List view",
-            gridContentDescription = "Card view",
-          )
-
-          Box {
-            IconButton(
-              onClick = onOpenSortMenu,
-              modifier = Modifier.testTag("music_sort_button"),
-            ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.Sort,
-                contentDescription = "Sort tracks",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-            DropdownMenu(
-              expanded = showSortMenu,
-              onDismissRequest = onDismissSortMenu,
-            ) {
-              MusicSortOrder.entries.forEach { option ->
-                DropdownMenuItem(
-                  text = {
-                    Text(
-                      text = option.displayName,
-                      fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
-                    )
-                  },
-                  leadingIcon = {
-                    if (option == sortOrder) {
-                      Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                      )
-                    }
-                  },
-                  onClick = { onSelectSortOrder(option) },
-                )
-              }
-            }
           }
         }
       }
@@ -1466,48 +1480,282 @@ internal fun ViewModeSegmentedToggle(
   }
 }
 
+private fun MusicLibraryTab.iconVector() = when (this) {
+  MusicLibraryTab.ARTISTS -> Icons.Default.Person
+  MusicLibraryTab.ALBUMS -> Icons.Default.Album
+  MusicLibraryTab.SONGS -> Icons.Default.MusicNote
+  MusicLibraryTab.GENRES -> Icons.Default.Category
+  MusicLibraryTab.PLAYLISTS -> Icons.AutoMirrored.Filled.PlaylistPlay
+}
+
 @Composable
 private fun MusicCategoryAndViewBar(
+  tabs: List<MusicLibraryTab> = MusicLibraryTab.entries.toList(),
   selectedTab: MusicLibraryTab,
+  sortOrder: MusicSortOrder = MusicSortOrder.TITLE_ASC,
+  showSortMenu: Boolean = false,
   onSelectTab: (MusicLibraryTab) -> Unit,
+  onMoveTab: (fromIndex: Int, toIndex: Int) -> Unit = { _, _ -> },
+  onOpenSortMenu: () -> Unit = {},
+  onDismissSortMenu: () -> Unit = {},
+  onSelectSortOrder: (MusicSortOrder) -> Unit = {},
 ) {
-  Row(
+  val density = LocalDensity.current
+  val haptic = LocalHapticFeedback.current
+  val scrollState = rememberScrollState()
+
+  val currentTabs by rememberUpdatedState(tabs)
+  val currentOnMoveTab by rememberUpdatedState(onMoveTab)
+  val tabBounds = remember { mutableMapOf<MusicLibraryTab, Rect>() }
+  var barCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+
+  var draggedTab by remember { mutableStateOf<MusicLibraryTab?>(null) }
+  var dragPointerOffset by remember { mutableStateOf(Offset.Zero) }
+  var grabOffsetFromCenter by remember { mutableStateOf(Offset.Zero) }
+  var draggedTabSize by remember { mutableStateOf<IntSize?>(null) }
+
+  val maxHitSlopPx = with(density) { 24.dp.toPx() }
+  val leftEdgeScrollZonePx = with(density) { 36.dp.toPx() }
+  val rightEdgeScrollZonePx = with(density) { 72.dp.toPx() }
+  val sortButtonExcludeZonePx = with(density) { 52.dp.toPx() }
+  val edgeScrollStepPx = with(density) { 10.dp.toPx() }
+
+  Box(
     modifier = Modifier
       .fillMaxWidth()
-      .padding(horizontal = 12.dp, vertical = 8.dp)
-      .horizontalScroll(rememberScrollState()),
-    horizontalArrangement = Arrangement.spacedBy(6.dp),
-    verticalAlignment = Alignment.CenterVertically,
-  ) {
-    MusicLibraryTab.entries.forEach { tab ->
-      val isSelected = tab == selectedTab
-      val tabIcon = when (tab) {
-        MusicLibraryTab.ARTISTS -> Icons.Default.Person
-        MusicLibraryTab.ALBUMS -> Icons.Default.Album
-        MusicLibraryTab.SONGS -> Icons.Default.MusicNote
-        MusicLibraryTab.GENRES -> Icons.Default.Category
-        MusicLibraryTab.PLAYLISTS -> Icons.AutoMirrored.Filled.PlaylistPlay
+      .testTag("music_category_bar")
+      .onGloballyPositioned { coords ->
+        barCoordinates = coords
       }
-      FilterChip(
-        selected = isSelected,
-        onClick = { onSelectTab(tab) },
-        label = {
-          Text(
-            text = tab.displayName,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-          )
-        },
-        leadingIcon = {
-          Icon(
-            imageVector = tabIcon,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-        },
+      .pointerInput(Unit) {
+        detectDragGesturesAfterLongPress(
+          onDragStart = { startOffset ->
+            val barWidth = (barCoordinates?.size?.width ?: 0).toFloat()
+            if (barWidth > 0f && startOffset.x >= barWidth - sortButtonExcludeZonePx) {
+              return@detectDragGesturesAfterLongPress
+            }
+            val directHit = currentTabs.firstOrNull { tab ->
+              tabBounds[tab]?.contains(startOffset) == true
+            }
+            val hitTab = directHit ?: currentTabs.minByOrNull { tab ->
+              val rect = tabBounds[tab] ?: return@minByOrNull Float.MAX_VALUE
+              val dx = when {
+                startOffset.x < rect.left -> rect.left - startOffset.x
+                startOffset.x > rect.right -> startOffset.x - rect.right
+                else -> 0f
+              }
+              val dy = when {
+                startOffset.y < rect.top -> rect.top - startOffset.y
+                startOffset.y > rect.bottom -> startOffset.y - rect.bottom
+                else -> 0f
+              }
+              dx + dy
+            }?.takeIf { tab ->
+              val rect = tabBounds[tab] ?: return@takeIf false
+              val dx = when {
+                startOffset.x < rect.left -> rect.left - startOffset.x
+                startOffset.x > rect.right -> startOffset.x - rect.right
+                else -> 0f
+              }
+              dx <= maxHitSlopPx
+            }
+
+            if (hitTab != null) {
+              val rect = tabBounds[hitTab]
+              draggedTab = hitTab
+              dragPointerOffset = startOffset
+              grabOffsetFromCenter = if (rect != null) {
+                startOffset - rect.center
+              } else {
+                Offset.Zero
+              }
+              draggedTabSize = rect?.let { IntSize(it.width.roundToInt(), it.height.roundToInt()) }
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            }
+          },
+          onDrag = { change, dragAmount ->
+            val activeTab = draggedTab ?: return@detectDragGesturesAfterLongPress
+            change.consume()
+            dragPointerOffset += dragAmount
+            val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+
+            val barWidth = (barCoordinates?.size?.width ?: 0).toFloat()
+            if (barWidth > 0f && scrollState.maxValue > 0) {
+              if (dragPointerOffset.x < leftEdgeScrollZonePx && scrollState.value > 0) {
+                scrollState.dispatchRawDelta(-edgeScrollStepPx)
+              } else if (dragPointerOffset.x > barWidth - rightEdgeScrollZonePx && scrollState.value < scrollState.maxValue) {
+                scrollState.dispatchRawDelta(edgeScrollStepPx)
+              }
+            }
+
+            val fromIndex = currentTabs.indexOf(activeTab)
+            if (fromIndex >= 0 && currentTabs.size > 1) {
+              val targetIndex = currentTabs.indices.minByOrNull { idx ->
+                val rect = tabBounds[currentTabs[idx]]
+                if (rect != null) abs(desiredCenter.x - rect.center.x) else Float.MAX_VALUE
+              }
+              if (targetIndex != null && targetIndex != fromIndex) {
+                currentOnMoveTab(fromIndex, targetIndex)
+              }
+            }
+          },
+          onDragEnd = {
+            draggedTab = null
+            dragPointerOffset = Offset.Zero
+            grabOffsetFromCenter = Offset.Zero
+            draggedTabSize = null
+          },
+          onDragCancel = {
+            draggedTab = null
+            dragPointerOffset = Offset.Zero
+            grabOffsetFromCenter = Offset.Zero
+            draggedTabSize = null
+          },
+        )
+      },
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .horizontalScroll(scrollState, enabled = draggedTab == null)
+        .padding(start = 12.dp, end = 56.dp, top = 8.dp, bottom = 8.dp),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      tabs.forEach { tab ->
+        val isSelected = tab == selectedTab
+        val isBeingDragged = tab == draggedTab
+        FilterChip(
+          selected = isSelected,
+          onClick = {
+            if (draggedTab == null) {
+              onSelectTab(tab)
+            }
+          },
+          label = {
+            Text(
+              text = tab.displayName,
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+            )
+          },
+          leadingIcon = {
+            Icon(
+              imageVector = tab.iconVector(),
+              contentDescription = null,
+              modifier = Modifier.size(16.dp),
+            )
+          },
+          shape = CircleShape,
+          modifier = Modifier
+            .onGloballyPositioned { coords ->
+              val barCoords = barCoordinates
+              if (barCoords != null && barCoords.isAttached && coords.isAttached) {
+                tabBounds[tab] = barCoords.localBoundingBoxOf(coords, clipBounds = false)
+              }
+            }
+            .graphicsLayer {
+              alpha = if (isBeingDragged) 0.3f else 1f
+            }
+            .testTag("music_tab_${tab.name}"),
+        )
+      }
+    }
+
+    // Pinned floating sort button on the right edge of the pill bar
+    Box(
+      modifier = Modifier
+        .align(Alignment.CenterEnd)
+        .padding(end = 12.dp)
+        .zIndex(10f),
+    ) {
+      Surface(
+        onClick = onOpenSortMenu,
         shape = CircleShape,
-        modifier = Modifier.testTag("music_tab_${tab.name}"),
-      )
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 3.dp,
+        shadowElevation = 4.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        modifier = Modifier
+          .size(34.dp)
+          .testTag("music_sort_button"),
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Sort,
+            contentDescription = "Sort tracks",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
+
+      DropdownMenu(
+        expanded = showSortMenu,
+        onDismissRequest = onDismissSortMenu,
+      ) {
+        MusicSortOrder.entries.forEach { option ->
+          DropdownMenuItem(
+            text = {
+              Text(
+                text = option.displayName,
+                fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
+              )
+            },
+            leadingIcon = {
+              if (option == sortOrder) {
+                Icon(
+                  imageVector = Icons.Default.Check,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                )
+              }
+            },
+            onClick = { onSelectSortOrder(option) },
+          )
+        }
+      }
+    }
+
+    val activeDraggedTab = draggedTab
+    if (activeDraggedTab != null && barCoordinates != null) {
+      val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+      val fallbackWidthPx = with(density) { 96.dp.toPx() }
+      val fallbackHeightPx = with(density) { 32.dp.toPx() }
+      val widthPx = draggedTabSize?.width?.toFloat() ?: fallbackWidthPx
+      val heightPx = draggedTabSize?.height?.toFloat() ?: fallbackHeightPx
+      val isSelected = activeDraggedTab == selectedTab
+
+      Box(
+        modifier = Modifier
+          .graphicsLayer {
+            translationX = desiredCenter.x - widthPx / 2f
+            translationY = desiredCenter.y - heightPx / 2f
+            scaleX = 1.06f
+            scaleY = 1.06f
+          }
+          .zIndex(100f),
+      ) {
+        FilterChip(
+          selected = isSelected,
+          onClick = {},
+          label = {
+            Text(
+              text = activeDraggedTab.displayName,
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+            )
+          },
+          leadingIcon = {
+            Icon(
+              imageVector = activeDraggedTab.iconVector(),
+              contentDescription = null,
+              modifier = Modifier.size(16.dp),
+            )
+          },
+          shape = CircleShape,
+        )
+      }
     }
   }
 }
@@ -2677,6 +2925,7 @@ private fun PlaylistsTabContent(
                   imageVector = when {
                     playlist.isFavorites -> Icons.Default.Star
                     playlist.isMostPlayed -> Icons.Default.GraphicEq
+                    playlist.isRecentlyPlayed -> Icons.Default.Timer
                     else -> Icons.AutoMirrored.Filled.PlaylistPlay
                   },
                   contentDescription = null,
@@ -3317,7 +3566,7 @@ private fun PlaylistDetailContent(
       return@Column
     }
 
-    if (playlist.isMostPlayed && playlist.tracks.isEmpty()) {
+    if ((playlist.isMostPlayed || playlist.isRecentlyPlayed) && playlist.tracks.isEmpty()) {
       EmptyMusicState(message = "No songs in library yet")
       return@Column
     }
@@ -3339,22 +3588,37 @@ private fun PlaylistDetailContent(
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         items(playlist.tracks, key = { it.id }) { track ->
-          val statBadge = if (playlist.isMostPlayed) {
-            val s = playStats[track.id]
-            if (s != null && s.hasRecordedActivity) {
-              val playsLabel = if (s.playCount == 1) "1 play" else "${s.playCount} plays"
-              val fullLabel = "${s.formattedFullPlays(track.durationMs)} full"
-              val skipsSuffix = if (s.skipCount > 0) {
-                " • ${s.skipCount} ${if (s.skipCount == 1) "skip" else "skips"}"
+          val statBadge = when {
+            playlist.isMostPlayed -> {
+              val s = playStats[track.id]
+              if (s != null && s.hasRecordedActivity) {
+                val playsLabel = if (s.playCount == 1) "1 play" else "${s.playCount} plays"
+                val fullLabel = "${s.formattedFullPlays(track.durationMs)} full"
+                val skipsSuffix = if (s.skipCount > 0) {
+                  " • ${s.skipCount} ${if (s.skipCount == 1) "skip" else "skips"}"
+                } else {
+                  ""
+                }
+                val lastPlayedSuffix = if (s.lastPlayedAtMs > 0L) {
+                  " • ${s.lastPlayedFormatted}"
+                } else {
+                  ""
+                }
+                "$playsLabel • $fullLabel • ${s.totalPlayTimeFormatted}$skipsSuffix$lastPlayedSuffix"
               } else {
-                ""
+                null
               }
-              "$playsLabel • $fullLabel • ${s.totalPlayTimeFormatted}$skipsSuffix"
-            } else {
-              null
             }
-          } else {
-            null
+            playlist.isRecentlyPlayed -> {
+              val s = playStats[track.id]
+              if (s != null && s.lastPlayedAtMs > 0L) {
+                val playsLabel = if (s.playCount == 1) "1 play" else "${s.playCount} plays"
+                "${s.lastPlayedFormatted} • $playsLabel"
+              } else {
+                null
+              }
+            }
+            else -> null
           }
           SongListItemCard(
             track = track,
@@ -3386,22 +3650,37 @@ private fun PlaylistDetailContent(
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
         items(playlist.tracks, key = { it.id }) { track ->
-          val statBadge = if (playlist.isMostPlayed) {
-            val s = playStats[track.id]
-            if (s != null && s.hasRecordedActivity) {
-              val playsLabel = if (s.playCount == 1) "1 play" else "${s.playCount} plays"
-              val fullLabel = "${s.formattedFullPlays(track.durationMs)} full"
-              val skipsSuffix = if (s.skipCount > 0) {
-                " • ${s.skipCount} ${if (s.skipCount == 1) "skip" else "skips"}"
+          val statBadge = when {
+            playlist.isMostPlayed -> {
+              val s = playStats[track.id]
+              if (s != null && s.hasRecordedActivity) {
+                val playsLabel = if (s.playCount == 1) "1 play" else "${s.playCount} plays"
+                val fullLabel = "${s.formattedFullPlays(track.durationMs)} full"
+                val skipsSuffix = if (s.skipCount > 0) {
+                  " • ${s.skipCount} ${if (s.skipCount == 1) "skip" else "skips"}"
+                } else {
+                  ""
+                }
+                val lastPlayedSuffix = if (s.lastPlayedAtMs > 0L) {
+                  " • ${s.lastPlayedFormatted}"
+                } else {
+                  ""
+                }
+                "$playsLabel • $fullLabel • ${s.totalPlayTimeFormatted}$skipsSuffix$lastPlayedSuffix"
               } else {
-                ""
+                null
               }
-              "$playsLabel • $fullLabel • ${s.totalPlayTimeFormatted}$skipsSuffix"
-            } else {
-              null
             }
-          } else {
-            null
+            playlist.isRecentlyPlayed -> {
+              val s = playStats[track.id]
+              if (s != null && s.lastPlayedAtMs > 0L) {
+                val playsLabel = if (s.playCount == 1) "1 play" else "${s.playCount} plays"
+                "${s.lastPlayedFormatted} • $playsLabel"
+              } else {
+                null
+              }
+            }
+            else -> null
           }
           SongGridItemCard(
             track = track,
@@ -5298,6 +5577,12 @@ private fun SaveQueueAsPlaylistDialog(
   )
 }
 
+private enum class TrackDetailsSection(val title: String) {
+  SONG_INFO("Song Info"),
+  STATS("Stats"),
+  FILE_INFO("File Info"),
+}
+
 @Composable
 private fun TrackDetailsDialog(
   track: MusicTrack,
@@ -5306,6 +5591,14 @@ private fun TrackDetailsDialog(
   onSelectColor: (String) -> Unit,
   onDismiss: () -> Unit,
 ) {
+  val haptic = LocalHapticFeedback.current
+  val coroutineScope = rememberCoroutineScope()
+  val sections = TrackDetailsSection.entries
+  val pagerState = rememberPagerState(
+    initialPage = 0,
+    pageCount = { sections.size },
+  )
+
   val paletteEntries = listOf(
     palette.dominantColor to palette.dominantHex,
     palette.secondaryColor to palette.secondaryHex,
@@ -5358,7 +5651,7 @@ private fun TrackDetailsDialog(
         modifier = Modifier
           .fillMaxWidth()
           .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
         Card(
           shape = RoundedCornerShape(14.dp),
@@ -5451,22 +5744,154 @@ private fun TrackDetailsDialog(
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-        DetailRow(label = "Artist", value = track.artist)
-        DetailRow(label = "Album", value = track.album)
-        DetailRow(label = "Track #", value = track.trackNumberFormatted, isMono = true)
-        DetailRow(label = "Genre", value = track.genre)
-        DetailRow(label = "Year", value = track.year.toString(), isMono = true)
-        DetailRow(label = "Duration", value = track.durationFormatted, isMono = true)
-        DetailRow(label = "Plays", value = playStat.playCount.toString(), isMono = true)
-        DetailRow(label = "Full Plays", value = playStat.formattedFullPlays(track.durationMs), isMono = true)
-        DetailRow(label = "Playtime", value = playStat.totalPlayTimeFormatted, isMono = true)
-        DetailRow(label = "Skips", value = playStat.skipCount.toString(), isMono = true)
-        DetailRow(label = "Format", value = track.formatLabel, isMono = true)
-        DetailRow(label = "Bitrate", value = track.bitrateFormatted, isMono = true)
-        DetailRow(label = "Sample Rate", value = track.sampleRateFormatted, isMono = true)
-        DetailRow(label = "Channels", value = track.channelsLabel)
-        DetailRow(label = "Size", value = track.sizeFormatted, isMono = true)
-        DetailRow(label = "Source", value = track.sourceLabel, isMono = true)
+        // 3-Tab Segmented Selector (Song Info, Stats, File Info)
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("track_details_tabs"),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            sections.forEachIndexed { index, section ->
+              val isSelected = pagerState.currentPage == index
+              Surface(
+                shape = CircleShape,
+                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                modifier = Modifier
+                  .weight(1f)
+                  .clip(CircleShape)
+                  .clickable {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    coroutineScope.launch {
+                      pagerState.animateScrollToPage(index)
+                    }
+                  }
+                  .semantics { selected = isSelected }
+                  .testTag("track_details_tab_${section.name}"),
+              ) {
+                Box(
+                  contentAlignment = Alignment.Center,
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+                ) {
+                  Text(
+                    text = section.title,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isSelected) {
+                      MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                      MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+              }
+            }
+          }
+        }
+
+        // Swipeable Paginated Content
+        HorizontalPager(
+          state = pagerState,
+          verticalAlignment = Alignment.Top,
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("track_details_pager"),
+        ) { pageIndex ->
+          val section = sections[pageIndex]
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+            ),
+            modifier = Modifier
+              .fillMaxWidth()
+              .heightIn(min = 172.dp)
+              .testTag("track_details_page_${section.name}"),
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              when (section) {
+                TrackDetailsSection.SONG_INFO -> {
+                  DetailRow(label = "Artist", value = track.artist)
+                  DetailRow(label = "Album", value = track.album)
+                  DetailRow(label = "Track #", value = track.trackNumberFormatted, isMono = true)
+                  DetailRow(label = "Genre", value = track.genre)
+                  DetailRow(label = "Year", value = track.year.toString(), isMono = true)
+                  DetailRow(label = "Duration", value = track.durationFormatted, isMono = true)
+                }
+
+                TrackDetailsSection.STATS -> {
+                  DetailRow(label = "Plays", value = playStat.playCount.toString(), isMono = true)
+                  DetailRow(label = "Full Plays", value = playStat.formattedFullPlays(track.durationMs), isMono = true)
+                  DetailRow(label = "Playtime", value = playStat.totalPlayTimeFormatted, isMono = true)
+                  DetailRow(label = "Skips", value = playStat.skipCount.toString(), isMono = true)
+                  DetailRow(label = "Last Played", value = playStat.lastPlayedFormatted, isMono = true)
+                }
+
+                TrackDetailsSection.FILE_INFO -> {
+                  DetailRow(label = "Format", value = track.formatLabel, isMono = true)
+                  DetailRow(label = "Bitrate", value = track.bitrateFormatted, isMono = true)
+                  DetailRow(label = "Sample Rate", value = track.sampleRateFormatted, isMono = true)
+                  DetailRow(label = "Channels", value = track.channelsLabel)
+                  DetailRow(label = "Size", value = track.sizeFormatted, isMono = true)
+                  DetailRow(label = "Source", value = track.sourceLabel, isMono = true)
+                }
+              }
+            }
+          }
+        }
+
+        // Page Indicator Dots
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 2.dp)
+            .testTag("track_details_page_indicator"),
+          horizontalArrangement = Arrangement.Center,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          sections.forEachIndexed { index, section ->
+            val isSelected = pagerState.currentPage == index
+            Box(
+              modifier = Modifier
+                .padding(horizontal = 4.dp)
+                .size(width = if (isSelected) 18.dp else 6.dp, height = 6.dp)
+                .clip(CircleShape)
+                .background(
+                  if (isSelected) {
+                    MaterialTheme.colorScheme.primary
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                  }
+                )
+                .clickable {
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  coroutineScope.launch {
+                    pagerState.animateScrollToPage(index)
+                  }
+                }
+                .semantics {
+                  contentDescription = "Page ${index + 1}: ${section.title}"
+                  selected = isSelected
+                }
+                .testTag("track_details_dot_${section.name}"),
+            )
+          }
+        }
       }
     },
     confirmButton = {

@@ -86,4 +86,22 @@ class ChordBookScreenTest {
     composeTestRule.onNodeWithTag("catalog_search_overlay").assertDoesNotExist()
     composeTestRule.onNodeWithTag("chord_book_header_subtext").assertIsDisplayed()
   }
+
+  @Test
+  fun songsPillAndToolbarControls_displayAndSwitchTab() {
+    composeTestRule.setContent {
+      ToolboxTheme {
+        ChordBookScreen(tuningRepository = InMemoryGuitarTunerRepository())
+      }
+    }
+
+    composeTestRule.onNodeWithTag("chord_book_pill_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Songs").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("chord_book_dot_label_toggle").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("chord_book_enharmonic_toggle").assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("chord_book_tab_SONGBOOK").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("chord_book_songbook_list").assertIsDisplayed()
+  }
 }

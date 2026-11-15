@@ -226,4 +226,42 @@ class BluetoothGamepadScreenTest {
     assertTrue(activeHistory.contains(setOf(GamepadButton.DPAD_DOWN, GamepadButton.DPAD_RIGHT)))
     assertTrue(activeHistory.contains(setOf(GamepadButton.DPAD_RIGHT)))
   }
+
+  @Test
+  fun connectionScreen_displaysDemoGamepadOptionAndTriggersCallback() {
+    var demoStarted = false
+    val state = BluetoothRemoteUiState(
+      isBluetoothEnabled = false,
+      isHidRegistered = false,
+      devices = emptyList(),
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        Surface {
+          DeviceListContent(
+            state = state,
+            hasPermissions = false,
+            onRequestPermissions = {},
+            onEnableBluetooth = {},
+            onMakeDiscoverable = {},
+            onScan = {},
+            onStopScan = {},
+            onConnect = {},
+            onCancelConnect = {},
+            onDismissMessage = {},
+            title = "Bluetooth Gamepad",
+            icon = Icons.Default.SportsEsports,
+            onStartDemo = { demoStarted = true },
+          )
+        }
+      }
+    }
+
+    composeTestRule.onNodeWithText("Bluetooth Gamepad").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Offline simulator").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Demo Gamepad (HID Simulator)").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("bt_gamepad_start_demo_button").assertIsDisplayed().performClick()
+    assertTrue(demoStarted)
+  }
 }

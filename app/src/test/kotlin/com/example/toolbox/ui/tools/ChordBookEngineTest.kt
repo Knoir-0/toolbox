@@ -334,7 +334,7 @@ class ChordBookEngineTest {
   }
 
   @Test
-  fun chordBookTab_orderAndTitles_matchChordsScalesReverseSongbook() {
+  fun chordBookTab_orderAndTitles_matchChordsScalesReverseSongs() {
     assertEquals(
       listOf(
         ChordBookTab.CHORDS,
@@ -345,7 +345,7 @@ class ChordBookEngineTest {
       ChordBookTab.entries,
     )
     assertEquals(
-      listOf("Chords", "Scales", "Reverse", "Songbook"),
+      listOf("Chords", "Scales", "Reverse", "Songs"),
       ChordBookTab.entries.map { it.title },
     )
   }

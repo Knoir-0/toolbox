@@ -160,7 +160,7 @@ data class NamedColorSwatch(
 )
 
 object ColorMath {
-  private val presetSwatches = listOf(
+  val presetSwatches = listOf(
     NamedColorSwatch("Ocean Blue", "#23759B", 35, 117, 155),
     NamedColorSwatch("Crimson", "#DC143C", 220, 20, 60),
     NamedColorSwatch("Coral", "#FF6B57", 255, 107, 87),
@@ -175,7 +175,7 @@ object ColorMath {
     NamedColorSwatch("Rose", "#F43F5E", 244, 63, 94),
   )
 
-  private val namedReferenceCatalog = presetSwatches + listOf(
+  val namedReferenceCatalog = presetSwatches + listOf(
     NamedColorSwatch("Pure Red", "#FF0000", 255, 0, 0),
     NamedColorSwatch("Sunset Orange", "#F97316", 249, 115, 22),
     NamedColorSwatch("Gold", "#EAB308", 234, 179, 8),

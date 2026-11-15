@@ -61,6 +61,7 @@ import androidx.compose.material.icons.filled.CropLandscape
 import androidx.compose.material.icons.filled.CropPortrait
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -173,7 +174,7 @@ fun VideoEditorScreen(
   var metadata by remember { mutableStateOf(initialMetadataForPreview) }
   var editState by remember {
     mutableStateOf(
-      initialMetadataForPreview?.let { VideoEditState.initialForDuration(it.durationMs) }
+      initialMetadataForPreview?.let { VideoEditState.initialForDuration(it.durationMs, it.tags) }
         ?: VideoEditState()
     )
   }
@@ -248,7 +249,7 @@ fun VideoEditorScreen(
         return@launch
       }
       metadata = probed
-      editState = VideoEditState.initialForDuration(probed.durationMs)
+      editState = VideoEditState.initialForDuration(probed.durationMs, probed.tags)
       history.clear()
       historyRevision++
       playheadMs = 0L
@@ -550,7 +551,7 @@ fun VideoEditorScreen(
           },
           onResetAll = {
             applyCommittedEdit {
-              VideoEditState.initialForDuration(currentMetadata.durationMs)
+              VideoEditState.initialForDuration(currentMetadata.durationMs, currentMetadata.tags)
             }
             requestSeek(0L)
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -748,6 +749,39 @@ fun VideoEditorScreen(
                       )
                     }
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  },
+                )
+              }
+
+              VideoEditorMode.DATA -> {
+                VideoDataControls(
+                  metadata = currentMetadata,
+                  editState = editState,
+                  onTagsLiveChange = { updatedTags ->
+                    editState = editState.copy(metadataTags = updatedTags)
+                  },
+                  onClearTags = {
+                    applyCommittedEdit { state ->
+                      state.copy(metadataTags = VideoMetadataTags())
+                    }
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  },
+                  onResetTags = {
+                    applyCommittedEdit { state ->
+                      state.copy(metadataTags = state.initialMetadataTags)
+                    }
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  },
+                  onApplyTags = {
+                    val clean = editState.metadataTags.sanitized()
+                    pushUndoSnapshot(editState)
+                    editState = editState.copy(metadataTags = clean)
+                    if (currentMetadata.file.exists()) {
+                      coroutineScope.launch {
+                        VideoEditorEngine.writeVideoMetadataTags(currentMetadata.file, clean)
+                      }
+                    }
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                   },
                 )
               }
@@ -2338,6 +2372,199 @@ private fun VideoAdjustControls(
 }
 
 @Composable
+private fun VideoDataControls(
+  metadata: VideoMetadata,
+  editState: VideoEditState,
+  onTagsLiveChange: (VideoMetadataTags) -> Unit,
+  onClearTags: () -> Unit,
+  onResetTags: () -> Unit,
+  onApplyTags: () -> Unit,
+) {
+  val tags = editState.metadataTags
+  val canClear = !tags.isEmpty
+  val canReset = editState.hasMetadataChanges
+
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("video_metadata_panel"),
+    verticalArrangement = Arrangement.spacedBy(6.dp),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(max = 175.dp)
+        .verticalScroll(rememberScrollState()),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(
+          value = tags.title,
+          onValueChange = { onTagsLiveChange(tags.copy(title = it)) },
+          label = { Text("Title", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("video_metadata_title_input"),
+        )
+        OutlinedTextField(
+          value = tags.artist,
+          onValueChange = { onTagsLiveChange(tags.copy(artist = it)) },
+          label = { Text("Artist / Creator", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("video_metadata_artist_input"),
+        )
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(
+          value = tags.album,
+          onValueChange = { onTagsLiveChange(tags.copy(album = it)) },
+          label = { Text("Album / Show", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("video_metadata_album_input"),
+        )
+        OutlinedTextField(
+          value = tags.genre,
+          onValueChange = { onTagsLiveChange(tags.copy(genre = it)) },
+          label = { Text("Genre", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("video_metadata_genre_input"),
+        )
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(
+          value = tags.year,
+          onValueChange = { onTagsLiveChange(tags.copy(year = it)) },
+          label = { Text("Year", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("video_metadata_year_input"),
+        )
+        OutlinedTextField(
+          value = tags.location,
+          onValueChange = { onTagsLiveChange(tags.copy(location = it)) },
+          label = { Text("Location", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("video_metadata_location_input"),
+        )
+      }
+
+      OutlinedTextField(
+        value = tags.comment,
+        onValueChange = { onTagsLiveChange(tags.copy(comment = it)) },
+        label = { Text("Comment", style = MaterialTheme.typography.labelSmall) },
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodySmall,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("video_metadata_comment_input"),
+      )
+    }
+
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(
+          text = "${metadata.resolutionLabel} • ${metadata.frameRate.roundToInt()}fps • ${metadata.sizeFormatted}",
+          style = MaterialTheme.typography.labelSmall,
+          fontFamily = FontFamily.Monospace,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(
+          onClick = onClearTags,
+          enabled = canClear,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(32.dp)
+            .testTag("video_metadata_clear_button"),
+        ) {
+          Text("Clear", style = MaterialTheme.typography.labelSmall)
+        }
+      }
+
+      Spacer(modifier = Modifier.width(8.dp))
+
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        OutlinedButton(
+          onClick = onResetTags,
+          enabled = canReset,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(32.dp)
+            .testTag("video_metadata_reset_button"),
+        ) {
+          Text("Reset", style = MaterialTheme.typography.labelSmall)
+        }
+
+        Button(
+          onClick = onApplyTags,
+          enabled = canReset,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(32.dp)
+            .testTag("video_metadata_apply_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("Apply", style = MaterialTheme.typography.labelSmall)
+        }
+      }
+    }
+  }
+}
+
+@Composable
 private fun VideoModeSelectorRow(
   activeMode: VideoEditorMode,
   editState: VideoEditState,
@@ -2358,6 +2585,7 @@ private fun VideoModeSelectorRow(
         VideoEditorMode.TRANSFORM -> editState.hasTransformChanges
         VideoEditorMode.SPEED -> editState.hasSpeedChanges || editState.isMuted || abs(editState.volume - 1f) > 0.01f || editState.fadeInOut
         VideoEditorMode.ADJUST -> editState.hasColorChanges
+        VideoEditorMode.DATA -> editState.hasMetadataChanges
       }
       SegmentedButton(
         shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
@@ -2376,6 +2604,7 @@ private fun VideoModeSelectorRow(
               VideoEditorMode.TRANSFORM -> Icons.AutoMirrored.Filled.RotateRight
               VideoEditorMode.SPEED -> Icons.Default.Speed
               VideoEditorMode.ADJUST -> Icons.Default.Tune
+              VideoEditorMode.DATA -> Icons.Default.Info
             }
             Icon(
               imageVector = icon,

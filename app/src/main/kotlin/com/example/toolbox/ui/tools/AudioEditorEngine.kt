@@ -1,7 +1,12 @@
 package com.example.toolbox.ui.tools
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
+import com.arthenica.ffmpegkit.FFmpegKit
+import com.arthenica.ffmpegkit.FFprobeKit
+import com.arthenica.ffmpegkit.ReturnCode
 import java.io.BufferedOutputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
@@ -24,6 +29,64 @@ enum class AudioEditorMode(val displayName: String) {
   TRIM("Trim"),
   VOLUME_FADE("Volume"),
   SPEED_EFFECTS("Speed"),
+  DATA("Data"),
+}
+
+/**
+ * Editable audio metadata tags supported by the Audio Editor's `Data` tool.
+ */
+data class AudioMetadataTags(
+  val title: String = "",
+  val artist: String = "",
+  val album: String = "",
+  val genre: String = "",
+  val year: String = "",
+  val trackNumber: String = "",
+  val comment: String = "",
+) {
+  val isEmpty: Boolean
+    get() = title.isBlank() &&
+      artist.isBlank() &&
+      album.isBlank() &&
+      genre.isBlank() &&
+      year.isBlank() &&
+      trackNumber.isBlank() &&
+      comment.isBlank()
+
+  val populatedFieldCount: Int
+    get() = listOf(title, artist, album, genre, year, trackNumber, comment).count { it.isNotBlank() }
+
+  fun sanitized(): AudioMetadataTags {
+    fun clean(value: String, maxLen: Int = 256): String =
+      value.replace("\u0000", "")
+        .replace("\r", " ")
+        .replace("\n", " ")
+        .trim()
+        .take(maxLen)
+
+    return AudioMetadataTags(
+      title = clean(title),
+      artist = clean(artist),
+      album = clean(album),
+      genre = clean(genre, 128),
+      year = clean(year, 32),
+      trackNumber = clean(trackNumber, 32),
+      comment = clean(comment, 512),
+    )
+  }
+
+  fun toFfmpegMetadataMap(): Map<String, String> {
+    val clean = sanitized()
+    return buildMap {
+      if (clean.title.isNotEmpty()) put("title", clean.title)
+      if (clean.artist.isNotEmpty()) put("artist", clean.artist)
+      if (clean.album.isNotEmpty()) put("album", clean.album)
+      if (clean.genre.isNotEmpty()) put("genre", clean.genre)
+      if (clean.year.isNotEmpty()) put("date", clean.year)
+      if (clean.trackNumber.isNotEmpty()) put("track", clean.trackNumber)
+      if (clean.comment.isNotEmpty()) put("comment", clean.comment)
+    }
+  }
 }
 
 /**
@@ -109,6 +172,7 @@ data class AudioEditSnapshot(
   val buffer: AudioSampleBuffer,
   val trimStartFraction: Float = 0f,
   val trimEndFraction: Float = 1f,
+  val metadata: AudioMetadataTags = AudioMetadataTags(),
   val actionLabel: String = "Original",
 )
 
@@ -525,21 +589,85 @@ object AudioEditorEngine {
   }
 
   /**
-   * Writes [buffer] as a standard 16-bit PCM RIFF WAVE file using [AudioRecorderEngine.createWavHeader].
+   * Builds a standard RIFF `LIST` `INFO` chunk containing non-empty [metadata] fields.
+   * Returns an empty array when [metadata] has no populated fields.
+   */
+  fun createListInfoChunk(metadata: AudioMetadataTags): ByteArray {
+    val clean = metadata.sanitized()
+    if (clean.isEmpty) return ByteArray(0)
+
+    val entries = listOf(
+      "INAM" to clean.title,
+      "IART" to clean.artist,
+      "IPRD" to clean.album,
+      "IGNR" to clean.genre,
+      "ICRD" to clean.year,
+      "ITRK" to clean.trackNumber,
+      "ICMT" to clean.comment,
+    ).filter { it.second.isNotEmpty() }
+
+    if (entries.isEmpty()) return ByteArray(0)
+
+    val subchunksOut = ByteArrayOutputStream()
+    for ((fourCc, value) in entries) {
+      val idBytes = fourCc.toByteArray(Charsets.US_ASCII)
+      val payload = (value + "\u0000").toByteArray(Charsets.UTF_8)
+      val sizeBuf = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(payload.size).array()
+      subchunksOut.write(idBytes, 0, 4)
+      subchunksOut.write(sizeBuf, 0, 4)
+      subchunksOut.write(payload)
+      if (payload.size % 2 == 1) {
+        subchunksOut.write(0)
+      }
+    }
+
+    val subchunkBytes = subchunksOut.toByteArray()
+    val listDataSize = 4 + subchunkBytes.size
+    val out = ByteBuffer.allocate(8 + listDataSize).order(ByteOrder.LITTLE_ENDIAN)
+    out.put("LIST".toByteArray(Charsets.US_ASCII))
+    out.putInt(listDataSize)
+    out.put("INFO".toByteArray(Charsets.US_ASCII))
+    out.put(subchunkBytes)
+    return out.array()
+  }
+
+  /**
+   * Builds FFmpeg `-metadata key=value` argument pairs for [metadata].
+   */
+  fun buildFfmpegMetadataArgs(metadata: AudioMetadataTags): List<String> {
+    val map = metadata.toFfmpegMetadataMap()
+    if (map.isEmpty()) return emptyList()
+    return buildList {
+      for ((key, value) in map) {
+        add("-metadata")
+        add("$key=$value")
+      }
+    }
+  }
+
+  /**
+   * Writes [buffer] as a standard 16-bit PCM RIFF WAVE file using [AudioRecorderEngine.createWavHeader],
+   * and appends a RIFF `LIST` `INFO` metadata chunk when [metadata] is non-empty.
    */
   fun writeWavFile(
     buffer: AudioSampleBuffer,
     outputFile: File,
+    metadata: AudioMetadataTags = AudioMetadataTags(),
   ): Boolean {
     return try {
       outputFile.parentFile?.mkdirs()
       val pcmBytesLength = buffer.samples.size * 2L
+      val listChunk = createListInfoChunk(metadata)
       val header = AudioRecorderEngine.createWavHeader(
         pcmDataLength = pcmBytesLength,
         sampleRate = buffer.sampleRate,
         channels = buffer.safeChannels,
         bitsPerSample = 16,
       )
+      if (listChunk.isNotEmpty()) {
+        val totalRiffDataLen = (pcmBytesLength + 36L + listChunk.size).toInt()
+        ByteBuffer.wrap(header, 4, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(totalRiffDataLen)
+      }
       BufferedOutputStream(FileOutputStream(outputFile)).use { out ->
         out.write(header)
         val chunkFrames = 4096
@@ -554,10 +682,223 @@ object AudioEditorEngine {
           out.write(byteChunk.array(), 0, count * 2)
           offset += count
         }
+        if (listChunk.isNotEmpty()) {
+          out.write(listChunk)
+        }
         out.flush()
       }
       outputFile.exists() && outputFile.length() >= 44L
     } catch (_: Exception) {
+      false
+    }
+  }
+
+  /**
+   * Reads RIFF `LIST` `INFO` metadata tags from a WAV file if present.
+   */
+  fun readWavMetadata(file: File): AudioMetadataTags {
+    if (!file.exists() || file.length() < 44L) return AudioMetadataTags()
+    return try {
+      RandomAccessFile(file, "r").use { raf ->
+        val riffHeader = ByteArray(12)
+        raf.readFully(riffHeader)
+        val riff = String(riffHeader, 0, 4, Charsets.US_ASCII)
+        val wave = String(riffHeader, 8, 4, Charsets.US_ASCII)
+        if (riff != "RIFF" || wave != "WAVE") return AudioMetadataTags()
+
+        var title = ""
+        var artist = ""
+        var album = ""
+        var genre = ""
+        var year = ""
+        var trackNumber = ""
+        var comment = ""
+
+        while (raf.filePointer + 8L <= raf.length()) {
+          val chunkHeader = ByteArray(8)
+          raf.readFully(chunkHeader)
+          val chunkId = String(chunkHeader, 0, 4, Charsets.US_ASCII)
+          val chunkSize = ByteBuffer.wrap(chunkHeader, 4, 4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .int
+            .toLong() and 0xFFFFFFFFL
+          val chunkStart = raf.filePointer
+
+          if (chunkId == "LIST" && chunkSize >= 4L && chunkStart + chunkSize <= raf.length()) {
+            val typeBytes = ByteArray(4)
+            raf.readFully(typeBytes)
+            val listType = String(typeBytes, 0, 4, Charsets.US_ASCII)
+            if (listType == "INFO") {
+              val listEnd = chunkStart + chunkSize
+              while (raf.filePointer + 8L <= listEnd) {
+                val subHeader = ByteArray(8)
+                raf.readFully(subHeader)
+                val subId = String(subHeader, 0, 4, Charsets.US_ASCII)
+                val subSize = (
+                  ByteBuffer.wrap(subHeader, 4, 4)
+                    .order(ByteOrder.LITTLE_ENDIAN)
+                    .int
+                    .toLong() and 0xFFFFFFFFL
+                  ).coerceAtMost(listEnd - raf.filePointer)
+                val subStart = raf.filePointer
+                if (subSize in 1L..8192L) {
+                  val subBytes = ByteArray(subSize.toInt())
+                  raf.readFully(subBytes)
+                  val text = String(subBytes, Charsets.UTF_8)
+                    .trimEnd('\u0000')
+                    .trim()
+                  when (subId) {
+                    "INAM" -> title = text
+                    "IART" -> artist = text
+                    "IPRD" -> album = text
+                    "IGNR" -> genre = text
+                    "ICRD" -> year = text
+                    "ITRK", "IPRT" -> trackNumber = text
+                    "ICMT" -> comment = text
+                  }
+                }
+                val nextSub = subStart + subSize + (if (subSize % 2L == 1L) 1L else 0L)
+                if (nextSub <= subStart || nextSub > listEnd) break
+                raf.seek(nextSub)
+              }
+            }
+          }
+
+          val nextPos = chunkStart + chunkSize + (if (chunkSize % 2L == 1L) 1L else 0L)
+          if (nextPos <= chunkStart || nextPos > raf.length()) break
+          raf.seek(nextPos)
+        }
+
+        AudioMetadataTags(
+          title = title,
+          artist = artist,
+          album = album,
+          genre = genre,
+          year = year,
+          trackNumber = trackNumber,
+          comment = comment,
+        ).sanitized()
+      }
+    } catch (_: Throwable) {
+      AudioMetadataTags()
+    }
+  }
+
+  /**
+   * Reads audio metadata tags from [file] using RIFF `LIST` `INFO` parsing for WAV files,
+   * supplemented by Android [MediaMetadataRetriever] and [FFprobeKit] for all audio formats.
+   */
+  fun readAudioMetadata(file: File): AudioMetadataTags {
+    if (!file.exists() || !file.isFile || file.length() <= 0L) return AudioMetadataTags()
+
+    var tags = readWavMetadata(file)
+
+    // Supplement via MediaMetadataRetriever when available
+    val retriever = try {
+      MediaMetadataRetriever()
+    } catch (_: Throwable) {
+      null
+    }
+    if (retriever != null) {
+      try {
+        retriever.setDataSource(file.absolutePath)
+        val mmrTitle = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)?.trim().orEmpty()
+        val mmrArtist = (
+          retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+            ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
+            ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_AUTHOR)
+          )?.trim().orEmpty()
+        val mmrAlbum = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)?.trim().orEmpty()
+        val mmrGenre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE)?.trim().orEmpty()
+        val mmrYear = (
+          retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)
+            ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
+          )?.trim().orEmpty()
+        val mmrTrack = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)?.trim().orEmpty()
+
+        tags = tags.copy(
+          title = tags.title.ifBlank { mmrTitle },
+          artist = tags.artist.ifBlank { mmrArtist },
+          album = tags.album.ifBlank { mmrAlbum },
+          genre = tags.genre.ifBlank { mmrGenre },
+          year = tags.year.ifBlank { mmrYear },
+          trackNumber = tags.trackNumber.ifBlank { mmrTrack },
+        )
+      } catch (_: Throwable) {
+      } finally {
+        try {
+          retriever.release()
+        } catch (_: Throwable) {}
+      }
+    }
+
+    // Supplement via FFprobeKit format tags (e.g. comment, Vorbis/ID3/MP4 tags) when available
+    try {
+      val session = FFprobeKit.getMediaInformation(file.absolutePath)
+      val formatTags = session?.mediaInformation?.tags
+      if (formatTags != null) {
+        fun optTag(vararg keys: String): String {
+          for (k in keys) {
+            val v = formatTags.optString(k, "").trim()
+            if (v.isNotEmpty()) return v
+            val upper = formatTags.optString(k.uppercase(Locale.ROOT), "").trim()
+            if (upper.isNotEmpty()) return upper
+          }
+          return ""
+        }
+        tags = tags.copy(
+          title = tags.title.ifBlank { optTag("title", "INAM") },
+          artist = tags.artist.ifBlank { optTag("artist", "album_artist", "author", "IART") },
+          album = tags.album.ifBlank { optTag("album", "IPRD") },
+          genre = tags.genre.ifBlank { optTag("genre", "IGNR") },
+          year = tags.year.ifBlank { optTag("date", "year", "ICRD") },
+          trackNumber = tags.trackNumber.ifBlank { optTag("track", "ITRK") },
+          comment = tags.comment.ifBlank { optTag("comment", "description", "ICMT") },
+        )
+      }
+    } catch (_: Throwable) {
+      // FFprobeKit native libraries may not be loaded in local JVM tests
+    }
+
+    return tags.sanitized()
+  }
+
+  /**
+   * Writes [metadata] tags into an existing audio [file] in place.
+   * Supports direct lossless RIFF `LIST` `INFO` chunk updates for WAV files and FFmpeg stream-copy
+   * metadata tagging for compressed formats.
+   */
+  fun writeAudioMetadata(file: File, metadata: AudioMetadataTags): Boolean {
+    if (!file.exists() || !file.isFile) return false
+    val clean = metadata.sanitized()
+    readWavFile(file)?.let { wavBuffer ->
+      return writeWavFile(wavBuffer, file, clean)
+    }
+    return try {
+      val tempOut = File(file.parentFile ?: File("."), ".meta_${System.nanoTime()}_${file.name}")
+      try {
+        val args = mutableListOf(
+          "-y",
+          "-i",
+          file.absolutePath,
+          "-map_metadata",
+          "-1",
+          "-c",
+          "copy",
+        )
+        args.addAll(buildFfmpegMetadataArgs(clean))
+        args.add(tempOut.absolutePath)
+        val session = FFmpegKit.executeWithArguments(args.toTypedArray())
+        if (ReturnCode.isSuccess(session.returnCode) && tempOut.exists() && tempOut.length() > 0L) {
+          tempOut.copyTo(file, overwrite = true)
+          true
+        } else {
+          false
+        }
+      } finally {
+        tempOut.delete()
+      }
+    } catch (_: Throwable) {
       false
     }
   }
@@ -786,8 +1127,10 @@ object AudioEditorEngine {
     outputFile: File,
     format: AudioExportFormat,
     overwriteExisting: Boolean = false,
+    metadata: AudioMetadataTags = AudioMetadataTags(),
   ): Result<File> = withContext(Dispatchers.IO) {
     try {
+      val cleanMetadata = metadata.sanitized()
       val outDir = outputFile.parentFile ?: AudioRecorderEngine.getDefaultAudioDirectory(context)
       outDir.mkdirs()
       val desiredStem = FileConverterEngine.extractFileStem(outputFile.name)
@@ -802,7 +1145,7 @@ object AudioEditorEngine {
             targetFormat = ConvertibleFormat.WAV,
           )
         }
-        return@withContext if (writeWavFile(buffer, targetWav)) {
+        return@withContext if (writeWavFile(buffer, targetWav, cleanMetadata)) {
           Result.success(targetWav)
         } else {
           Result.failure(IllegalStateException("Failed to write WAV file."))
@@ -811,7 +1154,7 @@ object AudioEditorEngine {
 
       val tempWav = File.createTempFile("audio_editor_export_", ".wav", context.cacheDir)
       try {
-        if (!writeWavFile(buffer, tempWav)) {
+        if (!writeWavFile(buffer, tempWav, cleanMetadata)) {
           return@withContext Result.failure(IllegalStateException("Failed to stage temporary WAV for encoding."))
         }
         val convertDir = if (overwriteExisting) context.cacheDir else outDir
@@ -824,6 +1167,9 @@ object AudioEditorEngine {
         )
         val stagedFile = convResult.outputFile
         if (convResult.success && stagedFile != null && stagedFile.exists() && stagedFile.length() > 0L) {
+          if (!cleanMetadata.isEmpty) {
+            writeAudioMetadata(stagedFile, cleanMetadata)
+          }
           if (overwriteExisting) {
             val destination = File(outDir, "$desiredStem.${format.extension}")
             stagedFile.copyTo(destination, overwrite = true)

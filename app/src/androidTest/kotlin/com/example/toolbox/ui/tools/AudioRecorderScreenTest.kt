@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -160,10 +162,55 @@ class AudioRecorderScreenTest {
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("audio_editor_screen").assertIsDisplayed()
-    composeTestRule.onNodeWithText(wavFile.name, substring = true).assertIsDisplayed()
+    composeTestRule.onAllNodesWithText(wavFile.name, substring = true).onFirst().assertIsDisplayed()
 
     composeTestRule.onNodeWithTag("action_navigate_back").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("audio_recorder_screen").assertIsDisplayed()
+  }
+
+  @Test
+  fun deviceAudioFab_isSmallerAndPositionedToRightOfMicFab_andRecordsDeviceAudio() {
+    composeTestRule.setContent {
+      ToolboxTheme {
+        AudioRecorderScreen(initialDirectory = testAudioDir)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    val micFabNode = composeTestRule.onNodeWithTag("audio_recorder_fab")
+    val deviceFabNode = composeTestRule.onNodeWithTag("device_audio_recorder_fab")
+
+    micFabNode.assertIsDisplayed()
+    deviceFabNode
+      .assertIsDisplayed()
+      .assertContentDescriptionEquals("Record device audio")
+    composeTestRule.onNodeWithTag("fab_device_audio_icon", useUnmergedTree = true).assertIsDisplayed()
+
+    val micBounds = micFabNode.fetchSemanticsNode().boundsInRoot
+    val deviceBounds = deviceFabNode.fetchSemanticsNode().boundsInRoot
+
+    // Verify device audio FAB is smaller than main microphone FAB and positioned to its right
+    assertTrue("Device audio FAB should be smaller than mic FAB", deviceBounds.width < micBounds.width)
+    assertTrue("Device audio FAB should be to the right of mic FAB", deviceBounds.left >= micBounds.right)
+
+    // Tap the device audio FAB to start recording device audio
+    deviceFabNode.performClick()
+    composeTestRule.waitForIdle()
+
+    deviceFabNode.assertContentDescriptionEquals("Stop device audio recording")
+    composeTestRule.onNodeWithTag("fab_device_stop_icon", useUnmergedTree = true).assertIsDisplayed()
+    composeTestRule.onNodeWithText("● RECORDING DEVICE AUDIO").assertIsDisplayed()
+
+    // Tap the device audio FAB again to stop and save the device audio recording
+    deviceFabNode.performClick()
+    composeTestRule.waitForIdle()
+
+    val savedFiles = testAudioDir.listFiles()?.filter { it.isFile }.orEmpty()
+    assertTrue("Expected a saved device audio recording file", savedFiles.isNotEmpty())
+    val savedFile = savedFiles.first()
+    assertTrue(savedFile.name.startsWith("Recording_Device_"))
+    composeTestRule.onNodeWithTag("recording_item_${savedFile.name}").assertIsDisplayed()
+    composeTestRule.onNodeWithText("DEVICE").assertIsDisplayed()
   }
 }

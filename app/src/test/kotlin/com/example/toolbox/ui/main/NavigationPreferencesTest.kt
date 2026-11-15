@@ -67,6 +67,7 @@ class NavigationPreferencesTest {
       Tool.METRONOME,
       Tool.COLOR_PICKER,
       Tool.OBD2_SCANNER,
+      Tool.SEARCH,
       Tool.SETTINGS,
     )
     assertEquals(expectedDefaultOrder, Tool.entries)
@@ -77,7 +78,7 @@ class NavigationPreferencesTest {
 
   @Test
   fun parseToolOrder_validSavedOrder_preservesOrder() {
-    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,NOTES,CHORD_BOOK,PLANT_SCHEDULE,CAMERA,AUDIO_EDITOR,VIDEO_EDITOR,BLUETOOTH_GAMEPAD,DECIBEL_METER,ARCHIVE,MUSIC,PDF_VIEWER,RECIPES,OBD2_SCANNER,SETTINGS"
+    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,NOTES,CHORD_BOOK,PLANT_SCHEDULE,CAMERA,AUDIO_EDITOR,VIDEO_EDITOR,BLUETOOTH_GAMEPAD,DECIBEL_METER,ARCHIVE,MUSIC,PDF_VIEWER,RECIPES,OBD2_SCANNER,SEARCH,SETTINGS"
     val result = parseToolOrder(raw)
     val expected = listOf(
       Tool.IMAGE_EDITOR,
@@ -107,6 +108,7 @@ class NavigationPreferencesTest {
       Tool.PDF_VIEWER,
       Tool.RECIPES,
       Tool.OBD2_SCANNER,
+      Tool.SEARCH,
       Tool.SETTINGS,
     )
     assertEquals(expected, result)
@@ -198,6 +200,7 @@ class NavigationPreferencesTest {
       Tool.PDF_VIEWER,
       Tool.RECIPE_BOOK,
       Tool.OBD2_SCANNER,
+      Tool.SEARCH,
       Tool.SETTINGS,
     )
     repo.setToolOrder(customOrder)
@@ -247,6 +250,7 @@ class NavigationPreferencesTest {
       Tool.PDF_VIEWER,
       Tool.RECIPE_BOOK,
       Tool.OBD2_SCANNER,
+      Tool.SEARCH,
       Tool.SETTINGS,
     )
     repo.setToolOrder(customOrder)

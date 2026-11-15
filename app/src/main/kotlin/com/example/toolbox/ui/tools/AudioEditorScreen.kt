@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
@@ -45,6 +46,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
@@ -174,12 +176,21 @@ fun AudioEditorScreen(
     }
   }
 
+  val resolvedInitialMetadata = remember(initialFile) {
+    initialFile?.let { file ->
+      if (file.exists()) AudioEditorEngine.readAudioMetadata(file) else AudioMetadataTags()
+    } ?: AudioMetadataTags()
+  }
+
   // Undo/redo history shared from ImageEditorEngine
   val history = remember { ImageEditorHistory<AudioEditSnapshot>(maxDepth = 15) }
   var historyVersion by remember { mutableIntStateOf(0) }
 
   var originalBuffer by remember(resolvedInitialBuffer) { mutableStateOf<AudioSampleBuffer?>(resolvedInitialBuffer) }
   var currentBuffer by remember(resolvedInitialBuffer) { mutableStateOf<AudioSampleBuffer?>(resolvedInitialBuffer) }
+  var originalMetadata by remember(resolvedInitialMetadata) { mutableStateOf(resolvedInitialMetadata) }
+  var currentMetadata by remember(resolvedInitialMetadata) { mutableStateOf(resolvedInitialMetadata) }
+  var draftMetadata by remember(resolvedInitialMetadata) { mutableStateOf(resolvedInitialMetadata) }
   var sourceFile by remember(initialFile) { mutableStateOf<File?>(initialFile) }
   var sourceFileName by remember(initialFile, initialFileName) {
     mutableStateOf(initialFile?.name ?: initialFileName)
@@ -238,12 +249,16 @@ fun AudioEditorScreen(
   val hasVolumeFadeChanges =
     abs(volumeGainPercent - 100f) > 0.5f || fadeInSeconds > 0.05f || fadeOutSeconds > 0.05f
   val hasSpeedChanges = abs(speedMultiplier - 1f) >= 0.02f
+  val hasDataChanges =
+    draftMetadata.sanitized() != originalMetadata.sanitized() ||
+      currentMetadata.sanitized() != originalMetadata.sanitized()
   val hasAnyChanges =
     canUndo ||
       currentBuffer != originalBuffer ||
       hasTrimChanges ||
       hasVolumeFadeChanges ||
-      hasSpeedChanges
+      hasSpeedChanges ||
+      hasDataChanges
 
   fun performWithDiscardCheck(action: () -> Unit) {
     if (currentBuffer != null && hasAnyChanges) {
@@ -259,11 +274,15 @@ fun AudioEditorScreen(
     name: String,
     file: File? = null,
     banner: String? = null,
+    metadata: AudioMetadataTags = file?.let { AudioEditorEngine.readAudioMetadata(it) } ?: AudioMetadataTags(),
   ) {
     stopPlayback()
     history.clear()
     originalBuffer = buffer
     currentBuffer = buffer
+    originalMetadata = metadata
+    currentMetadata = metadata
+    draftMetadata = metadata
     sourceFile = file
     sourceFileName = name
     trimStartFraction = 0f
@@ -281,6 +300,7 @@ fun AudioEditorScreen(
     newBuffer: AudioSampleBuffer,
     actionDescription: String,
     resetSelection: Boolean = true,
+    newMetadata: AudioMetadataTags = draftMetadata.sanitized(),
   ) {
     val prev = currentBuffer ?: return
     stopPlayback()
@@ -289,10 +309,13 @@ fun AudioEditorScreen(
         buffer = prev,
         trimStartFraction = trimStartFraction,
         trimEndFraction = trimEndFraction,
+        metadata = currentMetadata,
         actionLabel = actionDescription,
       )
     )
     currentBuffer = newBuffer
+    currentMetadata = newMetadata
+    draftMetadata = newMetadata
     if (resetSelection) {
       trimStartFraction = 0f
       trimEndFraction = 1f
@@ -531,6 +554,7 @@ fun AudioEditorScreen(
                 buffer = active,
                 trimStartFraction = trimStartFraction,
                 trimEndFraction = trimEndFraction,
+                metadata = draftMetadata.sanitized(),
               )
             )
             if (prev != null) {
@@ -538,6 +562,8 @@ fun AudioEditorScreen(
               trimStartFraction = prev.trimStartFraction
               trimEndFraction = prev.trimEndFraction
               playheadFraction = prev.trimStartFraction
+              currentMetadata = prev.metadata
+              draftMetadata = prev.metadata
               statusBannerText = "Undid edit"
               historyVersion++
               haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -551,6 +577,7 @@ fun AudioEditorScreen(
                 buffer = active,
                 trimStartFraction = trimStartFraction,
                 trimEndFraction = trimEndFraction,
+                metadata = draftMetadata.sanitized(),
               )
             )
             if (next != null) {
@@ -558,6 +585,8 @@ fun AudioEditorScreen(
               trimStartFraction = next.trimStartFraction
               trimEndFraction = next.trimEndFraction
               playheadFraction = next.trimStartFraction
+              currentMetadata = next.metadata
+              draftMetadata = next.metadata
               statusBannerText = "Redid edit"
               historyVersion++
               haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -568,6 +597,9 @@ fun AudioEditorScreen(
               stopPlayback()
               currentBuffer = null
               originalBuffer = null
+              originalMetadata = AudioMetadataTags()
+              currentMetadata = AudioMetadataTags()
+              draftMetadata = AudioMetadataTags()
               sourceFile = null
               history.clear()
               statusBannerText = null
@@ -678,7 +710,7 @@ fun AudioEditorScreen(
                   "${FileConverterEngine.extractFileStem(sourceFileName)}_edited.wav",
                 )
                 val ok = withContext(Dispatchers.IO) {
-                  AudioEditorEngine.writeWavFile(effectiveBuf, tempShareFile)
+                  AudioEditorEngine.writeWavFile(effectiveBuf, tempShareFile, draftMetadata.sanitized())
                 }
                 isBusy = false
                 if (ok) {
@@ -700,7 +732,11 @@ fun AudioEditorScreen(
               fadeInSeconds = 0f
               fadeOutSeconds = 0f
               speedMultiplier = 1.0f
-              commitEdit(orig, "Reset to original audio")
+              commitEdit(
+                newBuffer = orig,
+                actionDescription = "Reset to original audio",
+                newMetadata = originalMetadata,
+              )
             },
           )
 
@@ -883,6 +919,44 @@ fun AudioEditorScreen(
                     },
                   )
                 }
+
+                AudioEditorMode.DATA -> {
+                  AudioDataControls(
+                    buffer = activeBuf,
+                    metadata = draftMetadata,
+                    originalMetadata = originalMetadata,
+                    committedMetadata = currentMetadata,
+                    onMetadataChange = { updated -> draftMetadata = updated },
+                    onClearMetadata = {
+                      draftMetadata = AudioMetadataTags()
+                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    },
+                    onResetMetadata = {
+                      draftMetadata = originalMetadata
+                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    },
+                    onApplyMetadata = {
+                      val clean = draftMetadata.sanitized()
+                      commitEdit(
+                        newBuffer = activeBuf,
+                        actionDescription = if (clean.isEmpty) {
+                          "Cleared audio metadata tags"
+                        } else {
+                          "Updated audio metadata (${clean.populatedFieldCount} ${if (clean.populatedFieldCount == 1) "field" else "fields"})"
+                        },
+                        resetSelection = false,
+                        newMetadata = clean,
+                      )
+                      sourceFile?.let { file ->
+                        if (file.exists() && file.extension.equals("wav", ignoreCase = true)) {
+                          coroutineScope.launch(Dispatchers.IO) {
+                            AudioEditorEngine.writeAudioMetadata(file, clean)
+                          }
+                        }
+                      }
+                    },
+                  )
+                }
               }
             }
           }
@@ -895,6 +969,7 @@ fun AudioEditorScreen(
             hasTrimEdits = hasTrimChanges,
             hasVolumeFadeEdits = hasVolumeFadeChanges,
             hasSpeedEdits = hasSpeedChanges,
+            hasDataEdits = hasDataChanges,
             onSelectMode = { mode ->
               activeMode = mode
               haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -1031,27 +1106,32 @@ fun AudioEditorScreen(
           } else {
             exportFormat
           }
+          val effectiveMetadata = draftMetadata.sanitized()
           val result = AudioEditorEngine.exportAudioBuffer(
             context = context,
             buffer = previewEffectiveBuffer,
             outputFile = targetFile,
             format = resolvedFormat,
             overwriteExisting = overwriteOriginal && sourceFile != null,
+            metadata = effectiveMetadata,
           )
           isBusy = false
           result.onSuccess { savedFile ->
             showExportDialog = false
-            // Commit any pending slider/handle adjustments into the editor state
-            if (previewEffectiveBuffer != exportBuf) {
+            // Commit any pending slider/handle/metadata adjustments into the editor state
+            if (previewEffectiveBuffer != exportBuf || effectiveMetadata != currentMetadata) {
               history.push(
                 AudioEditSnapshot(
                   buffer = exportBuf,
                   trimStartFraction = trimStartFraction,
                   trimEndFraction = trimEndFraction,
+                  metadata = currentMetadata,
                   actionLabel = "Saved edits",
                 )
               )
               currentBuffer = previewEffectiveBuffer
+              currentMetadata = effectiveMetadata
+              draftMetadata = effectiveMetadata
               trimStartFraction = 0f
               trimEndFraction = 1f
               playheadFraction = 0f
@@ -2286,6 +2366,211 @@ private fun SpeedAndReverseControls(
   }
 }
 
+@Composable
+private fun AudioDataControls(
+  buffer: AudioSampleBuffer,
+  metadata: AudioMetadataTags,
+  originalMetadata: AudioMetadataTags,
+  committedMetadata: AudioMetadataTags,
+  onMetadataChange: (AudioMetadataTags) -> Unit,
+  onClearMetadata: () -> Unit,
+  onResetMetadata: () -> Unit,
+  onApplyMetadata: () -> Unit,
+) {
+  val hasUncommittedMetadata = metadata.sanitized() != committedMetadata.sanitized()
+  val canResetToOriginal = metadata.sanitized() != originalMetadata.sanitized()
+  val canClear = !metadata.isEmpty
+  val chLabel = if (buffer.safeChannels == 2) "Stereo" else "Mono"
+
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("audio_metadata_panel"),
+    verticalArrangement = Arrangement.spacedBy(6.dp),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(max = 175.dp)
+        .verticalScroll(rememberScrollState()),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(
+          value = metadata.title,
+          onValueChange = { onMetadataChange(metadata.copy(title = it)) },
+          label = { Text("Title", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("audio_metadata_title_input"),
+        )
+        OutlinedTextField(
+          value = metadata.artist,
+          onValueChange = { onMetadataChange(metadata.copy(artist = it)) },
+          label = { Text("Artist", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("audio_metadata_artist_input"),
+        )
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(
+          value = metadata.album,
+          onValueChange = { onMetadataChange(metadata.copy(album = it)) },
+          label = { Text("Album", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("audio_metadata_album_input"),
+        )
+        OutlinedTextField(
+          value = metadata.genre,
+          onValueChange = { onMetadataChange(metadata.copy(genre = it)) },
+          label = { Text("Genre", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("audio_metadata_genre_input"),
+        )
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(
+          value = metadata.year,
+          onValueChange = { onMetadataChange(metadata.copy(year = it)) },
+          label = { Text("Year", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("audio_metadata_year_input"),
+        )
+        OutlinedTextField(
+          value = metadata.trackNumber,
+          onValueChange = { onMetadataChange(metadata.copy(trackNumber = it)) },
+          label = { Text("Track #", style = MaterialTheme.typography.labelSmall) },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.bodySmall,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier
+            .weight(1f)
+            .testTag("audio_metadata_track_input"),
+        )
+      }
+
+      OutlinedTextField(
+        value = metadata.comment,
+        onValueChange = { onMetadataChange(metadata.copy(comment = it)) },
+        label = { Text("Comment", style = MaterialTheme.typography.labelSmall) },
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodySmall,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("audio_metadata_comment_input"),
+      )
+    }
+
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(
+          text = "${buffer.sampleRate} Hz • $chLabel • 16-bit",
+          style = MaterialTheme.typography.labelSmall,
+          fontFamily = FontFamily.Monospace,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(
+          onClick = onClearMetadata,
+          enabled = canClear,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("audio_metadata_clear_button"),
+        ) {
+          Text(
+            text = "Clear",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+      }
+
+      Spacer(modifier = Modifier.width(8.dp))
+
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        OutlinedButton(
+          onClick = onResetMetadata,
+          enabled = canResetToOriginal,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("audio_metadata_reset_button"),
+        ) {
+          Text(
+            text = "Reset",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+
+        Button(
+          onClick = onApplyMetadata,
+          enabled = hasUncommittedMetadata,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("audio_metadata_apply_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(
+            text = "Apply",
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+      }
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Bottom Mode Selector Row (aligned with ModeSelectorRow & VideoModeSelectorRow)
 // ---------------------------------------------------------------------------
@@ -2296,6 +2581,7 @@ private fun AudioEditorModeSelector(
   hasTrimEdits: Boolean,
   hasVolumeFadeEdits: Boolean,
   hasSpeedEdits: Boolean,
+  hasDataEdits: Boolean = false,
   onSelectMode: (AudioEditorMode) -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -2312,11 +2598,13 @@ private fun AudioEditorModeSelector(
         AudioEditorMode.TRIM -> hasTrimEdits
         AudioEditorMode.VOLUME_FADE -> hasVolumeFadeEdits
         AudioEditorMode.SPEED_EFFECTS -> hasSpeedEdits
+        AudioEditorMode.DATA -> hasDataEdits
       }
       val icon = when (mode) {
         AudioEditorMode.TRIM -> Icons.Default.ContentCut
         AudioEditorMode.VOLUME_FADE -> Icons.AutoMirrored.Filled.VolumeUp
         AudioEditorMode.SPEED_EFFECTS -> Icons.Default.Speed
+        AudioEditorMode.DATA -> Icons.Default.Info
       }
       SegmentedButton(
         shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),

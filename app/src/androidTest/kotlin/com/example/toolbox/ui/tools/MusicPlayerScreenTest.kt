@@ -8,6 +8,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
@@ -132,20 +133,57 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("playlist_list_view").assertIsDisplayed()
     composeTestRule.onNodeWithText("Favorites").assertIsDisplayed()
     composeTestRule.onNodeWithText("Most Played").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Recently Played").assertIsDisplayed()
 
     composeTestRule.onNodeWithTag("music_view_mode_card").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("playlist_card_view").assertIsDisplayed()
 
-    // 6. Integrated Toolbar Search searches the currently selected view (Playlists)
+    // 6. Integrated Toolbar Search searches the currently selected view (Playlists) and hides toolbar icons when searching
+    composeTestRule.onNodeWithTag("music_view_mode_toggle").assertIsDisplayed()
     composeTestRule.onNodeWithTag("music_search_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("music_search_input").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_view_mode_toggle").assertDoesNotExist()
     composeTestRule.onNodeWithTag("music_search_input").performTextInput("Fav")
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("Favorites").assertIsDisplayed()
     composeTestRule.onNodeWithTag("music_search_toggle").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_view_mode_toggle").assertIsDisplayed()
+
+    // 7. Sort button is pinned on the right inside the pill bar, and press and hold reorders section tabs
+    composeTestRule.onNodeWithTag("music_sort_button").assertIsDisplayed()
+    val barBounds = composeTestRule.onNodeWithTag("music_category_bar").fetchSemanticsNode().boundsInRoot
+    val sortBounds = composeTestRule.onNodeWithTag("music_sort_button").fetchSemanticsNode().boundsInRoot
+    assertTrue(sortBounds.top >= barBounds.top - 1f && sortBounds.bottom <= barBounds.bottom + 1f)
+    assertTrue(sortBounds.center.x > barBounds.center.x)
+    val artistsBoundsBefore = composeTestRule.onNodeWithTag("music_tab_ARTISTS").fetchSemanticsNode().boundsInRoot
+    val songsBoundsBefore = composeTestRule.onNodeWithTag("music_tab_SONGS").fetchSemanticsNode().boundsInRoot
+    assertTrue(artistsBoundsBefore.left < songsBoundsBefore.left)
+
+    val startLocal = Offset(
+      x = songsBoundsBefore.center.x - barBounds.left,
+      y = songsBoundsBefore.center.y - barBounds.top,
+    )
+    val endLocal = Offset(
+      x = artistsBoundsBefore.center.x - barBounds.left,
+      y = artistsBoundsBefore.center.y - barBounds.top,
+    )
+    composeTestRule.onNodeWithTag("music_category_bar").performTouchInput {
+      down(startLocal)
+      advanceEventTime(viewConfiguration.longPressTimeoutMillis + 100L)
+      moveTo(endLocal)
+      up()
+    }
+    composeTestRule.waitForIdle()
+
+    val session = MusicPlayerEngine.getActivePlaybackSession()
+    assertNotNull(session)
+    assertEquals(MusicLibraryTab.SONGS, session!!.tabOrder.first())
+    val artistsBoundsAfter = composeTestRule.onNodeWithTag("music_tab_ARTISTS").fetchSemanticsNode().boundsInRoot
+    val songsBoundsAfter = composeTestRule.onNodeWithTag("music_tab_SONGS").fetchSemanticsNode().boundsInRoot
+    assertTrue(songsBoundsAfter.left < artistsBoundsAfter.left)
   }
 
   @Test
@@ -234,8 +272,24 @@ class MusicPlayerScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("track_details_dialog").assertIsDisplayed()
     composeTestRule.onNodeWithText("Colors").assertIsDisplayed()
+
+    // Page 1 (Song Info) is active by default
+    composeTestRule.onNodeWithTag("track_details_tab_SONG_INFO").assertIsDisplayed().assertIsSelected()
+    composeTestRule.onNodeWithText("Artist").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Track #").assertIsDisplayed()
+
+    // Switch to Page 2 (Stats)
+    composeTestRule.onNodeWithTag("track_details_tab_STATS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("track_details_tab_STATS").assertIsSelected()
     composeTestRule.onNodeWithText("Full Plays").assertIsDisplayed()
     composeTestRule.onNodeWithText("Skips").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Last Played").assertIsDisplayed()
+
+    // Switch to Page 3 (File Info)
+    composeTestRule.onNodeWithTag("track_details_tab_FILE_INFO").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("track_details_tab_FILE_INFO").assertIsSelected()
     composeTestRule.onNodeWithText("Format").assertIsDisplayed()
     composeTestRule.onNodeWithText("Bitrate").assertIsDisplayed()
 

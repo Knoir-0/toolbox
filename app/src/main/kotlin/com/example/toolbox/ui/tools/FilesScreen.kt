@@ -155,6 +155,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -664,9 +665,6 @@ fun FilesScreen(
         searchQuery = searchQuery,
         storageInfoSubtext = headerSubtext,
         viewMode = viewMode,
-        sortOrder = sortOrder,
-        groupOption = groupOption,
-        showSortMenu = showSortMenu,
         isSelectionMode = isSelectionMode,
         selectedCount = selectedPaths.size,
         totalCount = processedItems.size,
@@ -717,61 +715,6 @@ fun FilesScreen(
         onToggleViewMode = {
           viewMode = if (viewMode == FileViewMode.LIST) FileViewMode.GRID else FileViewMode.LIST
         },
-        onOpenSortMenu = { showSortMenu = true },
-        onDismissSortMenu = { showSortMenu = false },
-        onSelectSortOrder = {
-          sortOrder = it
-          val updated = FolderSortGroupConfig(groupOption = groupOption, sortOrder = it)
-          if (isSortGroupSavedForFolder) {
-            if (!isInspection) {
-              FileManagerEngine.setFolderSortGroupConfig(context, currentDirectory, updated)
-            }
-          } else {
-            defaultSortGroupConfig = updated
-            if (!isInspection) {
-              FileManagerEngine.setDefaultSortGroupConfig(context, updated)
-            }
-          }
-          showSortMenu = false
-        },
-        onSelectGroupOption = {
-          groupOption = it
-          val updated = FolderSortGroupConfig(groupOption = it, sortOrder = sortOrder)
-          if (isSortGroupSavedForFolder) {
-            if (!isInspection) {
-              FileManagerEngine.setFolderSortGroupConfig(context, currentDirectory, updated)
-            }
-          } else {
-            defaultSortGroupConfig = updated
-            if (!isInspection) {
-              FileManagerEngine.setDefaultSortGroupConfig(context, updated)
-            }
-          }
-          showSortMenu = false
-        },
-        isSortGroupSavedForFolder = isSortGroupSavedForFolder,
-        onToggleSaveSortGroupForFolder = {
-          val newSaved = !isSortGroupSavedForFolder
-          isSortGroupSavedForFolder = newSaved
-          if (newSaved) {
-            val folderConfig = FolderSortGroupConfig(groupOption = groupOption, sortOrder = sortOrder)
-            if (!isInspection) {
-              FileManagerEngine.setFolderSortGroupConfig(context, currentDirectory, folderConfig)
-            }
-            if (defaultSortGroupConfig != folderEntryDefaultConfig) {
-              defaultSortGroupConfig = folderEntryDefaultConfig
-              if (!isInspection) {
-                FileManagerEngine.setDefaultSortGroupConfig(context, folderEntryDefaultConfig)
-              }
-            }
-          } else {
-            if (!isInspection) {
-              FileManagerEngine.removeFolderSortGroupConfig(context, currentDirectory)
-            }
-            groupOption = defaultSortGroupConfig.groupOption
-            sortOrder = defaultSortGroupConfig.sortOrder
-          }
-        },
         onNavigateUp = { navigateUp() },
         canNavigateUp = canNavigateUp(),
         singleSelectedFolder = if (selectedItems.size == 1 && selectedItems.first().isDirectory) selectedItems.first().file else null,
@@ -820,14 +763,72 @@ fun FilesScreen(
         onAddFolderToHomeScreen = { folder -> addFolderToHomeScreen(context, folder, themeColor) },
       )
 
-      // 2. Storage Pill Buttons Row:
+      // 2. Storage Pill Buttons Row + Pinned Floating Sort/Group Button:
       // Starts with the user's root folder (storage/emulated/0), and whenever external
       // storage devices are connected, new pills pop up with the storage device name.
       StorageDevicePillRow(
         storageVolumes = storageVolumes,
         activeVolume = activeVolume,
+        sortOrder = sortOrder,
+        groupOption = groupOption,
+        showSortMenu = showSortMenu,
+        isSortGroupSavedForFolder = isSortGroupSavedForFolder,
         onSelectVolume = { volume ->
           navigateTo(volume.file)
+        },
+        onOpenSortMenu = { showSortMenu = true },
+        onDismissSortMenu = { showSortMenu = false },
+        onSelectSortOrder = {
+          sortOrder = it
+          val updated = FolderSortGroupConfig(groupOption = groupOption, sortOrder = it)
+          if (isSortGroupSavedForFolder) {
+            if (!isInspection) {
+              FileManagerEngine.setFolderSortGroupConfig(context, currentDirectory, updated)
+            }
+          } else {
+            defaultSortGroupConfig = updated
+            if (!isInspection) {
+              FileManagerEngine.setDefaultSortGroupConfig(context, updated)
+            }
+          }
+          showSortMenu = false
+        },
+        onSelectGroupOption = {
+          groupOption = it
+          val updated = FolderSortGroupConfig(groupOption = it, sortOrder = sortOrder)
+          if (isSortGroupSavedForFolder) {
+            if (!isInspection) {
+              FileManagerEngine.setFolderSortGroupConfig(context, currentDirectory, updated)
+            }
+          } else {
+            defaultSortGroupConfig = updated
+            if (!isInspection) {
+              FileManagerEngine.setDefaultSortGroupConfig(context, updated)
+            }
+          }
+          showSortMenu = false
+        },
+        onToggleSaveSortGroupForFolder = {
+          val newSaved = !isSortGroupSavedForFolder
+          isSortGroupSavedForFolder = newSaved
+          if (newSaved) {
+            val folderConfig = FolderSortGroupConfig(groupOption = groupOption, sortOrder = sortOrder)
+            if (!isInspection) {
+              FileManagerEngine.setFolderSortGroupConfig(context, currentDirectory, folderConfig)
+            }
+            if (defaultSortGroupConfig != folderEntryDefaultConfig) {
+              defaultSortGroupConfig = folderEntryDefaultConfig
+              if (!isInspection) {
+                FileManagerEngine.setDefaultSortGroupConfig(context, folderEntryDefaultConfig)
+              }
+            }
+          } else {
+            if (!isInspection) {
+              FileManagerEngine.removeFolderSortGroupConfig(context, currentDirectory)
+            }
+            groupOption = defaultSortGroupConfig.groupOption
+            sortOrder = defaultSortGroupConfig.sortOrder
+          }
         },
       )
 
@@ -1441,9 +1442,6 @@ private fun FilesHeader(
   searchQuery: String,
   storageInfoSubtext: String,
   viewMode: FileViewMode,
-  sortOrder: FileSortOrder,
-  groupOption: FileGroupOption = FileGroupOption.TYPE,
-  showSortMenu: Boolean,
   isSelectionMode: Boolean = false,
   selectedCount: Int = 0,
   totalCount: Int = 0,
@@ -1456,12 +1454,6 @@ private fun FilesHeader(
   onToggleSearch: () -> Unit,
   onSearchQueryChange: (String) -> Unit,
   onToggleViewMode: () -> Unit,
-  onOpenSortMenu: () -> Unit,
-  onDismissSortMenu: () -> Unit,
-  onSelectSortOrder: (FileSortOrder) -> Unit,
-  onSelectGroupOption: (FileGroupOption) -> Unit = {},
-  isSortGroupSavedForFolder: Boolean = false,
-  onToggleSaveSortGroupForFolder: () -> Unit = {},
   onNavigateUp: () -> Unit,
   canNavigateUp: Boolean,
   singleSelectedFolder: File? = null,
@@ -1849,171 +1841,29 @@ private fun FilesHeader(
             }
           }
 
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-          ) {
-            IconButton(onClick = onToggleSearch, modifier = Modifier.testTag("action_toggle_search")) {
-              Icon(
-                Icons.Default.Search,
-                contentDescription = "Search",
+          if (!isSearchActive) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+              IconButton(onClick = onToggleSearch, modifier = Modifier.testTag("action_toggle_search")) {
+                Icon(
+                  Icons.Default.Search,
+                  contentDescription = "Search",
+                )
+              }
+
+              ViewModeSegmentedToggle(
+                isListView = viewMode == FileViewMode.LIST,
+                onSelectListView = { if (viewMode != FileViewMode.LIST) onToggleViewMode() },
+                onSelectGridView = { if (viewMode == FileViewMode.LIST) onToggleViewMode() },
+                onToggle = onToggleViewMode,
+                toggleTestTag = "action_toggle_view_mode",
+                listTestTag = "files_view_mode_list",
+                gridTestTag = "files_view_mode_grid",
+                listContentDescription = "List view",
+                gridContentDescription = "Grid view",
               )
-            }
-
-            ViewModeSegmentedToggle(
-              isListView = viewMode == FileViewMode.LIST,
-              onSelectListView = { if (viewMode != FileViewMode.LIST) onToggleViewMode() },
-              onSelectGridView = { if (viewMode == FileViewMode.LIST) onToggleViewMode() },
-              onToggle = onToggleViewMode,
-              toggleTestTag = "action_toggle_view_mode",
-              listTestTag = "files_view_mode_list",
-              gridTestTag = "files_view_mode_grid",
-              listContentDescription = "List view",
-              gridContentDescription = "Grid view",
-            )
-
-            Box {
-              IconButton(onClick = onOpenSortMenu, modifier = Modifier.testTag("action_sort_menu")) {
-                Icon(Icons.Default.Tune, contentDescription = "Sort and group options")
-              }
-              DropdownMenu(
-                expanded = showSortMenu,
-                onDismissRequest = onDismissSortMenu,
-                modifier = Modifier
-                  .widthIn(min = 320.dp, max = 390.dp)
-                  .testTag("sort_and_group_menu"),
-              ) {
-                Row(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .height(IntrinsicSize.Min)
-                    .padding(vertical = 4.dp),
-                ) {
-                  // Left panel: GROUP BY
-                  Column(
-                    modifier = Modifier
-                      .weight(1f)
-                      .fillMaxHeight(),
-                  ) {
-                    Text(
-                      text = "GROUP BY",
-                      style = MaterialTheme.typography.labelSmall,
-                      fontWeight = FontWeight.Bold,
-                      color = MaterialTheme.colorScheme.primary,
-                      modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                    )
-                    FileGroupOption.entries.forEach { option ->
-                      DropdownMenuItem(
-                        text = {
-                          Text(
-                            text = option.displayName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (option == groupOption) FontWeight.Bold else FontWeight.Normal,
-                            color = if (option == groupOption) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                          )
-                        },
-                        trailingIcon = if (option == groupOption) {
-                          {
-                            Icon(
-                              imageVector = Icons.Default.Check,
-                              contentDescription = null,
-                              tint = MaterialTheme.colorScheme.primary,
-                              modifier = Modifier.size(18.dp),
-                            )
-                          }
-                        } else null,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                        onClick = { onSelectGroupOption(option) },
-                        modifier = Modifier.testTag("group_option_${option.name.lowercase()}"),
-                      )
-                    }
-
-                    Spacer(modifier = Modifier.weight(1f))
-
-                    HorizontalDivider(
-                      color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
-                    )
-
-                    // Bottom-left checkbox to save sort/group for this specific folder
-                    Row(
-                      verticalAlignment = Alignment.CenterVertically,
-                      modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { onToggleSaveSortGroupForFolder() }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                        .testTag("save_sort_group_for_folder"),
-                    ) {
-                      Checkbox(
-                        checked = isSortGroupSavedForFolder,
-                        onCheckedChange = { onToggleSaveSortGroupForFolder() },
-                        colors = CheckboxDefaults.colors(
-                          checkedColor = MaterialTheme.colorScheme.primary,
-                        ),
-                        modifier = Modifier
-                          .size(28.dp)
-                          .testTag("save_sort_group_for_folder_checkbox"),
-                      )
-                      Spacer(modifier = Modifier.width(6.dp))
-                      Text(
-                        text = "Save for folder",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = if (isSortGroupSavedForFolder) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (isSortGroupSavedForFolder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                      )
-                    }
-                  }
-
-                  // Vertical divider between Group By and Sort By panels
-                  VerticalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.padding(vertical = 6.dp),
-                  )
-
-                  // Right panel: SORT BY
-                  Column(
-                    modifier = Modifier
-                      .weight(1f)
-                      .fillMaxHeight(),
-                  ) {
-                    Text(
-                      text = "SORT BY",
-                      style = MaterialTheme.typography.labelSmall,
-                      fontWeight = FontWeight.Bold,
-                      color = MaterialTheme.colorScheme.primary,
-                      modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                    )
-                    FileSortOrder.entries.forEach { order ->
-                      DropdownMenuItem(
-                        text = {
-                          Text(
-                            text = order.displayName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (order == sortOrder) FontWeight.Bold else FontWeight.Normal,
-                            color = if (order == sortOrder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                          )
-                        },
-                        trailingIcon = if (order == sortOrder) {
-                          {
-                            Icon(
-                              imageVector = Icons.Default.Check,
-                              contentDescription = null,
-                              tint = MaterialTheme.colorScheme.primary,
-                              modifier = Modifier.size(18.dp),
-                            )
-                          }
-                        } else null,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                        onClick = { onSelectSortOrder(order) },
-                        modifier = Modifier.testTag("sort_order_${order.name.lowercase()}"),
-                      )
-                    }
-                  }
-                }
-              }
             }
           }
         }
@@ -2110,7 +1960,7 @@ private fun FilesHeader(
 }
 
 /**
- * Storage device pill buttons row.
+ * Storage device pill buttons row with a pinned floating sort/group icon on the right.
  * Displays a pill button for storage/emulated/0 (the user's root folder), and dynamically
  * displays new pill buttons with the name of each connected external storage device (SD card, USB OTG, etc.).
  */
@@ -2118,51 +1968,234 @@ private fun FilesHeader(
 private fun StorageDevicePillRow(
   storageVolumes: List<StorageVolumeInfo>,
   activeVolume: StorageVolumeInfo?,
+  sortOrder: FileSortOrder = FileSortOrder.NAME_ASC,
+  groupOption: FileGroupOption = FileGroupOption.TYPE,
+  showSortMenu: Boolean = false,
+  isSortGroupSavedForFolder: Boolean = false,
   onSelectVolume: (StorageVolumeInfo) -> Unit,
+  onOpenSortMenu: () -> Unit = {},
+  onDismissSortMenu: () -> Unit = {},
+  onSelectSortOrder: (FileSortOrder) -> Unit = {},
+  onSelectGroupOption: (FileGroupOption) -> Unit = {},
+  onToggleSaveSortGroupForFolder: () -> Unit = {},
 ) {
-  Row(
+  Box(
     modifier = Modifier
       .fillMaxWidth()
-      .horizontalScroll(rememberScrollState())
-      .padding(horizontal = 12.dp, vertical = 6.dp),
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-    verticalAlignment = Alignment.CenterVertically,
+      .testTag("files_pill_bar"),
   ) {
-    storageVolumes.forEach { volume ->
-      val isSelected = activeVolume?.id == volume.id
-      val icon = when {
-        volume.isPrimary -> Icons.Default.Home
-        volume.id == FileManagerEngine.SAMPLES_VOLUME_ID ||
-          volume.name.equals(FileManagerEngine.SAMPLES_FOLDER_NAME, ignoreCase = true) -> Icons.Default.Folder
-        volume.name.contains("usb", ignoreCase = true) -> Icons.Default.Usb
-        else -> Icons.Default.SdCard
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .horizontalScroll(rememberScrollState())
+        .padding(start = 12.dp, end = 56.dp, top = 6.dp, bottom = 6.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      storageVolumes.forEach { volume ->
+        val isSelected = activeVolume?.id == volume.id
+        val icon = when {
+          volume.isPrimary -> Icons.Default.Home
+          volume.id == FileManagerEngine.SAMPLES_VOLUME_ID ||
+            volume.name.equals(FileManagerEngine.SAMPLES_FOLDER_NAME, ignoreCase = true) -> Icons.Default.Folder
+          volume.name.contains("usb", ignoreCase = true) -> Icons.Default.Usb
+          else -> Icons.Default.SdCard
+        }
+
+        FilterChip(
+          selected = isSelected,
+          onClick = { onSelectVolume(volume) },
+          shape = RoundedCornerShape(20.dp),
+          modifier = Modifier.testTag("storage_pill_${volume.id}"),
+          leadingIcon = {
+            Icon(
+              imageVector = icon,
+              contentDescription = null,
+              modifier = Modifier.size(16.dp),
+            )
+          },
+          label = {
+            Text(
+              text = volume.name,
+              fontSize = 13.sp,
+              fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            )
+          },
+          colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+          ),
+        )
+      }
+    }
+
+    // Pinned floating sort/group button on the right edge of the pill bar
+    Box(
+      modifier = Modifier
+        .align(Alignment.CenterEnd)
+        .padding(end = 12.dp)
+        .zIndex(10f),
+    ) {
+      Surface(
+        onClick = onOpenSortMenu,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 3.dp,
+        shadowElevation = 4.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        modifier = Modifier
+          .size(34.dp)
+          .testTag("action_sort_menu"),
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.Tune,
+            contentDescription = "Sort and group options",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+          )
+        }
       }
 
-      FilterChip(
-        selected = isSelected,
-        onClick = { onSelectVolume(volume) },
-        shape = RoundedCornerShape(20.dp),
-        modifier = Modifier.testTag("storage_pill_${volume.id}"),
-        leadingIcon = {
-          Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
+      DropdownMenu(
+        expanded = showSortMenu,
+        onDismissRequest = onDismissSortMenu,
+        modifier = Modifier
+          .widthIn(min = 320.dp, max = 390.dp)
+          .testTag("sort_and_group_menu"),
+      ) {
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .padding(vertical = 4.dp),
+        ) {
+          // Left panel: GROUP BY
+          Column(
+            modifier = Modifier
+              .weight(1f)
+              .fillMaxHeight(),
+          ) {
+            Text(
+              text = "GROUP BY",
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+            )
+            FileGroupOption.entries.forEach { option ->
+              DropdownMenuItem(
+                text = {
+                  Text(
+                    text = option.displayName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (option == groupOption) FontWeight.Bold else FontWeight.Normal,
+                    color = if (option == groupOption) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                  )
+                },
+                trailingIcon = if (option == groupOption) {
+                  {
+                    Icon(
+                      imageVector = Icons.Default.Check,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.size(18.dp),
+                    )
+                  }
+                } else null,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                onClick = { onSelectGroupOption(option) },
+                modifier = Modifier.testTag("group_option_${option.name.lowercase()}"),
+              )
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            HorizontalDivider(
+              color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+            )
+
+            // Bottom-left checkbox to save sort/group for this specific folder
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onToggleSaveSortGroupForFolder() }
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .testTag("save_sort_group_for_folder"),
+            ) {
+              Checkbox(
+                checked = isSortGroupSavedForFolder,
+                onCheckedChange = { onToggleSaveSortGroupForFolder() },
+                colors = CheckboxDefaults.colors(
+                  checkedColor = MaterialTheme.colorScheme.primary,
+                ),
+                modifier = Modifier
+                  .size(28.dp)
+                  .testTag("save_sort_group_for_folder_checkbox"),
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(
+                text = "Save for folder",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (isSortGroupSavedForFolder) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (isSortGroupSavedForFolder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
+
+          // Vertical divider between Group By and Sort By panels
+          VerticalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            modifier = Modifier.padding(vertical = 6.dp),
           )
-        },
-        label = {
-          Text(
-            text = volume.name,
-            fontSize = 13.sp,
-            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-          )
-        },
-        colors = FilterChipDefaults.filterChipColors(
-          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-          selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-        ),
-      )
+
+          // Right panel: SORT BY
+          Column(
+            modifier = Modifier
+              .weight(1f)
+              .fillMaxHeight(),
+          ) {
+            Text(
+              text = "SORT BY",
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+            )
+            FileSortOrder.entries.forEach { order ->
+              DropdownMenuItem(
+                text = {
+                  Text(
+                    text = order.displayName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (order == sortOrder) FontWeight.Bold else FontWeight.Normal,
+                    color = if (order == sortOrder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                  )
+                },
+                trailingIcon = if (order == sortOrder) {
+                  {
+                    Icon(
+                      imageVector = Icons.Default.Check,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.size(18.dp),
+                    )
+                  }
+                } else null,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                onClick = { onSelectSortOrder(order) },
+                modifier = Modifier.testTag("sort_order_${order.name.lowercase()}"),
+              )
+            }
+          }
+        }
+      }
     }
   }
 }
@@ -4030,24 +4063,37 @@ fun FileGroupHeaderCollapsedPreview() {
 @Composable
 fun FilesHeaderSortMenuPreview() {
   ToolboxTheme {
-    Box(modifier = Modifier.padding(16.dp)) {
+    Column(modifier = Modifier.padding(16.dp)) {
       FilesHeader(
         currentDirectory = File("/storage/emulated/0/Documents"),
         isSearchActive = false,
         searchQuery = "",
         storageInfoSubtext = "Internal Storage",
         viewMode = FileViewMode.LIST,
-        sortOrder = FileSortOrder.NAME_ASC,
-        groupOption = FileGroupOption.TYPE,
-        showSortMenu = true,
         onToggleSearch = {},
         onSearchQueryChange = {},
         onToggleViewMode = {},
+        onNavigateUp = {},
+        canNavigateUp = true,
+      )
+      StorageDevicePillRow(
+        storageVolumes = listOf(
+          StorageVolumeInfo(
+            id = "primary",
+            name = "Internal Storage",
+            file = File("/storage/emulated/0"),
+            isPrimary = true,
+            isRemovable = false,
+          ),
+        ),
+        activeVolume = null,
+        sortOrder = FileSortOrder.NAME_ASC,
+        groupOption = FileGroupOption.TYPE,
+        showSortMenu = true,
+        onSelectVolume = {},
         onOpenSortMenu = {},
         onDismissSortMenu = {},
         onSelectSortOrder = {},
-        onNavigateUp = {},
-        canNavigateUp = true,
       )
     }
   }

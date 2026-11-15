@@ -40,7 +40,7 @@ data class BtDeviceInfo(
 sealed interface RemoteConnection {
   data object Disconnected : RemoteConnection
   data class Connecting(val device: BtDeviceInfo, val pairing: Boolean = false) : RemoteConnection
-  data class Connected(val device: BtDeviceInfo) : RemoteConnection
+  data class Connected(val device: BtDeviceInfo, val isDemo: Boolean = false) : RemoteConnection
 }
 
 enum class BluetoothSupport { SUPPORTED, NO_ADAPTER, API_TOO_OLD }
@@ -211,8 +211,14 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
       connectedDevice = null
       pendingConnect = null
       discovered.clear()
+      val currentConnection = _uiState.value.connection
+      val keepDemo = currentConnection is RemoteConnection.Connected && currentConnection.isDemo
       _uiState.update {
-        it.copy(isHidRegistered = false, isScanning = false, connection = RemoteConnection.Disconnected)
+        it.copy(
+          isHidRegistered = false,
+          isScanning = false,
+          connection = if (keepDemo) currentConnection else RemoteConnection.Disconnected,
+        )
       }
     }
     refreshDevices()
@@ -293,6 +299,38 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
       hid?.open()
     } else {
       requestHidConnect(device)
+    }
+  }
+
+  /**
+   * Connects to the built-in offline demo device so the user can test the remote or gamepad
+   * controls without pairing a physical TV or console.
+   */
+  fun startDemoMode(
+    deviceName: String = "Demo Remote (HID Simulator)",
+    kind: BtDeviceKind = BtDeviceKind.TV,
+  ) {
+    stopScan()
+    pendingConnect = null
+    connectTimeoutJob?.cancel()
+    releaseAllInput()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      val hid = session as? BluetoothHidSession
+      connectedDevice?.let { hid?.disconnect(it) }
+    }
+    connectedDevice = null
+    val demoDevice = BtDeviceInfo(
+      address = DEMO_DEVICE_ADDRESS,
+      name = deviceName,
+      isBonded = true,
+      kind = kind,
+    )
+    _uiState.update {
+      it.copy(
+        connection = RemoteConnection.Connected(demoDevice, isDemo = true),
+        message = null,
+        messageDeviceAddress = null,
+      )
     }
   }
 
@@ -611,6 +649,7 @@ class BluetoothRemoteViewModel(application: Application) : AndroidViewModel(appl
   }
 
   companion object {
+    const val DEMO_DEVICE_ADDRESS = "00:00:00:00:DE:M0"
     private const val CONNECT_TIMEOUT_MS = 30_000L
     private const val KEY_STROKE_DELAY_MS = 35L
 

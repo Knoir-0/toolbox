@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.RestaurantMenu
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material.icons.filled.Speed
@@ -194,6 +195,11 @@ enum class Tool(
     title = "OBD2",
     icon = Icons.Default.DirectionsCar,
     category = ToolCategory.REMOTES_AND_DEVICES,
+  ),
+  SEARCH(
+    title = "Search",
+    icon = Icons.Default.Search,
+    category = ToolCategory.SYSTEM,
   ),
   SETTINGS(
     title = "Settings",
