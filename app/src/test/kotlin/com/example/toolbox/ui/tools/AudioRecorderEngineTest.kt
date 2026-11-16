@@ -84,6 +84,25 @@ class AudioRecorderEngineTest {
       )
       assertTrue(deviceFile.name.startsWith("Recording_Device_"))
       assertEquals(AudioCaptureSource.DEVICE_AUDIO, AudioRecorderEngine.inferCaptureSource(deviceFile.name))
+
+      // Combined (Device + Microphone) audio capture source generates Recording_Both_ filename and infers source accurately
+      val bothFileName = AudioRecorderEngine.generateTimestampedFileName(
+        format = AudioRecordingFormat.M4A,
+        epochMs = fixedEpoch,
+        source = AudioCaptureSource.DEVICE_AND_MIC,
+      )
+      assertTrue(bothFileName.startsWith("Recording_Both_"))
+      assertTrue(bothFileName.endsWith(".m4a"))
+      assertEquals(AudioCaptureSource.DEVICE_AND_MIC, AudioRecorderEngine.inferCaptureSource(bothFileName))
+
+      val bothFile = AudioRecorderEngine.createTimestampedOutputFile(
+        directory = tempDir,
+        format = AudioRecordingFormat.M4A,
+        epochMs = fixedEpoch,
+        source = AudioCaptureSource.DEVICE_AND_MIC,
+      )
+      assertTrue(bothFile.name.startsWith("Recording_Both_"))
+      assertEquals(AudioCaptureSource.DEVICE_AND_MIC, AudioRecorderEngine.inferCaptureSource(bothFile.name))
     } finally {
       tempDir.deleteRecursively()
     }

@@ -19,28 +19,28 @@ class SearchScreenTest {
   val composeTestRule = createAndroidComposeRule<ComponentActivity>()
 
   @Test
-  fun searchScreen_displaysDiscoveryHomeAndLaunchesQuickTool() {
+  fun searchScreen_autofocusesToolbarSearchAndDisplaysCategoryPillsAndDirectory() {
     var selectedTool: Tool? = null
-    val searchPrefs = InMemorySearchPreferencesRepository(
-      initialRecentSearches = listOf("P0420"),
-    )
 
     composeTestRule.setContent {
       ToolboxTheme {
         SearchScreen(
           onSelectTool = { selectedTool = it },
-          searchPreferencesRepository = searchPrefs,
-          customDataSources = SearchDataSources(),
+          customDataSources = SearchDataSources(
+            hiddenTools = setOf(Tool.CALCULATOR),
+          ),
         )
       }
     }
 
     composeTestRule.onNodeWithTag("search_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("toolbar_search_bar").assertIsDisplayed()
     composeTestRule.onNodeWithTag("search_query_input").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("search_pinned_tools_card").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("search_recent_searches_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("search_category_pills_row").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("search_suggestions_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("search_tool_hidden_icon_CALCULATOR").assertIsDisplayed()
 
-    composeTestRule.onNodeWithTag("search_quick_launch_CALCULATOR").performClick()
+    composeTestRule.onNodeWithTag("search_directory_tool_CALCULATOR").performClick()
     composeTestRule.waitForIdle()
     assertEquals(Tool.CALCULATOR, selectedTool)
   }
@@ -53,7 +53,6 @@ class SearchScreenTest {
       ToolboxTheme {
         SearchScreen(
           onSelectTool = { selectedTool = it },
-          searchPreferencesRepository = InMemorySearchPreferencesRepository(),
           customDataSources = SearchDataSources(),
         )
       }

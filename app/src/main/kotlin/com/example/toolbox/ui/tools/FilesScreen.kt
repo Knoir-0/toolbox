@@ -1998,7 +1998,7 @@ private fun FilesHeader(
               }
               if (archiveTarget != null && onOpenSelectedArchive != null) {
                 DropdownMenuItem(
-                  text = { Text("Archives") },
+                  text = { Text("Archive") },
                   leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
                   onClick = {
                     showOverflowMenu = false
@@ -2008,7 +2008,7 @@ private fun FilesHeader(
                 )
               } else if (hasSelection) {
                 DropdownMenuItem(
-                  text = { Text("Archives") },
+                  text = { Text("Archive") },
                   leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
                   onClick = {
                     showOverflowMenu = false
@@ -2041,7 +2041,7 @@ private fun FilesHeader(
               }
               if (singleSelectedFile != null && onOpenSelectedGallery != null && (FileManagerEngine.isImageFile(singleSelectedFile) || VideoEditorEngine.isVideoFile(singleSelectedFile))) {
                 DropdownMenuItem(
-                  text = { Text("Open in Gallery") },
+                  text = { Text("Gallery") },
                   leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
                   onClick = {
                     showOverflowMenu = false
@@ -2064,24 +2064,13 @@ private fun FilesHeader(
               if (singleSelectedFile != null && FileManagerEngine.isTextFile(singleSelectedFile)) {
                 if (onSaveSelectedToNotes != null) {
                   DropdownMenuItem(
-                    text = { Text("Save to Notes") },
+                    text = { Text("Add Note") },
                     leadingIcon = { Icon(Icons.AutoMirrored.Filled.StickyNote2, contentDescription = null) },
                     onClick = {
                       showOverflowMenu = false
                       onSaveSelectedToNotes(singleSelectedFile)
                     },
                     modifier = Modifier.testTag("action_selection_save_to_notes"),
-                  )
-                }
-                if (onImportSelectedToTodo != null) {
-                  DropdownMenuItem(
-                    text = { Text("Import to To Do") },
-                    leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) },
-                    onClick = {
-                      showOverflowMenu = false
-                      onImportSelectedToTodo(singleSelectedFile)
-                    },
-                    modifier = Modifier.testTag("action_selection_import_to_todo"),
                   )
                 }
               }
@@ -2118,7 +2107,7 @@ private fun FilesHeader(
               }
               if (singleSelectedFolder != null && onOpenSelectedGallery != null) {
                 DropdownMenuItem(
-                  text = { Text("Open in Gallery") },
+                  text = { Text("Gallery") },
                   leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
                   onClick = {
                     showOverflowMenu = false
@@ -2129,7 +2118,7 @@ private fun FilesHeader(
               }
               if (singleSelectedFolder != null && onPlaySelectedMusic != null) {
                 DropdownMenuItem(
-                  text = { Text("Open in Music") },
+                  text = { Text("Music") },
                   leadingIcon = { Icon(Icons.Default.Headphones, contentDescription = null) },
                   onClick = {
                     showOverflowMenu = false
@@ -3182,7 +3171,7 @@ private fun FileActionMenu(
       }
       if (ArchiveEngine.isSupportedArchive(item.file)) {
         DropdownMenuItem(
-          text = { Text("Archives") },
+          text = { Text("Archive") },
           leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
           onClick = onOpenArchive,
           modifier = Modifier.testTag("action_open_archive"),
@@ -3210,7 +3199,7 @@ private fun FileActionMenu(
           modifier = Modifier.testTag("action_preview_image"),
         )
         DropdownMenuItem(
-          text = { Text("Open in Gallery") },
+          text = { Text("Gallery") },
           leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
           onClick = onOpenGallery,
           modifier = Modifier.testTag("action_open_gallery"),
@@ -3249,7 +3238,7 @@ private fun FileActionMenu(
           modifier = Modifier.testTag("action_edit_video"),
         )
         DropdownMenuItem(
-          text = { Text("Open in Gallery") },
+          text = { Text("Gallery") },
           leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
           onClick = onOpenGallery,
           modifier = Modifier.testTag("action_open_gallery"),
@@ -3262,16 +3251,10 @@ private fun FileActionMenu(
           modifier = Modifier.testTag("action_edit_text"),
         )
         DropdownMenuItem(
-          text = { Text("Save to Notes") },
+          text = { Text("Add Note") },
           leadingIcon = { Icon(Icons.AutoMirrored.Filled.StickyNote2, contentDescription = null) },
           onClick = onSaveToNotes,
           modifier = Modifier.testTag("action_save_to_notes"),
-        )
-        DropdownMenuItem(
-          text = { Text("Import to To Do") },
-          leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) },
-          onClick = onImportToTodo,
-          modifier = Modifier.testTag("action_import_to_todo"),
         )
       }
       DropdownMenuItem(
@@ -3284,19 +3267,19 @@ private fun FileActionMenu(
 
     if (item.isDirectory) {
       DropdownMenuItem(
-        text = { Text("Open in Gallery") },
+        text = { Text("Gallery") },
         leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
         onClick = onOpenGallery,
         modifier = Modifier.testTag("action_open_gallery"),
       )
       DropdownMenuItem(
-        text = { Text("Open in Music") },
+        text = { Text("Music") },
         leadingIcon = { Icon(Icons.Default.Headphones, contentDescription = null) },
         onClick = onPlayMusic,
         modifier = Modifier.testTag("action_open_music"),
       )
       DropdownMenuItem(
-        text = { Text("Archives") },
+        text = { Text("Archive") },
         leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
         onClick = onOpenArchive,
         modifier = Modifier.testTag("action_open_archive"),
@@ -3327,12 +3310,6 @@ private fun FileActionMenu(
       leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
       onClick = onCopy,
       modifier = Modifier.testTag("action_copy"),
-    )
-    DropdownMenuItem(
-      text = { Text("Duplicate") },
-      leadingIcon = { Icon(Icons.Default.FileCopy, contentDescription = null) },
-      onClick = onDuplicate,
-      modifier = Modifier.testTag("action_duplicate"),
     )
     DropdownMenuItem(
       text = { Text("Rename") },

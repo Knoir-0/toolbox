@@ -21,7 +21,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -141,7 +143,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -285,6 +290,10 @@ fun NotesScreen(
   var selectedNoteIds by remember { mutableStateOf(setOf<String>()) }
   val isSelectionMode = selectedNoteIds.isNotEmpty()
 
+  BackHandler(enabled = isSelectionMode) {
+    selectedNoteIds = emptySet()
+  }
+
   // Editor state
   var editingNote by remember { mutableStateOf<NoteItem?>(null) }
 
@@ -293,7 +302,7 @@ fun NotesScreen(
   var showBulkColorDialog by remember { mutableStateOf(false) }
   var showEmptyTrashDialog by remember { mutableStateOf(false) }
 
-  // Drag-and-drop state for rearranging notes in both grid and list views
+  // Drag-and-drop and long-press selection state in both grid and list views
   val density = LocalDensity.current
   val gridState = rememberLazyStaggeredGridState()
   val verticalSpacingPx = with(density) { 10.dp.toPx() }
@@ -301,7 +310,9 @@ fun NotesScreen(
   val maxAutoScrollStepPx = with(density) { 14.dp.toPx() }
 
   var gridCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+  val cardCoordinates = remember { mutableStateMapOf<String, LayoutCoordinates>() }
   val cardBounds = remember { mutableStateMapOf<String, Rect>() }
+  var activeLongPressNoteId by remember { mutableStateOf<String?>(null) }
   var draggedNoteId by remember { mutableStateOf<String?>(null) }
   var dragPointerOffset by remember { mutableStateOf(Offset.Zero) }
   var grabOffsetFromCenter by remember { mutableStateOf(Offset.Zero) }
@@ -310,8 +321,19 @@ fun NotesScreen(
   var initialDragSnapshot by remember { mutableStateOf<NotesHistorySnapshot?>(null) }
   var autoScrollSpeedPx by remember { mutableFloatStateOf(0f) }
 
-  LaunchedEffect(isGridView, gridColumnsPerRow, activeFilter) {
-    cardBounds.clear()
+  fun syncCardBounds() {
+    val gridCoords = gridCoordinates ?: return
+    if (!gridCoords.isAttached) return
+    val iterator = cardCoordinates.entries.iterator()
+    while (iterator.hasNext()) {
+      val (id, coords) = iterator.next()
+      if (coords.isAttached) {
+        cardBounds[id] = gridCoords.localBoundingBoxOf(coords, clipBounds = false)
+      } else {
+        iterator.remove()
+        cardBounds.remove(id)
+      }
+    }
   }
 
   LaunchedEffect(draggedNoteId, autoScrollSpeedPx) {
@@ -685,135 +707,174 @@ fun NotesScreen(
               .fillMaxSize()
               .onGloballyPositioned { coords ->
                 gridCoordinates = coords
+                syncCardBounds()
               }
               .pointerInput(isGridView, activeFilter) {
-                detectDragGesturesAfterLongPress(
-                  onDragStart = { startOffset ->
-                    val hitNote = findInitialHitNote(
-                      point = startOffset,
-                      visibleNotes = currentFilteredResult.allNotes,
-                      cardBounds = cardBounds,
-                    )
-                    if (hitNote != null) {
-                      val rect = cardBounds[hitNote.id]
-                      draggedNoteId = hitNote.id
-                      dragPointerOffset = startOffset
-                      grabOffsetFromCenter = if (rect != null) {
-                        startOffset - rect.center
-                      } else {
-                        Offset.Zero
-                      }
-                      draggedCardSize = rect?.let {
-                        IntSize(it.width.roundToInt(), it.height.roundToInt())
-                      }
-                      hasDragged = false
-                      autoScrollSpeedPx = 0f
-                      initialDragSnapshot = NotesHistorySnapshot(notes, savedLabels)
-                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    }
-                  },
-                  onDrag = { change, dragAmount ->
-                    val activeNoteId = draggedNoteId ?: return@detectDragGesturesAfterLongPress
-                    change.consume()
-                    if (dragAmount.x != 0f || dragAmount.y != 0f) {
-                      hasDragged = true
-                    }
-                    dragPointerOffset += dragAmount
-                    val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+                awaitEachGesture {
+                  val down = awaitFirstDown(requireUnconsumed = false)
+                  syncCardBounds()
+                  val hitNote = findInitialHitNote(
+                    point = down.position,
+                    visibleNotes = currentFilteredResult.allNotes,
+                    cardBounds = cardBounds,
+                  ) ?: return@awaitEachGesture
 
-                    val viewportHeight = (gridCoordinates?.size?.height ?: 0).toFloat()
-                    autoScrollSpeedPx = when {
-                      viewportHeight <= 0f -> 0f
-                      dragPointerOffset.y < autoScrollEdgeThresholdPx && gridState.canScrollBackward -> {
-                        val fraction = ((autoScrollEdgeThresholdPx - dragPointerOffset.y) / autoScrollEdgeThresholdPx)
-                          .coerceIn(0f, 1f)
-                        -maxAutoScrollStepPx * fraction
+                  val longPress = awaitLongPressOrCancellation(down.id) ?: return@awaitEachGesture
+                  syncCardBounds()
+                  val startOffset = longPress.position
+                  val rect = cardBounds[hitNote.id]
+                  val wasInSelectionMode = selectedNoteIds.isNotEmpty()
+                  val selectionBeforePress = selectedNoteIds
+                  val isSelectingOnHold = hitNote.id !in selectedNoteIds
+
+                  // Immediately select/deselect the note when held down
+                  activeLongPressNoteId = hitNote.id
+                  selectedNoteIds = if (isSelectingOnHold) {
+                    selectedNoteIds + hitNote.id
+                  } else {
+                    selectedNoteIds - hitNote.id
+                  }
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+
+                  val dragSlopPx = maxOf(
+                    viewConfiguration.touchSlop,
+                    with(density) { 14.dp.toPx() },
+                  )
+                  var totalDragOffset = Offset.Zero
+                  var isReorderDragging = false
+
+                  try {
+                    while (true) {
+                      val event = awaitPointerEvent(PointerEventPass.Initial)
+                      val change = event.changes.firstOrNull { it.id == longPress.id } ?: break
+                      if (change.changedToUpIgnoreConsumed()) {
+                        change.consume()
+                        break
                       }
-                      dragPointerOffset.y > viewportHeight - autoScrollEdgeThresholdPx && gridState.canScrollForward -> {
-                        val fraction = ((dragPointerOffset.y - (viewportHeight - autoScrollEdgeThresholdPx)) / autoScrollEdgeThresholdPx)
-                          .coerceIn(0f, 1f)
-                        maxAutoScrollStepPx * fraction
-                      }
-                      else -> 0f
-                    }
+                      val dragAmount = change.positionChangeIgnoreConsumed()
+                      change.consume()
+                      if (dragAmount == Offset.Zero) continue
 
-                    val liveFiltered = NotesEngine.filterNotes(
-                      notes = notes,
-                      filter = currentActiveFilter,
-                      searchQuery = if (currentIsSearchActive) currentSearchQuery else "",
-                      colorFilter = if (currentIsSearchActive) currentSelectedColorFilter else null,
-                    )
-                    val sectionNotes = if (liveFiltered.pinned.any { it.id == activeNoteId }) {
-                      liveFiltered.pinned
-                    } else {
-                      liveFiltered.others
-                    }
+                      totalDragOffset += dragAmount
+                      val currentPointerPos = change.position
 
-                    val targetNoteId = findTargetNoteId(
-                      draggedNoteId = activeNoteId,
-                      point = desiredCenter,
-                      sectionNotes = sectionNotes,
-                      cardBounds = cardBounds,
-                      isGridView = currentIsGridView,
-                    )
-
-                    if (targetNoteId != null && targetNoteId != activeNoteId) {
-                      val firstVisibleIndex = gridState.firstVisibleItemIndex
-                      val firstVisibleOffset = gridState.firstVisibleItemScrollOffset
-                      val reordered = NotesEngine.reorderNotes(notes, activeNoteId, targetNoteId)
-                      if (reordered != notes) {
-                        val nextFiltered = NotesEngine.filterNotes(
-                          notes = reordered,
-                          filter = currentActiveFilter,
-                          searchQuery = if (currentIsSearchActive) currentSearchQuery else "",
-                          colorFilter = if (currentIsSearchActive) currentSelectedColorFilter else null,
-                        )
-                        val newSectionNotes = if (nextFiltered.pinned.any { it.id == activeNoteId }) {
-                          nextFiltered.pinned
-                        } else {
-                          nextFiltered.others
-                        }
-                        updateSectionCardBoundsOptimistically(
-                          oldSectionNotes = sectionNotes,
-                          newSectionNotes = newSectionNotes,
+                      if (wasInSelectionMode || currentActiveFilter == NotesFilter.Trash) {
+                        syncCardBounds()
+                        val hoveredNote = findInitialHitNote(
+                          point = currentPointerPos,
+                          visibleNotes = currentFilteredResult.allNotes,
                           cardBounds = cardBounds,
-                          isGridView = currentIsGridView,
-                          verticalSpacingPx = verticalSpacingPx,
-                          columns = currentColumns,
                         )
-                        notes = reordered
-                        gridState.requestScrollToItem(firstVisibleIndex, firstVisibleOffset)
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        if (hoveredNote != null) {
+                          val updatedSelection = if (isSelectingOnHold) {
+                            selectedNoteIds + hoveredNote.id
+                          } else {
+                            selectedNoteIds - hoveredNote.id
+                          }
+                          if (updatedSelection != selectedNoteIds) {
+                            selectedNoteIds = updatedSelection
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                          }
+                        }
+                        continue
                       }
-                    }
-                  },
-                  onDragEnd = {
-                    val finishedNoteId = draggedNoteId
-                    val didMove = hasDragged
-                    val before = initialDragSnapshot
 
-                    draggedNoteId = null
-                    dragPointerOffset = Offset.Zero
-                    grabOffsetFromCenter = Offset.Zero
-                    draggedCardSize = null
-                    hasDragged = false
-                    autoScrollSpeedPx = 0f
-                    initialDragSnapshot = null
-
-                    if (!didMove && finishedNoteId != null) {
-                      selectedNoteIds = if (finishedNoteId in selectedNoteIds) {
-                        selectedNoteIds - finishedNoteId
+                      if (!isReorderDragging) {
+                        if (totalDragOffset.getDistance() <= dragSlopPx) {
+                          continue
+                        }
+                        isReorderDragging = true
+                        selectedNoteIds = selectionBeforePress
+                        draggedNoteId = hitNote.id
+                        dragPointerOffset = currentPointerPos
+                        grabOffsetFromCenter = if (rect != null) {
+                          startOffset - rect.center
+                        } else {
+                          Offset.Zero
+                        }
+                        draggedCardSize = rect?.let {
+                          IntSize(it.width.roundToInt(), it.height.roundToInt())
+                        }
+                        hasDragged = true
+                        autoScrollSpeedPx = 0f
+                        initialDragSnapshot = NotesHistorySnapshot(notes, savedLabels)
                       } else {
-                        selectedNoteIds + finishedNoteId
+                        dragPointerOffset += dragAmount
                       }
-                    } else if (before != null && before.notes != notes) {
-                      undoStack = listOf(before) + undoStack.take(49)
-                      redoStack = emptyList()
-                      repo.saveNotes(notes)
+
+                      val activeNoteId = draggedNoteId ?: continue
+                      val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+
+                      val viewportHeight = (gridCoordinates?.size?.height ?: 0).toFloat()
+                      autoScrollSpeedPx = when {
+                        viewportHeight <= 0f -> 0f
+                        dragPointerOffset.y < autoScrollEdgeThresholdPx && gridState.canScrollBackward -> {
+                          val fraction = ((autoScrollEdgeThresholdPx - dragPointerOffset.y) / autoScrollEdgeThresholdPx)
+                            .coerceIn(0f, 1f)
+                          -maxAutoScrollStepPx * fraction
+                        }
+                        dragPointerOffset.y > viewportHeight - autoScrollEdgeThresholdPx && gridState.canScrollForward -> {
+                          val fraction = ((dragPointerOffset.y - (viewportHeight - autoScrollEdgeThresholdPx)) / autoScrollEdgeThresholdPx)
+                            .coerceIn(0f, 1f)
+                          maxAutoScrollStepPx * fraction
+                        }
+                        else -> 0f
+                      }
+
+                      val liveFiltered = NotesEngine.filterNotes(
+                        notes = notes,
+                        filter = currentActiveFilter,
+                        searchQuery = if (currentIsSearchActive) currentSearchQuery else "",
+                        colorFilter = if (currentIsSearchActive) currentSelectedColorFilter else null,
+                      )
+                      val sectionNotes = if (liveFiltered.pinned.any { it.id == activeNoteId }) {
+                        liveFiltered.pinned
+                      } else {
+                        liveFiltered.others
+                      }
+
+                      val targetNoteId = findTargetNoteId(
+                        draggedNoteId = activeNoteId,
+                        point = desiredCenter,
+                        sectionNotes = sectionNotes,
+                        cardBounds = cardBounds,
+                        isGridView = currentIsGridView,
+                      )
+
+                      if (targetNoteId != null && targetNoteId != activeNoteId) {
+                        val firstVisibleIndex = gridState.firstVisibleItemIndex
+                        val firstVisibleOffset = gridState.firstVisibleItemScrollOffset
+                        val reordered = NotesEngine.reorderNotes(notes, activeNoteId, targetNoteId)
+                        if (reordered != notes) {
+                          val nextFiltered = NotesEngine.filterNotes(
+                            notes = reordered,
+                            filter = currentActiveFilter,
+                            searchQuery = if (currentIsSearchActive) currentSearchQuery else "",
+                            colorFilter = if (currentIsSearchActive) currentSelectedColorFilter else null,
+                          )
+                          val newSectionNotes = if (nextFiltered.pinned.any { it.id == activeNoteId }) {
+                            nextFiltered.pinned
+                          } else {
+                            nextFiltered.others
+                          }
+                          updateSectionCardBoundsOptimistically(
+                            oldSectionNotes = sectionNotes,
+                            newSectionNotes = newSectionNotes,
+                            cardBounds = cardBounds,
+                            isGridView = currentIsGridView,
+                            verticalSpacingPx = verticalSpacingPx,
+                            columns = currentColumns,
+                          )
+                          notes = reordered
+                          gridState.requestScrollToItem(firstVisibleIndex, firstVisibleOffset)
+                          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        }
+                      }
                     }
-                  },
-                  onDragCancel = {
+                  } finally {
                     val before = initialDragSnapshot
+                    val didReorder = isReorderDragging
+                    activeLongPressNoteId = null
                     draggedNoteId = null
                     dragPointerOffset = Offset.Zero
                     grabOffsetFromCenter = Offset.Zero
@@ -822,13 +883,13 @@ fun NotesScreen(
                     autoScrollSpeedPx = 0f
                     initialDragSnapshot = null
 
-                    if (before != null && before.notes != notes) {
+                    if (didReorder && before != null && before.notes != notes) {
                       undoStack = listOf(before) + undoStack.take(49)
                       redoStack = emptyList()
                       repo.saveNotes(notes)
                     }
-                  },
-                )
+                  }
+                }
               },
           ) {
             LazyVerticalStaggeredGrid(
@@ -867,6 +928,7 @@ fun NotesScreen(
                   val isDraggingThis = draggedNoteId == note.id
                   DisposableEffect(note.id) {
                     onDispose {
+                      cardCoordinates.remove(note.id)
                       cardBounds.remove(note.id)
                     }
                   }
@@ -876,7 +938,7 @@ fun NotesScreen(
                     isSelectionMode = isSelectionMode,
                     isDragging = false,
                     onClick = {
-                      if (draggedNoteId != null) return@NoteCard
+                      if (draggedNoteId != null || activeLongPressNoteId != null) return@NoteCard
                       if (isSelectionMode) {
                         selectedNoteIds = if (note.id in selectedNoteIds) {
                           selectedNoteIds - note.id
@@ -889,17 +951,18 @@ fun NotesScreen(
                     },
                     onLongClick = null,
                     onTogglePin = {
-                      if (draggedNoteId != null) return@NoteCard
+                      if (draggedNoteId != null || activeLongPressNoteId != null) return@NoteCard
                       haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                       applyStateChange(NotesEngine.togglePin(notes, note.id))
                     },
                     onToggleChecklistItem = { itemId ->
-                      if (draggedNoteId != null) return@NoteCard
+                      if (draggedNoteId != null || activeLongPressNoteId != null) return@NoteCard
                       haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                       applyStateChange(NotesEngine.toggleChecklistItem(notes, note.id, itemId))
                     },
                     modifier = Modifier
                       .onGloballyPositioned { coords ->
+                        cardCoordinates[note.id] = coords
                         val gridCoords = gridCoordinates
                         if (gridCoords != null && gridCoords.isAttached && coords.isAttached) {
                           cardBounds[note.id] = gridCoords.localBoundingBoxOf(coords, clipBounds = false)
@@ -936,6 +999,7 @@ fun NotesScreen(
                   val isDraggingThis = draggedNoteId == note.id
                   DisposableEffect(note.id) {
                     onDispose {
+                      cardCoordinates.remove(note.id)
                       cardBounds.remove(note.id)
                     }
                   }
@@ -945,7 +1009,7 @@ fun NotesScreen(
                     isSelectionMode = isSelectionMode,
                     isDragging = false,
                     onClick = {
-                      if (draggedNoteId != null) return@NoteCard
+                      if (draggedNoteId != null || activeLongPressNoteId != null) return@NoteCard
                       if (isSelectionMode) {
                         selectedNoteIds = if (note.id in selectedNoteIds) {
                           selectedNoteIds - note.id
@@ -958,17 +1022,18 @@ fun NotesScreen(
                     },
                     onLongClick = null,
                     onTogglePin = {
-                      if (draggedNoteId != null) return@NoteCard
+                      if (draggedNoteId != null || activeLongPressNoteId != null) return@NoteCard
                       haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                       applyStateChange(NotesEngine.togglePin(notes, note.id))
                     },
                     onToggleChecklistItem = { itemId ->
-                      if (draggedNoteId != null) return@NoteCard
+                      if (draggedNoteId != null || activeLongPressNoteId != null) return@NoteCard
                       haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                       applyStateChange(NotesEngine.toggleChecklistItem(notes, note.id, itemId))
                     },
                     modifier = Modifier
                       .onGloballyPositioned { coords ->
+                        cardCoordinates[note.id] = coords
                         val gridCoords = gridCoordinates
                         if (gridCoords != null && gridCoords.isAttached && coords.isAttached) {
                           cardBounds[note.id] = gridCoords.localBoundingBoxOf(coords, clipBounds = false)
@@ -1985,7 +2050,9 @@ fun NoteCard(
             Checkbox(
               checked = isSelected,
               onCheckedChange = { onClick() },
-              modifier = Modifier.size(22.dp),
+              modifier = Modifier
+                .size(22.dp)
+                .testTag("note_card_checkbox_${note.id}"),
             )
           }
           if (note.title.isNotBlank()) {
@@ -2115,14 +2182,6 @@ fun NoteCard(
                     onClick = {
                       noteMenuExpanded = false
                       noteActions.onChangeColor(note)
-                    },
-                  )
-                  DropdownMenuItem(
-                    text = { Text("Duplicate Note") },
-                    leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-                    onClick = {
-                      noteMenuExpanded = false
-                      noteActions.onDuplicate(note)
                     },
                   )
                   HorizontalDivider()

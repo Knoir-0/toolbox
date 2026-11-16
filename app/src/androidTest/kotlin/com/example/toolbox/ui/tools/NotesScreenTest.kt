@@ -272,4 +272,69 @@ class NotesScreenTest {
     composeTestRule.onNodeWithText("recipes").assertIsDisplayed()
     composeTestRule.onNodeWithText("#recipes").assertDoesNotExist()
   }
+
+  @Test
+  fun notesScreen_holdingDownOnNotes_multiSelectsNotes() {
+    val repo = InMemoryNotesRepository(
+      initialNotes = listOf(
+        NoteItem(
+          id = "n1",
+          title = "First Note",
+          content = "Body one",
+        ),
+        NoteItem(
+          id = "n2",
+          title = "Second Note",
+          content = "Body two",
+        ),
+        NoteItem(
+          id = "n3",
+          title = "Third Note",
+          content = "Body three",
+        ),
+      ),
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        NotesScreen(repository = repo)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Hold down on the first note (with slight finger movement) -> enters multi-select mode
+    composeTestRule.onNodeWithTag("note_card_n1").performTouchInput {
+      down(center)
+      advanceEventTime(viewConfiguration.longPressTimeoutMillis + 100L)
+      moveBy(androidx.compose.ui.geometry.Offset(3f, 2f))
+      up()
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("notes_selection_top_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithText("1 selected").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("note_card_checkbox_n1").assertIsDisplayed()
+
+    // Hold down on the second note -> adds it to selection
+    composeTestRule.onNodeWithTag("note_card_n2").performTouchInput {
+      down(center)
+      advanceEventTime(viewConfiguration.longPressTimeoutMillis + 100L)
+      up()
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithText("2 selected").assertIsDisplayed()
+
+    // Tapping the third note in selection mode also selects it
+    composeTestRule.onNodeWithTag("note_card_n3").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithText("3 selected").assertIsDisplayed()
+
+    // Clear selection via top bar close button
+    composeTestRule.onNodeWithTag("notes_clear_selection").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("notes_selection_top_bar").assertIsNotDisplayed()
+  }
 }

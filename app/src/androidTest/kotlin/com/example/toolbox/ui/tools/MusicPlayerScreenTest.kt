@@ -85,10 +85,12 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("music_shuffle_all_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("artist_list_view").assertIsDisplayed()
     composeTestRule.onNodeWithText("Aurora Synth").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("artist_more_Aurora Synth").assertIsDisplayed()
 
     composeTestRule.onNodeWithTag("music_view_mode_card").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("artist_card_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("artist_more_Aurora Synth").assertIsDisplayed()
 
     // 2. Albums Card & List View
     composeTestRule.onNodeWithTag("music_tab_ALBUMS").performClick()
@@ -97,10 +99,12 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("music_shuffle_all_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("album_card_view").assertIsDisplayed()
     composeTestRule.onNodeWithText("Midnight Odyssey").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("album_more_Midnight Odyssey").assertIsDisplayed()
 
     composeTestRule.onNodeWithTag("music_view_mode_list").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("album_list_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("album_more_Midnight Odyssey").assertIsDisplayed()
 
     // 3. Songs List & Card View
     composeTestRule.onNodeWithTag("music_tab_SONGS").performClick()
@@ -109,10 +113,12 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("music_shuffle_all_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("song_list_view").assertIsDisplayed()
     composeTestRule.onNodeWithText("Neon Horizon").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("song_more_sample_neon_horizon").assertIsDisplayed()
 
     composeTestRule.onNodeWithTag("music_view_mode_card").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("song_card_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("song_more_sample_neon_horizon").assertIsDisplayed()
 
     // 4. Genres Card & List View
     composeTestRule.onNodeWithTag("music_tab_GENRES").performClick()
@@ -120,10 +126,12 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("music_play_all_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("music_shuffle_all_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("genre_card_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("genre_more_Synthwave").assertIsDisplayed()
 
     composeTestRule.onNodeWithTag("music_view_mode_list").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("genre_list_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("genre_more_Synthwave").assertIsDisplayed()
 
     // 5. Playlists List & Card View
     composeTestRule.onNodeWithTag("music_tab_PLAYLISTS").performClick()
@@ -134,10 +142,12 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithText("Favorites").assertIsDisplayed()
     composeTestRule.onNodeWithText("Most Played").assertIsDisplayed()
     composeTestRule.onNodeWithText("Recently Played").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("playlist_more_Favorites").assertIsDisplayed()
 
     composeTestRule.onNodeWithTag("music_view_mode_card").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("playlist_card_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("playlist_more_Favorites").assertIsDisplayed()
 
     // 6. Integrated Toolbar Search searches the currently selected view (Playlists) and hides toolbar icons when searching
     composeTestRule.onNodeWithTag("music_view_mode_toggle").assertIsDisplayed()

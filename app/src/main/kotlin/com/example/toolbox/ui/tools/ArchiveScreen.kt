@@ -2576,22 +2576,13 @@ private fun ArchiveEntryActionMenu(
           modifier = Modifier.testTag("action_preview_text_entry"),
         )
         DropdownMenuItem(
-          text = { Text("Save to Notes") },
+          text = { Text("Add Note") },
           leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
           onClick = {
             onDismiss()
             crossToolActions.onSaveToNotes(item)
           },
           modifier = Modifier.testTag("action_save_entry_to_notes"),
-        )
-        DropdownMenuItem(
-          text = { Text("Import to To Do") },
-          leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) },
-          onClick = {
-            onDismiss()
-            crossToolActions.onImportToTodo(item)
-          },
-          modifier = Modifier.testTag("action_import_entry_to_todo"),
         )
       } else if (ArchiveEngine.isImageEntry(item)) {
         DropdownMenuItem(
@@ -2601,7 +2592,7 @@ private fun ArchiveEntryActionMenu(
           modifier = Modifier.testTag("action_preview_image_entry"),
         )
         DropdownMenuItem(
-          text = { Text("Open in Gallery") },
+          text = { Text("Gallery") },
           leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
           onClick = {
             onDismiss()
@@ -2648,7 +2639,7 @@ private fun ArchiveEntryActionMenu(
         )
       } else if (ArchiveEngine.isVideoEntry(item)) {
         DropdownMenuItem(
-          text = { Text("Open in Gallery") },
+          text = { Text("Gallery") },
           leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
           onClick = {
             onDismiss()

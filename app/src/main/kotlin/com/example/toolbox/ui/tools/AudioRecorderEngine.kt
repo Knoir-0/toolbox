@@ -38,6 +38,11 @@ enum class AudioCaptureSource(
     shortLabel = "Device",
     description = "Record internal audio playing on the device",
   ),
+  DEVICE_AND_MIC(
+    displayName = "Device + Mic",
+    shortLabel = "Both",
+    description = "Record both internal device audio and external microphone audio",
+  ),
   ;
 
   companion object {
@@ -45,11 +50,22 @@ enum class AudioCaptureSource(
 
     fun fromNameOrDefault(name: String?): AudioCaptureSource {
       if (name.isNullOrBlank()) return DEFAULT
+      val trimmed = name.trim()
       return entries.find {
-        it.name.equals(name.trim(), ignoreCase = true) ||
-          it.shortLabel.equals(name.trim(), ignoreCase = true) ||
-          it.displayName.equals(name.trim(), ignoreCase = true)
-      } ?: DEFAULT
+        it.name.equals(trimmed, ignoreCase = true) ||
+          it.shortLabel.equals(trimmed, ignoreCase = true) ||
+          it.displayName.equals(trimmed, ignoreCase = true)
+      } ?: when (trimmed.lowercase(Locale.ROOT)) {
+        "both",
+        "combined",
+        "device_and_microphone",
+        "device_mic",
+        "mic_and_device",
+        "device & mic",
+        "device + microphone",
+        -> DEVICE_AND_MIC
+        else -> DEFAULT
+      }
     }
   }
 }
@@ -155,14 +171,17 @@ object AudioRecorderEngine {
    */
   fun inferCaptureSource(fileName: String): AudioCaptureSource {
     val lower = fileName.lowercase(Locale.ROOT)
-    return if (
+    return when {
+      lower.startsWith("recording_both_") ||
+        lower.startsWith("recording_combined_") ||
+        lower.startsWith("recording_device_mic_") ||
+        lower.startsWith("both_") ||
+        lower.contains("_both_") ||
+        lower.contains("_device_mic_") -> AudioCaptureSource.DEVICE_AND_MIC
       lower.startsWith("recording_device_") ||
-      lower.startsWith("device_") ||
-      lower.contains("_device_")
-    ) {
-      AudioCaptureSource.DEVICE_AUDIO
-    } else {
-      AudioCaptureSource.MICROPHONE
+        lower.startsWith("device_") ||
+        lower.contains("_device_") -> AudioCaptureSource.DEVICE_AUDIO
+      else -> AudioCaptureSource.MICROPHONE
     }
   }
 
@@ -189,9 +208,19 @@ object AudioRecorderEngine {
     return formatDurationMs(elapsedMs)
   }
 
+  private fun filePrefixForSource(source: AudioCaptureSource): String {
+    return when (source) {
+      AudioCaptureSource.MICROPHONE -> "Recording"
+      AudioCaptureSource.DEVICE_AUDIO -> "Recording_Device"
+      AudioCaptureSource.DEVICE_AND_MIC -> "Recording_Both"
+    }
+  }
+
   /**
    * Generates a timestamped base filename for a recording stopped at [epochMs].
-   * Example: `Recording_20261110_124523.m4a` (Microphone) or `Recording_Device_20261110_124523.m4a` (Device Audio).
+   * Example: `Recording_20261110_124523.m4a` (Microphone),
+   * `Recording_Device_20261110_124523.m4a` (Device Audio), or
+   * `Recording_Both_20261110_124523.m4a` (Device + Microphone).
    */
   fun generateTimestampedFileName(
     format: AudioRecordingFormat = AudioRecordingFormat.DEFAULT,
@@ -200,7 +229,7 @@ object AudioRecorderEngine {
   ): String {
     val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
     val stamp = sdf.format(Date(epochMs))
-    val prefix = if (source == AudioCaptureSource.DEVICE_AUDIO) "Recording_Device" else "Recording"
+    val prefix = filePrefixForSource(source)
     return "${prefix}_${stamp}.${format.extension}"
   }
 
@@ -219,7 +248,7 @@ object AudioRecorderEngine {
     }
     val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
     val stamp = sdf.format(Date(epochMs))
-    val prefix = if (source == AudioCaptureSource.DEVICE_AUDIO) "Recording_Device" else "Recording"
+    val prefix = filePrefixForSource(source)
     val baseStem = "${prefix}_$stamp"
     val ext = format.extension
 
@@ -536,6 +565,7 @@ class ActiveAudioRecordingSession(
 ) {
   private var mediaRecorder: MediaRecorder? = null
   private var audioRecord: AudioRecord? = null
+  private var secondaryAudioRecord: AudioRecord? = null
   private var wavThread: Thread? = null
   @Volatile private var isRecordingWav = false
   @Volatile var latestAmplitude: Float = 0f
@@ -560,18 +590,34 @@ class ActiveAudioRecordingSession(
     return true
   }
 
+  private fun deviceAudioSources(): List<Int> = buildList {
+    add(MediaRecorder.AudioSource.REMOTE_SUBMIX)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      add(MediaRecorder.AudioSource.VOICE_PERFORMANCE)
+    }
+    add(MediaRecorder.AudioSource.UNPROCESSED)
+    add(MediaRecorder.AudioSource.DEFAULT)
+  }
+
+  private fun micAudioSources(): List<Int> = listOf(
+    MediaRecorder.AudioSource.MIC,
+    MediaRecorder.AudioSource.DEFAULT,
+  )
+
   private fun candidateAudioSources(): List<Int> {
-    return if (source == AudioCaptureSource.DEVICE_AUDIO) {
-      buildList {
-        add(MediaRecorder.AudioSource.REMOTE_SUBMIX)
+    return when (source) {
+      AudioCaptureSource.DEVICE_AUDIO -> deviceAudioSources()
+      AudioCaptureSource.DEVICE_AND_MIC -> buildList {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
           add(MediaRecorder.AudioSource.VOICE_PERFORMANCE)
         }
-        add(MediaRecorder.AudioSource.UNPROCESSED)
+        add(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+        add(MediaRecorder.AudioSource.CAMCORDER)
+        add(MediaRecorder.AudioSource.REMOTE_SUBMIX)
+        add(MediaRecorder.AudioSource.MIC)
         add(MediaRecorder.AudioSource.DEFAULT)
       }
-    } else {
-      listOf(MediaRecorder.AudioSource.MIC, MediaRecorder.AudioSource.DEFAULT)
+      AudioCaptureSource.MICROPHONE -> micAudioSources()
     }
   }
 
@@ -635,6 +681,32 @@ class ActiveAudioRecordingSession(
   }
 
   @android.annotation.SuppressLint("MissingPermission")
+  private fun initFirstWorkingAudioRecord(
+    sources: List<Int>,
+    sampleRate: Int,
+    bufferSizeInBytes: Int,
+  ): AudioRecord? {
+    for (audioSource in sources) {
+      try {
+        val candidate = AudioRecord(
+          audioSource,
+          sampleRate,
+          AudioFormat.CHANNEL_IN_MONO,
+          AudioFormat.ENCODING_PCM_16BIT,
+          bufferSizeInBytes,
+        )
+        if (candidate.state == AudioRecord.STATE_INITIALIZED) {
+          candidate.startRecording()
+          return candidate
+        } else {
+          candidate.release()
+        }
+      } catch (_: Throwable) {}
+    }
+    return null
+  }
+
+  @android.annotation.SuppressLint("MissingPermission")
   private fun startWavRecording(): Boolean {
     val sampleRate = 44100
     val minBuf = try {
@@ -648,28 +720,34 @@ class ActiveAudioRecordingSession(
     }
     if (minBuf <= 0) return false
 
-    var initializedRecord: AudioRecord? = null
-    for (audioSource in candidateAudioSources()) {
-      try {
-        val candidate = AudioRecord(
-          audioSource,
-          sampleRate,
-          AudioFormat.CHANNEL_IN_MONO,
-          AudioFormat.ENCODING_PCM_16BIT,
-          minBuf * 2,
-        )
-        if (candidate.state == AudioRecord.STATE_INITIALIZED) {
-          candidate.startRecording()
-          initializedRecord = candidate
-          break
-        } else {
-          candidate.release()
-        }
-      } catch (_: Throwable) {}
+    val initializedRecord: AudioRecord?
+    var companionRecord: AudioRecord? = null
+
+    if (source == AudioCaptureSource.DEVICE_AND_MIC) {
+      val micRec = initFirstWorkingAudioRecord(micAudioSources(), sampleRate, minBuf * 2)
+      val devRec = initFirstWorkingAudioRecord(
+        listOf(MediaRecorder.AudioSource.REMOTE_SUBMIX) +
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            listOf(MediaRecorder.AudioSource.VOICE_PERFORMANCE)
+          } else {
+            emptyList()
+          },
+        sampleRate,
+        minBuf * 2,
+      )
+      if (micRec != null && devRec != null) {
+        initializedRecord = micRec
+        companionRecord = devRec
+      } else {
+        initializedRecord = micRec ?: devRec ?: initFirstWorkingAudioRecord(candidateAudioSources(), sampleRate, minBuf * 2)
+      }
+    } else {
+      initializedRecord = initFirstWorkingAudioRecord(candidateAudioSources(), sampleRate, minBuf * 2)
     }
 
     val record = initializedRecord ?: return false
     audioRecord = record
+    secondaryAudioRecord = companionRecord
     isRecordingWav = true
 
     return try {
@@ -679,19 +757,37 @@ class ActiveAudioRecordingSession(
             // Placeholder 44-byte header
             fos.write(AudioRecorderEngine.createWavHeader(0L, sampleRate))
             val shortBuf = ShortArray(1024)
+            val secondaryBuf = if (companionRecord != null) ShortArray(1024) else null
             val byteBuf = ByteArray(shortBuf.size * 2)
             var totalBytesWritten = 0L
 
             while (isRecordingWav) {
               val read = record.read(shortBuf, 0, shortBuf.size)
               if (read > 0) {
+                val secondaryRead = if (companionRecord != null && secondaryBuf != null) {
+                  try {
+                    companionRecord.read(secondaryBuf, 0, read)
+                  } catch (_: Throwable) {
+                    0
+                  }
+                } else {
+                  0
+                }
                 var peak = 0
                 for (i in 0 until read) {
-                  val s = shortBuf[i].toInt()
-                  val absVal = kotlin.math.abs(s)
+                  val primarySample = shortBuf[i].toInt()
+                  val mixedSample = if (secondaryBuf != null && i < secondaryRead) {
+                    (primarySample + secondaryBuf[i].toInt()).coerceIn(
+                      Short.MIN_VALUE.toInt(),
+                      Short.MAX_VALUE.toInt(),
+                    )
+                  } else {
+                    primarySample
+                  }
+                  val absVal = kotlin.math.abs(mixedSample)
                   if (absVal > peak) peak = absVal
-                  byteBuf[i * 2] = (s and 0xFF).toByte()
-                  byteBuf[i * 2 + 1] = ((s shr 8) and 0xFF).toByte()
+                  byteBuf[i * 2] = (mixedSample and 0xFF).toByte()
+                  byteBuf[i * 2 + 1] = ((mixedSample shr 8) and 0xFF).toByte()
                 }
                 latestAmplitude = (peak.toFloat() / Short.MAX_VALUE).coerceIn(0f, 1f)
                 val bytesToWrite = read * 2
@@ -718,7 +814,11 @@ class ActiveAudioRecordingSession(
       try {
         audioRecord?.release()
       } catch (_: Throwable) {}
+      try {
+        secondaryAudioRecord?.release()
+      } catch (_: Throwable) {}
       audioRecord = null
+      secondaryAudioRecord = null
       false
     }
   }
@@ -755,6 +855,13 @@ class ActiveAudioRecordingSession(
         audioRecord?.release()
       } catch (_: Throwable) {}
       audioRecord = null
+      try {
+        secondaryAudioRecord?.stop()
+      } catch (_: Throwable) {}
+      try {
+        secondaryAudioRecord?.release()
+      } catch (_: Throwable) {}
+      secondaryAudioRecord = null
     }
 
     val mr = mediaRecorder

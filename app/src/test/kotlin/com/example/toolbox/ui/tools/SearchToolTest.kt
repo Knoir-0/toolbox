@@ -152,12 +152,12 @@ class SearchToolTest {
     val allResults = SearchEngine.search("c")
     assertTrue(allResults.isNotEmpty())
 
-    val toolsOnly = SearchEngine.search(
+    val mathAndMeasureOnly = SearchEngine.search(
       query = "c",
-      categoryFilter = SearchCategoryFilter.TOOLS,
+      categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
     )
-    assertTrue(toolsOnly.isNotEmpty())
-    assertTrue(toolsOnly.all { it.resultType == SearchResultType.TOOL })
+    assertTrue(mathAndMeasureOnly.isNotEmpty())
+    assertTrue(mathAndMeasureOnly.all { it.tool.category == SearchCategoryFilter.MATH_AND_MEASUREMENT.toolCategory })
 
     val chordBookOnly = SearchEngine.search(
       query = "Dorian",
@@ -168,26 +168,11 @@ class SearchToolTest {
   }
 
   @Test
-  fun searchPreferencesRepository_managesRecentSearchesAndPinnedTools() {
-    val repo = InMemorySearchPreferencesRepository()
-    assertTrue(repo.getRecentSearches().isEmpty())
-
-    repo.addRecentSearch("P0420")
-    repo.addRecentSearch("100 km to mi")
-    repo.addRecentSearch("p0420") // deduplicated & moved to top
-    assertEquals(listOf("p0420", "100 km to mi"), repo.getRecentSearches())
-
-    repo.removeRecentSearch("P0420")
-    assertEquals(listOf("100 km to mi"), repo.getRecentSearches())
-
-    repo.clearRecentSearches()
-    assertTrue(repo.getRecentSearches().isEmpty())
-
-    val initialPinned = repo.getPinnedTools()
-    assertTrue(Tool.CALCULATOR in initialPinned)
-    val afterUnpin = repo.togglePinnedTool(Tool.CALCULATOR)
-    assertFalse(Tool.CALCULATOR in afterUnpin)
-    val afterRepin = repo.togglePinnedTool(Tool.CALCULATOR)
-    assertTrue(Tool.CALCULATOR in afterRepin)
+  fun searchCategoryFilters_alignWithAllToolCategories() {
+    for (tool in Tool.entries) {
+      val filter = SearchEngine.categoryFilterForTool(tool)
+      assertEquals(tool.category, filter.toolCategory)
+      assertEquals(tool.category.title, filter.label)
+    }
   }
 }

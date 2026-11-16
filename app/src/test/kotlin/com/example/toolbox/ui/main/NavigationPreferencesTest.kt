@@ -611,9 +611,9 @@ class NavigationPreferencesTest {
     val alphaSorted = sortCategoryGroups(groups, CategorySortingOption.ALPHABETICAL)
     assertEquals(
       listOf(
-        ToolCategory.MATH_AND_MEASUREMENT, // "Math & Measurement"
-        ToolCategory.MISCELLANEOUS, // "Miscellaneous"
-        ToolCategory.MUSIC_AND_INSTRUMENTS, // "Music & Instruments"
+        ToolCategory.MUSIC_AND_INSTRUMENTS, // "Instruments"
+        ToolCategory.MISCELLANEOUS, // "Lifestyle"
+        ToolCategory.MATH_AND_MEASUREMENT, // "Math & Measure"
         ToolCategory.PRODUCTIVITY, // "Productivity"
         ToolCategory.SYSTEM, // "System" always last
       ),

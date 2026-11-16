@@ -213,4 +213,49 @@ class AudioRecorderScreenTest {
     composeTestRule.onNodeWithTag("recording_item_${savedFile.name}").assertIsDisplayed()
     composeTestRule.onNodeWithText("DEVICE").assertIsDisplayed()
   }
+
+  @Test
+  fun bothAudioFab_isSmallerAndPositionedToLeftOfMicFab_andRecordsDeviceAndMicAudio() {
+    composeTestRule.setContent {
+      ToolboxTheme {
+        AudioRecorderScreen(initialDirectory = testAudioDir)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    val bothFabNode = composeTestRule.onNodeWithTag("both_audio_recorder_fab")
+    val micFabNode = composeTestRule.onNodeWithTag("audio_recorder_fab")
+
+    micFabNode.assertIsDisplayed()
+    bothFabNode
+      .assertIsDisplayed()
+      .assertContentDescriptionEquals("Record device and microphone audio")
+    composeTestRule.onNodeWithTag("fab_both_audio_icon", useUnmergedTree = true).assertIsDisplayed()
+
+    val bothBounds = bothFabNode.fetchSemanticsNode().boundsInRoot
+    val micBounds = micFabNode.fetchSemanticsNode().boundsInRoot
+
+    // Verify combined (device + mic) audio FAB is smaller than main microphone FAB and positioned to its left
+    assertTrue("Combined audio FAB should be smaller than mic FAB", bothBounds.width < micBounds.width)
+    assertTrue("Combined audio FAB should be to the left of mic FAB", bothBounds.right <= micBounds.left)
+
+    // Tap the combined audio FAB to start recording both device and microphone audio
+    bothFabNode.performClick()
+    composeTestRule.waitForIdle()
+
+    bothFabNode.assertContentDescriptionEquals("Stop device and microphone audio recording")
+    composeTestRule.onNodeWithTag("fab_both_stop_icon", useUnmergedTree = true).assertIsDisplayed()
+    composeTestRule.onNodeWithText("● RECORDING DEVICE & MIC AUDIO").assertIsDisplayed()
+
+    // Tap the combined audio FAB again to stop and save the recording
+    bothFabNode.performClick()
+    composeTestRule.waitForIdle()
+
+    val savedFiles = testAudioDir.listFiles()?.filter { it.isFile }.orEmpty()
+    assertTrue("Expected a saved combined audio recording file", savedFiles.isNotEmpty())
+    val savedFile = savedFiles.first()
+    assertTrue(savedFile.name.startsWith("Recording_Both_"))
+    composeTestRule.onNodeWithTag("recording_item_${savedFile.name}").assertIsDisplayed()
+    composeTestRule.onNodeWithText("DEVICE + MIC").assertIsDisplayed()
+  }
 }

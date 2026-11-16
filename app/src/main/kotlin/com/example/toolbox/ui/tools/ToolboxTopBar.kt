@@ -157,6 +157,7 @@ fun ToolboxTopBar(
   if (searchState != null) {
     LaunchedEffect(isSearchActive) {
       if (isSearchActive) {
+        runCatching { focusRequester.requestFocus() }
         delay(80)
         runCatching { focusRequester.requestFocus() }
         keyboardController?.show()

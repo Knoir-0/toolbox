@@ -3,6 +3,7 @@ package com.example.toolbox.ui.tools
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -21,7 +22,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,8 +31,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Launch
 import androidx.compose.material.icons.automirrored.filled.NoteAdd
@@ -42,14 +40,10 @@ import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -64,8 +58,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -79,7 +71,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -89,7 +80,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -97,7 +87,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.example.toolbox.ui.main.NavigationPreferencesRepository
 import com.example.toolbox.ui.main.Tool
-import com.example.toolbox.ui.main.ToolCategory
 import com.example.toolbox.ui.theme.ToolboxTheme
 import com.example.toolbox.ui.theme.parseHexColor
 
@@ -112,17 +101,12 @@ fun SearchScreen(
   onSelectTool: ((Tool) -> Unit)? = null,
   onOpenColorPicker: ((String?) -> Unit)? = null,
   preferencesRepository: NavigationPreferencesRepository? = null,
-  searchPreferencesRepository: SearchPreferencesRepository? = null,
   customDataSources: SearchDataSources? = null,
   initialQuery: String = "",
 ) {
   val context = LocalContext.current
   val haptics = LocalHapticFeedback.current
   val focusManager = LocalFocusManager.current
-
-  val searchPrefs = remember(context, searchPreferencesRepository) {
-    searchPreferencesRepository ?: SharedPreferencesSearchRepository(context)
-  }
 
   val hiddenTools by if (preferencesRepository != null) {
     preferencesRepository.hiddenToolsFlow.collectAsState()
@@ -144,21 +128,15 @@ fun SearchScreen(
     )
   }
 
+  var isSearchActive by rememberSaveable { mutableStateOf(true) }
   var searchQuery by rememberSaveable { mutableStateOf(initialQuery) }
   var selectedCategoryFilter by rememberSaveable { mutableStateOf(SearchCategoryFilter.ALL) }
   var selectedToolFilterName by rememberSaveable { mutableStateOf<String?>(null) }
-  var directoryCategoryFilterName by rememberSaveable { mutableStateOf<String?>(null) }
-  var recentSearches by remember { mutableStateOf(searchPrefs.getRecentSearches()) }
-  var pinnedTools by remember { mutableStateOf(searchPrefs.getPinnedTools()) }
   var inspectedResult by remember { mutableStateOf<SearchResultItem?>(null) }
   var copiedItemId by remember { mutableStateOf<String?>(null) }
 
   val selectedToolFilter = remember(selectedToolFilterName) {
     selectedToolFilterName?.let { name -> Tool.entries.find { it.name == name } }
-  }
-
-  val directoryCategoryFilter = remember(directoryCategoryFilterName) {
-    directoryCategoryFilterName?.let { name -> ToolCategory.entries.find { it.name == name } }
   }
 
   val results = remember(searchQuery, selectedCategoryFilter, selectedToolFilter, dataSources) {
@@ -177,17 +155,22 @@ fun SearchScreen(
     )
   }
 
-  fun recordRecentSearch(query: String) {
-    val trimmed = query.trim()
-    if (trimmed.isNotEmpty()) {
-      searchPrefs.addRecentSearch(trimmed)
-      recentSearches = searchPrefs.getRecentSearches()
+  BackHandler(
+    enabled = searchQuery.isNotEmpty() ||
+      selectedCategoryFilter != SearchCategoryFilter.ALL ||
+      selectedToolFilter != null,
+  ) {
+    if (searchQuery.isNotEmpty() || selectedToolFilter != null) {
+      searchQuery = ""
+      selectedToolFilterName = null
+    } else {
+      selectedCategoryFilter = SearchCategoryFilter.ALL
     }
+    focusManager.clearFocus()
   }
 
   fun launchToolFromSearch(tool: Tool, colorHex: String? = null) {
     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-    recordRecentSearch(searchQuery)
     if (tool == Tool.COLOR_PICKER && colorHex != null && onOpenColorPicker != null) {
       onOpenColorPicker(colorHex)
     } else {
@@ -222,12 +205,15 @@ fun SearchScreen(
       .background(MaterialTheme.colorScheme.background)
       .testTag("search_screen"),
   ) {
-    // Standard 68.dp Top Header Bar
+    // Standard 68.dp Top Header Bar with integrated & autofocused search bar
     ToolboxTopBar(
       title = "Search",
       subtext = statusSubtitle,
       icon = Icons.Default.Search,
       subtextTestTag = "search_status_subtitle",
+      leadingRowModifier = Modifier.clickable {
+        isSearchActive = true
+      },
       actions = {
         if (searchQuery.isNotBlank() || selectedCategoryFilter != SearchCategoryFilter.ALL || selectedToolFilter != null) {
           Surface(
@@ -263,77 +249,55 @@ fun SearchScreen(
           }
         }
       },
-    )
-
-    // Search Input & Filter Chips Header
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(horizontal = 16.dp, vertical = 10.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      OutlinedTextField(
-        value = searchQuery,
-        onValueChange = { newValue ->
+      searchState = ToolboxTopBarSearchState(
+        isActive = isSearchActive,
+        query = searchQuery,
+        onQueryChange = { newValue ->
           searchQuery = newValue
           copiedItemId = null
         },
-        modifier = Modifier
-          .fillMaxWidth()
-          .testTag("search_query_input"),
-        placeholder = {
-          Text(
-            text = "Search tools, math, units, notes, recipes, DTCs...",
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
+        onOpenSearch = {
+          isSearchActive = true
         },
-        leadingIcon = {
-          Icon(
-            imageVector = Icons.Default.Search,
-            contentDescription = "Search Icon",
-            tint = MaterialTheme.colorScheme.primary,
-          )
+        onCloseSearch = {
+          isSearchActive = false
+          searchQuery = ""
+          selectedToolFilterName = null
+          focusManager.clearFocus()
         },
-        trailingIcon = {
-          if (searchQuery.isNotEmpty()) {
-            IconButton(
-              onClick = {
-                searchQuery = ""
-                selectedToolFilterName = null
-              },
-              modifier = Modifier.testTag("search_clear_query_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Clear,
-                contentDescription = "Clear search query",
-              )
-            }
-          }
+        onClearQuery = {
+          searchQuery = ""
+          selectedToolFilterName = null
         },
-        singleLine = true,
-        shape = RoundedCornerShape(16.dp),
-        colors = OutlinedTextFieldDefaults.colors(
-          focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-          unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
-          focusedBorderColor = MaterialTheme.colorScheme.primary,
-          unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
-        ),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(
-          onSearch = {
-            recordRecentSearch(searchQuery)
-            focusManager.clearFocus()
-          }
-        ),
-      )
+        placeholder = "Search tools, math, units, notes, recipes, DTCs...",
+        searchContentDescription = "Search",
+        closeContentDescription = "Close search",
+        clearContentDescription = "Clear search query",
+        toggleButtonTestTag = "action_toggle_search",
+        searchBarTestTag = "toolbar_search_bar",
+        closeButtonTestTag = "action_close_search",
+        inputTestTag = "search_query_input",
+        clearButtonTestTag = "search_clear_query_button",
+        onSearchImeAction = {
+          focusManager.clearFocus()
+        },
+      ),
+    )
 
-      // Domain Category Filter Chips
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+
+    // Category Pills Bar (aligned with ToolCategory) + Per-Tool Filter Chips
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 12.dp, vertical = 6.dp),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
       Row(
         modifier = Modifier
           .fillMaxWidth()
-          .horizontalScroll(rememberScrollState()),
+          .horizontalScroll(rememberScrollState())
+          .testTag("search_category_pills_row"),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
@@ -342,13 +306,18 @@ fun SearchScreen(
           FilterChip(
             selected = isSelected,
             onClick = {
-              selectedCategoryFilter = filter
+              selectedCategoryFilter = if (isSelected && filter != SearchCategoryFilter.ALL) {
+                SearchCategoryFilter.ALL
+              } else {
+                filter
+              }
             },
             label = {
               Text(
                 text = filter.label,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
               )
             },
             shape = RoundedCornerShape(20.dp),
@@ -402,6 +371,7 @@ fun SearchScreen(
               } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
               },
+              maxLines = 1,
               modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
             )
           }
@@ -453,6 +423,7 @@ fun SearchScreen(
                     } else {
                       MaterialTheme.colorScheme.onSurfaceVariant
                     },
+                    maxLines = 1,
                   )
                 }
               }
@@ -461,34 +432,17 @@ fun SearchScreen(
       }
     }
 
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
 
     // Main Content Area
     if (searchQuery.isBlank()) {
       SearchDiscoveryHomeView(
-        recentSearches = recentSearches,
-        pinnedTools = pinnedTools,
         hiddenTools = hiddenTools,
         usageCounts = usageCounts,
         selectedCategoryFilter = selectedCategoryFilter,
-        directoryCategoryFilter = directoryCategoryFilter,
-        onSelectDirectoryCategory = { category ->
-          directoryCategoryFilterName = category?.name
-        },
         onRunQuery = { query ->
+          isSearchActive = true
           searchQuery = query
-          recordRecentSearch(query)
-        },
-        onRemoveRecentSearch = { query ->
-          searchPrefs.removeRecentSearch(query)
-          recentSearches = searchPrefs.getRecentSearches()
-        },
-        onClearRecentSearches = {
-          searchPrefs.clearRecentSearches()
-          recentSearches = emptyList()
-        },
-        onTogglePinTool = { tool ->
-          pinnedTools = searchPrefs.togglePinnedTool(tool)
         },
         onOpenTool = { tool ->
           launchToolFromSearch(tool)
@@ -514,9 +468,9 @@ fun SearchScreen(
         items(results, key = { it.id }) { item ->
           SearchResultCard(
             item = item,
+            isHiddenTool = item.resultType == SearchResultType.TOOL && item.tool in hiddenTools,
             isCopied = copiedItemId == item.id,
             onCardClick = {
-              recordRecentSearch(searchQuery)
               if (item.resultType == SearchResultType.TOOL) {
                 launchToolFromSearch(item.tool, item.colorHex)
               } else {
@@ -524,7 +478,6 @@ fun SearchScreen(
               }
             },
             onInspectClick = {
-              recordRecentSearch(searchQuery)
               inspectedResult = item
             },
             onOpenToolClick = {
@@ -561,27 +514,21 @@ fun SearchScreen(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SearchDiscoveryHomeView(
-  recentSearches: List<String>,
-  pinnedTools: List<Tool>,
   hiddenTools: Set<Tool>,
   usageCounts: Map<Tool, Int>,
   selectedCategoryFilter: SearchCategoryFilter,
-  directoryCategoryFilter: ToolCategory?,
-  onSelectDirectoryCategory: (ToolCategory?) -> Unit,
   onRunQuery: (String) -> Unit,
-  onRemoveRecentSearch: (String) -> Unit,
-  onClearRecentSearches: () -> Unit,
-  onTogglePinTool: (Tool) -> Unit,
   onOpenTool: (Tool) -> Unit,
 ) {
-  val filteredDirectoryTools = remember(selectedCategoryFilter, directoryCategoryFilter) {
+  val filteredDirectoryTools = remember(selectedCategoryFilter) {
     Tool.entries.filter { tool ->
-      val matchesSearchCat = when (selectedCategoryFilter) {
-        SearchCategoryFilter.ALL, SearchCategoryFilter.TOOLS -> true
-        else -> SearchEngine.categoryFilterForTool(tool) == selectedCategoryFilter
-      }
-      val matchesToolCat = directoryCategoryFilter == null || tool.category == directoryCategoryFilter
-      matchesSearchCat && matchesToolCat
+      selectedCategoryFilter.toolCategory == null || tool.category == selectedCategoryFilter.toolCategory
+    }
+  }
+
+  val filteredSuggestions = remember(selectedCategoryFilter) {
+    SearchEngine.DISCOVERY_SUGGESTIONS.filter { suggestion ->
+      selectedCategoryFilter.toolCategory == null || suggestion.tool.category == selectedCategoryFilter.toolCategory
     }
   }
 
@@ -590,11 +537,11 @@ private fun SearchDiscoveryHomeView(
       .fillMaxSize()
       .testTag("search_discovery_home"),
     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-    verticalArrangement = Arrangement.spacedBy(14.dp),
+    verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    // 1. Pinned / Quick Launch Tools
-    if (pinnedTools.isNotEmpty()) {
-      item(key = "pinned_tools_section") {
+    // 1. Instant Evaluators & Discovery Suggestions
+    if (filteredSuggestions.isNotEmpty()) {
+      item(key = "discovery_suggestions_section") {
         Card(
           shape = RoundedCornerShape(14.dp),
           colors = CardDefaults.cardColors(
@@ -602,7 +549,7 @@ private fun SearchDiscoveryHomeView(
           ),
           modifier = Modifier
             .fillMaxWidth()
-            .testTag("search_pinned_tools_card"),
+            .testTag("search_suggestions_card"),
         ) {
           Column(
             modifier = Modifier
@@ -611,188 +558,59 @@ private fun SearchDiscoveryHomeView(
             verticalArrangement = Arrangement.spacedBy(10.dp),
           ) {
             Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Star,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.size(16.dp),
-                )
-                Text(
-                  text = "Quick Launch Tools",
-                  style = MaterialTheme.typography.labelLarge,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.primary,
-                )
-              }
+              Icon(
+                imageVector = Icons.Default.AutoAwesome,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(16.dp),
+              )
               Text(
-                text = "Tap any tool to open",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = "Instant Evaluators & Catalog Lookups",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
               )
             }
 
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              pinnedTools.forEach { tool ->
-                Surface(
-                  shape = RoundedCornerShape(12.dp),
-                  color = MaterialTheme.colorScheme.surface,
-                  border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-                  modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable { onOpenTool(tool) }
-                    .testTag("search_quick_launch_${tool.name}"),
-                ) {
-                  Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                  ) {
-                    Box(
-                      modifier = Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primaryContainer),
-                      contentAlignment = Alignment.Center,
-                    ) {
-                      Icon(
-                        imageVector = tool.icon,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(16.dp),
-                      )
-                    }
-                    Text(
-                      text = tool.title,
-                      style = MaterialTheme.typography.labelLarge,
-                      fontWeight = FontWeight.SemiBold,
-                      color = MaterialTheme.colorScheme.onSurface,
-                    )
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // 2. Recent Searches
-    if (recentSearches.isNotEmpty()) {
-      item(key = "recent_searches_section") {
-        Card(
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-          ),
-          modifier = Modifier
-            .fillMaxWidth()
-            .testTag("search_recent_searches_card"),
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.History,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
-                  modifier = Modifier.size(16.dp),
-                )
-                Text(
-                  text = "Recent Searches",
-                  style = MaterialTheme.typography.labelLarge,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.primary,
-                )
-              }
-
-              Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surface,
-                modifier = Modifier
-                  .clip(CircleShape)
-                  .clickable { onClearRecentSearches() }
-                  .testTag("search_clear_recent_button"),
-              ) {
-                Row(
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                  Icon(
-                    imageVector = Icons.Default.DeleteSweep,
-                    contentDescription = "Clear recent searches",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(14.dp),
-                  )
-                  Text(
-                    text = "Clear",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  )
-                }
-              }
-            }
+            Text(
+              text = "Type a math formula, unit conversion, hex color, RPG dice roll, chord, scale, recipe, plant, or OBD2 trouble code:",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             FlowRow(
               modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.spacedBy(8.dp),
               verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-              recentSearches.forEach { recent ->
+              filteredSuggestions.forEach { suggestion ->
                 Surface(
                   shape = CircleShape,
-                  color = MaterialTheme.colorScheme.surface,
-                  border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                  color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.75f),
                   modifier = Modifier
                     .clip(CircleShape)
-                    .clickable { onRunQuery(recent) }
-                    .testTag("search_recent_item_$recent"),
+                    .clickable { onRunQuery(suggestion.query) }
+                    .testTag("search_suggestion_${suggestion.query}"),
                 ) {
                   Row(
-                    modifier = Modifier.padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                   ) {
-                    Text(
-                      text = recent,
-                      style = MaterialTheme.typography.labelMedium,
-                      color = MaterialTheme.colorScheme.onSurface,
-                    )
                     Icon(
-                      imageVector = Icons.Default.Close,
-                      contentDescription = "Remove $recent",
-                      tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                      modifier = Modifier
-                        .size(16.dp)
-                        .clip(CircleShape)
-                        .clickable { onRemoveRecentSearch(recent) }
-                        .testTag("search_remove_recent_$recent"),
+                      imageVector = suggestion.tool.icon,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                      modifier = Modifier.size(14.dp),
+                    )
+                    Text(
+                      text = suggestion.label,
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = FontWeight.SemiBold,
+                      color = MaterialTheme.colorScheme.onSecondaryContainer,
                     )
                   }
                 }
@@ -803,158 +621,38 @@ private fun SearchDiscoveryHomeView(
       }
     }
 
-    // 3. Instant Evaluators & Discovery Suggestions
-    item(key = "discovery_suggestions_section") {
-      Card(
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(
-          containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        ),
+    // 2. Tools Directory Header
+    item(key = "directory_header_section") {
+      val headerTitle = if (selectedCategoryFilter == SearchCategoryFilter.ALL) {
+        "All Tools (${filteredDirectoryTools.size})"
+      } else {
+        "${selectedCategoryFilter.label} (${filteredDirectoryTools.size})"
+      }
+      Row(
         modifier = Modifier
           .fillMaxWidth()
-          .testTag("search_suggestions_card"),
+          .padding(bottom = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
       ) {
-        Column(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(14.dp),
-          verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-          ) {
-            Icon(
-              imageVector = Icons.Default.AutoAwesome,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(16.dp),
-            )
-            Text(
-              text = "Instant Evaluators & Catalog Lookups",
-              style = MaterialTheme.typography.labelLarge,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.primary,
-            )
-          }
-
-          Text(
-            text = "Type a math formula, unit conversion, hex color, RPG dice roll, chord, scale, recipe, plant, or OBD2 trouble code:",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-
-          FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            SearchEngine.DISCOVERY_SUGGESTIONS.forEach { suggestion ->
-              Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.75f),
-                modifier = Modifier
-                  .clip(CircleShape)
-                  .clickable { onRunQuery(suggestion.query) }
-                  .testTag("search_suggestion_${suggestion.query}"),
-              ) {
-                Row(
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                  Icon(
-                    imageVector = suggestion.tool.icon,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.size(14.dp),
-                  )
-                  Text(
-                    text = suggestion.label,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                  )
-                }
-              }
-            }
-          }
-        }
+        Text(
+          text = headerTitle,
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+          text = "${Tool.entries.size - hiddenTools.size} visible • ${hiddenTools.size} hidden",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
       }
     }
 
-    // 4. All Tools Directory Header & Category Filter
-    item(key = "directory_header_section") {
-      Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Text(
-            text = "All Tools Directory (${filteredDirectoryTools.size})",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
-          Text(
-            text = "${Tool.entries.size - hiddenTools.size} visible • ${hiddenTools.size} hidden",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          val allSelected = directoryCategoryFilter == null
-          FilterChip(
-            selected = allSelected,
-            onClick = { onSelectDirectoryCategory(null) },
-            label = {
-              Text(
-                text = "All Categories",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = if (allSelected) FontWeight.Bold else FontWeight.Medium,
-              )
-            },
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.testTag("search_dir_cat_ALL"),
-          )
-
-          ToolCategory.entries.forEach { category ->
-            val isSelected = directoryCategoryFilter == category
-            FilterChip(
-              selected = isSelected,
-              onClick = {
-                onSelectDirectoryCategory(if (isSelected) null else category)
-              },
-              label = {
-                Text(
-                  text = category.title,
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                )
-              },
-              shape = RoundedCornerShape(20.dp),
-              modifier = Modifier.testTag("search_dir_cat_${category.name}"),
-            )
-          }
-        }
-      }
-    }
-
-    // 5. All Tools Directory Cards
+    // 3. Tools Directory Cards
     items(filteredDirectoryTools, key = { "dir_${it.name}" }) { tool ->
       val meta = SearchEngine.TOOL_METADATA[tool]
       val isHidden = tool in hiddenTools
-      val isPinned = tool in pinnedTools
       val usageCount = usageCounts[tool] ?: 0
 
       Card(
@@ -1003,6 +701,9 @@ private fun SearchDiscoveryHomeView(
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
               )
               Surface(
                 shape = CircleShape,
@@ -1013,32 +714,19 @@ private fun SearchDiscoveryHomeView(
                   style = MaterialTheme.typography.labelSmall,
                   fontWeight = FontWeight.SemiBold,
                   color = MaterialTheme.colorScheme.onSecondaryContainer,
+                  maxLines = 1,
                   modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                 )
               }
               if (isHidden) {
-                Surface(
-                  shape = CircleShape,
-                  color = MaterialTheme.colorScheme.surface,
-                ) {
-                  Row(
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.VisibilityOff,
-                      contentDescription = "Hidden in bar",
-                      tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                      modifier = Modifier.size(11.dp),
-                    )
-                    Text(
-                      text = "Hidden",
-                      style = MaterialTheme.typography.labelSmall,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                  }
-                }
+                Icon(
+                  imageVector = Icons.Default.VisibilityOff,
+                  contentDescription = "Hidden in bar",
+                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier
+                    .size(16.dp)
+                    .testTag("search_tool_hidden_icon_${tool.name}"),
+                )
               }
             }
 
@@ -1058,24 +746,6 @@ private fun SearchDiscoveryHomeView(
                 fontWeight = FontWeight.SemiBold,
               )
             }
-          }
-
-          IconButton(
-            onClick = { onTogglePinTool(tool) },
-            modifier = Modifier
-              .size(34.dp)
-              .testTag("search_pin_tool_${tool.name}"),
-          ) {
-            Icon(
-              imageVector = if (isPinned) Icons.Default.Star else Icons.Default.StarBorder,
-              contentDescription = if (isPinned) "Unpin ${tool.title}" else "Pin ${tool.title}",
-              tint = if (isPinned) {
-                MaterialTheme.colorScheme.primary
-              } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-              },
-              modifier = Modifier.size(20.dp),
-            )
           }
 
           var toolMenuExpanded by remember { mutableStateOf(false) }
@@ -1104,19 +774,6 @@ private fun SearchDiscoveryHomeView(
                 onClick = {
                   toolMenuExpanded = false
                   onOpenTool(tool)
-                },
-              )
-              DropdownMenuItem(
-                text = { Text(if (isPinned) "Unpin from Quick Launch" else "Pin to Quick Launch") },
-                leadingIcon = {
-                  Icon(
-                    imageVector = if (isPinned) Icons.Default.Star else Icons.Default.StarBorder,
-                    contentDescription = null,
-                  )
-                },
-                onClick = {
-                  toolMenuExpanded = false
-                  onTogglePinTool(tool)
                 },
               )
               DropdownMenuItem(
@@ -1166,6 +823,7 @@ private fun SearchDiscoveryHomeView(
 @Composable
 private fun SearchResultCard(
   item: SearchResultItem,
+  isHiddenTool: Boolean,
   isCopied: Boolean,
   onCardClick: () -> Unit,
   onInspectClick: () -> Unit,
@@ -1242,23 +900,44 @@ private fun SearchResultCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
           ) {
-            Text(
-              text = item.title,
-              style = MaterialTheme.typography.titleSmall,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurface,
+            Row(
               modifier = Modifier.weight(1f),
-            )
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Text(
+                text = item.title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+              )
+              if (isHiddenTool) {
+                Icon(
+                  imageVector = Icons.Default.VisibilityOff,
+                  contentDescription = "Hidden in bar",
+                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.size(16.dp),
+                )
+              }
+            }
             Spacer(modifier = Modifier.width(8.dp))
             Surface(
               shape = CircleShape,
               color = MaterialTheme.colorScheme.secondaryContainer,
             ) {
               Text(
-                text = "${item.tool.title} • ${item.badgeLabel}",
+                text = if (item.resultType == SearchResultType.TOOL) {
+                  item.tool.category.title
+                } else {
+                  "${item.tool.title} • ${item.badgeLabel}"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 1,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
               )
             }
@@ -1747,9 +1426,6 @@ private fun SearchResultInspectionDialog(
 private fun SearchScreenPreview() {
   ToolboxTheme {
     SearchScreen(
-      searchPreferencesRepository = InMemorySearchPreferencesRepository(
-        initialRecentSearches = listOf("100 km to mi", "P0420", "Pancakes"),
-      ),
       customDataSources = SearchDataSources(),
     )
   }

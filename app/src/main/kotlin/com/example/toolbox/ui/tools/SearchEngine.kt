@@ -1,31 +1,31 @@
 package com.example.toolbox.ui.tools
 
 import android.content.Context
-import android.content.SharedPreferences
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.ToolCategory
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
-import org.json.JSONArray
-
-const val SEARCH_TOOL_PREFS_NAME = "toolbox_search_prefs"
-const val KEY_RECENT_SEARCHES = "recent_searches_json"
-const val KEY_PINNED_TOOLS = "pinned_tools_json"
-const val MAX_RECENT_SEARCHES = 12
 
 /**
- * High-level domain filter chips for narrowing universal search results across all tools.
+ * Category filter chips for narrowing universal search results and tools directory,
+ * aligned directly with [ToolCategory].
  */
-enum class SearchCategoryFilter(val label: String) {
-  ALL("All"),
-  TOOLS("Tools"),
-  PRODUCTIVITY("Productivity"),
-  MATH_AND_SCIENCE("Math & Units"),
-  MUSIC_AND_AUDIO("Music & Audio"),
-  FILES_AND_MEDIA("Files & Media"),
-  CATALOGS_AND_REFERENCE("Catalogs"),
+enum class SearchCategoryFilter(
+  val label: String,
+  val toolCategory: ToolCategory? = null,
+) {
+  ALL("All", null),
+  MATH_AND_MEASUREMENT(ToolCategory.MATH_AND_MEASUREMENT.title, ToolCategory.MATH_AND_MEASUREMENT),
+  PRODUCTIVITY(ToolCategory.PRODUCTIVITY.title, ToolCategory.PRODUCTIVITY),
+  FILES_AND_STORAGE(ToolCategory.FILES_AND_STORAGE.title, ToolCategory.FILES_AND_STORAGE),
+  PHOTO_AND_VIDEO(ToolCategory.PHOTO_AND_VIDEO.title, ToolCategory.PHOTO_AND_VIDEO),
+  AUDIO_AND_SOUND(ToolCategory.AUDIO_AND_SOUND.title, ToolCategory.AUDIO_AND_SOUND),
+  MUSIC_AND_INSTRUMENTS(ToolCategory.MUSIC_AND_INSTRUMENTS.title, ToolCategory.MUSIC_AND_INSTRUMENTS),
+  REMOTES_AND_DEVICES(ToolCategory.REMOTES_AND_DEVICES.title, ToolCategory.REMOTES_AND_DEVICES),
+  MISCELLANEOUS(ToolCategory.MISCELLANEOUS.title, ToolCategory.MISCELLANEOUS),
+  SYSTEM(ToolCategory.SYSTEM.title, ToolCategory.SYSTEM),
 }
 
 /**
@@ -100,7 +100,7 @@ data class SearchResultItem(
   val badgeLabel: String,
   val tool: Tool,
   val resultType: SearchResultType,
-  val categoryFilter: SearchCategoryFilter,
+  val categoryFilter: SearchCategoryFilter = SearchEngine.categoryFilterForTool(tool),
   val score: Int,
   val copyableValue: String? = null,
   val colorHex: String? = null,
@@ -109,7 +109,7 @@ data class SearchResultItem(
 
 /**
  * Pluggable data sources for user-created content across tools.
- * Can be backed by Android [SharedPreferences] or in-memory repositories in tests.
+ * Can be backed by Android [android.content.SharedPreferences] or in-memory repositories in tests.
  */
 data class SearchDataSources(
   val notesRepository: NotesRepository? = null,
@@ -118,150 +118,6 @@ data class SearchDataSources(
   val plantScheduleRepository: PlantScheduleRepository? = null,
   val hiddenTools: Set<Tool> = emptySet(),
   val usageCounts: Map<Tool, Int> = emptyMap(),
-)
-
-/**
- * Repository for persisting recent search queries and pinned quick-launch tools.
- */
-interface SearchPreferencesRepository {
-  fun getRecentSearches(): List<String>
-  fun addRecentSearch(query: String)
-  fun removeRecentSearch(query: String)
-  fun clearRecentSearches()
-  fun getPinnedTools(): List<Tool>
-  fun togglePinnedTool(tool: Tool): List<Tool>
-}
-
-class InMemorySearchPreferencesRepository(
-  initialRecentSearches: List<String> = emptyList(),
-  initialPinnedTools: List<Tool> = DEFAULT_PINNED_SEARCH_TOOLS,
-) : SearchPreferencesRepository {
-  private val recentSearches = initialRecentSearches.toMutableList()
-  private val pinnedTools = initialPinnedTools.toMutableList()
-
-  override fun getRecentSearches(): List<String> = recentSearches.toList()
-
-  override fun addRecentSearch(query: String) {
-    val trimmed = query.trim()
-    if (trimmed.isEmpty()) return
-    recentSearches.removeAll { it.equals(trimmed, ignoreCase = true) }
-    recentSearches.add(0, trimmed)
-    while (recentSearches.size > MAX_RECENT_SEARCHES) {
-      recentSearches.removeAt(recentSearches.lastIndex)
-    }
-  }
-
-  override fun removeRecentSearch(query: String) {
-    val trimmed = query.trim()
-    recentSearches.removeAll { it.equals(trimmed, ignoreCase = true) }
-  }
-
-  override fun clearRecentSearches() {
-    recentSearches.clear()
-  }
-
-  override fun getPinnedTools(): List<Tool> = pinnedTools.toList()
-
-  override fun togglePinnedTool(tool: Tool): List<Tool> {
-    if (tool in pinnedTools) {
-      pinnedTools.remove(tool)
-    } else {
-      pinnedTools.add(tool)
-    }
-    return pinnedTools.toList()
-  }
-}
-
-class SharedPreferencesSearchRepository(
-  private val prefs: SharedPreferences,
-) : SearchPreferencesRepository {
-
-  constructor(context: Context) : this(
-    context.getSharedPreferences(SEARCH_TOOL_PREFS_NAME, Context.MODE_PRIVATE)
-  )
-
-  override fun getRecentSearches(): List<String> {
-    val raw = prefs.getString(KEY_RECENT_SEARCHES, null) ?: return emptyList()
-    return try {
-      val array = JSONArray(raw)
-      buildList {
-        for (i in 0 until array.length()) {
-          val item = array.optString(i).trim()
-          if (item.isNotEmpty()) add(item)
-        }
-      }
-    } catch (_: Exception) {
-      emptyList()
-    }
-  }
-
-  override fun addRecentSearch(query: String) {
-    val trimmed = query.trim()
-    if (trimmed.isEmpty()) return
-    val updated = getRecentSearches()
-      .filterNot { it.equals(trimmed, ignoreCase = true) }
-      .toMutableList()
-    updated.add(0, trimmed)
-    val capped = updated.take(MAX_RECENT_SEARCHES)
-    saveRecentSearches(capped)
-  }
-
-  override fun removeRecentSearch(query: String) {
-    val trimmed = query.trim()
-    val updated = getRecentSearches().filterNot { it.equals(trimmed, ignoreCase = true) }
-    saveRecentSearches(updated)
-  }
-
-  override fun clearRecentSearches() {
-    prefs.edit().remove(KEY_RECENT_SEARCHES).apply()
-  }
-
-  override fun getPinnedTools(): List<Tool> {
-    val raw = prefs.getString(KEY_PINNED_TOOLS, null) ?: return DEFAULT_PINNED_SEARCH_TOOLS
-    return try {
-      val array = JSONArray(raw)
-      val parsed = buildList {
-        for (i in 0 until array.length()) {
-          val name = array.optString(i)
-          val tool = Tool.entries.find { it.name == name }
-          if (tool != null && tool !in this) add(tool)
-        }
-      }
-      parsed
-    } catch (_: Exception) {
-      DEFAULT_PINNED_SEARCH_TOOLS
-    }
-  }
-
-  override fun togglePinnedTool(tool: Tool): List<Tool> {
-    val current = getPinnedTools().toMutableList()
-    if (tool in current) {
-      current.remove(tool)
-    } else {
-      current.add(tool)
-    }
-    val array = JSONArray()
-    current.forEach { array.put(it.name) }
-    prefs.edit().putString(KEY_PINNED_TOOLS, array.toString()).apply()
-    return current
-  }
-
-  private fun saveRecentSearches(items: List<String>) {
-    val array = JSONArray()
-    items.forEach { array.put(it) }
-    prefs.edit().putString(KEY_RECENT_SEARCHES, array.toString()).apply()
-  }
-}
-
-val DEFAULT_PINNED_SEARCH_TOOLS: List<Tool> = listOf(
-  Tool.CALCULATOR,
-  Tool.NOTES,
-  Tool.TODO_LIST,
-  Tool.UNIT_CONVERTER,
-  Tool.RECIPES,
-  Tool.PLANT_SCHEDULE,
-  Tool.CHORD_BOOK,
-  Tool.OBD2_SCANNER,
 )
 
 /**
@@ -538,19 +394,19 @@ object SearchEngine {
   }
 
   /**
-   * Maps a [ToolCategory] to the corresponding high-level [SearchCategoryFilter].
+   * Maps a [Tool] to its corresponding [SearchCategoryFilter] based on [Tool.category].
    */
   fun categoryFilterForTool(tool: Tool): SearchCategoryFilter {
     return when (tool.category) {
+      ToolCategory.MATH_AND_MEASUREMENT -> SearchCategoryFilter.MATH_AND_MEASUREMENT
       ToolCategory.PRODUCTIVITY -> SearchCategoryFilter.PRODUCTIVITY
-      ToolCategory.MATH_AND_MEASUREMENT -> SearchCategoryFilter.MATH_AND_SCIENCE
-      ToolCategory.MUSIC_AND_INSTRUMENTS -> SearchCategoryFilter.MUSIC_AND_AUDIO
-      ToolCategory.AUDIO_AND_SOUND -> SearchCategoryFilter.MUSIC_AND_AUDIO
-      ToolCategory.PHOTO_AND_VIDEO -> SearchCategoryFilter.FILES_AND_MEDIA
-      ToolCategory.FILES_AND_STORAGE -> SearchCategoryFilter.FILES_AND_MEDIA
-      ToolCategory.REMOTES_AND_DEVICES -> SearchCategoryFilter.CATALOGS_AND_REFERENCE
-      ToolCategory.MISCELLANEOUS -> SearchCategoryFilter.CATALOGS_AND_REFERENCE
-      ToolCategory.SYSTEM -> SearchCategoryFilter.CATALOGS_AND_REFERENCE
+      ToolCategory.FILES_AND_STORAGE -> SearchCategoryFilter.FILES_AND_STORAGE
+      ToolCategory.PHOTO_AND_VIDEO -> SearchCategoryFilter.PHOTO_AND_VIDEO
+      ToolCategory.AUDIO_AND_SOUND -> SearchCategoryFilter.AUDIO_AND_SOUND
+      ToolCategory.MUSIC_AND_INSTRUMENTS -> SearchCategoryFilter.MUSIC_AND_INSTRUMENTS
+      ToolCategory.REMOTES_AND_DEVICES -> SearchCategoryFilter.REMOTES_AND_DEVICES
+      ToolCategory.MISCELLANEOUS -> SearchCategoryFilter.MISCELLANEOUS
+      ToolCategory.SYSTEM -> SearchCategoryFilter.SYSTEM
     }
   }
 
@@ -612,11 +468,7 @@ object SearchEngine {
     return allResults
       .asSequence()
       .filter { item ->
-        val matchesCategory = when (categoryFilter) {
-          SearchCategoryFilter.ALL -> true
-          SearchCategoryFilter.TOOLS -> item.resultType == SearchResultType.TOOL
-          else -> item.categoryFilter == categoryFilter
-        }
+        val matchesCategory = categoryFilter.toolCategory == null || item.tool.category == categoryFilter.toolCategory
         val matchesTool = toolFilter == null || item.tool == toolFilter
         matchesCategory && matchesTool
       }
@@ -731,7 +583,7 @@ object SearchEngine {
         title = title,
         subtitle = "$categoryTitle • $summary",
         snippet = description,
-        badgeLabel = if (isHidden) "Tool (Hidden)" else "Tool",
+        badgeLabel = "Tool",
         tool = tool,
         resultType = SearchResultType.TOOL,
         categoryFilter = categoryFilterForTool(tool),
@@ -775,7 +627,7 @@ object SearchEngine {
         badgeLabel = "Instant Math",
         tool = Tool.CALCULATOR,
         resultType = SearchResultType.LIVE_CALCULATION,
-        categoryFilter = SearchCategoryFilter.MATH_AND_SCIENCE,
+        categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
         score = 520,
         copyableValue = evaluated,
         detailRows = listOf(
@@ -881,7 +733,7 @@ object SearchEngine {
             badgeLabel = "Instant Conversion",
             tool = Tool.UNIT_CONVERTER,
             resultType = SearchResultType.LIVE_CONVERSION,
-            categoryFilter = SearchCategoryFilter.MATH_AND_SCIENCE,
+            categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
             score = 515,
             copyableValue = "$convertedFormatted ${toUnit.symbol}",
             detailRows = listOf(
@@ -911,7 +763,7 @@ object SearchEngine {
         badgeLabel = "Unit Table",
         tool = Tool.UNIT_CONVERTER,
         resultType = SearchResultType.LIVE_CONVERSION,
-        categoryFilter = SearchCategoryFilter.MATH_AND_SCIENCE,
+        categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
         score = 490,
         copyableValue = "$primaryConverted ${primaryPeer.symbol}",
         detailRows = listOf(
@@ -959,7 +811,6 @@ object SearchEngine {
         badgeLabel = "Live Color",
         tool = Tool.COLOR_PICKER,
         resultType = SearchResultType.LIVE_COLOR,
-        categoryFilter = SearchCategoryFilter.CATALOGS_AND_REFERENCE,
         score = 510,
         copyableValue = canonicalHex,
         colorHex = canonicalHex,
@@ -1014,7 +865,6 @@ object SearchEngine {
         badgeLabel = "Dice Formula",
         tool = Tool.DICE_ROLLER,
         resultType = SearchResultType.LIVE_DICE_ROLL,
-        categoryFilter = SearchCategoryFilter.CATALOGS_AND_REFERENCE,
         score = 505,
         copyableValue = notation,
         detailRows = listOf(
@@ -1070,7 +920,6 @@ object SearchEngine {
               badgeLabel = "Chord Voicing",
               tool = Tool.CHORD_BOOK,
               resultType = SearchResultType.CHORD,
-              categoryFilter = SearchCategoryFilter.MUSIC_AND_AUDIO,
               score = 495,
               copyableValue = chordNotes.joinToString(" "),
               detailRows = listOf(
@@ -1109,7 +958,6 @@ object SearchEngine {
             badgeLabel = "Metronome Tempo",
             tool = Tool.METRONOME,
             resultType = SearchResultType.TEMPO,
-            categoryFilter = SearchCategoryFilter.MUSIC_AND_AUDIO,
             score = 500,
             copyableValue = "$bpm BPM",
             detailRows = listOf(
@@ -1139,7 +987,7 @@ object SearchEngine {
             badgeLabel = "Sound Level",
             tool = Tool.DECIBEL_METER,
             resultType = SearchResultType.DECIBEL_LEVEL,
-            categoryFilter = SearchCategoryFilter.MATH_AND_SCIENCE,
+            categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
             score = 500,
             copyableValue = "${String.format(Locale.US, "%.1f", db)} dB",
             detailRows = listOf(
@@ -1363,7 +1211,6 @@ object SearchEngine {
         badgeLabel = if (recipe.isCustom) "Custom Recipe" else "Recipe",
         tool = Tool.RECIPES,
         resultType = SearchResultType.RECIPE,
-        categoryFilter = SearchCategoryFilter.CATALOGS_AND_REFERENCE,
         score = score,
         detailRows = listOf(
           SearchResultDetailRow("Recipe", recipe.name),
@@ -1416,7 +1263,6 @@ object SearchEngine {
         badgeLabel = "Plant Guide",
         tool = Tool.PLANT_SCHEDULE,
         resultType = SearchResultType.PLANT,
-        categoryFilter = SearchCategoryFilter.CATALOGS_AND_REFERENCE,
         score = score,
         detailRows = listOf(
           SearchResultDetailRow("Plant Name", plant.name),
@@ -1459,7 +1305,6 @@ object SearchEngine {
         badgeLabel = "Tuner Preset",
         tool = Tool.GUITAR_TUNER,
         resultType = SearchResultType.TUNING,
-        categoryFilter = SearchCategoryFilter.MUSIC_AND_AUDIO,
         score = score,
         copyableValue = notesText,
         detailRows = listOf(
@@ -1505,7 +1350,6 @@ object SearchEngine {
             badgeLabel = "Chord Type",
             tool = Tool.CHORD_BOOK,
             resultType = SearchResultType.CHORD,
-            categoryFilter = SearchCategoryFilter.MUSIC_AND_AUDIO,
             score = score,
             detailRows = listOf(
               SearchResultDetailRow("Chord Quality", quality.fullName),
@@ -1543,7 +1387,6 @@ object SearchEngine {
             badgeLabel = "Musical Scale",
             tool = Tool.CHORD_BOOK,
             resultType = SearchResultType.SCALE,
-            categoryFilter = SearchCategoryFilter.MUSIC_AND_AUDIO,
             score = score,
             copyableValue = cScaleNotes.joinToString(" "),
             detailRows = listOf(
@@ -1579,7 +1422,6 @@ object SearchEngine {
             badgeLabel = "Progression",
             tool = Tool.CHORD_BOOK,
             resultType = SearchResultType.PROGRESSION,
-            categoryFilter = SearchCategoryFilter.MUSIC_AND_AUDIO,
             score = score,
             copyableValue = chordsSummary,
             detailRows = listOf(
@@ -1613,7 +1455,6 @@ object SearchEngine {
             badgeLabel = tuning.instrument.shortName,
             tool = Tool.CHORD_BOOK,
             resultType = SearchResultType.TUNING,
-            categoryFilter = SearchCategoryFilter.MUSIC_AND_AUDIO,
             score = score,
             detailRows = listOf(
               SearchResultDetailRow("Instrument", tuning.instrument.displayName),
@@ -1673,7 +1514,6 @@ object SearchEngine {
             badgeLabel = "Tempo Marking",
             tool = Tool.METRONOME,
             resultType = SearchResultType.TEMPO,
-            categoryFilter = SearchCategoryFilter.MUSIC_AND_AUDIO,
             score = score,
             detailRows = listOf(
               SearchResultDetailRow("Tempo Marking", tempo.name),
@@ -1705,7 +1545,6 @@ object SearchEngine {
             badgeLabel = "Time Signature",
             tool = Tool.METRONOME,
             resultType = SearchResultType.TEMPO,
-            categoryFilter = SearchCategoryFilter.MUSIC_AND_AUDIO,
             score = score,
           )
         )
@@ -1747,7 +1586,7 @@ object SearchEngine {
               badgeLabel = "${category.label} Unit",
               tool = Tool.UNIT_CONVERTER,
               resultType = SearchResultType.UNIT,
-              categoryFilter = SearchCategoryFilter.MATH_AND_SCIENCE,
+              categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
               score = score,
               detailRows = listOf(
                 SearchResultDetailRow("Unit Name", unit.name),
@@ -1794,7 +1633,7 @@ object SearchEngine {
             badgeLabel = "Ruler Reference",
             tool = Tool.RULER,
             resultType = SearchResultType.RULER_REFERENCE,
-            categoryFilter = SearchCategoryFilter.MATH_AND_SCIENCE,
+            categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
             score = score,
             copyableValue = mmText,
             detailRows = listOf(
@@ -1827,7 +1666,7 @@ object SearchEngine {
             badgeLabel = "Ruler Mode",
             tool = Tool.RULER,
             resultType = SearchResultType.RULER_REFERENCE,
-            categoryFilter = SearchCategoryFilter.MATH_AND_SCIENCE,
+            categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
             score = score,
           )
         )
@@ -1859,7 +1698,7 @@ object SearchEngine {
         badgeLabel = "dB Classification",
         tool = Tool.DECIBEL_METER,
         resultType = SearchResultType.DECIBEL_LEVEL,
-        categoryFilter = SearchCategoryFilter.MATH_AND_SCIENCE,
+        categoryFilter = SearchCategoryFilter.MATH_AND_MEASUREMENT,
         score = score,
         detailRows = listOf(
           SearchResultDetailRow("Noise Category", category.label),
@@ -1896,7 +1735,6 @@ object SearchEngine {
             badgeLabel = "Color Swatch",
             tool = Tool.COLOR_PICKER,
             resultType = SearchResultType.COLOR_SWATCH,
-            categoryFilter = SearchCategoryFilter.CATALOGS_AND_REFERENCE,
             score = score,
             copyableValue = swatch.hex,
             colorHex = swatch.hex,
@@ -1931,7 +1769,6 @@ object SearchEngine {
             badgeLabel = "Color Harmony",
             tool = Tool.COLOR_PICKER,
             resultType = SearchResultType.COLOR_SWATCH,
-            categoryFilter = SearchCategoryFilter.CATALOGS_AND_REFERENCE,
             score = score,
           )
         )
@@ -1970,7 +1807,6 @@ object SearchEngine {
             badgeLabel = "OBD2 DTC",
             tool = Tool.OBD2_SCANNER,
             resultType = SearchResultType.OBD2_DTC,
-            categoryFilter = SearchCategoryFilter.CATALOGS_AND_REFERENCE,
             score = score,
             copyableValue = "${entry.code}: ${entry.description}",
             detailRows = listOf(
@@ -1999,7 +1835,6 @@ object SearchEngine {
             badgeLabel = "SAE J2012 DTC",
             tool = Tool.OBD2_SCANNER,
             resultType = SearchResultType.OBD2_DTC,
-            categoryFilter = SearchCategoryFilter.CATALOGS_AND_REFERENCE,
             score = 480,
             copyableValue = "${dynamicEntry.code}: ${dynamicEntry.description}",
             detailRows = listOf(
@@ -2044,7 +1879,6 @@ object SearchEngine {
         badgeLabel = "${format.category.displayName} Format",
         tool = Tool.FILE_CONVERTER,
         resultType = SearchResultType.FILE_FORMAT,
-        categoryFilter = SearchCategoryFilter.FILES_AND_MEDIA,
         score = score,
         detailRows = listOf(
           SearchResultDetailRow("Format", format.displayName),
@@ -2084,7 +1918,6 @@ object SearchEngine {
         badgeLabel = "Music Track",
         tool = Tool.MUSIC,
         resultType = SearchResultType.MUSIC_TRACK,
-        categoryFilter = SearchCategoryFilter.MUSIC_AND_AUDIO,
         score = score,
         detailRows = listOf(
           SearchResultDetailRow("Track Title", track.title),
@@ -2120,7 +1953,6 @@ object SearchEngine {
             badgeLabel = "Recorder Format",
             tool = Tool.AUDIO_RECORDER,
             resultType = SearchResultType.AUDIO_RECORDING,
-            categoryFilter = SearchCategoryFilter.MUSIC_AND_AUDIO,
             score = score,
           )
         )
@@ -2146,7 +1978,6 @@ object SearchEngine {
             badgeLabel = "Mic Source",
             tool = Tool.AUDIO_RECORDER,
             resultType = SearchResultType.AUDIO_RECORDING,
-            categoryFilter = SearchCategoryFilter.MUSIC_AND_AUDIO,
             score = score,
           )
         )
@@ -2185,7 +2016,6 @@ object SearchEngine {
             badgeLabel = "Camera Mode",
             tool = Tool.CAMERA,
             resultType = SearchResultType.CAMERA_MODE,
-            categoryFilter = SearchCategoryFilter.FILES_AND_MEDIA,
             score = score,
           )
         )
@@ -2211,7 +2041,6 @@ object SearchEngine {
             badgeLabel = "OCR Scanner",
             tool = Tool.CAMERA,
             resultType = SearchResultType.CAMERA_MODE,
-            categoryFilter = SearchCategoryFilter.FILES_AND_MEDIA,
             score = score,
           )
         )
@@ -2244,7 +2073,6 @@ object SearchEngine {
         badgeLabel = "Polyhedral Die",
         tool = Tool.DICE_ROLLER,
         resultType = SearchResultType.LIVE_DICE_ROLL,
-        categoryFilter = SearchCategoryFilter.CATALOGS_AND_REFERENCE,
         score = score,
       )
     }
@@ -2439,7 +2267,6 @@ object SearchEngine {
         badgeLabel = "App Setting",
         tool = Tool.SETTINGS,
         resultType = SearchResultType.SETTING,
-        categoryFilter = SearchCategoryFilter.CATALOGS_AND_REFERENCE,
         score = score,
       )
     }

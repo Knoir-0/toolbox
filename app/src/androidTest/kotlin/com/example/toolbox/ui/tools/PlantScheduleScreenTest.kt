@@ -125,4 +125,35 @@ class PlantScheduleScreenTest {
 
     composeTestRule.onNodeWithTag("scheduled_plant_item_basil").assertIsDisplayed()
   }
+
+  @Test
+  fun duplicatePlantFromContextMenu_opensAddPlantModalPrefilledWithPlant() {
+    val tomato = PlantScheduleEngine.BUILT_IN_PLANTS.first { it.id == "tomato" }
+    val repository = InMemoryPlantScheduleRepository(
+      initialScheduledPlants = listOf(tomato),
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        PlantScheduleScreen(repository = repository)
+      }
+    }
+
+    composeTestRule.onNodeWithTag("more_scheduled_plant_tomato").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("duplicate_scheduled_plant_tomato").performClick()
+    composeTestRule.waitForIdle()
+
+    // Opens the Add Plant modal prefilled with Tomato
+    composeTestRule.onNodeWithText("Add Plant").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Add to Schedule").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("custom_plant_name_input").assertIsDisplayed()
+
+    // Since name is pre-selected in the Add modal, typing replaces it and confirming adds the new custom plant
+    composeTestRule.onNodeWithTag("custom_plant_name_input").performTextInput("Cherry Tomato")
+    composeTestRule.onNodeWithTag("confirm_custom_plant_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithText("Cherry Tomato").assertIsDisplayed()
+  }
 }

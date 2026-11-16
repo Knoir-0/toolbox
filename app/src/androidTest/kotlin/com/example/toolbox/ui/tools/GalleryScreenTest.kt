@@ -135,9 +135,15 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("album_cover_Vacation", useUnmergedTree = true)
       .assertContentDescriptionEquals("Most recent photo: vacation_most_recent.png")
 
-    // 4. Folder name label is positioned underneath the tile
+    // 4. Folder name label is positioned underneath the tile, and album ... menu icon is at the bottom left
     val cameraTileBounds = cameraTile.fetchSemanticsNode().boundsInRoot
     val cameraLabelBounds = cameraLabel.fetchSemanticsNode().boundsInRoot
+    val cameraMoreBounds = composeTestRule.onNodeWithTag("album_more_Camera", useUnmergedTree = true)
+      .fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      "Expected album ... menu to be in the bottom-left quadrant of the tile",
+      cameraMoreBounds.center.x < cameraTileBounds.center.x && cameraMoreBounds.center.y > cameraTileBounds.center.y,
+    )
     assertTrue(
       "Expected folder label 'Camera' (${cameraLabelBounds.top}) to be underneath its tile (${cameraTileBounds.bottom})",
       cameraLabelBounds.top >= cameraTileBounds.bottom - 2f,
@@ -479,6 +485,20 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
+    // Edit icon is removed from image/video tiles and can be accessed via the ... menu at the bottom left
+    composeTestRule.onNodeWithTag("photo_tile_edit_photo.png").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_tile_edit_video.mp4").assertDoesNotExist()
+
+    // Verify ... menu icon for images is at the bottom left of the tile
+    val photoTileBounds = composeTestRule.onNodeWithTag("photo_tile_photo.png", useUnmergedTree = true)
+      .fetchSemanticsNode().boundsInRoot
+    val photoMoreBounds = composeTestRule.onNodeWithTag("photo_more_photo.png", useUnmergedTree = true)
+      .fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      "Expected photo ... menu to be in the bottom-left quadrant of the tile",
+      photoMoreBounds.center.x < photoTileBounds.center.x && photoMoreBounds.center.y > photoTileBounds.center.y,
+    )
+
     // Open photo.png in viewer and click Edit button -> opens ImageEditorScreen
     composeTestRule.onNodeWithTag("photo_tile_item_photo.png").performClick()
     composeTestRule.waitForIdle()
@@ -491,8 +511,10 @@ class GalleryScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("gallery_screen").assertIsDisplayed()
 
-    // Click Edit button on video.mp4 tile -> opens VideoEditorScreen
-    composeTestRule.onNodeWithTag("photo_tile_edit_video.mp4").performClick()
+    // Open ... menu on video.mp4 tile and click Edit -> opens VideoEditorScreen
+    composeTestRule.onNodeWithTag("photo_more_video.mp4").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_menu_edit_video.mp4").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("video_editor_screen").assertIsDisplayed()

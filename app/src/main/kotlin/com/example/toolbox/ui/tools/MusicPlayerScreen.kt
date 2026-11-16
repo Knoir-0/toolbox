@@ -677,7 +677,7 @@ fun MusicPlayerScreen(
     return
   }
 
-  val musicItemActions = remember(session, context) {
+  val musicItemActions = remember(session, context, selectedPlaylistId) {
     MusicItemActionDispatcher(
       onPlayTracks = { tracks ->
         if (tracks.isNotEmpty()) {
@@ -710,6 +710,16 @@ fun MusicPlayerScreen(
           tracksForAddToPlaylistDialog = tracks
         }
       },
+      onRemoveFromPlaylist = selectedPlaylistId
+        ?.takeIf { it !in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS }
+        ?.let { playlistId ->
+          { track: MusicTrack ->
+            if (session.removeTrackFromPlaylist(playlistId, track.id)) {
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              Toast.makeText(context, "Removed \"${track.title}\" from playlist", Toast.LENGTH_SHORT).show()
+            }
+          }
+        },
       onGoToArtist = { track ->
         isPlayerExpanded = false
         session.navigateToArtist(track.artist)
@@ -2248,6 +2258,15 @@ private fun ArtistsTabContent(
                   modifier = Modifier.size(18.dp),
                 )
               }
+              MusicCollectionContextMenuButton(
+                collectionTitle = artist.name,
+                tracks = artist.tracks,
+                moreButtonTestTag = "artist_more_${artist.name}",
+                menuTestTag = "artist_menu_${artist.name}",
+                isFavorite = isFavorite,
+                onToggleFavorite = { onToggleFavoriteArtist(artist) },
+                onPlay = { onPlayArtist(artist) },
+              )
             }
           }
         }
@@ -2296,69 +2315,84 @@ private fun ArtistsTabContent(
               .semantics { selected = isActive }
               .testTag("artist_item_${artist.name}"),
           ) {
-            Box(modifier = Modifier.fillMaxWidth()) {
-              Column(
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Box(
                 modifier = Modifier
                   .fillMaxWidth()
-                  .padding(12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                  .height(96.dp),
               ) {
-                Box(contentAlignment = Alignment.BottomEnd) {
-                  TrackArtworkThumbnail(
-                    track = artist.representativeTrack,
-                    size = 96.dp,
-                    shape = CircleShape,
+                TrackArtworkThumbnail(
+                  track = artist.representativeTrack,
+                  size = 96.dp,
+                  shape = CircleShape,
+                  modifier = Modifier.align(Alignment.Center),
+                )
+                IconButton(
+                  onClick = { onToggleFavoriteArtist(artist) },
+                  modifier = Modifier
+                    .size(30.dp)
+                    .align(Alignment.TopEnd)
+                    .testTag("favorite_artist_${artist.name}"),
+                ) {
+                  Icon(
+                    imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                    contentDescription = if (isFavorite) "Remove ${artist.name} from favorites" else "Add ${artist.name} to favorites",
+                    tint = if (isFavorite) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
                   )
-                  FilledIconButton(
-                    onClick = { onPlayArtist(artist) },
-                    shape = CircleShape,
-                    modifier = Modifier.size(30.dp),
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                      containerColor = MaterialTheme.colorScheme.primaryContainer,
-                      contentColor = MaterialTheme.colorScheme.primary,
-                    ),
-                  ) {
-                    Icon(
-                      imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
-                      contentDescription = "Play ${artist.name}",
-                      modifier = Modifier.size(16.dp),
-                    )
-                  }
                 }
-                Text(
-                  text = artist.name,
-                  style = MaterialTheme.typography.bodyLarge,
-                  fontWeight = FontWeight.SemiBold,
-                  color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                  textAlign = TextAlign.Center,
+                MusicCollectionContextMenuButton(
+                  collectionTitle = artist.name,
+                  tracks = artist.tracks,
+                  moreButtonTestTag = "artist_more_${artist.name}",
+                  menuTestTag = "artist_menu_${artist.name}",
+                  isFavorite = isFavorite,
+                  onToggleFavorite = { onToggleFavoriteArtist(artist) },
+                  onPlay = { onPlayArtist(artist) },
+                  modifier = Modifier.align(Alignment.BottomStart),
                 )
-                Text(
-                  text = artist.summaryText,
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                  textAlign = TextAlign.Center,
-                )
+                FilledIconButton(
+                  onClick = { onPlayArtist(artist) },
+                  shape = CircleShape,
+                  modifier = Modifier
+                    .size(30.dp)
+                    .align(Alignment.BottomEnd)
+                    .testTag("play_artist_${artist.name}"),
+                  colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                  ),
+                ) {
+                  Icon(
+                    imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                    contentDescription = "Play ${artist.name}",
+                    modifier = Modifier.size(16.dp),
+                  )
+                }
               }
-              IconButton(
-                onClick = { onToggleFavoriteArtist(artist) },
-                modifier = Modifier
-                  .align(Alignment.TopEnd)
-                  .padding(4.dp)
-                  .size(30.dp)
-                  .testTag("favorite_artist_${artist.name}"),
-              ) {
-                Icon(
-                  imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                  contentDescription = if (isFavorite) "Remove ${artist.name} from favorites" else "Add ${artist.name} to favorites",
-                  tint = if (isFavorite) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier.size(16.dp),
-                )
-              }
+              Text(
+                text = artist.name,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+              )
+              Text(
+                text = artist.summaryText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+              )
             }
           }
         }
@@ -2562,6 +2596,15 @@ private fun AlbumsTabContent(
                   modifier = Modifier.size(18.dp),
                 )
               }
+              MusicCollectionContextMenuButton(
+                collectionTitle = album.name,
+                tracks = album.tracks,
+                moreButtonTestTag = "album_more_${album.name}",
+                menuTestTag = "album_menu_${album.name}",
+                isFavorite = isFavorite,
+                onToggleFavorite = { onToggleFavoriteAlbum(album) },
+                onPlay = { onPlayAlbum(album) },
+              )
             }
           }
         }
@@ -2619,19 +2662,18 @@ private fun AlbumsTabContent(
               Box(
                 modifier = Modifier
                   .fillMaxWidth()
-                  .aspectRatio(1f),
-                contentAlignment = Alignment.BottomEnd,
+                  .aspectRatio(1f)
+                  .clip(RoundedCornerShape(12.dp)),
               ) {
                 TrackArtworkBanner(
                   track = album.representativeTrack,
-                  modifier = Modifier
-                    .fillMaxSize()
-                    .clip(RoundedCornerShape(12.dp)),
+                  modifier = Modifier.fillMaxSize(),
                 )
                 IconButton(
                   onClick = { onToggleFavoriteAlbum(album) },
                   modifier = Modifier
                     .align(Alignment.TopEnd)
+                    .padding(4.dp)
                     .size(30.dp)
                     .testTag("favorite_album_${album.name}"),
                 ) {
@@ -2642,12 +2684,27 @@ private fun AlbumsTabContent(
                     modifier = Modifier.size(16.dp),
                   )
                 }
+                MusicCollectionContextMenuButton(
+                  collectionTitle = album.name,
+                  tracks = album.tracks,
+                  moreButtonTestTag = "album_more_${album.name}",
+                  menuTestTag = "album_menu_${album.name}",
+                  isFavorite = isFavorite,
+                  onToggleFavorite = { onToggleFavoriteAlbum(album) },
+                  onPlay = { onPlayAlbum(album) },
+                  tint = Color.White,
+                  modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(4.dp),
+                )
                 FilledIconButton(
                   onClick = { onPlayAlbum(album) },
                   shape = CircleShape,
                   modifier = Modifier
+                    .align(Alignment.BottomEnd)
                     .padding(8.dp)
-                    .size(34.dp),
+                    .size(34.dp)
+                    .testTag("play_album_${album.name}"),
                   colors = IconButtonDefaults.filledIconButtonColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     contentColor = MaterialTheme.colorScheme.primary,
@@ -3461,7 +3518,7 @@ private fun PlaylistsTabContent(
                     { onDeletePlaylist(playlist) }
                   } else null,
                   tint = Color.White,
-                  modifier = Modifier.align(Alignment.TopEnd),
+                  modifier = Modifier.align(Alignment.BottomStart),
                 )
                 FilledIconButton(
                   onClick = { onPlayPlaylist(playlist) },
@@ -4436,7 +4493,7 @@ private fun SongGridItemCard(
           shape = RoundedCornerShape(8.dp),
           color = Color.Black.copy(alpha = 0.55f),
           modifier = Modifier
-            .align(Alignment.BottomStart)
+            .align(Alignment.TopStart)
             .padding(6.dp),
         ) {
           Text(
@@ -4447,18 +4504,11 @@ private fun SongGridItemCard(
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
           )
         }
-        SongContextMenuButton(
-          track = track,
-          isFavorite = isFavorite,
-          onPlay = onClick,
-          onToggleFavorite = onToggleFavorite,
-          tint = Color.White,
-          modifier = Modifier.align(Alignment.TopStart),
-        )
         IconButton(
           onClick = onToggleFavorite,
           modifier = Modifier
             .align(Alignment.TopEnd)
+            .padding(4.dp)
             .size(30.dp)
             .testTag("favorite_song_${track.id}"),
         ) {
@@ -4469,6 +4519,16 @@ private fun SongGridItemCard(
             modifier = Modifier.size(16.dp),
           )
         }
+        SongContextMenuButton(
+          track = track,
+          isFavorite = isFavorite,
+          onPlay = onClick,
+          onToggleFavorite = onToggleFavorite,
+          tint = Color.White,
+          modifier = Modifier
+            .align(Alignment.BottomStart)
+            .padding(4.dp),
+        )
         if (isCurrent) {
           Box(
             modifier = Modifier
@@ -4652,7 +4712,7 @@ private fun SongContextMenuButton(
         modifier = Modifier.testTag("song_menu_convert_${track.id}"),
       )
       DropdownMenuItem(
-        text = { Text("Compress to Archive") },
+        text = { Text("Archive") },
         leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
         onClick = {
           expanded = false
@@ -4661,7 +4721,7 @@ private fun SongContextMenuButton(
         modifier = Modifier.testTag("song_menu_archive_${track.id}"),
       )
       DropdownMenuItem(
-        text = { Text("Save to Notes") },
+        text = { Text("Add Note") },
         leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
         onClick = {
           expanded = false
@@ -4670,7 +4730,7 @@ private fun SongContextMenuButton(
         modifier = Modifier.testTag("song_menu_save_to_notes_${track.id}"),
       )
       DropdownMenuItem(
-        text = { Text("Open in Files") },
+        text = { Text("Folder") },
         leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
         onClick = {
           expanded = false
@@ -4695,15 +4755,6 @@ private fun SongContextMenuButton(
           actions.onShareTracks(listOf(track))
         },
         modifier = Modifier.testTag("song_menu_share_${track.id}"),
-      )
-      DropdownMenuItem(
-        text = { Text("Duplicate") },
-        leadingIcon = { Icon(Icons.Default.FileCopy, contentDescription = null) },
-        onClick = {
-          expanded = false
-          actions.onDuplicateTrack(track)
-        },
-        modifier = Modifier.testTag("song_menu_duplicate_${track.id}"),
       )
       DropdownMenuItem(
         text = { Text("Rename") },
@@ -4828,7 +4879,7 @@ private fun MusicCollectionContextMenuButton(
       }
       HorizontalDivider()
       DropdownMenuItem(
-        text = { Text("Compress to Archive") },
+        text = { Text("Archive") },
         leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
         onClick = {
           expanded = false

@@ -1222,7 +1222,8 @@ object GalleryEngine {
   // Smart Gallery Indexer: Background OCR, QR/Barcode & Automatic Tagging
   // =========================================================================
 
-  const val GALLERY_INDEX_CACHE_FILE_NAME = "gallery_smart_index_v1.json"
+  const val GALLERY_INDEX_CACHE_FILE_NAME = "gallery_smart_index_v2.json"
+  const val DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD = 0.80f
   private const val PNG_TEXT_KEYWORD_OCR = "OCR_TEXT"
   private const val PNG_TEXT_KEYWORD_LABELS = "IMAGE_LABELS"
 
@@ -1500,13 +1501,14 @@ object GalleryEngine {
   suspend fun recognizeImageLabelsWithMlKit(
     bitmap: Bitmap,
     rotationDegrees: Int = 0,
-    confidenceThreshold: Float = 0.65f,
+    confidenceThreshold: Float = DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD,
     maxLabels: Int = 5,
   ): List<String> {
     if (bitmap.width <= 16 || bitmap.height <= 16) return emptyList()
+    val effectiveThreshold = confidenceThreshold.coerceIn(0.3f, 0.98f)
     return try {
       val options = ImageLabelerOptions.Builder()
-        .setConfidenceThreshold(confidenceThreshold.coerceIn(0.3f, 0.95f))
+        .setConfidenceThreshold(effectiveThreshold)
         .build()
       val labeler = ImageLabeling.getClient(options)
       val inputImage = InputImage.fromBitmap(bitmap, rotationDegrees)
@@ -1515,6 +1517,7 @@ object GalleryEngine {
           .addOnSuccessListener { results ->
             labeler.close()
             val mapped = results
+              .filter { it.confidence >= effectiveThreshold }
               .sortedByDescending { it.confidence }
               .mapNotNull { item ->
                 val text = item.text.trim()

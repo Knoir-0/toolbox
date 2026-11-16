@@ -622,4 +622,89 @@ class TodoListTest {
       ),
     )
   }
+
+  @Test
+  fun engine_filterTasks_matchesTitleNotesSubtasksAndScheduleLabel() {
+    val tasks = listOf(
+      TodoItem(
+        id = "t1",
+        title = "Buy soldering flux",
+        notes = "Rosin core for PCB work",
+        subtasks = listOf(TodoSubTask(title = "Check 63/37 alloy")),
+      ),
+      TodoItem(
+        id = "t2",
+        title = "Water tomatoes",
+        notes = "Garden bed B",
+        scheduledAtMillis = System.currentTimeMillis(),
+      ),
+    )
+
+    assertEquals(2, TodoListEngine.filterTasks(tasks, "   ").size)
+    assertEquals(listOf("t1"), TodoListEngine.filterTasks(tasks, "flux").map { it.id })
+    assertEquals(listOf("t1"), TodoListEngine.filterTasks(tasks, "pcb").map { it.id })
+    assertEquals(listOf("t1"), TodoListEngine.filterTasks(tasks, "63/37").map { it.id })
+    assertEquals(listOf("t2"), TodoListEngine.filterTasks(tasks, "today").map { it.id })
+    assertTrue(TodoListEngine.filterTasks(tasks, "nonexistent").isEmpty())
+  }
+
+  @Test
+  fun engine_bulkActions_completeUncompleteScheduleAndDeleteMultipleTasks() {
+    val t1 = TodoItem(id = "t1", title = "Task 1", subtasks = listOf(TodoSubTask(title = "Sub 1")))
+    val t2 = TodoItem(id = "t2", title = "Task 2")
+    val t3 = TodoItem(id = "t3", title = "Task 3")
+    val initial = TodoHistorySnapshot(tasks = listOf(t1, t2, t3), completedToday = 0)
+
+    // Bulk schedule t1 & t2
+    val scheduledList = TodoListEngine.scheduleTasks(initial.tasks, setOf("t1", "t2"), 1_800_000_000_000L)
+    assertTrue(scheduledList.first { it.id == "t1" }.isScheduled)
+    assertTrue(scheduledList.first { it.id == "t2" }.isScheduled)
+    assertFalse(scheduledList.first { it.id == "t3" }.isScheduled)
+
+    // Bulk unschedule t1 & t2
+    val unscheduledList = TodoListEngine.unscheduleTasks(scheduledList, setOf("t1", "t2"))
+    assertFalse(unscheduledList.first { it.id == "t1" }.isScheduled)
+    assertFalse(unscheduledList.first { it.id == "t2" }.isScheduled)
+
+    // Bulk complete t1 & t2
+    val afterBulkComplete = TodoListEngine.completeTasks(initial, setOf("t1", "t2"))
+    assertEquals(listOf("t3"), afterBulkComplete.tasks.map { it.id })
+    assertEquals(2, afterBulkComplete.completedToday)
+    assertEquals(listOf("t1", "t2"), afterBulkComplete.completedTasks.map { it.id })
+    assertTrue(afterBulkComplete.completedTasks.first().subtasks.first().isCompleted)
+
+    // Bulk uncomplete t1
+    val afterBulkUncomplete = TodoListEngine.uncompleteTasks(afterBulkComplete, setOf("t1"))
+    assertEquals(listOf("t1", "t3"), afterBulkUncomplete.tasks.map { it.id })
+    assertEquals(1, afterBulkUncomplete.completedToday)
+    assertEquals(listOf("t2"), afterBulkUncomplete.completedTasks.map { it.id })
+
+    // Bulk delete active t1 & t3
+    val afterBulkDeleteActive = TodoListEngine.deleteTasks(afterBulkUncomplete, setOf("t1", "t3"))
+    assertTrue(afterBulkDeleteActive.tasks.isEmpty())
+
+    // Bulk delete completed t2
+    val afterBulkDeleteCompleted = TodoListEngine.deleteCompletedTasks(afterBulkDeleteActive, setOf("t2"))
+    assertTrue(afterBulkDeleteCompleted.completedTasks.isEmpty())
+    assertEquals(0, afterBulkDeleteCompleted.completedToday)
+  }
+
+  @Test
+  fun repository_persistsGridViewAndColumnsPerRow() {
+    val repo = InMemoryTodoListRepository()
+    assertFalse(repo.isGridView())
+    assertEquals(DEFAULT_TODO_GRID_COLUMNS, repo.getGridColumnsPerRow())
+
+    repo.setGridView(true)
+    assertTrue(repo.isGridView())
+
+    repo.setGridColumnsPerRow(4)
+    assertEquals(4, repo.getGridColumnsPerRow())
+
+    // Clamps out-of-range values
+    repo.setGridColumnsPerRow(99)
+    assertEquals(MAX_TODO_GRID_COLUMNS, repo.getGridColumnsPerRow())
+    repo.setGridColumnsPerRow(0)
+    assertEquals(MIN_TODO_GRID_COLUMNS, repo.getGridColumnsPerRow())
+  }
 }

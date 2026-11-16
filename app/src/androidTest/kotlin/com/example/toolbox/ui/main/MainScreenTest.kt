@@ -441,20 +441,20 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
     assertEquals(ToolSortingOption.TOOL_CATEGORIES, repo.getToolSorting())
 
-    // Check Math & Measurement category (Page 0)
+    // Check Math & Measure category (Page 0)
     val mathIndex = 0
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$mathIndex").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("Math & Measurement").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Math & Measure").assertIsDisplayed()
     composeTestRule.onNodeWithText("Calculate").assertIsDisplayed()
     composeTestRule.onNodeWithText("Units").assertIsDisplayed()
     composeTestRule.onNodeWithText("Ruler").assertIsDisplayed()
 
-    // Check Music & Instruments category
+    // Check Instruments category
     val musicIndex = 4
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$musicIndex").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("Music & Instruments").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Instruments").assertIsDisplayed()
     composeTestRule.onNodeWithText("Tuner").assertIsDisplayed()
     composeTestRule.onNodeWithText("Chords").assertIsDisplayed()
     composeTestRule.onNodeWithText("Metronome").assertDoesNotExist()
@@ -467,9 +467,9 @@ class MainScreenTest {
     repo.setToolsPerRow(3)
     composeTestRule.waitForIdle()
 
-    // Initially collapsed: only Row 0 (Math & Measurement) is visible; Row 1 does not exist
+    // Initially collapsed: only Row 0 (Math & Measure) is visible; Row 1 does not exist
     composeTestRule.onNodeWithTag("tools_grid_row_0").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Math & Measurement").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Math & Measure").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tools_grid_row_1").assertDoesNotExist()
     composeTestRule.onNodeWithText("Productivity").assertDoesNotExist()
     composeTestRule.onNodeWithTag("tools_per_row_control").assertDoesNotExist()
@@ -483,18 +483,18 @@ class MainScreenTest {
     // Both Row 0 and Row 1 of categories are now displayed simultaneously
     composeTestRule.onNodeWithTag("tools_grid_row_0").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tools_grid_row_1").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Math & Measurement").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Math & Measure").assertIsDisplayed()
     composeTestRule.onNodeWithText("Productivity").assertIsDisplayed()
     composeTestRule.onNodeWithTag("category_label_files_and_storage").assertTextEquals("Files").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tools_per_row_control").assertIsDisplayed()
 
-    // Navigate to Page 1 while expanded -> shows Row 2 (Photo & Video) and Row 3 (Audio & Sound)
+    // Navigate to Page 1 while expanded -> shows Row 2 (Photo & Video) and Row 3 (Audio)
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tools_grid_row_2").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tools_grid_row_3").assertIsDisplayed()
     composeTestRule.onNodeWithText("Photo & Video").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Audio & Sound").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Audio").assertIsDisplayed()
 
     // Drag down on the drag handle to return to single-row category state
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performTouchInput {
@@ -515,16 +515,16 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
 
     // With 6 tools per row:
-    // Row 0: Math & Measurement (3 tools) + Productivity (2 tools) + Files (1 tool) = 6 tools
-    // Row 1: Photo & Video (2 tools) + Audio & Sound (2 tools) + Music & Instruments (2 tools) = 6 tools
-    // Row 2: Remotes & Devices (2 tools) + Miscellaneous (3 tools) = 5 tools on 1 row!
+    // Row 0: Math & Measure (3 tools) + Productivity (2 tools) + Files (1 tool) = 6 tools
+    // Row 1: Photo & Video (2 tools) + Audio (2 tools) + Instruments (2 tools) = 6 tools
+    // Row 2: Devices (2 tools) + Lifestyle (3 tools) = 5 tools on 1 row!
     // Row 3: System (2 tools: Search, Settings)
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_2").performClick()
     composeTestRule.waitForIdle()
 
-    // Remotes & Devices and Miscellaneous fit on Page 2 as one row
-    composeTestRule.onNodeWithText("Remotes & Devices").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Miscellaneous").assertIsDisplayed()
+    // Devices and Lifestyle fit on Page 2 as one row
+    composeTestRule.onNodeWithText("Devices").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Lifestyle").assertIsDisplayed()
     composeTestRule.onNodeWithText("Dice").assertIsDisplayed()
 
     // Pull up the panel to reveal the second row (System) and the tools per row slider
@@ -1030,8 +1030,10 @@ class MainScreenTest {
       composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("gallery_screen").assertIsDisplayed()
 
-      // Click tile Edit button for clip.mp4 -> opens VideoEditorScreen
-      composeTestRule.onNodeWithTag("photo_tile_edit_clip.mp4").performClick()
+      // Open ... menu on clip.mp4 tile and click Edit -> opens VideoEditorScreen
+      composeTestRule.onNodeWithTag("photo_more_clip.mp4").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("photo_menu_edit_clip.mp4").performClick()
       composeTestRule.waitForIdle()
 
       composeTestRule.onNodeWithTag("video_editor_screen").assertIsDisplayed()
@@ -1207,14 +1209,14 @@ class MainScreenTest {
       }
       composeTestRule.waitForIdle()
 
-      // 1. Image file menu shows Open in Gallery & Inspect Color, and Inspect Color opens ColorPickerScreen
+      // 1. Image file menu shows Gallery & Inspect Color, and Inspect Color opens ColorPickerScreen
       composeTestRule.onNodeWithTag("file_options_swatch.png").performClick()
       composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("action_open_gallery").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_inspect_color").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_cut").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_copy").assertIsDisplayed()
-      composeTestRule.onNodeWithTag("action_duplicate").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_duplicate").assertDoesNotExist()
       composeTestRule.onNodeWithTag("action_inspect_color").performClick()
       composeTestRule.waitForIdle()
 
@@ -1235,11 +1237,11 @@ class MainScreenTest {
       composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()
 
-      // 3. Text/Markdown file menu shows Save to Notes & Import to To Do, and single-item Copy populates Paste bar
+      // 3. Text/Markdown file menu shows Add Note (without Import to To Do), and single-item Copy populates Paste bar
       composeTestRule.onNodeWithTag("file_options_checklist.md").performClick()
       composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("action_save_to_notes").assertIsDisplayed()
-      composeTestRule.onNodeWithTag("action_import_to_todo").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_import_to_todo").assertDoesNotExist()
       composeTestRule.onNodeWithTag("action_copy").performClick()
       composeTestRule.waitForIdle()
 

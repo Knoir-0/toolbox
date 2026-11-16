@@ -95,4 +95,32 @@ class RecipeBookScreenTest {
         composeTestRule.onNodeWithTag("multi_select_toolbar").assertIsDisplayed()
         composeTestRule.onNodeWithText("1 selected").assertIsDisplayed()
     }
+
+    @Test
+    fun duplicateRecipeFromContextMenu_opensAddRecipeModalPrefilledWithRecipe() {
+        val pancakes = RecipeBookEngine.BUILT_IN_RECIPES.first { it.id == "fluffy_pancakes" }
+        val repo = InMemoryRecipeBookRepository(initialSaved = listOf(pancakes))
+        composeTestRule.setContent {
+            ToolboxTheme {
+                RecipeBookScreen(repository = repo)
+            }
+        }
+
+        composeTestRule.onNodeWithTag("saved_recipe_overflow_fluffy_pancakes").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("duplicate_saved_recipe_fluffy_pancakes").performClick()
+        composeTestRule.waitForIdle()
+
+        // Opens the Add Recipe modal prefilled with the recipe
+        composeTestRule.onNodeWithTag("recipe_editor_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("save_custom_recipe_button").assertIsDisplayed()
+
+        // Since name is pre-selected, typing replaces it and confirming adds the new custom recipe
+        composeTestRule.onNodeWithTag("custom_recipe_name_input").performTextInput("Blueberry Pancakes")
+        composeTestRule.onNodeWithTag("save_custom_recipe_button").performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("Blueberry Pancakes").assertIsDisplayed()
+        assertTrue(repo.getSavedRecipes().any { it.name == "Blueberry Pancakes" && it.isCustom })
+    }
 }

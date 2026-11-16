@@ -222,6 +222,7 @@ fun PlantScheduleScreen(
   var showSelectionOverflowMenu by remember { mutableStateOf(false) }
   var showEditorDialog by remember { mutableStateOf(false) }
   var editingPlant by remember { mutableStateOf<PlantItem?>(null) }
+  var prefillPlant by remember { mutableStateOf<PlantItem?>(null) }
   var initialCustomName by remember { mutableStateOf("") }
   var inspectingPlants by remember { mutableStateOf<List<PlantItem>>(emptyList()) }
   var pendingDeletePlants by remember { mutableStateOf<List<PlantItem>>(emptyList()) }
@@ -342,15 +343,23 @@ fun PlantScheduleScreen(
     }
   }
 
+  fun openDuplicatePlantModal(plant: PlantItem) {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    editingPlant = null
+    prefillPlant = plant
+    initialCustomName = plant.name
+    showEditorDialog = true
+  }
+
   val plantCardDispatcher = remember(scheduledPlants, customPlants, context) {
     PlantCardActionDispatcher(
       onEditOrCustomize = { plant ->
         editingPlant = plant
+        prefillPlant = null
         showEditorDialog = true
       },
       onDuplicatePlant = { plant ->
-        duplicatePlantsAsCustom(listOf(plant))
-        Toast.makeText(context, "Duplicated \"${plant.name}\"", Toast.LENGTH_SHORT).show()
+        openDuplicatePlantModal(plant)
       },
       onAddScheduleToTodo = { plant ->
         CrossToolActions.saveTaskToTodoList(
@@ -486,21 +495,25 @@ fun PlantScheduleScreen(
                       onClick = {
                         showSelectionOverflowMenu = false
                         editingPlant = selectedItems.firstOrNull()
+                        prefillPlant = null
                         initialCustomName = ""
                         exitSelectionMode()
                         showEditorDialog = true
                       },
                     )
+                    DropdownMenuItem(
+                      text = { Text("Duplicate") },
+                      leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                      onClick = {
+                        showSelectionOverflowMenu = false
+                        val target = selectedItems.firstOrNull()
+                        exitSelectionMode()
+                        if (target != null) {
+                          openDuplicatePlantModal(target)
+                        }
+                      },
+                    )
                   }
-                  DropdownMenuItem(
-                    text = { Text("Duplicate Selected") },
-                    leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-                    onClick = {
-                      showSelectionOverflowMenu = false
-                      duplicatePlantsAsCustom(selectedItems)
-                      exitSelectionMode()
-                    },
-                  )
                   DropdownMenuItem(
                     text = {
                       Text(
@@ -584,6 +597,7 @@ fun PlantScheduleScreen(
               },
               onEditPlant = { plant ->
                 editingPlant = plant
+                prefillPlant = null
                 initialCustomName = ""
                 showEditorDialog = true
               },
@@ -591,7 +605,7 @@ fun PlantScheduleScreen(
                 inspectingPlants = listOf(plant)
               },
               onDuplicatePlant = { plant ->
-                duplicatePlantsAsCustom(listOf(plant))
+                openDuplicatePlantModal(plant)
               },
               onRemovePlant = ::removePlant,
               onEnterSelectionMode = { plantId ->
@@ -627,6 +641,7 @@ fun PlantScheduleScreen(
             onInspectPlant = { plant -> inspectingPlants = listOf(plant) },
             onCreateCustomWithQuery = {
               editingPlant = null
+              prefillPlant = null
               initialCustomName = searchQuery.trim()
               showEditorDialog = true
             },
@@ -694,6 +709,7 @@ fun PlantScheduleScreen(
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 isFabExpanded = false
                 editingPlant = null
+                prefillPlant = null
                 initialCustomName = searchQuery.trim()
                 showEditorDialog = true
               },
@@ -717,6 +733,7 @@ fun PlantScheduleScreen(
                   haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                   isFabExpanded = false
                   editingPlant = null
+                  prefillPlant = null
                   initialCustomName = searchQuery.trim()
                   showEditorDialog = true
                 },
@@ -813,10 +830,12 @@ fun PlantScheduleScreen(
   if (showEditorDialog) {
     PlantEditorDialog(
       existingPlant = editingPlant,
+      prefillPlant = prefillPlant,
       initialName = initialCustomName,
       onDismiss = {
         showEditorDialog = false
         editingPlant = null
+        prefillPlant = null
       },
       onConfirm = { savedPlant ->
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -833,6 +852,7 @@ fun PlantScheduleScreen(
         updateSchedule(updatedSchedule)
         showEditorDialog = false
         editingPlant = null
+        prefillPlant = null
       },
     )
   }
@@ -845,6 +865,7 @@ fun PlantScheduleScreen(
       onCustomize = { plant ->
         inspectingPlants = emptyList()
         editingPlant = plant
+        prefillPlant = null
         initialCustomName = ""
         showEditorDialog = true
       },
@@ -1252,12 +1273,13 @@ private fun CatalogPlantItemCard(
                 },
               )
               DropdownMenuItem(
-                text = { Text("Copy") },
+                text = { Text("Duplicate") },
                 leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                 onClick = {
                   showItemMenu = false
                   plantActions.onDuplicatePlant(plant)
                 },
+                modifier = Modifier.testTag("duplicate_catalog_plant_${plant.id}"),
               )
               HorizontalDivider()
               DropdownMenuItem(
@@ -1871,12 +1893,13 @@ private fun ScheduledPlantYearRow(
               modifier = Modifier.testTag("edit_scheduled_plant_${plant.id}"),
             )
             DropdownMenuItem(
-              text = { Text("Copy") },
+              text = { Text("Duplicate") },
               leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
               onClick = {
                 showItemMenu = false
                 onDuplicate()
               },
+              modifier = Modifier.testTag("duplicate_scheduled_plant_${plant.id}"),
             )
             HorizontalDivider()
             DropdownMenuItem(
@@ -2317,12 +2340,14 @@ private fun MonthActivitySummaryCard(
 @Composable
 private fun PlantEditorDialog(
   existingPlant: PlantItem?,
+  prefillPlant: PlantItem? = null,
   initialName: String,
   onDismiss: () -> Unit,
   onConfirm: (PlantItem) -> Unit,
 ) {
   val isEditing = existingPlant != null
-  val initialText = existingPlant?.name ?: initialName
+  val templatePlant = existingPlant ?: prefillPlant
+  val initialText = templatePlant?.name ?: initialName
   var nameField by remember {
     mutableStateOf(
       TextFieldValue(
@@ -2332,16 +2357,16 @@ private fun PlantEditorDialog(
     )
   }
   var selectedCategory by remember {
-    mutableStateOf(existingPlant?.category ?: PlantCategory.VEGETABLES)
+    mutableStateOf(templatePlant?.category ?: PlantCategory.VEGETABLES)
   }
   var plantingMonths by remember {
-    mutableStateOf(existingPlant?.normalizedPlantingMonths ?: setOf(4, 5))
+    mutableStateOf(templatePlant?.normalizedPlantingMonths ?: setOf(4, 5))
   }
   var harvestMonths by remember {
-    mutableStateOf(existingPlant?.normalizedHarvestMonths ?: setOf(7, 8, 9))
+    mutableStateOf(templatePlant?.normalizedHarvestMonths ?: setOf(7, 8, 9))
   }
   var notesText by remember {
-    mutableStateOf(existingPlant?.notes ?: "")
+    mutableStateOf(templatePlant?.notes ?: "")
   }
 
   // Section 5.2 & Section 6: Autofocus and pre-select text on both create AND edit
@@ -2367,13 +2392,13 @@ private fun PlantEditorDialog(
     PlantItem(
       id = existingPlant?.id ?: "custom_${UUID.randomUUID()}",
       name = trimmedName.ifEmpty { "Plant Preview" },
-      scientificName = existingPlant?.scientificName ?: "",
+      scientificName = templatePlant?.scientificName ?: "",
       category = selectedCategory,
       plantingMonths = plantingMonths,
       harvestMonths = harvestMonths,
-      sunRequirement = existingPlant?.sunRequirement ?: "Full Sun",
-      daysToMaturity = existingPlant?.daysToMaturity ?: "",
-      spacing = existingPlant?.spacing ?: "",
+      sunRequirement = templatePlant?.sunRequirement ?: "Full Sun",
+      daysToMaturity = templatePlant?.daysToMaturity ?: "",
+      spacing = templatePlant?.spacing ?: "",
       notes = notesText.trim(),
       isCustom = existingPlant?.isCustom ?: true,
     )

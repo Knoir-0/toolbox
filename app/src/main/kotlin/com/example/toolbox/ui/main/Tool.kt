@@ -41,14 +41,14 @@ import androidx.compose.ui.unit.dp
 enum class ToolCategory(
   val title: String,
 ) {
-  MATH_AND_MEASUREMENT(title = "Math & Measurement"),
+  MATH_AND_MEASUREMENT(title = "Math & Measure"),
   PRODUCTIVITY(title = "Productivity"),
   FILES_AND_STORAGE(title = "Files"),
   PHOTO_AND_VIDEO(title = "Photo & Video"),
-  AUDIO_AND_SOUND(title = "Audio & Sound"),
-  MUSIC_AND_INSTRUMENTS(title = "Music & Instruments"),
-  REMOTES_AND_DEVICES(title = "Remotes & Devices"),
-  MISCELLANEOUS(title = "Miscellaneous"),
+  AUDIO_AND_SOUND(title = "Audio"),
+  MUSIC_AND_INSTRUMENTS(title = "Instruments"),
+  REMOTES_AND_DEVICES(title = "Devices"),
+  MISCELLANEOUS(title = "Lifestyle"),
   SYSTEM(title = "System"),
 }
 
@@ -179,7 +179,7 @@ enum class Tool(
   DECIBEL_METER(
     title = "Decibels",
     icon = Icons.Default.Speed,
-    category = ToolCategory.AUDIO_AND_SOUND,
+    category = ToolCategory.MATH_AND_MEASUREMENT,
   ),
   METRONOME(
     title = "Metronome",
@@ -189,7 +189,7 @@ enum class Tool(
   COLOR_PICKER(
     title = "Colors",
     icon = Icons.Default.Palette,
-    category = ToolCategory.MISCELLANEOUS,
+    category = ToolCategory.PHOTO_AND_VIDEO,
   ),
   OBD2_SCANNER(
     title = "OBD2",

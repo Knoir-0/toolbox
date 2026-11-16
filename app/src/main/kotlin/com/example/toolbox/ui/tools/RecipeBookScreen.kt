@@ -212,6 +212,7 @@ fun RecipeBookScreen(
     var showMultiSelectOverflow by remember { mutableStateOf(false) }
     var inspectingRecipe by remember { mutableStateOf<RecipeItem?>(null) }
     var editingRecipe by remember { mutableStateOf<RecipeItem?>(null) }
+    var prefillRecipe by remember { mutableStateOf<RecipeItem?>(null) }
     var isCreatingCustom by remember { mutableStateOf(false) }
     var initialCustomName by remember { mutableStateOf("") }
     var pendingDeleteRecipes by remember { mutableStateOf<List<RecipeItem>?>(null) }
@@ -268,18 +269,18 @@ fun RecipeBookScreen(
         }
     }
 
+    fun openDuplicateRecipeModal(recipe: RecipeItem) {
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        editingRecipe = null
+        prefillRecipe = recipe
+        initialCustomName = recipe.name
+        isCreatingCustom = true
+    }
+
     val recipeCardDispatcher = remember(savedRecipes, customCatalog, context) {
         RecipeCardActionDispatcher(
             onDuplicateRecipe = { recipe ->
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                val copy = recipe.copy(
-                    id = "custom_${java.util.UUID.randomUUID()}",
-                    name = "${recipe.name} (Copy)",
-                    isCustom = true,
-                )
-                persistCustomCatalog(customCatalog + copy)
-                persistSaved(RecipeBookEngine.addRecipeToBook(savedRecipes, copy))
-                Toast.makeText(context, "Duplicated \"${recipe.name}\"", Toast.LENGTH_SHORT).show()
+                openDuplicateRecipeModal(recipe)
             },
             onAddIngredientsToTodo = { recipe ->
                 CrossToolActions.saveTaskToTodoList(
@@ -438,6 +439,21 @@ fun RecipeBookScreen(
                                                 if (target != null) {
                                                     editingRecipe = target
                                                     exitSelectionMode()
+                                                }
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Duplicate") },
+                                            leadingIcon = {
+                                                Icon(Icons.Default.ContentCopy, contentDescription = null)
+                                            },
+                                            onClick = {
+                                                showMultiSelectOverflow = false
+                                                val target = (savedRecipes + allCatalog)
+                                                    .firstOrNull { it.id in selectedIds }
+                                                exitSelectionMode()
+                                                if (target != null) {
+                                                    openDuplicateRecipeModal(target)
                                                 }
                                             }
                                         )
@@ -641,6 +657,7 @@ fun RecipeBookScreen(
                             inspectingRecipe = recipe
                         },
                         onCreateCustomWithName = { prefillName ->
+                            prefillRecipe = null
                             initialCustomName = prefillName
                             isCreatingCustom = true
                         }
@@ -703,6 +720,7 @@ fun RecipeBookScreen(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 isFabExpanded = false
+                                prefillRecipe = null
                                 initialCustomName = searchQuery.trim()
                                 isCreatingCustom = true
                             }
@@ -795,13 +813,18 @@ fun RecipeBookScreen(
     if (isCreatingCustom) {
         RecipeEditorDialog(
             initialRecipe = null,
+            prefillRecipe = prefillRecipe,
             prefillName = initialCustomName,
-            onDismiss = { isCreatingCustom = false },
+            onDismiss = {
+                isCreatingCustom = false
+                prefillRecipe = null
+            },
             onConfirm = { created ->
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 persistCustomCatalog(customCatalog + created)
                 persistSaved(RecipeBookEngine.addRecipeToBook(savedRecipes, created))
                 isCreatingCustom = false
+                prefillRecipe = null
             }
         )
     }
@@ -1312,12 +1335,13 @@ private fun CatalogRecipeResultCard(
                             )
                             HorizontalDivider()
                             DropdownMenuItem(
-                                text = { Text("Duplicate as Custom Recipe") },
+                                text = { Text("Duplicate") },
                                 leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                                 onClick = {
                                     showMenu = false
                                     recipeActions.onDuplicateRecipe(recipe)
-                                }
+                                },
+                                modifier = Modifier.testTag("duplicate_catalog_recipe_${recipe.id}")
                             )
                             DropdownMenuItem(
                                 text = { Text("Add Ingredients to To Do") },
@@ -1759,14 +1783,15 @@ private fun SavedRecipeCard(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("Duplicate Recipe") },
+                                text = { Text("Duplicate") },
                                 leadingIcon = {
                                     Icon(Icons.Default.ContentCopy, contentDescription = null)
                                 },
                                 onClick = {
                                     showOverflow = false
                                     recipeActions.onDuplicateRecipe(recipe)
-                                }
+                                },
+                                modifier = Modifier.testTag("duplicate_saved_recipe_${recipe.id}")
                             )
                             HorizontalDivider()
                             DropdownMenuItem(
@@ -2363,12 +2388,14 @@ private fun RecipeDetailDialog(
 @Composable
 private fun RecipeEditorDialog(
     initialRecipe: RecipeItem?,
+    prefillRecipe: RecipeItem? = null,
     prefillName: String,
     onDismiss: () -> Unit,
     onConfirm: (RecipeItem) -> Unit
 ) {
     val isEditing = initialRecipe != null
-    val startName = initialRecipe?.name ?: prefillName
+    val templateRecipe = initialRecipe ?: prefillRecipe
+    val startName = templateRecipe?.name ?: prefillName
     var nameField by remember {
         mutableStateOf(
             TextFieldValue(
@@ -2377,32 +2404,32 @@ private fun RecipeEditorDialog(
             )
         )
     }
-    var subtitle by remember { mutableStateOf(initialRecipe?.subtitle ?: "Homemade Recipe") }
-    var category by remember { mutableStateOf(initialRecipe?.category ?: RecipeCategory.MAINS) }
-    var difficulty by remember { mutableStateOf(initialRecipe?.difficulty ?: RecipeDifficulty.EASY) }
+    var subtitle by remember { mutableStateOf(templateRecipe?.subtitle ?: "Homemade Recipe") }
+    var category by remember { mutableStateOf(templateRecipe?.category ?: RecipeCategory.MAINS) }
+    var difficulty by remember { mutableStateOf(templateRecipe?.difficulty ?: RecipeDifficulty.EASY) }
     var prepMinutesText by remember {
-        mutableStateOf((initialRecipe?.prepTimeMinutes ?: 15).toString())
+        mutableStateOf((templateRecipe?.prepTimeMinutes ?: 15).toString())
     }
     var cookMinutesText by remember {
-        mutableStateOf((initialRecipe?.cookTimeMinutes ?: 20).toString())
+        mutableStateOf((templateRecipe?.cookTimeMinutes ?: 20).toString())
     }
     var servingsText by remember {
-        mutableStateOf((initialRecipe?.servings ?: 4).toString())
+        mutableStateOf((templateRecipe?.servings ?: 4).toString())
     }
     var ingredientsText by remember {
         mutableStateOf(
-            initialRecipe?.ingredients?.joinToString("\n")
+            templateRecipe?.ingredients?.joinToString("\n")
                 ?: "2 cups flour\n1 tsp kosher salt\n2 tbsp olive oil"
         )
     }
     var instructionsText by remember {
         mutableStateOf(
-            initialRecipe?.instructions?.joinToString("\n")
+            templateRecipe?.instructions?.joinToString("\n")
                 ?: "Prep and measure all ingredients.\nCook over medium heat until golden and tender.\nSeason to taste and serve warm."
         )
     }
     var notesText by remember {
-        mutableStateOf(initialRecipe?.notes ?: "")
+        mutableStateOf(templateRecipe?.notes ?: "")
     }
 
     val nameFocusRequester = remember { FocusRequester() }
@@ -2654,7 +2681,7 @@ private fun RecipeEditorDialog(
             Button(
                 onClick = {
                     val result = RecipeItem(
-                        id = initialRecipe?.id ?: "custom_recipe_${System.currentTimeMillis()}",
+                        id = initialRecipe?.id ?: "custom_recipe_${java.util.UUID.randomUUID()}",
                         name = nameField.text.trim(),
                         subtitle = subtitle.trim().ifEmpty { "Homemade Recipe" },
                         category = category,
@@ -2664,7 +2691,7 @@ private fun RecipeEditorDialog(
                         difficulty = difficulty,
                         ingredients = parsedIngredients,
                         instructions = parsedInstructions,
-                        tags = initialRecipe?.tags ?: setOf("Custom"),
+                        tags = templateRecipe?.tags ?: setOf("Custom"),
                         notes = notesText.trim(),
                         isFavorite = initialRecipe?.isFavorite ?: false,
                         isCustom = initialRecipe?.isCustom ?: true

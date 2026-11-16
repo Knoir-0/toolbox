@@ -2403,7 +2403,7 @@ private fun AlbumTileCard(
             shape = CircleShape,
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
             modifier = Modifier
-              .align(Alignment.TopEnd)
+              .align(Alignment.BottomStart)
               .padding(4.dp)
               .size(26.dp),
           ) {
@@ -2556,7 +2556,7 @@ private fun PhotoTileCard(
           shape = CircleShape,
           color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
           modifier = Modifier
-            .align(Alignment.TopStart)
+            .align(Alignment.BottomStart)
             .padding(4.dp)
             .size(26.dp),
         ) {
@@ -2567,26 +2567,6 @@ private fun PhotoTileCard(
             onEdit = onEdit,
           )
         }
-        Surface(
-          shape = CircleShape,
-          color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-          modifier = Modifier
-            .align(Alignment.TopEnd)
-            .padding(4.dp)
-            .size(26.dp)
-            .clip(CircleShape)
-            .clickable(onClick = onEdit)
-            .testTag("photo_tile_edit_${photo.name}"),
-        ) {
-          Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-            Icon(
-              imageVector = Icons.Default.Edit,
-              contentDescription = "Edit ${photo.name}",
-              tint = MaterialTheme.colorScheme.onSurface,
-              modifier = Modifier.size(14.dp),
-            )
-          }
-        }
       }
 
       // Match snippet or OCR / QR badge on bottom of tile
@@ -2595,7 +2575,7 @@ private fun PhotoTileCard(
           shape = RoundedCornerShape(6.dp),
           color = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f),
           modifier = Modifier
-            .align(Alignment.BottomStart)
+            .align(Alignment.BottomEnd)
             .padding(4.dp)
             .testTag("photo_tile_match_snippet_${photo.name}"),
         ) {
@@ -2614,7 +2594,7 @@ private fun PhotoTileCard(
           shape = RoundedCornerShape(6.dp),
           color = MaterialTheme.colorScheme.surface.copy(alpha = 0.84f),
           modifier = Modifier
-            .align(Alignment.BottomStart)
+            .align(Alignment.BottomEnd)
             .padding(4.dp)
             .testTag("photo_tile_recognition_badge_${photo.name}"),
         ) {
@@ -2954,19 +2934,6 @@ private fun PhotoListRow(
       }
 
       if (!isSelectionMode) {
-        IconButton(
-          onClick = onEdit,
-          modifier = Modifier
-            .size(36.dp)
-            .testTag("photo_list_edit_${photo.name}"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Edit,
-            contentDescription = "Edit ${photo.name}",
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
-          )
-        }
         GalleryPhotoContextMenuButton(
           photo = photo,
           indexEntry = indexEntry,
@@ -3017,7 +2984,7 @@ private fun GalleryAlbumContextMenuButton(
         modifier = Modifier.testTag("album_menu_open_${album.name}"),
       )
       DropdownMenuItem(
-        text = { Text("Compress to Archive") },
+        text = { Text("Archive") },
         leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
         onClick = {
           expanded = false
@@ -3026,7 +2993,7 @@ private fun GalleryAlbumContextMenuButton(
         modifier = Modifier.testTag("album_menu_archive_${album.name}"),
       )
       DropdownMenuItem(
-        text = { Text("Open in Files") },
+        text = { Text("Folder") },
         leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null) },
         onClick = {
           expanded = false
@@ -3169,7 +3136,7 @@ private fun GalleryPhotoContextMenuButton(
         modifier = Modifier.testTag("photo_menu_convert_${photo.name}"),
       )
       DropdownMenuItem(
-        text = { Text("Compress to Archive") },
+        text = { Text("Archive") },
         leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
         onClick = {
           expanded = false
@@ -3178,7 +3145,7 @@ private fun GalleryPhotoContextMenuButton(
         modifier = Modifier.testTag("photo_menu_archive_${photo.name}"),
       )
       DropdownMenuItem(
-        text = { Text("Save to Notes") },
+        text = { Text("Add Note") },
         leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
         onClick = {
           expanded = false
@@ -3187,7 +3154,7 @@ private fun GalleryPhotoContextMenuButton(
         modifier = Modifier.testTag("photo_menu_save_to_notes_${photo.name}"),
       )
       DropdownMenuItem(
-        text = { Text("Open in Files") },
+        text = { Text("Folder") },
         leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
         onClick = {
           expanded = false
@@ -3231,15 +3198,6 @@ private fun GalleryPhotoContextMenuButton(
           actions.onCopyPhoto(photo)
         },
         modifier = Modifier.testTag("photo_menu_copy_${photo.name}"),
-      )
-      DropdownMenuItem(
-        text = { Text("Duplicate") },
-        leadingIcon = { Icon(Icons.Default.FileCopy, contentDescription = null) },
-        onClick = {
-          expanded = false
-          actions.onDuplicatePhoto(photo)
-        },
-        modifier = Modifier.testTag("photo_menu_duplicate_${photo.name}"),
       )
       DropdownMenuItem(
         text = { Text("Rename") },

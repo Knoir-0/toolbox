@@ -349,7 +349,7 @@ class SettingsScreenTest {
     assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.AUDIO_RECORDER.category)
     assertEquals(ToolCategory.MUSIC_AND_INSTRUMENTS, Tool.CHORD_BOOK.category)
     assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.AUDIO_EDITOR.category)
-    assertEquals(ToolCategory.MISCELLANEOUS, Tool.COLOR_PICKER.category)
+    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.COLOR_PICKER.category)
     assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.IMAGE_EDITOR.category)
     assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.FILE_CONVERTER.category)
     assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.GALLERY.category)
@@ -362,7 +362,7 @@ class SettingsScreenTest {
     assertEquals(ToolCategory.MISCELLANEOUS, Tool.DICE_ROLLER.category)
     assertEquals(ToolCategory.REMOTES_AND_DEVICES, Tool.BLUETOOTH_REMOTE.category)
     assertEquals(ToolCategory.REMOTES_AND_DEVICES, Tool.BLUETOOTH_GAMEPAD.category)
-    assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.DECIBEL_METER.category)
+    assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.DECIBEL_METER.category)
     assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.ARCHIVE.category)
     assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.MUSIC.category)
     assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.PDF_VIEWER.category)
@@ -435,14 +435,14 @@ class SettingsScreenTest {
     val titles = sorted.map { it.title }
     assertEquals(
       listOf(
-        "Audio & Sound",
+        "Audio",
+        "Devices",
         "Files",
-        "Math & Measurement",
-        "Miscellaneous",
-        "Music & Instruments",
+        "Instruments",
+        "Lifestyle",
+        "Math & Measure",
         "Photo & Video",
         "Productivity",
-        "Remotes & Devices",
         "System",
       ),
       titles,

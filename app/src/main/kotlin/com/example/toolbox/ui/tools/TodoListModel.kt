@@ -168,8 +168,12 @@ data class TodoHistorySnapshot(
   val completedTasks: List<TodoItem> = emptyList(),
 )
 
+const val MIN_TODO_GRID_COLUMNS = 2
+const val MAX_TODO_GRID_COLUMNS = 4
+const val DEFAULT_TODO_GRID_COLUMNS = 2
+
 /**
- * Repository interface for saving and retrieving tasks and the daily completed count.
+ * Repository interface for saving and retrieving tasks, the daily completed count, and view preferences.
  */
 interface TodoListRepository {
   fun loadTasks(): List<TodoItem>
@@ -180,6 +184,10 @@ interface TodoListRepository {
   fun saveCompletedTasks(tasks: List<TodoItem>, currentDate: String = getTodayDateKey())
   fun loadSavedTasks(): List<TodoItem>
   fun saveSavedTasks(tasks: List<TodoItem>)
+  fun isGridView(): Boolean = false
+  fun setGridView(isGrid: Boolean) {}
+  fun getGridColumnsPerRow(): Int = DEFAULT_TODO_GRID_COLUMNS
+  fun setGridColumnsPerRow(columns: Int) {}
 }
 
 /**
@@ -191,10 +199,14 @@ class InMemoryTodoListRepository(
   private var completedCount: Int = 0,
   initialCompletedTasks: List<TodoItem> = emptyList(),
   initialSavedTasks: List<TodoItem> = emptyList(),
+  initialGridView: Boolean = false,
+  initialGridColumnsPerRow: Int = DEFAULT_TODO_GRID_COLUMNS,
 ) : TodoListRepository {
   private val tasks = initialTasks.toMutableList()
   private val completedTasksList = initialCompletedTasks.toMutableList()
   private val savedTasksList = initialSavedTasks.toMutableList()
+  private var gridView = initialGridView
+  private var gridColumnsPerRow = initialGridColumnsPerRow.coerceIn(MIN_TODO_GRID_COLUMNS, MAX_TODO_GRID_COLUMNS)
 
   override fun loadTasks(): List<TodoItem> = tasks.toList()
 
@@ -230,6 +242,18 @@ class InMemoryTodoListRepository(
     savedTasksList.clear()
     savedTasksList.addAll(tasks)
   }
+
+  override fun isGridView(): Boolean = gridView
+
+  override fun setGridView(isGrid: Boolean) {
+    gridView = isGrid
+  }
+
+  override fun getGridColumnsPerRow(): Int = gridColumnsPerRow
+
+  override fun setGridColumnsPerRow(columns: Int) {
+    gridColumnsPerRow = columns.coerceIn(MIN_TODO_GRID_COLUMNS, MAX_TODO_GRID_COLUMNS)
+  }
 }
 
 /**
@@ -246,6 +270,8 @@ class SharedPreferencesTodoListRepository(
     const val KEY_COMPLETED_TODAY_COUNT = "completed_today_count"
     const val KEY_COMPLETED_TASKS_JSON = "completed_tasks_json"
     const val KEY_SAVED_TASKS_JSON = "saved_tasks_json"
+    const val KEY_IS_GRID_VIEW = "is_grid_view"
+    const val KEY_GRID_COLUMNS_PER_ROW = "grid_columns_per_row"
   }
 
   constructor(context: Context) : this(
@@ -336,6 +362,25 @@ class SharedPreferencesTodoListRepository(
     sharedPreferences.edit()
       .putString(KEY_SAVED_TASKS_JSON, array.toString())
       .apply()
+  }
+
+  override fun isGridView(): Boolean {
+    return sharedPreferences.getBoolean(KEY_IS_GRID_VIEW, false)
+  }
+
+  override fun setGridView(isGrid: Boolean) {
+    sharedPreferences.edit().putBoolean(KEY_IS_GRID_VIEW, isGrid).apply()
+  }
+
+  override fun getGridColumnsPerRow(): Int {
+    return sharedPreferences
+      .getInt(KEY_GRID_COLUMNS_PER_ROW, DEFAULT_TODO_GRID_COLUMNS)
+      .coerceIn(MIN_TODO_GRID_COLUMNS, MAX_TODO_GRID_COLUMNS)
+  }
+
+  override fun setGridColumnsPerRow(columns: Int) {
+    val coerced = columns.coerceIn(MIN_TODO_GRID_COLUMNS, MAX_TODO_GRID_COLUMNS)
+    sharedPreferences.edit().putInt(KEY_GRID_COLUMNS_PER_ROW, coerced).apply()
   }
 }
 
@@ -631,6 +676,23 @@ object TodoListEngine {
   }
 
   /**
+   * Filters [tasks] by case-insensitive substring matching across title, notes, subtasks,
+   * and formatted schedule label.
+   */
+  fun filterTasks(tasks: List<TodoItem>, query: String): List<TodoItem> {
+    val trimmed = query.trim()
+    if (trimmed.isEmpty()) return tasks
+    return tasks.filter { task ->
+      task.title.contains(trimmed, ignoreCase = true) ||
+        task.notes.contains(trimmed, ignoreCase = true) ||
+        task.subtasks.any { it.title.contains(trimmed, ignoreCase = true) } ||
+        (task.scheduledAtMillis != null &&
+          formatScheduleLabel(task.scheduledAtMillis, task.scheduledEndMillis)
+            .contains(trimmed, ignoreCase = true))
+    }
+  }
+
+  /**
    * Completes an active task by [taskId], moving it from [TodoHistorySnapshot.tasks]
    * to [TodoHistorySnapshot.completedTasks] and incrementing [TodoHistorySnapshot.completedToday].
    */
@@ -649,12 +711,42 @@ object TodoListEngine {
   }
 
   /**
+   * Completes multiple active tasks by [taskIds].
+   */
+  fun completeTasks(snapshot: TodoHistorySnapshot, taskIds: Set<String>): TodoHistorySnapshot {
+    val toComplete = snapshot.tasks.filter { it.id in taskIds }
+    if (toComplete.isEmpty()) return snapshot
+    val updatedTasks = snapshot.tasks.filterNot { it.id in taskIds }
+    val completedItems = toComplete.map { task ->
+      task.copy(
+        isSubtasksCollapsed = true,
+        subtasks = task.subtasks.map { it.copy(isCompleted = true) },
+      )
+    }
+    return snapshot.copy(
+      tasks = updatedTasks,
+      completedToday = snapshot.completedToday + completedItems.size,
+      completedTasks = completedItems + snapshot.completedTasks,
+    )
+  }
+
+  /**
    * Deletes an active task by [taskId] from [TodoHistorySnapshot.tasks].
    */
   fun deleteTask(snapshot: TodoHistorySnapshot, taskId: String): TodoHistorySnapshot {
     if (snapshot.tasks.none { it.id == taskId }) return snapshot
     return snapshot.copy(
       tasks = snapshot.tasks.filter { it.id != taskId },
+    )
+  }
+
+  /**
+   * Deletes multiple active tasks by [taskIds].
+   */
+  fun deleteTasks(snapshot: TodoHistorySnapshot, taskIds: Set<String>): TodoHistorySnapshot {
+    if (snapshot.tasks.none { it.id in taskIds }) return snapshot
+    return snapshot.copy(
+      tasks = snapshot.tasks.filterNot { it.id in taskIds },
     )
   }
 
@@ -677,6 +769,26 @@ object TodoListEngine {
   }
 
   /**
+   * Uncompletes multiple completed tasks by [taskIds].
+   */
+  fun uncompleteTasks(snapshot: TodoHistorySnapshot, taskIds: Set<String>): TodoHistorySnapshot {
+    val toRestore = snapshot.completedTasks.filter { it.id in taskIds }
+    if (toRestore.isEmpty()) return snapshot
+    val updatedCompleted = snapshot.completedTasks.filterNot { it.id in taskIds }
+    val restoredTasks = toRestore.map { completedTask ->
+      completedTask.copy(
+        isSubtasksCollapsed = false,
+        subtasks = completedTask.subtasks.map { it.copy(isCompleted = false) },
+      )
+    }
+    return snapshot.copy(
+      tasks = restoredTasks + snapshot.tasks,
+      completedToday = maxOf(0, snapshot.completedToday - restoredTasks.size),
+      completedTasks = updatedCompleted,
+    )
+  }
+
+  /**
    * Deletes a completed task by [taskId] from [TodoHistorySnapshot.completedTasks]
    * and decrements [TodoHistorySnapshot.completedToday].
    */
@@ -685,6 +797,18 @@ object TodoListEngine {
     return snapshot.copy(
       completedToday = maxOf(0, snapshot.completedToday - 1),
       completedTasks = snapshot.completedTasks.filter { it.id != taskId },
+    )
+  }
+
+  /**
+   * Deletes multiple completed tasks by [taskIds] and decrements [TodoHistorySnapshot.completedToday].
+   */
+  fun deleteCompletedTasks(snapshot: TodoHistorySnapshot, taskIds: Set<String>): TodoHistorySnapshot {
+    val removedCount = snapshot.completedTasks.count { it.id in taskIds }
+    if (removedCount == 0) return snapshot
+    return snapshot.copy(
+      completedToday = maxOf(0, snapshot.completedToday - removedCount),
+      completedTasks = snapshot.completedTasks.filterNot { it.id in taskIds },
     )
   }
 
@@ -732,11 +856,51 @@ object TodoListEngine {
   }
 
   /**
+   * Schedules or reschedules multiple tasks by [taskIds].
+   */
+  fun scheduleTasks(
+    tasks: List<TodoItem>,
+    taskIds: Set<String>,
+    scheduledAtMillis: Long,
+    scheduledEndMillis: Long? = null,
+  ): List<TodoItem> {
+    val normalizedEnd = scheduledEndMillis?.takeIf { it > scheduledAtMillis }
+    return tasks.map { item ->
+      if (item.id in taskIds) {
+        item.copy(
+          scheduledAtMillis = scheduledAtMillis,
+          scheduledEndMillis = normalizedEnd,
+          notifiedAtScheduleMillis = null,
+        )
+      } else {
+        item
+      }
+    }
+  }
+
+  /**
    * Clears any schedule from the specified task.
    */
   fun unscheduleTask(tasks: List<TodoItem>, taskId: String): List<TodoItem> {
     return tasks.map { item ->
       if (item.id == taskId) {
+        item.copy(
+          scheduledAtMillis = null,
+          scheduledEndMillis = null,
+          notifiedAtScheduleMillis = null,
+        )
+      } else {
+        item
+      }
+    }
+  }
+
+  /**
+   * Clears any schedule from multiple tasks by [taskIds].
+   */
+  fun unscheduleTasks(tasks: List<TodoItem>, taskIds: Set<String>): List<TodoItem> {
+    return tasks.map { item ->
+      if (item.id in taskIds) {
         item.copy(
           scheduledAtMillis = null,
           scheduledEndMillis = null,

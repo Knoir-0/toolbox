@@ -63,6 +63,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.HeadsetMic
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
@@ -374,19 +375,19 @@ fun AudioRecorderScreen(
     ToolboxTopBar(
       title = "Audio Recorder",
       subtext = if (isRecording) {
-        val srcLabel = if (activeCaptureSource == AudioCaptureSource.DEVICE_AUDIO) {
-          "Recording device audio"
-        } else {
-          "Recording"
+        val srcLabel = when (activeCaptureSource) {
+          AudioCaptureSource.DEVICE_AUDIO -> "Recording device audio"
+          AudioCaptureSource.DEVICE_AND_MIC -> "Recording device & mic audio"
+          AudioCaptureSource.MICROPHONE -> "Recording"
         }
         "$srcLabel (${selectedFormat.shortLabel}) • $directoryDisplayPath"
       } else {
         "${recordings.size} recordings • ${selectedFormat.shortLabel} • $directoryDisplayPath"
       },
-      icon = if (isRecording && activeCaptureSource == AudioCaptureSource.DEVICE_AUDIO) {
-        Icons.Default.PhoneAndroid
-      } else {
-        Icons.Default.Mic
+      icon = when {
+        isRecording && activeCaptureSource == AudioCaptureSource.DEVICE_AUDIO -> Icons.Default.PhoneAndroid
+        isRecording && activeCaptureSource == AudioCaptureSource.DEVICE_AND_MIC -> Icons.Default.HeadsetMic
+        else -> Icons.Default.Mic
       },
       badgeContainerColor = if (isRecording) {
         MaterialTheme.colorScheme.errorContainer
@@ -560,6 +561,7 @@ fun AudioRecorderScreen(
         // Status Pill & Elapsed Timer above the floating FABs
         val isRecordingMic = isRecording && activeCaptureSource == AudioCaptureSource.MICROPHONE
         val isRecordingDevice = isRecording && activeCaptureSource == AudioCaptureSource.DEVICE_AUDIO
+        val isRecordingBoth = isRecording && activeCaptureSource == AudioCaptureSource.DEVICE_AND_MIC
 
         Badge(
           containerColor = if (isRecording) {
@@ -576,6 +578,7 @@ fun AudioRecorderScreen(
         ) {
           Text(
             text = when {
+              isRecordingBoth -> "● RECORDING DEVICE & MIC AUDIO"
               isRecordingDevice -> "● RECORDING DEVICE AUDIO"
               isRecording -> "● RECORDING"
               else -> "READY TO RECORD"
@@ -599,7 +602,7 @@ fun AudioRecorderScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Floating Microphone FAB in the middle + smaller Device Audio FAB to the right
+        // Smaller Combined (Device + Mic) FAB on the left + Primary Microphone FAB in the middle + smaller Device Audio FAB on the right
         val infiniteTransition = rememberInfiniteTransition(label = "RecordingPulse")
         val pulseScale by infiniteTransition.animateFloat(
           initialValue = 1.0f,
@@ -628,6 +631,23 @@ fun AudioRecorderScreen(
           label = "FabContentColor",
         )
 
+        val bothFabContainerColor by animateColorAsState(
+          targetValue = if (isRecordingBoth) {
+            MaterialTheme.colorScheme.error
+          } else {
+            MaterialTheme.colorScheme.secondaryContainer
+          },
+          label = "BothFabContainerColor",
+        )
+        val bothFabContentColor by animateColorAsState(
+          targetValue = if (isRecordingBoth) {
+            MaterialTheme.colorScheme.onError
+          } else {
+            MaterialTheme.colorScheme.onSecondaryContainer
+          },
+          label = "BothFabContentColor",
+        )
+
         val deviceFabContainerColor by animateColorAsState(
           targetValue = if (isRecordingDevice) {
             MaterialTheme.colorScheme.error
@@ -649,8 +669,78 @@ fun AudioRecorderScreen(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.Center,
         ) {
-          // Left balancing spacer so the primary Microphone FAB remains centered
-          Spacer(modifier = Modifier.width(84.dp))
+          // Smaller Device + Microphone Audio FAB to the left of the primary Microphone FAB
+          Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.size(72.dp),
+          ) {
+            if (isRecordingBoth) {
+              val dynamicBoost = (liveAmplitude * 0.15f).coerceIn(0f, 0.15f)
+              Box(
+                modifier = Modifier
+                  .size(64.dp)
+                  .scale(pulseScale + dynamicBoost)
+                  .clip(CircleShape)
+                  .background(MaterialTheme.colorScheme.error.copy(alpha = 0.2f)),
+              )
+            }
+
+            SmallFloatingActionButton(
+              onClick = {
+                if (isRecordingBoth) {
+                  stopRecording()
+                } else {
+                  startRecording(AudioCaptureSource.DEVICE_AND_MIC)
+                }
+              },
+              shape = CircleShape,
+              containerColor = bothFabContainerColor,
+              contentColor = bothFabContentColor,
+              elevation = FloatingActionButtonDefaults.elevation(
+                defaultElevation = 4.dp,
+                pressedElevation = 8.dp,
+              ),
+              modifier = Modifier
+                .size(56.dp)
+                .testTag("both_audio_recorder_fab")
+                .semantics {
+                  contentDescription = if (isRecordingBoth) {
+                    "Stop device and microphone audio recording"
+                  } else {
+                    "Record device and microphone audio"
+                  }
+                },
+            ) {
+              AnimatedContent(
+                targetState = isRecordingBoth,
+                transitionSpec = {
+                  (scaleIn(animationSpec = spring(stiffness = Spring.StiffnessMedium)) + fadeIn())
+                    .togetherWith(scaleOut() + fadeOut())
+                },
+                label = "BothToStopTransition",
+              ) { recordingBoth ->
+                if (recordingBoth) {
+                  Icon(
+                    imageVector = Icons.Default.Stop,
+                    contentDescription = null,
+                    modifier = Modifier
+                      .size(26.dp)
+                      .testTag("fab_both_stop_icon"),
+                  )
+                } else {
+                  Icon(
+                    imageVector = Icons.Default.HeadsetMic,
+                    contentDescription = null,
+                    modifier = Modifier
+                      .size(26.dp)
+                      .testTag("fab_both_audio_icon"),
+                  )
+                }
+              }
+            }
+          }
+
+          Spacer(modifier = Modifier.width(12.dp))
 
           // Primary Microphone / Stop FAB
           Box(
@@ -798,9 +888,10 @@ fun AudioRecorderScreen(
 
         Text(
           text = when {
+            isRecordingBoth -> "Recording device & mic audio • Tap Stop to save .${selectedFormat.extension} recording"
             isRecordingDevice -> "Recording device audio • Tap Stop to save .${selectedFormat.extension} recording"
             isRecording -> "Tap Stop to save .${selectedFormat.extension} recording"
-            else -> "Tap microphone or phone button to record (${selectedFormat.displayName})"
+            else -> "Tap mic, phone, or combined button to record (${selectedFormat.displayName})"
           },
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1135,10 +1226,10 @@ private fun RecordingListItemCard(
         contentAlignment = Alignment.Center,
       ) {
         Icon(
-          imageVector = if (item.captureSource == AudioCaptureSource.DEVICE_AUDIO) {
-            Icons.Default.PhoneAndroid
-          } else {
-            Icons.Default.GraphicEq
+          imageVector = when (item.captureSource) {
+            AudioCaptureSource.DEVICE_AUDIO -> Icons.Default.PhoneAndroid
+            AudioCaptureSource.DEVICE_AND_MIC -> Icons.Default.HeadsetMic
+            AudioCaptureSource.MICROPHONE -> Icons.Default.GraphicEq
           },
           contentDescription = null,
           tint = MaterialTheme.colorScheme.primary,
@@ -1180,6 +1271,19 @@ private fun RecordingListItemCard(
             ) {
               Text(
                 text = "DEVICE",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+              )
+            }
+          } else if (item.captureSource == AudioCaptureSource.DEVICE_AND_MIC) {
+            Surface(
+              shape = RoundedCornerShape(6.dp),
+              color = MaterialTheme.colorScheme.tertiaryContainer,
+            ) {
+              Text(
+                text = "DEVICE + MIC",
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onTertiaryContainer,
@@ -1253,7 +1357,7 @@ private fun RecordingListItemCard(
             modifier = Modifier.testTag("action_convert_file"),
           )
           DropdownMenuItem(
-            text = { Text("Compress to Archive") },
+            text = { Text("Archive") },
             leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
             onClick = {
               menuExpanded = false
@@ -1262,7 +1366,7 @@ private fun RecordingListItemCard(
             modifier = Modifier.testTag("action_compress_to_archive"),
           )
           DropdownMenuItem(
-            text = { Text("Save to Notes") },
+            text = { Text("Add Note") },
             leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
             onClick = {
               menuExpanded = false
@@ -1272,7 +1376,7 @@ private fun RecordingListItemCard(
           )
           HorizontalDivider()
           DropdownMenuItem(
-            text = { Text("Open in Files") },
+            text = { Text("Folder") },
             leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
             onClick = {
               menuExpanded = false
@@ -1299,15 +1403,6 @@ private fun RecordingListItemCard(
             modifier = Modifier.testTag("action_share"),
           )
           HorizontalDivider()
-          DropdownMenuItem(
-            text = { Text("Duplicate") },
-            leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-            onClick = {
-              menuExpanded = false
-              onDuplicate()
-            },
-            modifier = Modifier.testTag("action_duplicate"),
-          )
           DropdownMenuItem(
             text = { Text("Rename") },
             leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null) },
