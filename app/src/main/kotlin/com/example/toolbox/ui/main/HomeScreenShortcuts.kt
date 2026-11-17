@@ -34,6 +34,7 @@ import java.io.File
 
 const val EXTRA_STANDALONE_TOOL = "extra_standalone_tool"
 const val EXTRA_FOLDER_PATH = "extra_folder_path"
+const val EXTRA_EXPAND_MUSIC_PLAYER = "extra_expand_music_player"
 
 private const val SHORTCUT_ICON_SIZE_PX = 216
 private const val SHORTCUT_ADAPTIVE_VIEWPORT_DP = 108f
@@ -99,7 +100,11 @@ enum class LauncherIconVariant(
  * Resolves the [LauncherIconVariant] whose background matches (or is closest to) [themeColor].
  */
 fun resolveLauncherIconVariant(themeColor: String?): LauncherIconVariant {
-  if (themeColor.isNullOrBlank() || themeColor.equals(DEFAULT_THEME_COLOR_SYSTEM, ignoreCase = true)) {
+  if (
+    themeColor.isNullOrBlank() ||
+    themeColor.equals(DEFAULT_THEME_COLOR_SYSTEM, ignoreCase = true) ||
+    MusicPlayerColorOption.fromPrefValue(themeColor) != null
+  ) {
     return LauncherIconVariant.SYSTEM
   }
   val exactMatch = LauncherIconVariant.entries.find {
@@ -107,10 +112,7 @@ fun resolveLauncherIconVariant(themeColor: String?): LauncherIconVariant {
   }
   if (exactMatch != null) return exactMatch
 
-  val parsedColor = MusicPlayerColorOption.fromPrefValue(themeColor)
-    ?.resolveColor(MusicPlayerEngine.activeTrackPalette)
-    ?: parseHexColor(themeColor)
-    ?: return LauncherIconVariant.SYSTEM
+  val parsedColor = parseHexColor(themeColor) ?: return LauncherIconVariant.SYSTEM
   return LauncherIconVariant.entries
     .filter { it != LauncherIconVariant.SYSTEM }
     .minByOrNull { variant ->
@@ -247,6 +249,15 @@ fun parseStandaloneTool(intent: Intent?): Tool? {
 fun parseFolderShortcut(intent: Intent?): String? {
   return intent?.getStringExtra(EXTRA_FOLDER_PATH)
     ?: intent?.data?.getQueryParameter("folder")
+}
+
+/**
+ * Returns `true` if the incoming [Intent] requests opening the Music Player directly into the
+ * expanded full player view (for example, when launched by tapping the Android system media player).
+ */
+fun parseExpandMusicPlayer(intent: Intent?): Boolean {
+  return intent?.getBooleanExtra(EXTRA_EXPAND_MUSIC_PLAYER, false) == true ||
+    intent?.data?.getQueryParameter("expand_player")?.equals("true", ignoreCase = true) == true
 }
 
 /**

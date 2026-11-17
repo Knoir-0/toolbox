@@ -59,6 +59,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AccessTime
@@ -81,6 +82,7 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
@@ -162,6 +164,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -170,6 +173,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.theme.ToolboxTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -203,7 +207,8 @@ private fun formatTodoTaskPlainText(task: TodoItem): String {
     }
     if (task.scheduledAtMillis != null) {
       val sched = TodoListEngine.formatScheduleLabel(task.scheduledAtMillis, task.scheduledEndMillis)
-      appendLine("Scheduled: $sched")
+      val repeatSuffix = task.recurrenceRule?.let { " (${it.formatLabel()})" } ?: ""
+      appendLine("Scheduled: $sched$repeatSuffix")
     }
     if (task.subtasks.isNotEmpty()) {
       appendLine()
@@ -264,6 +269,10 @@ fun TodoListScreen(
   var showSchedulePanel by remember { mutableStateOf(false) }
   var schedulingTaskId by remember { mutableStateOf<String?>(null) }
   var scheduleStartMillis by remember { mutableLongStateOf(System.currentTimeMillis() + 3_600_000L) }
+  var scheduleRecurrenceRule by remember { mutableStateOf<TodoRecurrenceRule?>(null) }
+  var selectedSchedulePreset by remember {
+    mutableStateOf(TodoRecurrenceRule(interval = 1, unit = TodoRecurrenceUnit.HOUR, presetLabel = "1 hr"))
+  }
   var hasPendingSchedule by remember { mutableStateOf(false) }
 
   // Active in-app due notification popups
@@ -411,11 +420,21 @@ fun TodoListScreen(
   }
 
   fun completeTask(task: TodoItem) {
+    val now = System.currentTimeMillis()
     val currentSnapshot = TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)
-    val nextSnapshot = TodoListEngine.completeTask(currentSnapshot, task.id)
+    val nextSnapshot = TodoListEngine.completeTask(currentSnapshot, task.id, now)
     if (nextSnapshot == currentSnapshot) return
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     applySnapshot(nextSnapshot)
+    val rescheduledTask = nextSnapshot.tasks.firstOrNull { it.id == task.id }
+    if (task.isRecurring && rescheduledTask?.scheduledAtMillis != null) {
+      val nextLabel = TodoListEngine.formatScheduleLabel(
+        scheduledAtMillis = rescheduledTask.scheduledAtMillis,
+        scheduledEndMillis = rescheduledTask.scheduledEndMillis,
+        nowMillis = now,
+      )
+      Toast.makeText(context, "Completed! Rescheduled for $nextLabel", Toast.LENGTH_SHORT).show()
+    }
   }
 
   fun deleteTask(task: TodoItem) {
@@ -454,6 +473,9 @@ fun TodoListScreen(
   fun openScheduleForTask(task: TodoItem) {
     val defaultStart = task.scheduledAtMillis ?: (System.currentTimeMillis() + 3_600_000L)
     scheduleStartMillis = defaultStart
+    scheduleRecurrenceRule = task.recurrenceRule
+    selectedSchedulePreset = task.recurrenceRule
+      ?: TodoRecurrenceRule(interval = 1, unit = TodoRecurrenceUnit.HOUR, presetLabel = "1 hr")
     schedulingTaskId = task.id
     isSchedulingBulk = false
     showSchedulePanel = true
@@ -470,15 +492,19 @@ fun TodoListScreen(
       }
       haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
       val startMillis = scheduleStartMillis
+      val recurrence = scheduleRecurrenceRule
       val newItem = TodoItem(
         title = trimmed,
         scheduledAtMillis = startMillis,
         scheduledEndMillis = null,
+        recurrenceRule = recurrence,
       )
       applyAction(listOf(newItem) + tasks)
       val label = TodoListEngine.formatScheduleLabel(startMillis, null)
-      Toast.makeText(context, "Scheduled for $label", Toast.LENGTH_SHORT).show()
+      val repeatSuffix = recurrence?.let { " (${it.formatLabel()})" } ?: ""
+      Toast.makeText(context, "Scheduled for $label$repeatSuffix", Toast.LENGTH_SHORT).show()
       newTaskTitle = ""
+      scheduleRecurrenceRule = null
       hasPendingSchedule = false
       showSchedulePanel = false
     } else {
@@ -539,6 +565,15 @@ fun TodoListScreen(
     applyAction(updated)
   }
 
+  fun promoteSubTask(taskId: String, subtaskId: String) {
+    val parentTask = tasks.firstOrNull { it.id == taskId } ?: return
+    val subtask = parentTask.subtasks.firstOrNull { it.id == subtaskId } ?: return
+    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    val updated = TodoListEngine.promoteSubTaskToMainTask(tasks, taskId, subtaskId)
+    applyAction(updated)
+    Toast.makeText(context, "Moved \"${subtask.title}\" to main tasks", Toast.LENGTH_SHORT).show()
+  }
+
   fun updateSubTask(taskId: String, subtaskId: String, newTitle: String) {
     val updated = TodoListEngine.updateSubTaskTitle(tasks, taskId, subtaskId, newTitle)
     applyAction(updated)
@@ -554,6 +589,7 @@ fun TodoListScreen(
     taskId: String,
     scheduledAtMillis: Long,
     scheduledEndMillis: Long?,
+    recurrenceRule: TodoRecurrenceRule? = null,
   ) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !TodoNotificationHelper.hasNotificationPermission(context)) {
       notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -564,17 +600,20 @@ fun TodoListScreen(
       taskId = taskId,
       scheduledAtMillis = scheduledAtMillis,
       scheduledEndMillis = scheduledEndMillis,
+      recurrenceRule = recurrenceRule,
     )
     duePopupTasks = duePopupTasks.filter { it.id != taskId }
     applyAction(updated)
     val label = TodoListEngine.formatScheduleLabel(scheduledAtMillis, scheduledEndMillis)
-    Toast.makeText(context, "Scheduled for $label", Toast.LENGTH_SHORT).show()
+    val repeatSuffix = recurrenceRule?.let { " (${it.formatLabel()})" } ?: ""
+    Toast.makeText(context, "Scheduled for $label$repeatSuffix", Toast.LENGTH_SHORT).show()
   }
 
   fun scheduleSelectedTasks(
     taskIds: Set<String>,
     scheduledAtMillis: Long,
     scheduledEndMillis: Long?,
+    recurrenceRule: TodoRecurrenceRule? = null,
   ) {
     if (taskIds.isEmpty()) return
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !TodoNotificationHelper.hasNotificationPermission(context)) {
@@ -586,12 +625,14 @@ fun TodoListScreen(
       taskIds = taskIds,
       scheduledAtMillis = scheduledAtMillis,
       scheduledEndMillis = scheduledEndMillis,
+      recurrenceRule = recurrenceRule,
     )
     duePopupTasks = duePopupTasks.filter { it.id !in taskIds }
     applyAction(updated)
     selectedTaskIds = emptySet()
     val label = TodoListEngine.formatScheduleLabel(scheduledAtMillis, scheduledEndMillis)
-    Toast.makeText(context, "Scheduled ${taskIds.size} task(s) for $label", Toast.LENGTH_SHORT).show()
+    val repeatSuffix = recurrenceRule?.let { " (${it.formatLabel()})" } ?: ""
+    Toast.makeText(context, "Scheduled ${taskIds.size} task(s) for $label$repeatSuffix", Toast.LENGTH_SHORT).show()
   }
 
   fun unscheduleTask(taskId: String) {
@@ -932,8 +973,11 @@ fun TodoListScreen(
 
                   IconButton(
                     onClick = {
-                      val firstScheduled = selectedItemsList.firstOrNull { it.scheduledAtMillis != null }?.scheduledAtMillis
-                      scheduleStartMillis = firstScheduled ?: (System.currentTimeMillis() + 3_600_000L)
+                      val firstScheduledTask = selectedItemsList.firstOrNull { it.scheduledAtMillis != null }
+                      scheduleStartMillis = firstScheduledTask?.scheduledAtMillis ?: (System.currentTimeMillis() + 3_600_000L)
+                      scheduleRecurrenceRule = firstScheduledTask?.recurrenceRule
+                      selectedSchedulePreset = firstScheduledTask?.recurrenceRule
+                        ?: TodoRecurrenceRule(interval = 1, unit = TodoRecurrenceUnit.HOUR, presetLabel = "1 hr")
                       schedulingTaskId = null
                       isSchedulingBulk = true
                       showSchedulePanel = true
@@ -1078,8 +1122,11 @@ fun TodoListScreen(
                         enabled = hasSelection,
                         onClick = {
                           showOverflowMenu = false
-                          val firstScheduled = selectedItemsList.firstOrNull { it.scheduledAtMillis != null }?.scheduledAtMillis
-                          scheduleStartMillis = firstScheduled ?: (System.currentTimeMillis() + 3_600_000L)
+                          val firstScheduledTask = selectedItemsList.firstOrNull { it.scheduledAtMillis != null }
+                          scheduleStartMillis = firstScheduledTask?.scheduledAtMillis ?: (System.currentTimeMillis() + 3_600_000L)
+                          scheduleRecurrenceRule = firstScheduledTask?.recurrenceRule
+                          selectedSchedulePreset = firstScheduledTask?.recurrenceRule
+                            ?: TodoRecurrenceRule(interval = 1, unit = TodoRecurrenceUnit.HOUR, presetLabel = "1 hr")
                           schedulingTaskId = null
                           isSchedulingBulk = true
                           showSchedulePanel = true
@@ -1401,6 +1448,7 @@ fun TodoListScreen(
                       onSaveAsTemplate = { saveTaskTemplate(task) },
                       onAddSubTask = { subtaskTitle -> addSubTask(task.id, subtaskTitle) },
                       onDeleteSubTask = { subtaskId -> deleteSubTask(task.id, subtaskId) },
+                      onPromoteSubTask = { subtaskId -> promoteSubTask(task.id, subtaskId) },
                       onUpdateSubTask = { subtaskId, newTitle -> updateSubTask(task.id, subtaskId, newTitle) },
                       draggedSubtaskId = draggedSubtaskId,
                       subtaskDragOffsetY = subtaskDragOffsetY,
@@ -1485,6 +1533,12 @@ fun TodoListScreen(
                       if (!hasPendingSchedule) {
                         val defaultStart = System.currentTimeMillis() + 3_600_000L
                         scheduleStartMillis = defaultStart
+                        scheduleRecurrenceRule = null
+                        selectedSchedulePreset = TodoRecurrenceRule(
+                          interval = 1,
+                          unit = TodoRecurrenceUnit.HOUR,
+                          presetLabel = "1 hr",
+                        )
                       }
                       showSchedulePanel = true
                     }
@@ -1528,6 +1582,14 @@ fun TodoListScreen(
                 onStartMillisChange = { newStart ->
                   scheduleStartMillis = newStart
                 },
+                recurrenceRule = scheduleRecurrenceRule,
+                onRecurrenceRuleChange = { newRule ->
+                  scheduleRecurrenceRule = newRule
+                },
+                selectedPreset = selectedSchedulePreset,
+                onSelectedPresetChange = { newPreset ->
+                  selectedSchedulePreset = newPreset
+                },
                 onPresetSelected = {
                   if (!isSchedulingBulk) {
                     taskInputFocusRequester.requestFocus()
@@ -1540,6 +1602,7 @@ fun TodoListScreen(
                         taskIds = selectedTaskIds,
                         scheduledAtMillis = scheduleStartMillis,
                         scheduledEndMillis = null,
+                        recurrenceRule = scheduleRecurrenceRule,
                       )
                       isSchedulingBulk = false
                       showSchedulePanel = false
@@ -1549,6 +1612,7 @@ fun TodoListScreen(
                         taskId = taskToSchedule.id,
                         scheduledAtMillis = scheduleStartMillis,
                         scheduledEndMillis = null,
+                        recurrenceRule = scheduleRecurrenceRule,
                       )
                       schedulingTaskId = null
                       showSchedulePanel = false
@@ -1566,7 +1630,8 @@ fun TodoListScreen(
                         hasPendingSchedule = true
                         showSchedulePanel = false
                         val label = TodoListEngine.formatScheduleLabel(scheduleStartMillis, null)
-                        Toast.makeText(context, "Scheduled for $label", Toast.LENGTH_SHORT).show()
+                        val repeatSuffix = scheduleRecurrenceRule?.let { " (${it.formatLabel()})" } ?: ""
+                        Toast.makeText(context, "Scheduled for $label$repeatSuffix", Toast.LENGTH_SHORT).show()
                       }
                     }
                   }
@@ -1588,19 +1653,21 @@ fun TodoListScreen(
                     }
                     else -> {
                       hasPendingSchedule = false
+                      scheduleRecurrenceRule = null
                     }
                   }
                   showSchedulePanel = false
                 },
-                  onDismiss = {
-                    if (taskToSchedule == null && !isSchedulingBulk) {
-                      hasPendingSchedule = false
-                    }
-                    schedulingTaskId = null
-                    isSchedulingBulk = false
-                    showSchedulePanel = false
-                  },
-                )
+                onDismiss = {
+                  if (taskToSchedule == null && !isSchedulingBulk) {
+                    hasPendingSchedule = false
+                    scheduleRecurrenceRule = null
+                  }
+                  schedulingTaskId = null
+                  isSchedulingBulk = false
+                  showSchedulePanel = false
+                },
+              )
               }
             }
           }
@@ -1669,6 +1736,7 @@ private fun SwipeableTaskItem(
   onSaveAsTemplate: () -> Unit = {},
   onAddSubTask: (String) -> Unit,
   onDeleteSubTask: (String) -> Unit,
+  onPromoteSubTask: (String) -> Unit = {},
   onUpdateSubTask: (String, String) -> Unit,
   draggedSubtaskId: String? = null,
   subtaskDragOffsetY: Float = 0f,
@@ -1812,6 +1880,7 @@ private fun SwipeableTaskItem(
         onSaveAsTemplate = onSaveAsTemplate,
         onAddSubTask = onAddSubTask,
         onDeleteSubTask = onDeleteSubTask,
+        onPromoteSubTask = onPromoteSubTask,
         onUpdateSubTask = onUpdateSubTask,
         draggedSubtaskId = draggedSubtaskId,
         subtaskDragOffsetY = subtaskDragOffsetY,
@@ -1864,6 +1933,7 @@ private fun TaskCardContent(
   onSaveAsTemplate: () -> Unit = {},
   onAddSubTask: (String) -> Unit,
   onDeleteSubTask: (String) -> Unit,
+  onPromoteSubTask: (String) -> Unit = {},
   onUpdateSubTask: (String, String) -> Unit,
   draggedSubtaskId: String? = null,
   subtaskDragOffsetY: Float = 0f,
@@ -1942,7 +2012,7 @@ private fun TaskCardContent(
       containerColor = when {
         isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
         isBeingDragged -> MaterialTheme.colorScheme.surfaceContainerHigh
-        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        else -> MaterialTheme.colorScheme.background
       },
     ),
     border = when {
@@ -2172,6 +2242,7 @@ private fun TaskCardContent(
                 scheduledAtMillis = task.scheduledAtMillis,
                 scheduledEndMillis = task.scheduledEndMillis,
               )
+              val recurrenceSuffix = task.recurrenceRule?.let { " • ${it.formatShortLabel()}" } ?: ""
               Surface(
                 color = if (isDue) {
                   MaterialTheme.colorScheme.tertiaryContainer
@@ -2190,7 +2261,11 @@ private fun TaskCardContent(
                   horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                   Icon(
-                    imageVector = if (isDue) Icons.Default.NotificationsActive else Icons.Default.Schedule,
+                    imageVector = when {
+                      isDue -> Icons.Default.NotificationsActive
+                      task.isRecurring -> Icons.Default.Repeat
+                      else -> Icons.Default.Schedule
+                    },
                     contentDescription = null,
                     tint = if (isDue) {
                       MaterialTheme.colorScheme.onTertiaryContainer
@@ -2200,7 +2275,11 @@ private fun TaskCardContent(
                     modifier = Modifier.size(13.dp),
                   )
                   Text(
-                    text = if (isDue) "Scheduled (Due) • $formattedSchedule" else "Scheduled • $formattedSchedule",
+                    text = if (isDue) {
+                      "Scheduled (Due) • $formattedSchedule$recurrenceSuffix"
+                    } else {
+                      "Scheduled • $formattedSchedule$recurrenceSuffix"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = if (isDue) {
@@ -2644,6 +2723,20 @@ private fun TaskCardContent(
                 }
 
                 if (!isSelectionMode) {
+                  IconButton(
+                    onClick = { onPromoteSubTask(subtask.id) },
+                    modifier = Modifier
+                      .size(32.dp)
+                      .testTag("todo_subtask_promote_${subtask.id}"),
+                  ) {
+                    Icon(
+                      imageVector = Icons.AutoMirrored.Filled.CallMade,
+                      contentDescription = "Move subtask to main task list",
+                      tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                      modifier = Modifier.size(15.dp),
+                    )
+                  }
+
                   IconButton(
                     onClick = { onDeleteSubTask(subtask.id) },
                     modifier = Modifier
@@ -3464,7 +3557,7 @@ private fun CompletedTaskCard(
       containerColor = if (isSelected) {
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
       } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        MaterialTheme.colorScheme.background
       },
     ),
     border = if (isSelected) {
@@ -4312,7 +4405,7 @@ private fun DueNotificationPopupCard(
           contentAlignment = Alignment.Center,
         ) {
           Icon(
-            imageVector = Icons.Default.NotificationsActive,
+            imageVector = Tool.TODO_LIST.icon,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onTertiary,
             modifier = Modifier.size(20.dp),
@@ -4443,6 +4536,14 @@ private fun ScheduleTaskPanel(
   isExistingScheduled: Boolean,
   startMillis: Long,
   onStartMillisChange: (Long) -> Unit,
+  recurrenceRule: TodoRecurrenceRule? = null,
+  onRecurrenceRuleChange: (TodoRecurrenceRule?) -> Unit = {},
+  selectedPreset: TodoRecurrenceRule = TodoRecurrenceRule(
+    interval = 1,
+    unit = TodoRecurrenceUnit.HOUR,
+    presetLabel = "1 hr",
+  ),
+  onSelectedPresetChange: (TodoRecurrenceRule) -> Unit = {},
   onPresetSelected: () -> Unit = {},
   onConfirmSchedule: () -> Unit,
   onUnschedule: () -> Unit,
@@ -4450,6 +4551,7 @@ private fun ScheduleTaskPanel(
 ) {
   var showStartDatePicker by remember { mutableStateOf(false) }
   var showStartTimePicker by remember { mutableStateOf(false) }
+  var showCustomRecurrenceDialog by remember { mutableStateOf(false) }
 
   val dateFormatter = remember { SimpleDateFormat("EEE, MMM d, yyyy", Locale.US) }
   val timeFormatter = remember { SimpleDateFormat("h:mm a", Locale.US) }
@@ -4464,7 +4566,7 @@ private fun ScheduleTaskPanel(
     Column(
       modifier = Modifier
         .fillMaxWidth()
-        .heightIn(max = 460.dp)
+        .heightIn(max = 500.dp)
         .verticalScroll(rememberScrollState())
         .padding(horizontal = 16.dp, vertical = 12.dp),
       verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -4492,13 +4594,13 @@ private fun ScheduleTaskPanel(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
           )
+          val scheduleLabelText = TodoListEngine.formatScheduleLabel(
+            scheduledAtMillis = startMillis,
+            scheduledEndMillis = null,
+          )
+          val recurrenceSummary = recurrenceRule?.let { " • ${it.formatLabel()}" } ?: ""
           Text(
-            text = "Scheduled: ${
-              TodoListEngine.formatScheduleLabel(
-                scheduledAtMillis = startMillis,
-                scheduledEndMillis = null,
-              )
-            }",
+            text = "Scheduled: $scheduleLabelText$recurrenceSummary",
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.primary,
@@ -4557,10 +4659,25 @@ private fun ScheduleTaskPanel(
             verticalAlignment = Alignment.CenterVertically,
           ) {
             rowPresets.forEach { (label, calField, amount) ->
+              val presetRule = TodoRecurrenceRule.fromPreset(label, calField, amount)
+              val isPresetSelected = selectedPreset.unit == presetRule.unit &&
+                selectedPreset.interval == presetRule.interval &&
+                selectedPreset.presetLabel == presetRule.presetLabel
               Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                color = if (isPresetSelected) {
+                  MaterialTheme.colorScheme.primaryContainer
+                } else {
+                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                },
                 shape = RoundedCornerShape(20.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                border = BorderStroke(
+                  width = 1.dp,
+                  color = if (isPresetSelected) {
+                    MaterialTheme.colorScheme.primary
+                  } else {
+                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                  },
+                ),
                 modifier = Modifier
                   .weight(1f)
                   .clip(RoundedCornerShape(20.dp))
@@ -4568,6 +4685,10 @@ private fun ScheduleTaskPanel(
                     onStartMillisChange(
                       addCalendarOffset(System.currentTimeMillis(), calField, amount),
                     )
+                    onSelectedPresetChange(presetRule)
+                    if (recurrenceRule != null) {
+                      onRecurrenceRuleChange(presetRule)
+                    }
                     onPresetSelected()
                   },
               ) {
@@ -4578,8 +4699,12 @@ private fun ScheduleTaskPanel(
                   Text(
                     text = label,
                     style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = if (isPresetSelected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isPresetSelected) {
+                      MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                      MaterialTheme.colorScheme.onSurface
+                    },
                     maxLines = 1,
                   )
                 }
@@ -4587,6 +4712,149 @@ private fun ScheduleTaskPanel(
             }
           }
         }
+      }
+
+      // Google Calendar-style Recurrence / Repeat Section
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Repeat,
+            contentDescription = null,
+            tint = if (recurrenceRule != null) {
+              MaterialTheme.colorScheme.primary
+            } else {
+              MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.size(16.dp),
+          )
+          Text(
+            text = "Repeat",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        Text(
+          text = recurrenceRule?.formatLabel() ?: "Does not repeat",
+          style = MaterialTheme.typography.labelSmall,
+          fontWeight = FontWeight.SemiBold,
+          color = if (recurrenceRule != null) {
+            MaterialTheme.colorScheme.primary
+          } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+          },
+          modifier = Modifier.testTag("todo_schedule_recurrence_status"),
+        )
+      }
+
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        val doesNotRepeatSelected = recurrenceRule == null
+        FilterChip(
+          selected = doesNotRepeatSelected,
+          onClick = { onRecurrenceRuleChange(null) },
+          shape = RoundedCornerShape(20.dp),
+          label = {
+            Text(
+              text = "Does not repeat",
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = if (doesNotRepeatSelected) FontWeight.Bold else FontWeight.Medium,
+            )
+          },
+          modifier = Modifier.testTag("todo_recurrence_none"),
+        )
+
+        val repeatPresetSelected = recurrenceRule == selectedPreset
+        FilterChip(
+          selected = repeatPresetSelected,
+          onClick = {
+            onRecurrenceRuleChange(selectedPreset)
+          },
+          shape = RoundedCornerShape(20.dp),
+          leadingIcon = {
+            Icon(
+              imageVector = Icons.Default.Repeat,
+              contentDescription = null,
+              modifier = Modifier.size(14.dp),
+            )
+          },
+          label = {
+            Text(
+              text = selectedPreset.formatShortLabel(),
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = if (repeatPresetSelected) FontWeight.Bold else FontWeight.Medium,
+            )
+          },
+          modifier = Modifier.testTag("todo_recurrence_preset"),
+        )
+
+        val calendarPresets = listOf(
+          "Daily" to TodoRecurrenceRule.DAILY,
+          "Weekly" to TodoRecurrenceRule.WEEKLY,
+          "Monthly" to TodoRecurrenceRule.MONTHLY,
+          "Yearly" to TodoRecurrenceRule.YEARLY,
+          "Weekdays (Mon–Fri)" to TodoRecurrenceRule.WEEKDAYS,
+        )
+
+        calendarPresets.forEach { (chipLabel, rule) ->
+          val isSelected = recurrenceRule?.unit == rule.unit &&
+            recurrenceRule.interval == rule.interval &&
+            (rule.unit == TodoRecurrenceUnit.WEEKDAYS || recurrenceRule.presetLabel == rule.presetLabel)
+          FilterChip(
+            selected = isSelected,
+            onClick = {
+              onSelectedPresetChange(rule)
+              onRecurrenceRuleChange(rule)
+              onStartMillisChange(rule.nextScheduledAtMillis(System.currentTimeMillis()))
+            },
+            shape = RoundedCornerShape(20.dp),
+            label = {
+              Text(
+                text = chipLabel,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+              )
+            },
+            modifier = Modifier.testTag("todo_recurrence_${rule.unit.name.lowercase(Locale.US)}"),
+          )
+        }
+
+        val isCustomSelected = recurrenceRule != null &&
+          recurrenceRule != selectedPreset &&
+          calendarPresets.none { (_, r) ->
+            recurrenceRule.unit == r.unit &&
+              recurrenceRule.interval == r.interval &&
+              recurrenceRule.presetLabel == r.presetLabel
+          }
+        FilterChip(
+          selected = isCustomSelected,
+          onClick = { showCustomRecurrenceDialog = true },
+          shape = RoundedCornerShape(20.dp),
+          label = {
+            Text(
+              text = if (isCustomSelected) {
+                "Custom (${recurrenceRule.formatShortLabel()})"
+              } else {
+                "Custom..."
+              },
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = if (isCustomSelected) FontWeight.Bold else FontWeight.Medium,
+            )
+          },
+          modifier = Modifier.testTag("todo_recurrence_custom"),
+        )
       }
 
       // Date & Time Pickers
@@ -4778,6 +5046,202 @@ private fun ScheduleTaskPanel(
       dismissButton = {
         TextButton(
           onClick = { showStartTimePicker = false },
+          shape = RoundedCornerShape(12.dp),
+        ) {
+          Text("Cancel")
+        }
+      },
+    )
+  }
+
+  if (showCustomRecurrenceDialog) {
+    var intervalInput by remember(recurrenceRule) {
+      mutableStateOf((recurrenceRule?.interval ?: 1).toString())
+    }
+    var selectedUnit by remember(recurrenceRule) {
+      val currentUnit = recurrenceRule?.unit ?: TodoRecurrenceUnit.DAY
+      mutableStateOf(
+        if (currentUnit == TodoRecurrenceUnit.WEEKDAYS) TodoRecurrenceUnit.DAY else currentUnit,
+      )
+    }
+    val parsedInterval = intervalInput.trim().toIntOrNull()?.coerceIn(1, 365)
+    val canConfirmCustom = parsedInterval != null && parsedInterval >= 1
+    val selectableUnits = remember {
+      listOf(
+        TodoRecurrenceUnit.MINUTE,
+        TodoRecurrenceUnit.HOUR,
+        TodoRecurrenceUnit.DAY,
+        TodoRecurrenceUnit.WEEK,
+        TodoRecurrenceUnit.MONTH,
+        TodoRecurrenceUnit.YEAR,
+      )
+    }
+
+    AlertDialog(
+      onDismissRequest = { showCustomRecurrenceDialog = false },
+      shape = RoundedCornerShape(28.dp),
+      containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+      tonalElevation = 6.dp,
+      title = {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(14.dp),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Box(
+            modifier = Modifier
+              .size(44.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Repeat,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(24.dp),
+            )
+          }
+          Column {
+            Text(
+              text = "Custom Recurrence",
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+              text = "Choose how often this task repeats after completion",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+      },
+      text = {
+        Column(
+          modifier = Modifier.fillMaxWidth(),
+          verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            ),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Repeat,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+              )
+              val previewRule = TodoRecurrenceRule(
+                interval = parsedInterval ?: 1,
+                unit = selectedUnit,
+              )
+              Text(
+                text = "$taskTitle • ${previewRule.formatLabel()}",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
+
+          OutlinedTextField(
+            value = intervalInput,
+            onValueChange = { input ->
+              if (input.length <= 3 && input.all { it.isDigit() }) {
+                intervalInput = input
+              }
+            },
+            label = { Text("Repeats every") },
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            keyboardOptions = KeyboardOptions(
+              keyboardType = KeyboardType.Number,
+              imeAction = ImeAction.Done,
+            ),
+            isError = !canConfirmCustom,
+            supportingText = if (!canConfirmCustom) {
+              { Text("Enter a number from 1 to 365") }
+            } else {
+              null
+            },
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("todo_custom_recurrence_interval_input"),
+          )
+
+          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            selectableUnits.chunked(3).forEach { unitRow ->
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                unitRow.forEach { unitOption ->
+                  val isUnitSelected = selectedUnit == unitOption
+                  val unitText = if ((parsedInterval ?: 1) == 1) {
+                    unitOption.singularLabel
+                  } else {
+                    unitOption.pluralLabel
+                  }
+                  FilterChip(
+                    selected = isUnitSelected,
+                    onClick = { selectedUnit = unitOption },
+                    shape = RoundedCornerShape(20.dp),
+                    label = {
+                      Text(
+                        text = unitText.replaceFirstChar { it.titlecase(Locale.US) },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (isUnitSelected) FontWeight.Bold else FontWeight.Medium,
+                      )
+                    },
+                    modifier = Modifier
+                      .weight(1f)
+                      .testTag("todo_custom_recurrence_unit_${unitOption.name.lowercase(Locale.US)}"),
+                  )
+                }
+              }
+            }
+          }
+        }
+      },
+      confirmButton = {
+        Button(
+          onClick = {
+            if (parsedInterval != null) {
+              val customRule = TodoRecurrenceRule(
+                interval = parsedInterval,
+                unit = selectedUnit,
+              )
+              onSelectedPresetChange(customRule)
+              onRecurrenceRuleChange(customRule)
+              onStartMillisChange(customRule.nextScheduledAtMillis(System.currentTimeMillis()))
+              showCustomRecurrenceDialog = false
+            }
+          },
+          enabled = canConfirmCustom,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier.testTag("todo_custom_recurrence_confirm"),
+        ) {
+          Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("Done")
+        }
+      },
+      dismissButton = {
+        TextButton(
+          onClick = { showCustomRecurrenceDialog = false },
           shape = RoundedCornerShape(12.dp),
         ) {
           Text("Cancel")

@@ -141,16 +141,36 @@ class AudioRecorderEngineTest {
   }
 
   @Test
-  fun formatDirectoryDisplayPath_andResolveDirectoryInput_defaultToAudioFolder() {
+  fun formatDirectoryDisplayPath_andResolveDirectoryInput_defaultToAudioRecordingsAndDownloadsFolders() {
+    assertEquals(listOf("Audio", "Recordings", "Downloads"), DEFAULT_AUDIO_RECORDER_FOLDER_NAMES)
+    assertEquals(listOf("/Audio", "/Recordings", "/Downloads"), DEFAULT_AUDIO_RECORDER_FOLDER_DISPLAY_PATHS)
+    assertEquals(
+      listOf(
+        AudioRecorderDefaultFolder.AUDIO,
+        AudioRecorderDefaultFolder.RECORDINGS,
+        AudioRecorderDefaultFolder.DOWNLOADS,
+      ),
+      AudioRecorderDefaultFolder.entries,
+    )
+
     val fakeRoot = File("/storage/emulated/0")
     val defaultAudio = File(fakeRoot, "Audio")
     assertEquals("/Audio", AudioRecorderEngine.formatDirectoryDisplayPath(defaultAudio, fakeRoot))
+    assertEquals("/Recordings", AudioRecorderEngine.formatDirectoryDisplayPath(File(fakeRoot, "Recordings"), fakeRoot))
+    assertEquals("/Downloads", AudioRecorderEngine.formatDirectoryDisplayPath(File(fakeRoot, "Downloads"), fakeRoot))
 
     val nested = File(fakeRoot, "Music/VoiceMemos")
     assertEquals("/Music/VoiceMemos", AudioRecorderEngine.formatDirectoryDisplayPath(nested, fakeRoot))
 
     val tempFallback = Files.createTempDirectory("fallback_root").toFile()
     try {
+      val resolvedDefaults = AudioRecorderEngine.resolveDefaultDirectories(
+        userRoot = File("/non_existent_unwritable_root_path"),
+        fallbackBaseDir = tempFallback,
+      )
+      assertEquals(listOf("Audio", "Recordings", "Downloads"), resolvedDefaults.map { it.name })
+      assertTrue(resolvedDefaults.all { it.exists() && it.isDirectory })
+
       val resolvedDefault = AudioRecorderEngine.resolveDirectoryInput(
         inputPath = "/Audio",
         userRoot = File("/non_existent_unwritable_root_path"),
@@ -166,8 +186,59 @@ class AudioRecorderEngineTest {
       )
       assertEquals("Recordings", resolvedCustom.name)
       assertTrue(resolvedCustom.exists())
+
+      val resolvedDownloads = AudioRecorderEngine.resolveDirectoryInput(
+        inputPath = "/Downloads",
+        userRoot = File("/non_existent_unwritable_root_path"),
+        fallbackBaseDir = tempFallback,
+      )
+      assertEquals("Downloads", resolvedDownloads.name)
+      assertTrue(resolvedDownloads.exists())
     } finally {
       tempFallback.deleteRecursively()
     }
+  }
+
+  @Test
+  fun sortRecordings_andGroupRecordings_sortAndGroupAccurately() {
+    val items = listOf(
+      AudioRecordingItem(
+        file = File("/storage/emulated/0/Audio/Recording_20261110_100000.m4a"),
+        name = "Recording_20261110_100000.m4a",
+        path = "/storage/emulated/0/Audio/Recording_20261110_100000.m4a",
+        sizeBytes = 100_000L,
+        lastModifiedMs = 1_000L,
+        extension = "m4a",
+        durationMs = 5_000L,
+      ),
+      AudioRecordingItem(
+        file = File("/storage/emulated/0/Audio/Recording_Device_20261110_120000.wav"),
+        name = "Recording_Device_20261110_120000.wav",
+        path = "/storage/emulated/0/Audio/Recording_Device_20261110_120000.wav",
+        sizeBytes = 500_000L,
+        lastModifiedMs = 3_000L,
+        extension = "wav",
+        durationMs = 20_000L,
+      ),
+    )
+
+    val byDateDesc = AudioRecorderEngine.sortRecordings(items, AudioRecorderSortOrder.DATE_DESC)
+    assertEquals("Recording_Device_20261110_120000.wav", byDateDesc.first().name)
+
+    val byDateAsc = AudioRecorderEngine.sortRecordings(items, AudioRecorderSortOrder.DATE_ASC)
+    assertEquals("Recording_20261110_100000.m4a", byDateAsc.first().name)
+
+    val byDurationDesc = AudioRecorderEngine.sortRecordings(items, AudioRecorderSortOrder.DURATION_DESC)
+    assertEquals(20_000L, byDurationDesc.first().durationMs)
+
+    val groupedBySource = AudioRecorderEngine.groupRecordings(items, AudioRecorderGroupOption.SOURCE)
+    assertEquals(2, groupedBySource.size)
+    assertEquals("Microphone", groupedBySource[0].title)
+    assertEquals("Device Audio", groupedBySource[1].title)
+
+    val groupedByFormat = AudioRecorderEngine.groupRecordings(items, AudioRecorderGroupOption.FORMAT)
+    assertEquals(2, groupedByFormat.size)
+    assertEquals("M4A", groupedByFormat[0].title)
+    assertEquals("WAV", groupedByFormat[1].title)
   }
 }

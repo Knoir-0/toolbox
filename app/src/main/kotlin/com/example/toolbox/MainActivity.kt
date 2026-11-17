@@ -14,6 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import com.example.toolbox.ui.main.Tool
+import com.example.toolbox.ui.main.parseExpandMusicPlayer
 import com.example.toolbox.ui.main.parseFolderShortcut
 import com.example.toolbox.ui.main.parseStandaloneTool
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
@@ -26,15 +27,26 @@ import java.io.File
 class MainActivity : ComponentActivity() {
   private val standaloneToolState = mutableStateOf<Tool?>(null)
   private val initialFolderState = mutableStateOf<String?>(null)
+  private val expandMusicPlayerState = mutableStateOf(false)
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    MusicPlayerEngine.ensureSystemMediaMonitoring(this)
     MusicPlayerEngine.syncExternalSystemMediaSessions(this)
     val parsedTool = parseStandaloneTool(intent)
     val parsedFolder = parseFolderShortcut(intent)
-    val resolvedTool = if (parsedFolder != null) (parsedTool ?: Tool.FILES) else parsedTool
+    val expandMusicPlayer = parseExpandMusicPlayer(intent)
+    val resolvedTool = when {
+      parsedFolder != null -> parsedTool ?: Tool.FILES
+      expandMusicPlayer -> parsedTool ?: Tool.MUSIC
+      else -> parsedTool
+    }
     standaloneToolState.value = resolvedTool
     initialFolderState.value = parsedFolder
+    expandMusicPlayerState.value = expandMusicPlayer
+    if (expandMusicPlayer) {
+      MusicPlayerEngine.requestExpandFullPlayer()
+    }
     syncStandaloneTaskDescription(
       activity = this,
       standaloneTool = resolvedTool,
@@ -51,9 +63,12 @@ class MainActivity : ComponentActivity() {
       val accentColor by preferencesRepository.accentColorFlow.collectAsState()
       val standaloneTool by standaloneToolState
       val initialFolder by initialFolderState
+      val expandMusicPlayerInitial by expandMusicPlayerState
 
-      LaunchedEffect(themeColor) {
-        syncAppLauncherIcon(this@MainActivity, themeColor)
+      LaunchedEffect(themeColor, standaloneTool) {
+        if (standaloneTool == null) {
+          syncAppLauncherIcon(this@MainActivity, themeColor)
+        }
       }
 
       LaunchedEffect(standaloneTool, initialFolder, themeColor) {
@@ -76,6 +91,7 @@ class MainActivity : ComponentActivity() {
           MainNavigation(
             standaloneTool = standaloneTool,
             initialDirectory = initialFolder?.let { File(it) },
+            initialExpandMusicPlayer = expandMusicPlayerInitial,
           )
         }
       }
@@ -87,9 +103,14 @@ class MainActivity : ComponentActivity() {
     setIntent(intent)
     val parsedFolder = parseFolderShortcut(intent)
     val parsedTool = parseStandaloneTool(intent)
+    val expandMusicPlayer = parseExpandMusicPlayer(intent)
     if (parsedFolder != null) {
       initialFolderState.value = parsedFolder
       standaloneToolState.value = parsedTool ?: Tool.FILES
+    } else if (expandMusicPlayer) {
+      standaloneToolState.value = parsedTool ?: Tool.MUSIC
+      expandMusicPlayerState.value = true
+      MusicPlayerEngine.requestExpandFullPlayer()
     } else if (parsedTool != null) {
       standaloneToolState.value = parsedTool
     }
@@ -103,5 +124,12 @@ class MainActivity : ComponentActivity() {
   override fun onResume() {
     super.onResume()
     MusicPlayerEngine.syncExternalSystemMediaSessions(this)
+  }
+
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    if (hasFocus) {
+      MusicPlayerEngine.syncExternalSystemMediaSessions(this)
+    }
   }
 }

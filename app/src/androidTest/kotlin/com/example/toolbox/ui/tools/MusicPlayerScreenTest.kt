@@ -18,6 +18,7 @@ import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -914,5 +915,45 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("bulk_delete_name_input").performTextInput("Wrong Name")
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("confirm_bulk_delete_button").assertIsNotEnabled()
+  }
+
+  @Test
+  fun musicPlayer_longPressEntersMultiSelectMode_andSupportsSelectAllPlayAndDelete() {
+    composeTestRule.setContent {
+      ToolboxTheme {
+        MusicPlayerScreen(
+          initialTracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS,
+          initialTab = MusicLibraryTab.SONGS,
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    val firstSong = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS[0]
+    val secondSong = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS[1]
+
+    // 1. Long-press on first song enters multi-select mode and shows ToolboxTopBarSelectionState
+    composeTestRule.onNodeWithTag("song_item_${firstSong.id}")
+      .performTouchInput { longClick() }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("action_close_selection").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("action_toggle_select_all").assertIsDisplayed()
+    composeTestRule.onNodeWithText("1 selected").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("select_checkbox_song:${firstSong.id}").assertIsDisplayed()
+
+    // 2. Tapping a second song while in selection mode selects it ("2 selected")
+    composeTestRule.onNodeWithTag("song_item_${secondSong.id}").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("2 selected").assertIsDisplayed()
+
+    // 3. Tapping bulk Play plays the selected tracks and exits multi-select mode
+    composeTestRule.onNodeWithTag("action_bulk_play").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("action_close_selection").assertDoesNotExist()
+    val session = MusicPlayerEngine.getActivePlaybackSession()
+    assertNotNull(session)
+    assertTrue(session!!.isPlaying)
+    assertEquals(2, session.playbackQueue.size)
   }
 }

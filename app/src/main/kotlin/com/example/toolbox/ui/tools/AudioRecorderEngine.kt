@@ -17,8 +17,127 @@ const val AUDIO_RECORDER_PREFS_NAME = "audio_recorder_preferences"
 const val PREF_KEY_AUDIO_FORMAT = "selected_audio_format"
 const val PREF_KEY_AUDIO_DIRECTORY = "selected_audio_directory"
 const val PREF_KEY_AUDIO_CAPTURE_SOURCE = "selected_audio_capture_source"
+const val PREF_KEY_AUDIO_SORT_ORDER = "selected_audio_sort_order"
+const val PREF_KEY_AUDIO_GROUP_OPTION = "selected_audio_group_option"
+const val PREF_PREFIX_AUDIO_FOLDER_SORT_GROUP = "audio_folder_sort_group_"
+
 const val DEFAULT_AUDIO_FOLDER_NAME = "Audio"
+const val DEFAULT_RECORDINGS_FOLDER_NAME = "Recordings"
+const val DEFAULT_DOWNLOADS_FOLDER_NAME = "Downloads"
+
 const val DEFAULT_AUDIO_FOLDER_DISPLAY = "/Audio"
+const val DEFAULT_RECORDINGS_FOLDER_DISPLAY = "/Recordings"
+const val DEFAULT_DOWNLOADS_FOLDER_DISPLAY = "/Downloads"
+
+val DEFAULT_AUDIO_RECORDER_FOLDER_NAMES: List<String> = listOf(
+  DEFAULT_AUDIO_FOLDER_NAME,
+  DEFAULT_RECORDINGS_FOLDER_NAME,
+  DEFAULT_DOWNLOADS_FOLDER_NAME,
+)
+
+val DEFAULT_AUDIO_RECORDER_FOLDER_DISPLAY_PATHS: List<String> = listOf(
+  DEFAULT_AUDIO_FOLDER_DISPLAY,
+  DEFAULT_RECORDINGS_FOLDER_DISPLAY,
+  DEFAULT_DOWNLOADS_FOLDER_DISPLAY,
+)
+
+/**
+ * Default folders accessed by the Audio Recorder tool (`Audio`, `Recordings`, `Downloads`).
+ */
+enum class AudioRecorderDefaultFolder(
+  val folderName: String,
+  val displayPath: String,
+) {
+  AUDIO(
+    folderName = DEFAULT_AUDIO_FOLDER_NAME,
+    displayPath = DEFAULT_AUDIO_FOLDER_DISPLAY,
+  ),
+  RECORDINGS(
+    folderName = DEFAULT_RECORDINGS_FOLDER_NAME,
+    displayPath = DEFAULT_RECORDINGS_FOLDER_DISPLAY,
+  ),
+  DOWNLOADS(
+    folderName = DEFAULT_DOWNLOADS_FOLDER_NAME,
+    displayPath = DEFAULT_DOWNLOADS_FOLDER_DISPLAY,
+  ),
+  ;
+
+  companion object {
+    val DEFAULT: AudioRecorderDefaultFolder = AUDIO
+
+    fun fromPathOrName(pathOrName: String?): AudioRecorderDefaultFolder? {
+      if (pathOrName.isNullOrBlank()) return null
+      val cleaned = pathOrName.trim().trim('/').substringAfterLast('/')
+      return when {
+        cleaned.equals(DEFAULT_AUDIO_FOLDER_NAME, ignoreCase = true) -> AUDIO
+        cleaned.equals(DEFAULT_RECORDINGS_FOLDER_NAME, ignoreCase = true) -> RECORDINGS
+        cleaned.equals(DEFAULT_DOWNLOADS_FOLDER_NAME, ignoreCase = true) ||
+          cleaned.equals("Download", ignoreCase = true) -> DOWNLOADS
+        else -> null
+      }
+    }
+  }
+}
+
+/**
+ * Sorting options for recordings in the Audio Recorder tool.
+ */
+enum class AudioRecorderSortOrder(val displayName: String) {
+  DATE_DESC("Date (Newest first)"),
+  DATE_ASC("Date (Oldest first)"),
+  NAME_ASC("Name (A to Z)"),
+  NAME_DESC("Name (Z to A)"),
+  DURATION_DESC("Duration (Longest first)"),
+  DURATION_ASC("Duration (Shortest first)"),
+  SIZE_DESC("Size (Largest first)"),
+  SIZE_ASC("Size (Smallest first)"),
+  ;
+
+  companion object {
+    val DEFAULT: AudioRecorderSortOrder = DATE_DESC
+
+    fun fromNameOrDefault(name: String?): AudioRecorderSortOrder {
+      if (name.isNullOrBlank()) return DEFAULT
+      return entries.find { it.name.equals(name.trim(), ignoreCase = true) } ?: DEFAULT
+    }
+  }
+}
+
+/**
+ * Grouping / filtering options for organizing recordings in the Audio Recorder tool.
+ */
+enum class AudioRecorderGroupOption(val displayName: String) {
+  NONE("None"),
+  DATE("Date"),
+  SOURCE("Source"),
+  FORMAT("Format"),
+  ;
+
+  companion object {
+    val DEFAULT: AudioRecorderGroupOption = NONE
+
+    fun fromNameOrDefault(name: String?): AudioRecorderGroupOption {
+      if (name.isNullOrBlank()) return DEFAULT
+      return entries.find { it.name.equals(name.trim(), ignoreCase = true) } ?: DEFAULT
+    }
+  }
+}
+
+/**
+ * Holds a combined group-by and sort-by configuration for an Audio Recorder folder or default preference.
+ */
+data class AudioRecorderSortGroupConfig(
+  val groupOption: AudioRecorderGroupOption = AudioRecorderGroupOption.DEFAULT,
+  val sortOrder: AudioRecorderSortOrder = AudioRecorderSortOrder.DEFAULT,
+)
+
+/**
+ * Represents a grouped section of [AudioRecordingItem]s under a common [title] header.
+ */
+data class AudioRecordingGroup(
+  val title: String,
+  val items: List<AudioRecordingItem>,
+)
 
 /**
  * Audio input source for the Audio Recorder tool.
@@ -271,14 +390,30 @@ object AudioRecorderEngine {
     if (absPath.startsWith("$rootPath/")) {
       return absPath.removePrefix(rootPath)
     }
-    if (directory.name.equals(DEFAULT_AUDIO_FOLDER_NAME, ignoreCase = true)) {
-      return DEFAULT_AUDIO_FOLDER_DISPLAY
+    AudioRecorderDefaultFolder.fromPathOrName(directory.name)?.let { defaultFolder ->
+      return defaultFolder.displayPath
     }
     return absPath
   }
 
   /**
-   * Resolves a folder input string (such as `/Audio`, `Audio`, `/Music/Clips`, or an absolute path)
+   * Resolves the default directories accessed by the Audio Recorder tool (`Audio`, `Recordings`, `Downloads`).
+   */
+  fun resolveDefaultDirectories(
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+    fallbackBaseDir: File? = null,
+  ): List<File> {
+    return AudioRecorderDefaultFolder.entries.map { folder ->
+      resolveDirectoryInput(
+        inputPath = folder.displayPath,
+        userRoot = userRoot,
+        fallbackBaseDir = fallbackBaseDir,
+      )
+    }
+  }
+
+  /**
+   * Resolves a folder input string (such as `/Audio`, `Audio`, `/Recordings`, `/Downloads`, `/Music/Clips`, or an absolute path)
    * into a concrete [File] directory.
    */
   fun resolveDirectoryInput(
@@ -307,7 +442,7 @@ object AudioRecorderEngine {
       return directFile
     }
 
-    // Treat "/Audio" or "Audio" or "/Recordings" as relative to userRoot (/storage/emulated/0)
+    // Treat "/Audio" or "Audio" or "/Recordings" or "/Downloads" as relative to userRoot (/storage/emulated/0)
     val relativeSubpath = trimmed.trimStart('/')
     val candidateInRoot = File(userRoot, relativeSubpath)
     if ((candidateInRoot.exists() && candidateInRoot.canWrite()) || candidateInRoot.mkdirs()) {
@@ -352,33 +487,201 @@ object AudioRecorderEngine {
   }
 
   /**
-   * Lists all audio recordings inside [directory], sorted newest first (`lastModifiedMs` descending).
+   * Lists all audio recordings inside [directory], sorted according to [sortOrder] (defaults to newest first).
+   * When [directory] is `Downloads` (or `Download`), also includes any audio recordings in the sibling
+   * `Download` / `Downloads` directory under the same parent if present.
    */
   fun listRecordings(
     directory: File,
     includeDurationMetadata: Boolean = false,
+    sortOrder: AudioRecorderSortOrder = AudioRecorderSortOrder.DEFAULT,
   ): List<AudioRecordingItem> {
-    if (!directory.exists() || !directory.isDirectory) return emptyList()
-    val files = directory.listFiles() ?: return emptyList()
-    return files
-      .filter { isRecordingFile(it) }
-      .sortedWith(compareByDescending<File> { it.lastModified() }.thenByDescending { it.name })
-      .map { file ->
-        val duration = if (includeDurationMetadata) {
-          extractAudioDurationMs(file)
-        } else {
-          estimateDurationFromFile(file)
-        }
-        AudioRecordingItem(
-          file = file,
-          name = file.name,
-          path = file.absolutePath,
-          sizeBytes = file.length(),
-          lastModifiedMs = file.lastModified(),
-          extension = file.extension.lowercase(Locale.ROOT),
-          durationMs = duration,
-        )
+    val dirsToScan = buildList {
+      if (directory.exists() && directory.isDirectory) {
+        add(directory)
       }
+      val parent = directory.parentFile
+      if (parent != null) {
+        if (directory.name.equals("Downloads", ignoreCase = true)) {
+          val singularDownload = File(parent, "Download")
+          if (singularDownload.exists() && singularDownload.isDirectory && singularDownload.absolutePath != directory.absolutePath) {
+            add(singularDownload)
+          }
+        } else if (directory.name.equals("Download", ignoreCase = true)) {
+          val pluralDownloads = File(parent, "Downloads")
+          if (pluralDownloads.exists() && pluralDownloads.isDirectory && pluralDownloads.absolutePath != directory.absolutePath) {
+            add(pluralDownloads)
+          }
+        }
+      }
+    }
+    if (dirsToScan.isEmpty()) return emptyList()
+
+    val seenPaths = mutableSetOf<String>()
+    val rawFiles = mutableListOf<File>()
+    for (dir in dirsToScan) {
+      val files = dir.listFiles() ?: continue
+      for (file in files) {
+        if (isRecordingFile(file) && seenPaths.add(file.absolutePath)) {
+          rawFiles.add(file)
+        }
+      }
+    }
+
+    val items = rawFiles.map { file ->
+      val duration = if (includeDurationMetadata) {
+        extractAudioDurationMs(file)
+      } else {
+        estimateDurationFromFile(file)
+      }
+      AudioRecordingItem(
+        file = file,
+        name = file.name,
+        path = file.absolutePath,
+        sizeBytes = file.length(),
+        lastModifiedMs = file.lastModified(),
+        extension = file.extension.lowercase(Locale.ROOT),
+        durationMs = duration,
+      )
+    }
+    return sortRecordings(items, sortOrder)
+  }
+
+  /**
+   * Sorts a list of [AudioRecordingItem]s according to [sortOrder].
+   */
+  fun sortRecordings(
+    items: List<AudioRecordingItem>,
+    sortOrder: AudioRecorderSortOrder,
+  ): List<AudioRecordingItem> {
+    return when (sortOrder) {
+      AudioRecorderSortOrder.DATE_DESC -> items.sortedWith(
+        compareByDescending<AudioRecordingItem> { it.lastModifiedMs }
+          .thenByDescending { it.name.lowercase(Locale.ROOT) }
+      )
+      AudioRecorderSortOrder.DATE_ASC -> items.sortedWith(
+        compareBy<AudioRecordingItem> { it.lastModifiedMs }
+          .thenBy { it.name.lowercase(Locale.ROOT) }
+      )
+      AudioRecorderSortOrder.NAME_ASC -> items.sortedWith(
+        compareBy<AudioRecordingItem> { it.name.lowercase(Locale.ROOT) }
+          .thenByDescending { it.lastModifiedMs }
+      )
+      AudioRecorderSortOrder.NAME_DESC -> items.sortedWith(
+        compareByDescending<AudioRecordingItem> { it.name.lowercase(Locale.ROOT) }
+          .thenByDescending { it.lastModifiedMs }
+      )
+      AudioRecorderSortOrder.DURATION_DESC -> items.sortedWith(
+        compareByDescending<AudioRecordingItem> { it.durationMs }
+          .thenByDescending { it.lastModifiedMs }
+      )
+      AudioRecorderSortOrder.DURATION_ASC -> items.sortedWith(
+        compareBy<AudioRecordingItem> { it.durationMs }
+          .thenByDescending { it.lastModifiedMs }
+      )
+      AudioRecorderSortOrder.SIZE_DESC -> items.sortedWith(
+        compareByDescending<AudioRecordingItem> { it.sizeBytes }
+          .thenByDescending { it.lastModifiedMs }
+      )
+      AudioRecorderSortOrder.SIZE_ASC -> items.sortedWith(
+        compareBy<AudioRecordingItem> { it.sizeBytes }
+          .thenByDescending { it.lastModifiedMs }
+      )
+    }
+  }
+
+  /**
+   * Groups and sorts [items] according to [groupOption] and [sortOrder].
+   */
+  fun groupRecordings(
+    items: List<AudioRecordingItem>,
+    groupOption: AudioRecorderGroupOption,
+    sortOrder: AudioRecorderSortOrder = AudioRecorderSortOrder.DEFAULT,
+    nowMs: Long = System.currentTimeMillis(),
+  ): List<AudioRecordingGroup> {
+    val sorted = sortRecordings(items, sortOrder)
+    if (sorted.isEmpty()) return emptyList()
+    return when (groupOption) {
+      AudioRecorderGroupOption.NONE -> listOf(AudioRecordingGroup(title = "", items = sorted))
+      AudioRecorderGroupOption.DATE -> {
+        val oneDayMs = 24L * 60L * 60L * 1000L
+        val sevenDaysMs = 7L * oneDayMs
+        val grouped = sorted.groupBy { item ->
+          val age = (nowMs - item.lastModifiedMs).coerceAtLeast(0L)
+          when {
+            age < oneDayMs -> "Today"
+            age < 2 * oneDayMs -> "Yesterday"
+            age < sevenDaysMs -> "Last 7 Days"
+            else -> "Older"
+          }
+        }
+        val order = listOf("Today", "Yesterday", "Last 7 Days", "Older")
+        order.mapNotNull { key ->
+          val list = grouped[key]
+          if (list.isNullOrEmpty()) null else AudioRecordingGroup(title = key, items = list)
+        }
+      }
+      AudioRecorderGroupOption.SOURCE -> {
+        val grouped = sorted.groupBy { it.captureSource }
+        AudioCaptureSource.entries.mapNotNull { source ->
+          val list = grouped[source]
+          if (list.isNullOrEmpty()) null else AudioRecordingGroup(title = source.displayName, items = list)
+        }
+      }
+      AudioRecorderGroupOption.FORMAT -> {
+        val grouped = sorted.groupBy { it.formatBadge }
+        grouped.entries
+          .sortedBy { it.key }
+          .map { (badge, list) -> AudioRecordingGroup(title = badge, items = list) }
+      }
+    }
+  }
+
+  fun getDefaultSortGroupConfig(context: Context): AudioRecorderSortGroupConfig {
+    val prefs = context.getSharedPreferences(AUDIO_RECORDER_PREFS_NAME, Context.MODE_PRIVATE)
+    val group = AudioRecorderGroupOption.fromNameOrDefault(prefs.getString(PREF_KEY_AUDIO_GROUP_OPTION, null))
+    val sort = AudioRecorderSortOrder.fromNameOrDefault(prefs.getString(PREF_KEY_AUDIO_SORT_ORDER, null))
+    return AudioRecorderSortGroupConfig(groupOption = group, sortOrder = sort)
+  }
+
+  fun setDefaultSortGroupConfig(context: Context, config: AudioRecorderSortGroupConfig) {
+    val prefs = context.getSharedPreferences(AUDIO_RECORDER_PREFS_NAME, Context.MODE_PRIVATE)
+    prefs.edit()
+      .putString(PREF_KEY_AUDIO_GROUP_OPTION, config.groupOption.name)
+      .putString(PREF_KEY_AUDIO_SORT_ORDER, config.sortOrder.name)
+      .apply()
+  }
+
+  fun resolveSortGroupConfig(
+    context: Context,
+    folderKey: String,
+  ): Pair<AudioRecorderSortGroupConfig, Boolean> {
+    val prefs = context.getSharedPreferences(AUDIO_RECORDER_PREFS_NAME, Context.MODE_PRIVATE)
+    val key = PREF_PREFIX_AUDIO_FOLDER_SORT_GROUP + folderKey
+    val raw = prefs.getString(key, null)
+    if (!raw.isNullOrBlank() && raw.contains(":")) {
+      val parts = raw.split(":", limit = 2)
+      val group = AudioRecorderGroupOption.fromNameOrDefault(parts[0])
+      val sort = AudioRecorderSortOrder.fromNameOrDefault(parts[1])
+      return AudioRecorderSortGroupConfig(groupOption = group, sortOrder = sort) to true
+    }
+    return getDefaultSortGroupConfig(context) to false
+  }
+
+  fun setFolderSortGroupConfig(
+    context: Context,
+    folderKey: String,
+    config: AudioRecorderSortGroupConfig,
+  ) {
+    val prefs = context.getSharedPreferences(AUDIO_RECORDER_PREFS_NAME, Context.MODE_PRIVATE)
+    val key = PREF_PREFIX_AUDIO_FOLDER_SORT_GROUP + folderKey
+    prefs.edit().putString(key, "${config.groupOption.name}:${config.sortOrder.name}").apply()
+  }
+
+  fun removeFolderSortGroupConfig(context: Context, folderKey: String) {
+    val prefs = context.getSharedPreferences(AUDIO_RECORDER_PREFS_NAME, Context.MODE_PRIVATE)
+    val key = PREF_PREFIX_AUDIO_FOLDER_SORT_GROUP + folderKey
+    prefs.edit().remove(key).apply()
   }
 
   /**

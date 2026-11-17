@@ -16,6 +16,7 @@ import java.io.File
 fun MainNavigation(
   standaloneTool: Tool? = null,
   initialDirectory: File? = null,
+  initialExpandMusicPlayer: Boolean = false,
 ) {
   val backStack = rememberNavBackStack(Main)
 
@@ -28,6 +29,7 @@ fun MainNavigation(
           MainScreen(
             standaloneTool = standaloneTool,
             initialDirectory = initialDirectory,
+            initialExpandMusicPlayer = initialExpandMusicPlayer,
             onItemClick = { navKey -> backStack.add(navKey) },
           )
         }

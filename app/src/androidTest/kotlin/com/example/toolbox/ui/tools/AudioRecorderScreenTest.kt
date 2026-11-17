@@ -105,12 +105,32 @@ class AudioRecorderScreenTest {
   }
 
   @Test
-  fun formatSelector_andFolderSelector_allowSwappingFormatAndChangingFolder() {
+  fun formatSelector_folderPills_filterButton_andTopListLayout_workCorrectly() {
     composeTestRule.setContent {
       ToolboxTheme {
         AudioRecorderScreen(initialDirectory = testAudioDir)
       }
     }
+
+    // Verify recording list view is positioned at the top, above the recording buttons
+    val recordingsSectionBounds = composeTestRule.onNodeWithTag("recordings_section")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val recorderButtonsBounds = composeTestRule.onNodeWithTag("recorder_center_stage")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+    assertTrue(
+      "Recording list view should be above the recording buttons",
+      recordingsSectionBounds.bottom <= recorderButtonsBounds.top + 4f,
+    )
+
+    // Verify default folder pills (Audio, Recordings, Downloads) and filter button are displayed
+    composeTestRule.onNodeWithTag("folder_pill_Audio").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_pill_Recordings").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_pill_Downloads").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("audio_recorder_filter_button").assertIsDisplayed()
 
     // Default format is M4A; open format dropdown and swap to WAV
     composeTestRule.onNodeWithTag("format_selector_button").assertIsDisplayed().performClick()
@@ -128,16 +148,22 @@ class AudioRecorderScreenTest {
     val wavFiles = testAudioDir.listFiles()?.filter { it.extension == "wav" }.orEmpty()
     assertTrue("Expected a saved .wav recording file", wavFiles.isNotEmpty())
 
-    // Open folder selector dialog via folder pill
-    composeTestRule.onNodeWithTag("recordings_folder_pill").assertIsDisplayed().performClick()
+    // Switch between folders using the pill selectors
+    composeTestRule.onNodeWithTag("folder_pill_Recordings").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("No recordings in /Recordings").assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("folder_pill_Downloads").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("No recordings in /Downloads").assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("folder_pill_Audio").performClick()
     composeTestRule.waitForIdle()
 
-    composeTestRule.onNodeWithTag("change_folder_dialog").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("folder_preset_Recordings").performClick()
-    composeTestRule.onNodeWithTag("confirm_folder_button").performClick()
+    // Open filter menu via filter button
+    composeTestRule.onNodeWithTag("audio_recorder_filter_button").performClick()
     composeTestRule.waitForIdle()
-
-    composeTestRule.onNodeWithText("/Recordings").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("audio_recorder_filter_menu").assertIsDisplayed()
   }
 
   @Test

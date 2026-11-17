@@ -26,10 +26,12 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -129,6 +131,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -268,9 +271,20 @@ private data class BulkDeleteMusicCollectionTarget(
 
 internal val LocalMusicItemActions = compositionLocalOf { MusicItemActionDispatcher() }
 
+internal data class MusicSelectionController(
+  val isSelectionMode: Boolean = false,
+  val selectedKeys: Set<String> = emptySet(),
+  val onToggleSelection: (String) -> Unit = {},
+  val onLongPressSelect: (String) -> Unit = {},
+) {
+  fun isSelected(key: String): Boolean = key in selectedKeys
+}
+
+internal val LocalMusicSelectionController = compositionLocalOf { MusicSelectionController() }
+
 private val ArtworkOverlayButtonBackground = Color.Black.copy(alpha = 0.45f)
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MusicPlayerScreen(
   modifier: Modifier = Modifier,
@@ -312,6 +326,12 @@ fun MusicPlayerScreen(
       initialQueueExpanded = initialQueueExpanded,
       isInspection = isInspection,
     )
+  }
+
+  LaunchedEffect(initialPlayerExpanded) {
+    if (initialPlayerExpanded) {
+      session.expandFullPlayer()
+    }
   }
 
   // Library Tab Order & Selected Tab: Artists, Albums, Songs, Genres, Playlists
@@ -583,9 +603,40 @@ fun MusicPlayerScreen(
   var bulkDeleteTarget by remember { mutableStateOf<BulkDeleteMusicCollectionTarget?>(null) }
   var playlistForRenameDialog by remember { mutableStateOf<MusicPlaylist?>(null) }
   var playlistForDeleteDialog by remember { mutableStateOf<MusicPlaylist?>(null) }
+  var isSelectionMode by rememberSaveable { mutableStateOf(false) }
+  var selectedItemKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
+  var showMultiSelectDeleteDialog by remember { mutableStateOf(false) }
   var inlineColorPickerHex by rememberSaveable { mutableStateOf<String?>(null) }
   var showSortMenu by remember { mutableStateOf(false) }
   val crossToolHostState = rememberCrossToolFileHostState()
+
+  fun clearSelection() {
+    isSelectionMode = false
+    selectedItemKeys = emptySet()
+    showMultiSelectDeleteDialog = false
+  }
+
+  fun toggleItemSelection(key: String) {
+    val updated = if (key in selectedItemKeys) {
+      selectedItemKeys - key
+    } else {
+      selectedItemKeys + key
+    }
+    selectedItemKeys = updated
+    if (updated.isEmpty()) {
+      isSelectionMode = false
+    }
+  }
+
+  fun enterSelectionWithItem(key: String) {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    if (!isSelectionMode) {
+      isSelectionMode = true
+      selectedItemKeys = setOf(key)
+    } else {
+      toggleItemSelection(key)
+    }
+  }
 
   fun openColorInColorsTool(hex: String) {
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -917,7 +968,7 @@ fun MusicPlayerScreen(
   }
 
   BackHandler(
-    enabled = isPlayerExpanded || showQueueSheet || showSavePlaylistDialog || isSearchActive || hasDrillDown || onNavigateBack != null
+    enabled = isPlayerExpanded || showQueueSheet || showSavePlaylistDialog || isSelectionMode || isSearchActive || hasDrillDown || onNavigateBack != null
   ) {
     when {
       showSavePlaylistDialog -> showSavePlaylistDialog = false
@@ -926,21 +977,39 @@ fun MusicPlayerScreen(
         isPlayerExpanded = false
         sectionFocusVersion++
       }
+      isSelectionMode -> {
+        clearSelection()
+      }
       isSearchActive -> {
         isSearchActive = false
         searchQuery = ""
         sectionFocusVersion++
       }
-      hasDrillDown -> clearDrillDown()
+      hasDrillDown -> {
+        clearSelection()
+        clearDrillDown()
+      }
       onNavigateBack != null -> onNavigateBack()
     }
+  }
+
+  val selectionController = remember(isSelectionMode, selectedItemKeys) {
+    MusicSelectionController(
+      isSelectionMode = isSelectionMode,
+      selectedKeys = selectedItemKeys,
+      onToggleSelection = ::toggleItemSelection,
+      onLongPressSelect = ::enterSelectionWithItem,
+    )
   }
 
   val baseBg = MaterialTheme.colorScheme.background
   val ambientTopColor = lerp(baseBg, animatedDominant, 0.22f)
   val ambientMidColor = lerp(baseBg, animatedSecondary, 0.10f)
 
-  CompositionLocalProvider(LocalMusicItemActions provides musicItemActions) {
+  CompositionLocalProvider(
+    LocalMusicItemActions provides musicItemActions,
+    LocalMusicSelectionController provides selectionController,
+  ) {
   Box(
     modifier = modifier
       .fillMaxSize()
@@ -971,7 +1040,7 @@ fun MusicPlayerScreen(
         }
       }
       val activeAlbum = selectedAlbumKey?.let { key ->
-        baseAlbums.find { "${it.name}|${it.artist}".equals(key, ignoreCase = true) }?.let { album ->
+        baseAlbums.find { MusicPlayerEngine.matchesAlbumKey(it, key) }?.let { album ->
           if (searchQuery.isBlank()) {
             album
           } else {
@@ -1026,6 +1095,105 @@ fun MusicPlayerScreen(
         else -> "Search ${selectedTab.displayName.lowercase()}..."
       }
 
+      val currentSelectableKeys: List<String> = remember(
+        activeAlbum,
+        activeArtist,
+        activeGenre,
+        activePlaylist,
+        selectedTab,
+        allHomePlaylists,
+        allArtists,
+        allAlbums,
+        sortedTracks,
+        allGenres,
+        allPlaylists,
+      ) {
+        when {
+          activeAlbum != null -> activeAlbum.tracks.map { "song:${it.id}" }
+          activeArtist != null -> activeArtist.tracks.map { "song:${it.id}" }
+          activeGenre != null -> activeGenre.tracks.map { "song:${it.id}" }
+          activePlaylist != null -> activePlaylist.tracks.map { "song:${it.id}" }
+          else -> when (selectedTab) {
+            MusicLibraryTab.HOME -> allHomePlaylists.map { "playlist:${it.id}" }
+            MusicLibraryTab.ARTISTS -> allArtists.map { "artist:${it.name}" }
+            MusicLibraryTab.ALBUMS -> allAlbums.map { "album:${it.name}|${it.artist}" }
+            MusicLibraryTab.SONGS -> sortedTracks.map { "song:${it.id}" }
+            MusicLibraryTab.GENRES -> allGenres.map { "genre:${it.name}" }
+            MusicLibraryTab.PLAYLISTS -> allPlaylists.map { "playlist:${it.id}" }
+          }
+        }
+      }
+
+      val selectedTracks: List<MusicTrack> = remember(
+        selectedItemKeys,
+        allTracks,
+        baseArtists,
+        baseAlbums,
+        baseGenres,
+        basePlaylists,
+        baseHomePlaylists,
+      ) {
+        if (selectedItemKeys.isEmpty()) {
+          emptyList()
+        } else {
+          val trackById = allTracks.associateBy { it.id }
+          val combinedPlaylists = basePlaylists + baseHomePlaylists
+          val collected = LinkedHashMap<String, MusicTrack>()
+          for (key in selectedItemKeys) {
+            when {
+              key.startsWith("song:") -> {
+                val id = key.removePrefix("song:")
+                trackById[id]?.let { collected[it.id] = it }
+              }
+              key.startsWith("artist:") -> {
+                val name = key.removePrefix("artist:")
+                baseArtists.find { it.name.equals(name, ignoreCase = true) }?.tracks?.forEach {
+                  collected[it.id] = it
+                }
+              }
+              key.startsWith("album:") -> {
+                val albumKey = key.removePrefix("album:")
+                baseAlbums.find { MusicPlayerEngine.matchesAlbumKey(it, albumKey) }?.tracks?.forEach {
+                  collected[it.id] = it
+                }
+              }
+              key.startsWith("genre:") -> {
+                val name = key.removePrefix("genre:")
+                baseGenres.find { it.name.equals(name, ignoreCase = true) }?.tracks?.forEach {
+                  collected[it.id] = it
+                }
+              }
+              key.startsWith("playlist:") -> {
+                val id = key.removePrefix("playlist:")
+                combinedPlaylists.find { it.id == id }?.tracks?.forEach {
+                  collected[it.id] = it
+                }
+              }
+            }
+          }
+          collected.values.toList()
+        }
+      }
+
+      val selectedDeletablePlaylistIds: List<String> = remember(selectedItemKeys) {
+        selectedItemKeys.mapNotNull { key ->
+          if (key.startsWith("playlist:")) {
+            val id = key.removePrefix("playlist:")
+            id.takeUnless { MusicPlayerEngine.isProtectedPlaylistId(it) }
+          } else {
+            null
+          }
+        }
+      }
+
+      val hasDeletableTrackOrCollectionSelection = remember(selectedItemKeys) {
+        selectedItemKeys.any {
+          it.startsWith("song:") || it.startsWith("artist:") || it.startsWith("album:") || it.startsWith("genre:")
+        }
+      }
+      val canDeleteSelection = (hasDeletableTrackOrCollectionSelection && selectedTracks.isNotEmpty()) ||
+        selectedDeletablePlaylistIds.isNotEmpty()
+
       MusicPlayerTopBar(
         title = headerTitle,
         subtext = headerSubtext,
@@ -1035,7 +1203,89 @@ fun MusicPlayerScreen(
         searchQuery = searchQuery,
         viewMode = viewMode,
         accentTint = animatedDominant,
-        onBackClick = { clearDrillDown() },
+        isSelectionMode = isSelectionMode,
+        selectedCount = selectedItemKeys.size,
+        totalSelectableCount = currentSelectableKeys.size,
+        canDeleteSelection = canDeleteSelection,
+        onToggleSelectAll = {
+          if (currentSelectableKeys.isNotEmpty()) {
+            selectedItemKeys = if (selectedItemKeys.size >= currentSelectableKeys.size &&
+              currentSelectableKeys.all { it in selectedItemKeys }
+            ) {
+              emptySet()
+            } else {
+              currentSelectableKeys.toSet()
+            }
+          }
+        },
+        onCloseSelection = { clearSelection() },
+        onBulkPlay = {
+          if (selectedTracks.isNotEmpty()) {
+            playTrackInContext(selectedTracks.first(), selectedTracks)
+            clearSelection()
+          }
+        },
+        onBulkPlayNext = {
+          if (selectedTracks.isNotEmpty()) {
+            musicItemActions.onPlayNext(selectedTracks)
+            clearSelection()
+          }
+        },
+        onBulkAddToQueue = {
+          if (selectedTracks.isNotEmpty()) {
+            musicItemActions.onAddToQueue(selectedTracks)
+            clearSelection()
+          }
+        },
+        onBulkAddToPlaylist = {
+          if (selectedTracks.isNotEmpty()) {
+            tracksForAddToPlaylistDialog = selectedTracks
+            clearSelection()
+          }
+        },
+        onBulkShare = {
+          if (selectedTracks.isNotEmpty()) {
+            musicItemActions.onShareTracks(selectedTracks)
+            clearSelection()
+          }
+        },
+        onBulkDelete = {
+          if (!canDeleteSelection) return@MusicPlayerTopBar
+          val singleKey = selectedItemKeys.singleOrNull()
+          when {
+            singleKey != null && singleKey.startsWith("artist:") -> {
+              val name = singleKey.removePrefix("artist:")
+              val artist = baseArtists.find { it.name.equals(name, ignoreCase = true) }
+              if (artist != null) {
+                clearSelection()
+                musicItemActions.onDeleteArtist(artist)
+              }
+            }
+            singleKey != null && singleKey.startsWith("album:") -> {
+              val albumKey = singleKey.removePrefix("album:")
+              val album = baseAlbums.find { MusicPlayerEngine.matchesAlbumKey(it, albumKey) }
+              if (album != null) {
+                clearSelection()
+                musicItemActions.onDeleteAlbum(album)
+              }
+            }
+            singleKey != null && singleKey.startsWith("genre:") -> {
+              val name = singleKey.removePrefix("genre:")
+              val genre = baseGenres.find { it.name.equals(name, ignoreCase = true) }
+              if (genre != null) {
+                clearSelection()
+                musicItemActions.onDeleteGenre(genre)
+              }
+            }
+            else -> {
+              showMultiSelectDeleteDialog = true
+            }
+          }
+        },
+        onBackClick = {
+          clearSelection()
+          clearDrillDown()
+        },
         onNavigateBack = onNavigateBack,
         onSearchToggle = {
           isSearchActive = !isSearchActive
@@ -1065,6 +1315,7 @@ fun MusicPlayerScreen(
         sortOrder = sortOrder,
         showSortMenu = showSortMenu,
         onSelectTab = { tab ->
+          clearSelection()
           clearDrillDown()
           updateTab(tab)
           haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -1806,6 +2057,116 @@ fun MusicPlayerScreen(
         onDismiss = { playlistForDeleteDialog = null },
       )
     }
+
+    // 18. Multi-Select Bulk Delete Confirmation Dialog
+    if (showMultiSelectDeleteDialog) {
+      val playlistIdsToDelete = selectedItemKeys.mapNotNull { key ->
+        if (key.startsWith("playlist:")) {
+          key.removePrefix("playlist:").takeUnless { MusicPlayerEngine.isProtectedPlaylistId(it) }
+        } else {
+          null
+        }
+      }
+      val tracksToDelete = remember(selectedItemKeys, allTracks, baseArtists, baseAlbums, baseGenres) {
+        val trackById = allTracks.associateBy { it.id }
+        val collected = LinkedHashMap<String, MusicTrack>()
+        for (key in selectedItemKeys) {
+          when {
+            key.startsWith("song:") -> {
+              trackById[key.removePrefix("song:")]?.let { collected[it.id] = it }
+            }
+            key.startsWith("artist:") -> {
+              val name = key.removePrefix("artist:")
+              baseArtists.find { it.name.equals(name, ignoreCase = true) }?.tracks?.forEach { collected[it.id] = it }
+            }
+            key.startsWith("album:") -> {
+              val albumKey = key.removePrefix("album:")
+              baseAlbums.find { "${it.name}|${it.artist}".equals(albumKey, ignoreCase = true) }?.tracks?.forEach { collected[it.id] = it }
+            }
+            key.startsWith("genre:") -> {
+              val name = key.removePrefix("genre:")
+              baseGenres.find { it.name.equals(name, ignoreCase = true) }?.tracks?.forEach { collected[it.id] = it }
+            }
+          }
+        }
+        collected.values.toList()
+      }
+      val selectedItemCount = selectedItemKeys.size
+      AlertDialog(
+        onDismissRequest = { showMultiSelectDeleteDialog = false },
+        shape = RoundedCornerShape(28.dp),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.testTag("multi_select_delete_music_dialog"),
+        icon = {
+          Box(
+            modifier = Modifier
+              .size(44.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.errorContainer),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Delete,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.onErrorContainer,
+              modifier = Modifier.size(22.dp),
+            )
+          }
+        },
+        title = {
+          Text(
+            text = if (playlistIdsToDelete.isNotEmpty() && tracksToDelete.isEmpty()) {
+              "Delete ${playlistIdsToDelete.size} Selected Playlist${if (playlistIdsToDelete.size == 1) "" else "s"}?"
+            } else {
+              "Delete $selectedItemCount Selected Item${if (selectedItemCount == 1) "" else "s"}?"
+            },
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+          )
+        },
+        text = {
+          Text(
+            text = if (playlistIdsToDelete.isNotEmpty() && tracksToDelete.isEmpty()) {
+              "This will remove ${playlistIdsToDelete.size} user playlist${if (playlistIdsToDelete.size == 1) "" else "s"} (songs will remain in your library)."
+            } else {
+              "This will permanently delete ${tracksToDelete.size} song${if (tracksToDelete.size == 1) "" else "s"} from your library."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        },
+        confirmButton = {
+          Button(
+            onClick = {
+              playlistIdsToDelete.forEach { deletePlaylist(it) }
+              if (tracksToDelete.isNotEmpty()) {
+                session.deleteTracks(tracksToDelete)
+              }
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              clearSelection()
+            },
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+              containerColor = MaterialTheme.colorScheme.error,
+              contentColor = MaterialTheme.colorScheme.onError,
+            ),
+            modifier = Modifier.testTag("confirm_multi_select_delete_music_button"),
+          ) {
+            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Delete")
+          }
+        },
+        dismissButton = {
+          TextButton(
+            onClick = { showMultiSelectDeleteDialog = false },
+            shape = RoundedCornerShape(14.dp),
+          ) {
+            Text("Cancel")
+          }
+        },
+      )
+    }
   }
   }
 }
@@ -1820,6 +2181,18 @@ private fun MusicPlayerTopBar(
   searchQuery: String,
   viewMode: MusicViewMode,
   accentTint: Color,
+  isSelectionMode: Boolean = false,
+  selectedCount: Int = 0,
+  totalSelectableCount: Int = 0,
+  canDeleteSelection: Boolean = false,
+  onToggleSelectAll: () -> Unit = {},
+  onCloseSelection: () -> Unit = {},
+  onBulkPlay: () -> Unit = {},
+  onBulkPlayNext: () -> Unit = {},
+  onBulkAddToQueue: () -> Unit = {},
+  onBulkAddToPlaylist: () -> Unit = {},
+  onBulkShare: () -> Unit = {},
+  onBulkDelete: () -> Unit = {},
   onBackClick: () -> Unit,
   onNavigateBack: (() -> Unit)? = null,
   onSearchToggle: () -> Unit,
@@ -1839,6 +2212,168 @@ private fun MusicPlayerTopBar(
     onNavigateBack = if (hasDrillDown) onBackClick else onNavigateBack,
     backContentDescription = "Back",
     backButtonTestTag = if (hasDrillDown) "music_back_button" else "action_navigate_back",
+    selectionState = if (isSelectionMode) {
+      ToolboxTopBarSelectionState(
+        selectedCount = selectedCount,
+        totalCount = totalSelectableCount,
+        onToggleSelectAll = onToggleSelectAll,
+        onCloseSelection = onCloseSelection,
+        actions = {
+          var showOverflowMenu by remember { mutableStateOf(false) }
+          val hasSelection = selectedCount > 0
+
+          IconButton(
+            onClick = onBulkPlay,
+            enabled = hasSelection,
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("action_bulk_play"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.PlayArrow,
+              contentDescription = "Play selected",
+              tint = if (hasSelection) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          IconButton(
+            onClick = onBulkAddToPlaylist,
+            enabled = hasSelection,
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("action_bulk_add_to_playlist"),
+          ) {
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
+              contentDescription = "Add selected to playlist",
+              tint = if (hasSelection) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          IconButton(
+            onClick = onBulkShare,
+            enabled = hasSelection,
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("action_bulk_share"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Share,
+              contentDescription = "Share selected",
+              tint = if (hasSelection) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          IconButton(
+            onClick = onBulkDelete,
+            enabled = canDeleteSelection,
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("action_bulk_delete"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Delete,
+              contentDescription = "Delete selected",
+              tint = if (canDeleteSelection) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.error.copy(alpha = 0.38f),
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          Box {
+            IconButton(
+              onClick = { showOverflowMenu = true },
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("action_selection_overflow"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = "More selection actions",
+                modifier = Modifier.size(20.dp),
+              )
+            }
+
+            DropdownMenu(
+              expanded = showOverflowMenu,
+              onDismissRequest = { showOverflowMenu = false },
+            ) {
+              DropdownMenuItem(
+                text = { Text("Play") },
+                leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkPlay()
+                },
+                modifier = Modifier.testTag("action_selection_play"),
+              )
+              DropdownMenuItem(
+                text = { Text("Play Next") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistPlay, contentDescription = null) },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkPlayNext()
+                },
+                modifier = Modifier.testTag("action_selection_play_next"),
+              )
+              DropdownMenuItem(
+                text = { Text("Add to Queue") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null) },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkAddToQueue()
+                },
+                modifier = Modifier.testTag("action_selection_add_to_queue"),
+              )
+              DropdownMenuItem(
+                text = { Text("Add to Playlist…") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null) },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkAddToPlaylist()
+                },
+                modifier = Modifier.testTag("action_selection_add_to_playlist"),
+              )
+              DropdownMenuItem(
+                text = { Text("Share") },
+                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkShare()
+                },
+                modifier = Modifier.testTag("action_selection_share"),
+              )
+              if (canDeleteSelection) {
+                DropdownMenuItem(
+                  text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                  leadingIcon = {
+                    Icon(
+                      Icons.Default.Delete,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.error,
+                    )
+                  },
+                  onClick = {
+                    showOverflowMenu = false
+                    onBulkDelete()
+                  },
+                  modifier = Modifier.testTag("action_selection_delete"),
+                )
+              }
+            }
+          }
+        },
+      )
+    } else {
+      null
+    },
     searchState = ToolboxTopBarSearchState(
       isActive = isSearchActive,
       query = searchQuery,
@@ -2273,7 +2808,7 @@ private fun LazyGridState.isItemFullyVisible(index: Int): Boolean {
     (item.offset.y + item.size.height) <= info.viewportEndOffset
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun HomeTabContent(
   playlists: List<MusicPlaylist>,
@@ -2435,24 +2970,37 @@ private fun HomeTabContent(
 
           itemsIndexed(playlists, key = { idx, it -> "${it.id}_${refreshGeneration}_$idx" }) { index, playlist ->
             val isActive = currentTrackId != null && playlist.tracks.any { it.id == currentTrackId }
+            val selection = LocalMusicSelectionController.current
+            val selectionKey = "playlist:${playlist.id}"
+            val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
             Card(
               shape = RoundedCornerShape(14.dp),
               colors = CardDefaults.cardColors(
-                containerColor = if (isActive) {
+                containerColor = if (isItemSelected || isActive) {
                   MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
                 } else {
                   MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
                 },
               ),
               border = BorderStroke(
-                width = 1.dp,
-                color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                width = if (isItemSelected) 1.5.dp else 1.dp,
+                color = if (isItemSelected) MaterialTheme.colorScheme.primary
+                else if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
                 else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
               ),
               modifier = Modifier
                 .fillMaxWidth()
-                .clickable { onSelectPlaylist(playlist) }
-                .semantics { selected = isActive }
+                .combinedClickable(
+                  onClick = {
+                    if (selection.isSelectionMode) {
+                      selection.onToggleSelection(selectionKey)
+                    } else {
+                      onSelectPlaylist(playlist)
+                    }
+                  },
+                  onLongClick = { selection.onLongPressSelect(selectionKey) },
+                )
+                .semantics { selected = isItemSelected || isActive }
                 .testTag("home_playlist_item_$index"),
             ) {
               Row(
@@ -2463,11 +3011,24 @@ private fun HomeTabContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
               ) {
-                TrackArtworkThumbnail(
-                  track = playlist.representativeTrack,
-                  size = 56.dp,
-                  shape = RoundedCornerShape(12.dp),
-                )
+                if (selection.isSelectionMode) {
+                  Box(
+                    modifier = Modifier.size(56.dp),
+                    contentAlignment = Alignment.Center,
+                  ) {
+                    Checkbox(
+                      checked = isItemSelected,
+                      onCheckedChange = { selection.onToggleSelection(selectionKey) },
+                      modifier = Modifier.testTag("select_checkbox_$selectionKey"),
+                    )
+                  }
+                } else {
+                  TrackArtworkThumbnail(
+                    track = playlist.representativeTrack,
+                    size = 56.dp,
+                    shape = RoundedCornerShape(12.dp),
+                  )
+                }
                 Column(modifier = Modifier.weight(1f)) {
                   Text(
                     text = playlist.name,
@@ -2556,24 +3117,37 @@ private fun HomeTabContent(
 
           gridItemsIndexed(playlists, key = { idx, it -> "${it.id}_${refreshGeneration}_$idx" }) { index, playlist ->
             val isActive = currentTrackId != null && playlist.tracks.any { it.id == currentTrackId }
+            val selection = LocalMusicSelectionController.current
+            val selectionKey = "playlist:${playlist.id}"
+            val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
             Card(
               shape = RoundedCornerShape(14.dp),
               colors = CardDefaults.cardColors(
-                containerColor = if (isActive) {
+                containerColor = if (isItemSelected || isActive) {
                   MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
                 } else {
                   MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
                 },
               ),
               border = BorderStroke(
-                width = 1.dp,
-                color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                width = if (isItemSelected) 1.5.dp else 1.dp,
+                color = if (isItemSelected) MaterialTheme.colorScheme.primary
+                else if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
                 else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
               ),
               modifier = Modifier
                 .fillMaxWidth()
-                .clickable { onSelectPlaylist(playlist) }
-                .semantics { selected = isActive }
+                .combinedClickable(
+                  onClick = {
+                    if (selection.isSelectionMode) {
+                      selection.onToggleSelection(selectionKey)
+                    } else {
+                      onSelectPlaylist(playlist)
+                    }
+                  },
+                  onLongClick = { selection.onLongPressSelect(selectionKey) },
+                )
+                .semantics { selected = isItemSelected || isActive }
                 .testTag("home_playlist_item_$index"),
             ) {
               Column(
@@ -2593,20 +3167,31 @@ private fun HomeTabContent(
                     track = playlist.representativeTrack,
                     modifier = Modifier.fillMaxSize(),
                   )
-                  Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = Color.Black.copy(alpha = 0.55f),
-                    modifier = Modifier
-                      .align(Alignment.TopStart)
-                      .padding(6.dp),
-                  ) {
-                    Text(
-                      text = playlist.totalDurationFormatted,
-                      style = MaterialTheme.typography.labelSmall,
-                      fontFamily = FontFamily.Monospace,
-                      color = Color.White,
-                      modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                  if (selection.isSelectionMode) {
+                    Checkbox(
+                      checked = isItemSelected,
+                      onCheckedChange = { selection.onToggleSelection(selectionKey) },
+                      modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(4.dp)
+                        .testTag("select_checkbox_$selectionKey"),
                     )
+                  } else {
+                    Surface(
+                      shape = RoundedCornerShape(8.dp),
+                      color = Color.Black.copy(alpha = 0.55f),
+                      modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp),
+                    ) {
+                      Text(
+                        text = playlist.totalDurationFormatted,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                      )
+                    }
                   }
                   MusicCollectionContextMenuButton(
                     collectionTitle = playlist.name,
@@ -2664,6 +3249,7 @@ private fun HomeTabContent(
   }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ArtistsTabContent(
   artists: List<MusicArtist>,
@@ -2780,24 +3366,37 @@ private fun ArtistsTabContent(
           val isActive = index == focusedIndex ||
             (currentArtistName != null && currentArtistName.equals(artist.name, ignoreCase = true))
           val isFavorite = MusicPlayerEngine.isArtistFavorite(artist, favoriteArtists)
+          val selection = LocalMusicSelectionController.current
+          val selectionKey = "artist:${artist.name}"
+          val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
           Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
-              containerColor = if (isActive) {
+              containerColor = if (isItemSelected || isActive) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
               } else {
                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
               },
             ),
             border = BorderStroke(
-              width = 1.dp,
-              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              width = if (isItemSelected) 1.5.dp else 1.dp,
+              color = if (isItemSelected) MaterialTheme.colorScheme.primary
+              else if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
               else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
             ),
             modifier = Modifier
               .fillMaxWidth()
-              .clickable { onSelectArtist(artist) }
-              .semantics { selected = isActive }
+              .combinedClickable(
+                onClick = {
+                  if (selection.isSelectionMode) {
+                    selection.onToggleSelection(selectionKey)
+                  } else {
+                    onSelectArtist(artist)
+                  }
+                },
+                onLongClick = { selection.onLongPressSelect(selectionKey) },
+              )
+              .semantics { selected = isItemSelected || isActive }
               .testTag("artist_item_${artist.name}"),
           ) {
             Row(
@@ -2807,11 +3406,24 @@ private fun ArtistsTabContent(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-              TrackArtworkThumbnail(
-                track = artist.representativeTrack,
-                size = 52.dp,
-                shape = CircleShape,
-              )
+              if (selection.isSelectionMode) {
+                Box(
+                  modifier = Modifier.size(52.dp),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Checkbox(
+                    checked = isItemSelected,
+                    onCheckedChange = { selection.onToggleSelection(selectionKey) },
+                    modifier = Modifier.testTag("select_checkbox_$selectionKey"),
+                  )
+                }
+              } else {
+                TrackArtworkThumbnail(
+                  track = artist.representativeTrack,
+                  size = 52.dp,
+                  shape = CircleShape,
+                )
+              }
               Column(modifier = Modifier.weight(1f)) {
                 Text(
                   text = artist.name,
@@ -2899,24 +3511,37 @@ private fun ArtistsTabContent(
           val isActive = index == focusedIndex ||
             (currentArtistName != null && currentArtistName.equals(artist.name, ignoreCase = true))
           val isFavorite = MusicPlayerEngine.isArtistFavorite(artist, favoriteArtists)
+          val selection = LocalMusicSelectionController.current
+          val selectionKey = "artist:${artist.name}"
+          val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
           Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
-              containerColor = if (isActive) {
+              containerColor = if (isItemSelected || isActive) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
               } else {
                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
               },
             ),
             border = BorderStroke(
-              width = 1.dp,
-              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              width = if (isItemSelected) 1.5.dp else 1.dp,
+              color = if (isItemSelected) MaterialTheme.colorScheme.primary
+              else if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
               else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
             ),
             modifier = Modifier
               .fillMaxWidth()
-              .clickable { onSelectArtist(artist) }
-              .semantics { selected = isActive }
+              .combinedClickable(
+                onClick = {
+                  if (selection.isSelectionMode) {
+                    selection.onToggleSelection(selectionKey)
+                  } else {
+                    onSelectArtist(artist)
+                  }
+                },
+                onLongClick = { selection.onLongPressSelect(selectionKey) },
+              )
+              .semantics { selected = isItemSelected || isActive }
               .testTag("artist_item_${artist.name}"),
           ) {
             Column(
@@ -2937,6 +3562,15 @@ private fun ArtistsTabContent(
                   shape = CircleShape,
                   modifier = Modifier.align(Alignment.Center),
                 )
+                if (selection.isSelectionMode) {
+                  Checkbox(
+                    checked = isItemSelected,
+                    onCheckedChange = { selection.onToggleSelection(selectionKey) },
+                    modifier = Modifier
+                      .align(Alignment.TopStart)
+                      .testTag("select_checkbox_$selectionKey"),
+                  )
+                }
                 IconButton(
                   onClick = { onToggleFavoriteArtist(artist) },
                   colors = IconButtonDefaults.iconButtonColors(
@@ -3013,6 +3647,7 @@ private fun ArtistsTabContent(
   }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AlbumsTabContent(
   albums: List<MusicAlbum>,
@@ -3129,24 +3764,37 @@ private fun AlbumsTabContent(
           val isActive = index == focusedIndex ||
             (currentAlbumName != null && currentAlbumName.equals(album.name, ignoreCase = true))
           val isFavorite = MusicPlayerEngine.isAlbumFavorite(album, favoriteAlbums)
+          val selection = LocalMusicSelectionController.current
+          val selectionKey = "album:${album.name}|${album.artist}"
+          val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
           Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
-              containerColor = if (isActive) {
+              containerColor = if (isItemSelected || isActive) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
               } else {
                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
               },
             ),
             border = BorderStroke(
-              width = 1.dp,
-              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              width = if (isItemSelected) 1.5.dp else 1.dp,
+              color = if (isItemSelected) MaterialTheme.colorScheme.primary
+              else if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
               else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
             ),
             modifier = Modifier
               .fillMaxWidth()
-              .clickable { onSelectAlbum(album) }
-              .semantics { selected = isActive }
+              .combinedClickable(
+                onClick = {
+                  if (selection.isSelectionMode) {
+                    selection.onToggleSelection(selectionKey)
+                  } else {
+                    onSelectAlbum(album)
+                  }
+                },
+                onLongClick = { selection.onLongPressSelect(selectionKey) },
+              )
+              .semantics { selected = isItemSelected || isActive }
               .testTag("album_item_${album.name}"),
           ) {
             Row(
@@ -3156,11 +3804,24 @@ private fun AlbumsTabContent(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-              TrackArtworkThumbnail(
-                track = album.representativeTrack,
-                size = 56.dp,
-                shape = RoundedCornerShape(12.dp),
-              )
+              if (selection.isSelectionMode) {
+                Box(
+                  modifier = Modifier.size(56.dp),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Checkbox(
+                    checked = isItemSelected,
+                    onCheckedChange = { selection.onToggleSelection(selectionKey) },
+                    modifier = Modifier.testTag("select_checkbox_$selectionKey"),
+                  )
+                }
+              } else {
+                TrackArtworkThumbnail(
+                  track = album.representativeTrack,
+                  size = 56.dp,
+                  shape = RoundedCornerShape(12.dp),
+                )
+              }
               Column(modifier = Modifier.weight(1f)) {
                 Text(
                   text = album.name,
@@ -3248,24 +3909,37 @@ private fun AlbumsTabContent(
           val isActive = index == focusedIndex ||
             (currentAlbumName != null && currentAlbumName.equals(album.name, ignoreCase = true))
           val isFavorite = MusicPlayerEngine.isAlbumFavorite(album, favoriteAlbums)
+          val selection = LocalMusicSelectionController.current
+          val selectionKey = "album:${album.name}|${album.artist}"
+          val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
           Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
-              containerColor = if (isActive) {
+              containerColor = if (isItemSelected || isActive) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
               } else {
                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
               },
             ),
             border = BorderStroke(
-              width = 1.dp,
-              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              width = if (isItemSelected) 1.5.dp else 1.dp,
+              color = if (isItemSelected) MaterialTheme.colorScheme.primary
+              else if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
               else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
             ),
             modifier = Modifier
               .fillMaxWidth()
-              .clickable { onSelectAlbum(album) }
-              .semantics { selected = isActive }
+              .combinedClickable(
+                onClick = {
+                  if (selection.isSelectionMode) {
+                    selection.onToggleSelection(selectionKey)
+                  } else {
+                    onSelectAlbum(album)
+                  }
+                },
+                onLongClick = { selection.onLongPressSelect(selectionKey) },
+              )
+              .semantics { selected = isItemSelected || isActive }
               .testTag("album_item_${album.name}"),
           ) {
             Column(
@@ -3284,6 +3958,16 @@ private fun AlbumsTabContent(
                   track = album.representativeTrack,
                   modifier = Modifier.fillMaxSize(),
                 )
+                if (selection.isSelectionMode) {
+                  Checkbox(
+                    checked = isItemSelected,
+                    onCheckedChange = { selection.onToggleSelection(selectionKey) },
+                    modifier = Modifier
+                      .align(Alignment.TopStart)
+                      .padding(4.dp)
+                      .testTag("select_checkbox_$selectionKey"),
+                  )
+                }
                 IconButton(
                   onClick = { onToggleFavoriteAlbum(album) },
                   colors = IconButtonDefaults.iconButtonColors(
@@ -3514,6 +4198,7 @@ private fun SongsTabContent(
   }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GenresTabContent(
   genres: List<MusicGenre>,
@@ -3630,24 +4315,37 @@ private fun GenresTabContent(
           val isActive = index == focusedIndex ||
             (currentGenreName != null && currentGenreName.equals(genre.name, ignoreCase = true))
           val isFavorite = MusicPlayerEngine.isGenreFavorite(genre, favoriteGenres)
+          val selection = LocalMusicSelectionController.current
+          val selectionKey = "genre:${genre.name}"
+          val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
           Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
-              containerColor = if (isActive) {
+              containerColor = if (isItemSelected || isActive) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
               } else {
                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
               },
             ),
             border = BorderStroke(
-              width = 1.dp,
-              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              width = if (isItemSelected) 1.5.dp else 1.dp,
+              color = if (isItemSelected) MaterialTheme.colorScheme.primary
+              else if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
               else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
             ),
             modifier = Modifier
               .fillMaxWidth()
-              .clickable { onSelectGenre(genre) }
-              .semantics { selected = isActive }
+              .combinedClickable(
+                onClick = {
+                  if (selection.isSelectionMode) {
+                    selection.onToggleSelection(selectionKey)
+                  } else {
+                    onSelectGenre(genre)
+                  }
+                },
+                onLongClick = { selection.onLongPressSelect(selectionKey) },
+              )
+              .semantics { selected = isItemSelected || isActive }
               .testTag("genre_item_${genre.name}"),
           ) {
             Row(
@@ -3657,11 +4355,24 @@ private fun GenresTabContent(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-              TrackArtworkThumbnail(
-                track = genre.representativeTrack,
-                size = 52.dp,
-                shape = RoundedCornerShape(12.dp),
-              )
+              if (selection.isSelectionMode) {
+                Box(
+                  modifier = Modifier.size(52.dp),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Checkbox(
+                    checked = isItemSelected,
+                    onCheckedChange = { selection.onToggleSelection(selectionKey) },
+                    modifier = Modifier.testTag("select_checkbox_$selectionKey"),
+                  )
+                }
+              } else {
+                TrackArtworkThumbnail(
+                  track = genre.representativeTrack,
+                  size = 52.dp,
+                  shape = RoundedCornerShape(12.dp),
+                )
+              }
               Column(modifier = Modifier.weight(1f)) {
                 Text(
                   text = genre.name,
@@ -3749,27 +4460,40 @@ private fun GenresTabContent(
           val isActive = index == focusedIndex ||
             (currentGenreName != null && currentGenreName.equals(genre.name, ignoreCase = true))
           val isFavorite = MusicPlayerEngine.isGenreFavorite(genre, favoriteGenres)
+          val selection = LocalMusicSelectionController.current
+          val selectionKey = "genre:${genre.name}"
+          val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
           val genrePalette = remember(genre.representativeTrack?.id) {
             MusicPlayerEngine.resolveTrackPalette(genre.representativeTrack)
           }
           Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
-              containerColor = if (isActive) {
+              containerColor = if (isItemSelected || isActive) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
               } else {
                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
               },
             ),
             border = BorderStroke(
-              width = 1.dp,
-              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              width = if (isItemSelected) 1.5.dp else 1.dp,
+              color = if (isItemSelected) MaterialTheme.colorScheme.primary
+              else if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
               else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
             ),
             modifier = Modifier
               .fillMaxWidth()
-              .clickable { onSelectGenre(genre) }
-              .semantics { selected = isActive }
+              .combinedClickable(
+                onClick = {
+                  if (selection.isSelectionMode) {
+                    selection.onToggleSelection(selectionKey)
+                  } else {
+                    onSelectGenre(genre)
+                  }
+                },
+                onLongClick = { selection.onLongPressSelect(selectionKey) },
+              )
+              .semantics { selected = isItemSelected || isActive }
               .testTag("genre_item_${genre.name}"),
           ) {
             Column(
@@ -3790,14 +4514,24 @@ private fun GenresTabContent(
                   )
                   .padding(10.dp),
               ) {
-                Icon(
-                  imageVector = Icons.Default.LibraryMusic,
-                  contentDescription = null,
-                  tint = Color.White.copy(alpha = 0.85f),
-                  modifier = Modifier
-                    .size(28.dp)
-                    .align(Alignment.TopStart),
-                )
+                if (selection.isSelectionMode) {
+                  Checkbox(
+                    checked = isItemSelected,
+                    onCheckedChange = { selection.onToggleSelection(selectionKey) },
+                    modifier = Modifier
+                      .align(Alignment.TopStart)
+                      .testTag("select_checkbox_$selectionKey"),
+                  )
+                } else {
+                  Icon(
+                    imageVector = Icons.Default.LibraryMusic,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier
+                      .size(28.dp)
+                      .align(Alignment.TopStart),
+                  )
+                }
                 IconButton(
                   onClick = { onToggleFavoriteGenre(genre) },
                   colors = IconButtonDefaults.iconButtonColors(
@@ -3872,6 +4606,7 @@ private fun GenresTabContent(
   }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PlaylistsTabContent(
   playlists: List<MusicPlaylist>,
@@ -3962,24 +4697,37 @@ private fun PlaylistsTabContent(
       ) {
         items(playlists, key = { it.id }) { playlist ->
           val isActive = currentTrackId != null && playlist.tracks.any { it.id == currentTrackId }
+          val selection = LocalMusicSelectionController.current
+          val selectionKey = "playlist:${playlist.id}"
+          val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
           Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
-              containerColor = if (isActive) {
+              containerColor = if (isItemSelected || isActive) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
               } else {
                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
               },
             ),
             border = BorderStroke(
-              width = 1.dp,
-              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              width = if (isItemSelected) 1.5.dp else 1.dp,
+              color = if (isItemSelected) MaterialTheme.colorScheme.primary
+              else if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
               else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
             ),
             modifier = Modifier
               .fillMaxWidth()
-              .clickable { onSelectPlaylist(playlist) }
-              .semantics { selected = isActive }
+              .combinedClickable(
+                onClick = {
+                  if (selection.isSelectionMode) {
+                    selection.onToggleSelection(selectionKey)
+                  } else {
+                    onSelectPlaylist(playlist)
+                  }
+                },
+                onLongClick = { selection.onLongPressSelect(selectionKey) },
+              )
+              .semantics { selected = isItemSelected || isActive }
               .testTag("playlist_item_${playlist.name}"),
           ) {
             Row(
@@ -3989,11 +4737,24 @@ private fun PlaylistsTabContent(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-              TrackArtworkThumbnail(
-                track = playlist.representativeTrack,
-                size = 52.dp,
-                shape = RoundedCornerShape(12.dp),
-              )
+              if (selection.isSelectionMode) {
+                Box(
+                  modifier = Modifier.size(52.dp),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Checkbox(
+                    checked = isItemSelected,
+                    onCheckedChange = { selection.onToggleSelection(selectionKey) },
+                    modifier = Modifier.testTag("select_checkbox_$selectionKey"),
+                  )
+                }
+              } else {
+                TrackArtworkThumbnail(
+                  track = playlist.representativeTrack,
+                  size = 52.dp,
+                  shape = RoundedCornerShape(12.dp),
+                )
+              }
               Column(modifier = Modifier.weight(1f)) {
                 Text(
                   text = playlist.name,
@@ -4083,27 +4844,40 @@ private fun PlaylistsTabContent(
       ) {
         items(playlists, key = { it.id }) { playlist ->
           val isActive = currentTrackId != null && playlist.tracks.any { it.id == currentTrackId }
+          val selection = LocalMusicSelectionController.current
+          val selectionKey = "playlist:${playlist.id}"
+          val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
           val playlistPalette = remember(playlist.representativeTrack?.id) {
             MusicPlayerEngine.resolveTrackPalette(playlist.representativeTrack)
           }
           Card(
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
-              containerColor = if (isActive) {
+              containerColor = if (isItemSelected || isActive) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
               } else {
                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
               },
             ),
             border = BorderStroke(
-              width = 1.dp,
-              color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+              width = if (isItemSelected) 1.5.dp else 1.dp,
+              color = if (isItemSelected) MaterialTheme.colorScheme.primary
+              else if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
               else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
             ),
             modifier = Modifier
               .fillMaxWidth()
-              .clickable { onSelectPlaylist(playlist) }
-              .semantics { selected = isActive }
+              .combinedClickable(
+                onClick = {
+                  if (selection.isSelectionMode) {
+                    selection.onToggleSelection(selectionKey)
+                  } else {
+                    onSelectPlaylist(playlist)
+                  }
+                },
+                onLongClick = { selection.onLongPressSelect(selectionKey) },
+              )
+              .semantics { selected = isItemSelected || isActive }
               .testTag("playlist_item_${playlist.name}"),
           ) {
             Column(
@@ -4124,19 +4898,29 @@ private fun PlaylistsTabContent(
                   )
                   .padding(10.dp),
               ) {
-                Icon(
-                  imageVector = when {
-                    playlist.isFavorites -> Icons.Default.Star
-                    playlist.isMostPlayed -> Icons.Default.GraphicEq
-                    playlist.isRecentlyPlayed -> Icons.Default.Timer
-                    else -> Icons.AutoMirrored.Filled.PlaylistPlay
-                  },
-                  contentDescription = null,
-                  tint = Color.White.copy(alpha = 0.85f),
-                  modifier = Modifier
-                    .size(28.dp)
-                    .align(Alignment.TopStart),
-                )
+                if (selection.isSelectionMode) {
+                  Checkbox(
+                    checked = isItemSelected,
+                    onCheckedChange = { selection.onToggleSelection(selectionKey) },
+                    modifier = Modifier
+                      .align(Alignment.TopStart)
+                      .testTag("select_checkbox_$selectionKey"),
+                  )
+                } else {
+                  Icon(
+                    imageVector = when {
+                      playlist.isFavorites -> Icons.Default.Star
+                      playlist.isMostPlayed -> Icons.Default.GraphicEq
+                      playlist.isRecentlyPlayed -> Icons.Default.Timer
+                      else -> Icons.AutoMirrored.Filled.PlaylistPlay
+                    },
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier
+                      .size(28.dp)
+                      .align(Alignment.TopStart),
+                  )
+                }
                 val itemActions = LocalMusicItemActions.current
                 MusicCollectionContextMenuButton(
                   collectionTitle = playlist.name,
@@ -4964,6 +5748,7 @@ private fun PlaylistDetailContent(
   }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SongListItemCard(
   track: MusicTrack,
@@ -4974,24 +5759,37 @@ private fun SongListItemCard(
   onClick: () -> Unit,
   onToggleFavorite: () -> Unit,
 ) {
+  val selection = LocalMusicSelectionController.current
+  val selectionKey = "song:${track.id}"
+  val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
   Card(
     shape = RoundedCornerShape(14.dp),
     colors = CardDefaults.cardColors(
-      containerColor = if (isCurrent) {
+      containerColor = if (isItemSelected || isCurrent) {
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
       } else {
         MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
       },
     ),
     border = BorderStroke(
-      width = 1.dp,
-      color = if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+      width = if (isItemSelected) 1.5.dp else 1.dp,
+      color = if (isItemSelected) MaterialTheme.colorScheme.primary
+      else if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
       else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
     ),
     modifier = Modifier
       .fillMaxWidth()
-      .clickable(onClick = onClick)
-      .semantics { selected = isCurrent }
+      .combinedClickable(
+        onClick = {
+          if (selection.isSelectionMode) {
+            selection.onToggleSelection(selectionKey)
+          } else {
+            onClick()
+          }
+        },
+        onLongClick = { selection.onLongPressSelect(selectionKey) },
+      )
+      .semantics { selected = isItemSelected || isCurrent }
       .testTag("song_item_${track.id}"),
   ) {
     Row(
@@ -5001,26 +5799,39 @@ private fun SongListItemCard(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-      Box(contentAlignment = Alignment.Center) {
-        TrackArtworkThumbnail(
-          track = track,
-          size = 48.dp,
-          shape = RoundedCornerShape(10.dp),
-        )
-        if (isCurrent) {
-          Box(
-            modifier = Modifier
-              .size(48.dp)
-              .clip(RoundedCornerShape(10.dp))
-              .background(Color.Black.copy(alpha = 0.42f)),
-            contentAlignment = Alignment.Center,
-          ) {
-            Icon(
-              imageVector = if (isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
-              contentDescription = if (isPlaying) "Now Playing" else "Selected",
-              tint = Color.White,
-              modifier = Modifier.size(22.dp),
-            )
+      if (selection.isSelectionMode) {
+        Box(
+          modifier = Modifier.size(48.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          Checkbox(
+            checked = isItemSelected,
+            onCheckedChange = { selection.onToggleSelection(selectionKey) },
+            modifier = Modifier.testTag("select_checkbox_$selectionKey"),
+          )
+        }
+      } else {
+        Box(contentAlignment = Alignment.Center) {
+          TrackArtworkThumbnail(
+            track = track,
+            size = 48.dp,
+            shape = RoundedCornerShape(10.dp),
+          )
+          if (isCurrent) {
+            Box(
+              modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color.Black.copy(alpha = 0.42f)),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = if (isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                contentDescription = if (isPlaying) "Now Playing" else "Selected",
+                tint = Color.White,
+                modifier = Modifier.size(22.dp),
+              )
+            }
           }
         }
       }
@@ -5078,6 +5889,7 @@ private fun SongListItemCard(
   }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SongGridItemCard(
   track: MusicTrack,
@@ -5088,24 +5900,37 @@ private fun SongGridItemCard(
   onClick: () -> Unit,
   onToggleFavorite: () -> Unit,
 ) {
+  val selection = LocalMusicSelectionController.current
+  val selectionKey = "song:${track.id}"
+  val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
   Card(
     shape = RoundedCornerShape(14.dp),
     colors = CardDefaults.cardColors(
-      containerColor = if (isCurrent) {
+      containerColor = if (isItemSelected || isCurrent) {
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
       } else {
         MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
       },
     ),
     border = BorderStroke(
-      width = 1.dp,
-      color = if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+      width = if (isItemSelected) 1.5.dp else 1.dp,
+      color = if (isItemSelected) MaterialTheme.colorScheme.primary
+      else if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
       else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
     ),
     modifier = Modifier
       .fillMaxWidth()
-      .clickable(onClick = onClick)
-      .semantics { selected = isCurrent }
+      .combinedClickable(
+        onClick = {
+          if (selection.isSelectionMode) {
+            selection.onToggleSelection(selectionKey)
+          } else {
+            onClick()
+          }
+        },
+        onLongClick = { selection.onLongPressSelect(selectionKey) },
+      )
+      .semantics { selected = isItemSelected || isCurrent }
       .testTag("song_item_${track.id}"),
   ) {
     Column(
@@ -5124,20 +5949,31 @@ private fun SongGridItemCard(
           track = track,
           modifier = Modifier.fillMaxSize(),
         )
-        Surface(
-          shape = RoundedCornerShape(8.dp),
-          color = Color.Black.copy(alpha = 0.55f),
-          modifier = Modifier
-            .align(Alignment.TopStart)
-            .padding(6.dp),
-        ) {
-          Text(
-            text = track.durationFormatted,
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = FontFamily.Monospace,
-            color = Color.White,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        if (selection.isSelectionMode) {
+          Checkbox(
+            checked = isItemSelected,
+            onCheckedChange = { selection.onToggleSelection(selectionKey) },
+            modifier = Modifier
+              .align(Alignment.TopStart)
+              .padding(4.dp)
+              .testTag("select_checkbox_$selectionKey"),
           )
+        } else {
+          Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = Color.Black.copy(alpha = 0.55f),
+            modifier = Modifier
+              .align(Alignment.TopStart)
+              .padding(6.dp),
+          ) {
+            Text(
+              text = track.durationFormatted,
+              style = MaterialTheme.typography.labelSmall,
+              fontFamily = FontFamily.Monospace,
+              color = Color.White,
+              modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+          }
         }
         IconButton(
           onClick = onToggleFavorite,

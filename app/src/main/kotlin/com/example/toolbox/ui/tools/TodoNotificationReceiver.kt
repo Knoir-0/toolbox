@@ -10,11 +10,20 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.Person
 import androidx.core.content.ContextCompat
-import com.example.toolbox.MainActivity
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import com.example.toolbox.R
+import com.example.toolbox.ui.main.Tool
+import com.example.toolbox.ui.main.createStandaloneToolIntent
+import com.example.toolbox.ui.main.createToolShortcutBitmap
+import com.example.toolbox.ui.main.resolveShortcutBackgroundColor
+import com.example.toolbox.ui.main.resolveShortcutForegroundColor
 import java.util.Collections
 
 /**
@@ -25,6 +34,7 @@ object TodoNotificationHelper {
 
   const val CHANNEL_ID = "todo_schedule_channel"
   const val CHANNEL_NAME = "Scheduled To-Do Notes"
+  const val TODO_NOTIFICATION_SHORTCUT_ID = "shortcut_notification_todo_list"
   const val ACTION_TODO_SCHEDULE_ALARM = "com.example.toolbox.ACTION_TODO_SCHEDULE_ALARM"
   const val EXTRA_TASK_ID = "extra_todo_task_id"
   const val EXTRA_TASK_TITLE = "extra_todo_task_title"
@@ -94,9 +104,7 @@ object TodoNotificationHelper {
     ensureNotificationChannel(context)
     if (!hasNotificationPermission(context)) return
 
-    val launchIntent = Intent(context, MainActivity::class.java).apply {
-      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-    }
+    val launchIntent = createStandaloneToolIntent(context, Tool.TODO_LIST)
     val pendingIntentFlags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     val contentPendingIntent = PendingIntent.getActivity(
       context,
@@ -105,6 +113,18 @@ object TodoNotificationHelper {
       pendingIntentFlags,
     )
 
+    val backgroundColor = resolveShortcutBackgroundColor(themeColor = null, context = context)
+    val foregroundColor = resolveShortcutForegroundColor(backgroundColor)
+    val todoIconBitmap = try {
+      createToolShortcutBitmap(
+        imageVector = Tool.TODO_LIST.icon,
+        backgroundColor = backgroundColor,
+        foregroundColor = foregroundColor,
+      )
+    } catch (_: Exception) {
+      null
+    }
+
     val bigTextStyle = NotificationCompat.BigTextStyle()
       .setBigContentTitle(title)
       .bigText(content)
@@ -112,8 +132,9 @@ object TodoNotificationHelper {
       bigTextStyle.setSummaryText(summaryText)
     }
 
-    val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-      .setSmallIcon(R.drawable.ic_tool_todo_list_foreground)
+    val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+      .setSmallIcon(R.drawable.ic_notification_todo_list)
+      .setColor(backgroundColor.toArgb())
       .setContentTitle(title)
       .setContentText(content)
       .setStyle(bigTextStyle)
@@ -122,7 +143,41 @@ object TodoNotificationHelper {
       .setDefaults(NotificationCompat.DEFAULT_ALL)
       .setAutoCancel(true)
       .setContentIntent(contentPendingIntent)
-      .build()
+
+    if (!summaryText.isNullOrBlank()) {
+      builder.setSubText(summaryText)
+    }
+
+    if (todoIconBitmap != null) {
+      builder.setLargeIcon(todoIconBitmap)
+      try {
+        val todoIconCompat = IconCompat.createWithAdaptiveBitmap(todoIconBitmap)
+        val senderPerson = Person.Builder()
+          .setName(title)
+          .setKey("todo_task_$notificationId")
+          .setIcon(todoIconCompat)
+          .build()
+        val shortcutInfo = ShortcutInfoCompat.Builder(context, TODO_NOTIFICATION_SHORTCUT_ID)
+          .setShortLabel(Tool.TODO_LIST.title)
+          .setLongLabel(Tool.TODO_LIST.title)
+          .setIcon(todoIconCompat)
+          .setIntent(launchIntent)
+          .setPerson(senderPerson)
+          .setLongLived(true)
+          .build()
+        ShortcutManagerCompat.pushDynamicShortcut(context, shortcutInfo)
+        val messagingStyle = NotificationCompat.MessagingStyle(senderPerson)
+          .setGroupConversation(false)
+          .addMessage(content, System.currentTimeMillis(), senderPerson)
+        builder
+          .setStyle(messagingStyle)
+          .setShortcutInfo(shortcutInfo)
+      } catch (_: Exception) {
+        // Fallback to BigTextStyle + LargeIcon if ShortcutManager is unavailable
+      }
+    }
+
+    val notification = builder.build()
 
     try {
       NotificationManagerCompat.from(context).notify(notificationId, notification)

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -61,6 +62,7 @@ import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RestartAlt
@@ -101,6 +103,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -116,7 +119,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -125,6 +132,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_PLAYER
+import com.example.toolbox.ui.main.AppPermission
 import com.example.toolbox.ui.main.CategorySortingOption
 import com.example.toolbox.ui.main.CategoryToolSortingOption
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
@@ -135,12 +143,14 @@ import com.example.toolbox.ui.main.InMemoryNavigationPreferencesRepository
 import com.example.toolbox.ui.main.MAX_TOOLS_PER_ROW
 import com.example.toolbox.ui.main.MIN_TOOLS_PER_ROW
 import com.example.toolbox.ui.main.NavigationPreferencesRepository
+import com.example.toolbox.ui.main.PermissionToolUsageStat
 import com.example.toolbox.ui.main.ThemeMode
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.ToolSortOrder
 import com.example.toolbox.ui.main.ToolSortingOption
 import com.example.toolbox.ui.main.coerceToolsPerRow
 import com.example.toolbox.ui.main.exportSettingsToJson
+import com.example.toolbox.ui.main.formatPermissionUsageTimestamp
 import com.example.toolbox.ui.main.importSettingsFromJson
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
 import com.example.toolbox.ui.main.resetAllSettingsToDefaults
@@ -199,6 +209,45 @@ fun openExternalUrl(context: Context, url: String) {
   }
 }
 
+fun openAppPermissionSystemSettings(context: Context, permission: AppPermission) {
+  try {
+    when (permission) {
+      AppPermission.NOTIFICATION_LISTENER -> {
+        MusicPlayerEngine.openSystemMediaListenerSettings(context)
+        return
+      }
+      AppPermission.STORAGE -> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+          val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+            data = Uri.parse("package:${context.packageName}")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          }
+          context.startActivity(intent)
+          return
+        }
+      }
+      AppPermission.SCHEDULE_EXACT_ALARM -> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+            data = Uri.parse("package:${context.packageName}")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          }
+          context.startActivity(intent)
+          return
+        }
+      }
+      else -> {}
+    }
+    val appDetailsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+      data = Uri.parse("package:${context.packageName}")
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(appDetailsIntent)
+  } catch (_: Throwable) {
+    Toast.makeText(context, "Unable to open system permission settings", Toast.LENGTH_SHORT).show()
+  }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -208,6 +257,7 @@ fun SettingsScreen(
   initialCollapsedCategories: Set<ToolCategory> = remember { ToolCategory.entries.toSet() },
   initialThemeColorExpanded: Boolean = false,
   initialAccentColorExpanded: Boolean = false,
+  initialPermissionsExpanded: Boolean = true,
   onOpenUrl: ((String) -> Unit)? = null,
   onSelectTool: ((Tool) -> Unit)? = null,
 ) {
@@ -223,9 +273,12 @@ fun SettingsScreen(
   val categoryToolSorting by preferencesRepository.categoryToolSortingFlow.collectAsState()
   val toolUsageCounts by preferencesRepository.toolUsageCountsFlow.collectAsState()
   val toolsPerRow by preferencesRepository.toolsPerRowFlow.collectAsState()
+  val permissionGrantStates by preferencesRepository.permissionGrantStatesFlow.collectAsState()
+  val permissionUsageStats by preferencesRepository.permissionUsageStatsFlow.collectAsState()
 
   var isThemeColorExpanded by rememberSaveable { mutableStateOf(initialThemeColorExpanded) }
   var isAccentColorExpanded by rememberSaveable { mutableStateOf(initialAccentColorExpanded) }
+  var isPermissionsExpanded by rememberSaveable { mutableStateOf(initialPermissionsExpanded) }
 
   var customHexInput by rememberSaveable(themeColor) {
     mutableStateOf(
@@ -742,12 +795,38 @@ fun SettingsScreen(
 
     // Section 3: Theme Color (Collapsible)
     val localContext = LocalContext.current
+    val isInspection = LocalInspectionMode.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var isSystemMediaListenerEnabled by remember(localContext) {
+      mutableStateOf(
+        if (isInspection) true else MusicPlayerEngine.isSystemMediaListenerEnabled(localContext)
+      )
+    }
     val currentMusicPalette = MusicPlayerEngine.activeTrackPalette
     val currentMusicTrack = MusicPlayerEngine.activeTrack
     val activeSystemMediaInfo = MusicPlayerEngine.activeSystemMediaInfo
     val isMusicPlaying = MusicPlayerEngine.isMusicPlaying
-    LaunchedEffect(localContext) {
-      MusicPlayerEngine.syncExternalSystemMediaSessions(localContext)
+    LaunchedEffect(localContext, isThemeColorExpanded, musicPlayerThemeEnabled) {
+      if (!isInspection) {
+        isSystemMediaListenerEnabled = MusicPlayerEngine.isSystemMediaListenerEnabled(localContext)
+        MusicPlayerEngine.syncExternalSystemMediaSessions(localContext)
+      }
+    }
+    DisposableEffect(lifecycleOwner, localContext, isInspection) {
+      if (isInspection) {
+        onDispose {}
+      } else {
+        val observer = LifecycleEventObserver { _, event ->
+          if (event == Lifecycle.Event.ON_RESUME) {
+            isSystemMediaListenerEnabled = MusicPlayerEngine.isSystemMediaListenerEnabled(localContext)
+            MusicPlayerEngine.syncExternalSystemMediaSessions(localContext)
+          }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+          lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+      }
     }
     val selectedMusicColorOption = remember(themeColor, musicPlayerColorOption) {
       MusicPlayerColorOption.fromPrefValue(themeColor)
@@ -977,6 +1056,10 @@ fun SettingsScreen(
                   role = Role.Checkbox,
                   onValueChange = { checked ->
                     preferencesRepository.setMusicPlayerThemeEnabled(checked)
+                    if (checked && !isInspection) {
+                      isSystemMediaListenerEnabled = MusicPlayerEngine.isSystemMediaListenerEnabled(localContext)
+                      MusicPlayerEngine.syncExternalSystemMediaSessions(localContext)
+                    }
                   },
                 )
                 .testTag("color_preset_music_player")
@@ -1127,6 +1210,10 @@ fun SettingsScreen(
                     onClick = {
                       preferencesRepository.setMusicPlayerColorOption(musicOption.prefValue)
                       preferencesRepository.setMusicPlayerThemeEnabled(true)
+                      if (!isInspection) {
+                        isSystemMediaListenerEnabled = MusicPlayerEngine.isSystemMediaListenerEnabled(localContext)
+                        MusicPlayerEngine.syncExternalSystemMediaSessions(localContext)
+                      }
                     },
                     modifier = Modifier
                       .weight(1f)
@@ -1192,6 +1279,50 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                      )
+                    }
+                  }
+                }
+              }
+
+              if (!isSystemMediaListenerEnabled && activeSystemMediaInfo?.isExternalApp != true) {
+                Surface(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("system_media_listener_permission_banner"),
+                  shape = RoundedCornerShape(12.dp),
+                  color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
+                  border = BorderStroke(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                  ),
+                ) {
+                  Row(
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                  ) {
+                    Text(
+                      text = "Grant Notification Access so Toolbox can read artwork & track colors from external media apps.",
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSecondaryContainer,
+                      modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 8.dp),
+                    )
+                    OutlinedButton(
+                      onClick = {
+                        MusicPlayerEngine.openSystemMediaListenerSettings(localContext)
+                      },
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                      modifier = Modifier.testTag("grant_system_media_access_button"),
+                    ) {
+                      Text(
+                        text = "Grant Access",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
                       )
                     }
                   }
@@ -1809,6 +1940,7 @@ fun SettingsScreen(
     val configurableTools = remember { Tool.entries.filter { it != Tool.SETTINGS } }
     val hiddenCount = configurableTools.count { it in hiddenTools }
     val visibleCount = configurableTools.size - hiddenCount
+    val totalToolUses = toolUsageCounts.values.sum()
     val context = LocalContext.current
     val sortedCategories = remember { ToolCategory.entries.sortedBy { it.title } }
     var collapsedCategories by rememberSaveable { mutableStateOf(initialCollapsedCategories) }
@@ -2159,12 +2291,418 @@ fun SettingsScreen(
                 }
               }
             }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+              Text(
+                text = "Total tool uses: $totalToolUses",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("tool_settings_total_uses_text"),
+              )
+
+              OutlinedButton(
+                onClick = { preferencesRepository.resetToolUsage() },
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier
+                  .testTag("tool_settings_reset_stats_button")
+                  .testTag("reset_tool_usage_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.RestartAlt,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                  text = "Reset Stats",
+                  style = MaterialTheme.typography.labelMedium,
+                )
+              }
+            }
           }
         }
       }
     }
 
-    // Section 6: Backup & Restore Settings
+    // Section 6: App Permissions & Tool Usage Statistics
+    val totalPermissionsCount = AppPermission.entries.size
+    val grantedPermissionsCount = AppPermission.entries.count { perm ->
+      permissionGrantStates[perm] != false
+    }
+    val totalPermissionUseEvents = AppPermission.entries.sumOf { perm ->
+      permissionUsageStats[perm]?.values?.sumOf { it.useCount } ?: 0
+    }
+
+    Card(
+      modifier = Modifier
+        .fillMaxWidth()
+        .testTag("permissions_card")
+        .testTag("settings_permissions_card"),
+      colors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+      ),
+      shape = RoundedCornerShape(16.dp),
+    ) {
+      Column(
+        modifier = Modifier.padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        // Collapsible Header Row
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { isPermissionsExpanded = !isPermissionsExpanded }
+            .testTag("permissions_toggle")
+            .testTag("settings_permissions_toggle"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Lock,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(20.dp),
+            )
+            Column {
+              Text(
+                text = "Permissions",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+              )
+              Text(
+                text = "$grantedPermissionsCount of $totalPermissionsCount granted • $totalPermissionUseEvents total uses",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("permissions_header_summary"),
+              )
+            }
+          }
+
+          val permissionsChevronAngle by animateFloatAsState(
+            targetValue = if (isPermissionsExpanded) 180f else 0f,
+            label = "permissions_chevron",
+          )
+
+          IconButton(
+            onClick = { isPermissionsExpanded = !isPermissionsExpanded },
+          ) {
+            Icon(
+              imageVector = Icons.Default.ExpandMore,
+              contentDescription = if (isPermissionsExpanded) "Collapse permissions" else "Expand permissions",
+              modifier = Modifier.rotate(permissionsChevronAngle),
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+
+        AnimatedVisibility(
+          visible = isPermissionsExpanded,
+          enter = expandVertically() + fadeIn(),
+          exit = shrinkVertically() + fadeOut(),
+        ) {
+          Column(
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            Text(
+              text = "All permissions used by Toolbox, with per-tool usage counts, last used timestamps, and controls to grant or revoke each permission.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              OutlinedButton(
+                onClick = { preferencesRepository.grantAllPermissions() },
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                modifier = Modifier
+                  .weight(1f)
+                  .testTag("permissions_grant_all_button"),
+              ) {
+                Text(
+                  text = "Grant All",
+                  style = MaterialTheme.typography.labelMedium,
+                )
+              }
+              OutlinedButton(
+                onClick = { preferencesRepository.revokeAllPermissions() },
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                modifier = Modifier
+                  .weight(1f)
+                  .testTag("permissions_revoke_all_button"),
+              ) {
+                Text(
+                  text = "Revoke All",
+                  style = MaterialTheme.typography.labelMedium,
+                )
+              }
+              OutlinedButton(
+                onClick = { preferencesRepository.resetPermissionUsage() },
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                modifier = Modifier
+                  .weight(1f)
+                  .testTag("permissions_reset_stats_button"),
+              ) {
+                Text(
+                  text = "Reset Stats",
+                  style = MaterialTheme.typography.labelMedium,
+                )
+              }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+            Column(
+              modifier = Modifier.fillMaxWidth(),
+              verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+              AppPermission.entries.forEach { permission ->
+                val isGranted = permissionGrantStates[permission] != false
+                val permToolStatsMap = permissionUsageStats[permission].orEmpty()
+                val totalPermUses = permToolStatsMap.values.sumOf { it.useCount }
+                val lastPermTimestampMs = permToolStatsMap.values.maxOfOrNull { it.lastUsedTimestampMs } ?: 0L
+                val lastPermFormatted = formatPermissionUsageTimestamp(lastPermTimestampMs)
+                val permKey = permission.name.lowercase()
+
+                OutlinedCard(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("permission_card_$permKey"),
+                  shape = RoundedCornerShape(12.dp),
+                  border = CardDefaults.outlinedCardBorder().copy(
+                    brush = androidx.compose.ui.graphics.SolidColor(
+                      if (isGranted) {
+                        MaterialTheme.colorScheme.outlineVariant
+                      } else {
+                        MaterialTheme.colorScheme.error.copy(alpha = 0.6f)
+                      }
+                    ),
+                  ),
+                  colors = CardDefaults.outlinedCardColors(
+                    containerColor = if (isGranted) {
+                      MaterialTheme.colorScheme.surfaceContainerLowest
+                    } else {
+                      MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.14f)
+                    },
+                  ),
+                ) {
+                  Column(
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                  ) {
+                    Row(
+                      modifier = Modifier.fillMaxWidth(),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                      Column(
+                        modifier = Modifier
+                          .weight(1f)
+                          .padding(end = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                      ) {
+                        Row(
+                          verticalAlignment = Alignment.CenterVertically,
+                          horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                          Text(
+                            text = permission.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                          )
+                          Surface(
+                            shape = CircleShape,
+                            color = if (isGranted) {
+                              MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                              MaterialTheme.colorScheme.errorContainer
+                            },
+                            contentColor = if (isGranted) {
+                              MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                              MaterialTheme.colorScheme.onErrorContainer
+                            },
+                            modifier = Modifier.testTag("permission_status_$permKey"),
+                          ) {
+                            Text(
+                              text = if (isGranted) "Granted" else "Revoked",
+                              style = MaterialTheme.typography.labelSmall,
+                              fontWeight = FontWeight.SemiBold,
+                              modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            )
+                          }
+                        }
+
+                        Text(
+                          text = permission.manifestPermission,
+                          style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                          fontFamily = FontFamily.Monospace,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                          maxLines = 1,
+                          overflow = TextOverflow.Ellipsis,
+                        )
+                      }
+
+                      if (isGranted) {
+                        OutlinedButton(
+                          onClick = {
+                            preferencesRepository.revokePermission(permission)
+                            if (!isInspection && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                              try {
+                                context.revokeSelfPermissionsOnKill(permission.manifestPermissions)
+                              } catch (_: Throwable) {}
+                            }
+                          },
+                          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                          modifier = Modifier
+                            .testTag("permission_toggle_$permKey")
+                            .testTag("permission_revoke_$permKey"),
+                        ) {
+                          Text(
+                            text = "Revoke",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                          )
+                        }
+                      } else {
+                        Button(
+                          onClick = {
+                            preferencesRepository.grantPermission(permission)
+                          },
+                          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                          modifier = Modifier
+                            .testTag("permission_toggle_$permKey")
+                            .testTag("permission_grant_$permKey"),
+                        ) {
+                          Text(
+                            text = "Grant",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                          )
+                        }
+                      }
+                    }
+
+                    Text(
+                      text = permission.description,
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    Text(
+                      text = "Total uses: $totalPermUses • Last used: $lastPermFormatted",
+                      style = MaterialTheme.typography.labelSmall,
+                      fontWeight = FontWeight.SemiBold,
+                      color = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.testTag("permission_summary_$permKey"),
+                    )
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+                    Column(
+                      modifier = Modifier.fillMaxWidth(),
+                      verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                      permission.toolsUsingPermission.forEach { tool ->
+                        val toolStat = permToolStatsMap[tool]
+                          ?: PermissionToolUsageStat(permission = permission, tool = tool)
+                        val toolKey = tool.name.lowercase()
+
+                        Row(
+                          modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { onSelectTool?.invoke(tool) }
+                            .padding(vertical = 3.dp, horizontal = 4.dp)
+                            .testTag("permission_tool_row_${permKey}_$toolKey"),
+                          verticalAlignment = Alignment.CenterVertically,
+                          horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                          Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.weight(1f),
+                          ) {
+                            Icon(
+                              imageVector = tool.icon,
+                              contentDescription = null,
+                              tint = MaterialTheme.colorScheme.primary,
+                              modifier = Modifier.size(15.dp),
+                            )
+                            Text(
+                              text = tool.title,
+                              style = MaterialTheme.typography.bodySmall,
+                              fontWeight = FontWeight.Medium,
+                              color = MaterialTheme.colorScheme.onSurface,
+                              maxLines = 1,
+                              overflow = TextOverflow.Ellipsis,
+                            )
+                          }
+
+                          Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                          ) {
+                            Surface(
+                              shape = CircleShape,
+                              color = if (toolStat.useCount > 0) {
+                                MaterialTheme.colorScheme.secondaryContainer
+                              } else {
+                                MaterialTheme.colorScheme.surfaceVariant
+                              },
+                              contentColor = if (toolStat.useCount > 0) {
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                              } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                              },
+                            ) {
+                              Text(
+                                text = "${toolStat.useCount} ${if (toolStat.useCount == 1) "use" else "uses"}",
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier
+                                  .padding(horizontal = 6.dp, vertical = 1.dp)
+                                  .testTag("permission_tool_count_${permKey}_$toolKey"),
+                              )
+                            }
+
+                            Text(
+                              text = "Last: ${toolStat.lastUsedFormatted}",
+                              style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                              fontFamily = FontFamily.Monospace,
+                              color = MaterialTheme.colorScheme.onSurfaceVariant,
+                              modifier = Modifier.testTag("permission_tool_timestamp_${permKey}_$toolKey"),
+                            )
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Section 7: Backup & Restore Settings
     var backupRestoreStatus by rememberSaveable { mutableStateOf<String?>(null) }
     var showResetConfirmDialog by rememberSaveable { mutableStateOf(false) }
 

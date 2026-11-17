@@ -376,13 +376,25 @@ class MusicPlayerEngineTest {
       assertEquals("Daft Punk", parsedCustom!!.artist)
       assertEquals("Digital Love", parsedCustom.title)
 
-      // Default library loading scans the Music and Audio folders (ignoring Download)
+      // Default library loading scans Music, Audio, Recordings, and Downloads (plus Android's Download folder)
+      assertEquals(
+        listOf("Music", "Audio", "Recordings", "Downloads"),
+        DEFAULT_MUSIC_FOLDER_NAMES,
+      )
       val musicDir = File(tempDir, "Music").apply { mkdirs() }
       val audioDir = File(tempDir, "Audio").apply { mkdirs() }
-      val downloadDir = File(tempDir, "Download").apply { mkdirs() }
+      val audioSubDir = File(audioDir, "Subfolder").apply { mkdirs() }
+      val recordingsDir = File(tempDir, "Recordings").apply { mkdirs() }
+      val recordingsSubDir = File(recordingsDir, "Meetings").apply { mkdirs() }
+      val downloadsDir = File(tempDir, "Downloads").apply { mkdirs() }
+      val ignoredDir = File(tempDir, "Documents").apply { mkdirs() }
       wavFile.copyTo(File(musicDir, "MusicSong.wav"), overwrite = true)
-      wavFile.copyTo(File(audioDir, "AudioRecording.wav"), overwrite = true)
-      wavFile.copyTo(File(downloadDir, "DownloadedClip.wav"), overwrite = true)
+      wavFile.copyTo(File(audioDir, "Artist One - AudioRecording.wav"), overwrite = true)
+      wavFile.copyTo(File(audioSubDir, "Artist Two - NestedAudioClip.wav"), overwrite = true)
+      wavFile.copyTo(File(recordingsDir, "Speaker A - VoiceNote1.wav"), overwrite = true)
+      wavFile.copyTo(File(recordingsSubDir, "Speaker B - VoiceNote2.wav"), overwrite = true)
+      wavFile.copyTo(File(downloadsDir, "DownloadedClip.wav"), overwrite = true)
+      wavFile.copyTo(File(ignoredDir, "IgnoredDocAudio.wav"), overwrite = true)
 
       val libraryTracks = MusicPlayerEngine.loadLibraryTracks(
         rootDirectory = tempDir,
@@ -390,8 +402,35 @@ class MusicPlayerEngineTest {
         includeSamples = false,
         inspectMetadataRetriever = false,
       )
-      assertEquals(2, libraryTracks.size)
-      assertEquals(setOf("MusicSong", "AudioRecording"), libraryTracks.map { it.title }.toSet())
+      assertEquals(6, libraryTracks.size)
+      assertEquals(
+        setOf("MusicSong", "AudioRecording", "NestedAudioClip", "VoiceNote1", "VoiceNote2", "DownloadedClip"),
+        libraryTracks.map { it.title }.toSet(),
+      )
+
+      // Audio and Recordings folders (including nested subfolders and mixed artists) are each treated as a single album
+      val audioTracks = libraryTracks.filter { it.title in setOf("AudioRecording", "NestedAudioClip") }
+      assertEquals(2, audioTracks.size)
+      assertTrue(audioTracks.all { it.album == "Audio" })
+
+      val recordingTracks = libraryTracks.filter { it.title in setOf("VoiceNote1", "VoiceNote2") }
+      assertEquals(2, recordingTracks.size)
+      assertTrue(recordingTracks.all { it.album == "Recordings" })
+
+      val builtAlbums = MusicPlayerEngine.buildAlbums(libraryTracks)
+      val audioAlbums = builtAlbums.filter { it.name == "Audio" }
+      val recordingAlbums = builtAlbums.filter { it.name == "Recordings" }
+      assertEquals(1, audioAlbums.size)
+      assertEquals(2, audioAlbums.single().tracks.size)
+      assertEquals("Various Artists", audioAlbums.single().artist)
+      assertTrue(MusicPlayerEngine.matchesAlbumKey(audioAlbums.single(), "Audio|Artist One"))
+      assertTrue(MusicPlayerEngine.matchesAlbumKey(audioAlbums.single(), "Audio|Various Artists"))
+
+      assertEquals(1, recordingAlbums.size)
+      assertEquals(2, recordingAlbums.single().tracks.size)
+      assertEquals("Various Artists", recordingAlbums.single().artist)
+      assertTrue(MusicPlayerEngine.matchesAlbumKey(recordingAlbums.single(), "Recordings|Speaker A"))
+      assertTrue(MusicPlayerEngine.matchesAlbumKey(recordingAlbums.single(), "Recordings|Various Artists"))
     } finally {
       tempDir.deleteRecursively()
     }
@@ -1377,11 +1416,85 @@ class MusicPlayerEngineTest {
       assertEquals(1.5f, session.playbackSpeed, 0.001f)
       assertEquals(1.5f, session.systemMediaControlState.playbackSpeed, 0.001f)
 
-      // Toggle favorite via system media control custom action
+      // Toggle favorite via system media control custom action (strictly for the individual song, not artist/album)
+      session.toggleFavoriteArtist(tracks[1].artist)
+      session.toggleFavoriteAlbum(tracks[1].album, tracks[1].artist)
       assertFalse(session.systemMediaControlState.isFavorite)
+      assertEquals(
+        com.example.toolbox.R.drawable.ic_media_favorite_off,
+        session.systemMediaControlState.favoriteIconRes,
+      )
+
       assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE))
       assertTrue(tracks[1].id in session.favoriteIds)
       assertTrue(session.systemMediaControlState.isFavorite)
+      assertEquals(
+        com.example.toolbox.R.drawable.ic_media_favorite_on,
+        session.systemMediaControlState.favoriteIconRes,
+      )
+
+      // Shuffle and Repeat buttons flank playback controls and reflect state in icons
+      assertEquals(
+        listOf(
+          MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE,
+          MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT,
+          MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE,
+        ),
+        session.systemMediaControlState.customActionIds,
+      )
+      assertEquals(MusicShuffleMode.OFF, session.systemMediaControlState.shuffleMode)
+      assertEquals(
+        com.example.toolbox.R.drawable.ic_media_shuffle_off,
+        session.systemMediaControlState.shuffleIconRes,
+      )
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE))
+      assertEquals(MusicShuffleMode.SHUFFLE, session.systemMediaControlState.shuffleMode)
+      assertEquals(
+        com.example.toolbox.R.drawable.ic_media_shuffle_on,
+        session.systemMediaControlState.shuffleIconRes,
+      )
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE))
+      assertEquals(MusicShuffleMode.SMART_SHUFFLE, session.systemMediaControlState.shuffleMode)
+      assertEquals(
+        com.example.toolbox.R.drawable.ic_media_shuffle_smart,
+        session.systemMediaControlState.shuffleIconRes,
+      )
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE))
+      assertEquals(MusicShuffleMode.OFF, session.systemMediaControlState.shuffleMode)
+      assertEquals(
+        com.example.toolbox.R.drawable.ic_media_shuffle_off,
+        session.systemMediaControlState.shuffleIconRes,
+      )
+
+      assertEquals(MusicRepeatMode.OFF, session.systemMediaControlState.repeatMode)
+      assertEquals(
+        com.example.toolbox.R.drawable.ic_media_repeat_off,
+        session.systemMediaControlState.repeatIconRes,
+      )
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT))
+      assertEquals(MusicRepeatMode.REPEAT_ALL, session.systemMediaControlState.repeatMode)
+      assertEquals(
+        com.example.toolbox.R.drawable.ic_media_repeat_all,
+        session.systemMediaControlState.repeatIconRes,
+      )
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT))
+      assertEquals(MusicRepeatMode.REPEAT_ONE, session.systemMediaControlState.repeatMode)
+      assertEquals(
+        com.example.toolbox.R.drawable.ic_media_repeat_one,
+        session.systemMediaControlState.repeatIconRes,
+      )
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT))
+      assertEquals(MusicRepeatMode.OFF, session.systemMediaControlState.repeatMode)
+      assertEquals(
+        com.example.toolbox.R.drawable.ic_media_repeat_off,
+        session.systemMediaControlState.repeatIconRes,
+      )
+
+      // Expanding full player from system media player launch keeps playback active and opens full player view
+      assertFalse(session.isPlayerExpanded)
+      session.expandFullPlayer()
+      assertTrue(session.isPlayerExpanded)
+      assertTrue(session.isPlaying)
 
       // Pause via media button
       assertTrue(session.handleMediaKeyEvent(android.view.KeyEvent.KEYCODE_MEDIA_PAUSE))
@@ -1405,9 +1518,21 @@ class MusicPlayerEngineTest {
       assertEquals("Spotify", MusicPlayerEngine.activeSystemMediaInfo?.sourceAppName)
       assertTrue(MusicPlayerEngine.activeSystemMediaInfo?.isExternalApp == true)
 
-      // Pausing external media stops isMusicPlaying
+      // Pausing external media stops isMusicPlaying, while activeTrackPalette and activeSystemMediaInfo
+      // still reflect the external media session over an unplayed/paused internal track
       MusicPlayerEngine.updateExternalSystemMediaSession(externalInfo.copy(isPlaying = false))
       assertFalse(MusicPlayerEngine.isMusicPlaying)
+      assertEquals("#1DB954", MusicPlayerEngine.activeTrackPalette.dominantHex)
+      assertEquals("Midnight City", MusicPlayerEngine.activeSystemMediaInfo?.title)
+      assertTrue(MusicPlayerEngine.activeSystemMediaInfo?.isExternalApp == true)
+
+      // Active playback states (PLAYING, BUFFERING, SKIPPING_TO_NEXT, CONNECTING, etc.) are recognized
+      assertTrue(MusicPlayerEngine.isPlaybackStateActive(android.media.session.PlaybackState.STATE_PLAYING))
+      assertTrue(MusicPlayerEngine.isPlaybackStateActive(android.media.session.PlaybackState.STATE_BUFFERING))
+      assertTrue(MusicPlayerEngine.isPlaybackStateActive(android.media.session.PlaybackState.STATE_SKIPPING_TO_NEXT))
+      assertTrue(MusicPlayerEngine.isPlaybackStateActive(android.media.session.PlaybackState.STATE_CONNECTING))
+      assertFalse(MusicPlayerEngine.isPlaybackStateActive(android.media.session.PlaybackState.STATE_PAUSED))
+      assertFalse(MusicPlayerEngine.isPlaybackStateActive(android.media.session.PlaybackState.STATE_STOPPED))
     } finally {
       MusicPlayerEngine.updateExternalSystemMediaSession(null)
       session.release()

@@ -9,6 +9,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +31,8 @@ const val PREF_KEY_TOOL_SORT_ORDER = "tool_sort_order"
 const val PREF_KEY_CATEGORY_SORTING = "category_sorting"
 const val PREF_KEY_CATEGORY_TOOL_SORTING = "category_tool_sorting"
 const val PREF_KEY_TOOL_USAGE = "tool_usage"
+const val PREF_KEY_PERMISSION_STATES = "permission_states"
+const val PREF_KEY_PERMISSION_USAGE = "permission_usage"
 
 const val DEFAULT_THEME_COLOR_SYSTEM = "SYSTEM"
 const val FALLBACK_THEME_COLOR_HEX = "#8E66A6"
@@ -57,12 +62,181 @@ const val ACCENT_COLOR_MUSIC_ACCENT = THEME_COLOR_MUSIC_ACCENT
 const val PREF_KEY_ACCENT_COLOR = "accent_color"
 
 /**
- * Observable bridge state for Music Player theme settings so [com.example.toolbox.ui.theme.ToolboxTheme]
- * stays synchronized even when callers do not pass explicit Music Player theme parameters.
+ * Represents each Android permission (or permission group) declared and used by Toolbox,
+ * along with its human-readable metadata and the [Tool]s that use it.
+ */
+enum class AppPermission(
+  val title: String,
+  val manifestPermission: String,
+  val manifestPermissions: List<String>,
+  val description: String,
+  val toolsUsingPermission: List<Tool>,
+) {
+  CAMERA(
+    title = "Camera",
+    manifestPermission = "android.permission.CAMERA",
+    manifestPermissions = listOf("android.permission.CAMERA"),
+    description = "Capture photos, record video, and sample live camera colors",
+    toolsUsingPermission = listOf(
+      Tool.CAMERA,
+      Tool.COLOR_PICKER,
+    ),
+  ),
+  RECORD_AUDIO(
+    title = "Microphone",
+    manifestPermission = "android.permission.RECORD_AUDIO",
+    manifestPermissions = listOf("android.permission.RECORD_AUDIO"),
+    description = "Record voice memos, video audio, guitar pitch, and sound pressure levels",
+    toolsUsingPermission = listOf(
+      Tool.AUDIO_RECORDER,
+      Tool.CAMERA,
+      Tool.GUITAR_TUNER,
+      Tool.DECIBEL_METER,
+    ),
+  ),
+  STORAGE(
+    title = "Files & Storage",
+    manifestPermission = "android.permission.MANAGE_EXTERNAL_STORAGE",
+    manifestPermissions = listOf(
+      "android.permission.MANAGE_EXTERNAL_STORAGE",
+      "android.permission.READ_EXTERNAL_STORAGE",
+      "android.permission.WRITE_EXTERNAL_STORAGE",
+    ),
+    description = "Browse, edit, convert, and manage local files, media, documents, and archives",
+    toolsUsingPermission = listOf(
+      Tool.FILES,
+      Tool.GALLERY,
+      Tool.MUSIC,
+      Tool.IMAGE_EDITOR,
+      Tool.VIDEO_EDITOR,
+      Tool.AUDIO_EDITOR,
+      Tool.FILE_CONVERTER,
+      Tool.ARCHIVE,
+      Tool.PDF_VIEWER,
+      Tool.SEARCH,
+    ),
+  ),
+  BLUETOOTH(
+    title = "Bluetooth & Nearby Devices",
+    manifestPermission = "android.permission.BLUETOOTH_CONNECT",
+    manifestPermissions = listOf(
+      "android.permission.BLUETOOTH_CONNECT",
+      "android.permission.BLUETOOTH_SCAN",
+      "android.permission.BLUETOOTH_ADVERTISE",
+      "android.permission.BLUETOOTH",
+      "android.permission.BLUETOOTH_ADMIN",
+      "android.permission.ACCESS_FINE_LOCATION",
+    ),
+    description = "Discover, pair, and connect to Bluetooth HID remotes, gamepads, and OBD2 scanners",
+    toolsUsingPermission = listOf(
+      Tool.BLUETOOTH_REMOTE,
+      Tool.BLUETOOTH_GAMEPAD,
+      Tool.OBD2_SCANNER,
+      Tool.MUSIC,
+    ),
+  ),
+  POST_NOTIFICATIONS(
+    title = "Notifications",
+    manifestPermission = "android.permission.POST_NOTIFICATIONS",
+    manifestPermissions = listOf("android.permission.POST_NOTIFICATIONS"),
+    description = "Display task reminders, plant watering alerts, and media playback notifications",
+    toolsUsingPermission = listOf(
+      Tool.TODO_LIST,
+      Tool.PLANT_SCHEDULE,
+      Tool.MUSIC,
+    ),
+  ),
+  SCHEDULE_EXACT_ALARM(
+    title = "Exact Alarms",
+    manifestPermission = "android.permission.SCHEDULE_EXACT_ALARM",
+    manifestPermissions = listOf(
+      "android.permission.SCHEDULE_EXACT_ALARM",
+      "android.permission.USE_EXACT_ALARM",
+    ),
+    description = "Schedule exact-time reminders for tasks and plant care",
+    toolsUsingPermission = listOf(
+      Tool.TODO_LIST,
+      Tool.PLANT_SCHEDULE,
+    ),
+  ),
+  NOTIFICATION_LISTENER(
+    title = "System Media Access",
+    manifestPermission = "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE",
+    manifestPermissions = listOf("android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"),
+    description = "Observe active Android system media player sessions for dynamic theme colors",
+    toolsUsingPermission = listOf(
+      Tool.SETTINGS,
+      Tool.MUSIC,
+    ),
+  ),
+  VIBRATE(
+    title = "Vibration & Haptics",
+    manifestPermission = "android.permission.VIBRATE",
+    manifestPermissions = listOf("android.permission.VIBRATE"),
+    description = "Provide haptic feedback for metronome beats, dice rolls, controllers, and alerts",
+    toolsUsingPermission = listOf(
+      Tool.METRONOME,
+      Tool.DICE_ROLLER,
+      Tool.BLUETOOTH_REMOTE,
+      Tool.BLUETOOTH_GAMEPAD,
+      Tool.TODO_LIST,
+    ),
+  ),
+  RECEIVE_BOOT_COMPLETED(
+    title = "Run at Startup",
+    manifestPermission = "android.permission.RECEIVE_BOOT_COMPLETED",
+    manifestPermissions = listOf("android.permission.RECEIVE_BOOT_COMPLETED"),
+    description = "Reschedule active task and plant reminders automatically after device reboot",
+    toolsUsingPermission = listOf(
+      Tool.TODO_LIST,
+      Tool.PLANT_SCHEDULE,
+    ),
+  );
+
+  companion object {
+    fun permissionsForTool(tool: Tool): List<AppPermission> =
+      entries.filter { tool in it.toolsUsingPermission }
+  }
+}
+
+/**
+ * Formats a permission usage timestamp (`lastUsedTimestampMs`) in `yyyy-MM-dd HH:mm` format,
+ * or `"Never"` if `<= 0L`.
+ */
+fun formatPermissionUsageTimestamp(timestampMs: Long): String {
+  if (timestampMs <= 0L) return "Never"
+  val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+  return sdf.format(Date(timestampMs))
+}
+
+/**
+ * Tracks how many times a specific [Tool] has used a given [AppPermission] and the last
+ * timestamp (`lastUsedTimestampMs`) when it was used.
+ */
+data class PermissionToolUsageStat(
+  val permission: AppPermission,
+  val tool: Tool,
+  val useCount: Int = 0,
+  val lastUsedTimestampMs: Long = 0L,
+) {
+  val hasBeenUsed: Boolean
+    get() = useCount > 0 && lastUsedTimestampMs > 0L
+
+  val lastUsedFormatted: String
+    get() = formatPermissionUsageTimestamp(lastUsedTimestampMs)
+}
+
+/**
+ * Observable bridge state for Music Player theme and App Permission settings so
+ * [com.example.toolbox.ui.theme.ToolboxTheme] and tool screens stay synchronized.
  */
 object NavigationPreferencesBridge {
   var musicPlayerThemeEnabled by mutableStateOf(DEFAULT_MUSIC_PLAYER_THEME_ENABLED)
   var musicPlayerColorOption by mutableStateOf(DEFAULT_MUSIC_PLAYER_COLOR_OPTION)
+  var permissionGrantStates by mutableStateOf(AppPermission.entries.associateWith { true })
+
+  fun isPermissionGranted(permission: AppPermission): Boolean =
+    permissionGrantStates[permission] != false
 }
 
 val DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
@@ -241,6 +415,87 @@ fun serializeToolUsage(usage: Map<Tool, Int>): String {
 }
 
 /**
+ * Parses a comma-separated `PERMISSION:true/false` string into a map of [AppPermission] grant states.
+ * Permissions not present in [rawString] default to `true` (granted).
+ */
+fun parsePermissionStates(rawString: String?): Map<AppPermission, Boolean> {
+  val result = AppPermission.entries.associateWith { true }.toMutableMap()
+  if (rawString.isNullOrBlank()) return result
+  rawString.split(",").forEach { entry ->
+    val parts = entry.split(":")
+    if (parts.size == 2) {
+      val permName = parts[0].trim()
+      val granted = parts[1].trim().equals("true", ignoreCase = true)
+      try {
+        val perm = AppPermission.valueOf(permName)
+        result[perm] = granted
+      } catch (_: IllegalArgumentException) {}
+    }
+  }
+  return result
+}
+
+/**
+ * Serializes a map of [AppPermission] grant states into a comma-separated `PERMISSION:true/false` string.
+ */
+fun serializePermissionStates(states: Map<AppPermission, Boolean>): String {
+  return AppPermission.entries.joinToString(",") { perm ->
+    val granted = states[perm] != false
+    "${perm.name}:$granted"
+  }
+}
+
+/**
+ * Parses a semicolon-separated `PERMISSION|TOOL|COUNT|TIMESTAMP` string into nested permission usage maps.
+ */
+fun parsePermissionUsage(
+  rawString: String?,
+): Map<AppPermission, Map<Tool, PermissionToolUsageStat>> {
+  if (rawString.isNullOrBlank()) return emptyMap()
+  val result = mutableMapOf<AppPermission, MutableMap<Tool, PermissionToolUsageStat>>()
+  rawString.split(";").forEach { entry ->
+    val parts = entry.split("|")
+    if (parts.size == 4) {
+      val permName = parts[0].trim()
+      val toolName = parts[1].trim()
+      val count = parts[2].trim().toIntOrNull() ?: 0
+      val timestamp = parts[3].trim().toLongOrNull() ?: 0L
+      if (count > 0) {
+        try {
+          val perm = AppPermission.valueOf(permName)
+          val tool = Tool.valueOf(toolName)
+          val toolMap = result.getOrPut(perm) { mutableMapOf() }
+          toolMap[tool] = PermissionToolUsageStat(
+            permission = perm,
+            tool = tool,
+            useCount = count,
+            lastUsedTimestampMs = timestamp,
+          )
+        } catch (_: IllegalArgumentException) {}
+      }
+    }
+  }
+  return result
+}
+
+/**
+ * Serializes nested permission usage maps into a semicolon-separated `PERMISSION|TOOL|COUNT|TIMESTAMP` string.
+ */
+fun serializePermissionUsage(
+  stats: Map<AppPermission, Map<Tool, PermissionToolUsageStat>>,
+): String {
+  val entries = mutableListOf<String>()
+  stats.forEach { (perm, toolMap) ->
+    toolMap.forEach { (tool, stat) ->
+      if (stat.useCount > 0) {
+        entries.add("${perm.name}|${tool.name}|${stat.useCount}|${stat.lastUsedTimestampMs}")
+      }
+    }
+  }
+  return entries.joinToString(";")
+}
+
+/**
  * Sorts tools in descending order of usage counts while guaranteeing [Tool.SETTINGS] is last.
  */
 fun sortToolsByUsage(
@@ -416,6 +671,45 @@ interface NavigationPreferencesRepository {
   fun incrementToolUsage(tool: Tool)
   fun resetToolUsage()
   val toolUsageCountsFlow: StateFlow<Map<Tool, Int>>
+
+  fun getPermissionGrantStates(): Map<AppPermission, Boolean> =
+    AppPermission.entries.associateWith { true }
+  fun isPermissionGranted(permission: AppPermission): Boolean =
+    getPermissionGrantStates()[permission] != false
+  fun setPermissionGranted(permission: AppPermission, granted: Boolean) {}
+  fun grantPermission(permission: AppPermission) = setPermissionGranted(permission, true)
+  fun revokePermission(permission: AppPermission) = setPermissionGranted(permission, false)
+  fun setPermissionGrantStates(states: Map<AppPermission, Boolean>) {
+    AppPermission.entries.forEach { perm ->
+      setPermissionGranted(perm, states[perm] != false)
+    }
+  }
+  fun grantAllPermissions() {
+    setPermissionGrantStates(AppPermission.entries.associateWith { true })
+  }
+  fun revokeAllPermissions() {
+    setPermissionGrantStates(AppPermission.entries.associateWith { false })
+  }
+  val permissionGrantStatesFlow: StateFlow<Map<AppPermission, Boolean>>
+    get() = MutableStateFlow(getPermissionGrantStates()).asStateFlow()
+
+  fun getPermissionUsageStats(): Map<AppPermission, Map<Tool, PermissionToolUsageStat>> = emptyMap()
+  fun setPermissionUsageStats(stats: Map<AppPermission, Map<Tool, PermissionToolUsageStat>>) {}
+  fun getPermissionUsageForTool(permission: AppPermission, tool: Tool): PermissionToolUsageStat =
+    getPermissionUsageStats()[permission]?.get(tool)
+      ?: PermissionToolUsageStat(permission = permission, tool = tool)
+  fun getTotalPermissionUsageCount(permission: AppPermission): Int =
+    getPermissionUsageStats()[permission]?.values?.sumOf { it.useCount } ?: 0
+  fun getLastPermissionUsedTimestamp(permission: AppPermission): Long =
+    getPermissionUsageStats()[permission]?.values?.maxOfOrNull { it.lastUsedTimestampMs } ?: 0L
+  fun recordPermissionUsage(
+    permission: AppPermission,
+    tool: Tool,
+    timestampMs: Long = System.currentTimeMillis(),
+  ) {}
+  fun resetPermissionUsage() {}
+  val permissionUsageStatsFlow: StateFlow<Map<AppPermission, Map<Tool, PermissionToolUsageStat>>>
+    get() = MutableStateFlow(getPermissionUsageStats()).asStateFlow()
 }
 
 /**
@@ -472,6 +766,18 @@ class DefaultNavigationPreferencesRepository(
 
   private val _toolUsageCountsFlow = MutableStateFlow(getToolUsageCounts())
   override val toolUsageCountsFlow: StateFlow<Map<Tool, Int>> = _toolUsageCountsFlow.asStateFlow()
+
+  private val _permissionGrantStatesFlow = MutableStateFlow(getPermissionGrantStates())
+  override val permissionGrantStatesFlow: StateFlow<Map<AppPermission, Boolean>> =
+    _permissionGrantStatesFlow.asStateFlow()
+
+  private val _permissionUsageStatsFlow = MutableStateFlow(getPermissionUsageStats())
+  override val permissionUsageStatsFlow: StateFlow<Map<AppPermission, Map<Tool, PermissionToolUsageStat>>> =
+    _permissionUsageStatsFlow.asStateFlow()
+
+  init {
+    NavigationPreferencesBridge.permissionGrantStates = _permissionGrantStatesFlow.value
+  }
 
   override fun getToolsPerRow(): Int {
     val count = sharedPreferences.getInt(PREF_KEY_TOOLS_PER_ROW, DEFAULT_TOOLS_PER_ROW)
@@ -701,11 +1007,85 @@ class DefaultNavigationPreferencesRepository(
     current[tool] = updated
     sharedPreferences.edit().putString(PREF_KEY_TOOL_USAGE, serializeToolUsage(current)).apply()
     _toolUsageCountsFlow.value = current
+    val now = System.currentTimeMillis()
+    AppPermission.permissionsForTool(tool).forEach { perm ->
+      if (isPermissionGranted(perm)) {
+        recordPermissionUsage(perm, tool, now)
+      }
+    }
   }
 
   override fun resetToolUsage() {
     sharedPreferences.edit().remove(PREF_KEY_TOOL_USAGE).apply()
     _toolUsageCountsFlow.value = emptyMap()
+  }
+
+  override fun getPermissionGrantStates(): Map<AppPermission, Boolean> {
+    val raw = sharedPreferences.getString(PREF_KEY_PERMISSION_STATES, null)
+    return parsePermissionStates(raw)
+  }
+
+  override fun setPermissionGranted(permission: AppPermission, granted: Boolean) {
+    val updated = getPermissionGrantStates().toMutableMap()
+    updated[permission] = granted
+    sharedPreferences.edit()
+      .putString(PREF_KEY_PERMISSION_STATES, serializePermissionStates(updated))
+      .apply()
+    _permissionGrantStatesFlow.value = updated
+    NavigationPreferencesBridge.permissionGrantStates = updated
+  }
+
+  override fun setPermissionGrantStates(states: Map<AppPermission, Boolean>) {
+    val normalized = AppPermission.entries.associateWith { states[it] != false }
+    sharedPreferences.edit()
+      .putString(PREF_KEY_PERMISSION_STATES, serializePermissionStates(normalized))
+      .apply()
+    _permissionGrantStatesFlow.value = normalized
+    NavigationPreferencesBridge.permissionGrantStates = normalized
+  }
+
+  override fun getPermissionUsageStats(): Map<AppPermission, Map<Tool, PermissionToolUsageStat>> {
+    val raw = sharedPreferences.getString(PREF_KEY_PERMISSION_USAGE, null)
+    return parsePermissionUsage(raw)
+  }
+
+  override fun setPermissionUsageStats(stats: Map<AppPermission, Map<Tool, PermissionToolUsageStat>>) {
+    val serialized = serializePermissionUsage(stats)
+    if (serialized.isEmpty()) {
+      sharedPreferences.edit().remove(PREF_KEY_PERMISSION_USAGE).apply()
+    } else {
+      sharedPreferences.edit().putString(PREF_KEY_PERMISSION_USAGE, serialized).apply()
+    }
+    _permissionUsageStatsFlow.value = parsePermissionUsage(serialized)
+  }
+
+  override fun recordPermissionUsage(
+    permission: AppPermission,
+    tool: Tool,
+    timestampMs: Long,
+  ) {
+    if (!isPermissionGranted(permission)) return
+    val current = getPermissionUsageStats().mapValues { it.value.toMutableMap() }.toMutableMap()
+    val toolMap = current.getOrPut(permission) { mutableMapOf() }
+    val existing = toolMap[tool]
+    val newCount = (existing?.useCount ?: 0) + 1
+    val newTimestamp = maxOf(existing?.lastUsedTimestampMs ?: 0L, timestampMs)
+    toolMap[tool] = PermissionToolUsageStat(
+      permission = permission,
+      tool = tool,
+      useCount = newCount,
+      lastUsedTimestampMs = newTimestamp,
+    )
+    val ImmutableCopy = current.mapValues { it.value.toMap() }
+    sharedPreferences.edit()
+      .putString(PREF_KEY_PERMISSION_USAGE, serializePermissionUsage(ImmutableCopy))
+      .apply()
+    _permissionUsageStatsFlow.value = ImmutableCopy
+  }
+
+  override fun resetPermissionUsage() {
+    sharedPreferences.edit().remove(PREF_KEY_PERMISSION_USAGE).apply()
+    _permissionUsageStatsFlow.value = emptyMap()
   }
 }
 
@@ -734,6 +1114,8 @@ class InMemoryNavigationPreferencesRepository(
   initialCategorySorting: CategorySortingOption = CategorySortingOption.MANUAL,
   initialCategoryToolSorting: CategoryToolSortingOption = CategoryToolSortingOption.MANUAL,
   initialToolUsage: Map<Tool, Int> = emptyMap(),
+  initialPermissionStates: Map<AppPermission, Boolean> = AppPermission.entries.associateWith { true },
+  initialPermissionUsage: Map<AppPermission, Map<Tool, PermissionToolUsageStat>> = emptyMap(),
 ) : NavigationPreferencesRepository {
   private val _toolsPerRowFlow = MutableStateFlow(coerceToolsPerRow(initialToolsPerRow))
   override val toolsPerRowFlow: StateFlow<Int> = _toolsPerRowFlow.asStateFlow()
@@ -780,6 +1162,20 @@ class InMemoryNavigationPreferencesRepository(
 
   private val _toolUsageCountsFlow = MutableStateFlow(initialToolUsage)
   override val toolUsageCountsFlow: StateFlow<Map<Tool, Int>> = _toolUsageCountsFlow.asStateFlow()
+
+  private val _permissionGrantStatesFlow = MutableStateFlow(
+    AppPermission.entries.associateWith { initialPermissionStates[it] != false }
+  )
+  override val permissionGrantStatesFlow: StateFlow<Map<AppPermission, Boolean>> =
+    _permissionGrantStatesFlow.asStateFlow()
+
+  private val _permissionUsageStatsFlow = MutableStateFlow(initialPermissionUsage)
+  override val permissionUsageStatsFlow: StateFlow<Map<AppPermission, Map<Tool, PermissionToolUsageStat>>> =
+    _permissionUsageStatsFlow.asStateFlow()
+
+  init {
+    NavigationPreferencesBridge.permissionGrantStates = _permissionGrantStatesFlow.value
+  }
 
   override fun getToolsPerRow(): Int = _toolsPerRowFlow.value
 
@@ -882,10 +1278,63 @@ class InMemoryNavigationPreferencesRepository(
     val current = _toolUsageCountsFlow.value.toMutableMap()
     current[tool] = (current[tool] ?: 0) + 1
     _toolUsageCountsFlow.value = current
+    val now = System.currentTimeMillis()
+    AppPermission.permissionsForTool(tool).forEach { perm ->
+      if (isPermissionGranted(perm)) {
+        recordPermissionUsage(perm, tool, now)
+      }
+    }
   }
 
   override fun resetToolUsage() {
     _toolUsageCountsFlow.value = emptyMap()
+  }
+
+  override fun getPermissionGrantStates(): Map<AppPermission, Boolean> =
+    _permissionGrantStatesFlow.value
+
+  override fun setPermissionGranted(permission: AppPermission, granted: Boolean) {
+    val updated = _permissionGrantStatesFlow.value.toMutableMap()
+    updated[permission] = granted
+    _permissionGrantStatesFlow.value = updated
+    NavigationPreferencesBridge.permissionGrantStates = updated
+  }
+
+  override fun setPermissionGrantStates(states: Map<AppPermission, Boolean>) {
+    val normalized = AppPermission.entries.associateWith { states[it] != false }
+    _permissionGrantStatesFlow.value = normalized
+    NavigationPreferencesBridge.permissionGrantStates = normalized
+  }
+
+  override fun getPermissionUsageStats(): Map<AppPermission, Map<Tool, PermissionToolUsageStat>> =
+    _permissionUsageStatsFlow.value
+
+  override fun setPermissionUsageStats(stats: Map<AppPermission, Map<Tool, PermissionToolUsageStat>>) {
+    _permissionUsageStatsFlow.value = stats
+  }
+
+  override fun recordPermissionUsage(
+    permission: AppPermission,
+    tool: Tool,
+    timestampMs: Long,
+  ) {
+    if (!isPermissionGranted(permission)) return
+    val current = _permissionUsageStatsFlow.value.mapValues { it.value.toMutableMap() }.toMutableMap()
+    val toolMap = current.getOrPut(permission) { mutableMapOf() }
+    val existing = toolMap[tool]
+    val newCount = (existing?.useCount ?: 0) + 1
+    val newTimestamp = maxOf(existing?.lastUsedTimestampMs ?: 0L, timestampMs)
+    toolMap[tool] = PermissionToolUsageStat(
+      permission = permission,
+      tool = tool,
+      useCount = newCount,
+      lastUsedTimestampMs = newTimestamp,
+    )
+    _permissionUsageStatsFlow.value = current.mapValues { it.value.toMap() }
+  }
+
+  override fun resetPermissionUsage() {
+    _permissionUsageStatsFlow.value = emptyMap()
   }
 }
 
@@ -924,6 +1373,8 @@ private val RECOGNIZED_BACKUP_KEYS = setOf(
   PREF_KEY_CATEGORY_SORTING,
   PREF_KEY_CATEGORY_TOOL_SORTING,
   PREF_KEY_TOOL_USAGE,
+  PREF_KEY_PERMISSION_STATES,
+  PREF_KEY_PERMISSION_USAGE,
 )
 
 /**
@@ -945,6 +1396,8 @@ fun exportSettingsToJson(repository: NavigationPreferencesRepository): String {
   json.put(PREF_KEY_CATEGORY_SORTING, repository.getCategorySorting().name)
   json.put(PREF_KEY_CATEGORY_TOOL_SORTING, repository.getCategoryToolSorting().name)
   json.put(PREF_KEY_TOOL_USAGE, serializeToolUsage(repository.getToolUsageCounts()))
+  json.put(PREF_KEY_PERMISSION_STATES, serializePermissionStates(repository.getPermissionGrantStates()))
+  json.put(PREF_KEY_PERMISSION_USAGE, serializePermissionUsage(repository.getPermissionUsageStats()))
   return json.toString(2)
 }
 
@@ -1042,6 +1495,16 @@ fun importSettingsFromJson(
     if (json.has(PREF_KEY_TOOL_USAGE)) {
       repository.setToolUsageCounts(parseToolUsage(json.optString(PREF_KEY_TOOL_USAGE, "")))
     }
+    if (json.has(PREF_KEY_PERMISSION_STATES)) {
+      repository.setPermissionGrantStates(
+        parsePermissionStates(json.optString(PREF_KEY_PERMISSION_STATES, ""))
+      )
+    }
+    if (json.has(PREF_KEY_PERMISSION_USAGE)) {
+      repository.setPermissionUsageStats(
+        parsePermissionUsage(json.optString(PREF_KEY_PERMISSION_USAGE, ""))
+      )
+    }
     true
   } catch (_: Exception) {
     false
@@ -1065,4 +1528,6 @@ fun resetAllSettingsToDefaults(repository: NavigationPreferencesRepository) {
   repository.setCategorySorting(CategorySortingOption.MANUAL)
   repository.setCategoryToolSorting(CategoryToolSortingOption.MANUAL)
   repository.resetToolUsage()
+  repository.grantAllPermissions()
+  repository.resetPermissionUsage()
 }

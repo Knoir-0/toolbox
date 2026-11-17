@@ -667,7 +667,7 @@ class GalleryScreenTest {
       initialZetaLeft < initialAlphaLeft,
     )
 
-    // Open sort & group menu: verify GROUP BY and SORT BY columns and select Name (A to Z)
+    // Open sort & group menu: verify GROUP BY, SORT BY, and Save for folder checkbox, then select Name (A to Z)
     composeTestRule.onNodeWithTag("gallery_sort_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("GROUP BY").assertIsDisplayed()
@@ -677,6 +677,7 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("gallery_group_option_media_type").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_group_option_smart_tags").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_group_option_none").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_save_sort_group_for_folder").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_sort_option_name_asc").performClick()
     composeTestRule.waitForIdle()
 

@@ -735,4 +735,127 @@ class SettingsScreenTest {
       MusicPlayerEngine.resetPlaybackSession()
     }
   }
+
+  @Test
+  fun permissionsSection_tracksUsagePerToolWithTimestamps_andSupportsGrantAndRevoke() {
+    val repo = InMemoryNavigationPreferencesRepository()
+
+    // 1. All app permissions are present and granted by default with 0 uses
+    assertTrue(com.example.toolbox.ui.main.AppPermission.entries.isNotEmpty())
+    com.example.toolbox.ui.main.AppPermission.entries.forEach { perm ->
+      assertTrue(repo.isPermissionGranted(perm))
+      assertEquals(0, repo.getTotalPermissionUsageCount(perm))
+      assertEquals(0L, repo.getLastPermissionUsedTimestamp(perm))
+      assertTrue(perm.toolsUsingPermission.isNotEmpty())
+    }
+
+    // 2. Recording permission usage for specific tools updates counts and timestamps
+    val t1 = 1_763_400_000_000L
+    val t2 = 1_763_400_060_000L
+    repo.recordPermissionUsage(
+      com.example.toolbox.ui.main.AppPermission.CAMERA,
+      Tool.CAMERA,
+      timestampMs = t1,
+    )
+    repo.recordPermissionUsage(
+      com.example.toolbox.ui.main.AppPermission.CAMERA,
+      Tool.CAMERA,
+      timestampMs = t2,
+    )
+    repo.recordPermissionUsage(
+      com.example.toolbox.ui.main.AppPermission.CAMERA,
+      Tool.COLOR_PICKER,
+      timestampMs = t1,
+    )
+
+    val cameraToolStat = repo.getPermissionUsageForTool(
+      com.example.toolbox.ui.main.AppPermission.CAMERA,
+      Tool.CAMERA,
+    )
+    val colorPickerToolStat = repo.getPermissionUsageForTool(
+      com.example.toolbox.ui.main.AppPermission.CAMERA,
+      Tool.COLOR_PICKER,
+    )
+    assertEquals(2, cameraToolStat.useCount)
+    assertEquals(t2, cameraToolStat.lastUsedTimestampMs)
+    assertEquals(
+      com.example.toolbox.ui.main.formatPermissionUsageTimestamp(t2),
+      cameraToolStat.lastUsedFormatted,
+    )
+    assertEquals(1, colorPickerToolStat.useCount)
+    assertEquals(t1, colorPickerToolStat.lastUsedTimestampMs)
+    assertEquals(3, repo.getTotalPermissionUsageCount(com.example.toolbox.ui.main.AppPermission.CAMERA))
+    assertEquals(t2, repo.getLastPermissionUsedTimestamp(com.example.toolbox.ui.main.AppPermission.CAMERA))
+
+    // 3. Revoking a permission prevents further usage recording until re-granted
+    repo.revokePermission(com.example.toolbox.ui.main.AppPermission.CAMERA)
+    assertFalse(repo.isPermissionGranted(com.example.toolbox.ui.main.AppPermission.CAMERA))
+    assertFalse(
+      com.example.toolbox.ui.main.NavigationPreferencesBridge.isPermissionGranted(
+        com.example.toolbox.ui.main.AppPermission.CAMERA
+      )
+    )
+    repo.recordPermissionUsage(
+      com.example.toolbox.ui.main.AppPermission.CAMERA,
+      Tool.CAMERA,
+      timestampMs = t2 + 10_000L,
+    )
+    assertEquals(
+      2,
+      repo.getPermissionUsageForTool(
+        com.example.toolbox.ui.main.AppPermission.CAMERA,
+        Tool.CAMERA,
+      ).useCount,
+    )
+
+    // Re-granting the permission restores access and allows usage tracking again
+    repo.grantPermission(com.example.toolbox.ui.main.AppPermission.CAMERA)
+    assertTrue(repo.isPermissionGranted(com.example.toolbox.ui.main.AppPermission.CAMERA))
+    repo.recordPermissionUsage(
+      com.example.toolbox.ui.main.AppPermission.CAMERA,
+      Tool.CAMERA,
+      timestampMs = t2 + 20_000L,
+    )
+    assertEquals(
+      3,
+      repo.getPermissionUsageForTool(
+        com.example.toolbox.ui.main.AppPermission.CAMERA,
+        Tool.CAMERA,
+      ).useCount,
+    )
+    assertEquals(
+      t2 + 20_000L,
+      repo.getPermissionUsageForTool(
+        com.example.toolbox.ui.main.AppPermission.CAMERA,
+        Tool.CAMERA,
+      ).lastUsedTimestampMs,
+    )
+
+    // 4. Backup & Restore preserves permission grant states and usage stats
+    repo.revokePermission(com.example.toolbox.ui.main.AppPermission.BLUETOOTH)
+    val backupJson = com.example.toolbox.ui.main.exportSettingsToJson(repo)
+    val restoredRepo = InMemoryNavigationPreferencesRepository()
+    assertTrue(com.example.toolbox.ui.main.importSettingsFromJson(backupJson, restoredRepo))
+    assertFalse(restoredRepo.isPermissionGranted(com.example.toolbox.ui.main.AppPermission.BLUETOOTH))
+    assertTrue(restoredRepo.isPermissionGranted(com.example.toolbox.ui.main.AppPermission.CAMERA))
+    assertEquals(
+      3,
+      restoredRepo.getPermissionUsageForTool(
+        com.example.toolbox.ui.main.AppPermission.CAMERA,
+        Tool.CAMERA,
+      ).useCount,
+    )
+    assertEquals(
+      t2 + 20_000L,
+      restoredRepo.getPermissionUsageForTool(
+        com.example.toolbox.ui.main.AppPermission.CAMERA,
+        Tool.CAMERA,
+      ).lastUsedTimestampMs,
+    )
+
+    // 5. Resetting settings restores all permissions to granted and clears usage stats
+    com.example.toolbox.ui.main.resetAllSettingsToDefaults(restoredRepo)
+    assertTrue(restoredRepo.isPermissionGranted(com.example.toolbox.ui.main.AppPermission.BLUETOOTH))
+    assertEquals(0, restoredRepo.getTotalPermissionUsageCount(com.example.toolbox.ui.main.AppPermission.CAMERA))
+  }
 }

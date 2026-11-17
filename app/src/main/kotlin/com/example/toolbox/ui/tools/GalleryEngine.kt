@@ -31,6 +31,9 @@ const val PREF_KEY_GALLERY_VIEW_MODE = "gallery_view_mode"
 const val PREF_KEY_GALLERY_ALBUMS_PER_ROW = "gallery_albums_per_row"
 const val PREF_KEY_GALLERY_SORT_ORDER = "gallery_sort_order"
 const val PREF_KEY_GALLERY_GROUP_OPTION = "gallery_group_option"
+const val PREF_KEY_GALLERY_DEFAULT_SORT_GROUP = "gallery_default_sort_group"
+const val PREF_PREFIX_GALLERY_FOLDER_SORT_GROUP = "gallery_folder_sort_group_"
+const val GALLERY_ROOT_FOLDER_KEY = "__gallery_root__"
 
 const val MIN_ALBUMS_PER_ROW = 3
 const val MAX_ALBUMS_PER_ROW = 6
@@ -69,7 +72,7 @@ data class GalleryVideoPreviewState(
   val playSessionToken: Int = 0,
 )
 
-val DEFAULT_GALLERY_FOLDER_NAMES: List<String> = listOf("Pictures", "DCIM")
+val DEFAULT_GALLERY_FOLDER_NAMES: List<String> = listOf("DCIM", "Pictures", "Photos", "Downloads")
 const val DEFAULT_NEW_ALBUM_FOLDER_NAME: String = "Pictures"
 
 /**
@@ -116,11 +119,11 @@ enum class GallerySortOrder(val displayName: String) {
 
 /**
  * Grouping options for organizing media in the Gallery tool:
- * - [FOLDERS]: Hierarchical album/folder view (default).
+ * - [FOLDERS]: Groups albums and photos by the default root folders (`DCIM` and `Pictures`).
  * - [DATE]: Groups photos & videos chronologically (Today, Yesterday, This Week, Month & Year).
  * - [MEDIA_TYPE]: Groups items into Photos, Videos, GIFs, and Screenshots.
  * - [SMART_TAGS]: Groups items by detected smart tags (Receipts, Documents, QR Codes, visual labels, Untagged).
- * - [NONE]: Flat ungrouped grid/list of all photos & videos in scope.
+ * - [NONE]: Un-nested view (default) combining `Pictures` and `DCIM` without group headers.
  */
 enum class GalleryGroupOption(val displayName: String) {
   FOLDERS("Folders"),
@@ -131,7 +134,7 @@ enum class GalleryGroupOption(val displayName: String) {
   ;
 
   companion object {
-    val DEFAULT: GalleryGroupOption = FOLDERS
+    val DEFAULT: GalleryGroupOption = NONE
 
     fun fromNameOrDefault(name: String?): GalleryGroupOption {
       if (name.isNullOrBlank()) return DEFAULT
@@ -141,12 +144,32 @@ enum class GalleryGroupOption(val displayName: String) {
 }
 
 /**
+ * Holds a combined group-by and sort-by configuration for a gallery folder/album or default preference.
+ */
+data class GallerySortGroupConfig(
+  val groupOption: GalleryGroupOption = GalleryGroupOption.DEFAULT,
+  val sortOrder: GallerySortOrder = GallerySortOrder.DEFAULT,
+)
+
+/**
  * Represents a grouped section of [GalleryPhoto] items under a common [title] header.
  */
 data class GalleryPhotoGroup(
   val title: String,
   val photos: List<GalleryPhoto>,
 )
+
+/**
+ * Represents a root-folder group (such as `"DCIM"` or `"Pictures"`) containing that root folder's
+ * [albums] and direct [photos].
+ */
+data class GalleryFolderGroup(
+  val title: String,
+  val albums: List<GalleryAlbum>,
+  val photos: List<GalleryPhoto>,
+) {
+  val totalCount: Int get() = albums.size + photos.size
+}
 
 /**
  * Represents an individual photo file inside an album.
@@ -616,14 +639,19 @@ object GalleryEngine {
   }
 
   /**
-   * Resolves the list of folders loaded into the gallery, starting with the default `Pictures` and `DCIM`
-   * folders and appending any user-added folder paths.
+   * Resolves the list of folders loaded into the gallery, starting with the default `DCIM`, `Pictures`,
+   * `Photos`, and `Downloads` folders and appending any user-added folder paths.
    */
   fun resolveGalleryFolders(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
     additionalPaths: List<String> = emptyList(),
   ): List<File> {
-    val defaults = getDefaultGalleryFolders(rootDirectory)
+    val defaults = getDefaultGalleryFolders(rootDirectory).toMutableList()
+    // Also include Android's singular "Download" folder when present on storage
+    val androidDownloadDir = File(rootDirectory, "Download")
+    if (androidDownloadDir.exists() && androidDownloadDir.isDirectory) {
+      defaults.add(androidDownloadDir)
+    }
     val extras = additionalPaths.mapNotNull { raw ->
       val trimmed = raw.trim()
       if (trimmed.isEmpty()) {
@@ -743,6 +771,95 @@ object GalleryEngine {
   }
 
   /**
+   * Checks whether [directory] is the `Downloads` (or Android `Download`) folder, which is treated
+   * as a single album in the gallery rather than having its contents un-nested into the root view.
+   */
+  fun isDownloadsDirectory(directory: File): Boolean {
+    val name = directory.name
+    return name.equals("Downloads", ignoreCase = true) || name.equals("Download", ignoreCase = true)
+  }
+
+  /**
+   * Collects all supported photo/video files recursively inside [directories] up to [maxDepth],
+   * skipping dot-prefixed entries and `.nomedia` directories.
+   */
+  private fun collectMediaFilesInDirectories(
+    directories: List<File>,
+    maxDepth: Int = 8,
+  ): List<File> {
+    val result = LinkedHashMap<String, File>()
+
+    fun scan(currentDir: File, depth: Int) {
+      if (depth > maxDepth) return
+      if (hasNoMediaFile(currentDir)) return
+      val children = try {
+        currentDir.listFiles()
+      } catch (_: Throwable) {
+        null
+      } ?: return
+
+      for (child in children) {
+        if (child.name.startsWith(".")) continue
+        if (child.isFile && isPhotoFile(child)) {
+          result.putIfAbsent(child.absolutePath, child)
+        } else if (child.isDirectory && depth < maxDepth) {
+          scan(child, depth + 1)
+        }
+      }
+    }
+
+    for (dir in directories) {
+      if (dir.exists() && dir.isDirectory) {
+        scan(dir, 0)
+      }
+    }
+    return result.values.toList()
+  }
+
+  /**
+   * Builds a single unified `"Downloads"` [GalleryAlbum] across [directories], flattening all media
+   * inside `Downloads` into a single album (`subAlbumCount = 0`).
+   */
+  fun buildDownloadsAlbum(
+    directories: List<File>,
+    maxDepth: Int = 8,
+    deferAlbumArt: Boolean = false,
+  ): GalleryAlbum {
+    val distinctDirs = mutableListOf<File>()
+    for (dir in directories) {
+      if (distinctDirs.none { it.absolutePath.equals(dir.absolutePath, ignoreCase = true) }) {
+        distinctDirs.add(dir)
+      }
+    }
+    val primaryDir = distinctDirs.firstOrNull() ?: File("Downloads")
+    val mediaFiles = collectMediaFilesInDirectories(distinctDirs, maxDepth = maxDepth)
+    val totalPhotos = mediaFiles.size
+    val mostRecent = if (deferAlbumArt) {
+      null
+    } else {
+      mediaFiles.maxWithOrNull(
+        compareBy<File> { it.lastModified() }
+          .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+      )
+    }
+    val lastMod = mostRecent?.lastModified()
+      ?: distinctDirs.maxOfOrNull { if (it.exists()) it.lastModified() else 0L }
+      ?: 0L
+
+    return GalleryAlbum(
+      directory = primaryDir,
+      name = "Downloads",
+      path = primaryDir.absolutePath,
+      mostRecentPhoto = mostRecent,
+      directPhotoCount = totalPhotos,
+      totalPhotoCount = totalPhotos,
+      subAlbumCount = 0,
+      lastModifiedMs = lastMod,
+      directories = distinctDirs,
+    )
+  }
+
+  /**
    * Builds a [GalleryAlbum] model for [directory], resolving its most recent photo, direct photo count,
    * total photo count (including nested folders), and nested folder count.
    *
@@ -764,7 +881,8 @@ object GalleryEngine {
 
   /**
    * Builds a unified [GalleryAlbum] model across one or more [directories] (e.g. when same-named
-   * subfolders in `DCIM` and `Photos` are merged as if they were in the same folder).
+   * subfolders in `DCIM`, `Pictures`, and `Photos` are merged as if they were in the same folder).
+   * If all [directories] are `Downloads` folders, builds a single flat `"Downloads"` album.
    */
   fun buildMergedAlbum(
     directories: List<File>,
@@ -776,6 +894,13 @@ object GalleryEngine {
       if (distinctDirs.none { it.absolutePath.equals(dir.absolutePath, ignoreCase = true) }) {
         distinctDirs.add(dir)
       }
+    }
+    if (distinctDirs.isNotEmpty() && distinctDirs.all { isDownloadsDirectory(it) }) {
+      return buildDownloadsAlbum(
+        directories = distinctDirs,
+        maxDepth = maxDepth,
+        deferAlbumArt = deferAlbumArt,
+      )
     }
     val primaryDir = distinctDirs.firstOrNull() ?: File("")
 
@@ -881,11 +1006,12 @@ object GalleryEngine {
   }
 
   /**
-   * Loads the un-nested root contents of the Gallery by combining `Pictures` and `DCIM`
-   * (plus any [additionalPaths]) as if they were the same folder:
-   * - [AlbumContents.nestedAlbums]: All subdirectories inside `Pictures` and `DCIM` (merging same-named
-   *   subfolders), sorted alphabetically.
-   * - [AlbumContents.photos]: All direct photo files inside `Pictures` and `DCIM`, sorted newest first.
+   * Loads the root contents of the Gallery from the default folders (`DCIM`, `Pictures`, `Photos`,
+   * and `Downloads`, plus any [additionalPaths]):
+   * - `DCIM`, `Pictures`, and `Photos` (and non-Downloads folders) have their subdirectories un-nested
+   *   as top-level albums (merging same-named subfolders) and their direct photo files combined at root.
+   * - `Downloads` (including Android's `Download` folder) is treated as a single `"Downloads"` album
+   *   in [AlbumContents.nestedAlbums].
    */
   fun loadRootContents(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
@@ -894,12 +1020,39 @@ object GalleryEngine {
   ): AlbumContents {
     val targetFolders = (folders ?: resolveGalleryFolders(rootDirectory, additionalPaths))
       .filterNot { isHiddenByNoMedia(it) }
-    return loadMergedAlbumContents(targetFolders)
+    val downloadsFolders = targetFolders.filter { isDownloadsDirectory(it) && isAlbumDirectory(it) }
+    val unNestedFolders = targetFolders.filterNot { isDownloadsDirectory(it) }
+
+    val baseContents = loadMergedAlbumContents(unNestedFolders)
+    val mergedNestedAlbums = if (downloadsFolders.isNotEmpty()) {
+      val existingDownloadsAlbum = baseContents.nestedAlbums.find {
+        it.name.equals("Downloads", ignoreCase = true) || it.name.equals("Download", ignoreCase = true)
+      }
+      val allDownloadsDirs = if (existingDownloadsAlbum != null) {
+        downloadsFolders + existingDownloadsAlbum.directories
+      } else {
+        downloadsFolders
+      }
+      val downloadsAlbum = buildDownloadsAlbum(allDownloadsDirs)
+      (
+        baseContents.nestedAlbums.filterNot {
+          it.name.equals("Downloads", ignoreCase = true) || it.name.equals("Download", ignoreCase = true)
+        } + downloadsAlbum
+      ).sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+    } else {
+      baseContents.nestedAlbums
+    }
+
+    return baseContents.copy(
+      directory = targetFolders.firstOrNull() ?: baseContents.directory,
+      nestedAlbums = mergedNestedAlbums,
+      directories = targetFolders,
+    )
   }
 
   /**
-   * Loads the root-level albums for the Gallery by un-nesting the contents of `Pictures` and `DCIM`
-   * (and any [additionalPaths]) as if they were the same folder.
+   * Loads the root-level albums for the Gallery (`DCIM`, `Pictures`, and `Photos` un-nested, plus
+   * `Downloads` treated as a single album).
    */
   fun loadRootAlbums(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
@@ -932,9 +1085,11 @@ object GalleryEngine {
 
   /**
    * Loads and merges the contents of multiple [directories] as if they were the same folder:
-   * - Subdirectories across [directories] are un-nested to the top level, merging any subdirectories
-   *   that share the same name (case-insensitively) into a single [GalleryAlbum].
-   * - Direct photo files across [directories] are combined and sorted newest first.
+   * - When [directories] represent the `Downloads` folder, treats `Downloads` as a single flat album
+   *   with no nested sub-albums and all media files inside `Downloads` collected together.
+   * - Otherwise, subdirectories across [directories] are un-nested to the top level, merging any
+   *   subdirectories that share the same name (case-insensitively) into a single [GalleryAlbum],
+   *   and direct photo files across [directories] are combined and sorted newest first.
    */
   fun loadMergedAlbumContents(directories: List<File>): AlbumContents {
     val distinctDirs = mutableListOf<File>()
@@ -944,6 +1099,30 @@ object GalleryEngine {
       }
     }
     val primaryDir = distinctDirs.firstOrNull() ?: File("")
+
+    if (distinctDirs.isNotEmpty() && distinctDirs.all { isDownloadsDirectory(it) }) {
+      val photos = collectMediaFilesInDirectories(distinctDirs, maxDepth = 8)
+        .sortedWith(
+          compareByDescending<File> { it.lastModified() }
+            .thenByDescending(String.CASE_INSENSITIVE_ORDER) { it.name }
+        )
+        .map { file ->
+          GalleryPhoto(
+            file = file,
+            name = file.name,
+            path = file.absolutePath,
+            sizeBytes = file.length(),
+            lastModifiedMs = file.lastModified(),
+            extension = file.extension.lowercase(Locale.ROOT),
+          )
+        }
+      return AlbumContents(
+        directory = primaryDir,
+        nestedAlbums = emptyList(),
+        photos = photos,
+        directories = distinctDirs,
+      )
+    }
 
     val children = distinctDirs.flatMap { dir ->
       if (dir.exists() && dir.isDirectory && !hasNoMediaFile(dir)) {
@@ -1051,6 +1230,282 @@ object GalleryEngine {
           .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
     }
     return photos.sortedWith(comparator)
+  }
+
+  /**
+   * Resolves the root folder group title (`"DCIM"`, `"Pictures"`, `"Photos"`, `"Downloads"`, etc.) for [file].
+   */
+  fun resolveDefaultFolderGroupTitle(file: File): String {
+    var current: File? = file.absoluteFile
+    while (current != null) {
+      val name = current.name
+      if (name.equals("DCIM", ignoreCase = true)) return "DCIM"
+      if (name.equals("Pictures", ignoreCase = true)) return "Pictures"
+      if (name.equals("Photos", ignoreCase = true)) return "Photos"
+      if (name.equals("Downloads", ignoreCase = true) || name.equals("Download", ignoreCase = true)) {
+        return "Downloads"
+      }
+      current = current.parentFile
+    }
+    return "Pictures"
+  }
+
+  /**
+   * Groups albums and photos by their root folders (`"DCIM"`, `"Pictures"`, `"Photos"`, and `"Downloads"`,
+   * plus any custom loaded root folders) when [GalleryGroupOption.FOLDERS] is selected.
+   */
+  fun groupByDefaultFolders(
+    rootDirectories: List<File>,
+    currentAlbum: GalleryAlbum? = null,
+    sortOrder: GallerySortOrder = GallerySortOrder.DATE_DESC,
+    searchQuery: String = "",
+    selectedTag: String? = null,
+    indexMap: Map<String, GalleryPhotoIndexEntry> = emptyMap(),
+  ): List<GalleryFolderGroup> {
+    val sourceDirs = if (currentAlbum != null) {
+      currentAlbum.directories
+    } else {
+      rootDirectories.filterNot { isHiddenByNoMedia(it) }
+    }
+
+    val dirsByGroupTitle = LinkedHashMap<String, MutableList<File>>()
+    for (dir in sourceDirs) {
+      val title = when {
+        dir.name.equals("DCIM", ignoreCase = true) -> "DCIM"
+        dir.name.equals("Pictures", ignoreCase = true) -> "Pictures"
+        dir.name.equals("Photos", ignoreCase = true) -> "Photos"
+        dir.name.equals("Downloads", ignoreCase = true) || dir.name.equals("Download", ignoreCase = true) -> "Downloads"
+        currentAlbum == null && dir.name.isNotBlank() -> dir.name
+        else -> resolveDefaultFolderGroupTitle(dir)
+      }
+      dirsByGroupTitle.getOrPut(title) { mutableListOf() }.add(dir)
+    }
+
+    val hasSearch = searchQuery.isNotBlank() || !selectedTag.isNullOrBlank()
+    val groups = mutableListOf<GalleryFolderGroup>()
+
+    for ((title, groupDirs) in dirsByGroupTitle) {
+      val isRootDownloadsGroup = currentAlbum == null && title.equals("Downloads", ignoreCase = true)
+      val contents = if (isRootDownloadsGroup) {
+        val validDownloadDirs = groupDirs.filter { isAlbumDirectory(it) }
+        val downloadsAlbum = if (validDownloadDirs.isNotEmpty()) {
+          buildDownloadsAlbum(validDownloadDirs)
+        } else {
+          null
+        }
+        AlbumContents(
+          directory = groupDirs.firstOrNull() ?: File("Downloads"),
+          nestedAlbums = if (downloadsAlbum != null && downloadsAlbum.totalPhotoCount > 0) {
+            listOf(downloadsAlbum)
+          } else {
+            emptyList()
+          },
+          photos = emptyList(),
+          directories = groupDirs,
+        )
+      } else {
+        loadMergedAlbumContents(groupDirs)
+      }
+      if (hasSearch) {
+        val scopeFiles = collectMediaFiles(contents.nestedAlbums, contents.photos)
+        val scopePhotos = scopeFiles.map { file ->
+          GalleryPhoto(
+            file = file,
+            name = file.name,
+            path = file.absolutePath,
+            sizeBytes = file.length(),
+            lastModifiedMs = file.lastModified(),
+            extension = file.extension.lowercase(Locale.ROOT),
+          )
+        }
+        val searchRes = searchGallery(
+          albums = contents.nestedAlbums,
+          directPhotos = contents.photos,
+          allScopePhotos = scopePhotos,
+          indexMap = indexMap,
+          searchQuery = searchQuery,
+          selectedTag = selectedTag,
+          sortOrder = sortOrder,
+        )
+        if (searchRes.matchingAlbums.isNotEmpty() || searchRes.matchingPhotos.isNotEmpty()) {
+          groups.add(
+            GalleryFolderGroup(
+              title = title,
+              albums = searchRes.matchingAlbums,
+              photos = searchRes.matchingPhotos,
+            )
+          )
+        }
+      } else {
+        val sortedAlbums = sortAlbums(contents.nestedAlbums, sortOrder)
+        val sortedPhotos = sortPhotos(contents.photos, sortOrder)
+        if (sortedAlbums.isNotEmpty() || sortedPhotos.isNotEmpty()) {
+          groups.add(
+            GalleryFolderGroup(
+              title = title,
+              albums = sortedAlbums,
+              photos = sortedPhotos,
+            )
+          )
+        }
+      }
+    }
+
+    // Order standard default folders ("DCIM", "Pictures", "Photos", "Downloads") consistently
+    val folderPriority = listOf("DCIM", "Pictures", "Photos", "Downloads")
+    return groups.sortedWith(
+      compareBy<GalleryFolderGroup> { group ->
+        val idx = folderPriority.indexOfFirst { it.equals(group.title, ignoreCase = true) }
+        if (idx >= 0) idx else 100
+      }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
+    )
+  }
+
+  private var inMemoryDefaultSortGroupConfig = GallerySortGroupConfig()
+  private val inMemoryFolderSortGroupMap = mutableMapOf<String, GallerySortGroupConfig>()
+
+  fun clearSortGroupConfigs() {
+    inMemoryDefaultSortGroupConfig = GallerySortGroupConfig()
+    inMemoryFolderSortGroupMap.clear()
+  }
+
+  fun serializeSortGroupConfig(config: GallerySortGroupConfig): String {
+    return "${config.groupOption.name}:${config.sortOrder.name}"
+  }
+
+  fun parseSortGroupConfig(raw: String?): GallerySortGroupConfig? {
+    if (raw.isNullOrBlank()) return null
+    val parts = raw.split(":")
+    if (parts.size != 2) return null
+    return try {
+      val group = GalleryGroupOption.valueOf(parts[0].trim())
+      val sort = GallerySortOrder.valueOf(parts[1].trim())
+      GallerySortGroupConfig(groupOption = group, sortOrder = sort)
+    } catch (_: IllegalArgumentException) {
+      null
+    }
+  }
+
+  fun getDefaultSortGroupConfig(context: Context? = null): GallerySortGroupConfig {
+    if (context == null) return inMemoryDefaultSortGroupConfig
+    return try {
+      val prefs = context.getSharedPreferences(GALLERY_PREFS_NAME, Context.MODE_PRIVATE)
+      val combined = parseSortGroupConfig(prefs.getString(PREF_KEY_GALLERY_DEFAULT_SORT_GROUP, null))
+      if (combined != null) {
+        combined
+      } else {
+        val savedGroup = prefs.getString(PREF_KEY_GALLERY_GROUP_OPTION, null)
+        val savedSort = prefs.getString(PREF_KEY_GALLERY_SORT_ORDER, null)
+        if (savedGroup != null || savedSort != null) {
+          GallerySortGroupConfig(
+            groupOption = GalleryGroupOption.fromNameOrDefault(savedGroup),
+            sortOrder = GallerySortOrder.fromNameOrDefault(savedSort),
+          )
+        } else {
+          GallerySortGroupConfig()
+        }
+      }
+    } catch (_: Throwable) {
+      inMemoryDefaultSortGroupConfig
+    }
+  }
+
+  fun setDefaultSortGroupConfig(
+    context: Context? = null,
+    config: GallerySortGroupConfig,
+  ) {
+    inMemoryDefaultSortGroupConfig = config
+    if (context == null) return
+    try {
+      val prefs = context.getSharedPreferences(GALLERY_PREFS_NAME, Context.MODE_PRIVATE)
+      prefs.edit()
+        .putString(PREF_KEY_GALLERY_DEFAULT_SORT_GROUP, serializeSortGroupConfig(config))
+        .putString(PREF_KEY_GALLERY_GROUP_OPTION, config.groupOption.name)
+        .putString(PREF_KEY_GALLERY_SORT_ORDER, config.sortOrder.name)
+        .apply()
+    } catch (_: Throwable) {}
+  }
+
+  fun getFolderSortGroupConfig(
+    context: Context? = null,
+    folderKey: String,
+  ): GallerySortGroupConfig? {
+    if (context == null) return inMemoryFolderSortGroupMap[folderKey]
+    return try {
+      val prefs = context.getSharedPreferences(GALLERY_PREFS_NAME, Context.MODE_PRIVATE)
+      parseSortGroupConfig(prefs.getString(PREF_PREFIX_GALLERY_FOLDER_SORT_GROUP + folderKey, null))
+    } catch (_: Throwable) {
+      inMemoryFolderSortGroupMap[folderKey]
+    }
+  }
+
+  fun getFolderSortGroupConfig(
+    context: Context? = null,
+    directory: File,
+  ): GallerySortGroupConfig? = getFolderSortGroupConfig(context, directory.absolutePath)
+
+  fun hasFolderSortGroupConfig(
+    context: Context? = null,
+    folderKey: String,
+  ): Boolean {
+    return getFolderSortGroupConfig(context, folderKey) != null
+  }
+
+  fun hasFolderSortGroupConfig(
+    context: Context? = null,
+    directory: File,
+  ): Boolean = hasFolderSortGroupConfig(context, directory.absolutePath)
+
+  fun setFolderSortGroupConfig(
+    context: Context? = null,
+    folderKey: String,
+    config: GallerySortGroupConfig,
+  ) {
+    inMemoryFolderSortGroupMap[folderKey] = config
+    if (context == null) return
+    try {
+      val prefs = context.getSharedPreferences(GALLERY_PREFS_NAME, Context.MODE_PRIVATE)
+      prefs.edit()
+        .putString(PREF_PREFIX_GALLERY_FOLDER_SORT_GROUP + folderKey, serializeSortGroupConfig(config))
+        .apply()
+    } catch (_: Throwable) {}
+  }
+
+  fun setFolderSortGroupConfig(
+    context: Context? = null,
+    directory: File,
+    config: GallerySortGroupConfig,
+  ) = setFolderSortGroupConfig(context, directory.absolutePath, config)
+
+  fun removeFolderSortGroupConfig(
+    context: Context? = null,
+    folderKey: String,
+  ) {
+    inMemoryFolderSortGroupMap.remove(folderKey)
+    if (context == null) return
+    try {
+      val prefs = context.getSharedPreferences(GALLERY_PREFS_NAME, Context.MODE_PRIVATE)
+      prefs.edit()
+        .remove(PREF_PREFIX_GALLERY_FOLDER_SORT_GROUP + folderKey)
+        .apply()
+    } catch (_: Throwable) {}
+  }
+
+  fun removeFolderSortGroupConfig(
+    context: Context? = null,
+    directory: File,
+  ) = removeFolderSortGroupConfig(context, directory.absolutePath)
+
+  fun resolveSortGroupConfig(
+    context: Context? = null,
+    folderKey: String,
+  ): Pair<GallerySortGroupConfig, Boolean> {
+    val folderConfig = getFolderSortGroupConfig(context, folderKey)
+    return if (folderConfig != null) {
+      folderConfig to true
+    } else {
+      getDefaultSortGroupConfig(context) to false
+    }
   }
 
   /**

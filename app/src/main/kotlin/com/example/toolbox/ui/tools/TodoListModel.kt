@@ -49,6 +49,160 @@ data class TodoSubTask(
 const val MAIN_TASKS_SCHEDULE_HORIZON_MILLIS = 24L * 60L * 60L * 1000L
 
 /**
+ * Supported recurrence units for Google Calendar-style recurring tasks and relative schedule presets.
+ */
+enum class TodoRecurrenceUnit(
+  val calendarField: Int,
+  val singularLabel: String,
+  val pluralLabel: String,
+) {
+  MINUTE(Calendar.MINUTE, "minute", "minutes"),
+  HOUR(Calendar.HOUR_OF_DAY, "hour", "hours"),
+  DAY(Calendar.DAY_OF_YEAR, "day", "days"),
+  WEEK(Calendar.WEEK_OF_YEAR, "week", "weeks"),
+  MONTH(Calendar.MONTH, "month", "months"),
+  YEAR(Calendar.YEAR, "year", "years"),
+  WEEKDAYS(Calendar.DAY_OF_YEAR, "weekday", "weekdays"),
+  ;
+
+  companion object {
+    fun fromCalendarField(field: Int): TodoRecurrenceUnit = when (field) {
+      Calendar.MINUTE -> MINUTE
+      Calendar.HOUR_OF_DAY, Calendar.HOUR -> HOUR
+      Calendar.DAY_OF_YEAR, Calendar.DAY_OF_MONTH, Calendar.DATE -> DAY
+      Calendar.WEEK_OF_YEAR, Calendar.WEEK_OF_MONTH -> WEEK
+      Calendar.MONTH -> MONTH
+      Calendar.YEAR -> YEAR
+      else -> DAY
+    }
+
+    fun fromNameOrNull(name: String?): TodoRecurrenceUnit? {
+      if (name.isNullOrBlank()) return null
+      return entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
+    }
+  }
+}
+
+/**
+ * Defines how a recurring task repeats upon task completion.
+ */
+data class TodoRecurrenceRule(
+  val interval: Int = 1,
+  val unit: TodoRecurrenceUnit = TodoRecurrenceUnit.DAY,
+  val presetLabel: String? = null,
+) {
+  /**
+   * Computes the next scheduled timestamp starting from [fromMillis] (typically completion time).
+   */
+  fun nextScheduledAtMillis(fromMillis: Long = System.currentTimeMillis()): Long {
+    val cal = Calendar.getInstance().apply { timeInMillis = fromMillis }
+    val safeInterval = interval.coerceAtLeast(1)
+    when (unit) {
+      TodoRecurrenceUnit.WEEKDAYS -> {
+        var remaining = safeInterval
+        while (remaining > 0) {
+          cal.add(Calendar.DAY_OF_YEAR, 1)
+          val dow = cal.get(Calendar.DAY_OF_WEEK)
+          if (dow != Calendar.SATURDAY && dow != Calendar.SUNDAY) {
+            remaining--
+          }
+        }
+      }
+      else -> {
+        cal.add(unit.calendarField, safeInterval)
+      }
+    }
+    return cal.timeInMillis
+  }
+
+  fun formatLabel(): String {
+    if (unit == TodoRecurrenceUnit.WEEKDAYS) {
+      return "Every weekday (Mon–Fri)"
+    }
+    if (!presetLabel.isNullOrBlank()) {
+      return "Every $presetLabel"
+    }
+    val safeInterval = interval.coerceAtLeast(1)
+    return if (safeInterval == 1) {
+      when (unit) {
+        TodoRecurrenceUnit.MINUTE -> "Every minute"
+        TodoRecurrenceUnit.HOUR -> "Hourly"
+        TodoRecurrenceUnit.DAY -> "Daily"
+        TodoRecurrenceUnit.WEEK -> "Weekly"
+        TodoRecurrenceUnit.MONTH -> "Monthly"
+        TodoRecurrenceUnit.YEAR -> "Yearly"
+        TodoRecurrenceUnit.WEEKDAYS -> "Every weekday (Mon–Fri)"
+      }
+    } else {
+      "Every $safeInterval ${unit.pluralLabel}"
+    }
+  }
+
+  fun formatShortLabel(): String {
+    if (unit == TodoRecurrenceUnit.WEEKDAYS) {
+      return "Weekdays"
+    }
+    if (!presetLabel.isNullOrBlank()) {
+      return "Every $presetLabel"
+    }
+    val safeInterval = interval.coerceAtLeast(1)
+    return if (safeInterval == 1) {
+      when (unit) {
+        TodoRecurrenceUnit.MINUTE -> "Every 1 min"
+        TodoRecurrenceUnit.HOUR -> "Hourly"
+        TodoRecurrenceUnit.DAY -> "Daily"
+        TodoRecurrenceUnit.WEEK -> "Weekly"
+        TodoRecurrenceUnit.MONTH -> "Monthly"
+        TodoRecurrenceUnit.YEAR -> "Yearly"
+        TodoRecurrenceUnit.WEEKDAYS -> "Weekdays"
+      }
+    } else {
+      "Every $safeInterval ${unit.pluralLabel}"
+    }
+  }
+
+  fun toJson(): JSONObject = JSONObject().apply {
+    put("interval", interval.coerceAtLeast(1))
+    put("unit", unit.name)
+    if (!presetLabel.isNullOrBlank()) {
+      put("presetLabel", presetLabel)
+    }
+  }
+
+  companion object {
+    val DAILY = TodoRecurrenceRule(interval = 1, unit = TodoRecurrenceUnit.DAY, presetLabel = "1 day")
+    val WEEKLY = TodoRecurrenceRule(interval = 1, unit = TodoRecurrenceUnit.WEEK, presetLabel = "1 wk")
+    val MONTHLY = TodoRecurrenceRule(interval = 1, unit = TodoRecurrenceUnit.MONTH, presetLabel = "1 mo")
+    val YEARLY = TodoRecurrenceRule(interval = 1, unit = TodoRecurrenceUnit.YEAR)
+    val WEEKDAYS = TodoRecurrenceRule(interval = 1, unit = TodoRecurrenceUnit.WEEKDAYS)
+
+    fun fromPreset(label: String, calendarField: Int, amount: Int): TodoRecurrenceRule {
+      return TodoRecurrenceRule(
+        interval = amount.coerceAtLeast(1),
+        unit = TodoRecurrenceUnit.fromCalendarField(calendarField),
+        presetLabel = label,
+      )
+    }
+
+    fun fromJson(json: JSONObject?): TodoRecurrenceRule? {
+      if (json == null) return null
+      val unit = TodoRecurrenceUnit.fromNameOrNull(json.optString("unit", null)) ?: return null
+      val interval = json.optInt("interval", 1).coerceAtLeast(1)
+      val presetLabel = if (json.has("presetLabel") && !json.isNull("presetLabel")) {
+        json.optString("presetLabel").takeIf { it.isNotBlank() }
+      } else {
+        null
+      }
+      return TodoRecurrenceRule(
+        interval = interval,
+        unit = unit,
+        presetLabel = presetLabel,
+      )
+    }
+  }
+}
+
+/**
  * Represents a single todo task, optionally containing subtasks, notes, and a scheduled date/time range.
  */
 data class TodoItem(
@@ -61,9 +215,13 @@ data class TodoItem(
   val scheduledAtMillis: Long? = null,
   val scheduledEndMillis: Long? = null,
   val notifiedAtScheduleMillis: Long? = null,
+  val recurrenceRule: TodoRecurrenceRule? = null,
 ) {
   val isScheduled: Boolean
     get() = scheduledAtMillis != null
+
+  val isRecurring: Boolean
+    get() = recurrenceRule != null
 
   fun isScheduledBeyondHorizon(
     nowMillis: Long = System.currentTimeMillis(),
@@ -130,6 +288,9 @@ data class TodoItem(
     if (notifiedAtScheduleMillis != null) {
       put("notifiedAtScheduleMillis", notifiedAtScheduleMillis)
     }
+    if (recurrenceRule != null) {
+      put("recurrenceRule", recurrenceRule.toJson())
+    }
   }
 
   companion object {
@@ -161,6 +322,11 @@ data class TodoItem(
       } else {
         null
       }
+      val recurrence = if (json.has("recurrenceRule") && !json.isNull("recurrenceRule")) {
+        TodoRecurrenceRule.fromJson(json.optJSONObject("recurrenceRule"))
+      } else {
+        null
+      }
       return TodoItem(
         id = json.optString("id", UUID.randomUUID().toString()),
         title = json.optString("title", ""),
@@ -171,6 +337,7 @@ data class TodoItem(
         scheduledAtMillis = scheduledAt,
         scheduledEndMillis = scheduledEnd,
         notifiedAtScheduleMillis = notifiedAt,
+        recurrenceRule = recurrence,
       )
     }
   }
@@ -424,6 +591,12 @@ class TodoHistoryManager(
     return currentSnapshot
   }
 
+  fun promoteSubTaskToMainTask(taskId: String, subtaskId: String): TodoHistorySnapshot {
+    val updatedTasks = TodoListEngine.promoteSubTaskToMainTask(currentSnapshot.tasks, taskId, subtaskId)
+    applyAction(newTasks = updatedTasks)
+    return currentSnapshot
+  }
+
   fun undo(): TodoHistorySnapshot? {
     if (undoStack.isEmpty()) return null
     redoStack.add(currentSnapshot)
@@ -625,6 +798,33 @@ object TodoListEngine {
   }
 
   /**
+   * Removes a subtask from task [taskId] and promotes it into a standalone [TodoItem]
+   * in the main task list (inserted immediately after the parent task).
+   */
+  fun promoteSubTaskToMainTask(
+    tasks: List<TodoItem>,
+    taskId: String,
+    subtaskId: String,
+  ): List<TodoItem> {
+    val parentIndex = tasks.indexOfFirst { it.id == taskId }
+    if (parentIndex == -1) return tasks
+    val parentTask = tasks[parentIndex]
+    val subtask = parentTask.subtasks.firstOrNull { it.id == subtaskId } ?: return tasks
+
+    val updatedParent = parentTask.copy(
+      subtasks = parentTask.subtasks.filter { it.id != subtaskId },
+    )
+    val promotedTask = TodoItem(
+      id = subtask.id,
+      title = subtask.title,
+    )
+    val mutable = tasks.toMutableList()
+    mutable[parentIndex] = updatedParent
+    mutable.add(parentIndex + 1, promotedTask)
+    return mutable.toList()
+  }
+
+  /**
    * Updates the title of an existing subtask.
    */
   fun updateSubTaskTitle(tasks: List<TodoItem>, taskId: String, subtaskId: String, newTitle: String): List<TodoItem> {
@@ -661,7 +861,7 @@ object TodoListEngine {
 
   /**
    * Filters [tasks] by case-insensitive substring matching across title, notes, subtasks,
-   * and formatted schedule label.
+   * formatted schedule label, and recurrence rule label.
    */
   fun filterTasks(tasks: List<TodoItem>, query: String): List<TodoItem> {
     val trimmed = query.trim()
@@ -672,16 +872,56 @@ object TodoListEngine {
         task.subtasks.any { it.title.contains(trimmed, ignoreCase = true) } ||
         (task.scheduledAtMillis != null &&
           formatScheduleLabel(task.scheduledAtMillis, task.scheduledEndMillis)
-            .contains(trimmed, ignoreCase = true))
+            .contains(trimmed, ignoreCase = true)) ||
+        (task.recurrenceRule != null &&
+          task.recurrenceRule.formatLabel().contains(trimmed, ignoreCase = true))
     }
   }
 
   /**
-   * Completes an active task by [taskId], moving it from [TodoHistorySnapshot.tasks]
-   * to [TodoHistorySnapshot.completedTasks] and incrementing [TodoHistorySnapshot.completedToday].
+   * Completes an active task by [taskId].
+   * - Non-recurring tasks move from [TodoHistorySnapshot.tasks] to [TodoHistorySnapshot.completedTasks].
+   * - Recurring tasks ([TodoItem.recurrenceRule] != null) automatically reschedule themselves for
+   *   their next occurrence based on the selected recurrence preset at [nowMillis] (with subtasks reset
+   *   to uncompleted), while also recording the completed occurrence in [TodoHistorySnapshot.completedTasks]
+   *   and incrementing [TodoHistorySnapshot.completedToday].
    */
-  fun completeTask(snapshot: TodoHistorySnapshot, taskId: String): TodoHistorySnapshot {
+  fun completeTask(
+    snapshot: TodoHistorySnapshot,
+    taskId: String,
+    nowMillis: Long = System.currentTimeMillis(),
+  ): TodoHistorySnapshot {
     val task = snapshot.tasks.firstOrNull { it.id == taskId } ?: return snapshot
+    val rule = task.recurrenceRule
+    if (rule != null) {
+      val nextStart = rule.nextScheduledAtMillis(nowMillis)
+      val duration = if (
+        task.scheduledAtMillis != null &&
+        task.scheduledEndMillis != null &&
+        task.scheduledEndMillis > task.scheduledAtMillis
+      ) {
+        task.scheduledEndMillis - task.scheduledAtMillis
+      } else {
+        null
+      }
+      val rescheduledTask = task.copy(
+        scheduledAtMillis = nextStart,
+        scheduledEndMillis = duration?.let { nextStart + it },
+        notifiedAtScheduleMillis = null,
+        subtasks = task.subtasks.map { it.copy(isCompleted = false) },
+      )
+      val completedOccurrence = task.copy(
+        id = "${task.id}_completed_$nowMillis",
+        isSubtasksCollapsed = true,
+        subtasks = task.subtasks.map { it.copy(isCompleted = true) },
+      )
+      return snapshot.copy(
+        tasks = snapshot.tasks.map { if (it.id == taskId) rescheduledTask else it },
+        completedToday = snapshot.completedToday + 1,
+        completedTasks = listOf(completedOccurrence) + snapshot.completedTasks,
+      )
+    }
+
     val updatedTasks = snapshot.tasks.filter { it.id != taskId }
     val completedItem = task.copy(
       isSubtasksCollapsed = true,
@@ -696,13 +936,52 @@ object TodoListEngine {
 
   /**
    * Completes multiple active tasks by [taskIds].
+   * Recurring tasks automatically reschedule to their next occurrence at [nowMillis].
    */
-  fun completeTasks(snapshot: TodoHistorySnapshot, taskIds: Set<String>): TodoHistorySnapshot {
+  fun completeTasks(
+    snapshot: TodoHistorySnapshot,
+    taskIds: Set<String>,
+    nowMillis: Long = System.currentTimeMillis(),
+  ): TodoHistorySnapshot {
     val toComplete = snapshot.tasks.filter { it.id in taskIds }
     if (toComplete.isEmpty()) return snapshot
-    val updatedTasks = snapshot.tasks.filterNot { it.id in taskIds }
-    val completedItems = toComplete.map { task ->
+
+    val updatedTasks = snapshot.tasks.mapNotNull { task ->
+      if (task.id !in taskIds) {
+        task
+      } else {
+        val rule = task.recurrenceRule
+        if (rule != null) {
+          val nextStart = rule.nextScheduledAtMillis(nowMillis)
+          val duration = if (
+            task.scheduledAtMillis != null &&
+            task.scheduledEndMillis != null &&
+            task.scheduledEndMillis > task.scheduledAtMillis
+          ) {
+            task.scheduledEndMillis - task.scheduledAtMillis
+          } else {
+            null
+          }
+          task.copy(
+            scheduledAtMillis = nextStart,
+            scheduledEndMillis = duration?.let { nextStart + it },
+            notifiedAtScheduleMillis = null,
+            subtasks = task.subtasks.map { it.copy(isCompleted = false) },
+          )
+        } else {
+          null
+        }
+      }
+    }
+
+    val completedItems = toComplete.mapIndexed { idx, task ->
+      val completedId = if (task.recurrenceRule != null) {
+        "${task.id}_completed_${nowMillis}_$idx"
+      } else {
+        task.id
+      }
       task.copy(
+        id = completedId,
         isSubtasksCollapsed = true,
         subtasks = task.subtasks.map { it.copy(isCompleted = true) },
       )
@@ -814,8 +1093,8 @@ object TodoListEngine {
 
   /**
    * Schedules or reschedules a task for [scheduledAtMillis] and an optional [scheduledEndMillis]
-   * date/time range. Resets [TodoItem.notifiedAtScheduleMillis] so a notification fires when
-   * [scheduledAtMillis] is reached.
+   * date/time range and optional [recurrenceRule]. Resets [TodoItem.notifiedAtScheduleMillis]
+   * so a notification fires when [scheduledAtMillis] is reached.
    */
   fun scheduleTask(
     tasks: List<TodoItem>,
@@ -823,6 +1102,7 @@ object TodoListEngine {
     scheduledAtMillis: Long,
     scheduledEndMillis: Long? = null,
     notes: String? = null,
+    recurrenceRule: TodoRecurrenceRule? = null,
   ): List<TodoItem> {
     val normalizedEnd = scheduledEndMillis?.takeIf { it > scheduledAtMillis }
     return tasks.map { item ->
@@ -832,6 +1112,7 @@ object TodoListEngine {
           scheduledEndMillis = normalizedEnd,
           notifiedAtScheduleMillis = null,
           notes = notes?.trim() ?: item.notes,
+          recurrenceRule = recurrenceRule,
         )
       } else {
         item
@@ -847,6 +1128,7 @@ object TodoListEngine {
     taskIds: Set<String>,
     scheduledAtMillis: Long,
     scheduledEndMillis: Long? = null,
+    recurrenceRule: TodoRecurrenceRule? = null,
   ): List<TodoItem> {
     val normalizedEnd = scheduledEndMillis?.takeIf { it > scheduledAtMillis }
     return tasks.map { item ->
@@ -855,6 +1137,7 @@ object TodoListEngine {
           scheduledAtMillis = scheduledAtMillis,
           scheduledEndMillis = normalizedEnd,
           notifiedAtScheduleMillis = null,
+          recurrenceRule = recurrenceRule,
         )
       } else {
         item
@@ -863,7 +1146,7 @@ object TodoListEngine {
   }
 
   /**
-   * Clears any schedule from the specified task.
+   * Clears any schedule and recurrence rule from the specified task.
    */
   fun unscheduleTask(tasks: List<TodoItem>, taskId: String): List<TodoItem> {
     return tasks.map { item ->
@@ -872,6 +1155,7 @@ object TodoListEngine {
           scheduledAtMillis = null,
           scheduledEndMillis = null,
           notifiedAtScheduleMillis = null,
+          recurrenceRule = null,
         )
       } else {
         item
@@ -880,7 +1164,7 @@ object TodoListEngine {
   }
 
   /**
-   * Clears any schedule from multiple tasks by [taskIds].
+   * Clears any schedule and recurrence rule from multiple tasks by [taskIds].
    */
   fun unscheduleTasks(tasks: List<TodoItem>, taskIds: Set<String>): List<TodoItem> {
     return tasks.map { item ->
@@ -889,6 +1173,7 @@ object TodoListEngine {
           scheduledAtMillis = null,
           scheduledEndMillis = null,
           notifiedAtScheduleMillis = null,
+          recurrenceRule = null,
         )
       } else {
         item

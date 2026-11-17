@@ -28,14 +28,13 @@ class GalleryEngineTest {
   }
 
   @Test
-  fun defaultFolders_arePicturesAndDcim_andContentsAreUnNestedAsSameFolder_andDefaultNewAlbumIsPictures() {
-    assertEquals(listOf("Pictures", "DCIM"), DEFAULT_GALLERY_FOLDER_NAMES)
+  fun defaultFolders_areDcimPicturesPhotosAndDownloads_andContentsAreUnNestedAsSameFolder_andDefaultNewAlbumIsPictures() {
+    assertEquals(listOf("DCIM", "Pictures", "Photos", "Downloads"), DEFAULT_GALLERY_FOLDER_NAMES)
     assertEquals("Pictures", DEFAULT_NEW_ALBUM_FOLDER_NAME)
 
     val folders = GalleryEngine.getDefaultGalleryFolders(tempRootDir)
-    assertEquals(2, folders.size)
-    assertEquals("Pictures", folders[0].name)
-    assertEquals("DCIM", folders[1].name)
+    assertEquals(4, folders.size)
+    assertEquals(listOf("DCIM", "Pictures", "Photos", "Downloads"), folders.map { it.name })
 
     val defaultNewAlbumFolder = GalleryEngine.getDefaultNewAlbumFolder(tempRootDir)
     assertEquals(File(tempRootDir, "Pictures").absolutePath, defaultNewAlbumFolder.absolutePath)
@@ -85,6 +84,42 @@ class GalleryEngineTest {
 
     val rootAlbums = GalleryEngine.loadRootAlbums(rootDirectory = tempRootDir)
     assertEquals(listOf("Camera", "Screenshots", "Vacation"), rootAlbums.map { it.name })
+
+    // When Downloads exists, it is treated as a single "Downloads" album rather than un-nested
+    val downloadsDir = File(tempRootDir, "Downloads").apply { mkdirs() }
+    val downloadsSubDir = File(downloadsDir, "ExtractedZip").apply { mkdirs() }
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(downloadsDir, "dl_direct.png"),
+      lastModifiedMs = 7_000_000L,
+    )
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(downloadsSubDir, "dl_nested.png"),
+      lastModifiedMs = 8_000_000L,
+    )
+
+    val rootWithDownloads = GalleryEngine.loadRootContents(rootDirectory = tempRootDir)
+    assertEquals(
+      listOf("Camera", "Downloads", "Screenshots", "Vacation"),
+      rootWithDownloads.nestedAlbums.map { it.name },
+    )
+    // Direct photos in Downloads do not spill into root loose photos
+    assertEquals(
+      listOf("pictures_direct.png", "dcim_direct.png"),
+      rootWithDownloads.photos.map { it.name },
+    )
+
+    val downloadsAlbum = rootWithDownloads.nestedAlbums.first { it.name == "Downloads" }
+    assertEquals(2, downloadsAlbum.totalPhotoCount)
+    assertEquals(2, downloadsAlbum.directPhotoCount)
+    assertEquals(0, downloadsAlbum.subAlbumCount)
+    assertEquals("dl_nested.png", downloadsAlbum.mostRecentPhoto?.name)
+
+    val downloadsContents = GalleryEngine.loadAlbumContents(downloadsAlbum)
+    assertTrue(downloadsContents.nestedAlbums.isEmpty())
+    assertEquals(
+      listOf("dl_nested.png", "dl_direct.png"),
+      downloadsContents.photos.map { it.name },
+    )
   }
 
   @Test
@@ -737,9 +772,11 @@ class GalleryEngineTest {
   }
 
   @Test
-  fun groupPhotos_supportsFoldersDateMediaTypeSmartTagsAndNone() {
-    assertEquals(GalleryGroupOption.FOLDERS, GalleryGroupOption.DEFAULT)
-    assertEquals(GalleryGroupOption.FOLDERS, GalleryGroupOption.fromNameOrDefault(null))
+  fun groupPhotos_supportsFoldersDateMediaTypeSmartTagsAndNone_andSavesSortGroupConfigs() {
+    GalleryEngine.clearSortGroupConfigs()
+    assertEquals(GalleryGroupOption.NONE, GalleryGroupOption.DEFAULT)
+    assertEquals(GalleryGroupOption.NONE, GalleryGroupOption.fromNameOrDefault(null))
+    assertEquals(GalleryGroupOption.FOLDERS, GalleryGroupOption.fromNameOrDefault("FOLDERS"))
     assertEquals(GalleryGroupOption.DATE, GalleryGroupOption.fromNameOrDefault("DATE"))
     assertEquals(GalleryGroupOption.MEDIA_TYPE, GalleryGroupOption.fromNameOrDefault("MEDIA_TYPE"))
     assertEquals(GalleryGroupOption.SMART_TAGS, GalleryGroupOption.fromNameOrDefault("SMART_TAGS"))
@@ -750,21 +787,61 @@ class GalleryEngineTest {
     val yesterdayMs = nowMs - 26L * 3_600_000L
     val sixtyDaysAgoMs = nowMs - 60L * 24L * 3_600_000L
 
-    val photoFile = File(tempRootDir, "DCIM/Camera/portrait.jpg").apply {
+    val dcimDir = File(tempRootDir, "DCIM").apply { mkdirs() }
+    val picturesDir = File(tempRootDir, "Pictures").apply { mkdirs() }
+    val photosDir = File(tempRootDir, "Photos").apply { mkdirs() }
+    val downloadsDir = File(tempRootDir, "Downloads").apply { mkdirs() }
+
+    val photoFile = File(dcimDir, "Camera/portrait.jpg").apply {
       parentFile?.mkdirs()
       writeBytes(byteArrayOf(1, 2, 3))
     }
-    val videoFile = File(tempRootDir, "DCIM/Camera/clip.mp4").apply {
+    val videoFile = File(dcimDir, "Camera/clip.mp4").apply {
       writeBytes(byteArrayOf(0, 0, 0, 24))
     }
-    val gifFile = File(tempRootDir, "Pictures/meme.gif").apply {
+    val gifFile = File(picturesDir, "meme.gif").apply {
       parentFile?.mkdirs()
       writeBytes(byteArrayOf(1, 2))
     }
-    val screenshotFile = File(tempRootDir, "Pictures/Screenshots/Screenshot_01.png").apply {
+    val screenshotFile = File(picturesDir, "Screenshots/Screenshot_01.png").apply {
       parentFile?.mkdirs()
       writeBytes(byteArrayOf(1, 2, 3, 4))
     }
+    val exportedPhoto = File(photosDir, "exported.png").apply {
+      writeBytes(byteArrayOf(1, 2, 3))
+    }
+    val downloadedPhoto = File(downloadsDir, "downloaded.png").apply {
+      writeBytes(byteArrayOf(1, 2, 3))
+    }
+
+    // 0. FOLDERS groups by the default root folders ("DCIM", "Pictures", "Photos", and "Downloads")
+    val folderGroups = GalleryEngine.groupByDefaultFolders(
+      rootDirectories = listOf(dcimDir, picturesDir, photosDir, downloadsDir),
+      sortOrder = GallerySortOrder.NAME_ASC,
+    )
+    assertEquals(listOf("DCIM", "Pictures", "Photos", "Downloads"), folderGroups.map { it.title })
+    assertEquals(listOf("Camera"), folderGroups[0].albums.map { it.name })
+    assertEquals(listOf("Screenshots"), folderGroups[1].albums.map { it.name })
+    assertEquals(listOf("meme.gif"), folderGroups[1].photos.map { it.name })
+    assertEquals(listOf("exported.png"), folderGroups[2].photos.map { it.name })
+    assertEquals(listOf("Downloads"), folderGroups[3].albums.map { it.name })
+    assertEquals(1, folderGroups[3].albums.single().totalPhotoCount)
+    assertTrue(folderGroups[3].photos.isEmpty())
+
+    // Verify saving default and folder-specific sort & group configurations
+    val customDefault = GallerySortGroupConfig(GalleryGroupOption.DATE, GallerySortOrder.NAME_ASC)
+    GalleryEngine.setDefaultSortGroupConfig(config = customDefault)
+    assertEquals(customDefault, GalleryEngine.getDefaultSortGroupConfig())
+
+    val cameraFolderConfig = GallerySortGroupConfig(GalleryGroupOption.MEDIA_TYPE, GallerySortOrder.SIZE_DESC)
+    GalleryEngine.setFolderSortGroupConfig(directory = File(dcimDir, "Camera"), config = cameraFolderConfig)
+    assertTrue(GalleryEngine.hasFolderSortGroupConfig(directory = File(dcimDir, "Camera")))
+    assertEquals(cameraFolderConfig to true, GalleryEngine.resolveSortGroupConfig(folderKey = File(dcimDir, "Camera").absolutePath))
+    assertEquals(customDefault to false, GalleryEngine.resolveSortGroupConfig(folderKey = picturesDir.absolutePath))
+
+    GalleryEngine.removeFolderSortGroupConfig(directory = File(dcimDir, "Camera"))
+    assertTrue(!GalleryEngine.hasFolderSortGroupConfig(directory = File(dcimDir, "Camera")))
+    GalleryEngine.clearSortGroupConfigs()
 
     val photos = listOf(
       GalleryPhoto(photoFile, photoFile.name, photoFile.absolutePath, 300L, oneHourAgo, "jpg"),

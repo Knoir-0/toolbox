@@ -354,26 +354,42 @@ fun GalleryScreen(
     prefs?.edit()?.putString(PREF_KEY_GALLERY_VIEW_MODE, newMode.name)?.apply()
   }
 
+  // Default sort & group configuration for folders without a saved folder-specific override
+  var defaultSortGroupConfig by remember {
+    val loaded = if (isInspection) {
+      GallerySortGroupConfig()
+    } else {
+      GalleryEngine.getDefaultSortGroupConfig(context)
+    }
+    mutableStateOf(
+      GallerySortGroupConfig(
+        groupOption = initialGroupOption ?: loaded.groupOption,
+        sortOrder = initialSortOrder ?: loaded.sortOrder,
+      )
+    )
+  }
+
+  val initialFolderKey = initialAlbumDirectory?.absolutePath ?: GALLERY_ROOT_FOLDER_KEY
+  val initialResolvedSortGroup = remember(initialFolderKey) {
+    if (isInspection) {
+      defaultSortGroupConfig to false
+    } else {
+      val (resolved, saved) = GalleryEngine.resolveSortGroupConfig(context, initialFolderKey)
+      GallerySortGroupConfig(
+        groupOption = initialGroupOption ?: resolved.groupOption,
+        sortOrder = initialSortOrder ?: resolved.sortOrder,
+      ) to saved
+    }
+  }
+
   // Sort order: defaults to DATE_DESC (Newest first)
   var sortOrder by rememberSaveable {
-    val saved = prefs?.getString(PREF_KEY_GALLERY_SORT_ORDER, null)
-    mutableStateOf(initialSortOrder ?: GallerySortOrder.fromNameOrDefault(saved))
+    mutableStateOf(initialResolvedSortGroup.first.sortOrder)
   }
 
-  fun updateSortOrder(newOrder: GallerySortOrder) {
-    sortOrder = newOrder
-    prefs?.edit()?.putString(PREF_KEY_GALLERY_SORT_ORDER, newOrder.name)?.apply()
-  }
-
-  // Group option: defaults to FOLDERS
+  // Group option: defaults to NONE (un-nested root view; FOLDERS groups by DCIM and Pictures)
   var groupOption by rememberSaveable {
-    val saved = prefs?.getString(PREF_KEY_GALLERY_GROUP_OPTION, null)
-    mutableStateOf(initialGroupOption ?: GalleryGroupOption.fromNameOrDefault(saved))
-  }
-
-  fun updateGroupOption(newOption: GalleryGroupOption) {
-    groupOption = newOption
-    prefs?.edit()?.putString(PREF_KEY_GALLERY_GROUP_OPTION, newOption.name)?.apply()
+    mutableStateOf(initialResolvedSortGroup.first.groupOption)
   }
 
   var showSortMenu by remember { mutableStateOf(false) }
@@ -414,7 +430,12 @@ fun GalleryScreen(
     if (isInspection && rootDirectory == null && initialFolders == null) {
       AlbumContents(
         directory = File("/storage/emulated/0/Pictures"),
-        directories = listOf(File("/storage/emulated/0/Pictures"), File("/storage/emulated/0/DCIM")),
+        directories = listOf(
+          File("/storage/emulated/0/DCIM"),
+          File("/storage/emulated/0/Pictures"),
+          File("/storage/emulated/0/Photos"),
+          File("/storage/emulated/0/Downloads"),
+        ),
         nestedAlbums = listOf(
           GalleryAlbum(
             directory = File("/storage/emulated/0/DCIM/Camera"),
@@ -425,6 +446,16 @@ fun GalleryScreen(
             totalPhotoCount = 24,
             subAlbumCount = 1,
             lastModifiedMs = System.currentTimeMillis() - 60_000L,
+          ),
+          GalleryAlbum(
+            directory = File("/storage/emulated/0/Downloads"),
+            name = "Downloads",
+            path = "/storage/emulated/0/Downloads",
+            mostRecentPhoto = null,
+            directPhotoCount = 4,
+            totalPhotoCount = 4,
+            subAlbumCount = 0,
+            lastModifiedMs = System.currentTimeMillis() - 75_000L,
           ),
           GalleryAlbum(
             directory = File("/storage/emulated/0/DCIM/Screenshots"),
@@ -530,6 +561,83 @@ fun GalleryScreen(
     }
   }
   val currentAlbum: GalleryAlbum? = albumStack.lastOrNull()
+  val currentFolderKey = currentAlbum?.path ?: GALLERY_ROOT_FOLDER_KEY
+
+  var isSortGroupSavedForFolder by remember(currentFolderKey) {
+    mutableStateOf(
+      if (isInspection) false else GalleryEngine.hasFolderSortGroupConfig(context, currentFolderKey)
+    )
+  }
+  var folderEntryDefaultConfig by remember(currentFolderKey) {
+    mutableStateOf(defaultSortGroupConfig)
+  }
+
+  LaunchedEffect(currentFolderKey) {
+    val folderConfig = if (isInspection) null else GalleryEngine.getFolderSortGroupConfig(context, currentFolderKey)
+    if (folderConfig != null) {
+      isSortGroupSavedForFolder = true
+      groupOption = folderConfig.groupOption
+      sortOrder = folderConfig.sortOrder
+    } else {
+      isSortGroupSavedForFolder = false
+      groupOption = defaultSortGroupConfig.groupOption
+      sortOrder = defaultSortGroupConfig.sortOrder
+    }
+  }
+
+  fun updateSortOrder(newOrder: GallerySortOrder) {
+    sortOrder = newOrder
+    val updated = GallerySortGroupConfig(groupOption = groupOption, sortOrder = newOrder)
+    if (isSortGroupSavedForFolder) {
+      if (!isInspection) {
+        GalleryEngine.setFolderSortGroupConfig(context, currentFolderKey, updated)
+      }
+    } else {
+      defaultSortGroupConfig = updated
+      if (!isInspection) {
+        GalleryEngine.setDefaultSortGroupConfig(context, updated)
+      }
+    }
+  }
+
+  fun updateGroupOption(newOption: GalleryGroupOption) {
+    groupOption = newOption
+    val updated = GallerySortGroupConfig(groupOption = newOption, sortOrder = sortOrder)
+    if (isSortGroupSavedForFolder) {
+      if (!isInspection) {
+        GalleryEngine.setFolderSortGroupConfig(context, currentFolderKey, updated)
+      }
+    } else {
+      defaultSortGroupConfig = updated
+      if (!isInspection) {
+        GalleryEngine.setDefaultSortGroupConfig(context, updated)
+      }
+    }
+  }
+
+  fun toggleSaveSortGroupForFolder() {
+    val newSaved = !isSortGroupSavedForFolder
+    isSortGroupSavedForFolder = newSaved
+    if (newSaved) {
+      val folderConfig = GallerySortGroupConfig(groupOption = groupOption, sortOrder = sortOrder)
+      if (!isInspection) {
+        GalleryEngine.setFolderSortGroupConfig(context, currentFolderKey, folderConfig)
+      }
+      if (defaultSortGroupConfig != folderEntryDefaultConfig) {
+        defaultSortGroupConfig = folderEntryDefaultConfig
+        if (!isInspection) {
+          GalleryEngine.setDefaultSortGroupConfig(context, folderEntryDefaultConfig)
+        }
+      }
+    } else {
+      if (!isInspection) {
+        GalleryEngine.removeFolderSortGroupConfig(context, currentFolderKey)
+      }
+      groupOption = defaultSortGroupConfig.groupOption
+      sortOrder = defaultSortGroupConfig.sortOrder
+    }
+  }
+
   var collapsedGroupTitles by remember(groupOption, currentAlbum?.path) {
     mutableStateOf(setOf<String>())
   }
@@ -729,6 +837,30 @@ fun GalleryScreen(
   val searchMatchingPhotos: List<GalleryPhoto> = searchResult.matchingPhotos
   val matchSnippetsByPath: Map<String, String> = searchResult.matchSnippetsByPath
 
+  val folderGroups: List<GalleryFolderGroup> = remember(
+    groupOption,
+    sortOrder,
+    rootContents,
+    currentAlbum,
+    hasActiveSearchQueryOrTag,
+    searchQuery,
+    selectedTagFilter,
+    photoIndexMap,
+  ) {
+    if (groupOption == GalleryGroupOption.FOLDERS) {
+      GalleryEngine.groupByDefaultFolders(
+        rootDirectories = rootContents.directories,
+        currentAlbum = currentAlbum,
+        sortOrder = sortOrder,
+        searchQuery = if (hasActiveSearchQueryOrTag) searchQuery else "",
+        selectedTag = if (hasActiveSearchQueryOrTag) selectedTagFilter else null,
+        indexMap = photoIndexMap,
+      )
+    } else {
+      emptyList()
+    }
+  }
+
   val photoGroups: List<GalleryPhotoGroup> = remember(
     groupOption,
     sortOrder,
@@ -737,7 +869,7 @@ fun GalleryScreen(
     allScopePhotos,
     photoIndexMap,
   ) {
-    if (groupOption == GalleryGroupOption.FOLDERS) {
+    if (groupOption == GalleryGroupOption.NONE || groupOption == GalleryGroupOption.FOLDERS) {
       emptyList()
     } else {
       val sourcePhotos = if (hasActiveSearchQueryOrTag) searchMatchingPhotos else allScopePhotos
@@ -750,14 +882,18 @@ fun GalleryScreen(
     }
   }
 
-  val activeAlbums: List<GalleryAlbum> = remember(groupOption, searchMatchingAlbums) {
-    if (groupOption == GalleryGroupOption.FOLDERS) searchMatchingAlbums else emptyList()
+  val activeAlbums: List<GalleryAlbum> = remember(groupOption, searchMatchingAlbums, folderGroups) {
+    when (groupOption) {
+      GalleryGroupOption.NONE -> searchMatchingAlbums
+      GalleryGroupOption.FOLDERS -> folderGroups.flatMap { it.albums }
+      else -> emptyList()
+    }
   }
-  val activePhotos: List<GalleryPhoto> = remember(groupOption, searchMatchingPhotos, photoGroups) {
-    if (groupOption == GalleryGroupOption.FOLDERS) {
-      searchMatchingPhotos
-    } else {
-      photoGroups.flatMap { it.photos }.distinctBy { it.path }
+  val activePhotos: List<GalleryPhoto> = remember(groupOption, searchMatchingPhotos, folderGroups, photoGroups) {
+    when (groupOption) {
+      GalleryGroupOption.NONE -> searchMatchingPhotos
+      GalleryGroupOption.FOLDERS -> folderGroups.flatMap { it.photos }.distinctBy { it.path }
+      else -> photoGroups.flatMap { it.photos }.distinctBy { it.path }
     }
   }
 
@@ -1126,6 +1262,7 @@ fun GalleryScreen(
         groupOption = groupOption,
         sortOrder = sortOrder,
         showSortMenu = showSortMenu,
+        isSortGroupSavedForFolder = isSortGroupSavedForFolder,
         isSearchView = isSearchActive && !isSelectionMode,
         availableTags = availableAutoTags,
         selectedTag = selectedTagFilter,
@@ -1159,6 +1296,9 @@ fun GalleryScreen(
         onSelectSortOrder = {
           updateSortOrder(it)
           showSortMenu = false
+        },
+        onToggleSaveSortGroupForFolder = {
+          toggleSaveSortGroupForFolder()
         },
       )
 
@@ -1212,6 +1352,7 @@ fun GalleryScreen(
           GalleryTileGridView(
             albums = activeAlbums,
             photos = activePhotos,
+            folderGroups = folderGroups,
             photoGroups = photoGroups,
             collapsedGroupTitles = collapsedGroupTitles,
             onToggleGroupCollapse = { title ->
@@ -1222,7 +1363,7 @@ fun GalleryScreen(
               }
             },
             albumsPerRow = albumsPerRow,
-            isInsideAlbum = currentAlbum != null || groupOption == GalleryGroupOption.NONE,
+            isInsideAlbum = currentAlbum != null && folderGroups.isEmpty(),
             isSelectionMode = isSelectionMode,
             selectedAlbumPaths = selectedAlbumPaths,
             selectedPhotoPaths = selectedPhotoPaths,
@@ -1285,6 +1426,7 @@ fun GalleryScreen(
           GalleryListView(
             albums = activeAlbums,
             photos = activePhotos,
+            folderGroups = folderGroups,
             photoGroups = photoGroups,
             collapsedGroupTitles = collapsedGroupTitles,
             onToggleGroupCollapse = { title ->
@@ -1956,9 +2098,10 @@ private fun GalleryNavigationAndDensityBar(
   albumStack: List<GalleryAlbum>,
   viewMode: GalleryViewMode,
   albumsPerRow: Int,
-  groupOption: GalleryGroupOption = GalleryGroupOption.FOLDERS,
+  groupOption: GalleryGroupOption = GalleryGroupOption.DEFAULT,
   sortOrder: GallerySortOrder,
   showSortMenu: Boolean,
+  isSortGroupSavedForFolder: Boolean = false,
   isSearchView: Boolean = false,
   availableTags: List<Pair<String, Int>> = emptyList(),
   selectedTag: String? = null,
@@ -1973,6 +2116,7 @@ private fun GalleryNavigationAndDensityBar(
   onDismissSortMenu: () -> Unit,
   onSelectGroupOption: (GalleryGroupOption) -> Unit = {},
   onSelectSortOrder: (GallerySortOrder) -> Unit,
+  onToggleSaveSortGroupForFolder: () -> Unit = {},
 ) {
   Surface(
     color = MaterialTheme.colorScheme.surface,
@@ -2235,6 +2379,48 @@ private fun GalleryNavigationAndDensityBar(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                     onClick = { onSelectGroupOption(option) },
                     modifier = Modifier.testTag("gallery_group_option_${option.name.lowercase()}"),
+                  )
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                HorizontalDivider(
+                  color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+                )
+
+                // Bottom-left checkbox to save sort/group for this specific folder/album
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onToggleSaveSortGroupForFolder() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("gallery_save_sort_group_for_folder"),
+                ) {
+                  Checkbox(
+                    checked = isSortGroupSavedForFolder,
+                    onCheckedChange = { onToggleSaveSortGroupForFolder() },
+                    colors = CheckboxDefaults.colors(
+                      checkedColor = MaterialTheme.colorScheme.primary,
+                    ),
+                    modifier = Modifier
+                      .size(28.dp)
+                      .testTag("gallery_save_sort_group_for_folder_checkbox"),
+                  )
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text(
+                    text = "Save for folder",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = if (isSortGroupSavedForFolder) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (isSortGroupSavedForFolder) {
+                      MaterialTheme.colorScheme.primary
+                    } else {
+                      MaterialTheme.colorScheme.onSurface
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                   )
                 }
               }
@@ -2555,6 +2741,7 @@ private fun GalleryGroupHeader(
 private fun GalleryTileGridView(
   albums: List<GalleryAlbum>,
   photos: List<GalleryPhoto>,
+  folderGroups: List<GalleryFolderGroup> = emptyList(),
   photoGroups: List<GalleryPhotoGroup> = emptyList(),
   collapsedGroupTitles: Set<String> = emptySet(),
   onToggleGroupCollapse: (String) -> Unit = {},
@@ -2623,7 +2810,7 @@ private fun GalleryTileGridView(
     scrollCooldownMs = videoPreviewScrollCooldownMs,
   )
 
-  val hasTitledGroups = photoGroups.any { it.title.isNotEmpty() }
+  val hasTitledPhotoGroups = photoGroups.any { it.title.isNotEmpty() }
 
   LazyVerticalGrid(
     state = gridState,
@@ -2636,34 +2823,68 @@ private fun GalleryTileGridView(
       },
     contentPadding = if (isInsideAlbum) {
       PaddingValues(2.dp)
-    } else if (hasTitledGroups) {
+    } else if (hasTitledPhotoGroups) {
       PaddingValues(horizontal = 8.dp, vertical = 6.dp)
     } else {
       PaddingValues(horizontal = 10.dp, vertical = 6.dp)
     },
     horizontalArrangement = Arrangement.spacedBy(
-      if (isInsideAlbum || hasTitledGroups) 2.dp else if (isCompactTile) 6.dp else 8.dp
+      if (isInsideAlbum || hasTitledPhotoGroups) 2.dp else if (isCompactTile) 6.dp else 8.dp
     ),
     verticalArrangement = Arrangement.spacedBy(
-      if (isInsideAlbum || hasTitledGroups) 2.dp else if (isCompactTile) 4.dp else 6.dp
+      if (isInsideAlbum || hasTitledPhotoGroups) 2.dp else if (isCompactTile) 4.dp else 6.dp
     ),
   ) {
-    items(
-      items = albums,
-      key = { "album_${it.path}" },
-    ) { album ->
-      AlbumTileCard(
-        album = album,
-        isCompact = isCompactTile,
-        isSelectionMode = isSelectionMode,
-        isSelected = album.path in selectedAlbumPaths,
-        onToggleSelect = { onToggleAlbumSelect(album) },
-        onLongClick = { onAlbumLongClick(album) },
-        onClick = { onAlbumClick(album) },
-      )
-    }
-
-    if (photoGroups.isNotEmpty()) {
+    if (folderGroups.isNotEmpty()) {
+      folderGroups.forEach { folderGroup ->
+        val isCollapsed = folderGroup.title in collapsedGroupTitles
+        item(
+          key = "grid_folder_group_header_${folderGroup.title}",
+          span = { GridItemSpan(maxLineSpan) },
+        ) {
+          GalleryGroupHeader(
+            title = folderGroup.title,
+            count = folderGroup.totalCount,
+            isCollapsed = isCollapsed,
+            onToggleCollapse = { onToggleGroupCollapse(folderGroup.title) },
+          )
+        }
+        if (!isCollapsed) {
+          items(
+            items = folderGroup.albums,
+            key = { album -> "folder_album_${folderGroup.title}|${album.path}" },
+          ) { album ->
+            AlbumTileCard(
+              album = album,
+              isCompact = isCompactTile,
+              isSelectionMode = isSelectionMode,
+              isSelected = album.path in selectedAlbumPaths,
+              onToggleSelect = { onToggleAlbumSelect(album) },
+              onLongClick = { onAlbumLongClick(album) },
+              onClick = { onAlbumClick(album) },
+            )
+          }
+          items(
+            items = folderGroup.photos,
+            key = { photo -> "photo_group_${folderGroup.title}|${photo.path}" },
+          ) { photo ->
+            PhotoTileCard(
+              photo = photo,
+              isCompact = isCompactTile,
+              isSelectionMode = isSelectionMode,
+              isSelected = photo.path in selectedPhotoPaths,
+              isPlayingVideoPreview = photo.isVideo && photo.path == activePreviewVideoPath,
+              indexEntry = photoIndexMap[photo.path],
+              matchSnippet = matchSnippetsByPath[photo.path],
+              onToggleSelect = { onTogglePhotoSelect(photo) },
+              onLongClick = { onPhotoLongClick(photo) },
+              onClick = { onPhotoClick(photo) },
+              onEdit = { onPhotoEdit(photo) },
+            )
+          }
+        }
+      }
+    } else if (photoGroups.isNotEmpty()) {
       photoGroups.forEach { group ->
         val isCollapsed = group.title.isNotEmpty() && group.title in collapsedGroupTitles
         if (group.title.isNotEmpty()) {
@@ -2703,6 +2924,21 @@ private fun GalleryTileGridView(
         }
       }
     } else {
+      items(
+        items = albums,
+        key = { "album_${it.path}" },
+      ) { album ->
+        AlbumTileCard(
+          album = album,
+          isCompact = isCompactTile,
+          isSelectionMode = isSelectionMode,
+          isSelected = album.path in selectedAlbumPaths,
+          onToggleSelect = { onToggleAlbumSelect(album) },
+          onLongClick = { onAlbumLongClick(album) },
+          onClick = { onAlbumClick(album) },
+        )
+      }
+
       if (albums.isNotEmpty() && photos.isNotEmpty()) {
         item(span = { GridItemSpan(maxLineSpan) }) {
           Text(
@@ -3101,6 +3337,7 @@ private fun PhotoTileCard(
 private fun GalleryListView(
   albums: List<GalleryAlbum>,
   photos: List<GalleryPhoto>,
+  folderGroups: List<GalleryFolderGroup> = emptyList(),
   photoGroups: List<GalleryPhotoGroup> = emptyList(),
   collapsedGroupTitles: Set<String> = emptySet(),
   onToggleGroupCollapse: (String) -> Unit = {},
@@ -3172,21 +3409,51 @@ private fun GalleryListView(
     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
     verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
-    items(
-      items = albums,
-      key = { "list_album_${it.path}" },
-    ) { album ->
-      AlbumListRow(
-        album = album,
-        isSelectionMode = isSelectionMode,
-        isSelected = album.path in selectedAlbumPaths,
-        onToggleSelect = { onToggleAlbumSelect(album) },
-        onLongClick = { onAlbumLongClick(album) },
-        onClick = { onAlbumClick(album) },
-      )
-    }
-
-    if (photoGroups.isNotEmpty()) {
+    if (folderGroups.isNotEmpty()) {
+      folderGroups.forEach { folderGroup ->
+        val isCollapsed = folderGroup.title in collapsedGroupTitles
+        item(key = "list_folder_group_header_${folderGroup.title}") {
+          GalleryGroupHeader(
+            title = folderGroup.title,
+            count = folderGroup.totalCount,
+            isCollapsed = isCollapsed,
+            onToggleCollapse = { onToggleGroupCollapse(folderGroup.title) },
+          )
+        }
+        if (!isCollapsed) {
+          items(
+            items = folderGroup.albums,
+            key = { album -> "list_folder_album_${folderGroup.title}|${album.path}" },
+          ) { album ->
+            AlbumListRow(
+              album = album,
+              isSelectionMode = isSelectionMode,
+              isSelected = album.path in selectedAlbumPaths,
+              onToggleSelect = { onToggleAlbumSelect(album) },
+              onLongClick = { onAlbumLongClick(album) },
+              onClick = { onAlbumClick(album) },
+            )
+          }
+          items(
+            items = folderGroup.photos,
+            key = { photo -> "list_photo_group_${folderGroup.title}|${photo.path}" },
+          ) { photo ->
+            PhotoListRow(
+              photo = photo,
+              isSelectionMode = isSelectionMode,
+              isSelected = photo.path in selectedPhotoPaths,
+              isPlayingVideoPreview = photo.isVideo && photo.path == activePreviewVideoPath,
+              indexEntry = photoIndexMap[photo.path],
+              matchSnippet = matchSnippetsByPath[photo.path],
+              onToggleSelect = { onTogglePhotoSelect(photo) },
+              onLongClick = { onPhotoLongClick(photo) },
+              onClick = { onPhotoClick(photo) },
+              onEdit = { onPhotoEdit(photo) },
+            )
+          }
+        }
+      }
+    } else if (photoGroups.isNotEmpty()) {
       photoGroups.forEach { group ->
         val isCollapsed = group.title.isNotEmpty() && group.title in collapsedGroupTitles
         if (group.title.isNotEmpty()) {
@@ -3222,6 +3489,20 @@ private fun GalleryListView(
         }
       }
     } else {
+      items(
+        items = albums,
+        key = { "list_album_${it.path}" },
+      ) { album ->
+        AlbumListRow(
+          album = album,
+          isSelectionMode = isSelectionMode,
+          isSelected = album.path in selectedAlbumPaths,
+          onToggleSelect = { onToggleAlbumSelect(album) },
+          onLongClick = { onAlbumLongClick(album) },
+          onClick = { onAlbumClick(album) },
+        )
+      }
+
       if (albums.isNotEmpty() && photos.isNotEmpty()) {
         item {
           Text(

@@ -392,6 +392,7 @@ fun MainScreen(
   onItemClick: (NavKey) -> Unit = {},
   standaloneTool: Tool? = null,
   initialDirectory: File? = null,
+  initialExpandMusicPlayer: Boolean = false,
   modifier: Modifier = Modifier,
   preferencesRepository: NavigationPreferencesRepository = rememberNavigationPreferencesRepository(),
 ) {
@@ -412,6 +413,7 @@ fun MainScreen(
       StandaloneToolScreen(
         tool = standaloneTool,
         initialDirectory = initialDirectory,
+        initialExpandMusicPlayer = initialExpandMusicPlayer,
         preferencesRepository = preferencesRepository,
         modifier = modifier,
       )
@@ -2430,6 +2432,7 @@ private fun ToolGridItem(
 fun StandaloneToolScreen(
   tool: Tool,
   initialDirectory: File? = null,
+  initialExpandMusicPlayer: Boolean = false,
   modifier: Modifier = Modifier,
   preferencesRepository: NavigationPreferencesRepository = rememberNavigationPreferencesRepository(),
 ) {
@@ -2452,6 +2455,7 @@ fun StandaloneToolScreen(
       tool = tool,
       bottomPadding = 0.dp,
       initialDirectory = initialDirectory,
+      initialExpandMusicPlayer = initialExpandMusicPlayer,
       preferencesRepository = preferencesRepository,
     )
   }
@@ -2463,6 +2467,7 @@ fun ToolContentView(
   tool: Tool,
   bottomPadding: Dp = 0.dp,
   initialDirectory: File? = null,
+  initialExpandMusicPlayer: Boolean = false,
   initialColorPickerHex: String? = null,
   onOpenColorPicker: ((String) -> Unit)? = null,
   onSelectTool: ((Tool) -> Unit)? = null,
@@ -2557,6 +2562,7 @@ fun ToolContentView(
       )
       Tool.MUSIC -> MusicPlayerScreen(
         initialDirectory = initialDirectory,
+        initialPlayerExpanded = initialExpandMusicPlayer,
         onOpenColorPicker = onOpenColorPicker,
         modifier = Modifier.padding(bottom = bottomPadding),
       )

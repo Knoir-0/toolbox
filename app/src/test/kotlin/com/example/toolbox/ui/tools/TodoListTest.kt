@@ -7,6 +7,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Calendar
 
 class TodoListTest {
 
@@ -735,5 +736,77 @@ class TodoListTest {
       listOf("unsched", "overdue", "within_24h", "exact_24h", "beyond_24h"),
       mainTasksLater.map { it.id },
     )
+  }
+
+  @Test
+  fun recurringTask_serializesAndReschedulesToPresetUponCompletion() {
+    val now = 1_700_000_000_000L
+    val threeDaysRule = TodoRecurrenceRule.fromPreset("3 days", Calendar.DAY_OF_YEAR, 3)
+    val recurringTask = TodoItem(
+      id = "rec-1",
+      title = "Water studio plants",
+      subtasks = listOf(TodoSubTask(id = "sub-1", title = "Check soil", isCompleted = true)),
+      scheduledAtMillis = now - 60_000L,
+      notifiedAtScheduleMillis = now - 60_000L,
+      recurrenceRule = threeDaysRule,
+    )
+
+    // Verify JSON round-trip preserves recurrenceRule
+    val restored = TodoItem.fromJson(recurringTask.toJson())
+    assertEquals(threeDaysRule, restored.recurrenceRule)
+    assertTrue(restored.isRecurring)
+
+    val initialSnapshot = TodoHistorySnapshot(tasks = listOf(recurringTask), completedToday = 0)
+    val afterComplete = TodoListEngine.completeTask(initialSnapshot, "rec-1", nowMillis = now)
+
+    // Recurring task stays in active tasks, rescheduled for 3 days from completion time
+    assertEquals(1, afterComplete.tasks.size)
+    val rescheduled = afterComplete.tasks.first()
+    assertEquals("rec-1", rescheduled.id)
+    assertEquals(threeDaysRule.nextScheduledAtMillis(now), rescheduled.scheduledAtMillis)
+    assertEquals(null, rescheduled.notifiedAtScheduleMillis)
+    assertFalse(rescheduled.subtasks.first().isCompleted)
+
+    // Completed occurrence is logged in completedTasks and increments completedToday
+    assertEquals(1, afterComplete.completedToday)
+    assertEquals(1, afterComplete.completedTasks.size)
+    assertTrue(afterComplete.completedTasks.first().subtasks.first().isCompleted)
+
+    // Because 3 days > 24 hours, it is hidden from main tasks view and only in scheduled view
+    assertTrue(TodoListEngine.getMainViewTasks(afterComplete.tasks, nowMillis = now).isEmpty())
+    assertTrue(rescheduled.isScheduled)
+  }
+
+  @Test
+  fun promoteSubTaskToMainTask_movesSubtaskIntoMainList_andSupportsUndoRedo() {
+    val sub1 = TodoSubTask(id = "sub-1", title = "Replace soldering tip")
+    val sub2 = TodoSubTask(id = "sub-2", title = "Clean flux residue")
+    val parent = TodoItem(
+      id = "task-1",
+      title = "Workbench cleanup",
+      subtasks = listOf(sub1, sub2),
+    )
+    val secondTask = TodoItem(id = "task-2", title = "Order heatshrink")
+    val history = TodoHistoryManager(initialTasks = listOf(parent, secondTask))
+
+    // Promote sub1 to main task list
+    val afterPromote = history.promoteSubTaskToMainTask("task-1", "sub-1")
+    assertEquals(listOf("task-1", "sub-1", "task-2"), afterPromote.tasks.map { it.id })
+    assertEquals("Replace soldering tip", afterPromote.tasks[1].title)
+    assertEquals(listOf("sub-2"), afterPromote.tasks[0].subtasks.map { it.id })
+    assertTrue(history.canUndo)
+
+    // Undo restores sub1 back into parent's subtasks and removes it from main task list
+    val afterUndo = history.undo()
+    assertNotNull(afterUndo)
+    assertEquals(listOf("task-1", "task-2"), afterUndo!!.tasks.map { it.id })
+    assertEquals(listOf("sub-1", "sub-2"), afterUndo.tasks[0].subtasks.map { it.id })
+    assertTrue(history.canRedo)
+
+    // Redo re-promotes sub1 back into the main task list
+    val afterRedo = history.redo()
+    assertNotNull(afterRedo)
+    assertEquals(listOf("task-1", "sub-1", "task-2"), afterRedo!!.tasks.map { it.id })
+    assertEquals(listOf("sub-2"), afterRedo.tasks[0].subtasks.map { it.id })
   }
 }
