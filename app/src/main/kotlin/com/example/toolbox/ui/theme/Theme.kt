@@ -385,21 +385,21 @@ enum class MusicPlayerColorOption(
 ) {
     DOMINANT(
         prefValue = ACCENT_COLOR_MUSIC_PLAYER,
-        label = "Music Player (Dominant)",
+        label = "System Media (Dominant)",
         swatchLabel = "Dominant",
-        description = "Matches the music player's dominant album art color",
+        description = "Matches the active Android system media player's dominant artwork color",
     ),
     SECONDARY(
         prefValue = ACCENT_COLOR_MUSIC_SECONDARY,
-        label = "Music Player (Secondary)",
+        label = "System Media (Secondary)",
         swatchLabel = "Secondary",
-        description = "Matches the music player's secondary album art color",
+        description = "Matches the active Android system media player's secondary artwork color",
     ),
     ACCENT(
         prefValue = ACCENT_COLOR_MUSIC_ACCENT,
-        label = "Music Player (Accent)",
+        label = "System Media (Accent)",
         swatchLabel = "Accent",
-        description = "Matches the music player's vibrant album art accent color",
+        description = "Matches the active Android system media player's vibrant artwork accent color",
     ),
     ;
 
@@ -419,13 +419,17 @@ enum class MusicPlayerColorOption(
         fun fromPrefValue(value: String?): MusicPlayerColorOption? {
             if (value.isNullOrBlank()) return null
             val prefix = value.trim().substringBefore(':').trim()
-            if (
+            return when {
                 prefix.equals(ACCENT_COLOR_MUSIC_PLAYER, ignoreCase = true) ||
-                prefix.equals(ACCENT_COLOR_MUSIC_DOMINANT, ignoreCase = true)
-            ) {
-                return DOMINANT
+                    prefix.equals(ACCENT_COLOR_MUSIC_DOMINANT, ignoreCase = true) ||
+                    prefix.equals("MEDIA_PLAYER", ignoreCase = true) ||
+                    prefix.equals("MEDIA_DOMINANT", ignoreCase = true) -> DOMINANT
+                prefix.equals(ACCENT_COLOR_MUSIC_SECONDARY, ignoreCase = true) ||
+                    prefix.equals("MEDIA_SECONDARY", ignoreCase = true) -> SECONDARY
+                prefix.equals(ACCENT_COLOR_MUSIC_ACCENT, ignoreCase = true) ||
+                    prefix.equals("MEDIA_ACCENT", ignoreCase = true) -> ACCENT
+                else -> entries.find { it.prefValue.equals(prefix, ignoreCase = true) }
             }
-            return entries.find { it.prefValue.equals(prefix, ignoreCase = true) }
         }
     }
 }

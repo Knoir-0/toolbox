@@ -8,6 +8,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.example.toolbox.ui.main.MainScreen
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.theme.ToolboxTheme
@@ -65,7 +66,7 @@ class VideoEditorScreenTest {
     composeTestRule.onNodeWithTag("editor_undo_button").assertIsNotEnabled()
 
     // Switch to Rotate tab and rotate 90 CW -> Undo becomes enabled & strategy switches to Hardware H.264
-    composeTestRule.onNodeWithTag("mode_tab_transform").performClick()
+    composeTestRule.onNodeWithTag("mode_tab_transform").performScrollTo().performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("rotate_cw_button").performClick()
     composeTestRule.waitForIdle()
@@ -80,21 +81,21 @@ class VideoEditorScreenTest {
     composeTestRule.onNodeWithTag("editor_redo_button").assertIsEnabled()
 
     // Switch through Crop, Speed, and Filters tabs
-    composeTestRule.onNodeWithTag("mode_tab_crop").performClick()
+    composeTestRule.onNodeWithTag("mode_tab_crop").performScrollTo().performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("crop_preset_ratio_16_9").assertIsDisplayed()
 
-    composeTestRule.onNodeWithTag("mode_tab_speed").performClick()
+    composeTestRule.onNodeWithTag("mode_tab_speed").performScrollTo().performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("mute_audio_chip").assertIsDisplayed()
 
-    composeTestRule.onNodeWithTag("mode_tab_adjust").performClick()
+    composeTestRule.onNodeWithTag("mode_tab_adjust").performScrollTo().performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("filter_preset_warm").performClick()
     composeTestRule.waitForIdle()
 
     // Switch to Data tab and verify metadata controls are displayed
-    composeTestRule.onNodeWithTag("mode_tab_data").performClick()
+    composeTestRule.onNodeWithTag("mode_tab_data").performScrollTo().performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("video_metadata_panel").assertIsDisplayed()
     composeTestRule.onNodeWithTag("video_metadata_title_input").assertIsDisplayed()

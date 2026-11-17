@@ -741,9 +741,14 @@ fun SettingsScreen(
     }
 
     // Section 3: Theme Color (Collapsible)
+    val localContext = LocalContext.current
     val currentMusicPalette = MusicPlayerEngine.activeTrackPalette
     val currentMusicTrack = MusicPlayerEngine.activeTrack
+    val activeSystemMediaInfo = MusicPlayerEngine.activeSystemMediaInfo
     val isMusicPlaying = MusicPlayerEngine.isMusicPlaying
+    LaunchedEffect(localContext) {
+      MusicPlayerEngine.syncExternalSystemMediaSessions(localContext)
+    }
     val selectedMusicColorOption = remember(themeColor, musicPlayerColorOption) {
       MusicPlayerColorOption.fromPrefValue(themeColor)
         ?: MusicPlayerColorOption.fromPrefValue(musicPlayerColorOption)
@@ -1032,7 +1037,7 @@ fun SettingsScreen(
                       text = if (isMusicThemeSelected) {
                         selectedMusicColorOption.label
                       } else {
-                        "Music Player Colors"
+                        "System Media Colors"
                       },
                       style = MaterialTheme.typography.titleSmall,
                       fontWeight = FontWeight.Bold,
@@ -1040,13 +1045,17 @@ fun SettingsScreen(
                     Text(
                       text = when {
                         !isMusicThemeSelected ->
-                          "When checked, themes app while music is playing (falls back to selected theme color)"
+                          "When checked, themes app from the active Android system media player (falls back to selected theme color)"
+                        isMusicPlaying && activeSystemMediaInfo != null && activeSystemMediaInfo.isExternalApp -> {
+                          val sourceSuffix = activeSystemMediaInfo.sourceAppName.takeIf { it.isNotBlank() }?.let { " • $it" }.orEmpty()
+                          "Playing ${activeSystemMediaInfo.title}$sourceSuffix (${selectedMusicColorOption.swatchLabel})"
+                        }
                         isMusicPlaying && currentMusicTrack != null ->
                           "Playing ${currentMusicTrack.title} (${selectedMusicColorOption.swatchLabel})"
                         isMusicPlaying ->
-                          "Active while music is playing (${selectedMusicColorOption.swatchLabel})"
+                          "Active while system media is playing (${selectedMusicColorOption.swatchLabel})"
                         else ->
-                          "Themes app when music is playing • Fallback: $fallbackThemeColorSummary"
+                          "Follows Android system media player • Fallback: $fallbackThemeColorSummary"
                       },
                       style = MaterialTheme.typography.bodySmall,
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1084,13 +1093,20 @@ fun SettingsScreen(
                 verticalAlignment = Alignment.CenterVertically,
               ) {
                 Text(
-                  text = "Music Player Palette",
+                  text = "System Media Palette",
                   style = MaterialTheme.typography.labelLarge,
                   fontWeight = FontWeight.SemiBold,
                   color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                  text = currentMusicTrack?.let { "${it.title} • ${it.artist}" } ?: "Tap color to track music player",
+                  text = when {
+                    activeSystemMediaInfo != null && activeSystemMediaInfo.isExternalApp -> {
+                      val artistOrApp = activeSystemMediaInfo.artist.ifBlank { activeSystemMediaInfo.sourceAppName }
+                      if (artistOrApp.isNotBlank()) "${activeSystemMediaInfo.title} • $artistOrApp" else activeSystemMediaInfo.title
+                    }
+                    currentMusicTrack != null -> "${currentMusicTrack.title} • ${currentMusicTrack.artist}"
+                    else -> "Follows Android system media player"
+                  },
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                   maxLines = 1,

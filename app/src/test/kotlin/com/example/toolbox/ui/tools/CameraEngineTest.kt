@@ -497,11 +497,14 @@ class CameraEngineTest {
       inferenceLatencyMs = 18L,
       sourceDescription = "Indoor Monstera Plant",
     )
-    // 5 tags >= 50% (Furniture at 39.4% is hidden because it is below 50% confidence)
-    assertEquals(5, standardResult.tags.size)
-    assertTrue(standardResult.tags.all { it.confidence >= 0.50f && it.boundingBox != null })
+    // Plant (96.2%) and Flowerpot (84.1%) have non-overlapping boxes and are >= 65%.
+    // Houseplant (91.4%) and Leaf (75.8%) overlap with Plant (96.2%) and are suppressed in favor of Plant.
+    // Room (58.2%) and Furniture (39.4%) are below 65% and are hidden.
+    assertEquals(2, standardResult.tags.size)
+    assertEquals(listOf("Plant", "Flowerpot"), standardResult.tags.map { it.label })
+    assertTrue(standardResult.tags.all { it.confidence >= 0.65f && it.boundingBox != null })
     assertEquals(6, standardResult.allCandidateTags.size)
-    assertEquals(3, standardResult.galleryPassingCount)
+    assertEquals(2, standardResult.galleryPassingCount)
     assertEquals("Plant", standardResult.topTag?.label)
     assertEquals("96.2%", standardResult.topTag?.confidenceFormatted)
     assertTrue(standardResult.topTag?.passesGalleryThreshold == true)
@@ -521,9 +524,9 @@ class CameraEngineTest {
     assertTrue(primaryBox.left >= 0.04f && primaryBox.right <= 0.96f)
     assertTrue(primaryBox.width >= 0.12f && primaryBox.height >= 0.10f)
 
-    // Filtering with 80% Gallery threshold keeps only the 3 >= 80% tags
+    // Filtering with 80% Gallery threshold keeps the 2 non-overlapping >= 80% tags
     val galleryStrictResult = standardResult.withThreshold(CameraVisionThresholdPreset.GALLERY_80.minConfidence)
-    assertEquals(3, galleryStrictResult.tags.size)
+    assertEquals(2, galleryStrictResult.tags.size)
     assertTrue(galleryStrictResult.tags.all { it.passesGalleryThreshold })
 
     val report = galleryStrictResult.formatSummaryReport()

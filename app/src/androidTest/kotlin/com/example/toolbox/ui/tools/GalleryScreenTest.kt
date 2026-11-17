@@ -354,12 +354,14 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithText("No photos or albums found").assertIsDisplayed()
     composeTestRule.onNodeWithText("Create Album").assertIsDisplayed()
 
-    // Open Add Album dialog via FAB menu and verify default location is Pictures
+    // Open Add Album dialog via FAB menu on default root screen: only Select and New album are shown (no New album here)
     composeTestRule.onNodeWithTag("gallery_add_folder_button").assertDoesNotExist()
     composeTestRule.onNodeWithTag("gallery_fab_menu_button").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Select").assertIsDisplayed()
     composeTestRule.onNodeWithText("New album").assertIsDisplayed()
-    composeTestRule.onNodeWithText("New album here").assertIsDisplayed()
+    composeTestRule.onNodeWithText("New album here").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("gallery_new_album_here_fab_button").assertDoesNotExist()
     composeTestRule.onNodeWithTag("gallery_new_album_fab_button").performClick()
     composeTestRule.waitForIdle()
 
@@ -511,6 +513,29 @@ class GalleryScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("gallery_screen").assertIsDisplayed()
 
+    // Open video.mp4 in viewer -> verify video plays automatically and starts muted, with toggleable controls
+    composeTestRule.onNodeWithTag("photo_tile_item_video.mp4").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_video_video.mp4", useUnmergedTree = true).assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_video_controls").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_video_play_state_label", useUnmergedTree = true)
+      .assertTextEquals("Playing")
+    composeTestRule.onNodeWithTag("photo_viewer_video_mute_state_label", useUnmergedTree = true)
+      .assertTextEquals("Muted")
+
+    composeTestRule.onNodeWithTag("photo_viewer_mute_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_video_mute_state_label", useUnmergedTree = true)
+      .assertTextEquals("Sound on")
+
+    composeTestRule.onNodeWithTag("photo_viewer_play_pause_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_video_play_state_label", useUnmergedTree = true)
+      .assertTextEquals("Paused")
+
+    composeTestRule.onNodeWithTag("photo_viewer_close_button").performClick()
+    composeTestRule.waitForIdle()
+
     // Open ... menu on video.mp4 tile and click Edit -> opens VideoEditorScreen
     composeTestRule.onNodeWithTag("photo_more_video.mp4").performClick()
     composeTestRule.waitForIdle()
@@ -642,9 +667,16 @@ class GalleryScreenTest {
       initialZetaLeft < initialAlphaLeft,
     )
 
-    // Open sort menu and select Name (A to Z)
+    // Open sort & group menu: verify GROUP BY and SORT BY columns and select Name (A to Z)
     composeTestRule.onNodeWithTag("gallery_sort_button").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("GROUP BY").assertIsDisplayed()
+    composeTestRule.onNodeWithText("SORT BY").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_group_option_folders").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_group_option_date").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_group_option_media_type").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_group_option_smart_tags").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_group_option_none").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_sort_option_name_asc").performClick()
     composeTestRule.waitForIdle()
 
@@ -795,11 +827,17 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // Open toolbar search bar
+    // Before opening search, navigation breadcrumbs are shown
+    composeTestRule.onNodeWithTag("gallery_breadcrumbs").assertIsDisplayed()
+
+    // Open toolbar search bar -> smart tags replace the navigation breadcrumbs in the pill toolbar, keeping the icon without 'Smart Tags:' text
     composeTestRule.onNodeWithTag("gallery_search_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("gallery_toolbar_search_bar").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_search_tag_filter_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_search_tags_icon").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Smart Tags:").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("gallery_breadcrumbs").assertDoesNotExist()
 
     // Filter by OCR text inside bakery_receipt.png ("Sourdough")
     composeTestRule.onNodeWithTag("gallery_search_input").performTextInput("Sourdough")
@@ -829,5 +867,51 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("photo_info_ocr_text").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_info_copy_ocr_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_info_save_to_notes_button").assertIsDisplayed()
+  }
+
+  @Test
+  fun inlineMutedVideoPreviews_playSequentiallyInView_pauseAfterAllPlayed_andRestartAfterCyclePause() {
+    val cameraDir = File(testRootDir, "DCIM/Camera").apply { mkdirs() }
+    File(cameraDir, "clip_1.mp4").apply {
+      writeBytes(byteArrayOf(0, 0, 0, 24))
+      setLastModified(3_000_000L)
+    }
+    File(cameraDir, "clip_2.mp4").apply {
+      writeBytes(byteArrayOf(0, 0, 0, 24))
+      setLastModified(2_000_000L)
+    }
+
+    composeTestRule.mainClock.autoAdvance = false
+    composeTestRule.setContent {
+      ToolboxTheme {
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialAlbumDirectory = cameraDir,
+          videoPreviewPlayDurationMs = 1_000L,
+          videoPreviewCyclePauseDurationMs = 2_000L,
+          videoPreviewScrollCooldownMs = 1_000L,
+        )
+      }
+    }
+    composeTestRule.mainClock.advanceTimeBy(100L)
+
+    // 1. First video in view (clip_1.mp4, newest first) starts playing muted preview
+    composeTestRule.onNodeWithTag("video_preview_playing_clip_1.mp4", useUnmergedTree = true).assertIsDisplayed()
+    composeTestRule.onNodeWithTag("video_preview_playing_clip_2.mp4", useUnmergedTree = true).assertDoesNotExist()
+
+    // 2. After clip_1.mp4 plays for its preview duration, moves on to clip_2.mp4
+    composeTestRule.mainClock.advanceTimeBy(1_050L)
+    composeTestRule.onNodeWithTag("video_preview_playing_clip_1.mp4", useUnmergedTree = true).assertDoesNotExist()
+    composeTestRule.onNodeWithTag("video_preview_playing_clip_2.mp4", useUnmergedTree = true).assertIsDisplayed()
+
+    // 3. After all videos in view have played, pauses with no video playing
+    composeTestRule.mainClock.advanceTimeBy(1_050L)
+    composeTestRule.onNodeWithTag("video_preview_playing_clip_1.mp4", useUnmergedTree = true).assertDoesNotExist()
+    composeTestRule.onNodeWithTag("video_preview_playing_clip_2.mp4", useUnmergedTree = true).assertDoesNotExist()
+
+    // 4. After the cycle pause completes, begins again with the first video in view (clip_1.mp4)
+    composeTestRule.mainClock.advanceTimeBy(2_050L)
+    composeTestRule.onNodeWithTag("video_preview_playing_clip_1.mp4", useUnmergedTree = true).assertIsDisplayed()
+    composeTestRule.mainClock.autoAdvance = true
   }
 }

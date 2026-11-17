@@ -782,7 +782,9 @@ object BitmapOperations {
   }
 
   /**
-   * Draws a list of strokes directly onto a mutable copy of [source].
+   * Draws a list of strokes onto a transparent stroke layer (so eraser strokes clear only
+   * drawn strokes using [PorterDuff.Mode.CLEAR] without punching holes into [source]), and
+   * composites the result onto a mutable copy of [source].
    */
   fun renderStrokes(
     source: Bitmap,
@@ -790,7 +792,12 @@ object BitmapOperations {
   ): Bitmap {
     if (strokes.isEmpty()) return source
     val output = source.copy(Bitmap.Config.ARGB_8888, true)
-    val canvas = Canvas(output)
+    val strokeLayer = Bitmap.createBitmap(
+      source.width.coerceAtLeast(1),
+      source.height.coerceAtLeast(1),
+      Bitmap.Config.ARGB_8888,
+    )
+    val strokeCanvas = Canvas(strokeLayer)
 
     strokes.forEach { stroke ->
       if (stroke.points.size < 2) {
@@ -800,12 +807,13 @@ object BitmapOperations {
             isAntiAlias = true
             style = Paint.Style.FILL
             if (stroke.isEraser) {
+              color = AndroidColor.TRANSPARENT
               xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
             } else {
               color = stroke.color.toArgb()
             }
           }
-          canvas.drawCircle(p.x, p.y, stroke.strokeWidth / 2f, paint)
+          strokeCanvas.drawCircle(p.x, p.y, stroke.strokeWidth / 2f, paint)
         }
         return@forEach
       }
@@ -818,6 +826,7 @@ object BitmapOperations {
         strokeCap = Paint.Cap.ROUND
         strokeWidth = stroke.strokeWidth
         if (stroke.isEraser) {
+          color = AndroidColor.TRANSPARENT
           xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
         } else {
           color = stroke.color.toArgb()
@@ -836,9 +845,12 @@ object BitmapOperations {
       val last = stroke.points.last()
       path.lineTo(last.x, last.y)
 
-      canvas.drawPath(path, paint)
+      strokeCanvas.drawPath(path, paint)
     }
 
+    val outputCanvas = Canvas(output)
+    outputCanvas.drawBitmap(strokeLayer, 0f, 0f, Paint(Paint.ANTI_ALIAS_FLAG))
+    strokeLayer.recycle()
     return output
   }
 

@@ -688,4 +688,151 @@ class GalleryEngineTest {
     ).map { it.first }
     assertTrue(availableTagNames.containsAll(listOf("Receipt", "QR Code", "Wi-Fi", "Food", "Text")))
   }
+
+  @Test
+  fun inlineVideoPreviewScheduler_cyclesThroughVisibleVideos_pausesAfterCycle_andPausesWhenPlayingVideoScrolledOutOfView() {
+    assertTrue(DEFAULT_VIDEO_PREVIEW_PLAY_DURATION_MS in 3_000L..6_000L)
+    assertTrue(DEFAULT_VIDEO_PREVIEW_CYCLE_PAUSE_DURATION_MS in 6_000L..8_000L)
+    assertTrue(DEFAULT_VIDEO_PREVIEW_SCROLL_OUT_COOLDOWN_MS in 2_000L..3_000L)
+
+    val visibleVideos = listOf("/DCIM/v1.mp4", "/DCIM/v2.mp4", "/DCIM/v3.mp4")
+
+    // 1. Starts playing the first video in view
+    var state = GalleryEngine.onVisibleVideosChanged(
+      state = GalleryVideoPreviewState(),
+      visibleVideoPaths = visibleVideos,
+    )
+    assertEquals(GalleryVideoPreviewPhase.PLAYING, state.phase)
+    assertEquals("/DCIM/v1.mp4", state.activeVideoPath)
+
+    // 2. After v1 finishes (3-6s), moves on to v2, then v3
+    state = GalleryEngine.onActiveVideoPreviewCompleted(state, visibleVideos)
+    assertEquals(GalleryVideoPreviewPhase.PLAYING, state.phase)
+    assertEquals("/DCIM/v2.mp4", state.activeVideoPath)
+
+    state = GalleryEngine.onActiveVideoPreviewCompleted(state, visibleVideos)
+    assertEquals(GalleryVideoPreviewPhase.PLAYING, state.phase)
+    assertEquals("/DCIM/v3.mp4", state.activeVideoPath)
+
+    // 3. Once all videos in view have been played, pauses in CYCLE_PAUSE (6-8s) with no active video
+    state = GalleryEngine.onActiveVideoPreviewCompleted(state, visibleVideos)
+    assertEquals(GalleryVideoPreviewPhase.CYCLE_PAUSE, state.phase)
+    assertNull(state.activeVideoPath)
+
+    // 4. After the cycle pause completes, begins again with the first video in view (v1)
+    state = GalleryEngine.onPreviewPauseOrCooldownCompleted(state, visibleVideos)
+    assertEquals(GalleryVideoPreviewPhase.PLAYING, state.phase)
+    assertEquals("/DCIM/v1.mp4", state.activeVideoPath)
+
+    // 5. If the user scrolls the playing video (v1) out of view, playback immediately pauses in SCROLL_COOLDOWN
+    val scrolledVisibleVideos = listOf("/DCIM/v2.mp4", "/DCIM/v3.mp4", "/DCIM/v4.mp4")
+    state = GalleryEngine.onVisibleVideosChanged(state, scrolledVisibleVideos)
+    assertEquals(GalleryVideoPreviewPhase.SCROLL_COOLDOWN, state.phase)
+    assertNull(state.activeVideoPath)
+
+    // 6. After the 2-3s cooldown following scroll stop, starts again with the first video currently in view (v2)
+    state = GalleryEngine.onPreviewPauseOrCooldownCompleted(state, scrolledVisibleVideos)
+    assertEquals(GalleryVideoPreviewPhase.PLAYING, state.phase)
+    assertEquals("/DCIM/v2.mp4", state.activeVideoPath)
+  }
+
+  @Test
+  fun groupPhotos_supportsFoldersDateMediaTypeSmartTagsAndNone() {
+    assertEquals(GalleryGroupOption.FOLDERS, GalleryGroupOption.DEFAULT)
+    assertEquals(GalleryGroupOption.FOLDERS, GalleryGroupOption.fromNameOrDefault(null))
+    assertEquals(GalleryGroupOption.DATE, GalleryGroupOption.fromNameOrDefault("DATE"))
+    assertEquals(GalleryGroupOption.MEDIA_TYPE, GalleryGroupOption.fromNameOrDefault("MEDIA_TYPE"))
+    assertEquals(GalleryGroupOption.SMART_TAGS, GalleryGroupOption.fromNameOrDefault("SMART_TAGS"))
+    assertEquals(GalleryGroupOption.NONE, GalleryGroupOption.fromNameOrDefault("NONE"))
+
+    val nowMs = 1_763_400_000_000L
+    val oneHourAgo = nowMs - 3_600_000L
+    val yesterdayMs = nowMs - 26L * 3_600_000L
+    val sixtyDaysAgoMs = nowMs - 60L * 24L * 3_600_000L
+
+    val photoFile = File(tempRootDir, "DCIM/Camera/portrait.jpg").apply {
+      parentFile?.mkdirs()
+      writeBytes(byteArrayOf(1, 2, 3))
+    }
+    val videoFile = File(tempRootDir, "DCIM/Camera/clip.mp4").apply {
+      writeBytes(byteArrayOf(0, 0, 0, 24))
+    }
+    val gifFile = File(tempRootDir, "Pictures/meme.gif").apply {
+      parentFile?.mkdirs()
+      writeBytes(byteArrayOf(1, 2))
+    }
+    val screenshotFile = File(tempRootDir, "Pictures/Screenshots/Screenshot_01.png").apply {
+      parentFile?.mkdirs()
+      writeBytes(byteArrayOf(1, 2, 3, 4))
+    }
+
+    val photos = listOf(
+      GalleryPhoto(photoFile, photoFile.name, photoFile.absolutePath, 300L, oneHourAgo, "jpg"),
+      GalleryPhoto(videoFile, videoFile.name, videoFile.absolutePath, 900L, yesterdayMs, "mp4"),
+      GalleryPhoto(gifFile, gifFile.name, gifFile.absolutePath, 200L, sixtyDaysAgoMs, "gif"),
+      GalleryPhoto(screenshotFile, screenshotFile.name, screenshotFile.absolutePath, 400L, oneHourAgo - 1_000L, "png"),
+    )
+
+    val indexMap = mapOf(
+      photoFile.absolutePath to GalleryPhotoIndexEntry(
+        path = photoFile.absolutePath,
+        lastModifiedMs = oneHourAgo,
+        sizeBytes = 300L,
+        autoTags = listOf("Nature"),
+      ),
+      screenshotFile.absolutePath to GalleryPhotoIndexEntry(
+        path = screenshotFile.absolutePath,
+        lastModifiedMs = oneHourAgo - 1_000L,
+        sizeBytes = 400L,
+        autoTags = listOf("Receipt", "Screenshot"),
+      ),
+    )
+
+    // 1. NONE produces a single untitled flat group
+    val noneGroups = GalleryEngine.groupPhotos(
+      photos = photos,
+      groupOption = GalleryGroupOption.NONE,
+      sortOrder = GallerySortOrder.DATE_DESC,
+    )
+    assertEquals(1, noneGroups.size)
+    assertEquals("", noneGroups.single().title)
+    assertEquals(4, noneGroups.single().photos.size)
+
+    // 2. DATE groups into Today, Yesterday, and Month Year
+    val dateGroups = GalleryEngine.groupPhotos(
+      photos = photos,
+      groupOption = GalleryGroupOption.DATE,
+      sortOrder = GallerySortOrder.DATE_DESC,
+      nowMs = nowMs,
+    )
+    assertEquals("Today", dateGroups[0].title)
+    assertEquals(2, dateGroups[0].photos.size)
+    assertEquals("Yesterday", dateGroups[1].title)
+    assertEquals(listOf("clip.mp4"), dateGroups[1].photos.map { it.name })
+    assertEquals(3, dateGroups.size)
+
+    // 3. MEDIA_TYPE groups into Photos, Videos, GIFs, and Screenshots
+    val mediaTypeGroups = GalleryEngine.groupPhotos(
+      photos = photos,
+      groupOption = GalleryGroupOption.MEDIA_TYPE,
+      sortOrder = GallerySortOrder.DATE_DESC,
+      indexMap = indexMap,
+    )
+    assertEquals(
+      listOf("Photos", "Videos", "GIFs", "Screenshots"),
+      mediaTypeGroups.map { it.title },
+    )
+
+    // 4. SMART_TAGS groups by detected tags plus Untagged
+    val smartTagGroups = GalleryEngine.groupPhotos(
+      photos = photos,
+      groupOption = GalleryGroupOption.SMART_TAGS,
+      sortOrder = GallerySortOrder.DATE_DESC,
+      indexMap = indexMap,
+    )
+    assertEquals(
+      listOf("Receipt", "Screenshot", "Nature", "Untagged"),
+      smartTagGroups.map { it.title },
+    )
+  }
 }

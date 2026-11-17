@@ -20,6 +20,7 @@ import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
 import com.example.toolbox.ui.main.syncAppLauncherIcon
 import com.example.toolbox.ui.main.syncStandaloneTaskDescription
 import com.example.toolbox.ui.theme.ToolboxTheme
+import com.example.toolbox.ui.tools.MusicPlayerEngine
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -28,6 +29,7 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    MusicPlayerEngine.syncExternalSystemMediaSessions(this)
     val parsedTool = parseStandaloneTool(intent)
     val parsedFolder = parseFolderShortcut(intent)
     val resolvedTool = if (parsedFolder != null) (parsedTool ?: Tool.FILES) else parsedTool
@@ -96,5 +98,10 @@ class MainActivity : ComponentActivity() {
       standaloneTool = standaloneToolState.value,
       initialFolder = initialFolderState.value,
     )
+  }
+
+  override fun onResume() {
+    super.onResume()
+    MusicPlayerEngine.syncExternalSystemMediaSessions(this)
   }
 }

@@ -117,11 +117,11 @@ enum class CameraCaptureMode(
   }
 }
 
-const val MIN_VISION_CONFIDENCE_THRESHOLD = 0.50f
+const val MIN_VISION_CONFIDENCE_THRESHOLD = 0.65f
 
 /**
  * Confidence threshold presets for live ML Kit Image Labeling in [CameraCaptureMode.VISION] mode.
- * Anything lower than 50% confidence ([MIN_VISION_CONFIDENCE_THRESHOLD]) is hidden.
+ * Anything lower than 65% confidence ([MIN_VISION_CONFIDENCE_THRESHOLD]) is hidden.
  */
 enum class CameraVisionThresholdPreset(
   val label: String,
@@ -129,11 +129,11 @@ enum class CameraVisionThresholdPreset(
   val minConfidence: Float,
   val description: String,
 ) {
-  STANDARD_50(
-    label = "≥50% Standard",
-    shortLabel = "≥50%",
+  STANDARD_65(
+    label = "≥65% Standard",
+    shortLabel = "≥65%",
     minConfidence = MIN_VISION_CONFIDENCE_THRESHOLD,
-    description = "Standard ML Kit confidence threshold (50% minimum)",
+    description = "Standard ML Kit confidence threshold (65% minimum)",
   ),
   HIGH_70(
     label = "≥70% High",
@@ -150,7 +150,7 @@ enum class CameraVisionThresholdPreset(
   ;
 
   companion object {
-    val DEFAULT: CameraVisionThresholdPreset = STANDARD_50
+    val DEFAULT: CameraVisionThresholdPreset = STANDARD_65
 
     fun fromNameOrDefault(name: String?): CameraVisionThresholdPreset {
       if (name.isNullOrBlank()) return DEFAULT
@@ -176,6 +176,7 @@ data class CameraVisionBoundingBox(
 ) {
   val width: Float get() = (right - left).coerceAtLeast(0f)
   val height: Float get() = (bottom - top).coerceAtLeast(0f)
+  val area: Float get() = width * height
   val centerX: Float get() = (left + right) * 0.5f
   val centerY: Float get() = (top + bottom) * 0.5f
 
@@ -185,6 +186,47 @@ data class CameraVisionBoundingBox(
     val r = right.coerceIn(l + 0.12f, 0.96f)
     val b = bottom.coerceIn(t + 0.10f, 0.90f)
     return CameraVisionBoundingBox(left = l, top = t, right = r, bottom = b)
+  }
+
+  fun intersectionArea(other: CameraVisionBoundingBox): Float {
+    val interLeft = maxOf(left, other.left)
+    val interTop = maxOf(top, other.top)
+    val interRight = minOf(right, other.right)
+    val interBottom = minOf(bottom, other.bottom)
+    if (interRight <= interLeft || interBottom <= interTop) return 0f
+    return (interRight - interLeft) * (interBottom - interTop)
+  }
+
+  fun intersectionOverUnion(other: CameraVisionBoundingBox): Float {
+    val inter = intersectionArea(other)
+    if (inter <= 0f) return 0f
+    val union = area + other.area - inter
+    return if (union > 0f) (inter / union).coerceIn(0f, 1f) else 0f
+  }
+
+  fun containmentRatio(other: CameraVisionBoundingBox): Float {
+    val inter = intersectionArea(other)
+    if (inter <= 0f) return 0f
+    val minArea = minOf(area, other.area)
+    return if (minArea > 0f) (inter / minArea).coerceIn(0f, 1f) else 0f
+  }
+
+  /**
+   * Returns `true` when this box and [other] are fully or heavily overlapping (one box is contained
+   * within the other, they share high Intersection-over-Union, or their top-left label anchors collide).
+   */
+  fun isFullyOverlappingWith(
+    other: CameraVisionBoundingBox,
+    containmentThreshold: Float = 0.80f,
+    iouThreshold: Float = 0.50f,
+  ): Boolean {
+    if (abs(left - other.left) < 0.06f && abs(top - other.top) < 0.06f &&
+      abs(right - other.right) < 0.06f && abs(bottom - other.bottom) < 0.06f
+    ) {
+      return true
+    }
+    return containmentRatio(other) >= containmentThreshold ||
+      intersectionOverUnion(other) >= iouThreshold
   }
 }
 
@@ -223,25 +265,28 @@ enum class CameraVisionSamplePreset(
         label = "Plant",
         confidence = 0.962f,
         index = 284,
-        boundingBox = CameraVisionBoundingBox(0.16f, 0.18f, 0.84f, 0.64f),
+        boundingBox = CameraVisionBoundingBox(0.14f, 0.16f, 0.62f, 0.54f),
       ),
       CameraVisionTag(
         label = "Houseplant",
         confidence = 0.914f,
         index = 192,
-        boundingBox = CameraVisionBoundingBox(0.22f, 0.24f, 0.78f, 0.78f),
+        // Fully overlaps with Plant (0.962f), so Houseplant is suppressed in favor of Plant
+        boundingBox = CameraVisionBoundingBox(0.14f, 0.16f, 0.62f, 0.54f),
       ),
       CameraVisionTag(
         label = "Flowerpot",
         confidence = 0.841f,
         index = 148,
-        boundingBox = CameraVisionBoundingBox(0.32f, 0.56f, 0.68f, 0.82f),
+        // Separate non-overlapping region for the pot below the foliage
+        boundingBox = CameraVisionBoundingBox(0.30f, 0.58f, 0.72f, 0.84f),
       ),
       CameraVisionTag(
         label = "Leaf",
         confidence = 0.758f,
         index = 211,
-        boundingBox = CameraVisionBoundingBox(0.12f, 0.22f, 0.52f, 0.48f),
+        // Contained inside Plant's bounding box, so Leaf is suppressed in favor of Plant
+        boundingBox = CameraVisionBoundingBox(0.18f, 0.20f, 0.52f, 0.48f),
       ),
       CameraVisionTag(
         label = "Room",
@@ -425,9 +470,9 @@ data class CameraVisionAnalysisResult(
 
   fun withThreshold(newThreshold: Float): CameraVisionAnalysisResult {
     val clamped = newThreshold.coerceIn(MIN_VISION_CONFIDENCE_THRESHOLD, 0.99f)
-    val filtered = allCandidateTags
-      .filter { it.confidenceClamped >= clamped }
-      .sortedByDescending { it.confidenceClamped }
+    val filtered = CameraEngine.suppressOverlappingVisionTags(
+      allCandidateTags.filter { it.confidenceClamped >= clamped }
+    )
     return copy(
       tags = filtered,
       confidenceThreshold = clamped,
@@ -3329,9 +3374,31 @@ object CameraEngine {
   }
 
   /**
-   * Normalizes, deduplicates, and filters raw [CameraVisionTag] items into a structured
-   * [CameraVisionAnalysisResult] sorted by descending confidence.
-   * Anything lower than 50% confidence ([MIN_VISION_CONFIDENCE_THRESHOLD]) is hidden.
+   * Filters a list of [CameraVisionTag] detections using Non-Maximum Suppression (NMS) so that
+   * when two detections have fully overlapping bounding boxes, only the highest-confidence
+   * detection is kept and the lower-confidence overlapping detection is hidden.
+   */
+  fun suppressOverlappingVisionTags(tags: List<CameraVisionTag>): List<CameraVisionTag> {
+    if (tags.size <= 1) return tags
+    val sorted = tags.sortedByDescending { it.confidenceClamped }
+    val kept = mutableListOf<CameraVisionTag>()
+    for (candidate in sorted) {
+      val candidateBox = (candidate.boundingBox ?: defaultVisionBoundingBoxForRank(0)).coerceNormalized()
+      val overlapsHigherConfidence = kept.any { existing ->
+        val existingBox = (existing.boundingBox ?: defaultVisionBoundingBoxForRank(0)).coerceNormalized()
+        candidateBox.isFullyOverlappingWith(existingBox)
+      }
+      if (!overlapsHigherConfidence) {
+        kept.add(candidate.copy(boundingBox = candidateBox))
+      }
+    }
+    return kept
+  }
+
+  /**
+   * Normalizes, deduplicates, filters by confidence (>= [MIN_VISION_CONFIDENCE_THRESHOLD]),
+   * and suppresses overlapping bounding boxes so only the highest-confidence detection renders
+   * for any overlapping region.
    */
   fun buildVisionAnalysisResult(
     rawTags: List<CameraVisionTag>,
@@ -3372,11 +3439,12 @@ object CameraEngine {
     }
 
     val allCandidates = dedupByLabel.values.take(maxLabels.coerceAtLeast(1))
-    val filteredTags = allCandidates.filter { it.confidenceClamped >= clampedThreshold }
+    val filteredAboveThreshold = allCandidates.filter { it.confidenceClamped >= clampedThreshold }
+    val nonOverlappingTags = suppressOverlappingVisionTags(filteredAboveThreshold)
 
     return CameraVisionAnalysisResult(
       id = "VISION_${analyzedAtMs}_${sourceDescription.hashCode()}",
-      tags = filteredTags,
+      tags = nonOverlappingTags,
       allCandidateTags = allCandidates,
       confidenceThreshold = clampedThreshold,
       inferenceLatencyMs = inferenceLatencyMs.coerceAtLeast(1L),
@@ -3484,12 +3552,12 @@ object CameraEngine {
       val combinedTags = mutableListOf<CameraVisionTag>()
       combinedTags.addAll(localizedByLabel.values)
 
-      fullFrameLabels.forEachIndexed { idx, (text, scoreAndIdx) ->
+      fullFrameLabels.forEach { (text, scoreAndIdx) ->
         val key = text.lowercase(Locale.US)
         val localized = localizedByLabel[key]
         val assignedBox = localized?.boundingBox
-          ?: salientRegions.getOrNull(idx % salientRegions.size)
-          ?: defaultVisionBoundingBoxForRank(idx)
+          ?: salientRegions.firstOrNull()
+          ?: defaultVisionBoundingBoxForRank(0)
         combinedTags.add(
           CameraVisionTag(
             label = text,

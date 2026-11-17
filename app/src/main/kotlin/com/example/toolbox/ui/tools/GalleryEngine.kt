@@ -11,6 +11,9 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
 import java.util.Locale
 import java.util.zip.CRC32
 import java.util.zip.Deflater
@@ -27,6 +30,7 @@ const val PREF_KEY_GALLERY_FOLDERS = "gallery_loaded_folders"
 const val PREF_KEY_GALLERY_VIEW_MODE = "gallery_view_mode"
 const val PREF_KEY_GALLERY_ALBUMS_PER_ROW = "gallery_albums_per_row"
 const val PREF_KEY_GALLERY_SORT_ORDER = "gallery_sort_order"
+const val PREF_KEY_GALLERY_GROUP_OPTION = "gallery_group_option"
 
 const val MIN_ALBUMS_PER_ROW = 3
 const val MAX_ALBUMS_PER_ROW = 6
@@ -34,6 +38,36 @@ const val DEFAULT_ALBUMS_PER_ROW = 3
 
 const val MIN_PHOTO_ZOOM = 1f
 const val MAX_PHOTO_ZOOM = 5f
+
+const val DEFAULT_VIDEO_PREVIEW_PLAY_DURATION_MS = 4_500L
+const val DEFAULT_VIDEO_PREVIEW_CYCLE_PAUSE_DURATION_MS = 7_000L
+const val DEFAULT_VIDEO_PREVIEW_SCROLL_OUT_COOLDOWN_MS = 2_500L
+
+/**
+ * Playback phases for inline muted video previews while browsing/scrolling the Gallery:
+ * - [IDLE]: No videos currently in view or inline preview disabled.
+ * - [PLAYING]: Playing a muted preview of the current active video in view (for 3–6s).
+ * - [CYCLE_PAUSE]: All videos currently in view have finished their preview; pausing (for 6–8s)
+ *   before starting again with the first video in view.
+ * - [SCROLL_COOLDOWN]: The video that was playing was scrolled out of view; pausing (for 2–3s
+ *   after the user stops scrolling) before starting again with the first video currently in view.
+ */
+enum class GalleryVideoPreviewPhase {
+  IDLE,
+  PLAYING,
+  CYCLE_PAUSE,
+  SCROLL_COOLDOWN,
+}
+
+/**
+ * Immutable state snapshot for the inline muted video preview scheduler in the Gallery.
+ */
+data class GalleryVideoPreviewState(
+  val phase: GalleryVideoPreviewPhase = GalleryVideoPreviewPhase.IDLE,
+  val activeVideoPath: String? = null,
+  val playedInCurrentCycle: Set<String> = emptySet(),
+  val playSessionToken: Int = 0,
+)
 
 val DEFAULT_GALLERY_FOLDER_NAMES: List<String> = listOf("Pictures", "DCIM")
 const val DEFAULT_NEW_ALBUM_FOLDER_NAME: String = "Pictures"
@@ -79,6 +113,40 @@ enum class GallerySortOrder(val displayName: String) {
     }
   }
 }
+
+/**
+ * Grouping options for organizing media in the Gallery tool:
+ * - [FOLDERS]: Hierarchical album/folder view (default).
+ * - [DATE]: Groups photos & videos chronologically (Today, Yesterday, This Week, Month & Year).
+ * - [MEDIA_TYPE]: Groups items into Photos, Videos, GIFs, and Screenshots.
+ * - [SMART_TAGS]: Groups items by detected smart tags (Receipts, Documents, QR Codes, visual labels, Untagged).
+ * - [NONE]: Flat ungrouped grid/list of all photos & videos in scope.
+ */
+enum class GalleryGroupOption(val displayName: String) {
+  FOLDERS("Folders"),
+  DATE("Date"),
+  MEDIA_TYPE("Media Type"),
+  SMART_TAGS("Smart Tags"),
+  NONE("None"),
+  ;
+
+  companion object {
+    val DEFAULT: GalleryGroupOption = FOLDERS
+
+    fun fromNameOrDefault(name: String?): GalleryGroupOption {
+      if (name.isNullOrBlank()) return DEFAULT
+      return entries.find { it.name.equals(name.trim(), ignoreCase = true) } ?: DEFAULT
+    }
+  }
+}
+
+/**
+ * Represents a grouped section of [GalleryPhoto] items under a common [title] header.
+ */
+data class GalleryPhotoGroup(
+  val title: String,
+  val photos: List<GalleryPhoto>,
+)
 
 /**
  * Represents an individual photo file inside an album.
@@ -333,6 +401,122 @@ object GalleryEngine {
     val base = currentZoom.coerceIn(MIN_PHOTO_ZOOM, MAX_PHOTO_ZOOM)
     if (zoomChange <= 0f || zoomChange.isNaN()) return base
     return (base * zoomChange).coerceIn(MIN_PHOTO_ZOOM, MAX_PHOTO_ZOOM)
+  }
+
+  /**
+   * Updates [state] when the ordered list of [visibleVideoPaths] in the Gallery viewport changes
+   * or when inline previews are [enabled]/disabled:
+   * - If disabled, resets to [GalleryVideoPreviewPhase.IDLE].
+   * - If [GalleryVideoPreviewPhase.PLAYING] and the currently playing video is scrolled out of view
+   *   (`activeVideoPath !in visibleVideoPaths`), immediately pauses playback and transitions to
+   *   [GalleryVideoPreviewPhase.SCROLL_COOLDOWN].
+   * - If [GalleryVideoPreviewPhase.IDLE] and at least one video is in view, begins playing the
+   *   first video in view.
+   */
+  fun onVisibleVideosChanged(
+    state: GalleryVideoPreviewState,
+    visibleVideoPaths: List<String>,
+    enabled: Boolean = true,
+  ): GalleryVideoPreviewState {
+    if (!enabled) {
+      return GalleryVideoPreviewState()
+    }
+
+    val playingPath = state.activeVideoPath
+    if (state.phase == GalleryVideoPreviewPhase.PLAYING && playingPath != null) {
+      if (playingPath !in visibleVideoPaths) {
+        return state.copy(
+          phase = GalleryVideoPreviewPhase.SCROLL_COOLDOWN,
+          activeVideoPath = null,
+          playedInCurrentCycle = emptySet(),
+        )
+      }
+      return state
+    }
+
+    if (visibleVideoPaths.isEmpty()) {
+      return if (state.phase == GalleryVideoPreviewPhase.SCROLL_COOLDOWN) {
+        state.copy(
+          activeVideoPath = null,
+          playedInCurrentCycle = emptySet(),
+        )
+      } else {
+        GalleryVideoPreviewState()
+      }
+    }
+
+    if (state.phase == GalleryVideoPreviewPhase.IDLE) {
+      val first = visibleVideoPaths.first()
+      return state.copy(
+        phase = GalleryVideoPreviewPhase.PLAYING,
+        activeVideoPath = first,
+        playedInCurrentCycle = emptySet(),
+        playSessionToken = state.playSessionToken + 1,
+      )
+    }
+
+    return state
+  }
+
+  /**
+   * Advances [state] when the currently playing video finishes its preview slice (3–6s):
+   * - Marks the video as played in [GalleryVideoPreviewState.playedInCurrentCycle].
+   * - Moves on to the next unplayed video in [visibleVideoPaths].
+   * - If all videos in [visibleVideoPaths] have been played, pauses and transitions to
+   *   [GalleryVideoPreviewPhase.CYCLE_PAUSE] (6–8s).
+   */
+  fun onActiveVideoPreviewCompleted(
+    state: GalleryVideoPreviewState,
+    visibleVideoPaths: List<String>,
+  ): GalleryVideoPreviewState {
+    val playingPath = state.activeVideoPath ?: return state
+    if (state.phase != GalleryVideoPreviewPhase.PLAYING) return state
+    if (playingPath !in visibleVideoPaths) {
+      return state.copy(
+        phase = GalleryVideoPreviewPhase.SCROLL_COOLDOWN,
+        activeVideoPath = null,
+        playedInCurrentCycle = emptySet(),
+      )
+    }
+
+    val updatedPlayed = state.playedInCurrentCycle + playingPath
+    val nextVideo = visibleVideoPaths.firstOrNull { it !in updatedPlayed }
+    return if (nextVideo != null) {
+      state.copy(
+        phase = GalleryVideoPreviewPhase.PLAYING,
+        activeVideoPath = nextVideo,
+        playedInCurrentCycle = updatedPlayed,
+        playSessionToken = state.playSessionToken + 1,
+      )
+    } else {
+      state.copy(
+        phase = GalleryVideoPreviewPhase.CYCLE_PAUSE,
+        activeVideoPath = null,
+        playedInCurrentCycle = updatedPlayed,
+      )
+    }
+  }
+
+  /**
+   * Resumes preview playback from the first video currently in [visibleVideoPaths] after either
+   * [GalleryVideoPreviewPhase.CYCLE_PAUSE] (6–8s) or [GalleryVideoPreviewPhase.SCROLL_COOLDOWN]
+   * (2–3s after scrolling stops) completes.
+   */
+  fun onPreviewPauseOrCooldownCompleted(
+    state: GalleryVideoPreviewState,
+    visibleVideoPaths: List<String>,
+  ): GalleryVideoPreviewState {
+    val first = visibleVideoPaths.firstOrNull()
+    return if (first != null) {
+      state.copy(
+        phase = GalleryVideoPreviewPhase.PLAYING,
+        activeVideoPath = first,
+        playedInCurrentCycle = emptySet(),
+        playSessionToken = state.playSessionToken + 1,
+      )
+    } else {
+      GalleryVideoPreviewState()
+    }
   }
 
   /**
@@ -867,6 +1051,121 @@ object GalleryEngine {
           .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
     }
     return photos.sortedWith(comparator)
+  }
+
+  /**
+   * Groups [photos] according to [groupOption] and sorts items within each group according to [sortOrder].
+   */
+  fun groupPhotos(
+    photos: List<GalleryPhoto>,
+    groupOption: GalleryGroupOption,
+    sortOrder: GallerySortOrder = GallerySortOrder.DATE_DESC,
+    indexMap: Map<String, GalleryPhotoIndexEntry> = emptyMap(),
+    nowMs: Long = System.currentTimeMillis(),
+  ): List<GalleryPhotoGroup> {
+    val sorted = sortPhotos(photos.distinctBy { it.path }, sortOrder)
+    if (sorted.isEmpty()) return emptyList()
+
+    return when (groupOption) {
+      GalleryGroupOption.FOLDERS,
+      GalleryGroupOption.NONE -> {
+        listOf(GalleryPhotoGroup(title = "", photos = sorted))
+      }
+
+      GalleryGroupOption.DATE -> {
+        val monthFormat = SimpleDateFormat("MMMM yyyy", Locale.US)
+        val todayCal = Calendar.getInstance().apply {
+          timeInMillis = nowMs
+          set(Calendar.HOUR_OF_DAY, 0)
+          set(Calendar.MINUTE, 0)
+          set(Calendar.SECOND, 0)
+          set(Calendar.MILLISECOND, 0)
+        }
+        val startOfTodayMs = todayCal.timeInMillis
+        val startOfYesterdayMs = startOfTodayMs - 24L * 60L * 60L * 1000L
+        val startOfWeekMs = startOfTodayMs - 6L * 24L * 60L * 60L * 1000L
+
+        val buckets = LinkedHashMap<String, MutableList<GalleryPhoto>>()
+        val dateOrderedPhotos = if (sortOrder == GallerySortOrder.DATE_ASC) {
+          sorted.sortedWith(
+            compareBy<GalleryPhoto> { it.lastModifiedMs }
+              .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+          )
+        } else {
+          sorted.sortedWith(
+            compareByDescending<GalleryPhoto> { it.lastModifiedMs }
+              .thenByDescending(String.CASE_INSENSITIVE_ORDER) { it.name }
+          )
+        }
+
+        for (photo in dateOrderedPhotos) {
+          val ts = photo.lastModifiedMs
+          val label = when {
+            ts >= startOfTodayMs -> "Today"
+            ts >= startOfYesterdayMs -> "Yesterday"
+            ts >= startOfWeekMs -> "This Week"
+            else -> monthFormat.format(Date(ts))
+          }
+          buckets.getOrPut(label) { mutableListOf() }.add(photo)
+        }
+
+        buckets.map { (title, groupItems) ->
+          GalleryPhotoGroup(
+            title = title,
+            photos = sortPhotos(groupItems, sortOrder),
+          )
+        }
+      }
+
+      GalleryGroupOption.MEDIA_TYPE -> {
+        val photosBucket = mutableListOf<GalleryPhoto>()
+        val videosBucket = mutableListOf<GalleryPhoto>()
+        val gifsBucket = mutableListOf<GalleryPhoto>()
+        val screenshotsBucket = mutableListOf<GalleryPhoto>()
+
+        for (photo in sorted) {
+          val entry = indexMap[photo.path]
+          val lowerName = photo.name.lowercase(Locale.ROOT)
+          val lowerParent = photo.file.parentFile?.name?.lowercase(Locale.ROOT).orEmpty()
+          val isScreenshot = lowerName.contains("screenshot") ||
+            lowerParent.contains("screenshot") ||
+            entry?.autoTags?.any { it.equals("Screenshot", ignoreCase = true) } == true
+          when {
+            photo.isVideo -> videosBucket.add(photo)
+            photo.extension.equals("gif", ignoreCase = true) -> gifsBucket.add(photo)
+            isScreenshot -> screenshotsBucket.add(photo)
+            else -> photosBucket.add(photo)
+          }
+        }
+
+        buildList {
+          if (photosBucket.isNotEmpty()) add(GalleryPhotoGroup("Photos", photosBucket))
+          if (videosBucket.isNotEmpty()) add(GalleryPhotoGroup("Videos", videosBucket))
+          if (gifsBucket.isNotEmpty()) add(GalleryPhotoGroup("GIFs", gifsBucket))
+          if (screenshotsBucket.isNotEmpty()) add(GalleryPhotoGroup("Screenshots", screenshotsBucket))
+        }
+      }
+
+      GalleryGroupOption.SMART_TAGS -> {
+        val orderedTags = extractAvailableAutoTags(sorted, indexMap).map { it.first }
+        val groups = mutableListOf<GalleryPhotoGroup>()
+        for (tag in orderedTags) {
+          val matching = sorted.filter { photo ->
+            indexMap[photo.path]?.autoTags?.any { it.equals(tag, ignoreCase = true) } == true
+          }
+          if (matching.isNotEmpty()) {
+            groups.add(GalleryPhotoGroup(title = tag, photos = matching))
+          }
+        }
+        val untagged = sorted.filter { photo ->
+          indexMap[photo.path]?.autoTags.isNullOrEmpty()
+        }
+        if (untagged.isNotEmpty()) {
+          groups.add(GalleryPhotoGroup(title = "Untagged", photos = untagged))
+        }
+        groups
+      }
+    }
   }
 
   /**

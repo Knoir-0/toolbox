@@ -205,14 +205,17 @@ class CameraScreenTest {
     composeTestRule.onNodeWithTag("camera_vision_reticle_overlay").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_shutter_vision_icon", useUnmergedTree = true).assertIsDisplayed()
 
-    // Trigger ML Kit Vision analysis via the shutter button and verify dynamic colored bounding boxes with labels & percentages >= 50%
+    // Trigger ML Kit Vision analysis via the shutter button and verify dynamic colored bounding boxes with labels & percentages >= 65%
     composeTestRule.onNodeWithTag("camera_shutter_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("vision_detected_card").assertIsDisplayed()
     composeTestRule.onNodeWithTag("vision_box_badge_Plant").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("vision_box_badge_Houseplant").assertIsDisplayed()
     composeTestRule.onNodeWithTag("vision_box_badge_Flowerpot").assertIsDisplayed()
-    // Furniture (39.4% confidence) is below 50% and must be hidden
+    // Houseplant (91.4%) and Leaf (75.8%) fully overlap with Plant (96.2%), so only Plant renders and the lower-confidence ones are hidden
+    composeTestRule.onNodeWithTag("vision_box_badge_Houseplant").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("vision_box_badge_Leaf").assertDoesNotExist()
+    // Room (58.2%) and Furniture (39.4%) are below 65% confidence and must be hidden
+    composeTestRule.onNodeWithTag("vision_box_badge_Room").assertDoesNotExist()
     composeTestRule.onNodeWithTag("vision_box_badge_Furniture").assertDoesNotExist()
 
     // Switch back to Note mode and open Notes directly from the scanned note card

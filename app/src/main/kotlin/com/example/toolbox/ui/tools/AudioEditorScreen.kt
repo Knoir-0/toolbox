@@ -100,6 +100,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -139,7 +140,7 @@ import kotlinx.coroutines.withContext
  * - Compact playback transport & quick-actions row (Play/Pause, Stop, Loop, Timecode, Share, Open, Reset).
  * - Mode-specific control surface (`RoundedCornerShape(16.dp)`) with single-row inline [SlimDotSlider]s
  *   and compact `CircleShape` action buttons.
- * - Bottom [SingleChoiceSegmentedButtonRow] mode selector (`Trim`, `Volume`, `Speed`).
+ * - Bottom horizontally scrollable pill mode selector (`Trim`, `Volume`, `Speed`, `Data`).
  */
 @Composable
 fun AudioEditorScreen(
@@ -2522,52 +2523,83 @@ private fun AudioEditorModeSelector(
   modifier: Modifier = Modifier,
 ) {
   val modes = AudioEditorMode.entries
-  SingleChoiceSegmentedButtonRow(
+  Row(
     modifier = modifier
       .fillMaxWidth()
       .padding(bottom = 4.dp)
       .testTag("mode_selector_row"),
+    horizontalArrangement = Arrangement.Center,
+    verticalAlignment = Alignment.CenterVertically,
   ) {
-    modes.forEachIndexed { index, mode ->
-      val selected = mode == activeMode
-      val hasActiveEdits = when (mode) {
-        AudioEditorMode.TRIM -> hasTrimEdits
-        AudioEditorMode.VOLUME_FADE -> hasVolumeFadeEdits
-        AudioEditorMode.SPEED_EFFECTS -> hasSpeedEdits
-        AudioEditorMode.DATA -> hasDataEdits
-      }
-      val icon = when (mode) {
-        AudioEditorMode.TRIM -> Icons.Default.ContentCut
-        AudioEditorMode.VOLUME_FADE -> Icons.AutoMirrored.Filled.VolumeUp
-        AudioEditorMode.SPEED_EFFECTS -> Icons.Default.Speed
-        AudioEditorMode.DATA -> Icons.Default.Info
-      }
-      SegmentedButton(
-        shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
-        onClick = { onSelectMode(mode) },
-        selected = selected,
-        icon = {},
-        modifier = Modifier.testTag("audio_editor_mode_${mode.name.lowercase(Locale.ROOT)}"),
-        label = {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
-          ) {
-            Icon(
-              imageVector = icon,
-              contentDescription = null,
-              modifier = Modifier.size(15.dp),
-            )
-            Spacer(modifier = Modifier.width(3.dp))
-            Text(
-              text = if (hasActiveEdits) "${mode.displayName}•" else mode.displayName,
-              style = MaterialTheme.typography.labelSmall,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
+    Surface(
+      shape = RoundedCornerShape(24.dp),
+      color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+      modifier = Modifier.testTag("audio_mode_selector"),
+    ) {
+      Row(
+        modifier = Modifier
+          .horizontalScroll(rememberScrollState())
+          .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        modes.forEach { mode ->
+          val selected = mode == activeMode
+          val hasActiveEdits = when (mode) {
+            AudioEditorMode.TRIM -> hasTrimEdits
+            AudioEditorMode.VOLUME_FADE -> hasVolumeFadeEdits
+            AudioEditorMode.SPEED_EFFECTS -> hasSpeedEdits
+            AudioEditorMode.DATA -> hasDataEdits
           }
-        },
-      )
+          val icon = when (mode) {
+            AudioEditorMode.TRIM -> Icons.Default.ContentCut
+            AudioEditorMode.VOLUME_FADE -> Icons.AutoMirrored.Filled.VolumeUp
+            AudioEditorMode.SPEED_EFFECTS -> Icons.Default.Speed
+            AudioEditorMode.DATA -> Icons.Default.Info
+          }
+          Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = if (selected) {
+              MaterialTheme.colorScheme.primaryContainer
+            } else {
+              Color.Transparent
+            },
+            modifier = Modifier
+              .clip(RoundedCornerShape(20.dp))
+              .clickable { onSelectMode(mode) }
+              .testTag("audio_editor_mode_${mode.name.lowercase(Locale.ROOT)}"),
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (selected) {
+                  MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(15.dp),
+              )
+              Text(
+                text = if (hasActiveEdits) "${mode.displayName}•" else mode.displayName,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                color = if (selected) {
+                  MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
+        }
+      }
     }
   }
 }

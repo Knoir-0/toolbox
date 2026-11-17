@@ -92,9 +92,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -120,7 +117,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -603,7 +602,7 @@ fun ImageEditorContent(
   val strokes = remember { mutableStateListOf<ImageDrawingStroke>() }
   val textAnnotations = remember { mutableStateListOf<ImageTextAnnotation>() }
   var currentColor by remember { mutableStateOf(Color.Red) }
-  var currentStrokeWidth by remember { mutableFloatStateOf(10f) }
+  var currentStrokeWidth by remember { mutableFloatStateOf(12f) }
   var isEraser by remember { mutableStateOf(false) }
 
   // Text annotation input dialog
@@ -1090,7 +1089,7 @@ fun ImageEditorContent(
 }
 
 /**
- * Bottom segmented row to toggle between Crop, Rotate, Tilt, Adjust, Draw, Data.
+ * Bottom horizontally scrollable pill row to toggle between Crop, Rotate, Tilt, Adjust, Draw, Data.
  */
 @Composable
 fun ModeSelectorRow(
@@ -1100,48 +1099,80 @@ fun ModeSelectorRow(
   hasDataEdits: Boolean = false,
 ) {
   val modes = ImageEditorMode.entries
-  SingleChoiceSegmentedButtonRow(
+  Row(
     modifier = modifier
       .fillMaxWidth()
       .padding(bottom = 6.dp)
       .testTag("mode_selector_row"),
+    horizontalArrangement = Arrangement.Center,
+    verticalAlignment = Alignment.CenterVertically,
   ) {
-    modes.forEachIndexed { index, mode ->
-      val hasEdits = mode == ImageEditorMode.DATA && hasDataEdits
-      SegmentedButton(
-        shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
-        onClick = { onModeSelected(mode) },
-        selected = activeMode == mode,
-        icon = {},
-        modifier = Modifier.testTag("image_editor_mode_${mode.name.lowercase(Locale.ROOT)}"),
-        label = {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
-          ) {
-            val icon = when (mode) {
-              ImageEditorMode.CROP -> Icons.Default.Crop
-              ImageEditorMode.ROTATE -> Icons.AutoMirrored.Filled.RotateRight
-              ImageEditorMode.TILT -> Icons.Default.Straighten
-              ImageEditorMode.ADJUST -> Icons.Default.Tune
-              ImageEditorMode.DRAW -> Icons.Default.Brush
-              ImageEditorMode.DATA -> Icons.Default.Info
-            }
-            Icon(
-              imageVector = icon,
-              contentDescription = null,
-              modifier = Modifier.size(15.dp),
-            )
-            Spacer(modifier = Modifier.width(3.dp))
-            Text(
-              text = if (hasEdits) "${mode.label}•" else mode.label,
-              style = MaterialTheme.typography.labelSmall,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
+    Surface(
+      shape = RoundedCornerShape(24.dp),
+      color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+      modifier = Modifier.testTag("image_mode_selector"),
+    ) {
+      Row(
+        modifier = Modifier
+          .horizontalScroll(rememberScrollState())
+          .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        modes.forEach { mode ->
+          val selected = activeMode == mode
+          val hasEdits = mode == ImageEditorMode.DATA && hasDataEdits
+          val icon = when (mode) {
+            ImageEditorMode.CROP -> Icons.Default.Crop
+            ImageEditorMode.ROTATE -> Icons.AutoMirrored.Filled.RotateRight
+            ImageEditorMode.TILT -> Icons.Default.Straighten
+            ImageEditorMode.ADJUST -> Icons.Default.Tune
+            ImageEditorMode.DRAW -> Icons.Default.Brush
+            ImageEditorMode.DATA -> Icons.Default.Info
           }
-        },
-      )
+          Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = if (selected) {
+              MaterialTheme.colorScheme.primaryContainer
+            } else {
+              Color.Transparent
+            },
+            modifier = Modifier
+              .clip(RoundedCornerShape(20.dp))
+              .clickable { onModeSelected(mode) }
+              .testTag("image_editor_mode_${mode.name.lowercase(Locale.ROOT)}"),
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (selected) {
+                  MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(15.dp),
+              )
+              Text(
+                text = if (hasEdits) "${mode.label}•" else mode.label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                color = if (selected) {
+                  MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
+        }
+      }
     }
   }
 }
@@ -2049,25 +2080,54 @@ fun DrawingCanvasOverlay(
 ) {
   var inProgressPoints by remember { mutableStateOf<List<Offset>>(emptyList()) }
   var draggingAnnotationIndex by remember { mutableStateOf<Int?>(null) }
+  val effectiveStrokeWidth = if (isEraser) currentStrokeWidth * 2.5f else currentStrokeWidth
 
   Box(
     modifier = modifier
       .fillMaxSize()
-      .pointerInput(bitmapWidth, bitmapHeight, currentColor, currentStrokeWidth, isEraser) {
+      .pointerInput(bitmapWidth, bitmapHeight, currentColor, effectiveStrokeWidth, isEraser) {
+        detectTapGestures { offset ->
+          if (size.width > 0 && size.height > 0) {
+            val normX = (offset.x / size.width).coerceIn(0f, 1f)
+            val normY = (offset.y / size.height).coerceIn(0f, 1f)
+            val touchedTextIdx = textAnnotations.indexOfLast { ann ->
+              kotlin.math.abs(ann.xRatio - normX) < 0.12f && kotlin.math.abs(ann.yRatio - normY) < 0.08f
+            }
+            if (isEraser && touchedTextIdx != -1) {
+              textAnnotations.removeAt(touchedTextIdx)
+            } else if (touchedTextIdx == -1) {
+              val bmX = normX * bitmapWidth
+              val bmY = normY * bitmapHeight
+              strokes.add(
+                ImageDrawingStroke(
+                  points = listOf(Offset(bmX, bmY)),
+                  color = currentColor,
+                  strokeWidth = effectiveStrokeWidth,
+                  isEraser = isEraser,
+                ),
+              )
+            }
+          }
+        }
+      }
+      .pointerInput(bitmapWidth, bitmapHeight, currentColor, effectiveStrokeWidth, isEraser) {
         detectDragGestures(
           onDragStart = { offset ->
             if (size.width > 0 && size.height > 0) {
-              val normX = offset.x / size.width
-              val normY = offset.y / size.height
+              val normX = (offset.x / size.width).coerceIn(0f, 1f)
+              val normY = (offset.y / size.height).coerceIn(0f, 1f)
 
-              // Check if user is grabbing an existing text annotation
+              // Check if user is grabbing an existing text annotation (or erasing it in eraser mode)
               val touchedTextIdx = textAnnotations.indexOfLast { ann ->
                 kotlin.math.abs(ann.xRatio - normX) < 0.12f && kotlin.math.abs(ann.yRatio - normY) < 0.08f
               }
 
-              if (touchedTextIdx != -1) {
+              if (!isEraser && touchedTextIdx != -1) {
                 draggingAnnotationIndex = touchedTextIdx
               } else {
+                if (isEraser && touchedTextIdx != -1) {
+                  textAnnotations.removeAt(touchedTextIdx)
+                }
                 val bmX = normX * bitmapWidth
                 val bmY = normY * bitmapHeight
                 inProgressPoints = listOf(Offset(bmX, bmY))
@@ -2077,14 +2137,20 @@ fun DrawingCanvasOverlay(
           onDrag = { change, _ ->
             change.consume()
             if (size.width > 0 && size.height > 0) {
-              val normX = (change.position.x / size.width).coerceIn(0.05f, 0.95f)
-              val normY = (change.position.y / size.height).coerceIn(0.05f, 0.95f)
-
               val annIdx = draggingAnnotationIndex
               if (annIdx != null && annIdx in textAnnotations.indices) {
+                val normX = (change.position.x / size.width).coerceIn(0.05f, 0.95f)
+                val normY = (change.position.y / size.height).coerceIn(0.05f, 0.95f)
                 val current = textAnnotations[annIdx]
                 textAnnotations[annIdx] = current.copy(xRatio = normX, yRatio = normY)
               } else {
+                val normX = (change.position.x / size.width).coerceIn(0f, 1f)
+                val normY = (change.position.y / size.height).coerceIn(0f, 1f)
+                if (isEraser && textAnnotations.isNotEmpty()) {
+                  textAnnotations.removeAll { ann ->
+                    kotlin.math.abs(ann.xRatio - normX) < 0.10f && kotlin.math.abs(ann.yRatio - normY) < 0.06f
+                  }
+                }
                 val bmX = normX * bitmapWidth
                 val bmY = normY * bitmapHeight
                 inProgressPoints = inProgressPoints + Offset(bmX, bmY)
@@ -2098,7 +2164,7 @@ fun DrawingCanvasOverlay(
                 ImageDrawingStroke(
                   points = inProgressPoints,
                   color = currentColor,
-                  strokeWidth = currentStrokeWidth,
+                  strokeWidth = effectiveStrokeWidth,
                   isEraser = isEraser,
                 ),
               )
@@ -2112,19 +2178,30 @@ fun DrawingCanvasOverlay(
         )
       },
   ) {
-    Canvas(modifier = Modifier.fillMaxSize()) {
+    // Offscreen compositing layer so BlendMode.Clear erases drawn strokes to reveal the underlying photo
+    Canvas(
+      modifier = Modifier
+        .fillMaxSize()
+        .graphicsLayer {
+          compositingStrategy = CompositingStrategy.Offscreen
+        },
+    ) {
       if (bitmapWidth <= 0 || bitmapHeight <= 0) return@Canvas
       val scaleX = size.width / bitmapWidth.toFloat()
       val scaleY = size.height / bitmapHeight.toFloat()
 
       fun drawStrokeList(strokeList: List<ImageDrawingStroke>) {
         strokeList.forEach { stroke ->
+          val drawColor = if (stroke.isEraser) Color.Transparent else stroke.color
+          val blendMode = if (stroke.isEraser) BlendMode.Clear else BlendMode.SrcOver
+
           if (stroke.points.size < 2) {
             stroke.points.firstOrNull()?.let { p ->
               drawCircle(
-                color = if (stroke.isEraser) Color.Black.copy(alpha = 0.5f) else stroke.color,
+                color = drawColor,
                 radius = (stroke.strokeWidth * scaleX) / 2f,
                 center = Offset(p.x * scaleX, p.y * scaleY),
+                blendMode = blendMode,
               )
             }
             return@forEach
@@ -2133,18 +2210,24 @@ fun DrawingCanvasOverlay(
           val path = Path()
           path.moveTo(stroke.points[0].x * scaleX, stroke.points[0].y * scaleY)
           for (i in 1 until stroke.points.size) {
+            val prev = stroke.points[i - 1]
             val curr = stroke.points[i]
-            path.lineTo(curr.x * scaleX, curr.y * scaleY)
+            val midX = ((prev.x + curr.x) / 2f) * scaleX
+            val midY = ((prev.y + curr.y) / 2f) * scaleY
+            path.quadraticTo(prev.x * scaleX, prev.y * scaleY, midX, midY)
           }
+          val last = stroke.points.last()
+          path.lineTo(last.x * scaleX, last.y * scaleY)
 
           drawPath(
             path = path,
-            color = if (stroke.isEraser) Color.White.copy(alpha = 0.5f) else stroke.color,
+            color = drawColor,
             style = Stroke(
               width = stroke.strokeWidth * scaleX,
               cap = StrokeCap.Round,
-              join = androidx.compose.ui.graphics.StrokeJoin.Round,
+              join = StrokeJoin.Round,
             ),
+            blendMode = blendMode,
           )
         }
       }
@@ -2156,11 +2239,28 @@ fun DrawingCanvasOverlay(
             ImageDrawingStroke(
               points = inProgressPoints,
               color = currentColor,
-              strokeWidth = currentStrokeWidth,
+              strokeWidth = effectiveStrokeWidth,
               isEraser = isEraser,
             ),
           ),
         )
+        if (isEraser) {
+          val tip = inProgressPoints.last()
+          val tipCenter = Offset(tip.x * scaleX, tip.y * scaleY)
+          val radius = (effectiveStrokeWidth * scaleX) / 2f
+          drawCircle(
+            color = Color.Black.copy(alpha = 0.45f),
+            radius = radius,
+            center = tipCenter,
+            style = Stroke(width = 2.dp.toPx()),
+          )
+          drawCircle(
+            color = Color.White.copy(alpha = 0.85f),
+            radius = radius,
+            center = tipCenter,
+            style = Stroke(width = 1.dp.toPx()),
+          )
+        }
       }
 
       // Draw text annotations on canvas
@@ -2333,6 +2433,7 @@ fun DrawControls(
           }
         },
         shape = CircleShape,
+        modifier = Modifier.testTag("draw_eraser_toggle"),
       )
 
       FilterChip(

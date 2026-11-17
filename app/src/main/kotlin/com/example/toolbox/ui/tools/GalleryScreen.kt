@@ -5,9 +5,13 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
+import android.graphics.SurfaceTexture
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.view.Surface as AndroidSurface
+import android.view.TextureView
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -37,26 +41,39 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -75,6 +92,8 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -91,6 +110,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FileCopy
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
@@ -100,12 +120,15 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
@@ -132,11 +155,16 @@ import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -150,6 +178,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -163,9 +192,12 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -175,16 +207,23 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.zIndex
 import androidx.core.content.FileProvider
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
 import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -233,6 +272,10 @@ fun GalleryScreen(
   initialAlbumsPerRow: Int? = null,
   initialViewMode: GalleryViewMode? = null,
   initialSortOrder: GallerySortOrder? = null,
+  initialGroupOption: GalleryGroupOption? = null,
+  videoPreviewPlayDurationMs: Long = DEFAULT_VIDEO_PREVIEW_PLAY_DURATION_MS,
+  videoPreviewCyclePauseDurationMs: Long = DEFAULT_VIDEO_PREVIEW_CYCLE_PAUSE_DURATION_MS,
+  videoPreviewScrollCooldownMs: Long = DEFAULT_VIDEO_PREVIEW_SCROLL_OUT_COOLDOWN_MS,
   onNavigateBack: (() -> Unit)? = null,
   onOpenImageEditor: ((File) -> Unit)? = null,
   onOpenVideoEditor: ((File) -> Unit)? = null,
@@ -320,6 +363,17 @@ fun GalleryScreen(
   fun updateSortOrder(newOrder: GallerySortOrder) {
     sortOrder = newOrder
     prefs?.edit()?.putString(PREF_KEY_GALLERY_SORT_ORDER, newOrder.name)?.apply()
+  }
+
+  // Group option: defaults to FOLDERS
+  var groupOption by rememberSaveable {
+    val saved = prefs?.getString(PREF_KEY_GALLERY_GROUP_OPTION, null)
+    mutableStateOf(initialGroupOption ?: GalleryGroupOption.fromNameOrDefault(saved))
+  }
+
+  fun updateGroupOption(newOption: GalleryGroupOption) {
+    groupOption = newOption
+    prefs?.edit()?.putString(PREF_KEY_GALLERY_GROUP_OPTION, newOption.name)?.apply()
   }
 
   var showSortMenu by remember { mutableStateOf(false) }
@@ -476,6 +530,9 @@ fun GalleryScreen(
     }
   }
   val currentAlbum: GalleryAlbum? = albumStack.lastOrNull()
+  var collapsedGroupTitles by remember(groupOption, currentAlbum?.path) {
+    mutableStateOf(setOf<String>())
+  }
 
   // Multi-selection state for albums and photos
   var isSelectionMode by rememberSaveable { mutableStateOf(false) }
@@ -668,9 +725,41 @@ fun GalleryScreen(
     }
   }
 
-  val activeAlbums: List<GalleryAlbum> = searchResult.matchingAlbums
-  val activePhotos: List<GalleryPhoto> = searchResult.matchingPhotos
+  val searchMatchingAlbums: List<GalleryAlbum> = searchResult.matchingAlbums
+  val searchMatchingPhotos: List<GalleryPhoto> = searchResult.matchingPhotos
   val matchSnippetsByPath: Map<String, String> = searchResult.matchSnippetsByPath
+
+  val photoGroups: List<GalleryPhotoGroup> = remember(
+    groupOption,
+    sortOrder,
+    hasActiveSearchQueryOrTag,
+    searchMatchingPhotos,
+    allScopePhotos,
+    photoIndexMap,
+  ) {
+    if (groupOption == GalleryGroupOption.FOLDERS) {
+      emptyList()
+    } else {
+      val sourcePhotos = if (hasActiveSearchQueryOrTag) searchMatchingPhotos else allScopePhotos
+      GalleryEngine.groupPhotos(
+        photos = sourcePhotos,
+        groupOption = groupOption,
+        sortOrder = sortOrder,
+        indexMap = photoIndexMap,
+      )
+    }
+  }
+
+  val activeAlbums: List<GalleryAlbum> = remember(groupOption, searchMatchingAlbums) {
+    if (groupOption == GalleryGroupOption.FOLDERS) searchMatchingAlbums else emptyList()
+  }
+  val activePhotos: List<GalleryPhoto> = remember(groupOption, searchMatchingPhotos, photoGroups) {
+    if (groupOption == GalleryGroupOption.FOLDERS) {
+      searchMatchingPhotos
+    } else {
+      photoGroups.flatMap { it.photos }.distinctBy { it.path }
+    }
+  }
 
   val selectedAlbums: List<GalleryAlbum> = remember(activeAlbums, selectedAlbumPaths) {
     activeAlbums.filter { it.path in selectedAlbumPaths }
@@ -1029,32 +1118,24 @@ fun GalleryScreen(
         onSelectViewMode = { updateViewMode(it) },
       )
 
-      // Smart Tag Filter Chips Row (shown when searching)
-      AnimatedVisibility(
-        visible = isSearchActive && !isSelectionMode,
-        enter = expandVertically() + fadeIn(),
-        exit = shrinkVertically() + fadeOut(),
-      ) {
-        GallerySearchTagFilterBar(
-          availableTags = availableAutoTags,
-          selectedTag = selectedTagFilter,
-          isIndexing = isIndexingPhotos,
-          indexedCount = indexedProgressCount,
-          totalCount = indexedTotalCount,
-          onSelectTag = { tag ->
-            selectedTagFilter = if (selectedTagFilter.equals(tag, ignoreCase = true)) null else tag
-            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-          },
-        )
-      }
-
-      // Pill & Filter Controls Bar underneath the toolbar
+      // Pill & Filter Controls Bar underneath the toolbar (shows Smart Tags when in search view, otherwise navigation pills)
       GalleryNavigationAndDensityBar(
         albumStack = albumStack.toList(),
         viewMode = viewMode,
         albumsPerRow = albumsPerRow,
+        groupOption = groupOption,
         sortOrder = sortOrder,
         showSortMenu = showSortMenu,
+        isSearchView = isSearchActive && !isSelectionMode,
+        availableTags = availableAutoTags,
+        selectedTag = selectedTagFilter,
+        isIndexing = isIndexingPhotos,
+        indexedCount = indexedProgressCount,
+        totalCount = indexedTotalCount,
+        onSelectTag = { tag ->
+          selectedTagFilter = if (selectedTagFilter.equals(tag, ignoreCase = true)) null else tag
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        },
         onNavigateToRoot = {
           isFabExpanded = false
           exitSelectionMode()
@@ -1071,6 +1152,10 @@ fun GalleryScreen(
         onAlbumsPerRowChange = { updateAlbumsPerRow(it) },
         onOpenSortMenu = { showSortMenu = true },
         onDismissSortMenu = { showSortMenu = false },
+        onSelectGroupOption = {
+          updateGroupOption(it)
+          showSortMenu = false
+        },
         onSelectSortOrder = {
           updateSortOrder(it)
           showSortMenu = false
@@ -1127,13 +1212,27 @@ fun GalleryScreen(
           GalleryTileGridView(
             albums = activeAlbums,
             photos = activePhotos,
+            photoGroups = photoGroups,
+            collapsedGroupTitles = collapsedGroupTitles,
+            onToggleGroupCollapse = { title ->
+              collapsedGroupTitles = if (title in collapsedGroupTitles) {
+                collapsedGroupTitles - title
+              } else {
+                collapsedGroupTitles + title
+              }
+            },
             albumsPerRow = albumsPerRow,
-            isInsideAlbum = currentAlbum != null,
+            isInsideAlbum = currentAlbum != null || groupOption == GalleryGroupOption.NONE,
             isSelectionMode = isSelectionMode,
             selectedAlbumPaths = selectedAlbumPaths,
             selectedPhotoPaths = selectedPhotoPaths,
             photoIndexMap = photoIndexMap,
             matchSnippetsByPath = matchSnippetsByPath,
+            isVideoPreviewEnabled = selectedPhotoForViewer == null,
+            videoPreviewScopeKey = "${currentAlbum?.path ?: "root"}:${groupOption.name}",
+            videoPreviewPlayDurationMs = videoPreviewPlayDurationMs,
+            videoPreviewCyclePauseDurationMs = videoPreviewCyclePauseDurationMs,
+            videoPreviewScrollCooldownMs = videoPreviewScrollCooldownMs,
             onToggleAlbumSelect = { album ->
               toggleAlbumSelection(album)
             },
@@ -1186,11 +1285,25 @@ fun GalleryScreen(
           GalleryListView(
             albums = activeAlbums,
             photos = activePhotos,
+            photoGroups = photoGroups,
+            collapsedGroupTitles = collapsedGroupTitles,
+            onToggleGroupCollapse = { title ->
+              collapsedGroupTitles = if (title in collapsedGroupTitles) {
+                collapsedGroupTitles - title
+              } else {
+                collapsedGroupTitles + title
+              }
+            },
             isSelectionMode = isSelectionMode,
             selectedAlbumPaths = selectedAlbumPaths,
             selectedPhotoPaths = selectedPhotoPaths,
             photoIndexMap = photoIndexMap,
             matchSnippetsByPath = matchSnippetsByPath,
+            isVideoPreviewEnabled = selectedPhotoForViewer == null,
+            videoPreviewScopeKey = "${currentAlbum?.path ?: "root"}:${groupOption.name}",
+            videoPreviewPlayDurationMs = videoPreviewPlayDurationMs,
+            videoPreviewCyclePauseDurationMs = videoPreviewCyclePauseDurationMs,
+            videoPreviewScrollCooldownMs = videoPreviewScrollCooldownMs,
             onToggleAlbumSelect = { album ->
               toggleAlbumSelection(album)
             },
@@ -1313,16 +1426,18 @@ fun GalleryScreen(
                 addAlbumDialogTarget = AddAlbumTarget.ROOT_ALBUM
               },
             )
-            GalleryMiniFab(
-              label = "New album here",
-              icon = Icons.Default.FolderOpen,
-              testTag = "gallery_new_album_here_fab_button",
-              onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                isFabExpanded = false
-                addAlbumDialogTarget = AddAlbumTarget.NESTED_ALBUM_HERE
-              },
-            )
+            if (currentAlbum != null) {
+              GalleryMiniFab(
+                label = "New album here",
+                icon = Icons.Default.FolderOpen,
+                testTag = "gallery_new_album_here_fab_button",
+                onClick = {
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                  isFabExpanded = false
+                  addAlbumDialogTarget = AddAlbumTarget.NESTED_ALBUM_HERE
+                },
+              )
+            }
           }
         }
 
@@ -1841,13 +1956,22 @@ private fun GalleryNavigationAndDensityBar(
   albumStack: List<GalleryAlbum>,
   viewMode: GalleryViewMode,
   albumsPerRow: Int,
+  groupOption: GalleryGroupOption = GalleryGroupOption.FOLDERS,
   sortOrder: GallerySortOrder,
   showSortMenu: Boolean,
+  isSearchView: Boolean = false,
+  availableTags: List<Pair<String, Int>> = emptyList(),
+  selectedTag: String? = null,
+  isIndexing: Boolean = false,
+  indexedCount: Int = 0,
+  totalCount: Int = 0,
+  onSelectTag: (String) -> Unit = {},
   onNavigateToRoot: () -> Unit,
   onNavigateToIndex: (Int) -> Unit,
   onAlbumsPerRowChange: (Int) -> Unit,
   onOpenSortMenu: () -> Unit,
   onDismissSortMenu: () -> Unit,
+  onSelectGroupOption: (GalleryGroupOption) -> Unit = {},
   onSelectSortOrder: (GallerySortOrder) -> Unit,
 ) {
   Surface(
@@ -1857,7 +1981,6 @@ private fun GalleryNavigationAndDensityBar(
     Box(
       modifier = Modifier
         .fillMaxWidth()
-        .heightIn(min = 46.dp)
         .testTag("gallery_pill_bar"),
       contentAlignment = Alignment.CenterStart,
     ) {
@@ -1875,68 +1998,140 @@ private fun GalleryNavigationAndDensityBar(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        // Breadcrumb path pills (always shows root "Albums" pill, plus nested folders when inside an album)
-        Row(
-          modifier = Modifier.testTag("gallery_breadcrumbs"),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-          val isAtRoot = albumStack.isEmpty()
-          Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = if (isAtRoot) {
-              MaterialTheme.colorScheme.primaryContainer
-            } else {
-              MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f)
-            },
+        if (isSearchView) {
+          Row(
             modifier = Modifier
-              .clip(RoundedCornerShape(20.dp))
-              .clickable(onClick = onNavigateToRoot)
-              .testTag("gallery_breadcrumb_root"),
+              .testTag("gallery_search_tag_filter_bar")
+              .testTag("gallery_search_tag_chips_row"),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
           ) {
-            Text(
-              text = "Albums",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = if (isAtRoot) FontWeight.Bold else FontWeight.Medium,
-              color = if (isAtRoot) {
-                MaterialTheme.colorScheme.onPrimaryContainer
-              } else {
-                MaterialTheme.colorScheme.onSecondaryContainer
-              },
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-            )
-          }
-
-          albumStack.forEachIndexed { index, album ->
             Icon(
-              imageVector = Icons.Default.ChevronRight,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier.size(16.dp),
-            )
-            val isCurrent = index == albumStack.lastIndex
-            Surface(
-              shape = RoundedCornerShape(20.dp),
-              color = if (isCurrent) {
-                MaterialTheme.colorScheme.primaryContainer
-              } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-              },
+              imageVector = Icons.Default.AutoAwesome,
+              contentDescription = "Smart tags",
+              tint = MaterialTheme.colorScheme.primary,
               modifier = Modifier
-                .clip(RoundedCornerShape(20.dp))
-                .clickable { onNavigateToIndex(index) }
-                .testTag("gallery_breadcrumb_${album.name}"),
-            ) {
+                .size(16.dp)
+                .testTag("gallery_search_tags_icon"),
+            )
+
+            if (availableTags.isEmpty()) {
               Text(
-                text = album.name,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                color = if (isCurrent) {
-                  MaterialTheme.colorScheme.onPrimaryContainer
+                text = if (isIndexing && totalCount > 0) {
+                  "Scanning photos ($indexedCount/$totalCount)…"
                 } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant
+                  "No tags detected yet"
                 },
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("gallery_search_tags_empty_label"),
+              )
+            } else {
+              availableTags.forEach { (tag, count) ->
+                val isSelected = selectedTag != null && selectedTag.equals(tag, ignoreCase = true)
+                FilterChip(
+                  selected = isSelected,
+                  onClick = { onSelectTag(tag) },
+                  label = {
+                    Text(
+                      text = "$tag ($count)",
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    )
+                  },
+                  leadingIcon = {
+                    Icon(
+                      imageVector = when {
+                        tag.equals("QR Code", ignoreCase = true) || tag.equals("Barcode", ignoreCase = true) ->
+                          Icons.Default.QrCode2
+                        tag.equals("Text", ignoreCase = true) ||
+                          tag.equals("Document", ignoreCase = true) ||
+                          tag.equals("Receipt", ignoreCase = true) ||
+                          tag.equals("Notes", ignoreCase = true) ->
+                          Icons.Default.DocumentScanner
+                        else -> Icons.AutoMirrored.Filled.Label
+                      },
+                      contentDescription = null,
+                      modifier = Modifier.size(16.dp),
+                    )
+                  },
+                  shape = RoundedCornerShape(20.dp),
+                  colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+                  ),
+                  modifier = Modifier.testTag("gallery_tag_filter_$tag"),
+                )
+              }
+            }
+          }
+        } else {
+          // Breadcrumb path pills sized identically to navigation pills in other tools (FilterChip with 20.dp shape)
+          Row(
+            modifier = Modifier.testTag("gallery_breadcrumbs"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            val isAtRoot = albumStack.isEmpty()
+            FilterChip(
+              selected = isAtRoot,
+              onClick = onNavigateToRoot,
+              shape = RoundedCornerShape(20.dp),
+              leadingIcon = {
+                Icon(
+                  imageVector = Icons.Default.PhotoLibrary,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+              },
+              label = {
+                Text(
+                  text = "Albums",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = if (isAtRoot) FontWeight.Bold else FontWeight.Medium,
+                )
+              },
+              colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+              ),
+              modifier = Modifier.testTag("gallery_breadcrumb_root"),
+            )
+
+            albumStack.forEachIndexed { index, album ->
+              Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+              )
+              val isCurrent = index == albumStack.lastIndex
+              FilterChip(
+                selected = isCurrent,
+                onClick = { onNavigateToIndex(index) },
+                shape = RoundedCornerShape(20.dp),
+                leadingIcon = {
+                  Icon(
+                    imageVector = Icons.Default.Folder,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                  )
+                },
+                label = {
+                  Text(
+                    text = album.name,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                  )
+                },
+                colors = FilterChipDefaults.filterChipColors(
+                  selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                  selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                  selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+                ),
+                modifier = Modifier.testTag("gallery_breadcrumb_${album.name}"),
               )
             }
           }
@@ -1979,8 +2174,8 @@ private fun GalleryNavigationAndDensityBar(
           ) {
             Box(contentAlignment = Alignment.Center) {
               Icon(
-                imageVector = Icons.AutoMirrored.Filled.Sort,
-                contentDescription = "Sort gallery",
+                imageVector = Icons.Default.Tune,
+                contentDescription = "Sort and group options",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp),
               )
@@ -1990,28 +2185,109 @@ private fun GalleryNavigationAndDensityBar(
           DropdownMenu(
             expanded = showSortMenu,
             onDismissRequest = onDismissSortMenu,
-            modifier = Modifier.testTag("gallery_sort_menu"),
+            modifier = Modifier
+              .widthIn(min = 320.dp, max = 390.dp)
+              .testTag("gallery_sort_menu"),
           ) {
-            GallerySortOrder.entries.forEach { option ->
-              DropdownMenuItem(
-                text = {
-                  Text(
-                    text = option.displayName,
-                    fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(IntrinsicSize.Min)
+                .padding(vertical = 4.dp),
+            ) {
+              // Left panel: GROUP BY
+              Column(
+                modifier = Modifier
+                  .weight(1f)
+                  .fillMaxHeight(),
+              ) {
+                Text(
+                  text = "GROUP BY",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                )
+                GalleryGroupOption.entries.forEach { option ->
+                  DropdownMenuItem(
+                    text = {
+                      Text(
+                        text = option.displayName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (option == groupOption) FontWeight.Bold else FontWeight.Normal,
+                        color = if (option == groupOption) {
+                          MaterialTheme.colorScheme.primary
+                        } else {
+                          MaterialTheme.colorScheme.onSurface
+                        },
+                      )
+                    },
+                    trailingIcon = if (option == groupOption) {
+                      {
+                        Icon(
+                          imageVector = Icons.Default.Check,
+                          contentDescription = null,
+                          tint = MaterialTheme.colorScheme.primary,
+                          modifier = Modifier.size(18.dp),
+                        )
+                      }
+                    } else null,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    onClick = { onSelectGroupOption(option) },
+                    modifier = Modifier.testTag("gallery_group_option_${option.name.lowercase()}"),
                   )
-                },
-                leadingIcon = {
-                  if (option == sortOrder) {
-                    Icon(
-                      imageVector = Icons.Default.Check,
-                      contentDescription = null,
-                      tint = MaterialTheme.colorScheme.primary,
-                    )
-                  }
-                },
-                onClick = { onSelectSortOrder(option) },
-                modifier = Modifier.testTag("gallery_sort_option_${option.name.lowercase()}"),
+                }
+              }
+
+              // Vertical divider between Group By and Sort By panels
+              VerticalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                modifier = Modifier.padding(vertical = 6.dp),
               )
+
+              // Right panel: SORT BY
+              Column(
+                modifier = Modifier
+                  .weight(1f)
+                  .fillMaxHeight(),
+              ) {
+                Text(
+                  text = "SORT BY",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                )
+                GallerySortOrder.entries.forEach { option ->
+                  DropdownMenuItem(
+                    text = {
+                      Text(
+                        text = option.displayName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
+                        color = if (option == sortOrder) {
+                          MaterialTheme.colorScheme.primary
+                        } else {
+                          MaterialTheme.colorScheme.onSurface
+                        },
+                      )
+                    },
+                    trailingIcon = if (option == sortOrder) {
+                      {
+                        Icon(
+                          imageVector = Icons.Default.Check,
+                          contentDescription = null,
+                          tint = MaterialTheme.colorScheme.primary,
+                          modifier = Modifier.size(18.dp),
+                        )
+                      }
+                    } else null,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    onClick = { onSelectSortOrder(option) },
+                    modifier = Modifier.testTag("gallery_sort_option_${option.name.lowercase()}"),
+                  )
+                }
+              }
             }
           }
         }
@@ -2060,97 +2336,6 @@ private fun GalleryPermissionBanner(
         shape = RoundedCornerShape(12.dp),
       ) {
         Text("Grant")
-      }
-    }
-  }
-}
-
-@Composable
-private fun GallerySearchTagFilterBar(
-  availableTags: List<Pair<String, Int>>,
-  selectedTag: String?,
-  isIndexing: Boolean,
-  indexedCount: Int,
-  totalCount: Int,
-  onSelectTag: (String) -> Unit,
-) {
-  Surface(
-    color = MaterialTheme.colorScheme.surface,
-    tonalElevation = 1.dp,
-    modifier = Modifier
-      .fillMaxWidth()
-      .testTag("gallery_search_tag_filter_bar"),
-  ) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .horizontalScroll(rememberScrollState())
-        .padding(horizontal = 12.dp, vertical = 6.dp)
-        .testTag("gallery_search_tag_chips_row"),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Icon(
-        imageVector = Icons.Default.AutoAwesome,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.size(16.dp),
-      )
-      Text(
-        text = "Smart Tags:",
-        style = MaterialTheme.typography.labelMedium,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-
-      if (availableTags.isEmpty()) {
-        Text(
-          text = if (isIndexing && totalCount > 0) {
-            "Scanning photos ($indexedCount/$totalCount)…"
-          } else {
-            "No tags detected yet"
-          },
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.testTag("gallery_search_tags_empty_label"),
-        )
-      } else {
-        availableTags.forEach { (tag, count) ->
-          val isSelected = selectedTag != null && selectedTag.equals(tag, ignoreCase = true)
-          FilterChip(
-            selected = isSelected,
-            onClick = { onSelectTag(tag) },
-            label = {
-              Text(
-                text = "$tag ($count)",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-              )
-            },
-            leadingIcon = {
-              Icon(
-                imageVector = when {
-                  tag.equals("QR Code", ignoreCase = true) || tag.equals("Barcode", ignoreCase = true) ->
-                    Icons.Default.QrCode2
-                  tag.equals("Text", ignoreCase = true) ||
-                    tag.equals("Document", ignoreCase = true) ||
-                    tag.equals("Receipt", ignoreCase = true) ||
-                    tag.equals("Notes", ignoreCase = true) ->
-                    Icons.Default.DocumentScanner
-                  else -> Icons.AutoMirrored.Filled.Label
-                },
-                contentDescription = null,
-                modifier = Modifier.size(15.dp),
-              )
-            },
-            shape = CircleShape,
-            colors = FilterChipDefaults.filterChipColors(
-              selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-              selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            ),
-            modifier = Modifier.testTag("gallery_tag_filter_$tag"),
-          )
-        }
       }
     }
   }
@@ -2222,9 +2407,157 @@ private fun GallerySearchEmptyStateView(
 }
 
 @Composable
+internal fun rememberGalleryVideoPreviewPath(
+  visibleVideoPaths: List<String>,
+  isScrollInProgress: Boolean,
+  enabled: Boolean = true,
+  scopeKey: String = "root",
+  playDurationMs: Long = DEFAULT_VIDEO_PREVIEW_PLAY_DURATION_MS,
+  cyclePauseDurationMs: Long = DEFAULT_VIDEO_PREVIEW_CYCLE_PAUSE_DURATION_MS,
+  scrollCooldownMs: Long = DEFAULT_VIDEO_PREVIEW_SCROLL_OUT_COOLDOWN_MS,
+): String? {
+  var previewState by remember(scopeKey) { mutableStateOf(GalleryVideoPreviewState()) }
+  val currentVisiblePaths by rememberUpdatedState(visibleVideoPaths)
+
+  // Immediately update state when enabled flag or visible videos in viewport change
+  LaunchedEffect(enabled, visibleVideoPaths, scopeKey) {
+    previewState = GalleryEngine.onVisibleVideosChanged(
+      state = previewState,
+      visibleVideoPaths = visibleVideoPaths,
+      enabled = enabled,
+    )
+  }
+
+  // Play the active video for playDurationMs (3-6s), then advance to the next video in view
+  LaunchedEffect(
+    enabled,
+    previewState.phase,
+    previewState.activeVideoPath,
+    previewState.playSessionToken,
+    playDurationMs,
+    scopeKey,
+  ) {
+    if (!enabled || previewState.phase != GalleryVideoPreviewPhase.PLAYING) return@LaunchedEffect
+    if (previewState.activeVideoPath == null) return@LaunchedEffect
+
+    delay(playDurationMs.coerceAtLeast(50L))
+
+    previewState = GalleryEngine.onActiveVideoPreviewCompleted(
+      state = previewState,
+      visibleVideoPaths = currentVisiblePaths,
+    )
+  }
+
+  // Pause for cyclePauseDurationMs (6-8s) once all videos in view have played, then restart with the first
+  LaunchedEffect(enabled, previewState.phase, cyclePauseDurationMs, scopeKey) {
+    if (!enabled || previewState.phase != GalleryVideoPreviewPhase.CYCLE_PAUSE) return@LaunchedEffect
+
+    delay(cyclePauseDurationMs.coerceAtLeast(50L))
+
+    previewState = GalleryEngine.onPreviewPauseOrCooldownCompleted(
+      state = previewState,
+      visibleVideoPaths = currentVisiblePaths,
+    )
+  }
+
+  // Pause for scrollCooldownMs (2-3s after user stops scrolling) when the playing video was scrolled out of view
+  LaunchedEffect(
+    enabled,
+    previewState.phase,
+    isScrollInProgress,
+    visibleVideoPaths,
+    scrollCooldownMs,
+    scopeKey,
+  ) {
+    if (!enabled || previewState.phase != GalleryVideoPreviewPhase.SCROLL_COOLDOWN) return@LaunchedEffect
+    if (isScrollInProgress) return@LaunchedEffect
+
+    delay(scrollCooldownMs.coerceAtLeast(50L))
+
+    previewState = GalleryEngine.onPreviewPauseOrCooldownCompleted(
+      state = previewState,
+      visibleVideoPaths = currentVisiblePaths,
+    )
+  }
+
+  return if (enabled && previewState.phase == GalleryVideoPreviewPhase.PLAYING) {
+    previewState.activeVideoPath
+  } else {
+    null
+  }
+}
+
+@Composable
+private fun GalleryGroupHeader(
+  title: String,
+  count: Int,
+  isCollapsed: Boolean = false,
+  onToggleCollapse: () -> Unit = {},
+  modifier: Modifier = Modifier,
+) {
+  val rotationState by animateFloatAsState(
+    targetValue = if (isCollapsed) -90f else 0f,
+    label = "gallery_group_expand_rotation",
+  )
+
+  Surface(
+    modifier = modifier
+      .fillMaxWidth()
+      .testTag("gallery_group_header_${title.lowercase().replace(" ", "_")}"),
+    shape = RoundedCornerShape(8.dp),
+    color = Color.Transparent,
+    onClick = onToggleCollapse,
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 4.dp, vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Text(
+          text = title,
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.primary,
+        )
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f),
+        ) {
+          Text(
+            text = count.toString(),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+          )
+        }
+      }
+
+      Icon(
+        imageVector = Icons.Default.ExpandMore,
+        contentDescription = if (isCollapsed) "Expand $title" else "Collapse $title",
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+          .size(20.dp)
+          .rotate(rotationState),
+      )
+    }
+  }
+}
+
+@Composable
 private fun GalleryTileGridView(
   albums: List<GalleryAlbum>,
   photos: List<GalleryPhoto>,
+  photoGroups: List<GalleryPhotoGroup> = emptyList(),
+  collapsedGroupTitles: Set<String> = emptySet(),
+  onToggleGroupCollapse: (String) -> Unit = {},
   albumsPerRow: Int,
   isInsideAlbum: Boolean = false,
   isSelectionMode: Boolean = false,
@@ -2232,6 +2565,11 @@ private fun GalleryTileGridView(
   selectedPhotoPaths: Set<String> = emptySet(),
   photoIndexMap: Map<String, GalleryPhotoIndexEntry> = emptyMap(),
   matchSnippetsByPath: Map<String, String> = emptyMap(),
+  isVideoPreviewEnabled: Boolean = true,
+  videoPreviewScopeKey: String = "root",
+  videoPreviewPlayDurationMs: Long = DEFAULT_VIDEO_PREVIEW_PLAY_DURATION_MS,
+  videoPreviewCyclePauseDurationMs: Long = DEFAULT_VIDEO_PREVIEW_CYCLE_PAUSE_DURATION_MS,
+  videoPreviewScrollCooldownMs: Long = DEFAULT_VIDEO_PREVIEW_SCROLL_OUT_COOLDOWN_MS,
   onToggleAlbumSelect: (GalleryAlbum) -> Unit = {},
   onTogglePhotoSelect: (GalleryPhoto) -> Unit = {},
   onAlbumLongClick: (GalleryAlbum) -> Unit = {},
@@ -2242,8 +2580,53 @@ private fun GalleryTileGridView(
 ) {
   val coercedColumns = GalleryEngine.coerceAlbumsPerRow(albumsPerRow)
   val isCompactTile = coercedColumns >= 5
+  val gridState = rememberLazyGridState()
+
+  val videoPathsSet = remember(photos) {
+    photos.filter { it.isVideo }.map { it.path }.toSet()
+  }
+  val visibleVideoPaths by remember(gridState, videoPathsSet) {
+    derivedStateOf {
+      val layoutInfo = gridState.layoutInfo
+      val viewportStart = layoutInfo.viewportStartOffset
+      val viewportEnd = layoutInfo.viewportEndOffset
+      val hasViewportBounds = viewportEnd > viewportStart
+      layoutInfo.visibleItemsInfo
+        .sortedBy { it.index }
+        .mapNotNull { itemInfo ->
+          val keyStr = itemInfo.key as? String ?: return@mapNotNull null
+          val path = when {
+            keyStr.startsWith("photo_group_") -> keyStr.substringAfter("|", "")
+            keyStr.startsWith("photo_") -> keyStr.removePrefix("photo_")
+            else -> return@mapNotNull null
+          }
+          if (path !in videoPathsSet) return@mapNotNull null
+          if (hasViewportBounds && itemInfo.size.height > 0) {
+            val itemTop = itemInfo.offset.y
+            val itemBottom = itemTop + itemInfo.size.height
+            val visiblePx = (minOf(itemBottom, viewportEnd) - maxOf(itemTop, viewportStart)).coerceAtLeast(0)
+            if (visiblePx < itemInfo.size.height * 0.35f) return@mapNotNull null
+          }
+          path
+        }
+        .distinct()
+    }
+  }
+
+  val activePreviewVideoPath = rememberGalleryVideoPreviewPath(
+    visibleVideoPaths = visibleVideoPaths,
+    isScrollInProgress = gridState.isScrollInProgress,
+    enabled = isVideoPreviewEnabled,
+    scopeKey = videoPreviewScopeKey,
+    playDurationMs = videoPreviewPlayDurationMs,
+    cyclePauseDurationMs = videoPreviewCyclePauseDurationMs,
+    scrollCooldownMs = videoPreviewScrollCooldownMs,
+  )
+
+  val hasTitledGroups = photoGroups.any { it.title.isNotEmpty() }
 
   LazyVerticalGrid(
+    state = gridState,
     columns = GridCells.Fixed(coercedColumns),
     modifier = Modifier
       .fillMaxSize()
@@ -2251,12 +2634,18 @@ private fun GalleryTileGridView(
       .semantics {
         contentDescription = "Tile view with $coercedColumns albums per row"
       },
-    contentPadding = PaddingValues(if (isInsideAlbum) 2.dp else 10.dp),
+    contentPadding = if (isInsideAlbum) {
+      PaddingValues(2.dp)
+    } else if (hasTitledGroups) {
+      PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+    } else {
+      PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+    },
     horizontalArrangement = Arrangement.spacedBy(
-      if (isInsideAlbum) 2.dp else if (isCompactTile) 6.dp else 8.dp
+      if (isInsideAlbum || hasTitledGroups) 2.dp else if (isCompactTile) 6.dp else 8.dp
     ),
     verticalArrangement = Arrangement.spacedBy(
-      if (isInsideAlbum) 2.dp else if (isCompactTile) 8.dp else 10.dp
+      if (isInsideAlbum || hasTitledGroups) 2.dp else if (isCompactTile) 4.dp else 6.dp
     ),
   ) {
     items(
@@ -2274,37 +2663,79 @@ private fun GalleryTileGridView(
       )
     }
 
-    if (albums.isNotEmpty() && photos.isNotEmpty()) {
-      item(span = { GridItemSpan(maxLineSpan) }) {
-        Text(
-          text = "Photos",
-          style = MaterialTheme.typography.titleSmall,
-          fontWeight = FontWeight.Bold,
-          color = MaterialTheme.colorScheme.primary,
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 6.dp, bottom = 2.dp)
-            .testTag("gallery_photos_section_header"),
+    if (photoGroups.isNotEmpty()) {
+      photoGroups.forEach { group ->
+        val isCollapsed = group.title.isNotEmpty() && group.title in collapsedGroupTitles
+        if (group.title.isNotEmpty()) {
+          item(
+            key = "grid_group_header_${group.title}",
+            span = { GridItemSpan(maxLineSpan) },
+          ) {
+            GalleryGroupHeader(
+              title = group.title,
+              count = group.photos.size,
+              isCollapsed = isCollapsed,
+              onToggleCollapse = { onToggleGroupCollapse(group.title) },
+            )
+          }
+        }
+        if (!isCollapsed) {
+          items(
+            items = group.photos,
+            key = { photo ->
+              if (group.title.isEmpty()) "photo_${photo.path}" else "photo_group_${group.title}|${photo.path}"
+            },
+          ) { photo ->
+            PhotoTileCard(
+              photo = photo,
+              isCompact = isCompactTile,
+              isSelectionMode = isSelectionMode,
+              isSelected = photo.path in selectedPhotoPaths,
+              isPlayingVideoPreview = photo.isVideo && photo.path == activePreviewVideoPath,
+              indexEntry = photoIndexMap[photo.path],
+              matchSnippet = matchSnippetsByPath[photo.path],
+              onToggleSelect = { onTogglePhotoSelect(photo) },
+              onLongClick = { onPhotoLongClick(photo) },
+              onClick = { onPhotoClick(photo) },
+              onEdit = { onPhotoEdit(photo) },
+            )
+          }
+        }
+      }
+    } else {
+      if (albums.isNotEmpty() && photos.isNotEmpty()) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+          Text(
+            text = "Photos",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(top = 6.dp, bottom = 2.dp)
+              .testTag("gallery_photos_section_header"),
+          )
+        }
+      }
+
+      items(
+        items = photos,
+        key = { "photo_${it.path}" },
+      ) { photo ->
+        PhotoTileCard(
+          photo = photo,
+          isCompact = isCompactTile,
+          isSelectionMode = isSelectionMode,
+          isSelected = photo.path in selectedPhotoPaths,
+          isPlayingVideoPreview = photo.isVideo && photo.path == activePreviewVideoPath,
+          indexEntry = photoIndexMap[photo.path],
+          matchSnippet = matchSnippetsByPath[photo.path],
+          onToggleSelect = { onTogglePhotoSelect(photo) },
+          onLongClick = { onPhotoLongClick(photo) },
+          onClick = { onPhotoClick(photo) },
+          onEdit = { onPhotoEdit(photo) },
         )
       }
-    }
-
-    items(
-      items = photos,
-      key = { "photo_${it.path}" },
-    ) { photo ->
-      PhotoTileCard(
-        photo = photo,
-        isCompact = isCompactTile,
-        isSelectionMode = isSelectionMode,
-        isSelected = photo.path in selectedPhotoPaths,
-        indexEntry = photoIndexMap[photo.path],
-        matchSnippet = matchSnippetsByPath[photo.path],
-        onToggleSelect = { onTogglePhotoSelect(photo) },
-        onLongClick = { onPhotoLongClick(photo) },
-        onClick = { onPhotoClick(photo) },
-        onEdit = { onPhotoEdit(photo) },
-      )
     }
   }
 }
@@ -2333,7 +2764,7 @@ private fun AlbumTileCard(
         onClick = onClick,
         onLongClick = onLongClick,
       )
-      .padding(2.dp)
+      .padding(horizontal = 2.dp, vertical = 1.dp)
       .testTag("album_tile_item_${album.name}"),
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
@@ -2446,7 +2877,7 @@ private fun AlbumTileCard(
       }
     }
 
-    Spacer(modifier = Modifier.height(6.dp))
+    Spacer(modifier = Modifier.height(3.dp))
 
     // Label with the folder name underneath the tile
     Text(
@@ -2483,6 +2914,7 @@ private fun PhotoTileCard(
   isCompact: Boolean,
   isSelectionMode: Boolean = false,
   isSelected: Boolean = false,
+  isPlayingVideoPreview: Boolean = false,
   indexEntry: GalleryPhotoIndexEntry? = null,
   matchSnippet: String? = null,
   onToggleSelect: () -> Unit = {},
@@ -2518,8 +2950,44 @@ private fun PhotoTileCard(
         photoFile = photo.file,
         contentDescription = photo.name,
         iconSize = if (isCompact) 22.dp else 32.dp,
+        isPlayingVideoPreview = isPlayingVideoPreview,
         modifier = Modifier.fillMaxSize(),
       )
+
+      if (photo.isVideo && !isCompact) {
+        Surface(
+          shape = CircleShape,
+          color = Color.Black.copy(alpha = 0.62f),
+          modifier = Modifier
+            .align(Alignment.TopStart)
+            .padding(4.dp)
+            .size(22.dp)
+            .testTag(
+              if (isPlayingVideoPreview) {
+                "video_preview_playing_badge_${photo.name}"
+              } else {
+                "video_tile_badge_${photo.name}"
+              }
+            ),
+        ) {
+          Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+            Icon(
+              imageVector = if (isPlayingVideoPreview) {
+                Icons.AutoMirrored.Filled.VolumeOff
+              } else {
+                Icons.Default.PlayArrow
+              },
+              contentDescription = if (isPlayingVideoPreview) {
+                "Playing muted video preview"
+              } else {
+                "Video"
+              },
+              tint = Color.White,
+              modifier = Modifier.size(13.dp),
+            )
+          }
+        }
+      }
 
       if (isSelected) {
         Box(
@@ -2633,11 +3101,19 @@ private fun PhotoTileCard(
 private fun GalleryListView(
   albums: List<GalleryAlbum>,
   photos: List<GalleryPhoto>,
+  photoGroups: List<GalleryPhotoGroup> = emptyList(),
+  collapsedGroupTitles: Set<String> = emptySet(),
+  onToggleGroupCollapse: (String) -> Unit = {},
   isSelectionMode: Boolean = false,
   selectedAlbumPaths: Set<String> = emptySet(),
   selectedPhotoPaths: Set<String> = emptySet(),
   photoIndexMap: Map<String, GalleryPhotoIndexEntry> = emptyMap(),
   matchSnippetsByPath: Map<String, String> = emptyMap(),
+  isVideoPreviewEnabled: Boolean = true,
+  videoPreviewScopeKey: String = "root",
+  videoPreviewPlayDurationMs: Long = DEFAULT_VIDEO_PREVIEW_PLAY_DURATION_MS,
+  videoPreviewCyclePauseDurationMs: Long = DEFAULT_VIDEO_PREVIEW_CYCLE_PAUSE_DURATION_MS,
+  videoPreviewScrollCooldownMs: Long = DEFAULT_VIDEO_PREVIEW_SCROLL_OUT_COOLDOWN_MS,
   onToggleAlbumSelect: (GalleryAlbum) -> Unit = {},
   onTogglePhotoSelect: (GalleryPhoto) -> Unit = {},
   onAlbumLongClick: (GalleryAlbum) -> Unit = {},
@@ -2646,12 +3122,55 @@ private fun GalleryListView(
   onPhotoClick: (GalleryPhoto) -> Unit,
   onPhotoEdit: (GalleryPhoto) -> Unit = {},
 ) {
+  val listState = rememberLazyListState()
+  val videoPathsSet = remember(photos) {
+    photos.filter { it.isVideo }.map { it.path }.toSet()
+  }
+  val visibleVideoPaths by remember(listState, videoPathsSet) {
+    derivedStateOf {
+      val layoutInfo = listState.layoutInfo
+      val viewportStart = layoutInfo.viewportStartOffset
+      val viewportEnd = layoutInfo.viewportEndOffset
+      val hasViewportBounds = viewportEnd > viewportStart
+      layoutInfo.visibleItemsInfo
+        .sortedBy { it.index }
+        .mapNotNull { itemInfo ->
+          val keyStr = itemInfo.key as? String ?: return@mapNotNull null
+          val path = when {
+            keyStr.startsWith("list_photo_group_") -> keyStr.substringAfter("|", "")
+            keyStr.startsWith("list_photo_") -> keyStr.removePrefix("list_photo_")
+            else -> return@mapNotNull null
+          }
+          if (path !in videoPathsSet) return@mapNotNull null
+          if (hasViewportBounds && itemInfo.size > 0) {
+            val itemTop = itemInfo.offset
+            val itemBottom = itemTop + itemInfo.size
+            val visiblePx = (minOf(itemBottom, viewportEnd) - maxOf(itemTop, viewportStart)).coerceAtLeast(0)
+            if (visiblePx < itemInfo.size * 0.35f) return@mapNotNull null
+          }
+          path
+        }
+        .distinct()
+    }
+  }
+
+  val activePreviewVideoPath = rememberGalleryVideoPreviewPath(
+    visibleVideoPaths = visibleVideoPaths,
+    isScrollInProgress = listState.isScrollInProgress,
+    enabled = isVideoPreviewEnabled,
+    scopeKey = videoPreviewScopeKey,
+    playDurationMs = videoPreviewPlayDurationMs,
+    cyclePauseDurationMs = videoPreviewCyclePauseDurationMs,
+    scrollCooldownMs = videoPreviewScrollCooldownMs,
+  )
+
   LazyColumn(
+    state = listState,
     modifier = Modifier
       .fillMaxSize()
       .testTag("gallery_list_view"),
-    contentPadding = PaddingValues(12.dp),
-    verticalArrangement = Arrangement.spacedBy(10.dp),
+    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+    verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
     items(
       items = albums,
@@ -2667,36 +3186,74 @@ private fun GalleryListView(
       )
     }
 
-    if (albums.isNotEmpty() && photos.isNotEmpty()) {
-      item {
-        Text(
-          text = "Photos",
-          style = MaterialTheme.typography.titleSmall,
-          fontWeight = FontWeight.Bold,
-          color = MaterialTheme.colorScheme.primary,
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 6.dp, bottom = 2.dp)
-            .testTag("gallery_photos_section_header"),
+    if (photoGroups.isNotEmpty()) {
+      photoGroups.forEach { group ->
+        val isCollapsed = group.title.isNotEmpty() && group.title in collapsedGroupTitles
+        if (group.title.isNotEmpty()) {
+          item(key = "list_group_header_${group.title}") {
+            GalleryGroupHeader(
+              title = group.title,
+              count = group.photos.size,
+              isCollapsed = isCollapsed,
+              onToggleCollapse = { onToggleGroupCollapse(group.title) },
+            )
+          }
+        }
+        if (!isCollapsed) {
+          items(
+            items = group.photos,
+            key = { photo ->
+              if (group.title.isEmpty()) "list_photo_${photo.path}" else "list_photo_group_${group.title}|${photo.path}"
+            },
+          ) { photo ->
+            PhotoListRow(
+              photo = photo,
+              isSelectionMode = isSelectionMode,
+              isSelected = photo.path in selectedPhotoPaths,
+              isPlayingVideoPreview = photo.isVideo && photo.path == activePreviewVideoPath,
+              indexEntry = photoIndexMap[photo.path],
+              matchSnippet = matchSnippetsByPath[photo.path],
+              onToggleSelect = { onTogglePhotoSelect(photo) },
+              onLongClick = { onPhotoLongClick(photo) },
+              onClick = { onPhotoClick(photo) },
+              onEdit = { onPhotoEdit(photo) },
+            )
+          }
+        }
+      }
+    } else {
+      if (albums.isNotEmpty() && photos.isNotEmpty()) {
+        item {
+          Text(
+            text = "Photos",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(top = 6.dp, bottom = 2.dp)
+              .testTag("gallery_photos_section_header"),
+          )
+        }
+      }
+
+      items(
+        items = photos,
+        key = { "list_photo_${it.path}" },
+      ) { photo ->
+        PhotoListRow(
+          photo = photo,
+          isSelectionMode = isSelectionMode,
+          isSelected = photo.path in selectedPhotoPaths,
+          isPlayingVideoPreview = photo.isVideo && photo.path == activePreviewVideoPath,
+          indexEntry = photoIndexMap[photo.path],
+          matchSnippet = matchSnippetsByPath[photo.path],
+          onToggleSelect = { onTogglePhotoSelect(photo) },
+          onLongClick = { onPhotoLongClick(photo) },
+          onClick = { onPhotoClick(photo) },
+          onEdit = { onPhotoEdit(photo) },
         )
       }
-    }
-
-    items(
-      items = photos,
-      key = { "list_photo_${it.path}" },
-    ) { photo ->
-      PhotoListRow(
-        photo = photo,
-        isSelectionMode = isSelectionMode,
-        isSelected = photo.path in selectedPhotoPaths,
-        indexEntry = photoIndexMap[photo.path],
-        matchSnippet = matchSnippetsByPath[photo.path],
-        onToggleSelect = { onTogglePhotoSelect(photo) },
-        onLongClick = { onPhotoLongClick(photo) },
-        onClick = { onPhotoClick(photo) },
-        onEdit = { onPhotoEdit(photo) },
-      )
     }
   }
 }
@@ -2737,7 +3294,7 @@ private fun AlbumListRow(
     Row(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(horizontal = 12.dp, vertical = 10.dp),
+        .padding(horizontal = 12.dp, vertical = 8.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       if (isSelectionMode) {
@@ -2820,6 +3377,7 @@ private fun PhotoListRow(
   photo: GalleryPhoto,
   isSelectionMode: Boolean = false,
   isSelected: Boolean = false,
+  isPlayingVideoPreview: Boolean = false,
   indexEntry: GalleryPhotoIndexEntry? = null,
   matchSnippet: String? = null,
   onToggleSelect: () -> Unit = {},
@@ -2853,7 +3411,7 @@ private fun PhotoListRow(
     Row(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(horizontal = 12.dp, vertical = 10.dp),
+        .padding(horizontal = 12.dp, vertical = 8.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       if (isSelectionMode) {
@@ -2885,6 +3443,7 @@ private fun PhotoListRow(
           photoFile = photo.file,
           contentDescription = photo.name,
           iconSize = 26.dp,
+          isPlayingVideoPreview = isPlayingVideoPreview,
           modifier = Modifier.fillMaxSize(),
         )
       }
@@ -3318,10 +3877,14 @@ private fun PhotoThumbnailBox(
   photoFile: File,
   contentDescription: String,
   iconSize: Dp,
+  isPlayingVideoPreview: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
+  val isInspectionMode = LocalInspectionMode.current
+  val density = LocalDensity.current
   val filePath = photoFile.absolutePath
   val fileLastMod = photoFile.lastModified()
+  val isVideoFile = remember(filePath) { VideoEditorEngine.isVideoFile(photoFile) }
   var bitmap by remember(filePath, fileLastMod) {
     mutableStateOf(GalleryEngine.getCachedThumbnailBitmap(photoFile))
   }
@@ -3333,7 +3896,7 @@ private fun PhotoThumbnailBox(
   }
 
   Box(
-    modifier = modifier,
+    modifier = modifier.clipToBounds(),
     contentAlignment = Alignment.Center,
   ) {
     if (bitmap != null) {
@@ -3351,7 +3914,7 @@ private fun PhotoThumbnailBox(
         contentAlignment = Alignment.Center,
       ) {
         Icon(
-          imageVector = if (VideoEditorEngine.isVideoFile(photoFile)) {
+          imageVector = if (isVideoFile) {
             Icons.Default.VideoFile
           } else {
             Icons.Default.Image
@@ -3360,6 +3923,143 @@ private fun PhotoThumbnailBox(
           tint = MaterialTheme.colorScheme.onTertiaryContainer,
           modifier = Modifier.size(iconSize),
         )
+      }
+    }
+
+    if (isPlayingVideoPreview && isVideoFile) {
+      var mediaPlayerRef by remember(filePath, fileLastMod) { mutableStateOf<MediaPlayer?>(null) }
+      var isPlayerPrepared by remember(filePath, fileLastMod) { mutableStateOf(false) }
+      var videoWidth by remember(filePath, fileLastMod) { mutableIntStateOf(0) }
+      var videoHeight by remember(filePath, fileLastMod) { mutableIntStateOf(0) }
+
+      DisposableEffect(filePath, fileLastMod) {
+        onDispose {
+          isPlayerPrepared = false
+          mediaPlayerRef?.let { mp ->
+            try {
+              mp.stop()
+            } catch (_: Throwable) {}
+            try {
+              mp.release()
+            } catch (_: Throwable) {}
+          }
+          mediaPlayerRef = null
+        }
+      }
+
+      BoxWithConstraints(
+        modifier = Modifier
+          .fillMaxSize()
+          .clipToBounds()
+          .testTag("video_preview_playing_${photoFile.name}")
+          .semantics {
+            this.contentDescription = "Playing muted preview: ${photoFile.name}"
+          },
+        contentAlignment = Alignment.Center,
+      ) {
+        val availWPx = with(density) { maxWidth.toPx() }
+        val availHPx = with(density) { maxHeight.toPx() }
+        val currentThumb = bitmap
+        val videoAspect = when {
+          videoWidth > 0 && videoHeight > 0 -> videoWidth.toFloat() / videoHeight.toFloat()
+          currentThumb != null && currentThumb.width > 0 && currentThumb.height > 0 ->
+            currentThumb.width.toFloat() / currentThumb.height.toFloat()
+          else -> 1f
+        }
+        val (coverWPx, coverHPx) = if (availWPx > 0f && availHPx > 0f) {
+          if (availWPx / availHPx > videoAspect) {
+            availWPx to (availWPx / videoAspect)
+          } else {
+            (availHPx * videoAspect) to availHPx
+          }
+        } else {
+          120f to 120f
+        }
+        val coverW = with(density) { coverWPx.toDp() }
+        val coverH = with(density) { coverHPx.toDp() }
+
+        if (!isInspectionMode && photoFile.exists()) {
+          key(filePath, fileLastMod) {
+            AndroidView(
+              factory = { ctx ->
+                TextureView(ctx).apply {
+                  isOpaque = false
+                  surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                    override fun onSurfaceTextureAvailable(
+                      surfaceTexture: SurfaceTexture,
+                      width: Int,
+                      height: Int,
+                    ) {
+                      val surface = AndroidSurface(surfaceTexture)
+                      val mp = MediaPlayer()
+                      try {
+                        mp.setDataSource(photoFile.absolutePath)
+                        mp.setSurface(surface)
+                        mp.isLooping = true
+                        mp.setVolume(0f, 0f)
+                        mp.setOnVideoSizeChangedListener { _, w, h ->
+                          if (w > 0 && h > 0) {
+                            videoWidth = w
+                            videoHeight = h
+                          }
+                        }
+                        mp.setOnPreparedListener { preparedMp ->
+                          if (preparedMp.videoWidth > 0 && preparedMp.videoHeight > 0) {
+                            videoWidth = preparedMp.videoWidth
+                            videoHeight = preparedMp.videoHeight
+                          }
+                          preparedMp.isLooping = true
+                          try {
+                            preparedMp.setVolume(0f, 0f)
+                          } catch (_: Throwable) {}
+                          mediaPlayerRef = preparedMp
+                          isPlayerPrepared = true
+                          try {
+                            preparedMp.start()
+                          } catch (_: Throwable) {}
+                        }
+                        mp.setOnErrorListener { _, _, _ ->
+                          isPlayerPrepared = false
+                          true
+                        }
+                        mp.prepareAsync()
+                      } catch (_: Throwable) {
+                        isPlayerPrepared = false
+                        try {
+                          mp.release()
+                        } catch (_: Throwable) {}
+                        surface.release()
+                      }
+                    }
+
+                    override fun onSurfaceTextureSizeChanged(
+                      surface: SurfaceTexture,
+                      width: Int,
+                      height: Int,
+                    ) = Unit
+
+                    override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                      isPlayerPrepared = false
+                      mediaPlayerRef?.let { mp ->
+                        try {
+                          mp.setSurface(null)
+                          mp.release()
+                        } catch (_: Throwable) {}
+                      }
+                      mediaPlayerRef = null
+                      return true
+                    }
+
+                    override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
+                  }
+                }
+              },
+              modifier = Modifier
+                .size(coverW, coverH)
+                .alpha(if (isPlayerPrepared) 1f else 0f),
+            )
+          }
+        }
       }
     }
   }
@@ -3434,6 +4134,43 @@ internal fun GalleryPhotoViewerDialog(
   onShare: (GalleryPhoto) -> Unit,
 ) {
   val context = LocalContext.current
+  val activityView = LocalView.current
+  val density = LocalDensity.current
+  val layoutDirection = LocalLayoutDirection.current
+  val activitySystemBars = WindowInsets.systemBars.asPaddingValues()
+  val activityCutout = WindowInsets.displayCutout.asPaddingValues()
+  val rootWindowInsets = ViewCompat.getRootWindowInsets(activityView)
+    ?.getInsetsIgnoringVisibility(
+      WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+    )
+  val rootTopDp = with(density) { (rootWindowInsets?.top ?: 0).toDp() }
+  val rootBottomDp = with(density) { (rootWindowInsets?.bottom ?: 0).toDp() }
+  val rootLeftDp = with(density) { (rootWindowInsets?.left ?: 0).toDp() }
+  val rootRightDp = with(density) { (rootWindowInsets?.right ?: 0).toDp() }
+  val rootStartDp = if (layoutDirection == LayoutDirection.Ltr) rootLeftDp else rootRightDp
+  val rootEndDp = if (layoutDirection == LayoutDirection.Ltr) rootRightDp else rootLeftDp
+
+  val activityTopInset = maxOf(
+    rootTopDp,
+    activitySystemBars.calculateTopPadding(),
+    activityCutout.calculateTopPadding(),
+  )
+  val activityBottomInset = maxOf(
+    rootBottomDp,
+    activitySystemBars.calculateBottomPadding(),
+    activityCutout.calculateBottomPadding(),
+  )
+  val activityStartInset = maxOf(
+    rootStartDp,
+    activitySystemBars.calculateStartPadding(layoutDirection),
+    activityCutout.calculateStartPadding(layoutDirection),
+  )
+  val activityEndInset = maxOf(
+    rootEndDp,
+    activitySystemBars.calculateEndPadding(layoutDirection),
+    activityCutout.calculateEndPadding(layoutDirection),
+  )
+
   val viewerPhotos = remember(photos, initialPhoto) {
     if (photos.isNotEmpty() && photos.any { it.path == initialPhoto.path }) {
       photos
@@ -3457,12 +4194,18 @@ internal fun GalleryPhotoViewerDialog(
   var showPreviewBar by rememberSaveable { mutableStateOf(true) }
   var showRecognitionInfoSheet by rememberSaveable { mutableStateOf(false) }
 
+  // Videos play automatically and muted by default in the viewer
+  var isVideoPlaying by rememberSaveable(initialPhoto.path) { mutableStateOf(true) }
+  var isVideoMuted by rememberSaveable(initialPhoto.path) { mutableStateOf(true) }
+
   // Current active page's zoom scale (1f..5f)
   var currentZoomScale by remember { mutableFloatStateOf(MIN_PHOTO_ZOOM) }
 
-  // Reset zoom when swiping to a different photo and keep the bottom preview scroll bar synced
+  // Reset zoom and auto-play muted when swiping to a different photo/video, keeping bottom preview scroll bar synced
   LaunchedEffect(pagerState.currentPage) {
     currentZoomScale = MIN_PHOTO_ZOOM
+    isVideoPlaying = true
+    isVideoMuted = true
     if (viewerPhotos.isNotEmpty() && pagerState.currentPage in viewerPhotos.indices) {
       previewListState.animateScrollToItem(pagerState.currentPage)
     }
@@ -3486,17 +4229,57 @@ internal fun GalleryPhotoViewerDialog(
       decorFitsSystemWindows = false,
     ),
   ) {
-    // Full black background with the image rendered directly on top
+    val dialogView = LocalView.current
+    SideEffect {
+      val dialogWindow = (dialogView.parent as? DialogWindowProvider)?.window
+      if (dialogWindow != null) {
+        WindowCompat.getInsetsController(dialogWindow, dialogView).apply {
+          isAppearanceLightStatusBars = false
+          isAppearanceLightNavigationBars = false
+        }
+      }
+    }
+
+    val dialogSystemBars = WindowInsets.systemBars.asPaddingValues()
+    val dialogCutout = WindowInsets.displayCutout.asPaddingValues()
+    val topSystemInset = maxOf(
+      activityTopInset,
+      dialogSystemBars.calculateTopPadding(),
+      dialogCutout.calculateTopPadding(),
+    )
+    val bottomSystemInset = maxOf(
+      activityBottomInset,
+      dialogSystemBars.calculateBottomPadding(),
+      dialogCutout.calculateBottomPadding(),
+    )
+    val startSystemInset = maxOf(
+      activityStartInset,
+      dialogSystemBars.calculateStartPadding(layoutDirection),
+      dialogCutout.calculateStartPadding(layoutDirection),
+    )
+    val endSystemInset = maxOf(
+      activityEndInset,
+      dialogSystemBars.calculateEndPadding(layoutDirection),
+      dialogCutout.calculateEndPadding(layoutDirection),
+    )
+
+    // Full black background with the image/video rendered directly on top, inset clear of system status & nav bars
     Box(
       modifier = Modifier
         .fillMaxSize()
         .background(Color.Black)
+        .padding(
+          start = startSystemInset,
+          top = topSystemInset,
+          end = endSystemInset,
+          bottom = bottomSystemInset,
+        )
         .testTag("gallery_photo_viewer_dialog")
         .semantics {
           contentDescription = "Full black background photo viewer"
         },
     ) {
-      // Swipeable horizontal pager over all photos in the album
+      // Swipeable horizontal pager over all photos/videos in the album
       HorizontalPager(
         state = pagerState,
         userScrollEnabled = currentZoomScale <= 1.02f,
@@ -3509,6 +4292,8 @@ internal fun GalleryPhotoViewerDialog(
         PhotoViewerPageContent(
           photo = pagePhoto,
           isCurrentPage = isCurrentPage,
+          isVideoPlaying = isCurrentPage && isVideoPlaying,
+          isVideoMuted = isVideoMuted,
           zoomScale = if (isCurrentPage) currentZoomScale else MIN_PHOTO_ZOOM,
           onZoomScaleChange = { updatedZoom ->
             if (isCurrentPage) {
@@ -3629,7 +4414,7 @@ internal fun GalleryPhotoViewerDialog(
         }
       }
 
-      // Bottom preview scroll bar + Auto-Tag & OCR/QR quick bar, dismissible with a tap on the image
+      // Bottom preview scroll bar + Video playback controls + Auto-Tag & OCR/QR quick bar, dismissible with a tap
       AnimatedVisibility(
         visible = showPreviewBar,
         enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
@@ -3639,6 +4424,81 @@ internal fun GalleryPhotoViewerDialog(
         Column(
           modifier = Modifier.fillMaxWidth(),
         ) {
+          if (currentPhoto.isVideo) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .testTag("photo_viewer_video_controls"),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Surface(
+                shape = CircleShape,
+                color = Color.Black.copy(alpha = 0.72f),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.24f)),
+                modifier = Modifier
+                  .clip(CircleShape)
+                  .clickable { isVideoPlaying = !isVideoPlaying }
+                  .testTag("photo_viewer_play_pause_button"),
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                  Icon(
+                    imageVector = if (isVideoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (isVideoPlaying) "Pause video" else "Play video",
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp),
+                  )
+                  Text(
+                    text = if (isVideoPlaying) "Playing" else "Paused",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                    modifier = Modifier.testTag("photo_viewer_video_play_state_label"),
+                  )
+                }
+              }
+
+              Surface(
+                shape = CircleShape,
+                color = Color.Black.copy(alpha = 0.72f),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.24f)),
+                modifier = Modifier
+                  .clip(CircleShape)
+                  .clickable { isVideoMuted = !isVideoMuted }
+                  .testTag("photo_viewer_mute_button"),
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                  Icon(
+                    imageVector = if (isVideoMuted) {
+                      Icons.AutoMirrored.Filled.VolumeOff
+                    } else {
+                      Icons.AutoMirrored.Filled.VolumeUp
+                    },
+                    contentDescription = if (isVideoMuted) "Unmute video" else "Mute video",
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp),
+                  )
+                  Text(
+                    text = if (isVideoMuted) "Muted" else "Sound on",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                    modifier = Modifier.testTag("photo_viewer_video_mute_state_label"),
+                  )
+                }
+              }
+            }
+          }
+
           if (currentIndexEntry != null &&
             (currentIndexEntry.autoTags.isNotEmpty() || currentIndexEntry.hasOcrText || currentIndexEntry.hasBarcodes)
           ) {
@@ -4119,24 +4979,39 @@ private fun GalleryPhotoRecognitionInfoDialog(
 private fun PhotoViewerPageContent(
   photo: GalleryPhoto,
   isCurrentPage: Boolean,
+  isVideoPlaying: Boolean = isCurrentPage,
+  isVideoMuted: Boolean = true,
   zoomScale: Float,
   onZoomScaleChange: (Float) -> Unit,
   onTapImage: () -> Unit,
 ) {
+  val isInspectionMode = LocalInspectionMode.current
+  val density = LocalDensity.current
+  val isVideo = photo.isVideo
+
   var bitmap by remember(photo.path, photo.lastModifiedMs) {
     mutableStateOf(GalleryEngine.getCachedThumbnailBitmap(photo.file))
   }
 
-  LaunchedEffect(photo.path, photo.lastModifiedMs) {
-    val fullBitmap = withContext(Dispatchers.IO) {
-      try {
-        BitmapFactory.decodeFile(photo.file.absolutePath)
-      } catch (_: Throwable) {
-        null
+  LaunchedEffect(photo.path, photo.lastModifiedMs, isVideo) {
+    if (isVideo) {
+      if (bitmap == null) {
+        val videoThumb = GalleryEngine.loadThumbnailBitmapAsync(photo.file)
+        if (videoThumb != null) {
+          bitmap = videoThumb
+        }
       }
-    }
-    if (fullBitmap != null) {
-      bitmap = fullBitmap
+    } else {
+      val fullBitmap = withContext(Dispatchers.IO) {
+        try {
+          BitmapFactory.decodeFile(photo.file.absolutePath)
+        } catch (_: Throwable) {
+          null
+        }
+      }
+      if (fullBitmap != null) {
+        bitmap = fullBitmap
+      }
     }
   }
 
@@ -4153,6 +5028,9 @@ private fun PhotoViewerPageContent(
   val currentZoomState by rememberUpdatedState(zoomScale)
   val currentOnZoomChange by rememberUpdatedState(onZoomScaleChange)
   val currentOnTapImage by rememberUpdatedState(onTapImage)
+  val currentIsCurrentPage by rememberUpdatedState(isCurrentPage)
+  val currentIsVideoPlaying by rememberUpdatedState(isVideoPlaying)
+  val currentIsVideoMuted by rememberUpdatedState(isVideoMuted)
 
   val currentBitmap = bitmap
 
@@ -4225,7 +5103,198 @@ private fun PhotoViewerPageContent(
       },
     contentAlignment = Alignment.Center,
   ) {
-    if (currentBitmap != null) {
+    if (isVideo) {
+      var mediaPlayerRef by remember(photo.path, photo.lastModifiedMs) { mutableStateOf<MediaPlayer?>(null) }
+      var isPlayerPrepared by remember(photo.path, photo.lastModifiedMs) { mutableStateOf(false) }
+      var videoWidth by remember(photo.path, photo.lastModifiedMs) { mutableIntStateOf(0) }
+      var videoHeight by remember(photo.path, photo.lastModifiedMs) { mutableIntStateOf(0) }
+
+      LaunchedEffect(mediaPlayerRef, isPlayerPrepared, isCurrentPage, isVideoPlaying, isVideoMuted) {
+        val mp = mediaPlayerRef ?: return@LaunchedEffect
+        if (!isPlayerPrepared) return@LaunchedEffect
+        try {
+          val vol = if (isVideoMuted) 0f else 1f
+          mp.setVolume(vol, vol)
+        } catch (_: Throwable) {}
+
+        try {
+          if (isCurrentPage && isVideoPlaying) {
+            if (!mp.isPlaying) {
+              mp.start()
+            }
+          } else {
+            if (mp.isPlaying) {
+              mp.pause()
+            }
+            if (!isCurrentPage) {
+              mp.seekTo(0)
+            }
+          }
+        } catch (_: Throwable) {}
+      }
+
+      DisposableEffect(photo.path, photo.lastModifiedMs) {
+        onDispose {
+          isPlayerPrepared = false
+          mediaPlayerRef?.let { mp ->
+            try {
+              mp.stop()
+            } catch (_: Throwable) {}
+            try {
+              mp.release()
+            } catch (_: Throwable) {}
+          }
+          mediaPlayerRef = null
+        }
+      }
+
+      BoxWithConstraints(
+        modifier = Modifier
+          .fillMaxSize()
+          .graphicsLayer {
+            scaleX = zoomScale
+            scaleY = zoomScale
+            translationX = panOffsetX
+            translationY = panOffsetY
+          }
+          .testTag("photo_viewer_image_${photo.name}")
+          .testTag("photo_viewer_video_${photo.name}"),
+        contentAlignment = Alignment.Center,
+      ) {
+        val availWPx = with(density) { maxWidth.toPx() }
+        val availHPx = with(density) { maxHeight.toPx() }
+        val videoAspect = when {
+          videoWidth > 0 && videoHeight > 0 -> videoWidth.toFloat() / videoHeight.toFloat()
+          currentBitmap != null && currentBitmap.width > 0 && currentBitmap.height > 0 ->
+            currentBitmap.width.toFloat() / currentBitmap.height.toFloat()
+          else -> 16f / 9f
+        }
+        val (fitWPx, fitHPx) = if (availWPx > 0f && availHPx > 0f) {
+          if (availWPx / availHPx > videoAspect) {
+            (availHPx * videoAspect) to availHPx
+          } else {
+            availWPx to (availWPx / videoAspect)
+          }
+        } else {
+          320f to 180f
+        }
+        val fitW = with(density) { fitWPx.toDp() }
+        val fitH = with(density) { fitHPx.toDp() }
+
+        if (!isPlayerPrepared) {
+          if (currentBitmap != null) {
+            Image(
+              bitmap = currentBitmap.asImageBitmap(),
+              contentDescription = photo.name,
+              contentScale = ContentScale.Fit,
+              modifier = Modifier.fillMaxSize(),
+            )
+          } else {
+            Column(
+              horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+              Icon(
+                imageVector = Icons.Default.VideoFile,
+                contentDescription = photo.name,
+                tint = Color.White,
+                modifier = Modifier.size(64.dp),
+              )
+              Spacer(modifier = Modifier.height(8.dp))
+              Text(
+                text = photo.name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White,
+              )
+            }
+          }
+        }
+
+        if (!isInspectionMode && photo.file.exists()) {
+          key(photo.path, photo.lastModifiedMs) {
+            AndroidView(
+              factory = { ctx ->
+                TextureView(ctx).apply {
+                  isOpaque = false
+                  surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                    override fun onSurfaceTextureAvailable(
+                      surfaceTexture: SurfaceTexture,
+                      width: Int,
+                      height: Int,
+                    ) {
+                      val surface = AndroidSurface(surfaceTexture)
+                      val mp = MediaPlayer()
+                      try {
+                        mp.setDataSource(photo.file.absolutePath)
+                        mp.setSurface(surface)
+                        mp.isLooping = true
+                        mp.setOnVideoSizeChangedListener { _, w, h ->
+                          if (w > 0 && h > 0) {
+                            videoWidth = w
+                            videoHeight = h
+                          }
+                        }
+                        mp.setOnPreparedListener { preparedMp ->
+                          if (preparedMp.videoWidth > 0 && preparedMp.videoHeight > 0) {
+                            videoWidth = preparedMp.videoWidth
+                            videoHeight = preparedMp.videoHeight
+                          }
+                          preparedMp.isLooping = true
+                          val vol = if (currentIsVideoMuted) 0f else 1f
+                          try {
+                            preparedMp.setVolume(vol, vol)
+                          } catch (_: Throwable) {}
+                          mediaPlayerRef = preparedMp
+                          isPlayerPrepared = true
+                          if (currentIsCurrentPage && currentIsVideoPlaying) {
+                            try {
+                              preparedMp.start()
+                            } catch (_: Throwable) {}
+                          }
+                        }
+                        mp.setOnErrorListener { _, _, _ ->
+                          isPlayerPrepared = false
+                          true
+                        }
+                        mp.prepareAsync()
+                      } catch (_: Throwable) {
+                        isPlayerPrepared = false
+                        try {
+                          mp.release()
+                        } catch (_: Throwable) {}
+                        surface.release()
+                      }
+                    }
+
+                    override fun onSurfaceTextureSizeChanged(
+                      surface: SurfaceTexture,
+                      width: Int,
+                      height: Int,
+                    ) = Unit
+
+                    override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                      isPlayerPrepared = false
+                      mediaPlayerRef?.let { mp ->
+                        try {
+                          mp.setSurface(null)
+                          mp.release()
+                        } catch (_: Throwable) {}
+                      }
+                      mediaPlayerRef = null
+                      return true
+                    }
+
+                    override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
+                  }
+                }
+              },
+              modifier = Modifier
+                .size(fitW, fitH)
+                .alpha(if (isPlayerPrepared) 1f else 0f),
+            )
+          }
+        }
+      }
+    } else if (currentBitmap != null) {
       Image(
         bitmap = currentBitmap.asImageBitmap(),
         contentDescription = photo.name,

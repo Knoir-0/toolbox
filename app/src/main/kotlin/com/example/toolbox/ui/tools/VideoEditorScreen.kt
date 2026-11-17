@@ -20,6 +20,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
@@ -93,9 +94,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -120,6 +118,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -2506,54 +2505,87 @@ private fun VideoModeSelectorRow(
   modifier: Modifier = Modifier,
 ) {
   val modes = VideoEditorMode.entries
-  SingleChoiceSegmentedButtonRow(
+  Row(
     modifier = modifier
       .fillMaxWidth()
       .padding(bottom = 4.dp)
       .testTag("mode_selector_row"),
+    horizontalArrangement = Arrangement.Center,
+    verticalAlignment = Alignment.CenterVertically,
   ) {
-    modes.forEachIndexed { index, mode ->
-      val hasActiveEdits = when (mode) {
-        VideoEditorMode.TRIM -> editState.hasTrimChanges
-        VideoEditorMode.CROP -> editState.hasCropChanges
-        VideoEditorMode.TRANSFORM -> editState.hasTransformChanges
-        VideoEditorMode.SPEED -> editState.hasSpeedChanges || editState.isMuted || abs(editState.volume - 1f) > 0.01f || editState.fadeInOut
-        VideoEditorMode.ADJUST -> editState.hasColorChanges
-        VideoEditorMode.DATA -> editState.hasMetadataChanges
-      }
-      SegmentedButton(
-        shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
-        onClick = { onModeSelected(mode) },
-        selected = activeMode == mode,
-        icon = {},
-        modifier = Modifier.testTag("mode_tab_${mode.name.lowercase(Locale.ROOT)}"),
-        label = {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
-          ) {
-            val icon = when (mode) {
-              VideoEditorMode.TRIM -> Icons.Default.ContentCut
-              VideoEditorMode.CROP -> Icons.Default.Crop
-              VideoEditorMode.TRANSFORM -> Icons.AutoMirrored.Filled.RotateRight
-              VideoEditorMode.SPEED -> Icons.Default.Speed
-              VideoEditorMode.ADJUST -> Icons.Default.Tune
-              VideoEditorMode.DATA -> Icons.Default.Info
-            }
-            Icon(
-              imageVector = icon,
-              contentDescription = null,
-              modifier = Modifier.size(15.dp),
-            )
-            Spacer(modifier = Modifier.width(3.dp))
-            Text(
-              text = if (hasActiveEdits) "${mode.label}•" else mode.label,
-              style = MaterialTheme.typography.labelSmall,
-              maxLines = 1,
-            )
+    Surface(
+      shape = RoundedCornerShape(24.dp),
+      color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+      modifier = Modifier.testTag("video_mode_selector"),
+    ) {
+      Row(
+        modifier = Modifier
+          .horizontalScroll(rememberScrollState())
+          .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        modes.forEach { mode ->
+          val selected = activeMode == mode
+          val hasActiveEdits = when (mode) {
+            VideoEditorMode.TRIM -> editState.hasTrimChanges
+            VideoEditorMode.CROP -> editState.hasCropChanges
+            VideoEditorMode.TRANSFORM -> editState.hasTransformChanges
+            VideoEditorMode.SPEED -> editState.hasSpeedChanges || editState.isMuted || abs(editState.volume - 1f) > 0.01f || editState.fadeInOut
+            VideoEditorMode.ADJUST -> editState.hasColorChanges
+            VideoEditorMode.DATA -> editState.hasMetadataChanges
           }
-        },
-      )
+          val icon = when (mode) {
+            VideoEditorMode.TRIM -> Icons.Default.ContentCut
+            VideoEditorMode.CROP -> Icons.Default.Crop
+            VideoEditorMode.TRANSFORM -> Icons.AutoMirrored.Filled.RotateRight
+            VideoEditorMode.SPEED -> Icons.Default.Speed
+            VideoEditorMode.ADJUST -> Icons.Default.Tune
+            VideoEditorMode.DATA -> Icons.Default.Info
+          }
+          Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = if (selected) {
+              MaterialTheme.colorScheme.primaryContainer
+            } else {
+              Color.Transparent
+            },
+            modifier = Modifier
+              .clip(RoundedCornerShape(20.dp))
+              .clickable { onModeSelected(mode) }
+              .testTag("mode_tab_${mode.name.lowercase(Locale.ROOT)}"),
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (selected) {
+                  MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(15.dp),
+              )
+              Text(
+                text = if (hasActiveEdits) "${mode.label}•" else mode.label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                color = if (selected) {
+                  MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
+        }
+      }
     }
   }
 }

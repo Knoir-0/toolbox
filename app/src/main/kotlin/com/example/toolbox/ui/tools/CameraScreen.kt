@@ -752,8 +752,12 @@ fun CameraScreen(
               sourceDescription = "Live Camera Frame",
             )
           }
-          if (analyzed != null && analyzed.tags.isNotEmpty()) {
-            latestVisionResult = analyzed
+          if (analyzed != null) {
+            if (analyzed.tags.isNotEmpty()) {
+              latestVisionResult = analyzed
+            } else if (latestVisionResult?.sourceDescription == "Live Camera Frame") {
+              latestVisionResult = null
+            }
           }
         }
       }
@@ -3448,10 +3452,11 @@ private fun VisionReticleOverlayCanvas(
   topInset: Dp = 16.dp,
 ) {
   val visibleTags = remember(visionResult) {
-    visionResult?.tags
-      ?.filter { it.confidenceClamped >= MIN_VISION_CONFIDENCE_THRESHOLD }
-      ?.take(5)
-      .orEmpty()
+    CameraEngine.suppressOverlappingVisionTags(
+      visionResult?.tags
+        ?.filter { it.confidenceClamped >= MIN_VISION_CONFIDENCE_THRESHOLD }
+        .orEmpty()
+    ).take(5)
   }
 
   val boxStrokeColors = listOf(

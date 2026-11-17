@@ -1,7 +1,19 @@
 package com.example.toolbox.ui.tools
 
 import android.app.Activity
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.bluetooth.BluetoothA2dp
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothHeadset
+import android.bluetooth.BluetoothProfile
+import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -11,13 +23,27 @@ import android.graphics.Paint
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
+import android.graphics.drawable.Icon
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.MediaMetadata
 import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.media.PlaybackParams
+import android.media.session.MediaController
+import android.media.session.MediaSession
+import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
 import android.os.Build
+import android.os.Bundle
 import android.os.Looper
+import android.provider.Settings
+import android.service.notification.NotificationListenerService
+import android.service.notification.StatusBarNotification
+import android.view.KeyEvent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -27,9 +53,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import com.example.toolbox.MainActivity
+import com.example.toolbox.R
+import com.example.toolbox.ui.main.EXTRA_STANDALONE_TOOL
+import com.example.toolbox.ui.main.Tool
 import java.io.File
 import java.io.FileOutputStream
 import java.lang.ref.WeakReference
@@ -526,6 +557,81 @@ object MusicPlayerEngine {
   val PLAYBACK_SPEED_OPTIONS: List<Float> = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
 
   const val MUSIC_INDEX_CACHE_FILE_NAME = "music_library_index_v1.json"
+
+  const val MEDIA_NOTIFICATION_CHANNEL_ID = "music_player_media_channel"
+  const val MEDIA_NOTIFICATION_CHANNEL_NAME = "Music Playback Controls"
+  const val MEDIA_NOTIFICATION_ID = 4102
+
+  const val ACTION_MEDIA_PLAY = "com.example.toolbox.music.ACTION_PLAY"
+  const val ACTION_MEDIA_PAUSE = "com.example.toolbox.music.ACTION_PAUSE"
+  const val ACTION_MEDIA_PLAY_PAUSE = "com.example.toolbox.music.ACTION_PLAY_PAUSE"
+  const val ACTION_MEDIA_NEXT = "com.example.toolbox.music.ACTION_NEXT"
+  const val ACTION_MEDIA_PREVIOUS = "com.example.toolbox.music.ACTION_PREVIOUS"
+  const val ACTION_MEDIA_TOGGLE_FAVORITE = "com.example.toolbox.music.ACTION_TOGGLE_FAVORITE"
+  const val ACTION_MEDIA_CYCLE_REPEAT = "com.example.toolbox.music.ACTION_CYCLE_REPEAT"
+  const val ACTION_MEDIA_CYCLE_SHUFFLE = "com.example.toolbox.music.ACTION_CYCLE_SHUFFLE"
+  const val ACTION_MEDIA_STOP = "com.example.toolbox.music.ACTION_STOP"
+
+  val SYSTEM_MEDIA_PLAYBACK_ACTIONS: Long =
+    PlaybackState.ACTION_PLAY or
+      PlaybackState.ACTION_PAUSE or
+      PlaybackState.ACTION_PLAY_PAUSE or
+      PlaybackState.ACTION_STOP or
+      PlaybackState.ACTION_SKIP_TO_NEXT or
+      PlaybackState.ACTION_SKIP_TO_PREVIOUS or
+      PlaybackState.ACTION_SEEK_TO or
+      PlaybackState.ACTION_SET_PLAYBACK_SPEED
+
+  /**
+   * Returns `true` if [deviceType] is a Bluetooth audio output device (A2DP, SCO, BLE Headset/Speaker/Broadcast, or Hearing Aid).
+   */
+  fun isBluetoothAudioDeviceType(deviceType: Int): Boolean {
+    return deviceType == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+      deviceType == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+      deviceType == AudioDeviceInfo.TYPE_HEARING_AID ||
+      deviceType == 26 || // AudioDeviceInfo.TYPE_BLE_HEADSET (API 31+)
+      deviceType == 27 || // AudioDeviceInfo.TYPE_BLE_SPEAKER (API 31+)
+      deviceType == 30    // AudioDeviceInfo.TYPE_BLE_BROADCAST (API 33+)
+  }
+
+  /**
+   * Returns `true` if [deviceType] is a Bluetooth or wired/USB headphone audio output device.
+   */
+  fun isHeadphoneOrBluetoothAudioDeviceType(deviceType: Int): Boolean {
+    return isBluetoothAudioDeviceType(deviceType) ||
+      deviceType == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+      deviceType == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+      deviceType == AudioDeviceInfo.TYPE_USB_HEADSET
+  }
+
+  /**
+   * Evaluates whether an incoming system audio/Bluetooth broadcast action and state transition
+   * indicates that Bluetooth headphones (or active external headphones) have disconnected and
+   * playback should pause.
+   */
+  fun shouldPauseOnAudioDisconnectBroadcast(
+    action: String?,
+    bluetoothState: Int = BluetoothProfile.STATE_DISCONNECTED,
+    previousBluetoothState: Int = BluetoothProfile.STATE_CONNECTED,
+    scoAudioState: Int = AudioManager.SCO_AUDIO_STATE_DISCONNECTED,
+  ): Boolean {
+    if (action.isNullOrBlank()) return false
+    return when (action) {
+      AudioManager.ACTION_AUDIO_BECOMING_NOISY -> true
+      BluetoothDevice.ACTION_ACL_DISCONNECTED -> true
+      BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED,
+      BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED -> {
+        (bluetoothState == BluetoothProfile.STATE_DISCONNECTED ||
+          bluetoothState == BluetoothProfile.STATE_DISCONNECTING) &&
+          previousBluetoothState != BluetoothProfile.STATE_DISCONNECTED
+      }
+      AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED -> {
+        scoAudioState == AudioManager.SCO_AUDIO_STATE_DISCONNECTED &&
+          previousBluetoothState == AudioManager.SCO_AUDIO_STATE_CONNECTED
+      }
+      else -> false
+    }
+  }
 
   private const val MAX_ARTWORK_CACHE_ENTRIES = 256
   private const val MAX_TRACK_METADATA_CACHE_ENTRIES = 2048
@@ -3542,27 +3648,106 @@ object MusicPlayerEngine {
   var activeTrack by mutableStateOf<MusicTrack?>(DEFAULT_SAMPLE_TRACKS.firstOrNull())
     internal set
 
+  private var internalTrackPalette by mutableStateOf(resolveTrackPalette(DEFAULT_SAMPLE_TRACKS.firstOrNull()))
+
   /**
-   * Currently active [AlbumArtPalette] for the Music Player's active track, observable by Compose UI
-   * so the app's accent color can dynamically follow the Music Player's colors.
+   * Currently active external app media session reported by the Android system media player
+   * (via [MediaSessionManager] or [ToolboxMediaListenerService]), if any.
    */
-  var activeTrackPalette by mutableStateOf(resolveTrackPalette(DEFAULT_SAMPLE_TRACKS.firstOrNull()))
+  var externalSystemMediaInfo by mutableStateOf<SystemMediaPlayingInfo?>(null)
     internal set
 
   /**
+   * Currently active [AlbumArtPalette] for the Android system media player (either the built-in
+   * Music Player or an external media app controlling the Android system media player), observable
+   * by Compose UI so the app's theme/accent colors dynamically follow whatever media is playing.
+   */
+  var activeTrackPalette: AlbumArtPalette
+    get() {
+      val internalPlaying = activeSessionState?.let { !it.isReleased && it.isPlaying && it.currentTrack != null } == true
+      if (internalPlaying) return internalTrackPalette
+      val external = externalSystemMediaInfo
+      if (external != null && external.isPlaying) return external.palette
+      if (external != null && activeSessionState?.currentTrack == null) return external.palette
+      return internalTrackPalette
+    }
+    internal set(value) {
+      internalTrackPalette = value
+    }
+
+  /**
    * Optional test override for [isMusicPlaying]. When `null`, [isMusicPlaying] reflects the active
-   * [MusicPlaybackSession] playback state.
+   * [MusicPlaybackSession] or external Android system media player playback state.
    */
   var isMusicPlayingOverride by mutableStateOf<Boolean?>(null)
     internal set
 
   /**
-   * Whether the Music Player is currently actively playing a track, observable by Compose UI
+   * Whether media is currently actively playing in either the built-in Music Player or an external
+   * app via the Android system media player, observable by Compose UI
    * (such as [com.example.toolbox.ui.theme.ToolboxTheme] and Settings).
    */
   val isMusicPlaying: Boolean
     get() = isMusicPlayingOverride
-      ?: (activeSessionState?.let { !it.isReleased && it.isPlaying && it.currentTrack != null } == true)
+      ?: (
+        (activeSessionState?.let { !it.isReleased && it.isPlaying && it.currentTrack != null } == true) ||
+          (externalSystemMediaInfo?.isPlaying == true)
+        )
+
+  /**
+   * Returns a [SystemMediaPlayingInfo] describing whatever media is currently active in the
+   * Android system media player (built-in Music Player or external media app).
+   */
+  val activeSystemMediaInfo: SystemMediaPlayingInfo?
+    get() {
+      val internalSession = activeSessionState
+      val internalTrack = internalSession?.currentTrack
+      if (internalSession != null && !internalSession.isReleased && internalSession.isPlaying && internalTrack != null) {
+        return SystemMediaPlayingInfo(
+          title = internalTrack.title,
+          artist = internalTrack.artist,
+          album = internalTrack.album,
+          genre = internalTrack.genre,
+          sourcePackage = "com.example.toolbox",
+          sourceAppName = "Toolbox Music",
+          isExternalApp = false,
+          isPlaying = true,
+          palette = internalTrackPalette,
+        )
+      }
+      val external = externalSystemMediaInfo
+      if (external != null && external.isPlaying) {
+        return external
+      }
+      if (internalTrack != null) {
+        return SystemMediaPlayingInfo(
+          title = internalTrack.title,
+          artist = internalTrack.artist,
+          album = internalTrack.album,
+          genre = internalTrack.genre,
+          sourcePackage = "com.example.toolbox",
+          sourceAppName = "Toolbox Music",
+          isExternalApp = false,
+          isPlaying = internalSession.isPlaying,
+          palette = internalTrackPalette,
+        )
+      }
+      if (external != null) {
+        return external
+      }
+      val fallbackTrack = activeTrack ?: return null
+      return SystemMediaPlayingInfo(
+        title = fallbackTrack.title,
+        artist = fallbackTrack.artist,
+        album = fallbackTrack.album,
+        genre = fallbackTrack.genre,
+        sourcePackage = "com.example.toolbox",
+        sourceAppName = "Toolbox Music",
+        isExternalApp = false,
+        isPlaying = isMusicPlayingOverride == true,
+        palette = internalTrackPalette,
+      )
+    }
 
   /**
    * Sets or clears a test override for [isMusicPlaying].
@@ -3579,7 +3764,171 @@ object MusicPlayerEngine {
     palette: AlbumArtPalette = resolveTrackPalette(track),
   ) {
     activeTrack = track
-    activeTrackPalette = palette
+    internalTrackPalette = palette
+  }
+
+  /**
+   * Extracts an [AlbumArtPalette] for an external app playing in the Android system media player,
+   * using its artwork [Bitmap] when available, or notification color, or deterministic metadata seed.
+   */
+  fun resolveSystemMediaPalette(
+    artworkBitmap: Bitmap? = null,
+    notificationColorRgb: Int? = null,
+    title: String = "",
+    artist: String = "",
+    album: String = "",
+    genre: String = "",
+  ): AlbumArtPalette {
+    if (artworkBitmap != null && artworkBitmap.width > 0 && artworkBitmap.height > 0) {
+      return extractPaletteFromBitmap(artworkBitmap)
+    }
+    if (notificationColorRgb != null && (notificationColorRgb and 0xFFFFFF) != 0) {
+      val primary = notificationColorRgb and 0xFFFFFF
+      val r = (primary shr 16) and 0xFF
+      val g = (primary shr 8) and 0xFF
+      val b = primary and 0xFF
+      val secondary = ((r * 65 / 100) shl 16) or ((g * 65 / 100) shl 8) or (b * 65 / 100)
+      val accent = (min(255, r + 55) shl 16) or (min(255, g + 55) shl 8) or min(255, b + 55)
+      return buildPaletteFromRgb(primary, secondary, accent)
+    }
+    val (pRgb, sRgb, aRgb) = computeDeterministicArtworkColors(
+      album = album.ifBlank { title.ifBlank { "System Media" } },
+      artist = artist.ifBlank { "External Player" },
+      genre = genre,
+    )
+    return buildPaletteFromRgb(pRgb, sRgb, aRgb)
+  }
+
+  /**
+   * Updates the observable external system media player state (from another app's [MediaSession]
+   * or media notification).
+   */
+  fun updateExternalSystemMediaSession(info: SystemMediaPlayingInfo?) {
+    externalSystemMediaInfo = info
+  }
+
+  /**
+   * Updates the external system media player state from raw metadata/artwork fields.
+   */
+  fun updateExternalSystemMediaFromMetadata(
+    title: String,
+    artist: String = "",
+    album: String = "",
+    genre: String = "",
+    sourcePackage: String = "",
+    sourceAppName: String = "",
+    isPlaying: Boolean = true,
+    artworkBitmap: Bitmap? = null,
+    notificationColorRgb: Int? = null,
+  ): SystemMediaPlayingInfo {
+    val palette = resolveSystemMediaPalette(
+      artworkBitmap = artworkBitmap,
+      notificationColorRgb = notificationColorRgb,
+      title = title,
+      artist = artist,
+      album = album,
+      genre = genre,
+    )
+    val info = SystemMediaPlayingInfo(
+      title = title.ifBlank { "External Media" },
+      artist = artist,
+      album = album,
+      genre = genre,
+      sourcePackage = sourcePackage,
+      sourceAppName = sourceAppName,
+      isExternalApp = true,
+      isPlaying = isPlaying,
+      palette = palette,
+    )
+    externalSystemMediaInfo = info
+    return info
+  }
+
+  /**
+   * Returns `true` if Notification Listener access is enabled for Toolbox so external apps'
+   * active [MediaSession]s can be queried from [MediaSessionManager].
+   */
+  fun isSystemMediaListenerEnabled(context: Context): Boolean {
+    return try {
+      val enabledListeners = Settings.Secure.getString(
+        context.contentResolver,
+        "enabled_notification_listeners",
+      ).orEmpty()
+      val pkg = context.packageName
+      enabledListeners.contains(pkg)
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  /**
+   * Queries [MediaSessionManager] for any active external [MediaController]s and updates
+   * [externalSystemMediaInfo] with the currently playing (or most recent) external media session's
+   * artwork palette and metadata.
+   */
+  fun syncExternalSystemMediaSessions(context: Context) {
+    if (!isSystemMediaListenerEnabled(context)) return
+    try {
+      val msm = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager ?: return
+      val component = ComponentName(context, ToolboxMediaListenerService::class.java)
+      val controllers = msm.getActiveSessions(component)
+      syncFromExternalMediaControllers(context, controllers)
+    } catch (_: Throwable) {}
+  }
+
+  internal fun syncFromExternalMediaControllers(
+    context: Context,
+    controllers: List<MediaController>?,
+  ) {
+    val ownPkg = context.packageName
+    val externalControllers = controllers.orEmpty().filter { it.packageName != ownPkg }
+    if (externalControllers.isEmpty()) {
+      if (externalSystemMediaInfo != null) {
+        externalSystemMediaInfo = externalSystemMediaInfo?.copy(isPlaying = false)
+      }
+      return
+    }
+    val chosen = externalControllers.firstOrNull { ctrl ->
+      val st = ctrl.playbackState?.state
+      st == PlaybackState.STATE_PLAYING || st == PlaybackState.STATE_BUFFERING
+    } ?: externalControllers.first()
+
+    val state = chosen.playbackState?.state
+    val playing = state == PlaybackState.STATE_PLAYING || state == PlaybackState.STATE_BUFFERING
+    val meta = chosen.metadata
+    val title = meta?.getString(MediaMetadata.METADATA_KEY_TITLE)
+      ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
+      ?: ""
+    val artist = meta?.getString(MediaMetadata.METADATA_KEY_ARTIST)
+      ?: meta?.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
+      ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
+      ?: ""
+    val album = meta?.getString(MediaMetadata.METADATA_KEY_ALBUM)
+      ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION)
+      ?: ""
+    val genre = meta?.getString(MediaMetadata.METADATA_KEY_GENRE) ?: ""
+    val artBitmap = meta?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+      ?: meta?.getBitmap(MediaMetadata.METADATA_KEY_ART)
+      ?: meta?.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
+
+    val appLabel = try {
+      val pm = context.packageManager
+      val appInfo = pm.getApplicationInfo(chosen.packageName, 0)
+      pm.getApplicationLabel(appInfo).toString()
+    } catch (_: Throwable) {
+      chosen.packageName
+    }
+
+    updateExternalSystemMediaFromMetadata(
+      title = title.ifBlank { appLabel },
+      artist = artist,
+      album = album,
+      genre = genre,
+      sourcePackage = chosen.packageName,
+      sourceAppName = appLabel,
+      isPlaying = playing,
+      artworkBitmap = artBitmap,
+    )
   }
 
   /**
@@ -3608,6 +3957,7 @@ object MusicPlayerEngine {
     }
     activeSessionState = null
     isMusicPlayingOverride = null
+    externalSystemMediaInfo = null
     if (activity is LifecycleOwner && observer != null) {
       try {
         activity.lifecycle.removeObserver(observer)
@@ -3761,6 +4111,41 @@ class MusicPlaybackSession(
   private var sleepTimerJob: Job? = null
   private var libraryLoadJob: Job? = null
   private var paletteLoadJob: Job? = null
+  private var mediaArtworkLoadJob: Job? = null
+
+  private val audioManager: AudioManager? = if (isInspection || appContext == null) {
+    null
+  } else {
+    try {
+      appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    } catch (_: Throwable) {
+      null
+    }
+  }
+  private var mediaSession: MediaSession? = null
+  private var lastSyncedMediaMetadataTrackId: String? = null
+  private var lastSyncedMediaMetadataDurationMs: Long = -1L
+  private var lastSyncedMediaArtworkBitmap: Bitmap? = null
+  private var audioDisconnectReceiver: BroadcastReceiver? = null
+  private var mediaControlReceiver: BroadcastReceiver? = null
+  private var audioDeviceCallback: AudioDeviceCallback? = null
+  private var audioFocusRequest: Any? = null
+  private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+    when (focusChange) {
+      AudioManager.AUDIOFOCUS_LOSS,
+      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+        if (isPlaying) {
+          setPlayingState(false)
+        }
+      }
+    }
+  }
+
+  var bluetoothDisconnectPauseCount: Int = 0
+    private set
+
+  var systemMediaControlState: SystemMediaControlState = SystemMediaControlState()
+    private set
 
   var isReleased: Boolean = false
     private set
@@ -3928,6 +4313,9 @@ class MusicPlaybackSession(
     val next = if (trackId in favoriteIds) favoriteIds - trackId else favoriteIds + trackId
     favoriteIds = next
     prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITES, next.joinToString("|"))?.apply()
+    if (currentTrack?.id == trackId) {
+      syncSystemMediaControls(forceMetadataUpdate = false)
+    }
   }
 
   var favoriteArtists by mutableStateOf(
@@ -4294,6 +4682,7 @@ class MusicPlaybackSession(
     }
     trackDurationMs = currentTrack?.durationMs?.coerceAtLeast(1000L) ?: 15_000L
     MusicPlayerEngine.activeSessionState = this
+    initSystemAudioAndMediaControls()
     prepareAndSyncMediaPlayer(forceRestart = false)
     startAsyncLibraryLoadAndArtworkPrefetch()
   }
@@ -4494,14 +4883,23 @@ class MusicPlaybackSession(
     syncActiveTrackPalette(force = forceRestart)
     val track = currentTrack
     if (track == null) {
+      abandonSystemAudioFocus()
       releaseMediaPlayer()
       syncProgressTicker()
+      syncSystemMediaControls(forceMetadataUpdate = true)
       return
+    }
+
+    if (isPlaying) {
+      requestSystemAudioFocus()
+    } else {
+      abandonSystemAudioFocus()
     }
 
     if (isInspection) {
       trackDurationMs = track.durationMs.coerceAtLeast(1000L)
       syncProgressTicker()
+      syncSystemMediaControls(forceMetadataUpdate = forceRestart)
       return
     }
 
@@ -4520,6 +4918,7 @@ class MusicPlaybackSession(
           applyPlaybackSpeed(existingMp)
         }
         syncProgressTicker()
+        syncSystemMediaControls(forceMetadataUpdate = forceRestart)
         return
       } catch (_: Throwable) {
         releaseMediaPlayer()
@@ -4577,6 +4976,7 @@ class MusicPlaybackSession(
     }
 
     syncProgressTicker()
+    syncSystemMediaControls(forceMetadataUpdate = true)
   }
 
   private fun autoAdvanceFromInstance(instanceId: Long) {
@@ -4792,6 +5192,7 @@ class MusicPlaybackSession(
       } catch (_: Throwable) {}
       flushPlayStats()
       syncProgressTicker()
+      syncSystemMediaControls(forceMetadataUpdate = false)
     }
   }
 
@@ -5150,7 +5551,9 @@ class MusicPlaybackSession(
       currentQueueIndex = 0
       isPlaying = false
       currentPositionMs = 0L
+      abandonSystemAudioFocus()
       releaseMediaPlayer()
+      syncSystemMediaControls(forceMetadataUpdate = true)
     } else {
       currentQueueIndex = (oldQueueIdx - removedBeforeCurrent).coerceIn(0, newPlaybackQueue.lastIndex)
       if (wasCurrentDeleted) {
@@ -5245,18 +5648,584 @@ class MusicPlaybackSession(
 
   fun finishSeekDrag() {
     val targetMs = (dragSeekFraction * trackDurationMs).toLong().coerceIn(0L, trackDurationMs)
-    currentPositionMs = targetMs
     isDraggingSeek = false
+    seekToPositionMs(targetMs)
+  }
+
+  fun seekToPositionMs(positionMs: Long) {
+    val targetMs = positionMs.coerceIn(0L, trackDurationMs)
+    currentPositionMs = targetMs
     try {
       mediaPlayer?.seekTo(targetMs.toInt())
     } catch (_: Throwable) {}
+    syncSystemMediaControls(forceMetadataUpdate = false)
+  }
+
+  fun setPlaybackSpeedValue(speed: Float) {
+    val clamped = speed.coerceIn(0.5f, 2.0f)
+    playbackSpeed = clamped
+    applyPlaybackSpeed(mediaPlayer)
+    syncSystemMediaControls(forceMetadataUpdate = false)
   }
 
   fun cyclePlaybackSpeed() {
     val idx = MusicPlayerEngine.PLAYBACK_SPEED_OPTIONS.indexOfFirst { it == playbackSpeed }
     val nextIdx = if (idx >= 0) (idx + 1) % MusicPlayerEngine.PLAYBACK_SPEED_OPTIONS.size else 2
-    playbackSpeed = MusicPlayerEngine.PLAYBACK_SPEED_OPTIONS[nextIdx]
-    applyPlaybackSpeed(mediaPlayer)
+    setPlaybackSpeedValue(MusicPlayerEngine.PLAYBACK_SPEED_OPTIONS[nextIdx])
+  }
+
+  /**
+   * Pauses playback when Bluetooth headphones (or active external headphones) disconnect.
+   * Returns `true` if playback was active and has now been paused.
+   */
+  fun onBluetoothHeadphonesDisconnected(): Boolean {
+    if (isReleased || !isPlaying) return false
+    bluetoothDisconnectPauseCount += 1
+    setPlayingState(false)
+    return true
+  }
+
+  /**
+   * Evaluates an incoming audio/Bluetooth disconnect broadcast [Intent] (or action string) and pauses
+   * playback if currently playing.
+   */
+  fun handleAudioDisconnectIntent(intent: Intent?): Boolean {
+    if (intent == null) return false
+    val action = intent.action
+    val btState = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, BluetoothProfile.STATE_DISCONNECTED)
+    val prevBtState = intent.getIntExtra(BluetoothProfile.EXTRA_PREVIOUS_STATE, BluetoothProfile.STATE_CONNECTED)
+    val scoState = intent.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, AudioManager.SCO_AUDIO_STATE_DISCONNECTED)
+    val prevScoState = intent.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_PREVIOUS_STATE, AudioManager.SCO_AUDIO_STATE_CONNECTED)
+    val effectivePrev = if (action == AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED) prevScoState else prevBtState
+    if (MusicPlayerEngine.shouldPauseOnAudioDisconnectBroadcast(
+        action = action,
+        bluetoothState = btState,
+        previousBluetoothState = effectivePrev,
+        scoAudioState = scoState,
+      )
+    ) {
+      return onBluetoothHeadphonesDisconnected()
+    }
+    return false
+  }
+
+  /**
+   * Handles an action from Android system media player controls or media notification buttons.
+   */
+  fun handleMediaControlAction(action: String?): Boolean {
+    if (isReleased || action.isNullOrBlank()) return false
+    return when (action) {
+      MusicPlayerEngine.ACTION_MEDIA_PLAY -> {
+        if (currentTrack == null && allTracks.isNotEmpty()) {
+          playTrackInContext(allTracks.first(), allTracks)
+        } else {
+          setPlayingState(true)
+        }
+        true
+      }
+      MusicPlayerEngine.ACTION_MEDIA_PAUSE,
+      MusicPlayerEngine.ACTION_MEDIA_STOP -> {
+        setPlayingState(false)
+        true
+      }
+      MusicPlayerEngine.ACTION_MEDIA_PLAY_PAUSE -> {
+        if (currentTrack == null && allTracks.isNotEmpty()) {
+          playTrackInContext(allTracks.first(), allTracks)
+        } else {
+          togglePlayPause()
+        }
+        true
+      }
+      MusicPlayerEngine.ACTION_MEDIA_NEXT -> {
+        skipToNext(userInitiated = true)
+        true
+      }
+      MusicPlayerEngine.ACTION_MEDIA_PREVIOUS -> {
+        skipToPrevious()
+        true
+      }
+      MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE -> {
+        val active = currentTrack ?: return false
+        toggleFavorite(active.id)
+        true
+      }
+      MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT -> {
+        cycleRepeatMode()
+        true
+      }
+      MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE -> {
+        cycleShuffleMode()
+        true
+      }
+      else -> false
+    }
+  }
+
+  /**
+   * Handles hardware or Bluetooth AVRCP media button key events.
+   */
+  fun handleMediaKeyEvent(keyCode: Int, keyAction: Int = KeyEvent.ACTION_DOWN): Boolean {
+    if (isReleased || keyAction != KeyEvent.ACTION_DOWN) return false
+    return when (keyCode) {
+      KeyEvent.KEYCODE_MEDIA_PLAY -> handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_PLAY)
+      KeyEvent.KEYCODE_MEDIA_PAUSE,
+      KeyEvent.KEYCODE_MEDIA_STOP -> handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_PAUSE)
+      KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+      KeyEvent.KEYCODE_HEADSETHOOK -> handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_PLAY_PAUSE)
+      KeyEvent.KEYCODE_MEDIA_NEXT -> handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_NEXT)
+      KeyEvent.KEYCODE_MEDIA_PREVIOUS -> handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_PREVIOUS)
+      else -> false
+    }
+  }
+
+  private fun requestSystemAudioFocus() {
+    val am = audioManager ?: return
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val req = (audioFocusRequest as? AudioFocusRequest) ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+          .setAudioAttributes(
+            AudioAttributes.Builder()
+              .setUsage(AudioAttributes.USAGE_MEDIA)
+              .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+              .build()
+          )
+          .setOnAudioFocusChangeListener(audioFocusListener)
+          .build()
+          .also { audioFocusRequest = it }
+        am.requestAudioFocus(req)
+      } else {
+        @Suppress("DEPRECATION")
+        am.requestAudioFocus(
+          audioFocusListener,
+          AudioManager.STREAM_MUSIC,
+          AudioManager.AUDIOFOCUS_GAIN,
+        )
+      }
+    } catch (_: Throwable) {}
+  }
+
+  private fun abandonSystemAudioFocus() {
+    val am = audioManager ?: return
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        (audioFocusRequest as? AudioFocusRequest)?.let { am.abandonAudioFocusRequest(it) }
+      } else {
+        @Suppress("DEPRECATION")
+        am.abandonAudioFocus(audioFocusListener)
+      }
+    } catch (_: Throwable) {}
+  }
+
+  private fun initSystemAudioAndMediaControls() {
+    if (isInspection || appContext == null) return
+
+    // 1. Register Bluetooth & Audio Becoming Noisy disconnect receiver
+    try {
+      val disconnectReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+          handleAudioDisconnectIntent(intent)
+        }
+      }
+      val disconnectFilter = IntentFilter().apply {
+        addAction(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+        addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
+        addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+        addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+        addAction(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED)
+      }
+      ContextCompat.registerReceiver(
+        appContext,
+        disconnectReceiver,
+        disconnectFilter,
+        ContextCompat.RECEIVER_EXPORTED,
+      )
+      audioDisconnectReceiver = disconnectReceiver
+    } catch (_: Throwable) {}
+
+    // 2. Register AudioDeviceCallback for immediate Bluetooth/headphone device removal detection
+    try {
+      val callback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+          if (removedDevices == null || !isPlaying) return
+          val disconnectedHeadphones = removedDevices.any { device ->
+            device.isSink && MusicPlayerEngine.isHeadphoneOrBluetoothAudioDeviceType(device.type)
+          }
+          if (disconnectedHeadphones) {
+            onBluetoothHeadphonesDisconnected()
+          }
+        }
+      }
+      audioManager?.registerAudioDeviceCallback(callback, null)
+      audioDeviceCallback = callback
+    } catch (_: Throwable) {}
+
+    // 3. Register Media Control BroadcastReceiver for notification action PendingIntents
+    try {
+      val controlReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+          handleMediaControlAction(intent?.action)
+        }
+      }
+      val controlFilter = IntentFilter().apply {
+        addAction(MusicPlayerEngine.ACTION_MEDIA_PLAY)
+        addAction(MusicPlayerEngine.ACTION_MEDIA_PAUSE)
+        addAction(MusicPlayerEngine.ACTION_MEDIA_PLAY_PAUSE)
+        addAction(MusicPlayerEngine.ACTION_MEDIA_NEXT)
+        addAction(MusicPlayerEngine.ACTION_MEDIA_PREVIOUS)
+        addAction(MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE)
+        addAction(MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT)
+        addAction(MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE)
+        addAction(MusicPlayerEngine.ACTION_MEDIA_STOP)
+      }
+      ContextCompat.registerReceiver(
+        appContext,
+        controlReceiver,
+        controlFilter,
+        ContextCompat.RECEIVER_NOT_EXPORTED,
+      )
+      mediaControlReceiver = controlReceiver
+    } catch (_: Throwable) {}
+
+    // 4. Create Android platform MediaSession for system media player controls (Lock screen, Quick Settings, Bluetooth AVRCP)
+    try {
+      val session = MediaSession(appContext, "ToolboxMusicPlayerSession")
+      val launchIntent = Intent(appContext, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        putExtra(EXTRA_STANDALONE_TOOL, Tool.MUSIC_PLAYER.name)
+      }
+      val sessionActivityPi = PendingIntent.getActivity(
+        appContext,
+        MusicPlayerEngine.MEDIA_NOTIFICATION_ID,
+        launchIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
+      session.setSessionActivity(sessionActivityPi)
+      session.setCallback(
+        object : MediaSession.Callback() {
+          override fun onPlay() {
+            handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_PLAY)
+          }
+
+          override fun onPause() {
+            handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_PAUSE)
+          }
+
+          override fun onStop() {
+            handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_STOP)
+          }
+
+          override fun onSkipToNext() {
+            handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_NEXT)
+          }
+
+          override fun onSkipToPrevious() {
+            handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_PREVIOUS)
+          }
+
+          override fun onSeekTo(pos: Long) {
+            seekToPositionMs(pos)
+          }
+
+          override fun onSetPlaybackSpeed(speed: Float) {
+            setPlaybackSpeedValue(speed)
+          }
+
+          override fun onCustomAction(action: String, extras: Bundle?) {
+            handleMediaControlAction(action)
+          }
+
+          override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
+            val keyEvent: KeyEvent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+              mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+            } else {
+              @Suppress("DEPRECATION")
+              mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
+            }
+            if (keyEvent != null && handleMediaKeyEvent(keyEvent.keyCode, keyEvent.action)) {
+              return true
+            }
+            return super.onMediaButtonEvent(mediaButtonIntent)
+          }
+        }
+      )
+      mediaSession = session
+      ensureMediaNotificationChannel()
+    } catch (_: Throwable) {}
+  }
+
+  private fun ensureMediaNotificationChannel() {
+    val ctx = appContext ?: return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      try {
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        if (nm.getNotificationChannel(MusicPlayerEngine.MEDIA_NOTIFICATION_CHANNEL_ID) == null) {
+          val channel = NotificationChannel(
+            MusicPlayerEngine.MEDIA_NOTIFICATION_CHANNEL_ID,
+            MusicPlayerEngine.MEDIA_NOTIFICATION_CHANNEL_NAME,
+            NotificationManager.IMPORTANCE_LOW,
+          ).apply {
+            description = "System media player controls for the Toolbox Music Player"
+            setShowBadge(false)
+            enableVibration(false)
+            setSound(null, null)
+          }
+          nm.createNotificationChannel(channel)
+        }
+      } catch (_: Throwable) {}
+    }
+  }
+
+  internal fun syncSystemMediaControls(forceMetadataUpdate: Boolean = false) {
+    val track = currentTrack
+    val isFav = track != null && track.id in favoriteIds
+    val cachedArt = if (track != null && !isInspection) {
+      MusicPlayerEngine.getCachedAlbumArtBitmap(track, 360)
+    } else {
+      null
+    }
+
+    systemMediaControlState = if (track == null || isReleased) {
+      SystemMediaControlState(isActive = false)
+    } else {
+      SystemMediaControlState(
+        isActive = true,
+        trackId = track.id,
+        title = track.title,
+        artist = track.artist,
+        album = track.album,
+        genre = track.genre,
+        durationMs = trackDurationMs,
+        positionMs = currentPositionMs,
+        isPlaying = isPlaying,
+        playbackSpeed = playbackSpeed,
+        isFavorite = isFav,
+        hasArtworkBitmap = cachedArt != null,
+        actions = MusicPlayerEngine.SYSTEM_MEDIA_PLAYBACK_ACTIONS,
+      )
+    }
+
+    if (isInspection || appContext == null) return
+    val session = mediaSession ?: return
+
+    try {
+      if (track == null || isReleased) {
+        session.isActive = false
+        val stopState = PlaybackState.Builder()
+          .setState(PlaybackState.STATE_STOPPED, 0L, 0f)
+          .setActions(MusicPlayerEngine.SYSTEM_MEDIA_PLAYBACK_ACTIONS)
+          .build()
+        session.setPlaybackState(stopState)
+        val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        nm?.cancel(MusicPlayerEngine.MEDIA_NOTIFICATION_ID)
+        return
+      }
+
+      session.isActive = true
+
+      // 1. Update PlaybackState (Play/Pause/Seek/Speed + Favorite custom action)
+      val stateInt = if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
+      val effectiveSpeed = if (isPlaying) playbackSpeed else 0f
+      val favIconRes = if (isFav) android.R.drawable.btn_star_big_on else android.R.drawable.btn_star_big_off
+      val favLabel = if (isFav) "Remove from Favorites" else "Add to Favorites"
+      val playbackState = PlaybackState.Builder()
+        .setState(stateInt, currentPositionMs.coerceAtLeast(0L), effectiveSpeed)
+        .setActions(MusicPlayerEngine.SYSTEM_MEDIA_PLAYBACK_ACTIONS)
+        .addCustomAction(
+          PlaybackState.CustomAction.Builder(
+            MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE,
+            favLabel,
+            favIconRes,
+          ).build()
+        )
+        .build()
+      session.setPlaybackState(playbackState)
+
+      // 2. Load artwork asynchronously if not yet in memory
+      if (cachedArt == null && mediaArtworkLoadJob?.isActive != true) {
+        val targetId = track.id
+        mediaArtworkLoadJob = scope.launch {
+          try {
+            val loadedArt = MusicPlayerEngine.loadAlbumArtBitmapAsync(track, sizePx = 360)
+            if (!isReleased && currentTrack?.id == targetId && loadedArt != lastSyncedMediaArtworkBitmap) {
+              syncSystemMediaControls(forceMetadataUpdate = true)
+            }
+          } catch (_: kotlinx.coroutines.CancellationException) {
+            throw kotlinx.coroutines.CancellationException()
+          } catch (_: Throwable) {}
+        }
+      }
+
+      // 3. Update MediaMetadata when track, duration, or artwork changes
+      val metadataChanged = forceMetadataUpdate ||
+        lastSyncedMediaMetadataTrackId != track.id ||
+        lastSyncedMediaMetadataDurationMs != trackDurationMs ||
+        lastSyncedMediaArtworkBitmap !== cachedArt
+      if (metadataChanged) {
+        lastSyncedMediaMetadataTrackId = track.id
+        lastSyncedMediaMetadataDurationMs = trackDurationMs
+        lastSyncedMediaArtworkBitmap = cachedArt
+
+        val metaBuilder = MediaMetadata.Builder()
+          .putString(MediaMetadata.METADATA_KEY_MEDIA_ID, track.id)
+          .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
+          .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
+          .putString(MediaMetadata.METADATA_KEY_ALBUM, track.album)
+          .putString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST, track.artist)
+          .putString(MediaMetadata.METADATA_KEY_GENRE, track.genre)
+          .putLong(MediaMetadata.METADATA_KEY_DURATION, trackDurationMs)
+          .putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, track.trackNumber.toLong())
+          .putLong(MediaMetadata.METADATA_KEY_YEAR, track.year.toLong())
+        if (cachedArt != null) {
+          metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, cachedArt)
+          metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ART, cachedArt)
+        }
+        session.setMetadata(metaBuilder.build())
+      }
+
+      // 4. Post / update MediaStyle system media notification
+      postSystemMediaNotification(track, isFav, cachedArt, session)
+    } catch (_: Throwable) {}
+  }
+
+  private fun buildMediaActionPendingIntent(action: String, requestCode: Int): PendingIntent {
+    val intent = Intent(action).apply {
+      setPackage(appContext?.packageName)
+    }
+    return PendingIntent.getBroadcast(
+      appContext,
+      requestCode,
+      intent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+  }
+
+  private fun postSystemMediaNotification(
+    track: MusicTrack,
+    isFavorite: Boolean,
+    artworkBitmap: Bitmap?,
+    session: MediaSession,
+  ) {
+    val ctx = appContext ?: return
+    ensureMediaNotificationChannel()
+    val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+
+    val launchIntent = Intent(ctx, MainActivity::class.java).apply {
+      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+      putExtra(EXTRA_STANDALONE_TOOL, Tool.MUSIC_PLAYER.name)
+    }
+    val contentPi = PendingIntent.getActivity(
+      ctx,
+      MusicPlayerEngine.MEDIA_NOTIFICATION_ID,
+      launchIntent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    val prevAction = Notification.Action.Builder(
+      Icon.createWithResource(ctx, android.R.drawable.ic_media_previous),
+      "Previous",
+      buildMediaActionPendingIntent(MusicPlayerEngine.ACTION_MEDIA_PREVIOUS, 101),
+    ).build()
+
+    val playPauseIcon = if (isPlaying) {
+      android.R.drawable.ic_media_pause
+    } else {
+      android.R.drawable.ic_media_play
+    }
+    val playPauseTitle = if (isPlaying) "Pause" else "Play"
+    val playPauseAction = Notification.Action.Builder(
+      Icon.createWithResource(ctx, playPauseIcon),
+      playPauseTitle,
+      buildMediaActionPendingIntent(MusicPlayerEngine.ACTION_MEDIA_PLAY_PAUSE, 102),
+    ).build()
+
+    val nextAction = Notification.Action.Builder(
+      Icon.createWithResource(ctx, android.R.drawable.ic_media_next),
+      "Next",
+      buildMediaActionPendingIntent(MusicPlayerEngine.ACTION_MEDIA_NEXT, 103),
+    ).build()
+
+    val favIcon = if (isFavorite) {
+      android.R.drawable.btn_star_big_on
+    } else {
+      android.R.drawable.btn_star_big_off
+    }
+    val favAction = Notification.Action.Builder(
+      Icon.createWithResource(ctx, favIcon),
+      if (isFavorite) "Unfavorite" else "Favorite",
+      buildMediaActionPendingIntent(MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE, 104),
+    ).build()
+
+    val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      Notification.Builder(ctx, MusicPlayerEngine.MEDIA_NOTIFICATION_CHANNEL_ID)
+    } else {
+      @Suppress("DEPRECATION")
+      Notification.Builder(ctx)
+    }
+
+    val mediaStyle = Notification.MediaStyle()
+      .setMediaSession(session.sessionToken)
+      .setShowActionsInCompactView(0, 1, 2)
+
+    builder
+      .setSmallIcon(R.drawable.ic_tool_music_player_foreground)
+      .setContentTitle(track.title)
+      .setContentText("${track.artist} • ${track.album}")
+      .setSubText(track.genre)
+      .setContentIntent(contentPi)
+      .setDeleteIntent(buildMediaActionPendingIntent(MusicPlayerEngine.ACTION_MEDIA_STOP, 105))
+      .setVisibility(Notification.VISIBILITY_PUBLIC)
+      .setCategory(Notification.CATEGORY_TRANSPORT)
+      .setOngoing(isPlaying)
+      .setOnlyAlertOnce(true)
+      .setColor((0xFF000000 or (track.artworkPrimaryRgb.toLong() and 0xFFFFFFL)).toInt())
+      .setStyle(mediaStyle)
+      .addAction(prevAction)
+      .addAction(playPauseAction)
+      .addAction(nextAction)
+      .addAction(favAction)
+
+    if (artworkBitmap != null) {
+      builder.setLargeIcon(artworkBitmap)
+    }
+
+    nm.notify(MusicPlayerEngine.MEDIA_NOTIFICATION_ID, builder.build())
+  }
+
+  private fun releaseSystemAudioAndMediaControls() {
+    abandonSystemAudioFocus()
+    val ctx = appContext
+    if (ctx != null) {
+      audioDisconnectReceiver?.let { receiver ->
+        try {
+          ctx.unregisterReceiver(receiver)
+        } catch (_: Throwable) {}
+      }
+      mediaControlReceiver?.let { receiver ->
+        try {
+          ctx.unregisterReceiver(receiver)
+        } catch (_: Throwable) {}
+      }
+      audioDeviceCallback?.let { cb ->
+        try {
+          audioManager?.unregisterAudioDeviceCallback(cb)
+        } catch (_: Throwable) {}
+      }
+      try {
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        nm?.cancel(MusicPlayerEngine.MEDIA_NOTIFICATION_ID)
+      } catch (_: Throwable) {}
+    }
+    audioDisconnectReceiver = null
+    mediaControlReceiver = null
+    audioDeviceCallback = null
+    mediaSession?.let { session ->
+      try {
+        session.isActive = false
+        session.release()
+      } catch (_: Throwable) {}
+    }
+    mediaSession = null
+    systemMediaControlState = SystemMediaControlState(isActive = false)
   }
 
   fun cycleSleepTimer() {
@@ -5295,8 +6264,184 @@ class MusicPlaybackSession(
     sleepTimerJob?.cancel()
     libraryLoadJob?.cancel()
     paletteLoadJob?.cancel()
+    mediaArtworkLoadJob?.cancel()
     scope.cancel()
     releaseMediaPlayer()
+    releaseSystemAudioAndMediaControls()
+  }
+}
+
+/**
+ * Snapshot of the Android system media player controls state published by [MusicPlaybackSession]
+ * via [MediaSession] and [Notification.MediaStyle].
+ */
+data class SystemMediaControlState(
+  val isActive: Boolean = false,
+  val trackId: String? = null,
+  val title: String = "",
+  val artist: String = "",
+  val album: String = "",
+  val genre: String = "",
+  val durationMs: Long = 0L,
+  val positionMs: Long = 0L,
+  val isPlaying: Boolean = false,
+  val playbackSpeed: Float = 1.0f,
+  val isFavorite: Boolean = false,
+  val hasArtworkBitmap: Boolean = false,
+  val actions: Long = 0L,
+)
+
+/**
+ * Metadata and extracted [AlbumArtPalette] for whichever media session is currently active in the
+ * Android system media player (either the built-in Toolbox Music Player or an external media app).
+ */
+data class SystemMediaPlayingInfo(
+  val title: String,
+  val artist: String = "",
+  val album: String = "",
+  val genre: String = "",
+  val sourcePackage: String = "",
+  val sourceAppName: String = "",
+  val isExternalApp: Boolean = false,
+  val isPlaying: Boolean = false,
+  val palette: AlbumArtPalette,
+)
+
+/**
+ * BroadcastReceiver that routes system media notification transport actions to the active
+ * [MusicPlaybackSession].
+ */
+class MusicMediaControlReceiver : BroadcastReceiver() {
+  override fun onReceive(context: Context?, intent: Intent?) {
+    val action = intent?.action ?: return
+    MusicPlayerEngine.getActivePlaybackSession()?.handleMediaControlAction(action)
+  }
+}
+
+/**
+ * NotificationListenerService that observes active [MediaSession] controllers and media
+ * notifications across the Android system media player so the app's dynamic media theme colors can
+ * follow external media players (e.g. Spotify, YouTube Music, Pocket Casts) as well as the
+ * built-in Music Player.
+ */
+class ToolboxMediaListenerService : NotificationListenerService() {
+  private var sessionManager: MediaSessionManager? = null
+  private val trackedControllers = mutableMapOf<MediaController, MediaController.Callback>()
+
+  private val activeSessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
+    bindExternalControllers(controllers)
+    MusicPlayerEngine.syncFromExternalMediaControllers(applicationContext, controllers)
+  }
+
+  override fun onListenerConnected() {
+    super.onListenerConnected()
+    try {
+      val msm = getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager ?: return
+      sessionManager = msm
+      val component = ComponentName(this, ToolboxMediaListenerService::class.java)
+      msm.addOnActiveSessionsChangedListener(activeSessionsListener, component)
+      val initial = msm.getActiveSessions(component)
+      bindExternalControllers(initial)
+      MusicPlayerEngine.syncFromExternalMediaControllers(applicationContext, initial)
+    } catch (_: Throwable) {}
+  }
+
+  override fun onListenerDisconnected() {
+    clearTrackedControllers()
+    try {
+      sessionManager?.removeOnActiveSessionsChangedListener(activeSessionsListener)
+    } catch (_: Throwable) {}
+    sessionManager = null
+    super.onListenerDisconnected()
+  }
+
+  override fun onNotificationPosted(sbn: StatusBarNotification?) {
+    super.onNotificationPosted(sbn)
+    val notification = sbn?.notification ?: return
+    val pkg = sbn.packageName ?: return
+    if (pkg == packageName) return
+    val extras = notification.extras ?: return
+    val isMediaNotification = notification.category == Notification.CATEGORY_TRANSPORT ||
+      extras.containsKey(Notification.EXTRA_MEDIA_SESSION)
+    if (!isMediaNotification) return
+
+    // Prefer MediaSessionManager controller metadata if available
+    try {
+      val msm = sessionManager ?: (getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager)
+      if (msm != null) {
+        val component = ComponentName(this, ToolboxMediaListenerService::class.java)
+        val controllers = msm.getActiveSessions(component)
+        if (!controllers.isNullOrEmpty()) {
+          bindExternalControllers(controllers)
+          MusicPlayerEngine.syncFromExternalMediaControllers(applicationContext, controllers)
+          return
+        }
+      }
+    } catch (_: Throwable) {}
+
+    val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
+    val artist = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
+    val album = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString().orEmpty()
+    val isOngoing = (notification.flags and Notification.FLAG_ONGOING_EVENT) != 0
+    val colorRgb = notification.color.takeIf { it != 0 }
+    val appLabel = try {
+      val appInfo = packageManager.getApplicationInfo(pkg, 0)
+      packageManager.getApplicationLabel(appInfo).toString()
+    } catch (_: Throwable) {
+      pkg
+    }
+    MusicPlayerEngine.updateExternalSystemMediaFromMetadata(
+      title = title.ifBlank { appLabel },
+      artist = artist,
+      album = album,
+      sourcePackage = pkg,
+      sourceAppName = appLabel,
+      isPlaying = isOngoing,
+      notificationColorRgb = colorRgb,
+    )
+  }
+
+  override fun onNotificationRemoved(sbn: StatusBarNotification?) {
+    super.onNotificationRemoved(sbn)
+    val pkg = sbn?.packageName ?: return
+    if (pkg == packageName) return
+    if (MusicPlayerEngine.externalSystemMediaInfo?.sourcePackage == pkg) {
+      MusicPlayerEngine.syncExternalSystemMediaSessions(applicationContext)
+    }
+  }
+
+  private fun bindExternalControllers(controllers: List<MediaController>?) {
+    clearTrackedControllers()
+    val list = controllers ?: return
+    for (controller in list) {
+      if (controller.packageName == packageName) continue
+      val callback = object : MediaController.Callback() {
+        override fun onPlaybackStateChanged(state: PlaybackState?) {
+          MusicPlayerEngine.syncExternalSystemMediaSessions(applicationContext)
+        }
+
+        override fun onMetadataChanged(metadata: MediaMetadata?) {
+          MusicPlayerEngine.syncExternalSystemMediaSessions(applicationContext)
+        }
+
+        override fun onSessionDestroyed() {
+          MusicPlayerEngine.syncExternalSystemMediaSessions(applicationContext)
+        }
+      }
+      try {
+        controller.registerCallback(callback)
+        trackedControllers[controller] = callback
+      } catch (_: Throwable) {}
+    }
+  }
+
+  private fun clearTrackedControllers() {
+    for ((ctrl, cb) in trackedControllers) {
+      try {
+        ctrl.unregisterCallback(cb)
+      } catch (_: Throwable) {}
+    }
+    trackedControllers.clear()
   }
 }
 

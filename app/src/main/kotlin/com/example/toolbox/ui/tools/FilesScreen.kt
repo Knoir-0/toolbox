@@ -2030,7 +2030,7 @@ private fun FilesHeader(
               }
               if (singleSelectedFile != null && onPlaySelectedMusic != null && FileManagerEngine.isAudioFile(singleSelectedFile) && !VideoEditorEngine.isVideoFile(singleSelectedFile)) {
                 DropdownMenuItem(
-                  text = { Text("Play in Music") },
+                  text = { Text("Music") },
                   leadingIcon = { Icon(Icons.Default.Headphones, contentDescription = null) },
                   onClick = {
                     showOverflowMenu = false
@@ -3212,7 +3212,7 @@ private fun FileActionMenu(
         )
       } else if (AudioEditorEngine.isSupportedAudioFile(item.file) && !VideoEditorEngine.isVideoFile(item.file)) {
         DropdownMenuItem(
-          text = { Text("Play in Music") },
+          text = { Text("Music") },
           leadingIcon = { Icon(Icons.Default.Headphones, contentDescription = null) },
           onClick = onPlayMusic,
           modifier = Modifier.testTag("action_play_music"),
@@ -3225,7 +3225,7 @@ private fun FileActionMenu(
         )
       } else if (FileManagerEngine.isAudioFile(item.file) && !VideoEditorEngine.isVideoFile(item.file)) {
         DropdownMenuItem(
-          text = { Text("Play in Music") },
+          text = { Text("Music") },
           leadingIcon = { Icon(Icons.Default.Headphones, contentDescription = null) },
           onClick = onPlayMusic,
           modifier = Modifier.testTag("action_play_music"),

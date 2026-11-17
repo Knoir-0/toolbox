@@ -1290,4 +1290,127 @@ class MusicPlayerEngineTest {
       tmpDir.deleteRecursively()
     }
   }
+
+  @Test
+  fun bluetoothDisconnect_andSystemMediaControls_pauseAndControlPlaybackCorrectly() {
+    // 1. Verify Bluetooth audio device type and broadcast disconnect classification
+    assertTrue(MusicPlayerEngine.isBluetoothAudioDeviceType(android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP))
+    assertTrue(MusicPlayerEngine.isBluetoothAudioDeviceType(android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO))
+    assertTrue(MusicPlayerEngine.isBluetoothAudioDeviceType(26)) // TYPE_BLE_HEADSET
+    assertFalse(MusicPlayerEngine.isBluetoothAudioDeviceType(android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER))
+
+    assertTrue(
+      MusicPlayerEngine.shouldPauseOnAudioDisconnectBroadcast(
+        action = android.media.AudioManager.ACTION_AUDIO_BECOMING_NOISY,
+      )
+    )
+    assertTrue(
+      MusicPlayerEngine.shouldPauseOnAudioDisconnectBroadcast(
+        action = android.bluetooth.BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED,
+        bluetoothState = android.bluetooth.BluetoothProfile.STATE_DISCONNECTED,
+        previousBluetoothState = android.bluetooth.BluetoothProfile.STATE_CONNECTED,
+      )
+    )
+    assertTrue(
+      MusicPlayerEngine.shouldPauseOnAudioDisconnectBroadcast(
+        action = android.bluetooth.BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED,
+        bluetoothState = android.bluetooth.BluetoothProfile.STATE_DISCONNECTING,
+        previousBluetoothState = android.bluetooth.BluetoothProfile.STATE_CONNECTED,
+      )
+    )
+    assertTrue(
+      MusicPlayerEngine.shouldPauseOnAudioDisconnectBroadcast(
+        action = android.bluetooth.BluetoothDevice.ACTION_ACL_DISCONNECTED,
+      )
+    )
+    assertFalse(
+      MusicPlayerEngine.shouldPauseOnAudioDisconnectBroadcast(
+        action = android.bluetooth.BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED,
+        bluetoothState = android.bluetooth.BluetoothProfile.STATE_CONNECTED,
+        previousBluetoothState = android.bluetooth.BluetoothProfile.STATE_CONNECTING,
+      )
+    )
+
+    val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+    val session = MusicPlaybackSession(context = null, initialTracks = tracks)
+    try {
+      // Initially no track is loaded -> system media control state is inactive
+      assertFalse(session.systemMediaControlState.isActive)
+      assertFalse(session.onBluetoothHeadphonesDisconnected())
+      assertEquals(0, session.bluetoothDisconnectPauseCount)
+
+      // 2. System media Play action starts playback on first library track when queue is empty
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_PLAY))
+      assertTrue(session.isPlaying)
+      assertEquals(tracks[0].id, session.currentTrack?.id)
+      assertTrue(session.systemMediaControlState.isActive)
+      assertTrue(session.systemMediaControlState.isPlaying)
+      assertEquals(tracks[0].title, session.systemMediaControlState.title)
+      assertEquals(tracks[0].artist, session.systemMediaControlState.artist)
+      assertEquals(tracks[0].album, session.systemMediaControlState.album)
+
+      // 3. Disconnecting Bluetooth headphones while playing pauses playback immediately
+      assertTrue(session.onBluetoothHeadphonesDisconnected())
+      assertFalse(session.isPlaying)
+      assertFalse(session.systemMediaControlState.isPlaying)
+      assertEquals(1, session.bluetoothDisconnectPauseCount)
+
+      // A second disconnect while already paused is a no-op
+      assertFalse(session.onBluetoothHeadphonesDisconnected())
+      assertEquals(1, session.bluetoothDisconnectPauseCount)
+
+      // 4. Hardware / Bluetooth AVRCP media key events and system media actions control playback
+      assertTrue(session.handleMediaKeyEvent(android.view.KeyEvent.KEYCODE_MEDIA_PLAY))
+      assertTrue(session.isPlaying)
+      assertTrue(session.systemMediaControlState.isPlaying)
+
+      assertTrue(session.handleMediaKeyEvent(android.view.KeyEvent.KEYCODE_MEDIA_NEXT))
+      assertEquals(tracks[1].id, session.currentTrack?.id)
+      assertEquals(tracks[1].title, session.systemMediaControlState.title)
+
+      // Seek and playback speed updates propagate to system media state
+      session.seekToPositionMs(6_500L)
+      assertEquals(6_500L, session.currentPositionMs)
+      assertEquals(6_500L, session.systemMediaControlState.positionMs)
+
+      session.setPlaybackSpeedValue(1.5f)
+      assertEquals(1.5f, session.playbackSpeed, 0.001f)
+      assertEquals(1.5f, session.systemMediaControlState.playbackSpeed, 0.001f)
+
+      // Toggle favorite via system media control custom action
+      assertFalse(session.systemMediaControlState.isFavorite)
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE))
+      assertTrue(tracks[1].id in session.favoriteIds)
+      assertTrue(session.systemMediaControlState.isFavorite)
+
+      // Pause via media button
+      assertTrue(session.handleMediaKeyEvent(android.view.KeyEvent.KEYCODE_MEDIA_PAUSE))
+      assertFalse(session.isPlaying)
+      assertFalse(session.systemMediaControlState.isPlaying)
+
+      // 5. External app playing in Android system media player drives activeTrackPalette and isMusicPlaying
+      val externalInfo = MusicPlayerEngine.updateExternalSystemMediaFromMetadata(
+        title = "Midnight City",
+        artist = "M83",
+        album = "Hurry Up, We're Dreaming",
+        sourcePackage = "com.spotify.music",
+        sourceAppName = "Spotify",
+        isPlaying = true,
+        notificationColorRgb = 0x1DB954,
+      )
+      assertTrue(MusicPlayerEngine.isMusicPlaying)
+      assertEquals(externalInfo.palette.dominantHex, MusicPlayerEngine.activeTrackPalette.dominantHex)
+      assertEquals("#1DB954", MusicPlayerEngine.activeTrackPalette.dominantHex)
+      assertEquals("Midnight City", MusicPlayerEngine.activeSystemMediaInfo?.title)
+      assertEquals("Spotify", MusicPlayerEngine.activeSystemMediaInfo?.sourceAppName)
+      assertTrue(MusicPlayerEngine.activeSystemMediaInfo?.isExternalApp == true)
+
+      // Pausing external media stops isMusicPlaying
+      MusicPlayerEngine.updateExternalSystemMediaSession(externalInfo.copy(isPlaying = false))
+      assertFalse(MusicPlayerEngine.isMusicPlaying)
+    } finally {
+      MusicPlayerEngine.updateExternalSystemMediaSession(null)
+      session.release()
+    }
+  }
 }
