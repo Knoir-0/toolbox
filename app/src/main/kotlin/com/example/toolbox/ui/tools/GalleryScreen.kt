@@ -1707,7 +1707,7 @@ fun GalleryScreen(
     val targetParentDir = if (isRootTarget) {
       defaultNewAlbumDir
     } else {
-      currentAlbum?.directory ?: defaultNewAlbumDir
+      currentAlbum.directory
     }
     AddGalleryFolderDialog(
       parentDirectory = targetParentDir,
@@ -2411,7 +2411,7 @@ private fun GalleryNavigationAndDensityBar(
                   )
                   Spacer(modifier = Modifier.width(6.dp))
                   Text(
-                    text = "Save for folder",
+                    text = "Save for album",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = if (isSortGroupSavedForFolder) FontWeight.SemiBold else FontWeight.Normal,
                     color = if (isSortGroupSavedForFolder) {

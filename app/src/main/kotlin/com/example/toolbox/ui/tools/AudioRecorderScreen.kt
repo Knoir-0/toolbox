@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -198,36 +199,49 @@ fun AudioRecorderScreen(
     }
   }
 
-  // Selected recordings directory (defaults to /Audio)
-  var recordingsDirectory by remember {
-    val initialDir = initialDirectory ?: run {
-      val savedPath = prefs?.getString(PREF_KEY_AUDIO_DIRECTORY, null)
-      if (!savedPath.isNullOrBlank()) {
-        AudioRecorderEngine.resolveDirectoryInput(savedPath, userRoot, effectiveFallbackDir)
-      } else {
-        if (isInspection) File("/storage/emulated/0/Audio")
-        else AudioRecorderEngine.getDefaultAudioDirectory(context)
-      }
+  // Currently selected default folder (Audio, Recordings, Downloads; defaults to Audio)
+  var selectedFolder by rememberSaveable {
+    val savedPath = prefs?.getString(PREF_KEY_AUDIO_DIRECTORY, null)
+    val initialFolder = when {
+      !savedPath.isNullOrBlank() ->
+        AudioRecorderDefaultFolder.fromPathOrName(savedPath) ?: AudioRecorderDefaultFolder.DEFAULT
+      initialDirectory != null ->
+        AudioRecorderDefaultFolder.fromPathOrName(initialDirectory.name) ?: AudioRecorderDefaultFolder.DEFAULT
+      else -> AudioRecorderDefaultFolder.DEFAULT
     }
-    mutableStateOf(initialDir)
+    mutableStateOf(initialFolder)
   }
 
   // User-facing folder display string (e.g. "/Audio", "/Recordings", "/Downloads")
-  var directoryDisplayPath by rememberSaveable {
-    val savedPath = prefs?.getString(PREF_KEY_AUDIO_DIRECTORY, null)
-    val initialDisplay = when {
-      !savedPath.isNullOrBlank() -> savedPath
-      initialDirectory != null -> {
-        val matchedDefault = AudioRecorderDefaultFolder.fromPathOrName(initialDirectory.name)
-        when {
-          matchedDefault != null -> matchedDefault.displayPath
-          initialDirectory.name.startsWith("Audio", ignoreCase = true) -> DEFAULT_AUDIO_FOLDER_DISPLAY
-          else -> AudioRecorderEngine.formatDirectoryDisplayPath(initialDirectory, userRoot)
-        }
+  val directoryDisplayPath = selectedFolder.displayPath
+
+  // Save & list location always defaults to the currently selected folder
+  val recordingsDirectory = remember(selectedFolder, initialDirectory, userRoot, effectiveFallbackDir, isInspection) {
+    when {
+      isInspection -> File(userRoot, selectedFolder.folderName)
+      initialDirectory != null &&
+        selectedFolder == AudioRecorderDefaultFolder.AUDIO &&
+        (initialDirectory.name.startsWith("Audio", ignoreCase = true) ||
+          AudioRecorderDefaultFolder.fromPathOrName(initialDirectory.name) == null) -> {
+        initialDirectory
       }
-      else -> DEFAULT_AUDIO_FOLDER_DISPLAY
+      initialDirectory != null &&
+        AudioRecorderDefaultFolder.fromPathOrName(initialDirectory.name) == selectedFolder -> {
+        initialDirectory
+      }
+      initialDirectory != null &&
+        !initialDirectory.absolutePath.startsWith(userRoot.absolutePath) -> {
+        val baseDir = initialDirectory.parentFile ?: effectiveFallbackDir ?: userRoot
+        File(baseDir, selectedFolder.folderName).also { it.mkdirs() }
+      }
+      else -> {
+        AudioRecorderEngine.resolveDirectoryInput(
+          inputPath = selectedFolder.displayPath,
+          userRoot = userRoot,
+          fallbackBaseDir = effectiveFallbackDir,
+        )
+      }
     }
-    mutableStateOf(initialDisplay)
   }
 
   // Sort & group configuration (persisted globally or per-folder)
@@ -309,42 +323,10 @@ fun AudioRecorderScreen(
     }
   }
 
-  fun updateRecordingsDirectory(inputPath: String) {
-    val normalizedDisplay = if (inputPath.isBlank()) {
-      DEFAULT_AUDIO_FOLDER_DISPLAY
-    } else if (!inputPath.startsWith("/")) {
-      "/$inputPath"
-    } else {
-      inputPath.trim()
-    }
-    val matchedDefault = AudioRecorderDefaultFolder.fromPathOrName(normalizedDisplay)
-    val resolved = when {
-      matchedDefault == AudioRecorderDefaultFolder.AUDIO &&
-        initialDirectory != null &&
-        initialDirectory.name.startsWith("Audio", ignoreCase = true) -> {
-        initialDirectory
-      }
-      matchedDefault != null &&
-        initialDirectory != null &&
-        !initialDirectory.absolutePath.startsWith(userRoot.absolutePath) -> {
-        val baseDir = initialDirectory.parentFile ?: effectiveFallbackDir ?: userRoot
-        File(baseDir, matchedDefault.folderName).also { it.mkdirs() }
-      }
-      else -> {
-        AudioRecorderEngine.resolveDirectoryInput(
-          inputPath = normalizedDisplay,
-          userRoot = userRoot,
-          fallbackBaseDir = effectiveFallbackDir,
-        )
-      }
-    }
-    recordingsDirectory = resolved
-    directoryDisplayPath = matchedDefault?.displayPath
-      ?: AudioRecorderEngine.formatDirectoryDisplayPath(resolved, userRoot)
-        .takeIf { it.isNotBlank() }
-      ?: normalizedDisplay
-    prefs?.edit()?.putString(PREF_KEY_AUDIO_DIRECTORY, directoryDisplayPath)?.apply()
-    syncSortGroupForFolder(directoryDisplayPath)
+  fun selectRecordingsFolder(folder: AudioRecorderDefaultFolder) {
+    selectedFolder = folder
+    prefs?.edit()?.putString(PREF_KEY_AUDIO_DIRECTORY, folder.displayPath)?.apply()
+    syncSortGroupForFolder(folder.displayPath)
   }
 
   // Microphone permission check
@@ -426,8 +408,24 @@ fun AudioRecorderScreen(
     }
   }
 
-  val recordings = remember(baseRecordings, sortOrder) {
-    AudioRecorderEngine.sortRecordings(baseRecordings, sortOrder)
+  var isSearchActive by rememberSaveable { mutableStateOf(false) }
+  var searchQuery by rememberSaveable { mutableStateOf("") }
+
+  BackHandler(enabled = isSearchActive) {
+    isSearchActive = false
+    searchQuery = ""
+  }
+
+  val filteredRecordings = remember(baseRecordings, isSearchActive, searchQuery) {
+    if (isSearchActive && searchQuery.isNotBlank()) {
+      AudioRecorderEngine.filterRecordings(baseRecordings, searchQuery)
+    } else {
+      baseRecordings
+    }
+  }
+
+  val recordings = remember(filteredRecordings, sortOrder) {
+    AudioRecorderEngine.sortRecordings(filteredRecordings, sortOrder)
   }
 
   val groupedRecordings = remember(recordings, groupOption, sortOrder) {
@@ -440,7 +438,6 @@ fun AudioRecorderScreen(
 
   // UI Dialog states
   var showFormatMenu by remember { mutableStateOf(false) }
-  var showFolderDialog by remember { mutableStateOf(false) }
   var activePlaybackRecording by remember { mutableStateOf<AudioRecordingItem?>(null) }
   var recordingToRename by remember { mutableStateOf<AudioRecordingItem?>(null) }
   var recordingToDelete by remember { mutableStateOf<AudioRecordingItem?>(null) }
@@ -509,7 +506,7 @@ fun AudioRecorderScreen(
       .background(MaterialTheme.colorScheme.background)
       .testTag("audio_recorder_screen"),
   ) {
-    // 1. Standard Tool Header / Top Bar (DESIGN_LANGUAGE.md 5.1)
+    // 1. Standard Tool Header / Top Bar (DESIGN_LANGUAGE.md 5.1 & 5.7)
     ToolboxTopBar(
       title = "Audio Recorder",
       subtext = if (isRecording) {
@@ -542,113 +539,40 @@ fun AudioRecorderScreen(
       } else {
         MaterialTheme.colorScheme.onSurfaceVariant
       },
-      actions = {
-        Box {
-          Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            modifier = Modifier
-              .clip(RoundedCornerShape(20.dp))
-              .clickable(enabled = !isRecording) { showFormatMenu = true }
-              .testTag("format_selector_button"),
-          ) {
-            Row(
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Tune,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.size(15.dp),
-              )
-              Text(
-                text = selectedFormat.shortLabel,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-              )
-              Icon(
-                imageVector = Icons.Default.ExpandMore,
-                contentDescription = "Select audio format",
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.size(16.dp),
-              )
-            }
-          }
-
-          DropdownMenu(
-            expanded = showFormatMenu,
-            onDismissRequest = { showFormatMenu = false },
-            modifier = Modifier.testTag("format_dropdown_menu"),
-          ) {
-            AudioRecordingFormat.entries.forEach { format ->
-              val isSelected = format == selectedFormat
-              DropdownMenuItem(
-                text = {
-                  Column {
-                    Text(
-                      text = format.displayName,
-                      fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                    )
-                    Text(
-                      text = format.description,
-                      style = MaterialTheme.typography.bodySmall,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                  }
-                },
-                onClick = {
-                  updateSelectedFormat(format)
-                  showFormatMenu = false
-                },
-                trailingIcon = if (isSelected) {
-                  {
-                    Icon(
-                      imageVector = Icons.Default.Check,
-                      contentDescription = null,
-                      tint = MaterialTheme.colorScheme.primary,
-                    )
-                  }
-                } else null,
-                modifier = Modifier.testTag("format_option_${format.name}"),
-              )
-            }
-          }
-        }
-
-        IconButton(
-          onClick = { showFolderDialog = true },
-          enabled = !isRecording,
-          modifier = Modifier
-            .size(36.dp)
-            .testTag("change_folder_top_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.FolderOpen,
-            contentDescription = "Change recordings folder",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp),
-          )
-        }
-      },
+      searchState = ToolboxTopBarSearchState(
+        isActive = isSearchActive,
+        query = searchQuery,
+        onQueryChange = { searchQuery = it },
+        onOpenSearch = { isSearchActive = true },
+        onCloseSearch = {
+          isSearchActive = false
+          searchQuery = ""
+        },
+        placeholder = "Search recordings in $directoryDisplayPath...",
+        searchContentDescription = "Search recordings",
+        closeContentDescription = "Close search",
+        clearContentDescription = "Clear search",
+        toggleButtonTestTag = "action_toggle_search",
+        searchBarTestTag = "toolbar_search_bar",
+        closeButtonTestTag = "action_close_search",
+        inputTestTag = "audio_recorder_search_input",
+        clearButtonTestTag = "action_clear_search",
+      ),
     )
 
     // 2. Folder Pill Selectors (Audio, Recordings, Downloads) + Floating Filter Button (DESIGN_LANGUAGE.md 5.4)
     AudioRecorderFolderPillBar(
-      currentDisplayPath = directoryDisplayPath,
+      selectedFolder = selectedFolder,
       enabled = !isRecording,
       groupOption = groupOption,
       sortOrder = sortOrder,
       showFilterMenu = showFilterMenu,
       isSortGroupSavedForFolder = isSortGroupSavedForFolder,
-      onSelectFolder = { path ->
+      onSelectFolder = { folder ->
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-        updateRecordingsDirectory(path)
+        selectRecordingsFolder(folder)
         refreshTrigger++
       },
-      onOpenCustomFolderDialog = { showFolderDialog = true },
       onOpenFilterMenu = { showFilterMenu = true },
       onDismissFilterMenu = { showFilterMenu = false },
       onSelectGroupOption = {
@@ -760,7 +684,11 @@ fun AudioRecorderScreen(
             }
             Spacer(modifier = Modifier.height(10.dp))
             Text(
-              text = "No recordings in $directoryDisplayPath",
+              text = if (isSearchActive && searchQuery.isNotBlank()) {
+                "No recordings matching \"${searchQuery.trim()}\" in $directoryDisplayPath"
+              } else {
+                "No recordings in $directoryDisplayPath"
+              },
               style = MaterialTheme.typography.bodyLarge,
               fontWeight = FontWeight.SemiBold,
               color = MaterialTheme.colorScheme.onSurface,
@@ -768,7 +696,11 @@ fun AudioRecorderScreen(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-              text = "Tap the microphone button below to record and save a timestamped audio file.",
+              text = if (isSearchActive && searchQuery.isNotBlank()) {
+                "Try a different search query or switch folders above."
+              } else {
+                "Tap the microphone button below to record and save a timestamped audio file."
+              },
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               textAlign = TextAlign.Center,
@@ -860,7 +792,7 @@ fun AudioRecorderScreen(
       modifier = Modifier
         .fillMaxWidth()
         .weight(0.46f)
-        .padding(horizontal = 16.dp, vertical = 8.dp)
+        .padding(horizontal = 16.dp, vertical = 4.dp)
         .testTag("recorder_center_stage"),
       contentAlignment = Alignment.Center,
     ) {
@@ -899,7 +831,7 @@ fun AudioRecorderScreen(
           )
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(4.dp))
 
         Text(
           text = AudioRecorderEngine.formatRecordingTimerMs(elapsedRecordingMs),
@@ -910,7 +842,7 @@ fun AudioRecorderScreen(
           modifier = Modifier.testTag("recording_timer_text"),
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Smaller Combined (Device + Mic) FAB on the left + Primary Microphone FAB in the middle + smaller Device Audio FAB on the right
         val infiniteTransition = rememberInfiniteTransition(label = "RecordingPulse")
@@ -982,7 +914,7 @@ fun AudioRecorderScreen(
           // Smaller Device + Microphone Audio FAB to the left of the primary Microphone FAB
           Box(
             contentAlignment = Alignment.Center,
-            modifier = Modifier.size(72.dp),
+            modifier = Modifier.size(68.dp),
           ) {
             if (isRecordingBoth) {
               val dynamicBoost = (liveAmplitude * 0.15f).coerceIn(0f, 0.15f)
@@ -1052,14 +984,14 @@ fun AudioRecorderScreen(
           // Primary Microphone / Stop FAB
           Box(
             contentAlignment = Alignment.Center,
-            modifier = Modifier.size(116.dp),
+            modifier = Modifier.size(104.dp),
           ) {
             // Outer animated pulse ring while recording microphone audio
             if (isRecordingMic) {
               val dynamicBoost = (liveAmplitude * 0.15f).coerceIn(0f, 0.15f)
               Box(
                 modifier = Modifier
-                  .size(104.dp)
+                  .size(100.dp)
                   .scale(pulseScale + dynamicBoost)
                   .clip(CircleShape)
                   .background(MaterialTheme.colorScheme.error.copy(alpha = 0.2f)),
@@ -1122,7 +1054,7 @@ fun AudioRecorderScreen(
           // Smaller Device Audio FAB to the right with a phone screen icon
           Box(
             contentAlignment = Alignment.Center,
-            modifier = Modifier.size(72.dp),
+            modifier = Modifier.size(68.dp),
           ) {
             if (isRecordingDevice) {
               val dynamicBoost = (liveAmplitude * 0.15f).coerceIn(0f, 0.15f)
@@ -1191,7 +1123,85 @@ fun AudioRecorderScreen(
           }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // Saved Audio Format Selector positioned above the instruction text
+        Box {
+          Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            modifier = Modifier
+              .clip(RoundedCornerShape(20.dp))
+              .clickable(enabled = !isRecording) { showFormatMenu = true }
+              .testTag("format_selector_button"),
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Tune,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(15.dp),
+              )
+              Text(
+                text = selectedFormat.shortLabel,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+              )
+              Icon(
+                imageVector = Icons.Default.ExpandMore,
+                contentDescription = "Select audio format",
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(16.dp),
+              )
+            }
+          }
+
+          DropdownMenu(
+            expanded = showFormatMenu,
+            onDismissRequest = { showFormatMenu = false },
+            modifier = Modifier.testTag("format_dropdown_menu"),
+          ) {
+            AudioRecordingFormat.entries.forEach { format ->
+              val isSelected = format == selectedFormat
+              DropdownMenuItem(
+                text = {
+                  Column {
+                    Text(
+                      text = format.displayName,
+                      fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    )
+                    Text(
+                      text = format.description,
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                },
+                onClick = {
+                  updateSelectedFormat(format)
+                  showFormatMenu = false
+                },
+                trailingIcon = if (isSelected) {
+                  {
+                    Icon(
+                      imageVector = Icons.Default.Check,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                    )
+                  }
+                } else null,
+                modifier = Modifier.testTag("format_option_${format.name}"),
+              )
+            }
+          }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
 
         Text(
           text = when {
@@ -1203,6 +1213,7 @@ fun AudioRecorderScreen(
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           textAlign = TextAlign.Center,
+          modifier = Modifier.testTag("recorder_instruction_text"),
         )
       }
     }
@@ -1217,21 +1228,6 @@ fun AudioRecorderScreen(
     MiniAudioPlayerModal(
       recording = recording,
       onDismiss = { activePlaybackRecording = null },
-    )
-  }
-
-  // Change Recordings Folder Dialog
-  if (showFolderDialog) {
-    ChangeRecordingsFolderDialog(
-      currentDisplayPath = directoryDisplayPath,
-      currentDirectory = recordingsDirectory,
-      userRoot = userRoot,
-      onDismiss = { showFolderDialog = false },
-      onConfirmPath = { newPath ->
-        updateRecordingsDirectory(newPath)
-        refreshTrigger++
-        showFolderDialog = false
-      },
     )
   }
 
@@ -1256,7 +1252,7 @@ fun AudioRecorderScreen(
     )
   }
 
-    // Delete Recording Confirmation Dialog
+  // Delete Recording Confirmation Dialog
   recordingToDelete?.let { item ->
     DeleteRecordingDialog(
       recording = item,
@@ -1281,24 +1277,19 @@ fun AudioRecorderScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AudioRecorderFolderPillBar(
-  currentDisplayPath: String,
+  selectedFolder: AudioRecorderDefaultFolder,
   enabled: Boolean,
   groupOption: AudioRecorderGroupOption,
   sortOrder: AudioRecorderSortOrder,
   showFilterMenu: Boolean,
   isSortGroupSavedForFolder: Boolean,
-  onSelectFolder: (String) -> Unit,
-  onOpenCustomFolderDialog: () -> Unit,
+  onSelectFolder: (AudioRecorderDefaultFolder) -> Unit,
   onOpenFilterMenu: () -> Unit,
   onDismissFilterMenu: () -> Unit,
   onSelectGroupOption: (AudioRecorderGroupOption) -> Unit,
   onSelectSortOrder: (AudioRecorderSortOrder) -> Unit,
   onToggleSaveSortGroupForFolder: () -> Unit,
 ) {
-  val activeDefaultFolder = remember(currentDisplayPath) {
-    AudioRecorderDefaultFolder.fromPathOrName(currentDisplayPath)
-  }
-
   Surface(
     color = MaterialTheme.colorScheme.surface,
     modifier = Modifier.fillMaxWidth(),
@@ -1324,12 +1315,12 @@ private fun AudioRecorderFolderPillBar(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         AudioRecorderDefaultFolder.entries.forEach { folder ->
-          val isSelected = activeDefaultFolder == folder
+          val isSelected = selectedFolder == folder
           FilterChip(
             selected = isSelected,
             onClick = {
               if (enabled) {
-                onSelectFolder(folder.displayPath)
+                onSelectFolder(folder)
               }
             },
             enabled = enabled,
@@ -1354,40 +1345,6 @@ private fun AudioRecorderFolderPillBar(
               selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
             ),
             modifier = Modifier.testTag("folder_pill_${folder.folderName}"),
-          )
-        }
-
-        // If a custom folder outside Audio / Recordings / Downloads is selected, show it as an active pill
-        if (activeDefaultFolder == null && currentDisplayPath.isNotBlank()) {
-          FilterChip(
-            selected = true,
-            onClick = {
-              if (enabled) {
-                onOpenCustomFolderDialog()
-              }
-            },
-            enabled = enabled,
-            shape = RoundedCornerShape(20.dp),
-            leadingIcon = {
-              Icon(
-                imageVector = Icons.Default.Folder,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-              )
-            },
-            label = {
-              Text(
-                text = currentDisplayPath.trimStart('/').ifEmpty { currentDisplayPath },
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-              )
-            },
-            colors = FilterChipDefaults.filterChipColors(
-              selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-              selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-            ),
-            modifier = Modifier.testTag("folder_pill_custom"),
           )
         }
       }
@@ -2158,223 +2115,6 @@ fun MiniAudioPlayerModal(
       }
     }
   }
-}
-
-/**
- * Dialog for changing the recordings folder (defaults to `/Audio`).
- * Follows DESIGN_LANGUAGE.md Section 5.2 Dialog Design Pattern.
- */
-@Composable
-private fun ChangeRecordingsFolderDialog(
-  currentDisplayPath: String,
-  currentDirectory: File,
-  userRoot: File,
-  onDismiss: () -> Unit,
-  onConfirmPath: (String) -> Unit,
-) {
-  var textFieldValue by remember {
-    mutableStateOf(
-      TextFieldValue(
-        text = currentDisplayPath,
-        selection = TextRange(0, currentDisplayPath.length),
-      )
-    )
-  }
-  val focusRequester = remember { FocusRequester() }
-
-  LaunchedEffect(Unit) {
-    try {
-      focusRequester.requestFocus()
-    } catch (_: Throwable) {}
-  }
-
-  val presetFolders = remember {
-    DEFAULT_AUDIO_RECORDER_FOLDER_DISPLAY_PATHS
-  }
-
-  val trimmedInput = textFieldValue.text.trim()
-  val validationError = remember(trimmedInput) {
-    if (trimmedInput.isEmpty()) {
-      "Folder path cannot be empty"
-    } else if (trimmedInput.any { it in listOf('\\', ':', '*', '?', '"', '<', '>', '|', '\u0000') }) {
-      "Path contains invalid characters"
-    } else {
-      null
-    }
-  }
-
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    shape = RoundedCornerShape(28.dp),
-    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-    tonalElevation = 6.dp,
-    modifier = Modifier.testTag("change_folder_dialog"),
-    title = {
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Box(
-          modifier = Modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primaryContainer),
-          contentAlignment = Alignment.Center,
-        ) {
-          Icon(
-            imageVector = Icons.Default.FolderOpen,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(24.dp),
-          )
-        }
-        Column {
-          Text(
-            text = "Recordings Folder",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
-          Text(
-            text = "Choose where recordings are saved & listed",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-      }
-    },
-    text = {
-      Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-      ) {
-        // Context Preview Card
-        Card(
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-          ),
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Folder,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(20.dp),
-            )
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = "Current folder: $currentDisplayPath",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              Text(
-                text = currentDirectory.absolutePath,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-          }
-        }
-
-        // Quick Preset Chips
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          presetFolders.forEach { preset ->
-            val selected = trimmedInput.equals(preset, ignoreCase = true)
-            FilterChip(
-              selected = selected,
-              onClick = {
-                textFieldValue = TextFieldValue(
-                  text = preset,
-                  selection = TextRange(preset.length),
-                )
-              },
-              label = { Text(preset) },
-              shape = RoundedCornerShape(20.dp),
-              modifier = Modifier.testTag("folder_preset_${preset.removePrefix("/")}"),
-            )
-          }
-        }
-
-        // Folder Path Input Field
-        OutlinedTextField(
-          value = textFieldValue,
-          onValueChange = { textFieldValue = it },
-          label = { Text("Folder path") },
-          placeholder = { Text(DEFAULT_AUDIO_FOLDER_DISPLAY) },
-          singleLine = true,
-          isError = validationError != null,
-          supportingText = if (validationError != null) {
-            { Text(validationError) }
-          } else {
-            { Text("Relative to internal storage root (${userRoot.absolutePath})") }
-          },
-          shape = RoundedCornerShape(14.dp),
-          leadingIcon = {
-            Icon(Icons.Default.Folder, contentDescription = null)
-          },
-          trailingIcon = if (textFieldValue.text.isNotEmpty()) {
-            {
-              IconButton(onClick = { textFieldValue = TextFieldValue("") }) {
-                Icon(Icons.Default.Clear, contentDescription = "Clear folder path")
-              }
-            }
-          } else null,
-          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-          keyboardActions = KeyboardActions(
-            onDone = {
-              if (validationError == null) {
-                onConfirmPath(trimmedInput)
-              }
-            },
-          ),
-          modifier = Modifier
-            .fillMaxWidth()
-            .focusRequester(focusRequester)
-            .testTag("folder_path_input"),
-        )
-      }
-    },
-    confirmButton = {
-      Button(
-        onClick = { onConfirmPath(trimmedInput) },
-        enabled = validationError == null,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.testTag("confirm_folder_button"),
-      ) {
-        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
-        Text("Confirm")
-      }
-    },
-    dismissButton = {
-      TextButton(
-        onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.testTag("cancel_folder_button"),
-      ) {
-        Text("Cancel")
-      }
-    },
-  )
 }
 
 @Composable

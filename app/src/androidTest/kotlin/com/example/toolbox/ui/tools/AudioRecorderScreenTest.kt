@@ -126,6 +126,32 @@ class AudioRecorderScreenTest {
       recordingsSectionBounds.bottom <= recorderButtonsBounds.top + 4f,
     )
 
+    // Verify toolbar folder selector button and modal do not exist
+    composeTestRule.onNodeWithTag("change_folder_top_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("change_folder_dialog").assertDoesNotExist()
+
+    // Verify format selector is positioned inside the recorder view above the "Tap ..." instruction text
+    val micFabBounds = composeTestRule.onNodeWithTag("audio_recorder_fab")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val formatSelectorBounds = composeTestRule.onNodeWithTag("format_selector_button")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val instructionTextBounds = composeTestRule.onNodeWithTag("recorder_instruction_text")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+    assertTrue(
+      "Format selector should be inside the recorder view below the recording FABs",
+      formatSelectorBounds.top >= micFabBounds.bottom - 4f,
+    )
+    assertTrue(
+      "Format selector should be above the Tap ... instruction text",
+      formatSelectorBounds.bottom <= instructionTextBounds.top + 4f,
+    )
+
     // Verify default folder pills (Audio, Recordings, Downloads) and filter button are displayed
     composeTestRule.onNodeWithTag("folder_pill_Audio").assertIsDisplayed()
     composeTestRule.onNodeWithTag("folder_pill_Recordings").assertIsDisplayed()
@@ -139,7 +165,7 @@ class AudioRecorderScreenTest {
     composeTestRule.onNodeWithTag("format_option_WAV").assertIsDisplayed().performClick()
     composeTestRule.waitForIdle()
 
-    // Record a WAV file
+    // Record a WAV file in the default Audio folder
     composeTestRule.onNodeWithTag("audio_recorder_fab").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("audio_recorder_fab").performClick()
@@ -148,10 +174,19 @@ class AudioRecorderScreenTest {
     val wavFiles = testAudioDir.listFiles()?.filter { it.extension == "wav" }.orEmpty()
     assertTrue("Expected a saved .wav recording file", wavFiles.isNotEmpty())
 
-    // Switch between folders using the pill selectors
+    // Switch to Recordings folder using the pill selector and verify new recordings save there by default
     composeTestRule.onNodeWithTag("folder_pill_Recordings").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("No recordings in /Recordings").assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("audio_recorder_fab").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("audio_recorder_fab").performClick()
+    composeTestRule.waitForIdle()
+
+    val recordingsFolderFiles = File(testAudioDir.parentFile, "Recordings").listFiles()?.filter { it.isFile }.orEmpty()
+    assertTrue("Expected recording to be saved into the selected Recordings folder", recordingsFolderFiles.isNotEmpty())
+    File(testAudioDir.parentFile, "Recordings").deleteRecursively()
 
     composeTestRule.onNodeWithTag("folder_pill_Downloads").performClick()
     composeTestRule.waitForIdle()
@@ -164,6 +199,14 @@ class AudioRecorderScreenTest {
     composeTestRule.onNodeWithTag("audio_recorder_filter_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("audio_recorder_filter_menu").assertIsDisplayed()
+
+    // Dismiss filter menu and test toolbar search in the currently selected folder
+    composeTestRule.onNodeWithTag("action_toggle_search").assertIsDisplayed().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("toolbar_search_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("audio_recorder_search_input").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("action_close_search").performClick()
+    composeTestRule.waitForIdle()
   }
 
   @Test

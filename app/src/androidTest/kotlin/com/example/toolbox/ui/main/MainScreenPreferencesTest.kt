@@ -34,6 +34,7 @@ class MainScreenPreferencesTest {
     )
     repo.setToolOrder(customOrder)
     repo.setToolsPerRow(4)
+    repo.setLastOpenedTool(null)
 
     composeTestRule.setContent {
       MainScreen()
@@ -58,5 +59,30 @@ class MainScreenPreferencesTest {
     val calcLeft = calcNode.fetchSemanticsNode().boundsInRoot.left
     val rulerLeft = rulerNode.fetchSemanticsNode().boundsInRoot.left
     assertTrue(calcLeft < rulerLeft)
+  }
+
+  @Test
+  fun mainScreen_remembersLastToolOpenedAcrossLaunches() {
+    composeTestRule.waitForIdle()
+
+    val repo = DefaultNavigationPreferencesRepository(composeTestRule.activity)
+    // Select Ruler in the pull-up panel
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tool_item_RULER").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("screen_edge_ruler_canvas").assertIsDisplayed()
+    junit.framework.TestCase.assertEquals(Tool.RULER, repo.getLastOpenedTool())
+
+    // Simulate relaunching MainScreen with a fresh repository instance reading SharedPreferences
+    val freshRepo = DefaultNavigationPreferencesRepository(composeTestRule.activity)
+    composeTestRule.setContent {
+      MainScreen(preferencesRepository = freshRepo)
+    }
+    composeTestRule.waitForIdle()
+
+    // Opens directly to Ruler instead of Calculator
+    composeTestRule.onNodeWithTag("screen_edge_ruler_canvas").assertIsDisplayed()
   }
 }

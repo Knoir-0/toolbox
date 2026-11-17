@@ -851,6 +851,38 @@ class NavigationPreferencesTest {
     // Expanded mode paginates 2 category rows per page -> 2 pages for 4 rows
     assertEquals(2, calculateExpandedPageCount(rows3.size))
   }
+
+  @Test
+  fun lastOpenedTool_persistsReloadsAndResetsCorrectly() {
+    val fakePrefs = FakeSharedPreferences()
+    val repo = DefaultNavigationPreferencesRepository(fakePrefs)
+
+    // Default is null before any tool is saved
+    assertEquals(null, repo.getLastOpenedTool())
+    assertEquals(null, repo.lastOpenedToolFlow.value)
+
+    // Save last opened tool
+    repo.setLastOpenedTool(Tool.MUSIC)
+    assertEquals(Tool.MUSIC, repo.getLastOpenedTool())
+    assertEquals(Tool.MUSIC, repo.lastOpenedToolFlow.value)
+    assertEquals("MUSIC", fakePrefs.getString(PREF_KEY_LAST_OPENED_TOOL, null))
+
+    // Reloaded repository restores last opened tool
+    val reloadedRepo = DefaultNavigationPreferencesRepository(fakePrefs)
+    assertEquals(Tool.MUSIC, reloadedRepo.getLastOpenedTool())
+    assertEquals(Tool.MUSIC, reloadedRepo.lastOpenedToolFlow.value)
+
+    // Invalid value falls back to null safely without crashing
+    fakePrefs.edit().putString(PREF_KEY_LAST_OPENED_TOOL, "INVALID_TOOL_NAME").apply()
+    val corruptedRepo = DefaultNavigationPreferencesRepository(fakePrefs)
+    assertEquals(null, corruptedRepo.getLastOpenedTool())
+
+    // Resetting all settings clears lastOpenedTool
+    repo.setLastOpenedTool(Tool.NOTES)
+    resetAllSettingsToDefaults(repo)
+    assertEquals(null, repo.getLastOpenedTool())
+    assertEquals(null, repo.lastOpenedToolFlow.value)
+  }
 }
 
 /**

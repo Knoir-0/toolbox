@@ -33,6 +33,7 @@ const val PREF_KEY_CATEGORY_TOOL_SORTING = "category_tool_sorting"
 const val PREF_KEY_TOOL_USAGE = "tool_usage"
 const val PREF_KEY_PERMISSION_STATES = "permission_states"
 const val PREF_KEY_PERMISSION_USAGE = "permission_usage"
+const val PREF_KEY_LAST_OPENED_TOOL = "last_opened_tool"
 
 const val DEFAULT_THEME_COLOR_SYSTEM = "SYSTEM"
 const val FALLBACK_THEME_COLOR_HEX = "#8E66A6"
@@ -710,6 +711,11 @@ interface NavigationPreferencesRepository {
   fun resetPermissionUsage() {}
   val permissionUsageStatsFlow: StateFlow<Map<AppPermission, Map<Tool, PermissionToolUsageStat>>>
     get() = MutableStateFlow(getPermissionUsageStats()).asStateFlow()
+
+  fun getLastOpenedTool(): Tool? = null
+  fun setLastOpenedTool(tool: Tool?) {}
+  val lastOpenedToolFlow: StateFlow<Tool?>
+    get() = MutableStateFlow(getLastOpenedTool()).asStateFlow()
 }
 
 /**
@@ -774,6 +780,9 @@ class DefaultNavigationPreferencesRepository(
   private val _permissionUsageStatsFlow = MutableStateFlow(getPermissionUsageStats())
   override val permissionUsageStatsFlow: StateFlow<Map<AppPermission, Map<Tool, PermissionToolUsageStat>>> =
     _permissionUsageStatsFlow.asStateFlow()
+
+  private val _lastOpenedToolFlow = MutableStateFlow(getLastOpenedTool())
+  override val lastOpenedToolFlow: StateFlow<Tool?> = _lastOpenedToolFlow.asStateFlow()
 
   init {
     NavigationPreferencesBridge.permissionGrantStates = _permissionGrantStatesFlow.value
@@ -1087,6 +1096,27 @@ class DefaultNavigationPreferencesRepository(
     sharedPreferences.edit().remove(PREF_KEY_PERMISSION_USAGE).apply()
     _permissionUsageStatsFlow.value = emptyMap()
   }
+
+  override fun getLastOpenedTool(): Tool? {
+    val raw = sharedPreferences.getString(PREF_KEY_LAST_OPENED_TOOL, null)
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
+      ?: return null
+    return try {
+      Tool.valueOf(raw)
+    } catch (_: IllegalArgumentException) {
+      null
+    }
+  }
+
+  override fun setLastOpenedTool(tool: Tool?) {
+    if (tool == null) {
+      sharedPreferences.edit().remove(PREF_KEY_LAST_OPENED_TOOL).apply()
+    } else {
+      sharedPreferences.edit().putString(PREF_KEY_LAST_OPENED_TOOL, tool.name).apply()
+    }
+    _lastOpenedToolFlow.value = tool
+  }
 }
 
 /**
@@ -1116,6 +1146,7 @@ class InMemoryNavigationPreferencesRepository(
   initialToolUsage: Map<Tool, Int> = emptyMap(),
   initialPermissionStates: Map<AppPermission, Boolean> = AppPermission.entries.associateWith { true },
   initialPermissionUsage: Map<AppPermission, Map<Tool, PermissionToolUsageStat>> = emptyMap(),
+  initialLastOpenedTool: Tool? = null,
 ) : NavigationPreferencesRepository {
   private val _toolsPerRowFlow = MutableStateFlow(coerceToolsPerRow(initialToolsPerRow))
   override val toolsPerRowFlow: StateFlow<Int> = _toolsPerRowFlow.asStateFlow()
@@ -1172,6 +1203,9 @@ class InMemoryNavigationPreferencesRepository(
   private val _permissionUsageStatsFlow = MutableStateFlow(initialPermissionUsage)
   override val permissionUsageStatsFlow: StateFlow<Map<AppPermission, Map<Tool, PermissionToolUsageStat>>> =
     _permissionUsageStatsFlow.asStateFlow()
+
+  private val _lastOpenedToolFlow = MutableStateFlow(initialLastOpenedTool)
+  override val lastOpenedToolFlow: StateFlow<Tool?> = _lastOpenedToolFlow.asStateFlow()
 
   init {
     NavigationPreferencesBridge.permissionGrantStates = _permissionGrantStatesFlow.value
@@ -1336,6 +1370,12 @@ class InMemoryNavigationPreferencesRepository(
   override fun resetPermissionUsage() {
     _permissionUsageStatsFlow.value = emptyMap()
   }
+
+  override fun getLastOpenedTool(): Tool? = _lastOpenedToolFlow.value
+
+  override fun setLastOpenedTool(tool: Tool?) {
+    _lastOpenedToolFlow.value = tool
+  }
 }
 
 /**
@@ -1375,6 +1415,7 @@ private val RECOGNIZED_BACKUP_KEYS = setOf(
   PREF_KEY_TOOL_USAGE,
   PREF_KEY_PERMISSION_STATES,
   PREF_KEY_PERMISSION_USAGE,
+  PREF_KEY_LAST_OPENED_TOOL,
 )
 
 /**
@@ -1398,6 +1439,9 @@ fun exportSettingsToJson(repository: NavigationPreferencesRepository): String {
   json.put(PREF_KEY_TOOL_USAGE, serializeToolUsage(repository.getToolUsageCounts()))
   json.put(PREF_KEY_PERMISSION_STATES, serializePermissionStates(repository.getPermissionGrantStates()))
   json.put(PREF_KEY_PERMISSION_USAGE, serializePermissionUsage(repository.getPermissionUsageStats()))
+  repository.getLastOpenedTool()?.let { lastTool ->
+    json.put(PREF_KEY_LAST_OPENED_TOOL, lastTool.name)
+  }
   return json.toString(2)
 }
 
@@ -1505,6 +1549,19 @@ fun importSettingsFromJson(
         parsePermissionUsage(json.optString(PREF_KEY_PERMISSION_USAGE, ""))
       )
     }
+    if (json.has(PREF_KEY_LAST_OPENED_TOOL)) {
+      val toolName = json.optString(PREF_KEY_LAST_OPENED_TOOL, "").trim()
+      val parsedTool = if (toolName.isEmpty()) {
+        null
+      } else {
+        try {
+          Tool.valueOf(toolName)
+        } catch (_: IllegalArgumentException) {
+          null
+        }
+      }
+      repository.setLastOpenedTool(parsedTool)
+    }
     true
   } catch (_: Exception) {
     false
@@ -1530,4 +1587,5 @@ fun resetAllSettingsToDefaults(repository: NavigationPreferencesRepository) {
   repository.resetToolUsage()
   repository.grantAllPermissions()
   repository.resetPermissionUsage()
+  repository.setLastOpenedTool(null)
 }

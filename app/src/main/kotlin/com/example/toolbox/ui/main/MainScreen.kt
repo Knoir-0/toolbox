@@ -420,20 +420,30 @@ fun MainScreen(
     } else {
       val toolOrder by preferencesRepository.toolOrderFlow.collectAsState()
       val hiddenTools by preferencesRepository.hiddenToolsFlow.collectAsState()
+      val lastOpenedTool by preferencesRepository.lastOpenedToolFlow.collectAsState()
 
-      val firstVisible = remember(toolOrder, hiddenTools, initialDirectory) {
+      val initialTool = remember(toolOrder, hiddenTools, initialDirectory, lastOpenedTool) {
         if (initialDirectory != null) {
           Tool.FILES
         } else {
-          toolOrder.firstOrNull { it !in hiddenTools } ?: Tool.SETTINGS
+          lastOpenedTool
+            ?: toolOrder.firstOrNull { it !in hiddenTools }
+            ?: Tool.SETTINGS
         }
       }
 
-      var selectedTool by rememberSaveable { mutableStateOf(if (initialDirectory != null) Tool.FILES else firstVisible) }
+      var selectedTool by rememberSaveable { mutableStateOf(initialTool) }
+
+      LaunchedEffect(selectedTool) {
+        preferencesRepository.setLastOpenedTool(selectedTool)
+      }
 
       ToolboxScaffold(
         selectedTool = selectedTool,
-        onSelectTool = { selectedTool = it },
+        onSelectTool = { tool ->
+          selectedTool = tool
+          preferencesRepository.setLastOpenedTool(tool)
+        },
         initialDirectory = initialDirectory,
         preferencesRepository = preferencesRepository,
         modifier = modifier,
@@ -490,9 +500,11 @@ fun ToolboxScaffold(
     }
   }
 
-  // Tool opened via a cross-tool link (e.g. Music -> Colors). It may be hidden from the grid, so it is
-  // exempt from the hidden-tool auto-switch, and Back returns to the tool that opened it.
-  var linkedTool by rememberSaveable { mutableStateOf<Tool?>(null) }
+  // Tool opened via a cross-tool link (e.g. Music -> Colors) or restored from lastOpenedTool when hidden.
+  // It may be hidden from the grid, so it is exempt from the hidden-tool auto-switch, and Back returns to the tool that opened it.
+  var linkedTool by rememberSaveable {
+    mutableStateOf(selectedTool.takeIf { it in hiddenTools && it != Tool.SETTINGS })
+  }
   var linkReturnTool by rememberSaveable { mutableStateOf<Tool?>(null) }
 
   // Auto-switch selectedTool if it becomes hidden
@@ -587,6 +599,7 @@ fun ToolboxScaffold(
             linkReturnTool = selectedTool
             linkedTool = Tool.COLOR_PICKER
             preferencesRepository?.incrementToolUsage(Tool.COLOR_PICKER)
+            preferencesRepository?.setLastOpenedTool(Tool.COLOR_PICKER)
             onSelectTool(Tool.COLOR_PICKER)
           },
           onSelectTool = { tool ->
@@ -594,6 +607,7 @@ fun ToolboxScaffold(
             linkReturnTool = selectedTool
             linkedTool = tool
             preferencesRepository?.incrementToolUsage(tool)
+            preferencesRepository?.setLastOpenedTool(tool)
             onSelectTool(tool)
             if (sheetValue == SheetValue.Expanded) {
               sheetValue = SheetValue.PartiallyExpanded
@@ -681,6 +695,7 @@ fun ToolboxScaffold(
           linkReturnTool = null
           selectedColorPickerHex = null
           preferencesRepository?.incrementToolUsage(tool)
+          preferencesRepository?.setLastOpenedTool(tool)
           onSelectTool(tool)
           if (sheetValue == SheetValue.Expanded) {
             sheetValue = SheetValue.PartiallyExpanded
@@ -1265,12 +1280,21 @@ fun ReorderableToolsGrid(
   val coroutineScope = rememberCoroutineScope()
   val density = LocalDensity.current
 
+  val initialSelectedIndex = tools.indexOf(selectedTool)
+  val initialSelectedRow = if (initialSelectedIndex >= 0) {
+    (initialSelectedIndex / effectiveColumns).coerceIn(0, maxOf(0, rowCount - 1))
+  } else {
+    0
+  }
+  val initialExpandedPage = (initialSelectedRow / ROWS_PER_PAGE_EXPANDED)
+    .coerceIn(0, maxOf(0, expandedPageCount - 1))
+
   val expandedPagerState = rememberPagerState(
-    initialPage = 0,
+    initialPage = initialExpandedPage,
     pageCount = { expandedPageCount },
   )
   val collapsedPagerState = rememberPagerState(
-    initialPage = 0,
+    initialPage = initialSelectedRow,
     pageCount = { rowCount },
   )
 
@@ -1347,7 +1371,7 @@ fun ReorderableToolsGrid(
   }
 
   // When selectedTool changes while collapsed, jump to the row of the selected tool
-  LaunchedEffect(selectedTool, isExpanded) {
+  LaunchedEffect(selectedTool, isExpanded, effectiveColumns, tools.size) {
     if (!isExpanded) {
       val selectedIndex = tools.indexOf(selectedTool)
       if (selectedIndex >= 0) {
@@ -1697,12 +1721,18 @@ fun CategoryToolsGrid(
   val coroutineScope = rememberCoroutineScope()
   val density = LocalDensity.current
 
+  val initialCategoryRow = categoryRows.indexOfFirst { row ->
+    row.groups.any { it.tools.contains(selectedTool) }
+  }.coerceAtLeast(0).coerceIn(0, maxOf(0, rowCount - 1))
+  val initialCategoryExpandedPage = (initialCategoryRow / ROWS_PER_PAGE_EXPANDED)
+    .coerceIn(0, maxOf(0, expandedPageCount - 1))
+
   val expandedPagerState = rememberPagerState(
-    initialPage = 0,
+    initialPage = initialCategoryExpandedPage,
     pageCount = { expandedPageCount },
   )
   val collapsedPagerState = rememberPagerState(
-    initialPage = 0,
+    initialPage = initialCategoryRow,
     pageCount = { rowCount },
   )
 

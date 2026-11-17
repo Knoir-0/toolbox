@@ -548,6 +548,27 @@ object AudioRecorderEngine {
   }
 
   /**
+   * Filters a list of [AudioRecordingItem]s in the active folder by [query] (matching file name,
+   * format badge/extension, capture source, duration, or formatted timestamp).
+   */
+  fun filterRecordings(
+    items: List<AudioRecordingItem>,
+    query: String,
+  ): List<AudioRecordingItem> {
+    val trimmed = query.trim()
+    if (trimmed.isEmpty()) return items
+    return items.filter { item ->
+      item.name.contains(trimmed, ignoreCase = true) ||
+        item.formatBadge.contains(trimmed, ignoreCase = true) ||
+        item.extension.contains(trimmed, ignoreCase = true) ||
+        item.captureSource.displayName.contains(trimmed, ignoreCase = true) ||
+        item.captureSource.shortLabel.contains(trimmed, ignoreCase = true) ||
+        item.durationFormatted.contains(trimmed, ignoreCase = true) ||
+        item.timestampFormatted.contains(trimmed, ignoreCase = true)
+    }
+  }
+
+  /**
    * Sorts a list of [AudioRecordingItem]s according to [sortOrder].
    */
   fun sortRecordings(

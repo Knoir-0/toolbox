@@ -240,5 +240,13 @@ class AudioRecorderEngineTest {
     assertEquals(2, groupedByFormat.size)
     assertEquals("M4A", groupedByFormat[0].title)
     assertEquals("WAV", groupedByFormat[1].title)
+
+    val filteredByWav = AudioRecorderEngine.filterRecordings(items, "wav")
+    assertEquals(1, filteredByWav.size)
+    assertEquals("Recording_Device_20261110_120000.wav", filteredByWav.first().name)
+
+    val filteredByDevice = AudioRecorderEngine.filterRecordings(items, "Device Audio")
+    assertEquals(1, filteredByDevice.size)
+    assertEquals("Recording_Device_20261110_120000.wav", filteredByDevice.first().name)
   }
 }

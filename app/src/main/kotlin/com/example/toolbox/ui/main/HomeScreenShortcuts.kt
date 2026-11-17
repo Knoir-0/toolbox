@@ -124,8 +124,47 @@ fun resolveLauncherIconVariant(themeColor: String?): LauncherIconVariant {
 }
 
 /**
- * Synchronizes the enabled launcher `<activity-alias>` so the application icon background on the
- * Home screen matches the active [themeColor].
+ * Returns `true` if [variant]'s `<activity-alias>` is currently enabled in [pm].
+ */
+private fun isLauncherVariantEnabled(
+  pm: PackageManager,
+  packageName: String,
+  variant: LauncherIconVariant,
+): Boolean {
+  val component = ComponentName(packageName, variant.aliasClassName)
+  val state = pm.getComponentEnabledSetting(component)
+  val isEnabledByDefault = variant == LauncherIconVariant.SYSTEM
+  return state == PackageManager.COMPONENT_ENABLED_STATE_ENABLED ||
+    (isEnabledByDefault && state == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT)
+}
+
+/**
+ * Resolves the currently enabled [LauncherIconVariant] in [PackageManager], falling back to
+ * [resolveLauncherIconVariant] when [PackageManager] is unavailable.
+ */
+fun resolveEnabledLauncherIconVariant(
+  context: Context,
+  themeColor: String? = null,
+): LauncherIconVariant {
+  val targetVariant = resolveLauncherIconVariant(themeColor)
+  return try {
+    val appContext = context.applicationContext ?: context
+    val pm = appContext.packageManager
+    val packageName = appContext.packageName
+    if (isLauncherVariantEnabled(pm, packageName, targetVariant)) {
+      return targetVariant
+    }
+    LauncherIconVariant.entries.firstOrNull { isLauncherVariantEnabled(pm, packageName, it) }
+      ?: targetVariant
+  } catch (_: Throwable) {
+    targetVariant
+  }
+}
+
+/**
+ * Ensures a launcher `<activity-alias>` is enabled without disabling the active launcher component
+ * of a running [Activity] (which would cause Android's ActivityTaskManagerService to force-finish
+ * the foreground activity on launch after an update or theme change).
  */
 fun syncAppLauncherIcon(
   context: Context,
@@ -139,32 +178,18 @@ fun syncAppLauncherIcon(
     val pm = appContext.packageManager
     val packageName = appContext.packageName
 
-    val targetComponent = ComponentName(packageName, targetVariant.aliasClassName)
-    if (pm.getComponentEnabledSetting(targetComponent) != PackageManager.COMPONENT_ENABLED_STATE_ENABLED) {
+    val enabledVariants = LauncherIconVariant.entries.filter {
+      isLauncherVariantEnabled(pm, packageName, it)
+    }
+    if (enabledVariants.isEmpty()) {
+      val targetComponent = ComponentName(packageName, targetVariant.aliasClassName)
       pm.setComponentEnabledSetting(
         targetComponent,
         PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
         PackageManager.DONT_KILL_APP,
       )
     }
-
-    for (variant in LauncherIconVariant.entries) {
-      if (variant != targetVariant) {
-        val component = ComponentName(packageName, variant.aliasClassName)
-        val currentState = pm.getComponentEnabledSetting(component)
-        val isEnabledByDefault = variant == LauncherIconVariant.SYSTEM
-        if (currentState == PackageManager.COMPONENT_ENABLED_STATE_ENABLED ||
-          (isEnabledByDefault && currentState == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT)
-        ) {
-          pm.setComponentEnabledSetting(
-            component,
-            PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-            PackageManager.DONT_KILL_APP,
-          )
-        }
-      }
-    }
-  } catch (_: Exception) {
+  } catch (_: Throwable) {
     // Ignore when PackageManager is unavailable in unit tests
   }
 }
@@ -574,7 +599,7 @@ fun addToolToHomeScreen(
         }
       }
       syncAppLauncherIcon(context, effectiveThemeColor)
-      val activeVariant = resolveLauncherIconVariant(effectiveThemeColor)
+      val activeVariant = resolveEnabledLauncherIconVariant(context, effectiveThemeColor)
       val pinShortcutInfo = ShortcutInfoCompat.Builder(context, "shortcut_tool_${tool.name}")
         .setShortLabel(tool.title)
         .setLongLabel(tool.title)
@@ -618,7 +643,7 @@ fun addFolderToHomeScreen(
         }
       }
       syncAppLauncherIcon(context, effectiveThemeColor)
-      val activeVariant = resolveLauncherIconVariant(effectiveThemeColor)
+      val activeVariant = resolveEnabledLauncherIconVariant(context, effectiveThemeColor)
       val shortcutId = "shortcut_folder_${folder.absolutePath.hashCode()}"
       val pinShortcutInfo = ShortcutInfoCompat.Builder(context, shortcutId)
         .setShortLabel(folderName)

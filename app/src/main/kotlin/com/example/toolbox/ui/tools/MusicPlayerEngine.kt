@@ -4620,179 +4620,190 @@ object MusicPlayerEngine {
    * playing (or most recent) external media session's artwork palette and metadata.
    */
   fun syncExternalSystemMediaSessions(context: Context) {
-    val appCtx = context.applicationContext ?: context
-    ensureSystemMediaMonitoring(appCtx)
-
-    // Refresh active media notifications from ToolboxMediaListenerService if connected
-    ToolboxMediaListenerService.activeInstance?.refreshCachedMediaNotifications()
-
-    val collectedControllers = mutableListOf<MediaController>()
     try {
-      val msm = appCtx.getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager
-      if (msm != null) {
-        val component = ComponentName(appCtx, ToolboxMediaListenerService::class.java)
-        val active = try {
-          msm.getActiveSessions(component)
-        } catch (_: SecurityException) {
-          try {
-            msm.getActiveSessions(null)
-          } catch (_: Throwable) {
-            emptyList()
-          }
-        }
-        collectedControllers.addAll(active)
-      }
-    } catch (_: Throwable) {}
+      val appCtx = context.applicationContext ?: context
+      ensureSystemMediaMonitoring(appCtx)
 
-    // Also build MediaControllers from any active media notification tokens not already in list
-    for (cachedNotif in activeMediaNotifications.values) {
-      val token = cachedNotif.sessionToken ?: continue
+      // Refresh active media notifications from ToolboxMediaListenerService if connected
+      ToolboxMediaListenerService.activeInstance?.refreshCachedMediaNotifications()
+
+      val collectedControllers = mutableListOf<MediaController>()
       try {
-        val ctrl = MediaController(appCtx, token)
-        if (collectedControllers.none { it.packageName == ctrl.packageName }) {
-          collectedControllers.add(ctrl)
+        val msm = appCtx.getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager
+        if (msm != null) {
+          val component = ComponentName(appCtx, ToolboxMediaListenerService::class.java)
+          val active = try {
+            msm.getActiveSessions(component)
+          } catch (_: SecurityException) {
+            try {
+              msm.getActiveSessions(null)
+            } catch (_: Throwable) {
+              emptyList()
+            }
+          }
+          collectedControllers.addAll(active)
         }
       } catch (_: Throwable) {}
-    }
 
-    bindEngineExternalControllers(appCtx, collectedControllers)
-    syncFromExternalMediaControllers(appCtx, collectedControllers)
+      // Also build MediaControllers from any active media notification tokens not already in list
+      for (cachedNotif in activeMediaNotifications.values) {
+        val token = cachedNotif.sessionToken ?: continue
+        try {
+          val ctrl = MediaController(appCtx, token)
+          if (collectedControllers.none { it.packageName == ctrl.packageName }) {
+            collectedControllers.add(ctrl)
+          }
+        } catch (_: Throwable) {}
+      }
+
+      bindEngineExternalControllers(appCtx, collectedControllers)
+      syncFromExternalMediaControllers(appCtx, collectedControllers)
+    } catch (_: Throwable) {}
   }
 
   internal fun syncFromExternalMediaControllers(
     context: Context,
     controllers: List<MediaController>?,
   ) {
-    val ownPkg = context.packageName
-    val externalControllers = controllers.orEmpty().filter { it.packageName != ownPkg }
-    val internalPlaying = activeSessionState?.let { !it.isReleased && it.isPlaying } == true
-    val audioManager = try {
-      context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-    } catch (_: Throwable) {
-      null
-    }
-    val systemMusicStreamActive = !internalPlaying && (audioManager?.isMusicActive == true)
+    try {
+      val ownPkg = context.packageName
+      val externalControllers = controllers.orEmpty().filter {
+        try {
+          it.packageName != ownPkg
+        } catch (_: Throwable) {
+          false
+        }
+      }
+      val internalPlaying = activeSessionState?.let { !it.isReleased && it.isPlaying } == true
+      val audioManager = try {
+        context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+      } catch (_: Throwable) {
+        null
+      }
+      val systemMusicStreamActive = !internalPlaying && (audioManager?.isMusicActive == true)
 
-    if (externalControllers.isEmpty()) {
-      // Check cached media notifications from ToolboxMediaListenerService
-      val latestNotif = activeMediaNotifications.values
-        .filter { it.packageName != ownPkg }
-        .maxByOrNull { (if (it.isOngoing) 1_000_000_000_000L else 0L) + it.postedAtMs }
-      if (latestNotif != null) {
-        val appLabel = resolveAppLabel(context, latestNotif.packageName)
-        val artBmp = latestNotif.artworkBitmap
-          ?: findLocalOrMediaStoreArtworkBitmap(context, latestNotif.title, latestNotif.artist, latestNotif.album)
-          ?: loadAppIconBitmap(context, latestNotif.packageName)
-        updateExternalSystemMediaFromMetadata(
-          title = latestNotif.title.ifBlank { appLabel },
-          artist = latestNotif.artist,
-          album = latestNotif.album,
-          sourcePackage = latestNotif.packageName,
-          sourceAppName = appLabel,
-          isPlaying = latestNotif.isOngoing || systemMusicStreamActive,
-          artworkBitmap = artBmp,
-          notificationColorRgb = latestNotif.colorRgb,
-        )
+      if (externalControllers.isEmpty()) {
+        // Check cached media notifications from ToolboxMediaListenerService
+        val latestNotif = activeMediaNotifications.values
+          .filter { it.packageName != ownPkg }
+          .maxByOrNull { (if (it.isOngoing) 1_000_000_000_000L else 0L) + it.postedAtMs }
+        if (latestNotif != null) {
+          val appLabel = resolveAppLabel(context, latestNotif.packageName)
+          val artBmp = latestNotif.artworkBitmap
+            ?: findLocalOrMediaStoreArtworkBitmap(context, latestNotif.title, latestNotif.artist, latestNotif.album)
+            ?: loadAppIconBitmap(context, latestNotif.packageName)
+          updateExternalSystemMediaFromMetadata(
+            title = latestNotif.title.ifBlank { appLabel },
+            artist = latestNotif.artist,
+            album = latestNotif.album,
+            sourcePackage = latestNotif.packageName,
+            sourceAppName = appLabel,
+            isPlaying = latestNotif.isOngoing || systemMusicStreamActive,
+            artworkBitmap = artBmp,
+            notificationColorRgb = latestNotif.colorRgb,
+          )
+          return
+        }
+
+        // Check standard Android music broadcast info
+        val broadcastInfo = lastBroadcastMediaInfo
+        if (broadcastInfo != null) {
+          val effectivePlaying = broadcastInfo.isPlaying && systemMusicStreamActive || broadcastInfo.isPlaying
+          externalSystemMediaInfo = broadcastInfo.copy(isPlaying = effectivePlaying)
+          return
+        }
+
+        // Check active external AudioPlaybackConfiguration package
+        val activeExternalPkg = findActiveExternalPlaybackPackage(context)
+        if (activeExternalPkg != null) {
+          val appLabel = resolveAppLabel(context, activeExternalPkg)
+          val iconBmp = loadAppIconBitmap(context, activeExternalPkg)
+          updateExternalSystemMediaFromMetadata(
+            title = appLabel.ifBlank { "System Media" },
+            sourcePackage = activeExternalPkg,
+            sourceAppName = appLabel,
+            isPlaying = true,
+            artworkBitmap = iconBmp,
+          )
+          return
+        }
+
+        if (externalSystemMediaInfo != null) {
+          externalSystemMediaInfo = externalSystemMediaInfo?.copy(isPlaying = false)
+        }
         return
       }
 
-      // Check standard Android music broadcast info
-      val broadcastInfo = lastBroadcastMediaInfo
-      if (broadcastInfo != null) {
-        val effectivePlaying = broadcastInfo.isPlaying && systemMusicStreamActive || broadcastInfo.isPlaying
-        externalSystemMediaInfo = broadcastInfo.copy(isPlaying = effectivePlaying)
-        return
+      fun isControllerPlaying(ctrl: MediaController): Boolean {
+        return try {
+          val st = ctrl.playbackState?.state
+          if (isPlaybackStateActive(st)) return true
+          val notif = activeMediaNotifications[ctrl.packageName]
+          val explicitlyStoppedOrPaused =
+            st == PlaybackState.STATE_PAUSED ||
+              st == PlaybackState.STATE_STOPPED ||
+              st == PlaybackState.STATE_ERROR
+          !explicitlyStoppedOrPaused && (notif?.isOngoing == true || systemMusicStreamActive)
+        } catch (_: Throwable) {
+          false
+        }
       }
 
-      // Check active external AudioPlaybackConfiguration package
-      val activeExternalPkg = findActiveExternalPlaybackPackage(context)
-      if (activeExternalPkg != null) {
-        val appLabel = resolveAppLabel(context, activeExternalPkg)
-        val iconBmp = loadAppIconBitmap(context, activeExternalPkg)
-        updateExternalSystemMediaFromMetadata(
-          title = appLabel.ifBlank { "System Media" },
-          sourcePackage = activeExternalPkg,
-          sourceAppName = appLabel,
-          isPlaying = true,
-          artworkBitmap = iconBmp,
-        )
-        return
-      }
+      val chosen = externalControllers.firstOrNull { isControllerPlaying(it) }
+        ?: externalControllers.first()
 
-      if (externalSystemMediaInfo != null) {
-        externalSystemMediaInfo = externalSystemMediaInfo?.copy(isPlaying = false)
-      }
-      return
-    }
+      val playing = isControllerPlaying(chosen) ||
+        (systemMusicStreamActive && externalControllers.size == 1 && chosen.playbackState?.state != PlaybackState.STATE_STOPPED)
+      val meta = try { chosen.metadata } catch (_: Throwable) { null }
+      val desc = try { meta?.description } catch (_: Throwable) { null }
+      val cachedNotif = activeMediaNotifications[chosen.packageName]
 
-    fun isControllerPlaying(ctrl: MediaController): Boolean {
-      val st = ctrl.playbackState?.state
-      if (isPlaybackStateActive(st)) return true
-      val notif = activeMediaNotifications[ctrl.packageName]
-      val explicitlyStoppedOrPaused =
-        st == PlaybackState.STATE_PAUSED ||
-          st == PlaybackState.STATE_STOPPED ||
-          st == PlaybackState.STATE_ERROR
-      if (!explicitlyStoppedOrPaused && (notif?.isOngoing == true || systemMusicStreamActive)) {
-        return true
-      }
-      return false
-    }
+      val title = meta?.getString(MediaMetadata.METADATA_KEY_TITLE)
+        ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
+        ?: desc?.title?.toString()
+        ?: cachedNotif?.title
+        ?: ""
+      val artist = meta?.getString(MediaMetadata.METADATA_KEY_ARTIST)
+        ?: meta?.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
+        ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
+        ?: desc?.subtitle?.toString()
+        ?: cachedNotif?.artist
+        ?: ""
+      val album = meta?.getString(MediaMetadata.METADATA_KEY_ALBUM)
+        ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION)
+        ?: desc?.description?.toString()
+        ?: cachedNotif?.album
+        ?: ""
+      val genre = meta?.getString(MediaMetadata.METADATA_KEY_GENRE) ?: ""
 
-    val chosen = externalControllers.firstOrNull { isControllerPlaying(it) }
-      ?: externalControllers.first()
+      val artUri = meta?.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
+        ?: meta?.getString(MediaMetadata.METADATA_KEY_ART_URI)
+        ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)
+        ?: desc?.iconUri?.toString()
 
-    val playing = isControllerPlaying(chosen) ||
-      (systemMusicStreamActive && externalControllers.size == 1 && chosen.playbackState?.state != PlaybackState.STATE_STOPPED)
-    val meta = chosen.metadata
-    val desc = meta?.description
-    val cachedNotif = activeMediaNotifications[chosen.packageName]
+      val artBitmap = try { meta?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART) } catch (_: Throwable) { null }
+        ?: try { meta?.getBitmap(MediaMetadata.METADATA_KEY_ART) } catch (_: Throwable) { null }
+        ?: try { meta?.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON) } catch (_: Throwable) { null }
+        ?: try { desc?.iconBitmap } catch (_: Throwable) { null }
+        ?: loadArtworkBitmapFromUri(context, artUri)
+        ?: cachedNotif?.artworkBitmap
+        ?: findLocalOrMediaStoreArtworkBitmap(context, title, artist, album)
+        ?: (if (cachedNotif?.colorRgb == null) loadAppIconBitmap(context, chosen.packageName) else null)
 
-    val title = meta?.getString(MediaMetadata.METADATA_KEY_TITLE)
-      ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
-      ?: desc?.title?.toString()
-      ?: cachedNotif?.title
-      ?: ""
-    val artist = meta?.getString(MediaMetadata.METADATA_KEY_ARTIST)
-      ?: meta?.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
-      ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
-      ?: desc?.subtitle?.toString()
-      ?: cachedNotif?.artist
-      ?: ""
-    val album = meta?.getString(MediaMetadata.METADATA_KEY_ALBUM)
-      ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION)
-      ?: desc?.description?.toString()
-      ?: cachedNotif?.album
-      ?: ""
-    val genre = meta?.getString(MediaMetadata.METADATA_KEY_GENRE) ?: ""
+      val appLabel = resolveAppLabel(context, chosen.packageName)
 
-    val artUri = meta?.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
-      ?: meta?.getString(MediaMetadata.METADATA_KEY_ART_URI)
-      ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)
-      ?: desc?.iconUri?.toString()
-
-    val artBitmap = meta?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
-      ?: meta?.getBitmap(MediaMetadata.METADATA_KEY_ART)
-      ?: meta?.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
-      ?: desc?.iconBitmap
-      ?: loadArtworkBitmapFromUri(context, artUri)
-      ?: cachedNotif?.artworkBitmap
-      ?: findLocalOrMediaStoreArtworkBitmap(context, title, artist, album)
-      ?: (if (cachedNotif?.colorRgb == null) loadAppIconBitmap(context, chosen.packageName) else null)
-
-    val appLabel = resolveAppLabel(context, chosen.packageName)
-
-    updateExternalSystemMediaFromMetadata(
-      title = title.ifBlank { appLabel },
-      artist = artist,
-      album = album,
-      genre = genre,
-      sourcePackage = chosen.packageName,
-      sourceAppName = appLabel,
-      isPlaying = playing,
-      artworkBitmap = artBitmap,
-      notificationColorRgb = cachedNotif?.colorRgb,
-    )
+      updateExternalSystemMediaFromMetadata(
+        title = title.ifBlank { appLabel },
+        artist = artist,
+        album = album,
+        genre = genre,
+        sourcePackage = chosen.packageName,
+        sourceAppName = appLabel,
+        isPlaying = playing,
+        artworkBitmap = artBitmap,
+        notificationColorRgb = cachedNotif?.colorRgb,
+      )
+    } catch (_: Throwable) {}
   }
 
   /**
@@ -7419,63 +7430,78 @@ class ToolboxMediaListenerService : NotificationListenerService() {
   private fun parseMediaStatusBarNotification(
     sbn: StatusBarNotification,
   ): MusicPlayerEngine.CachedExternalMediaNotification? {
-    val notification = sbn.notification ?: return null
-    val pkg = sbn.packageName ?: return null
-    if (pkg == packageName) return null
-    val extras = notification.extras ?: return null
-    val template = extras.getString(Notification.EXTRA_TEMPLATE).orEmpty()
-    val isMediaNotification = notification.category == Notification.CATEGORY_TRANSPORT ||
-      extras.containsKey(Notification.EXTRA_MEDIA_SESSION) ||
-      template.contains("Media", ignoreCase = true)
-    if (!isMediaNotification) return null
+    return try {
+      val notification = sbn.notification ?: return null
+      val pkg = sbn.packageName ?: return null
+      if (pkg == packageName) return null
+      val extras = notification.extras ?: return null
+      val template = try { extras.getString(Notification.EXTRA_TEMPLATE).orEmpty() } catch (_: Throwable) { "" }
+      val hasMediaSession = try { extras.containsKey(Notification.EXTRA_MEDIA_SESSION) } catch (_: Throwable) { false }
+      val isMediaNotification = notification.category == Notification.CATEGORY_TRANSPORT ||
+        hasMediaSession ||
+        template.contains("Media", ignoreCase = true)
+      if (!isMediaNotification) return null
 
-    val title = (extras.getCharSequence(Notification.EXTRA_TITLE)
-      ?: extras.getCharSequence(Notification.EXTRA_TITLE_BIG))?.toString().orEmpty()
-    val artist = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
-    val album = (extras.getCharSequence(Notification.EXTRA_SUB_TEXT)
-      ?: extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT))?.toString().orEmpty()
-    val isOngoing = (notification.flags and Notification.FLAG_ONGOING_EVENT) != 0
-    val colorRgb = notification.color.takeIf { it != 0 }
-    val artworkBitmap = MusicPlayerEngine.extractNotificationArtworkBitmap(applicationContext, notification)
-    val sessionToken = MusicPlayerEngine.extractNotificationMediaSessionToken(notification)
+      val title = try {
+        (extras.getCharSequence(Notification.EXTRA_TITLE)
+          ?: extras.getCharSequence(Notification.EXTRA_TITLE_BIG))?.toString().orEmpty()
+      } catch (_: Throwable) { "" }
+      val artist = try {
+        extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
+      } catch (_: Throwable) { "" }
+      val album = try {
+        (extras.getCharSequence(Notification.EXTRA_SUB_TEXT)
+          ?: extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT))?.toString().orEmpty()
+      } catch (_: Throwable) { "" }
+      val isOngoing = (notification.flags and Notification.FLAG_ONGOING_EVENT) != 0
+      val colorRgb = notification.color.takeIf { it != 0 }
+      val artworkBitmap = MusicPlayerEngine.extractNotificationArtworkBitmap(applicationContext, notification)
+      val sessionToken = MusicPlayerEngine.extractNotificationMediaSessionToken(notification)
 
-    return MusicPlayerEngine.CachedExternalMediaNotification(
-      packageName = pkg,
-      title = title,
-      artist = artist,
-      album = album,
-      isOngoing = isOngoing,
-      colorRgb = colorRgb,
-      artworkBitmap = artworkBitmap,
-      sessionToken = sessionToken,
-      postedAtMs = sbn.postTime.takeIf { it > 0L } ?: System.currentTimeMillis(),
-    )
+      MusicPlayerEngine.CachedExternalMediaNotification(
+        packageName = pkg,
+        title = title,
+        artist = artist,
+        album = album,
+        isOngoing = isOngoing,
+        colorRgb = colorRgb,
+        artworkBitmap = artworkBitmap,
+        sessionToken = sessionToken,
+        postedAtMs = sbn.postTime.takeIf { it > 0L } ?: System.currentTimeMillis(),
+      )
+    } catch (_: Throwable) {
+      null
+    }
   }
 
   override fun onNotificationPosted(sbn: StatusBarNotification?) {
     super.onNotificationPosted(sbn)
     if (sbn == null) return
-    val parsed = parseMediaStatusBarNotification(sbn) ?: return
-    MusicPlayerEngine.activeMediaNotifications[parsed.packageName] = parsed
-
     try {
-      val msm = sessionManager ?: (getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager)
-      if (msm != null) {
-        val component = ComponentName(this, ToolboxMediaListenerService::class.java)
-        val controllers = msm.getActiveSessions(component)
-        bindExternalControllers(controllers)
-      }
-    } catch (_: Throwable) {}
+      val parsed = parseMediaStatusBarNotification(sbn) ?: return
+      MusicPlayerEngine.activeMediaNotifications[parsed.packageName] = parsed
 
-    MusicPlayerEngine.syncExternalSystemMediaSessions(applicationContext)
+      try {
+        val msm = sessionManager ?: (getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager)
+        if (msm != null) {
+          val component = ComponentName(this, ToolboxMediaListenerService::class.java)
+          val controllers = msm.getActiveSessions(component)
+          bindExternalControllers(controllers)
+        }
+      } catch (_: Throwable) {}
+
+      MusicPlayerEngine.syncExternalSystemMediaSessions(applicationContext)
+    } catch (_: Throwable) {}
   }
 
   override fun onNotificationRemoved(sbn: StatusBarNotification?) {
     super.onNotificationRemoved(sbn)
-    val pkg = sbn?.packageName ?: return
-    if (pkg == packageName) return
-    MusicPlayerEngine.activeMediaNotifications.remove(pkg)
-    MusicPlayerEngine.syncExternalSystemMediaSessions(applicationContext)
+    try {
+      val pkg = sbn?.packageName ?: return
+      if (pkg == packageName) return
+      MusicPlayerEngine.activeMediaNotifications.remove(pkg)
+      MusicPlayerEngine.syncExternalSystemMediaSessions(applicationContext)
+    } catch (_: Throwable) {}
   }
 
   private fun bindExternalControllers(controllers: List<MediaController>?) {
