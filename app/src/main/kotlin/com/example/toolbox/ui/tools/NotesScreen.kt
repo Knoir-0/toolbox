@@ -427,7 +427,7 @@ fun NotesScreen(
         if (pinnedNotesCount > 0) {
           "$activeNotesCount $noteWord • $pinnedNotesCount pinned"
         } else {
-          "$activeNotesCount $noteWord • Offline board"
+          "$activeNotesCount $noteWord"
         }
       }
       NotesFilter.Pinned -> "$pinnedNotesCount pinned"
@@ -1769,14 +1769,6 @@ private fun NotesFilterChipsRow(
         ),
         modifier = Modifier.testTag("notes_filter_trash"),
       )
-
-      FilterChip(
-        selected = false,
-        onClick = onManageLabels,
-        label = { Text("+ Label") },
-        shape = RoundedCornerShape(20.dp),
-        modifier = Modifier.testTag("notes_add_label_chip"),
-      )
     }
 
     // Pinned floating [# per row] + [Manage Labels] buttons on the right edge of the pill bar
@@ -2156,57 +2148,11 @@ fun NoteCard(
                   )
                 } else {
                   DropdownMenuItem(
-                    text = { Text("Edit") },
-                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                    onClick = {
-                      noteMenuExpanded = false
-                      noteActions.onEdit(note)
-                    },
-                  )
-                  DropdownMenuItem(
-                    text = { Text(if (note.isPinned) "Unpin" else "Pin") },
-                    leadingIcon = {
-                      Icon(
-                        if (note.isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
-                        contentDescription = null,
-                      )
-                    },
-                    onClick = {
-                      noteMenuExpanded = false
-                      onTogglePin()
-                    },
-                  )
-                  DropdownMenuItem(
-                    text = { Text("Change Color") },
-                    leadingIcon = { Icon(Icons.Default.Palette, contentDescription = null) },
-                    onClick = {
-                      noteMenuExpanded = false
-                      noteActions.onChangeColor(note)
-                    },
-                  )
-                  HorizontalDivider()
-                  DropdownMenuItem(
                     text = { Text("Copy Text") },
                     leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                     onClick = {
                       noteMenuExpanded = false
                       noteActions.onCopyText(note)
-                    },
-                  )
-                  DropdownMenuItem(
-                    text = { Text("Add to To Do") },
-                    leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) },
-                    onClick = {
-                      noteMenuExpanded = false
-                      noteActions.onSendToTodo(note)
-                    },
-                  )
-                  DropdownMenuItem(
-                    text = { Text("Export as File") },
-                    leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
-                    onClick = {
-                      noteMenuExpanded = false
-                      noteActions.onExportAsFile(note)
                     },
                   )
                   DropdownMenuItem(
@@ -2219,20 +2165,7 @@ fun NoteCard(
                   )
                   HorizontalDivider()
                   DropdownMenuItem(
-                    text = { Text(if (note.isArchived) "Unarchive" else "Archive") },
-                    leadingIcon = {
-                      Icon(
-                        if (note.isArchived) Icons.Default.Unarchive else Icons.Default.Archive,
-                        contentDescription = null,
-                      )
-                    },
-                    onClick = {
-                      noteMenuExpanded = false
-                      noteActions.onToggleArchive(note)
-                    },
-                  )
-                  DropdownMenuItem(
-                    text = { Text("Move to trash", color = MaterialTheme.colorScheme.error) },
+                    text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
                     leadingIcon = {
                       Icon(
                         Icons.Default.Delete,

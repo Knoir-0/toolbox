@@ -419,6 +419,7 @@ data class ConversionRoute(
   val preferredBackend: ConverterBackend,
   val fallbackBackend: ConverterBackend? = null,
   val description: String,
+  val usesOcr: Boolean = false,
 ) {
   val isCrossCategory: Boolean
     get() = source.category != target.category
@@ -548,6 +549,7 @@ object FileConverterEngine {
       preferred: ConverterBackend,
       fallback: ConverterBackend? = null,
       description: String,
+      usesOcr: Boolean = false,
     ) {
       if (source == target) return
       val targetMap = map.getOrPut(source) { linkedMapOf() }
@@ -557,6 +559,7 @@ object FileConverterEngine {
         preferredBackend = preferred,
         fallbackBackend = fallback,
         description = description,
+        usesOcr = usesOcr,
       )
     }
 
@@ -601,6 +604,7 @@ object FileConverterEngine {
           preferred = if (src in NATIVE_DECODABLE_IMAGES) ConverterBackend.NATIVE else ConverterBackend.FFMPEG,
           fallback = if (src in NATIVE_DECODABLE_IMAGES) ConverterBackend.FFMPEG else null,
           description = "On-device ML Kit OCR text & document extraction (${src.displayName} → ${docDst.displayName})",
+          usesOcr = true,
         )
       }
     }
@@ -622,6 +626,7 @@ object FileConverterEngine {
         preferred = ConverterBackend.NATIVE,
         fallback = null,
         description = "Native PdfRenderer + on-device ML Kit OCR document extraction (PDF → ${docDst.displayName})",
+        usesOcr = true,
       )
     }
 

@@ -1997,13 +1997,14 @@ object SearchEngine {
         CameraCaptureMode.VIDEO -> "Video recording with live timer, torch control, and gallery integration"
         CameraCaptureMode.SCANNER -> "Real-time QR code, Aztec, Data Matrix, EAN-13, UPC-A, and Code 128 barcode scanner"
         CameraCaptureMode.NOTE -> "Optical Character Recognition (OCR) document scanner with contrast enhancement and direct save to Notes"
+        CameraCaptureMode.VISION -> "Live on-device ML Kit image labeling and visual scene tagging accuracy inspector"
       }
       val score = scoreTextMatch(
         normalizedQuery = normalizedQuery,
         tokens = tokens,
         primaryText = "Camera ${mode.displayName} Mode",
         secondaryText = description,
-        keywordsText = "camera photo video qr barcode scanner ocr note document",
+        keywordsText = "camera photo video qr barcode scanner ocr note document vision ml kit tagging labels eye",
         baseWeight = 120,
       )
       if (score > 0) {

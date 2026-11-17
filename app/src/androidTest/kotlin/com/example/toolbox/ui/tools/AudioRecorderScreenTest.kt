@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -158,6 +159,14 @@ class AudioRecorderScreenTest {
     composeTestRule.onNodeWithTag("recording_menu_${wavFile.name}").performClick()
     composeTestRule.waitForIdle()
 
+    // Verify Play, Archive, and Add Note options are removed, and Music is shown
+    composeTestRule.onNodeWithTag("recording_play_${wavFile.name}").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("action_compress_to_archive").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("action_save_to_notes").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("action_play_in_music")
+      .assertIsDisplayed()
+      .assertTextEquals("Music")
+
     composeTestRule.onNodeWithTag("action_edit_audio").assertIsDisplayed().performClick()
     composeTestRule.waitForIdle()
 
@@ -231,6 +240,16 @@ class AudioRecorderScreenTest {
       .assertIsDisplayed()
       .assertContentDescriptionEquals("Record device and microphone audio")
     composeTestRule.onNodeWithTag("fab_both_audio_icon", useUnmergedTree = true).assertIsDisplayed()
+
+    val outerDeviceIcon = composeTestRule.onNodeWithTag("fab_both_device_icon", useUnmergedTree = true)
+    val innerMicIcon = composeTestRule.onNodeWithTag("fab_both_mic_icon", useUnmergedTree = true)
+    outerDeviceIcon.assertIsDisplayed()
+    innerMicIcon.assertIsDisplayed()
+
+    val outerDeviceBounds = outerDeviceIcon.fetchSemanticsNode().boundsInRoot
+    val innerMicBounds = innerMicIcon.fetchSemanticsNode().boundsInRoot
+    assertTrue("Microphone icon should be overlaid inside the device icon horizontally", innerMicBounds.left > outerDeviceBounds.left && innerMicBounds.right < outerDeviceBounds.right)
+    assertTrue("Microphone icon should be overlaid inside the device icon vertically", innerMicBounds.top > outerDeviceBounds.top && innerMicBounds.bottom < outerDeviceBounds.bottom)
 
     val bothBounds = bothFabNode.fetchSemanticsNode().boundsInRoot
     val micBounds = micFabNode.fetchSemanticsNode().boundsInRoot

@@ -11,6 +11,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
@@ -79,8 +81,28 @@ class MusicPlayerScreenTest {
     }
     composeTestRule.waitForIdle()
 
+    // 0. Home Pill is at the front of the pill list, selected by default, displays 6 generated playlists, and refreshes on pull-down
+    composeTestRule.onNodeWithTag("music_tab_HOME").assertIsDisplayed().assertIsSelected()
+    composeTestRule.onNodeWithTag("home_list_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("home_playlist_item_0").assertIsDisplayed()
+    val session = MusicPlayerEngine.getActivePlaybackSession()
+    assertNotNull(session)
+    assertEquals(MusicLibraryTab.HOME, session!!.tabOrder.first())
+    assertEquals(6, session.homePlaylists.size)
+    val initialFirstMixName = session.homePlaylists.first().name
+    composeTestRule.onNodeWithText(initialFirstMixName).assertIsDisplayed()
+
+    // Pull down to refresh on Home tab -> generates 6 fresh playlists
+    composeTestRule.onNodeWithTag("home_pull_to_refresh").performTouchInput {
+      swipeDown(startY = top + 60f, endY = bottom - 60f)
+    }
+    composeTestRule.waitForIdle()
+    assertTrue(session.homeRefreshGeneration >= 1)
+    assertEquals(6, session.homePlaylists.size)
+
     // 1. Artists List & Card View
-    composeTestRule.onNodeWithTag("music_tab_ARTISTS").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_tab_ARTISTS").performClick()
+    composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("music_play_all_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("music_shuffle_all_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("artist_list_view").assertIsDisplayed()
@@ -168,8 +190,10 @@ class MusicPlayerScreenTest {
     val sortBounds = composeTestRule.onNodeWithTag("music_sort_button").fetchSemanticsNode().boundsInRoot
     assertTrue(sortBounds.top >= barBounds.top - 1f && sortBounds.bottom <= barBounds.bottom + 1f)
     assertTrue(sortBounds.center.x > barBounds.center.x)
+    val homeBoundsBefore = composeTestRule.onNodeWithTag("music_tab_HOME").fetchSemanticsNode().boundsInRoot
     val artistsBoundsBefore = composeTestRule.onNodeWithTag("music_tab_ARTISTS").fetchSemanticsNode().boundsInRoot
     val songsBoundsBefore = composeTestRule.onNodeWithTag("music_tab_SONGS").fetchSemanticsNode().boundsInRoot
+    assertTrue(homeBoundsBefore.left < artistsBoundsBefore.left)
     assertTrue(artistsBoundsBefore.left < songsBoundsBefore.left)
 
     val startLocal = Offset(
@@ -177,8 +201,8 @@ class MusicPlayerScreenTest {
       y = songsBoundsBefore.center.y - barBounds.top,
     )
     val endLocal = Offset(
-      x = artistsBoundsBefore.center.x - barBounds.left,
-      y = artistsBoundsBefore.center.y - barBounds.top,
+      x = homeBoundsBefore.center.x - barBounds.left,
+      y = homeBoundsBefore.center.y - barBounds.top,
     )
     composeTestRule.onNodeWithTag("music_category_bar").performTouchInput {
       down(startLocal)
@@ -188,9 +212,7 @@ class MusicPlayerScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    val session = MusicPlayerEngine.getActivePlaybackSession()
-    assertNotNull(session)
-    assertEquals(MusicLibraryTab.SONGS, session!!.tabOrder.first())
+    assertEquals(MusicLibraryTab.SONGS, session.tabOrder.first())
     val artistsBoundsAfter = composeTestRule.onNodeWithTag("music_tab_ARTISTS").fetchSemanticsNode().boundsInRoot
     val songsBoundsAfter = composeTestRule.onNodeWithTag("music_tab_SONGS").fetchSemanticsNode().boundsInRoot
     assertTrue(songsBoundsAfter.left < artistsBoundsAfter.left)
@@ -830,6 +852,67 @@ class MusicPlayerScreenTest {
     assertTrue(session.favoriteIds.isEmpty())
     composeTestRule.onNodeWithTag("playlist_item_Favorites").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("No tracks in this playlist yet").assertIsDisplayed()
+    composeTestRule.onNodeWithText("No favorites yet — tap the star on any song to add it here").assertIsDisplayed()
+  }
+
+  @Test
+  fun musicPlayer_contextMenuSupportsRenameAndBulkDeleteWithTypedConfirmation_andProtectsDefaultAndHomePlaylists() {
+    composeTestRule.setContent {
+      ToolboxTheme {
+        MusicPlayerScreen(
+          initialTracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS,
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    val session = MusicPlayerEngine.getActivePlaybackSession()
+    assertNotNull(session)
+
+    // 1. Home playlists do not have Delete in their context menu
+    val firstHomeMix = session!!.homePlaylists.first()
+    composeTestRule.onNodeWithTag("playlist_more_${firstHomeMix.name}").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("playlist_menu_${firstHomeMix.name}").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("playlist_menu_delete_${firstHomeMix.name}").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("playlist_more_${firstHomeMix.name}").performClick()
+    composeTestRule.waitForIdle()
+
+    // 2. Default playlists (Favorites, Most Played, Recently Played) do not have Delete
+    composeTestRule.onNodeWithTag("music_tab_PLAYLISTS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("delete_playlist_Favorites").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("playlist_more_Favorites").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("playlist_menu_delete_Favorites").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("playlist_more_Favorites").performClick()
+    composeTestRule.waitForIdle()
+
+    // 3. Rename an Artist from the Artist context menu ("Aurora Synth" -> "Aurora Prime")
+    composeTestRule.onNodeWithTag("music_tab_ARTISTS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("artist_more_Aurora Synth").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("artist_menu_rename_Aurora Synth").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("rename_music_item_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("rename_music_item_input").performTextInput(" Prime")
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("confirm_rename_music_item_button").performClick()
+    composeTestRule.waitForIdle()
+    assertTrue(session.allTracks.any { it.artist == "Aurora Synth Prime" })
+
+    // 4. Bulk delete an Artist requires typing the artist name in the confirmation modal
+    composeTestRule.onNodeWithTag("artist_more_Aurora Synth Prime").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("artist_menu_delete_Aurora Synth Prime").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("bulk_delete_music_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("confirm_bulk_delete_button").assertIsNotEnabled()
+
+    // Typing wrong name keeps confirm button disabled
+    composeTestRule.onNodeWithTag("bulk_delete_name_input").performTextInput("Wrong Name")
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("confirm_bulk_delete_button").assertIsNotEnabled()
   }
 }

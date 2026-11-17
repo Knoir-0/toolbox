@@ -173,7 +173,7 @@ class CameraScreenTest {
     assertTrue(adjustmentsBounds.center.y >= shutterRowBounds.top && adjustmentsBounds.center.y <= shutterRowBounds.bottom)
     assertTrue(filtersBounds.center.y >= shutterRowBounds.top && filtersBounds.center.y <= shutterRowBounds.bottom)
 
-    // Select Note mode, scan a document via OCR, and verify its contents are added to the Notes tool
+    // Select Note mode, scan a document via OCR, and verify it is shown for review first before adding to Notes
     composeTestRule.onNodeWithTag("mode_tab_NOTE").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("camera_note_reticle_overlay").assertIsDisplayed()
@@ -183,13 +183,44 @@ class CameraScreenTest {
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("note_scanner_detected_card").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("note_scanner_saved_badge").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("note_scanner_review_badge").assertIsDisplayed()
     composeTestRule.onNodeWithTag("note_scanner_detected_title").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("note_scanner_add_note_button").assertIsDisplayed()
 
+    // Verify note has NOT been added before pressing Add Note
+    val notesBeforeConfirm = SharedPreferencesNotesRepository(composeTestRule.activity).loadNotes()
+    assertTrue(notesBeforeConfirm.none { it.title == "Product Roadmap Sync" })
+
+    // Press Add Note after reviewing contents
+    composeTestRule.onNodeWithTag("note_scanner_add_note_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("note_scanner_saved_badge").assertIsDisplayed()
     val savedNotes = SharedPreferencesNotesRepository(composeTestRule.activity).loadNotes()
     assertTrue(savedNotes.any { it.title == "Product Roadmap Sync" && it.labels.contains("Scanned") })
 
-    // Open Notes directly from the scanned note card and verify the scanned note is displayed in the Notes tool
+    // Select Vision mode (ML Kit live tagging accuracy inspector)
+    composeTestRule.onNodeWithTag("mode_tab_VISION").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_vision_reticle_overlay").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("vision_controls_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_shutter_vision_icon", useUnmergedTree = true).assertIsDisplayed()
+
+    // Trigger ML Kit Vision analysis via the shutter button and verify live accuracy card & threshold controls
+    composeTestRule.onNodeWithTag("camera_shutter_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("vision_detected_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("vision_gallery_threshold_badge").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("vision_tags_list").assertIsDisplayed()
+
+    // Switch threshold to >=80% Gallery strict mode
+    composeTestRule.onNodeWithTag("vision_threshold_GALLERY_80").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("vision_detected_card").assertIsDisplayed()
+
+    // Switch back to Note mode and open Notes directly from the scanned note card
+    composeTestRule.onNodeWithTag("mode_tab_NOTE").performClick()
+    composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("note_scanner_open_notes_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("notes_screen").assertIsDisplayed()

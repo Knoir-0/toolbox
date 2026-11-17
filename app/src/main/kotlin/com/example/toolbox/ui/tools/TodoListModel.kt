@@ -42,6 +42,13 @@ data class TodoSubTask(
 }
 
 /**
+ * Maximum future schedule horizon (24 hours in milliseconds) for a scheduled task to remain visible
+ * in the main tasks view. Tasks scheduled further than 24 hours in the future are hidden from the
+ * main tasks view and only visible in the scheduled view.
+ */
+const val MAIN_TASKS_SCHEDULE_HORIZON_MILLIS = 24L * 60L * 60L * 1000L
+
+/**
  * Represents a single todo task, optionally containing subtasks, notes, and a scheduled date/time range.
  */
 data class TodoItem(
@@ -57,6 +64,16 @@ data class TodoItem(
 ) {
   val isScheduled: Boolean
     get() = scheduledAtMillis != null
+
+  fun isScheduledBeyondHorizon(
+    nowMillis: Long = System.currentTimeMillis(),
+    horizonMillis: Long = MAIN_TASKS_SCHEDULE_HORIZON_MILLIS,
+  ): Boolean = scheduledAtMillis != null && (scheduledAtMillis - nowMillis) > horizonMillis
+
+  fun isVisibleInMainTasksView(
+    nowMillis: Long = System.currentTimeMillis(),
+    horizonMillis: Long = MAIN_TASKS_SCHEDULE_HORIZON_MILLIS,
+  ): Boolean = !isScheduledBeyondHorizon(nowMillis, horizonMillis)
 
   fun isDue(nowMillis: Long = System.currentTimeMillis()): Boolean =
     scheduledAtMillis != null && nowMillis >= scheduledAtMillis
@@ -168,12 +185,8 @@ data class TodoHistorySnapshot(
   val completedTasks: List<TodoItem> = emptyList(),
 )
 
-const val MIN_TODO_GRID_COLUMNS = 2
-const val MAX_TODO_GRID_COLUMNS = 4
-const val DEFAULT_TODO_GRID_COLUMNS = 2
-
 /**
- * Repository interface for saving and retrieving tasks, the daily completed count, and view preferences.
+ * Repository interface for saving and retrieving tasks and the daily completed count.
  */
 interface TodoListRepository {
   fun loadTasks(): List<TodoItem>
@@ -184,10 +197,6 @@ interface TodoListRepository {
   fun saveCompletedTasks(tasks: List<TodoItem>, currentDate: String = getTodayDateKey())
   fun loadSavedTasks(): List<TodoItem>
   fun saveSavedTasks(tasks: List<TodoItem>)
-  fun isGridView(): Boolean = false
-  fun setGridView(isGrid: Boolean) {}
-  fun getGridColumnsPerRow(): Int = DEFAULT_TODO_GRID_COLUMNS
-  fun setGridColumnsPerRow(columns: Int) {}
 }
 
 /**
@@ -199,14 +208,10 @@ class InMemoryTodoListRepository(
   private var completedCount: Int = 0,
   initialCompletedTasks: List<TodoItem> = emptyList(),
   initialSavedTasks: List<TodoItem> = emptyList(),
-  initialGridView: Boolean = false,
-  initialGridColumnsPerRow: Int = DEFAULT_TODO_GRID_COLUMNS,
 ) : TodoListRepository {
   private val tasks = initialTasks.toMutableList()
   private val completedTasksList = initialCompletedTasks.toMutableList()
   private val savedTasksList = initialSavedTasks.toMutableList()
-  private var gridView = initialGridView
-  private var gridColumnsPerRow = initialGridColumnsPerRow.coerceIn(MIN_TODO_GRID_COLUMNS, MAX_TODO_GRID_COLUMNS)
 
   override fun loadTasks(): List<TodoItem> = tasks.toList()
 
@@ -242,18 +247,6 @@ class InMemoryTodoListRepository(
     savedTasksList.clear()
     savedTasksList.addAll(tasks)
   }
-
-  override fun isGridView(): Boolean = gridView
-
-  override fun setGridView(isGrid: Boolean) {
-    gridView = isGrid
-  }
-
-  override fun getGridColumnsPerRow(): Int = gridColumnsPerRow
-
-  override fun setGridColumnsPerRow(columns: Int) {
-    gridColumnsPerRow = columns.coerceIn(MIN_TODO_GRID_COLUMNS, MAX_TODO_GRID_COLUMNS)
-  }
 }
 
 /**
@@ -270,8 +263,6 @@ class SharedPreferencesTodoListRepository(
     const val KEY_COMPLETED_TODAY_COUNT = "completed_today_count"
     const val KEY_COMPLETED_TASKS_JSON = "completed_tasks_json"
     const val KEY_SAVED_TASKS_JSON = "saved_tasks_json"
-    const val KEY_IS_GRID_VIEW = "is_grid_view"
-    const val KEY_GRID_COLUMNS_PER_ROW = "grid_columns_per_row"
   }
 
   constructor(context: Context) : this(
@@ -362,25 +353,6 @@ class SharedPreferencesTodoListRepository(
     sharedPreferences.edit()
       .putString(KEY_SAVED_TASKS_JSON, array.toString())
       .apply()
-  }
-
-  override fun isGridView(): Boolean {
-    return sharedPreferences.getBoolean(KEY_IS_GRID_VIEW, false)
-  }
-
-  override fun setGridView(isGrid: Boolean) {
-    sharedPreferences.edit().putBoolean(KEY_IS_GRID_VIEW, isGrid).apply()
-  }
-
-  override fun getGridColumnsPerRow(): Int {
-    return sharedPreferences
-      .getInt(KEY_GRID_COLUMNS_PER_ROW, DEFAULT_TODO_GRID_COLUMNS)
-      .coerceIn(MIN_TODO_GRID_COLUMNS, MAX_TODO_GRID_COLUMNS)
-  }
-
-  override fun setGridColumnsPerRow(columns: Int) {
-    val coerced = columns.coerceIn(MIN_TODO_GRID_COLUMNS, MAX_TODO_GRID_COLUMNS)
-    sharedPreferences.edit().putInt(KEY_GRID_COLUMNS_PER_ROW, coerced).apply()
   }
 }
 
@@ -673,6 +645,18 @@ object TodoListEngine {
    */
   fun removeCompletedTask(completedTasks: List<TodoItem>, taskId: String): List<TodoItem> {
     return completedTasks.filter { it.id != taskId }
+  }
+
+  /**
+   * Returns active tasks that should be shown in the main tasks view at [nowMillis],
+   * excluding scheduled tasks that are more than [horizonMillis] (default 24 hours) in the future.
+   */
+  fun getMainViewTasks(
+    tasks: List<TodoItem>,
+    nowMillis: Long = System.currentTimeMillis(),
+    horizonMillis: Long = MAIN_TASKS_SCHEDULE_HORIZON_MILLIS,
+  ): List<TodoItem> {
+    return tasks.filter { it.isVisibleInMainTasksView(nowMillis, horizonMillis) }
   }
 
   /**

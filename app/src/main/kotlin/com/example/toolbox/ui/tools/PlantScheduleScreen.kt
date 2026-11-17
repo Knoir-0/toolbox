@@ -49,11 +49,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
@@ -133,8 +131,6 @@ import java.util.UUID
 internal class PlantCardActionDispatcher(
   val onEditOrCustomize: (PlantItem) -> Unit = {},
   val onDuplicatePlant: (PlantItem) -> Unit = {},
-  val onAddScheduleToTodo: (PlantItem) -> Unit = {},
-  val onSaveGuideToNotes: (PlantItem) -> Unit = {},
   val onCopyGuide: (PlantItem) -> Unit = {},
   val onShareGuide: (PlantItem) -> Unit = {},
 )
@@ -360,25 +356,6 @@ fun PlantScheduleScreen(
       },
       onDuplicatePlant = { plant ->
         openDuplicatePlantModal(plant)
-      },
-      onAddScheduleToTodo = { plant ->
-        CrossToolActions.saveTaskToTodoList(
-          context = context,
-          title = "Garden: ${plant.name}",
-          notes = formatPlantGuidePlainText(plant),
-          subtasks = listOf(
-            "Plant ${plant.name} (${plant.plantingSummary()})",
-            "Harvest ${plant.name} (${plant.harvestSummary()})",
-          ),
-        )
-      },
-      onSaveGuideToNotes = { plant ->
-        CrossToolActions.saveTextToNotes(
-          context = context,
-          title = "${plant.name} Planting Guide",
-          content = formatPlantGuidePlainText(plant),
-          labels = listOf("Plants"),
-        )
       },
       onCopyGuide = { plant ->
         CrossToolActions.copyTextToClipboard(
@@ -1283,22 +1260,6 @@ private fun CatalogPlantItemCard(
               )
               HorizontalDivider()
               DropdownMenuItem(
-                text = { Text("Add Planting & Harvest to To Do") },
-                leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) },
-                onClick = {
-                  showItemMenu = false
-                  plantActions.onAddScheduleToTodo(plant)
-                },
-              )
-              DropdownMenuItem(
-                text = { Text("Save Plant Guide to Notes") },
-                leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
-                onClick = {
-                  showItemMenu = false
-                  plantActions.onSaveGuideToNotes(plant)
-                },
-              )
-              DropdownMenuItem(
                 text = { Text("Share") },
                 leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
                 onClick = {
@@ -1902,22 +1863,6 @@ private fun ScheduledPlantYearRow(
               modifier = Modifier.testTag("duplicate_scheduled_plant_${plant.id}"),
             )
             HorizontalDivider()
-            DropdownMenuItem(
-              text = { Text("Add Planting & Harvest to To Do") },
-              leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) },
-              onClick = {
-                showItemMenu = false
-                plantActions.onAddScheduleToTodo(plant)
-              },
-            )
-            DropdownMenuItem(
-              text = { Text("Save Plant Guide to Notes") },
-              leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
-              onClick = {
-                showItemMenu = false
-                plantActions.onSaveGuideToNotes(plant)
-              },
-            )
             DropdownMenuItem(
               text = { Text("Share") },
               leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },

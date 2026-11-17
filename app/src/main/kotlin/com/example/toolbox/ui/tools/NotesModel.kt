@@ -219,7 +219,7 @@ data class NotesHistorySnapshot(
 )
 
 const val MIN_NOTES_GRID_COLUMNS = 2
-const val MAX_NOTES_GRID_COLUMNS = 4
+const val MAX_NOTES_GRID_COLUMNS = 3
 const val DEFAULT_NOTES_GRID_COLUMNS = 2
 
 /**

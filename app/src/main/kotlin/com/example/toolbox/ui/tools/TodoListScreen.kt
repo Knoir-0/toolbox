@@ -36,20 +36,21 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
-import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
-import androidx.compose.foundation.lazy.staggeredgrid.items as staggeredItems
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -58,7 +59,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AccessTime
@@ -74,7 +74,6 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DragHandle
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -152,7 +151,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -177,6 +178,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import kotlin.math.roundToInt
 
 private enum class TodoFilterTab {
   TASKS,
@@ -185,10 +187,8 @@ private enum class TodoFilterTab {
 }
 
 internal class TodoItemActionDispatcher(
-  val onDuplicateTask: (TodoItem) -> Unit = {},
   val onUnscheduleTask: (TodoItem) -> Unit = {},
   val onDeleteTask: (TodoItem) -> Unit = {},
-  val onSaveToNotes: (TodoItem) -> Unit = {},
   val onCopyTask: (TodoItem) -> Unit = {},
   val onShareTask: (TodoItem) -> Unit = {},
 )
@@ -237,16 +237,6 @@ fun TodoListScreen(
 
   var savedTasks by remember { mutableStateOf(repo.loadSavedTasks()) }
   var showSavedTasksSheet by remember { mutableStateOf(false) }
-
-  var isGridView by remember { mutableStateOf(repo.isGridView()) }
-  var gridColumnsPerRow by remember { mutableIntStateOf(repo.getGridColumnsPerRow()) }
-
-  fun updateGridColumnsPerRow(columns: Int) {
-    val coerced = columns.coerceIn(MIN_TODO_GRID_COLUMNS, MAX_TODO_GRID_COLUMNS)
-    gridColumnsPerRow = coerced
-    repo.setGridColumnsPerRow(coerced)
-    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-  }
 
   var isSearchActive by rememberSaveable { mutableStateOf(false) }
   var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -298,6 +288,7 @@ fun TodoListScreen(
   var initialDragSnapshot by remember { mutableStateOf<TodoHistorySnapshot?>(null) }
   val taskHeightsPx = remember { mutableStateMapOf<String, Float>() }
   val subtaskHeightsPx = remember { mutableStateMapOf<String, Float>() }
+  var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
   // Check midnight reset periodically / on resume
   LaunchedEffect(Unit) {
@@ -311,6 +302,9 @@ fun TodoListScreen(
     TodoNotificationHelper.syncTaskAlarms(context, tasks)
     while (true) {
       val now = System.currentTimeMillis()
+      if (TodoListEngine.getMainViewTasks(tasks, now) != TodoListEngine.getMainViewTasks(tasks, nowMillis)) {
+        nowMillis = now
+      }
       val dueList = TodoListEngine.getDueUnnotifiedTasks(tasks, now)
       if (dueList.isNotEmpty()) {
         var updated = tasks
@@ -354,6 +348,7 @@ fun TodoListScreen(
     undoStack = listOf(currentSnapshot) + undoStack.take(49)
     redoStack = emptyList()
     historyVersion += 1
+    nowMillis = System.currentTimeMillis()
 
     tasks = updatedTasks
     completedTodayCount = updatedCompletedToday
@@ -383,6 +378,7 @@ fun TodoListScreen(
     undoStack = undoStack.drop(1)
     redoStack = listOf(TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)) + redoStack
     historyVersion += 1
+    nowMillis = System.currentTimeMillis()
 
     tasks = previousState.tasks
     completedTodayCount = previousState.completedToday
@@ -402,6 +398,7 @@ fun TodoListScreen(
     redoStack = redoStack.drop(1)
     undoStack = listOf(TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)) + undoStack
     historyVersion += 1
+    nowMillis = System.currentTimeMillis()
 
     tasks = nextState.tasks
     completedTodayCount = nextState.completedToday
@@ -639,13 +636,32 @@ fun TodoListScreen(
     initialDragSnapshot = TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)
   }
 
+  val mainViewTasks = remember(tasks, nowMillis) {
+    TodoListEngine.getMainViewTasks(tasks, nowMillis)
+  }
+
+  val activeFilteredTasks = remember(tasks, mainViewTasks, selectedTab, isSearchActive, searchQuery) {
+    val base = if (selectedTab == TodoFilterTab.SCHEDULED) {
+      tasks.filter { it.isScheduled }
+    } else {
+      mainViewTasks
+    }
+    if (isSearchActive && searchQuery.isNotBlank()) {
+      TodoListEngine.filterTasks(base, searchQuery)
+    } else {
+      base
+    }
+  }
+
   fun onDragDelta(taskId: String, deltaY: Float) {
     if (draggedTaskId != taskId) return
     val firstVisibleIndex = listState.firstVisibleItemIndex
     val firstVisibleOffset = listState.firstVisibleItemScrollOffset
+    val visibleItems = activeFilteredTasks
+    val visibleIds = visibleItems.map { it.id }.toSet()
 
     val stepResult = TodoListEngine.calculateDragReorder(
-      items = tasks,
+      items = visibleItems,
       draggedId = taskId,
       idSelector = { it.id },
       currentOffsetY = dragOffsetY + deltaY,
@@ -657,7 +673,14 @@ fun TodoListScreen(
 
     dragOffsetY = stepResult.remainingOffsetY
     if (stepResult.moved) {
-      tasks = stepResult.items
+      val reorderedIterator = stepResult.items.iterator()
+      tasks = tasks.map { item ->
+        if (item.id in visibleIds && reorderedIterator.hasNext()) {
+          reorderedIterator.next()
+        } else {
+          item
+        }
+      }
       val minIdx = minOf(stepResult.fromIndex, stepResult.toIndex)
       val maxIdx = maxOf(stepResult.fromIndex, stepResult.toIndex)
       if (firstVisibleIndex in minIdx..maxIdx) {
@@ -719,19 +742,6 @@ fun TodoListScreen(
   val taskToSchedule = schedulingTaskId?.let { id -> tasks.firstOrNull { it.id == id } }
   val isSchedulePanelOpen = showSchedulePanel || taskToSchedule != null || isSchedulingBulk
 
-  val activeFilteredTasks = remember(tasks, selectedTab, isSearchActive, searchQuery) {
-    val base = if (selectedTab == TodoFilterTab.SCHEDULED) {
-      tasks.filter { it.isScheduled }
-    } else {
-      tasks
-    }
-    if (isSearchActive && searchQuery.isNotBlank()) {
-      TodoListEngine.filterTasks(base, searchQuery)
-    } else {
-      base
-    }
-  }
-
   val filteredCompletedTasks = remember(completedTasks, isSearchActive, searchQuery) {
     if (isSearchActive && searchQuery.isNotBlank()) {
       TodoListEngine.filterTasks(completedTasks, searchQuery)
@@ -769,33 +779,11 @@ fun TodoListScreen(
 
   val todoActionDispatcher = remember(tasks, completedTasks, completedTodayCount, context) {
     TodoItemActionDispatcher(
-      onDuplicateTask = { task ->
-        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        val duplicate = TodoItem(
-          title = "${task.title} (Copy)",
-          notes = task.notes,
-          subtasks = task.subtasks.map { TodoSubTask(title = it.title, isCompleted = it.isCompleted) },
-          isSubtasksCollapsed = false,
-          scheduledAtMillis = task.scheduledAtMillis,
-          scheduledEndMillis = task.scheduledEndMillis,
-        )
-        applyAction(listOf(duplicate) + tasks)
-        Toast.makeText(context, "Duplicated \"${task.title}\"", Toast.LENGTH_SHORT).show()
-      },
       onUnscheduleTask = { task ->
         unscheduleTask(task.id)
       },
       onDeleteTask = { task ->
         deleteTask(task)
-      },
-      onSaveToNotes = { task ->
-        CrossToolActions.saveTextToNotes(
-          context = context,
-          title = task.title,
-          content = formatTodoTaskPlainText(task),
-          isChecklist = task.subtasks.isNotEmpty(),
-          checklistItems = task.subtasks.map { NoteChecklistItem(text = it.title, isChecked = it.isCompleted) },
-        )
       },
       onCopyTask = { task ->
         CrossToolActions.copyTextToClipboard(
@@ -815,11 +803,26 @@ fun TodoListScreen(
   }
 
   val scheduledTasksCount = remember(tasks) { tasks.count { it.isScheduled } }
-  val headerSubtext = remember(selectedTab, tasks.size, scheduledTasksCount, completedTodayCount) {
+  val headerSubtext = remember(selectedTab, mainViewTasks.size, scheduledTasksCount, completedTodayCount) {
     when (selectedTab) {
-      TodoFilterTab.TASKS -> "${tasks.size} active • $completedTodayCount completed today"
-      TodoFilterTab.SCHEDULED -> "$scheduledTasksCount scheduled • ${tasks.size} active"
-      TodoFilterTab.COMPLETED -> "$completedTodayCount completed today • ${tasks.size} active"
+      TodoFilterTab.TASKS -> "${mainViewTasks.size} tasks • $completedTodayCount completed today"
+      TodoFilterTab.SCHEDULED -> "$scheduledTasksCount scheduled • ${mainViewTasks.size} tasks"
+      TodoFilterTab.COMPLETED -> "$completedTodayCount completed today • ${mainViewTasks.size} tasks"
+    }
+  }
+
+  var rootBottomInsetPx by remember { mutableIntStateOf(0) }
+  val imeBottomPx = WindowInsets.ime.getBottom(density)
+  val extraImeBottomPadding = with(density) {
+    (imeBottomPx - rootBottomInsetPx).coerceAtLeast(0).toDp()
+  }
+  val quickAddBringIntoViewRequester = remember { BringIntoViewRequester() }
+  val quickAddCoroutineScope = rememberCoroutineScope()
+  var isQuickAddInputFocused by remember { mutableStateOf(false) }
+
+  LaunchedEffect(isQuickAddInputFocused, imeBottomPx, newTaskTitle) {
+    if (isQuickAddInputFocused) {
+      quickAddBringIntoViewRequester.bringIntoView()
     }
   }
 
@@ -828,6 +831,12 @@ fun TodoListScreen(
       modifier = modifier
         .fillMaxSize()
         .background(MaterialTheme.colorScheme.background)
+        .onGloballyPositioned { coords ->
+          val rootHeight = coords.findRootCoordinates().size.height
+          val bottomInRoot = (coords.positionInRoot().y + coords.size.height).roundToInt()
+          rootBottomInsetPx = (rootHeight - bottomInRoot).coerceAtLeast(0)
+        }
+        .padding(bottom = extraImeBottomPadding)
         .testTag("todo_list_screen"),
     ) {
       Column(
@@ -1111,28 +1120,6 @@ fun TodoListScreen(
                     }
                     HorizontalDivider()
                     DropdownMenuItem(
-                      text = { Text("Save to Notes") },
-                      leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
-                      enabled = hasSelection,
-                      onClick = {
-                        showOverflowMenu = false
-                        if (selectedItemsList.isNotEmpty()) {
-                          val title = if (selectedItemsList.size == 1) {
-                            selectedItemsList.first().title
-                          } else {
-                            "To Do (${selectedItemsList.size} tasks)"
-                          }
-                          val combined = selectedItemsList.joinToString("\n\n") { formatTodoTaskPlainText(it) }
-                          CrossToolActions.saveTextToNotes(
-                            context = context,
-                            title = title,
-                            content = combined,
-                          )
-                          selectedTaskIds = emptySet()
-                        }
-                      },
-                    )
-                    DropdownMenuItem(
                       text = { Text("Copy") },
                       leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                       enabled = hasSelection,
@@ -1291,45 +1278,16 @@ fun TodoListScreen(
                 modifier = Modifier.size(20.dp),
               )
             }
-
-            ViewModeSegmentedToggle(
-              isListView = !isGridView,
-              onSelectListView = {
-                if (isGridView) {
-                  isGridView = false
-                  repo.setGridView(false)
-                }
-              },
-              onSelectGridView = {
-                if (!isGridView) {
-                  isGridView = true
-                  repo.setGridView(true)
-                }
-              },
-              onToggle = {
-                val nextMode = !isGridView
-                isGridView = nextMode
-                repo.setGridView(nextMode)
-              },
-              toggleTestTag = "todo_view_mode_toggle",
-              listTestTag = "todo_view_mode_list",
-              gridTestTag = "todo_view_mode_grid",
-              listContentDescription = "List view",
-              gridContentDescription = "Grid view",
-            )
           },
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-        // 2. Pill Filter Row (Tasks, Scheduled, Completed) + Pinned Floating [# per row] & [Saved Tasks] Controls
+        // 2. Pill Filter Row (Tasks, Scheduled, Completed) + Pinned Floating [Saved Tasks] Control
         TodoFilterPillRow(
           selectedTab = selectedTab,
-          tasksCount = tasks.size,
+          tasksCount = mainViewTasks.size,
           scheduledCount = scheduledTasksCount,
           completedCount = completedTodayCount,
-          isGridView = isGridView,
-          gridColumnsPerRow = gridColumnsPerRow,
-          onGridColumnsPerRowChange = { updateGridColumnsPerRow(it) },
           onOpenSavedTasks = {
             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
             showSavedTasksSheet = true
@@ -1364,18 +1322,11 @@ fun TodoListScreen(
           }
         }
 
-        // 4. Main Content Area (List or Staggered Grid with Pinch-to-Zoom)
+        // 4. Main Content Area (List)
         Box(
           modifier = Modifier
             .weight(1f)
-            .fillMaxWidth()
-            .pinchToChangeColumns(
-              enabled = isGridView,
-              columnsPerRow = gridColumnsPerRow,
-              minColumns = MIN_TODO_GRID_COLUMNS,
-              maxColumns = MAX_TODO_GRID_COLUMNS,
-              onColumnsChange = { updateGridColumnsPerRow(it) },
-            ),
+            .fillMaxWidth(),
         ) {
           val hasActiveSearchQuery = isSearchActive && searchQuery.isNotBlank()
 
@@ -1385,8 +1336,6 @@ fun TodoListScreen(
                 completedTasks = filteredCompletedTasks,
                 completedCount = completedTodayCount,
                 hasSearchQuery = hasActiveSearchQuery,
-                isGridView = isGridView,
-                gridColumnsPerRow = gridColumnsPerRow,
                 isSelectionMode = isSelectionMode,
                 selectedTaskIds = selectedTaskIds,
                 onToggleSelectTask = { taskId -> toggleTaskSelection(taskId) },
@@ -1402,62 +1351,6 @@ fun TodoListScreen(
                   hasActiveSearchQuery -> EmptySearchTasksState()
                   selectedTab == TodoFilterTab.SCHEDULED -> EmptyScheduledTasksState()
                   else -> EmptyTasksState()
-                }
-              } else if (isGridView) {
-                LazyVerticalStaggeredGrid(
-                  columns = StaggeredGridCells.Fixed(gridColumnsPerRow),
-                  modifier = Modifier
-                    .fillMaxSize()
-                    .testTag("todo_tasks_list"),
-                  contentPadding = PaddingValues(
-                    start = 12.dp,
-                    end = 12.dp,
-                    top = 8.dp,
-                    bottom = 104.dp,
-                  ),
-                  horizontalArrangement = Arrangement.spacedBy(10.dp),
-                  verticalItemSpacing = 10.dp,
-                ) {
-                  staggeredItems(
-                    items = activeFilteredTasks,
-                    key = { it.id },
-                  ) { task ->
-                    val isEditingInline = inlineEditingTaskId == task.id
-                    TaskCardContent(
-                      task = task,
-                      isBeingDragged = false,
-                      isSelected = task.id in selectedTaskIds,
-                      isSelectionMode = isSelectionMode,
-                      showDragHandle = false,
-                      isEditingInline = isEditingInline,
-                      onToggleSelection = { toggleTaskSelection(task.id) },
-                      onScheduleClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        openScheduleForTask(task)
-                      },
-                      onCheckboxClick = { completeTask(task) },
-                      onStartInlineEdit = { inlineEditingTaskId = task.id },
-                      onSaveInlineEdit = { newTitle ->
-                        val trimmed = newTitle.trim()
-                        if (trimmed.isNotEmpty() && trimmed != task.title) {
-                          val updated = tasks.map { if (it.id == task.id) it.copy(title = trimmed) else it }
-                          applyAction(updated)
-                        }
-                        inlineEditingTaskId = null
-                      },
-                      onToggleSubTask = { subtaskId -> toggleSubTask(task.id, subtaskId) },
-                      onToggleCollapseSubtasks = { toggleCollapseSubtasks(task.id) },
-                      onSaveAsTemplate = { saveTaskTemplate(task) },
-                      onAddSubTask = { subtaskTitle -> addSubTask(task.id, subtaskTitle) },
-                      onDeleteSubTask = { subtaskId -> deleteSubTask(task.id, subtaskId) },
-                      onUpdateSubTask = { subtaskId, newTitle -> updateSubTask(task.id, subtaskId, newTitle) },
-                      onStartDrag = {},
-                      onDrag = {},
-                      onEndDrag = {},
-                      onHeightMeasured = {},
-                      modifier = Modifier.testTag("todo_item_${task.id}"),
-                    )
-                  }
                 }
               } else {
                 LazyColumn(
@@ -1548,52 +1441,65 @@ fun TodoListScreen(
 
       // 5. Floating 28.dp Pill Quick-Add Bar (styled like NotesQuickCaptureBar)
       if (!isSelectionMode || isSchedulePanelOpen) {
-        Surface(
-          color = MaterialTheme.colorScheme.surfaceContainerHigh,
-          shape = RoundedCornerShape(28.dp),
-          tonalElevation = 6.dp,
-          shadowElevation = 4.dp,
-          border = BorderStroke(
-            width = 1.dp,
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-          ),
+        Box(
           modifier = Modifier
             .align(Alignment.BottomCenter)
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 12.dp)
-            .testTag("todo_quick_add_card"),
+            .bringIntoViewRequester(quickAddBringIntoViewRequester)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         ) {
-          Column(modifier = Modifier.fillMaxWidth()) {
-            if (!isSelectionMode) {
-              RoundedQuickAddBar(
-                title = newTaskTitle,
-                onTitleChange = { newTaskTitle = it },
-                onAdd = { addTask() },
-                onOpenSavedTasks = {
-                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                  showSavedTasksSheet = true
-                },
-                isScheduleOpen = isSchedulePanelOpen,
-                hasPendingSchedule = hasPendingSchedule,
-                onToggleSchedule = {
-                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                  if (isSchedulePanelOpen) {
-                    showSchedulePanel = false
-                    schedulingTaskId = null
-                    isSchedulingBulk = false
-                  } else {
-                    schedulingTaskId = null
-                    isSchedulingBulk = false
-                    if (!hasPendingSchedule) {
-                      val defaultStart = System.currentTimeMillis() + 3_600_000L
-                      scheduleStartMillis = defaultStart
+          Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = RoundedCornerShape(28.dp),
+            tonalElevation = 6.dp,
+            shadowElevation = 4.dp,
+            border = BorderStroke(
+              width = 1.dp,
+              color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            ),
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("todo_quick_add_card"),
+          ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+              if (!isSelectionMode) {
+                RoundedQuickAddBar(
+                  title = newTaskTitle,
+                  onTitleChange = { newTaskTitle = it },
+                  onAdd = { addTask() },
+                  onOpenSavedTasks = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    showSavedTasksSheet = true
+                  },
+                  isScheduleOpen = isSchedulePanelOpen,
+                  hasPendingSchedule = hasPendingSchedule,
+                  onToggleSchedule = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    if (isSchedulePanelOpen) {
+                      showSchedulePanel = false
+                      schedulingTaskId = null
+                      isSchedulingBulk = false
+                    } else {
+                      schedulingTaskId = null
+                      isSchedulingBulk = false
+                      if (!hasPendingSchedule) {
+                        val defaultStart = System.currentTimeMillis() + 3_600_000L
+                        scheduleStartMillis = defaultStart
+                      }
+                      showSchedulePanel = true
                     }
-                    showSchedulePanel = true
-                  }
-                },
-                inputFocusRequester = taskInputFocusRequester,
-              )
-            }
+                  },
+                  inputFocusRequester = taskInputFocusRequester,
+                  onInputFocusChanged = { focused ->
+                    isQuickAddInputFocused = focused
+                    if (focused) {
+                      quickAddCoroutineScope.launch {
+                        quickAddBringIntoViewRequester.bringIntoView()
+                      }
+                    }
+                  },
+                )
+              }
 
             // Schedule Task panel slides up inside the floating 28.dp pill bar
             AnimatedVisibility(
@@ -1686,15 +1592,16 @@ fun TodoListScreen(
                   }
                   showSchedulePanel = false
                 },
-                onDismiss = {
-                  if (taskToSchedule == null && !isSchedulingBulk) {
-                    hasPendingSchedule = false
-                  }
-                  schedulingTaskId = null
-                  isSchedulingBulk = false
-                  showSchedulePanel = false
-                },
-              )
+                  onDismiss = {
+                    if (taskToSchedule == null && !isSchedulingBulk) {
+                      hasPendingSchedule = false
+                    }
+                    schedulingTaskId = null
+                    isSchedulingBulk = false
+                    showSchedulePanel = false
+                  },
+                )
+              }
             }
           }
         }
@@ -2421,14 +2328,6 @@ private fun TaskCardContent(
                 modifier = Modifier.testTag("todo_task_menu_${task.id}"),
               ) {
                 DropdownMenuItem(
-                  text = { Text("Edit Title") },
-                  leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                  onClick = {
-                    showContextMenu = false
-                    onStartInlineEdit()
-                  },
-                )
-                DropdownMenuItem(
                   text = { Text(if (task.isScheduled) "Reschedule" else "Schedule") },
                   leadingIcon = {
                     Icon(
@@ -2468,26 +2367,7 @@ private fun TaskCardContent(
                   },
                   modifier = Modifier.testTag("todo_menu_complete_${task.id}"),
                 )
-                DropdownMenuItem(
-                  text = { Text("Add Subtask") },
-                  leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
-                  onClick = {
-                    showContextMenu = false
-                    if (task.isSubtasksCollapsed) {
-                      onToggleCollapseSubtasks()
-                    }
-                    showAddSubtaskInput = true
-                  },
-                )
                 HorizontalDivider()
-                DropdownMenuItem(
-                  text = { Text("Duplicate") },
-                  leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-                  onClick = {
-                    showContextMenu = false
-                    todoActions.onDuplicateTask(task)
-                  },
-                )
                 DropdownMenuItem(
                   text = { Text("Save as Template") },
                   leadingIcon = {
@@ -2502,14 +2382,6 @@ private fun TaskCardContent(
                     onSaveAsTemplate()
                   },
                   modifier = Modifier.testTag("todo_menu_save_template_${task.id}"),
-                )
-                DropdownMenuItem(
-                  text = { Text("Save to Notes") },
-                  leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
-                  onClick = {
-                    showContextMenu = false
-                    todoActions.onSaveToNotes(task)
-                  },
                 )
                 DropdownMenuItem(
                   text = { Text("Copy") },
@@ -2913,6 +2785,7 @@ private fun RoundedQuickAddBar(
   hasPendingSchedule: Boolean = false,
   onToggleSchedule: () -> Unit = {},
   inputFocusRequester: FocusRequester = remember { FocusRequester() },
+  onInputFocusChanged: (Boolean) -> Unit = {},
 ) {
   val isEnabled = title.trim().isNotEmpty()
   val addScale by animateFloatAsState(
@@ -3003,6 +2876,7 @@ private fun RoundedQuickAddBar(
         modifier = Modifier
           .weight(1f)
           .focusRequester(inputFocusRequester)
+          .onFocusChanged { onInputFocusChanged(it.isFocused) }
           .testTag("todo_input_title"),
       )
     }
@@ -3067,7 +2941,7 @@ private fun RoundedQuickAddBar(
 
 /**
  * Pill buttons row for switching between Tasks, Scheduled, and Completed views,
- * with pinned floating [# per row] and [Saved Tasks] controls on the right edge (Section 5.4 of DESIGN_LANGUAGE.md).
+ * with a pinned floating [Saved Tasks] control on the right edge (Section 5.4 of DESIGN_LANGUAGE.md).
  */
 @Composable
 private fun TodoFilterPillRow(
@@ -3075,9 +2949,6 @@ private fun TodoFilterPillRow(
   tasksCount: Int,
   scheduledCount: Int,
   completedCount: Int,
-  isGridView: Boolean = false,
-  gridColumnsPerRow: Int = DEFAULT_TODO_GRID_COLUMNS,
-  onGridColumnsPerRowChange: (Int) -> Unit = {},
   onOpenSavedTasks: () -> Unit = {},
   onSelectTab: (TodoFilterTab) -> Unit,
 ) {
@@ -3085,11 +2956,11 @@ private fun TodoFilterPillRow(
     Row(
       modifier = Modifier
         .fillMaxWidth()
-        .fadingPillRowUnderFloatingControls(hasColumnsButton = isGridView)
+        .fadingPillRowUnderFloatingControls(hasColumnsButton = false)
         .horizontalScroll(rememberScrollState())
         .padding(
           start = 12.dp,
-          end = if (isGridView) 96.dp else 56.dp,
+          end = 56.dp,
           top = 6.dp,
           bottom = 6.dp,
         )
@@ -3179,7 +3050,7 @@ private fun TodoFilterPillRow(
       )
     }
 
-    // Pinned floating [# per row] + [Saved Tasks] buttons on the right edge of the pill bar
+    // Pinned floating [Saved Tasks] button on the right edge of the pill bar
     Row(
       modifier = Modifier
         .align(Alignment.CenterEnd)
@@ -3189,18 +3060,6 @@ private fun TodoFilterPillRow(
       horizontalArrangement = Arrangement.spacedBy(6.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      if (isGridView) {
-        ToolboxFloatingColumnsButton(
-          columnsPerRow = gridColumnsPerRow,
-          minColumns = MIN_TODO_GRID_COLUMNS,
-          maxColumns = MAX_TODO_GRID_COLUMNS,
-          onColumnsChange = onGridColumnsPerRowChange,
-          buttonTestTag = "todo_columns_per_row_button",
-          countTestTag = "todo_columns_per_row_count",
-          contentDescription = "$gridColumnsPerRow tasks per row",
-        )
-      }
-
       Surface(
         onClick = onOpenSavedTasks,
         shape = CircleShape,
@@ -3372,7 +3231,7 @@ private fun EmptySearchTasksState() {
 }
 
 /**
- * Inline view displaying tasks completed today, supporting list & grid views, multi-selection,
+ * Inline view displaying tasks completed today, supporting multi-selection,
  * uncomplete, and swipe-to-remove.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -3381,8 +3240,6 @@ private fun CompletedTasksListContent(
   completedTasks: List<TodoItem>,
   completedCount: Int,
   hasSearchQuery: Boolean = false,
-  isGridView: Boolean = false,
-  gridColumnsPerRow: Int = DEFAULT_TODO_GRID_COLUMNS,
   isSelectionMode: Boolean = false,
   selectedTaskIds: Set<String> = emptySet(),
   onToggleSelectTask: (String) -> Unit = {},
@@ -3434,36 +3291,6 @@ private fun CompletedTasksListContent(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
-      }
-    }
-  } else if (isGridView) {
-    LazyVerticalStaggeredGrid(
-      columns = StaggeredGridCells.Fixed(gridColumnsPerRow),
-      modifier = Modifier
-        .fillMaxSize()
-        .testTag("todo_completed_tasks_list"),
-      contentPadding = PaddingValues(
-        start = 12.dp,
-        end = 12.dp,
-        top = 8.dp,
-        bottom = 104.dp,
-      ),
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
-      verticalItemSpacing = 10.dp,
-    ) {
-      staggeredItems(completedTasks, key = { it.id }) { task ->
-        val isUncollapsed = uncollapsedTaskIds[task.id] == true
-        CompletedTaskCard(
-          task = task,
-          isUncollapsed = isUncollapsed,
-          isSelected = task.id in selectedTaskIds,
-          isSelectionMode = isSelectionMode,
-          onToggleUncollapsed = { uncollapsedTaskIds[task.id] = !isUncollapsed },
-          onToggleSelect = { onToggleSelectTask(task.id) },
-          onUncomplete = { currentOnUncompleteTask(task) },
-          onDelete = { currentOnRemoveCompletedTask(task) },
-          modifier = Modifier.testTag("todo_completed_item_${task.id}"),
-        )
       }
     }
   } else {
@@ -3764,14 +3591,6 @@ private fun CompletedTaskCard(
                 onClick = {
                   completedMenuExpanded = false
                   onUncomplete()
-                },
-              )
-              DropdownMenuItem(
-                text = { Text("Save to Notes") },
-                leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
-                onClick = {
-                  completedMenuExpanded = false
-                  completedActions.onSaveToNotes(task)
                 },
               )
               DropdownMenuItem(

@@ -61,22 +61,30 @@ class MusicPlayerEngineTest {
     assertEquals(MusicViewMode.CARD, MusicViewMode.fromNameOrDefault("card"))
     assertEquals(MusicViewMode.LIST, MusicViewMode.fromNameOrDefault("invalid"))
 
+    assertEquals(MusicLibraryTab.HOME, MusicLibraryTab.DEFAULT)
+    assertEquals(MusicLibraryTab.HOME, MusicLibraryTab.fromNameOrDefault("HOME"))
     assertEquals(MusicLibraryTab.ARTISTS, MusicLibraryTab.fromNameOrDefault("ARTISTS"))
     assertEquals(MusicLibraryTab.ALBUMS, MusicLibraryTab.fromNameOrDefault("albums"))
     assertEquals(MusicLibraryTab.SONGS, MusicLibraryTab.fromNameOrDefault("SONGS"))
     assertEquals(MusicLibraryTab.GENRES, MusicLibraryTab.fromNameOrDefault("genres"))
     assertEquals(MusicLibraryTab.PLAYLISTS, MusicLibraryTab.fromNameOrDefault("playlists"))
 
-    // Section tab order parsing, serialization, and reordering
+    // Section tab order parsing, serialization, and reordering (HOME is at the front of the pill list)
     assertEquals(MusicLibraryTab.entries.toList(), MusicPlayerEngine.parseTabOrder(null))
+    assertEquals(MusicLibraryTab.HOME, MusicPlayerEngine.parseTabOrder(null).first())
+    assertEquals(
+      MusicLibraryTab.HOME,
+      MusicPlayerEngine.parseTabOrder("ARTISTS|ALBUMS|SONGS|GENRES|PLAYLISTS").first(),
+    )
     val reordered = MusicPlayerEngine.reorderTabs(
       tabs = MusicLibraryTab.entries.toList(),
-      fromIndex = 2, // SONGS
+      fromIndex = 3, // SONGS
       toIndex = 0,
     )
     assertEquals(
       listOf(
         MusicLibraryTab.SONGS,
+        MusicLibraryTab.HOME,
         MusicLibraryTab.ARTISTS,
         MusicLibraryTab.ALBUMS,
         MusicLibraryTab.GENRES,
@@ -1044,6 +1052,167 @@ class MusicPlayerEngineTest {
       session.deleteTrack(renamedTrack)
       assertEquals(initialCount, session.allTracks.size)
       assertFalse(session.allTracks.any { it.id == renamedTrack.id })
+
+      // Cards per row is bounded to 2..3 (max 3 per row)
+      assertEquals(2, MIN_MUSIC_CARDS_PER_ROW)
+      assertEquals(3, MAX_MUSIC_CARDS_PER_ROW)
+      assertEquals(2, session.cardsPerRow)
+      session.updateCardsPerRow(3)
+      assertEquals(3, session.cardsPerRow)
+      session.updateCardsPerRow(4)
+      assertEquals(3, session.cardsPerRow)
+      session.updateCardsPerRow(1)
+      assertEquals(2, session.cardsPerRow)
+
+      // Home playlists generate 6 mixes and regenerate on refreshHomePlaylists()
+      val initialHome = session.homePlaylists
+      assertEquals(6, initialHome.size)
+      assertTrue(initialHome.all { it.isGeneratedHomeMix && it.tracks.isNotEmpty() })
+      val refreshedHome = session.refreshHomePlaylists()
+      assertEquals(6, refreshedHome.size)
+      assertEquals(1, session.homeRefreshGeneration)
+      assertNotEquals(initialHome.map { it.name }, refreshedHome.map { it.name })
+    } finally {
+      session.release()
+    }
+  }
+
+  @Test
+  fun generateHomePlaylists_createsSixMixesUsingGenreMashupsPlayStatsAndFavorites_targetingOneHour() {
+    // Build a 30-track library (~4 min per song = 2 hours total) across similar genres
+    val genres = listOf("Synthwave", "Electronic", "Jazz", "Acoustic", "Rock", "Classical")
+    val longTracks = (1..30).map { idx ->
+      val genre = genres[(idx - 1) % genres.size]
+      MusicTrack(
+        id = "track_$idx",
+        title = "Song $idx",
+        artist = "Artist ${(idx - 1) % 6 + 1}",
+        album = "Album ${(idx - 1) % 6 + 1}",
+        genre = genre,
+        durationMs = 240_000L, // 4 minutes each
+        trackNumber = idx,
+      )
+    }
+
+    var stats = emptyMap<String, TrackPlayStats>()
+    stats = MusicPlayerEngine.recordPlayStat(stats, "track_1", incrementPlayCount = true, addedPlayTimeMs = 480_000L, timestampMs = 1_000L)
+    stats = MusicPlayerEngine.recordPlayStat(stats, "track_2", incrementPlayCount = true, addedPlayTimeMs = 240_000L, timestampMs = 2_000L)
+    stats = MusicPlayerEngine.recordPlayStat(stats, "track_7", incrementPlayCount = true, addedPlayTimeMs = 720_000L, timestampMs = 3_000L)
+
+    val favSongs = setOf("track_3", "track_9")
+    val favArtists = setOf("Artist 2")
+    val favAlbums = setOf("Album 4|Artist 4")
+    val favGenres = setOf("Synthwave")
+
+    val mixesGen0 = MusicPlayerEngine.generateHomePlaylists(
+      allTracks = longTracks,
+      playStats = stats,
+      favoriteIds = favSongs,
+      favoriteArtists = favArtists,
+      favoriteAlbums = favAlbums,
+      favoriteGenres = favGenres,
+      refreshGeneration = 0,
+    )
+
+    assertEquals(6, mixesGen0.size)
+    // Verify each playlist targets ~1 hour (3,600,000 ms, within ~45..70 min)
+    for (mix in mixesGen0) {
+      assertTrue("Expected non-empty mix ${mix.name}", mix.tracks.isNotEmpty())
+      assertTrue(
+        "Expected ~1 hr duration for ${mix.name}, got ${mix.totalDurationMs}",
+        mix.totalDurationMs in (45 * 60_000L)..(70 * 60_000L),
+      )
+    }
+
+    // Mix 1 & Mix 2 mash similar genres together (e.g. Synthwave + Electronic)
+    assertTrue(MusicPlayerEngine.areGenresSimilar("Synthwave", "Electronic"))
+    assertTrue(mixesGen0[0].subtitle.contains("Genre Mashup"))
+    assertTrue(mixesGen0[1].subtitle.contains("Genre Mashup"))
+
+    // Mix 3 uses play stats
+    assertTrue(mixesGen0[2].subtitle.contains("Play Stats"))
+    assertTrue(mixesGen0[2].tracks.any { it.id == "track_7" || it.id == "track_1" })
+
+    // Mix 4 uses favorites (songs, artists, albums, genres)
+    assertTrue(mixesGen0[3].subtitle.contains("Favorites"))
+    assertTrue(mixesGen0[3].tracks.any { it.id in favSongs || it.artist in favArtists })
+
+    // Refreshing (generation 1) generates a new set of 6 playlists
+    val mixesGen1 = MusicPlayerEngine.generateHomePlaylists(
+      allTracks = longTracks,
+      playStats = stats,
+      favoriteIds = favSongs,
+      favoriteArtists = favArtists,
+      favoriteAlbums = favAlbums,
+      favoriteGenres = favGenres,
+      refreshGeneration = 1,
+    )
+    assertEquals(6, mixesGen1.size)
+    assertNotEquals(mixesGen0.map { it.name }, mixesGen1.map { it.name })
+  }
+
+  @Test
+  fun playbackSession_renameAndDeleteArtistAlbumGenre_andProtectedPlaylists_workCorrectly() {
+    val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+    val session = MusicPlaybackSession(context = null, initialTracks = tracks)
+    try {
+      // 1. Default and Home playlists are protected from deletion and renaming
+      assertTrue(MusicPlayerEngine.isProtectedPlaylistId(MusicPlayerEngine.FAVORITES_PLAYLIST_ID))
+      assertTrue(MusicPlayerEngine.isProtectedPlaylistId(MusicPlayerEngine.MOST_PLAYED_PLAYLIST_ID))
+      assertTrue(MusicPlayerEngine.isProtectedPlaylistId(MusicPlayerEngine.RECENTLY_PLAYED_PLAYLIST_ID))
+      for (mix in session.homePlaylists) {
+        assertTrue(MusicPlayerEngine.isProtectedPlaylistId(mix.id))
+        assertFalse(session.deletePlaylist(mix.id))
+        assertFalse(session.renamePlaylist(mix.id, "Custom Name"))
+      }
+      assertFalse(session.deletePlaylist(MusicPlayerEngine.FAVORITES_PLAYLIST_ID))
+      assertFalse(session.deletePlaylist(MusicPlayerEngine.MOST_PLAYED_PLAYLIST_ID))
+      assertFalse(session.deletePlaylist(MusicPlayerEngine.RECENTLY_PLAYED_PLAYLIST_ID))
+
+      // 2. Rename entire Artist ("Aurora Synth" -> "Aurora Prime")
+      session.toggleFavoriteArtist("Aurora Synth")
+      assertTrue(session.isArtistFavorite("Aurora Synth"))
+      val renamedArtistTracks = session.renameArtist("Aurora Synth", "Aurora Prime")
+      assertEquals(3, renamedArtistTracks)
+      assertFalse(session.allTracks.any { it.artist == "Aurora Synth" })
+      assertEquals(3, session.allTracks.count { it.artist == "Aurora Prime" })
+      assertTrue(session.isArtistFavorite("Aurora Prime"))
+      assertFalse(session.isArtistFavorite("Aurora Synth"))
+
+      // 3. Rename entire Album ("Midnight Odyssey" -> "Dawn Odyssey")
+      session.toggleFavoriteAlbum("Midnight Odyssey", "Aurora Prime")
+      assertTrue(session.isAlbumFavorite("Midnight Odyssey", "Aurora Prime"))
+      val renamedAlbumTracks = session.renameAlbum("Midnight Odyssey", "Aurora Prime", "Dawn Odyssey")
+      assertEquals(2, renamedAlbumTracks)
+      assertFalse(session.allTracks.any { it.album == "Midnight Odyssey" })
+      assertEquals(2, session.allTracks.count { it.album == "Dawn Odyssey" })
+      assertTrue(session.isAlbumFavorite("Dawn Odyssey", "Aurora Prime"))
+
+      // 4. Rename entire Genre ("Jazz" -> "Smooth Jazz")
+      session.toggleFavoriteGenre("Jazz")
+      assertTrue(session.isGenreFavorite("Jazz"))
+      val renamedGenreTracks = session.renameGenre("Jazz", "Smooth Jazz")
+      assertEquals(2, renamedGenreTracks)
+      assertFalse(session.allTracks.any { it.genre == "Jazz" })
+      assertEquals(2, session.allTracks.count { it.genre == "Smooth Jazz" })
+      assertTrue(session.isGenreFavorite("Smooth Jazz"))
+
+      // 5. Delete entire Album ("Dawn Odyssey" -> removes 2 tracks)
+      val deletedAlbumTracks = session.deleteAlbum("Dawn Odyssey", "Aurora Prime")
+      assertEquals(2, deletedAlbumTracks)
+      assertFalse(session.allTracks.any { it.album == "Dawn Odyssey" })
+      assertFalse(session.isAlbumFavorite("Dawn Odyssey", "Aurora Prime"))
+
+      // 6. Delete entire Genre ("Smooth Jazz" -> removes 2 tracks)
+      val deletedGenreTracks = session.deleteGenre("Smooth Jazz")
+      assertEquals(2, deletedGenreTracks)
+      assertFalse(session.allTracks.any { it.genre == "Smooth Jazz" })
+      assertFalse(session.isGenreFavorite("Smooth Jazz"))
+
+      // 7. Delete entire Artist ("Sierra Pines" -> removes 2 tracks)
+      val deletedArtistTracks = session.deleteArtist("Sierra Pines")
+      assertEquals(2, deletedArtistTracks)
+      assertFalse(session.allTracks.any { it.artist == "Sierra Pines" })
     } finally {
       session.release()
     }

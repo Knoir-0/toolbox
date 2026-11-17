@@ -1186,8 +1186,15 @@ private fun ConversionCapabilityMapDialog(
         ) {
           items(formats, key = { it.name }) { fmt ->
             val routes = FileConverterEngine.getAvailableRoutes(fmt)
-            val nativeTargets = routes.filter { it.preferredBackend == ConverterBackend.NATIVE }.map { it.target.displayName }
-            val ffmpegTargets = routes.filter { it.preferredBackend == ConverterBackend.FFMPEG }.map { it.target.displayName }
+            val nativeTargets = routes
+              .filter { !it.usesOcr && it.preferredBackend == ConverterBackend.NATIVE }
+              .map { it.target.displayName }
+            val ffmpegTargets = routes
+              .filter { !it.usesOcr && it.preferredBackend == ConverterBackend.FFMPEG }
+              .map { it.target.displayName }
+            val ocrTargets = routes
+              .filter { it.usesOcr }
+              .map { it.target.displayName }
 
             Card(
               shape = RoundedCornerShape(14.dp),
@@ -1230,6 +1237,13 @@ private fun ConversionCapabilityMapDialog(
                 if (ffmpegTargets.isNotEmpty()) {
                   Text(
                     text = "FFmpeg: ${ffmpegTargets.joinToString(", ")}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+                if (ocrTargets.isNotEmpty()) {
+                  Text(
+                    text = "OCR: ${ocrTargets.joinToString(", ")}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                   )

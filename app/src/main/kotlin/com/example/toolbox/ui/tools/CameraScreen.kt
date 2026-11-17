@@ -72,6 +72,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -96,8 +97,10 @@ import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Highlight
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Save
@@ -108,6 +111,7 @@ import androidx.compose.material.icons.filled.TimerOff
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.ViewWeek
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.AlertDialog
@@ -364,6 +368,47 @@ fun CameraScreen(
 
   var showInlineNotesScreen by remember {
     mutableStateOf(false)
+  }
+
+  // Live ML Kit Vision Tagging states
+  var visionThresholdPreset by rememberSaveable {
+    val saved = prefs?.getString(PREF_KEY_CAMERA_VISION_THRESHOLD, null)
+    mutableStateOf(CameraVisionThresholdPreset.fromNameOrDefault(saved))
+  }
+
+  var visionSamplePreset by rememberSaveable {
+    val saved = prefs?.getString(PREF_KEY_CAMERA_VISION_PRESET, null)
+    mutableStateOf(CameraVisionSamplePreset.fromNameOrDefault(saved))
+  }
+
+  var latestVisionResult by remember {
+    mutableStateOf<CameraVisionAnalysisResult?>(
+      if (isInspection && initialCaptureMode == CameraCaptureMode.VISION) {
+        CameraEngine.buildVisionAnalysisResult(
+          rawTags = CameraVisionSamplePreset.DEFAULT.sampleTags,
+          confidenceThreshold = CameraVisionThresholdPreset.DEFAULT.minConfidence,
+          inferenceLatencyMs = 15L,
+          sourceDescription = CameraVisionSamplePreset.DEFAULT.sceneTitle,
+        )
+      } else {
+        null
+      }
+    )
+  }
+
+  var isVisionFrozen by rememberSaveable {
+    mutableStateOf(false)
+  }
+
+  fun updateVisionThresholdPreset(preset: CameraVisionThresholdPreset) {
+    visionThresholdPreset = preset
+    prefs?.edit()?.putString(PREF_KEY_CAMERA_VISION_THRESHOLD, preset.name)?.apply()
+    latestVisionResult = latestVisionResult?.withThreshold(preset.minConfidence)
+  }
+
+  fun updateVisionSamplePreset(preset: CameraVisionSamplePreset) {
+    visionSamplePreset = preset
+    prefs?.edit()?.putString(PREF_KEY_CAMERA_VISION_PRESET, preset.name)?.apply()
   }
 
   // Output directory (defaults to /DCIM/Camera)
@@ -652,24 +697,19 @@ fun CameraScreen(
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     showShutterFlash = true
 
-    val initialDoc = liveOcrDetectedDocument?.takeIf { it.rawText.isNotBlank() }
+    val initialDoc = (liveOcrDetectedDocument?.takeIf { it.rawText.isNotBlank() }
       ?: CameraEngine.analyzeScannedDocumentText(
         rawText = notePreset.sampleText,
         fallbackTitle = notePreset.defaultTitle,
-      )
+      )).copy(savedNoteId = null)
 
-    val (savedDoc, savedNote) = CameraEngine.saveScannedDocumentToNotes(
-      repository = effectiveNotesRepo,
-      document = initialDoc,
-      color = notePreset.noteColor,
-    )
-    latestScannedDocument = savedDoc
+    latestScannedDocument = initialDoc
 
     if (!isInspection) {
-      Toast.makeText(context, "Added note: ${savedNote.title}", Toast.LENGTH_SHORT).show()
+      Toast.makeText(context, "Scanned document: review and tap Add Note", Toast.LENGTH_SHORT).show()
     }
 
-    // Also run on-device ML Kit OCR on the live hardware frame (if available) to refine the note if a live document is in view
+    // Also run on-device ML Kit OCR on the live hardware frame (if available) to refine the previewed document
     val tv = activeTextureView
     val rawHardwareBitmap = try {
       if (tv != null && tv.isAvailable) tv.bitmap else null
@@ -682,14 +722,104 @@ fun CameraScreen(
           CameraEngine.recognizeTextFromBitmapWithMlKit(rawHardwareBitmap)
         }
         if (mlKitDoc != null && mlKitDoc.rawText.isNotBlank()) {
-          val updatedNote = savedNote.copy(
-            title = mlKitDoc.title,
-            content = mlKitDoc.body.ifBlank { mlKitDoc.rawText },
-            updatedAt = System.currentTimeMillis(),
+          val currentDoc = latestScannedDocument
+          // Only update in-place if the user hasn't already dismissed or saved the note
+          if (currentDoc != null && currentDoc.savedNoteId == null) {
+            latestScannedDocument = mlKitDoc.copy(savedNoteId = null)
+          }
+        }
+      }
+    }
+  }
+
+  fun addReviewedDocumentToNotes(document: CameraScannedDocument) {
+    if (document.savedNoteId != null) return
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    val (savedDoc, savedNote) = CameraEngine.saveScannedDocumentToNotes(
+      repository = effectiveNotesRepo,
+      document = document,
+      color = notePreset.noteColor,
+    )
+    latestScannedDocument = savedDoc
+    if (!isInspection) {
+      Toast.makeText(context, "Added note: ${savedNote.title}", Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  // Continuous live frame ML Kit Image Labeling when in VISION mode and hardware TextureView is rendering
+  LaunchedEffect(captureMode, visionThresholdPreset, isVisionFrozen, activeTextureView) {
+    if (captureMode != CameraCaptureMode.VISION || isVisionFrozen || isInspection) {
+      return@LaunchedEffect
+    }
+    while (isActive && captureMode == CameraCaptureMode.VISION && !isVisionFrozen) {
+      val tv = activeTextureView
+      if (tv != null && tv.isAvailable) {
+        val rawFrame = try {
+          tv.getBitmap(512, 512)
+        } catch (_: Throwable) {
+          null
+        }
+        if (rawFrame != null && rawFrame.width > 32 && rawFrame.height > 32) {
+          val analyzed = withContext(Dispatchers.Default) {
+            CameraEngine.recognizeVisionTagsFromBitmapWithMlKit(
+              bitmap = rawFrame,
+              confidenceThreshold = visionThresholdPreset.minConfidence,
+              sourceDescription = "Live Camera Frame",
+            )
+          }
+          if (analyzed != null && analyzed.allCandidateTags.isNotEmpty()) {
+            latestVisionResult = analyzed
+          }
+        }
+      }
+      delay(450L)
+    }
+  }
+
+  fun performVisionAnalysis() {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    showShutterFlash = true
+
+    val fallbackResult = CameraEngine.buildVisionAnalysisResult(
+      rawTags = visionSamplePreset.sampleTags,
+      confidenceThreshold = visionThresholdPreset.minConfidence,
+      inferenceLatencyMs = 16L,
+      frameWidth = 640,
+      frameHeight = 640,
+      sourceDescription = visionSamplePreset.sceneTitle,
+    )
+
+    // Immediately show either the latest live hardware result or the selected sample preset
+    val currentLive = latestVisionResult?.takeIf {
+      it.sourceDescription == "Live Camera Frame" && it.allCandidateTags.isNotEmpty()
+    }
+    val initialResult = currentLive?.withThreshold(visionThresholdPreset.minConfidence) ?: fallbackResult
+    latestVisionResult = initialResult
+
+    val topSummary = initialResult.topTag?.let { "${it.label} (${it.confidenceFormatted})" }
+      ?: "${initialResult.tags.size} tags above ${(visionThresholdPreset.minConfidence * 100f).roundToInt()}%"
+    if (!isInspection) {
+      Toast.makeText(context, "ML Kit Vision: $topSummary", Toast.LENGTH_SHORT).show()
+    }
+
+    // Also run on-device ML Kit Image Labeling asynchronously on the current hardware frame if available
+    val tv = activeTextureView
+    val rawHardwareBitmap = try {
+      if (tv != null && tv.isAvailable) tv.bitmap else null
+    } catch (_: Throwable) {
+      null
+    }
+    if (rawHardwareBitmap != null && rawHardwareBitmap.width > 32 && rawHardwareBitmap.height > 32) {
+      coroutineScope.launch {
+        val hwResult = withContext(Dispatchers.Default) {
+          CameraEngine.recognizeVisionTagsFromBitmapWithMlKit(
+            bitmap = rawHardwareBitmap,
+            confidenceThreshold = visionThresholdPreset.minConfidence,
+            sourceDescription = "Live Camera Frame",
           )
-          val updatedList = NotesEngine.saveOrDiscardNote(effectiveNotesRepo.loadNotes(), updatedNote)
-          effectiveNotesRepo.saveNotes(updatedList)
-          latestScannedDocument = mlKitDoc.copy(savedNoteId = savedNote.id)
+        }
+        if (hwResult != null && hwResult.allCandidateTags.isNotEmpty()) {
+          latestVisionResult = hwResult
         }
       }
     }
@@ -803,6 +933,11 @@ fun CameraScreen(
 
     if (captureMode == CameraCaptureMode.NOTE) {
       performNoteDocumentScan()
+      return
+    }
+
+    if (captureMode == CameraCaptureMode.VISION) {
+      performVisionAnalysis()
       return
     }
 
@@ -972,6 +1107,22 @@ fun CameraScreen(
             modifier = Modifier
               .fillMaxSize()
               .testTag("camera_note_reticle_overlay"),
+          )
+        }
+
+        // Live ML Kit Vision Tagging Viewfinder Reticle & HUD Overlay
+        if (captureMode == CameraCaptureMode.VISION) {
+          val frameTopInScreen = (containerH - frameH) / 2
+          val topOverlayHeight = with(density) { topOverlayHeightPx.toDp() }
+          val reticleTopInset = (topOverlayHeight + 20.dp - frameTopInScreen).coerceAtLeast(20.dp)
+          VisionReticleOverlayCanvas(
+            visionResult = latestVisionResult,
+            thresholdPreset = visionThresholdPreset,
+            isFrozen = isVisionFrozen,
+            topInset = reticleTopInset,
+            modifier = Modifier
+              .fillMaxSize()
+              .testTag("camera_vision_reticle_overlay"),
           )
         }
 
@@ -1685,6 +1836,9 @@ fun CameraScreen(
             if (activeScannedDocument != null) {
               ScannedNoteResultCard(
                 document = activeScannedDocument,
+                onAddNote = {
+                  addReviewedDocumentToNotes(activeScannedDocument)
+                },
                 onCopy = {
                   copyTextToClipboard(
                     context = context,
@@ -1772,7 +1926,131 @@ fun CameraScreen(
             }
           }
 
-          // Mode Selector Row: Photo / Video / Scan / Note Mode Switcher Pill
+          // Live ML Kit Vision Tagging Accuracy Card
+          val activeVisionResult = latestVisionResult
+          AnimatedVisibility(
+            visible = activeVisionResult != null && captureMode == CameraCaptureMode.VISION,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
+          ) {
+            if (activeVisionResult != null) {
+              VisionLiveTaggingCard(
+                result = activeVisionResult,
+                isFrozen = isVisionFrozen,
+                onToggleFreeze = {
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  isVisionFrozen = !isVisionFrozen
+                },
+                onCopyReport = {
+                  copyTextToClipboard(
+                    context = context,
+                    label = "ML Kit Vision Tagging",
+                    text = activeVisionResult.formatSummaryReport(),
+                    isInspection = isInspection,
+                  )
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                },
+                onSaveTaggedPhoto = {
+                  val outFile = CameraEngine.createTimestampedPhotoFile(
+                    directory = cameraDirectory,
+                    format = CameraPhotoFormat.PNG,
+                  )
+                  GalleryEngine.writeTextDocumentPng(
+                    outputFile = outFile,
+                    ocrText = activeVisionResult.sourceDescription,
+                    imageLabels = activeVisionResult.tags.map { it.label },
+                  )
+                  refreshTrigger++
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                  if (!isInspection) {
+                    Toast.makeText(context, "Saved tagged ${outFile.name}", Toast.LENGTH_SHORT).show()
+                  }
+                },
+                onDismiss = {
+                  latestVisionResult = null
+                  isVisionFrozen = false
+                },
+              )
+            }
+          }
+
+          // Live ML Kit Vision Threshold & Sample Scene Controls Row
+          AnimatedVisibility(
+            visible = captureMode == CameraCaptureMode.VISION,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .testTag("vision_controls_bar"),
+              horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              CameraVisionThresholdPreset.entries.forEach { thresholdOption ->
+                val selected = thresholdOption == visionThresholdPreset
+                FilterChip(
+                  selected = selected,
+                  onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    updateVisionThresholdPreset(thresholdOption)
+                  },
+                  label = {
+                    Text(
+                      text = thresholdOption.shortLabel,
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    )
+                  },
+                  leadingIcon = {
+                    Icon(
+                      imageVector = Icons.Default.Visibility,
+                      contentDescription = null,
+                      modifier = Modifier.size(16.dp),
+                    )
+                  },
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("vision_threshold_${thresholdOption.name}"),
+                )
+              }
+
+              CameraVisionSamplePreset.entries.forEach { preset ->
+                val selected = preset == visionSamplePreset
+                FilterChip(
+                  selected = selected,
+                  onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    updateVisionSamplePreset(preset)
+                    latestVisionResult = CameraEngine.buildVisionAnalysisResult(
+                      rawTags = preset.sampleTags,
+                      confidenceThreshold = visionThresholdPreset.minConfidence,
+                      inferenceLatencyMs = 15L,
+                      sourceDescription = preset.sceneTitle,
+                    )
+                  },
+                  label = {
+                    Text(
+                      text = preset.label,
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    )
+                  },
+                  leadingIcon = {
+                    Icon(
+                      imageVector = Icons.AutoMirrored.Filled.Label,
+                      contentDescription = null,
+                      modifier = Modifier.size(16.dp),
+                    )
+                  },
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("vision_preset_${preset.name}"),
+                )
+              }
+            }
+          }
+
+          // Mode Selector Row: Photo / Video / Scan / Note / Vision Mode Switcher Pill
           Row(
             modifier = Modifier
               .fillMaxWidth()
@@ -1819,6 +2097,7 @@ fun CameraScreen(
                           CameraCaptureMode.VIDEO -> Icons.Default.Videocam
                           CameraCaptureMode.SCANNER -> Icons.Default.QrCodeScanner
                           CameraCaptureMode.NOTE -> Icons.AutoMirrored.Filled.StickyNote2
+                          CameraCaptureMode.VISION -> Icons.Default.Visibility
                           CameraCaptureMode.PHOTO -> Icons.Default.PhotoCamera
                         },
                         contentDescription = null,
@@ -1964,7 +2243,9 @@ fun CameraScreen(
               targetValue = when {
                 isRecordingVideo -> MaterialTheme.colorScheme.error
                 captureMode == CameraCaptureMode.VIDEO -> MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
-                captureMode == CameraCaptureMode.SCANNER || captureMode == CameraCaptureMode.NOTE ->
+                captureMode == CameraCaptureMode.SCANNER ||
+                  captureMode == CameraCaptureMode.NOTE ||
+                  captureMode == CameraCaptureMode.VISION ->
                   MaterialTheme.colorScheme.tertiary
                 else -> MaterialTheme.colorScheme.primary
               },
@@ -1975,7 +2256,9 @@ fun CameraScreen(
               targetValue = when {
                 isRecordingVideo -> MaterialTheme.colorScheme.error
                 captureMode == CameraCaptureMode.VIDEO -> MaterialTheme.colorScheme.error
-                captureMode == CameraCaptureMode.SCANNER || captureMode == CameraCaptureMode.NOTE ->
+                captureMode == CameraCaptureMode.SCANNER ||
+                  captureMode == CameraCaptureMode.NOTE ||
+                  captureMode == CameraCaptureMode.VISION ->
                   MaterialTheme.colorScheme.tertiaryContainer
                 isCountingDown -> MaterialTheme.colorScheme.tertiaryContainer
                 else -> MaterialTheme.colorScheme.primaryContainer
@@ -1999,6 +2282,7 @@ fun CameraScreen(
                     captureMode == CameraCaptureMode.VIDEO -> "Start video recording"
                     captureMode == CameraCaptureMode.SCANNER -> "Scan QR code or barcode"
                     captureMode == CameraCaptureMode.NOTE -> "Scan document to note"
+                    captureMode == CameraCaptureMode.VISION -> "Analyze frame with ML Kit Vision"
                     else -> "Take photo"
                   }
                 },
@@ -2047,6 +2331,14 @@ fun CameraScreen(
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onTertiaryContainer,
                         modifier = Modifier.size(26.dp),
+                      )
+                      mode == CameraCaptureMode.VISION -> Icon(
+                        imageVector = Icons.Default.Visibility,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier
+                          .size(26.dp)
+                          .testTag("camera_shutter_vision_icon"),
                       )
                       else -> Icon(
                         imageVector = Icons.Default.Camera,
@@ -3290,16 +3582,527 @@ private fun DocumentNoteReticleOverlayCanvas(
 }
 
 /**
- * Floating card displayed above the bottom controls when a document is scanned via OCR in Note mode
- * and saved to the Notes tool.
+ * Viewfinder reticle and live ML Kit tagging telemetry HUD rendered when [CameraCaptureMode.VISION] is active.
+ */
+@Composable
+private fun VisionReticleOverlayCanvas(
+  visionResult: CameraVisionAnalysisResult?,
+  thresholdPreset: CameraVisionThresholdPreset,
+  isFrozen: Boolean,
+  modifier: Modifier = Modifier,
+  topInset: Dp = 20.dp,
+) {
+  val hasDetectedTags = visionResult != null && visionResult.tags.isNotEmpty()
+  val bracketColor = if (hasDetectedTags) {
+    MaterialTheme.colorScheme.tertiary
+  } else {
+    MaterialTheme.colorScheme.primary
+  }
+  val crosshairColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.28f)
+  val borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+
+  Box(modifier = modifier) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+      val minDim = size.minDimension
+      val frameW = (minDim * 0.72f).coerceAtMost(280.dp.toPx())
+      val frameH = (frameW * 0.88f).coerceAtMost(size.height * 0.65f)
+      val left = (size.width - frameW) / 2f
+      val top = topInset.toPx().coerceAtMost((size.height - frameH).coerceAtLeast(0f))
+      val right = left + frameW
+      val bottom = top + frameH
+      val cx = (left + right) / 2f
+      val cy = (top + bottom) / 2f
+      val armLen = minOf(frameW, frameH) * 0.16f
+      val strokePx = 3.5.dp.toPx()
+
+      // Subtle vision target frame
+      drawRoundRect(
+        color = borderColor,
+        topLeft = Offset(left, top),
+        size = Size(frameW, frameH),
+        cornerRadius = CornerRadius(18.dp.toPx(), 18.dp.toPx()),
+        style = Stroke(width = 1.dp.toPx()),
+      )
+
+      // Center optical target ring
+      val centerRadius = 18.dp.toPx()
+      drawCircle(
+        color = crosshairColor,
+        radius = centerRadius,
+        center = Offset(cx, cy),
+        style = Stroke(width = 1.2.dp.toPx()),
+      )
+      drawCircle(
+        color = bracketColor.copy(alpha = 0.65f),
+        radius = 3.dp.toPx(),
+        center = Offset(cx, cy),
+      )
+
+      // Corner brackets
+      drawLine(
+        color = bracketColor,
+        start = Offset(left, top + armLen),
+        end = Offset(left, top),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+      drawLine(
+        color = bracketColor,
+        start = Offset(left, top),
+        end = Offset(left + armLen, top),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+
+      drawLine(
+        color = bracketColor,
+        start = Offset(right - armLen, top),
+        end = Offset(right, top),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+      drawLine(
+        color = bracketColor,
+        start = Offset(right, top),
+        end = Offset(right, top + armLen),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+
+      drawLine(
+        color = bracketColor,
+        start = Offset(left, bottom - armLen),
+        end = Offset(left, bottom),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+      drawLine(
+        color = bracketColor,
+        start = Offset(left, bottom),
+        end = Offset(left + armLen, bottom),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+
+      drawLine(
+        color = bracketColor,
+        start = Offset(right - armLen, bottom),
+        end = Offset(right, bottom),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+      drawLine(
+        color = bracketColor,
+        start = Offset(right, bottom - armLen),
+        end = Offset(right, bottom),
+        strokeWidth = strokePx,
+        cap = StrokeCap.Round,
+      )
+    }
+
+    // Live ML Kit Telemetry Status Pill inside the top of the Vision Reticle
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(top = topInset + 10.dp, start = 24.dp, end = 24.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        modifier = Modifier.testTag("vision_hud_status_pill"),
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Visibility,
+            contentDescription = null,
+            tint = if (isFrozen) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(14.dp),
+          )
+          Text(
+            text = buildString {
+              append(if (isFrozen) "PAUSED" else "LIVE ML KIT")
+              append(" • ")
+              append(thresholdPreset.shortLabel)
+              if (visionResult != null) {
+                append(" • ${visionResult.inferenceLatencyMs}ms")
+                append(" • ${visionResult.galleryPassingCount} ≥80%")
+              }
+            },
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+        }
+      }
+
+      // Top 3 live floating tag pills in the viewfinder when tags are active
+      if (visionResult != null && visionResult.tags.isNotEmpty()) {
+        Row(
+          modifier = Modifier
+            .horizontalScroll(rememberScrollState())
+            .testTag("vision_hud_top_tags_row"),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          visionResult.tags.take(3).forEach { tag ->
+            Surface(
+              shape = RoundedCornerShape(14.dp),
+              color = if (tag.passesGalleryThreshold) {
+                MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
+              } else {
+                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f)
+              },
+              border = BorderStroke(
+                width = 1.dp,
+                color = if (tag.passesGalleryThreshold) {
+                  MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f)
+                } else {
+                  MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                },
+              ),
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+              ) {
+                Text(
+                  text = tag.label,
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = if (tag.passesGalleryThreshold) {
+                    MaterialTheme.colorScheme.onTertiaryContainer
+                  } else {
+                    MaterialTheme.colorScheme.onSurface
+                  },
+                )
+                Text(
+                  text = tag.confidenceFormatted,
+                  style = MaterialTheme.typography.labelSmall,
+                  fontFamily = FontFamily.Monospace,
+                  color = if (tag.passesGalleryThreshold) {
+                    MaterialTheme.colorScheme.onTertiaryContainer
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Floating card displayed above the bottom controls in [CameraCaptureMode.VISION] mode,
+ * showing live or snapshot ML Kit Image Labeling tags, exact confidence scores, 80% Gallery
+ * auto-tag threshold comparison bars, and quick actions.
+ */
+@Composable
+private fun VisionLiveTaggingCard(
+  result: CameraVisionAnalysisResult,
+  isFrozen: Boolean,
+  onToggleFreeze: () -> Unit,
+  onCopyReport: () -> Unit,
+  onSaveTaggedPhoto: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  Card(
+    shape = RoundedCornerShape(18.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.95f),
+    ),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.6f)),
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("vision_detected_card"),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 14.dp, vertical = 10.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      // Header Row
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Row(
+          modifier = Modifier.weight(1f),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Box(
+            modifier = Modifier
+              .size(38.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.tertiaryContainer),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Visibility,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.onTertiaryContainer,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          Column(modifier = Modifier.weight(1f)) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+              ) {
+                Text(
+                  text = "${result.galleryPassingCount}/${result.tags.size} ≥80% GALLERY",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.onPrimaryContainer,
+                  modifier = Modifier
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .testTag("vision_gallery_threshold_badge"),
+                )
+              }
+              Text(
+                text = "${result.inferenceLatencyMs}ms · Avg ${result.averageConfidenceFormatted}",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+            Text(
+              text = result.sourceDescription,
+              style = MaterialTheme.typography.bodyMedium,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.testTag("vision_detected_source_title"),
+            )
+          }
+        }
+
+        IconButton(
+          onClick = onDismiss,
+          modifier = Modifier
+            .size(32.dp)
+            .testTag("vision_result_dismiss_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = "Dismiss ML Kit Vision result",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
+
+      // Tag Confidence Accuracy Rows
+      if (result.tags.isEmpty()) {
+        Text(
+          text = "No labels met the ${(result.confidenceThreshold * 100f).roundToInt()}% confidence threshold (${result.allCandidateTags.size} lower-confidence candidates filtered).",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.testTag("vision_empty_threshold_message"),
+        )
+      } else {
+        Column(
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("vision_tags_list"),
+          verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+          result.tags.take(5).forEach { tag ->
+            val passesGallery = tag.passesGalleryThreshold
+            val barFillColor = if (passesGallery) {
+              MaterialTheme.colorScheme.tertiary
+            } else {
+              MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+            }
+            val barTrackColor = MaterialTheme.colorScheme.surfaceVariant
+            val markerColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("vision_tag_row_${tag.label}"),
+              verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                  modifier = Modifier.weight(1f),
+                ) {
+                  Text(
+                    text = tag.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                  if (tag.index >= 0) {
+                    Text(
+                      text = "#${tag.index}",
+                      style = MaterialTheme.typography.labelSmall,
+                      fontFamily = FontFamily.Monospace,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                  if (passesGallery) {
+                    Surface(
+                      shape = RoundedCornerShape(6.dp),
+                      color = MaterialTheme.colorScheme.tertiaryContainer,
+                    ) {
+                      Text(
+                        text = "≥80%",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                      )
+                    }
+                  }
+                }
+
+                Text(
+                  text = tag.confidenceFormatted,
+                  style = MaterialTheme.typography.labelMedium,
+                  fontFamily = FontFamily.Monospace,
+                  fontWeight = FontWeight.Bold,
+                  color = if (passesGallery) {
+                    MaterialTheme.colorScheme.tertiary
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                )
+              }
+
+              // Confidence Bar with 80% Gallery Threshold Marker
+              Canvas(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .height(6.dp)
+                  .clip(RoundedCornerShape(3.dp)),
+              ) {
+                drawRoundRect(
+                  color = barTrackColor,
+                  size = size,
+                  cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
+                )
+                drawRoundRect(
+                  color = barFillColor,
+                  size = Size(size.width * tag.confidenceClamped, size.height),
+                  cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
+                )
+                // 80% Gallery threshold tick mark
+                val galleryTickX = size.width * GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD
+                drawLine(
+                  color = markerColor,
+                  start = Offset(galleryTickX, 0f),
+                  end = Offset(galleryTickX, size.height),
+                  strokeWidth = 1.5.dp.toPx(),
+                )
+              }
+            }
+          }
+        }
+      }
+
+      // Action Buttons Row
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Button(
+          onClick = onToggleFreeze,
+          shape = RoundedCornerShape(12.dp),
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("vision_freeze_toggle_button"),
+        ) {
+          Icon(
+            imageVector = if (isFrozen) Icons.Default.PlayArrow else Icons.Default.Pause,
+            contentDescription = null,
+            modifier = Modifier.size(15.dp),
+          )
+          Spacer(modifier = Modifier.width(5.dp))
+          Text(
+            text = if (isFrozen) "Resume Live" else "Pause Live",
+            style = MaterialTheme.typography.labelMedium,
+          )
+        }
+
+        TextButton(
+          onClick = onCopyReport,
+          shape = RoundedCornerShape(12.dp),
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("vision_copy_report_button"),
+        ) {
+          Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("Copy Report", style = MaterialTheme.typography.labelMedium)
+        }
+
+        TextButton(
+          onClick = onSaveTaggedPhoto,
+          shape = RoundedCornerShape(12.dp),
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+          modifier = Modifier
+            .height(34.dp)
+            .testTag("vision_save_tagged_photo_button"),
+        ) {
+          Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(15.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("Save Tagged PNG", style = MaterialTheme.typography.labelMedium)
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Floating card displayed above the bottom controls when a document is scanned via OCR in Note mode,
+ * allowing the user to review the extracted title and contents before pressing Add Note.
  */
 @Composable
 private fun ScannedNoteResultCard(
   document: CameraScannedDocument,
+  onAddNote: () -> Unit,
   onCopy: () -> Unit,
   onOpenNotes: () -> Unit,
   onDismiss: () -> Unit,
 ) {
+  val isSaved = document.savedNoteId != null
+
   Card(
     shape = RoundedCornerShape(18.dp),
     colors = CardDefaults.cardColors(
@@ -3348,16 +4151,24 @@ private fun ScannedNoteResultCard(
             ) {
               Surface(
                 shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
+                color = if (isSaved) {
+                  MaterialTheme.colorScheme.primaryContainer
+                } else {
+                  MaterialTheme.colorScheme.secondaryContainer
+                },
               ) {
                 Text(
-                  text = "SAVED TO NOTES",
+                  text = if (isSaved) "SAVED TO NOTES" else "REVIEW NOTE",
                   style = MaterialTheme.typography.labelSmall,
                   fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.onPrimaryContainer,
+                  color = if (isSaved) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                  } else {
+                    MaterialTheme.colorScheme.onSecondaryContainer
+                  },
                   modifier = Modifier
                     .padding(horizontal = 6.dp, vertical = 2.dp)
-                    .testTag("note_scanner_saved_badge"),
+                    .testTag(if (isSaved) "note_scanner_saved_badge" else "note_scanner_review_badge"),
                 )
               }
               Text(
@@ -3381,7 +4192,7 @@ private fun ScannedNoteResultCard(
               text = document.bodyContent.ifBlank { document.rawText },
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 2,
+              maxLines = 3,
               overflow = TextOverflow.Ellipsis,
               modifier = Modifier.testTag("note_scanner_detected_content"),
             )
@@ -3411,19 +4222,58 @@ private fun ScannedNoteResultCard(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Button(
-          onClick = onOpenNotes,
+          onClick = onAddNote,
+          enabled = !isSaved,
           shape = RoundedCornerShape(12.dp),
           contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
           modifier = Modifier
             .height(34.dp)
-            .testTag("note_scanner_open_notes_button"),
+            .testTag("note_scanner_add_note_button"),
         ) {
-          Icon(Icons.AutoMirrored.Filled.StickyNote2, contentDescription = null, modifier = Modifier.size(15.dp))
+          Icon(
+            imageVector = if (isSaved) Icons.Default.Check else Icons.Default.Add,
+            contentDescription = null,
+            modifier = Modifier.size(15.dp),
+          )
           Spacer(modifier = Modifier.width(5.dp))
           Text(
-            text = "Open Notes",
+            text = if (isSaved) "Added" else "Add Note",
             style = MaterialTheme.typography.labelMedium,
           )
+        }
+
+        if (isSaved) {
+          Button(
+            onClick = onOpenNotes,
+            shape = RoundedCornerShape(12.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier
+              .height(34.dp)
+              .testTag("note_scanner_open_notes_button"),
+          ) {
+            Icon(Icons.AutoMirrored.Filled.StickyNote2, contentDescription = null, modifier = Modifier.size(15.dp))
+            Spacer(modifier = Modifier.width(5.dp))
+            Text(
+              text = "Open Notes",
+              style = MaterialTheme.typography.labelMedium,
+            )
+          }
+        } else {
+          TextButton(
+            onClick = onOpenNotes,
+            shape = RoundedCornerShape(12.dp),
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+            modifier = Modifier
+              .height(34.dp)
+              .testTag("note_scanner_open_notes_button"),
+          ) {
+            Icon(Icons.AutoMirrored.Filled.StickyNote2, contentDescription = null, modifier = Modifier.size(15.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+              text = "Open Notes",
+              style = MaterialTheme.typography.labelMedium,
+            )
+          }
         }
 
         TextButton(
@@ -4078,5 +4928,13 @@ private fun executeScannedCodePrimaryAction(
 private fun CameraScreenPreview() {
   ToolboxTheme {
     CameraScreen()
+  }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun CameraVisionScreenPreview() {
+  ToolboxTheme {
+    CameraScreen(initialCaptureMode = CameraCaptureMode.VISION)
   }
 }

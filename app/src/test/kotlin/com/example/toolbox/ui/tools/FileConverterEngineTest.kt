@@ -347,21 +347,31 @@ class FileConverterEngineTest {
       assertNotNull("Expected PNG -> ${target.name} OCR route", pngRoute)
       assertEquals(ConverterBackend.NATIVE, pngRoute!!.preferredBackend)
       assertEquals(ConverterBackend.FFMPEG, pngRoute.fallbackBackend)
+      assertTrue("Expected PNG -> ${target.name} to be marked usesOcr", pngRoute.usesOcr)
 
       val jpgRoute = FileConverterEngine.getRoute(ConvertibleFormat.JPG, target)
       assertNotNull("Expected JPG -> ${target.name} OCR route", jpgRoute)
       assertEquals(ConverterBackend.NATIVE, jpgRoute!!.preferredBackend)
+      assertTrue("Expected JPG -> ${target.name} to be marked usesOcr", jpgRoute.usesOcr)
 
       // TIFF uses FFMPEG decode + ML Kit OCR
       val tiffRoute = FileConverterEngine.getRoute(ConvertibleFormat.TIFF, target)
       assertNotNull("Expected TIFF -> ${target.name} OCR route", tiffRoute)
       assertEquals(ConverterBackend.FFMPEG, tiffRoute!!.preferredBackend)
+      assertTrue("Expected TIFF -> ${target.name} to be marked usesOcr", tiffRoute.usesOcr)
 
       // PDF uses NATIVE PdfRenderer + ML Kit OCR
       val pdfRoute = FileConverterEngine.getRoute(ConvertibleFormat.PDF, target)
       assertNotNull("Expected PDF -> ${target.name} OCR route", pdfRoute)
       assertEquals(ConverterBackend.NATIVE, pdfRoute!!.preferredBackend)
+      assertTrue("Expected PDF -> ${target.name} to be marked usesOcr", pdfRoute.usesOcr)
     }
+
+    // Non-OCR routes should have usesOcr = false
+    assertFalse(FileConverterEngine.getRoute(ConvertibleFormat.PNG, ConvertibleFormat.JPG)!!.usesOcr)
+    assertFalse(FileConverterEngine.getRoute(ConvertibleFormat.PNG, ConvertibleFormat.PDF)!!.usesOcr)
+    assertFalse(FileConverterEngine.getRoute(ConvertibleFormat.PDF, ConvertibleFormat.PNG)!!.usesOcr)
+    assertFalse(FileConverterEngine.getRoute(ConvertibleFormat.CSV, ConvertibleFormat.JSON)!!.usesOcr)
   }
 
   @Test

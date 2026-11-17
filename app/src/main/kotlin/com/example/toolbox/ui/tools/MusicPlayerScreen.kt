@@ -105,6 +105,7 @@ import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -112,6 +113,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Search
@@ -149,6 +151,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.material3.rememberStandardBottomSheetState
 import androidx.compose.runtime.Composable
@@ -182,6 +185,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -236,10 +242,33 @@ internal data class MusicItemActionDispatcher(
   val onDuplicateTrack: (MusicTrack) -> Unit = {},
   val onRenameTrack: (MusicTrack) -> Unit = {},
   val onDeleteTrack: (MusicTrack) -> Unit = {},
+  val onRenameArtist: (MusicArtist) -> Unit = {},
+  val onDeleteArtist: (MusicArtist) -> Unit = {},
+  val onRenameAlbum: (MusicAlbum) -> Unit = {},
+  val onDeleteAlbum: (MusicAlbum) -> Unit = {},
+  val onRenameGenre: (MusicGenre) -> Unit = {},
+  val onDeleteGenre: (MusicGenre) -> Unit = {},
   val onRenamePlaylist: (MusicPlaylist) -> Unit = {},
+  val onDeletePlaylist: (MusicPlaylist) -> Unit = {},
+)
+
+private enum class BulkDeleteCollectionKind(val label: String) {
+  ARTIST("Artist"),
+  ALBUM("Album"),
+  GENRE("Genre"),
+}
+
+private data class BulkDeleteMusicCollectionTarget(
+  val kind: BulkDeleteCollectionKind,
+  val name: String,
+  val artistScope: String = "",
+  val songCount: Int,
+  val subtitle: String,
 )
 
 internal val LocalMusicItemActions = compositionLocalOf { MusicItemActionDispatcher() }
+
+private val ArtworkOverlayButtonBackground = Color.Black.copy(alpha = 0.45f)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -382,7 +411,7 @@ fun MusicPlayerScreen(
   }
 
   fun deletePlaylist(playlistId: String) {
-    if (playlistId in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS) return
+    if (MusicPlayerEngine.isProtectedPlaylistId(playlistId)) return
     session.deletePlaylist(playlistId)
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
   }
@@ -509,6 +538,40 @@ fun MusicPlayerScreen(
     MusicPlayerEngine.filterPlaylists(basePlaylists, activeQuery)
   }
 
+  val homeRefreshGeneration = session.homeRefreshGeneration
+  val baseHomePlaylists = remember(
+    allTracks,
+    playStats,
+    favoriteIds,
+    favoriteArtists,
+    favoriteAlbums,
+    favoriteGenres,
+    homeRefreshGeneration,
+  ) {
+    MusicPlayerEngine.generateHomePlaylists(
+      allTracks = allTracks,
+      playStats = playStats,
+      favoriteIds = favoriteIds,
+      favoriteArtists = favoriteArtists,
+      favoriteAlbums = favoriteAlbums,
+      favoriteGenres = favoriteGenres,
+      refreshGeneration = homeRefreshGeneration,
+    )
+  }
+  val allHomePlaylists = remember(
+    baseHomePlaylists,
+    searchQuery,
+    selectedTab,
+    selectedArtistName,
+    selectedAlbumKey,
+    selectedGenreName,
+    selectedPlaylistId,
+  ) {
+    val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
+    val activeQuery = if (!hasDrill && selectedTab == MusicLibraryTab.HOME) searchQuery else ""
+    MusicPlayerEngine.filterPlaylists(baseHomePlaylists, activeQuery)
+  }
+
   // Playback Queue & Active Track State (managed by MusicPlaybackSession so playback continues across tool switches)
   val playbackQueue = session.playbackQueue
   val currentQueueIndex = session.currentQueueIndex
@@ -532,7 +595,12 @@ fun MusicPlayerScreen(
   var tracksForAddToPlaylistDialog by remember { mutableStateOf<List<MusicTrack>?>(null) }
   var trackForRenameDialog by remember { mutableStateOf<MusicTrack?>(null) }
   var trackForDeleteDialog by remember { mutableStateOf<MusicTrack?>(null) }
+  var artistForRenameDialog by remember { mutableStateOf<MusicArtist?>(null) }
+  var albumForRenameDialog by remember { mutableStateOf<MusicAlbum?>(null) }
+  var genreForRenameDialog by remember { mutableStateOf<MusicGenre?>(null) }
+  var bulkDeleteTarget by remember { mutableStateOf<BulkDeleteMusicCollectionTarget?>(null) }
   var playlistForRenameDialog by remember { mutableStateOf<MusicPlaylist?>(null) }
+  var playlistForDeleteDialog by remember { mutableStateOf<MusicPlaylist?>(null) }
   var inlineColorPickerHex by rememberSaveable { mutableStateOf<String?>(null) }
   var showSortMenu by remember { mutableStateOf(false) }
   val crossToolHostState = rememberCrossToolFileHostState()
@@ -821,9 +889,48 @@ fun MusicPlayerScreen(
       onDeleteTrack = { track ->
         trackForDeleteDialog = track
       },
+      onRenameArtist = { artist ->
+        artistForRenameDialog = artist
+      },
+      onDeleteArtist = { artist ->
+        bulkDeleteTarget = BulkDeleteMusicCollectionTarget(
+          kind = BulkDeleteCollectionKind.ARTIST,
+          name = artist.name,
+          songCount = artist.songCount,
+          subtitle = "${artist.name} • ${artist.summaryText}",
+        )
+      },
+      onRenameAlbum = { album ->
+        albumForRenameDialog = album
+      },
+      onDeleteAlbum = { album ->
+        bulkDeleteTarget = BulkDeleteMusicCollectionTarget(
+          kind = BulkDeleteCollectionKind.ALBUM,
+          name = album.name,
+          artistScope = album.artist,
+          songCount = album.songCount,
+          subtitle = "${album.name} • ${album.summaryText}",
+        )
+      },
+      onRenameGenre = { genre ->
+        genreForRenameDialog = genre
+      },
+      onDeleteGenre = { genre ->
+        bulkDeleteTarget = BulkDeleteMusicCollectionTarget(
+          kind = BulkDeleteCollectionKind.GENRE,
+          name = genre.name,
+          songCount = genre.songCount,
+          subtitle = "${genre.name} • ${genre.summaryText}",
+        )
+      },
       onRenamePlaylist = { playlist ->
-        if (!playlist.isBuiltIn) {
+        if (!playlist.isBuiltIn && !playlist.isGeneratedHomeMix && !MusicPlayerEngine.isProtectedPlaylistId(playlist.id)) {
           playlistForRenameDialog = playlist
+        }
+      },
+      onDeletePlaylist = { playlist ->
+        if (!playlist.isBuiltIn && !playlist.isGeneratedHomeMix && !MusicPlayerEngine.isProtectedPlaylistId(playlist.id)) {
+          playlistForDeleteDialog = playlist
         }
       },
     )
@@ -906,7 +1013,7 @@ fun MusicPlayerScreen(
         }
       }
       val activePlaylist = selectedPlaylistId?.let { id ->
-        basePlaylists.find { it.id == id }?.let { playlist ->
+        (basePlaylists + baseHomePlaylists).find { it.id == id }?.let { playlist ->
           if (searchQuery.isBlank()) {
             playlist
           } else {
@@ -1114,9 +1221,9 @@ fun MusicPlayerScreen(
                 }
               },
               onDeletePlaylist = {
-                deletePlaylist(activePlaylist.id)
-                selectedPlaylistId = null
-                sectionFocusVersion++
+                if (!activePlaylist.isBuiltIn && !activePlaylist.isGeneratedHomeMix && !MusicPlayerEngine.isProtectedPlaylistId(activePlaylist.id)) {
+                  playlistForDeleteDialog = activePlaylist
+                }
               },
               onSelectTrack = { track ->
                 playTrackInContext(track, activePlaylist.tracks)
@@ -1127,6 +1234,45 @@ fun MusicPlayerScreen(
 
           else -> {
             when (selectedTab) {
+              MusicLibraryTab.HOME -> {
+                HomeTabContent(
+                  playlists = allHomePlaylists,
+                  viewMode = viewMode,
+                  cardsPerRow = cardsPerRow,
+                  currentTrackId = currentTrack?.id,
+                  isPlaying = isPlaying,
+                  refreshGeneration = homeRefreshGeneration,
+                  onRefresh = {
+                    session.refreshHomePlaylists()
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                  },
+                  onPlayAll = {
+                    val tracks = allHomePlaylists.flatMap { it.tracks }.distinctBy { it.id }.ifEmpty { sortedTracks }
+                    if (tracks.isNotEmpty()) {
+                      playTrackInContext(tracks.first(), tracks)
+                    }
+                  },
+                  onShuffleAll = {
+                    val nonEmpty = allHomePlaylists.filter { it.tracks.isNotEmpty() }
+                    if (nonEmpty.isNotEmpty()) {
+                      val randomPlaylist = nonEmpty.random()
+                      playShuffledContext(randomPlaylist.tracks)
+                    } else if (sortedTracks.isNotEmpty()) {
+                      playShuffledContext(sortedTracks)
+                    }
+                  },
+                  onSelectPlaylist = { playlist ->
+                    selectedPlaylistId = playlist.id
+                    sectionFocusVersion++
+                  },
+                  onPlayPlaylist = { playlist ->
+                    if (playlist.tracks.isNotEmpty()) {
+                      playTrackInContext(playlist.tracks.first(), playlist.tracks)
+                    }
+                  },
+                )
+              }
+
               MusicLibraryTab.ARTISTS -> {
                 ArtistsTabContent(
                   artists = allArtists,
@@ -1346,7 +1492,9 @@ fun MusicPlayerScreen(
                     }
                   },
                   onDeletePlaylist = { playlist ->
-                    deletePlaylist(playlist.id)
+                    if (!playlist.isBuiltIn && !playlist.isGeneratedHomeMix && !MusicPlayerEngine.isProtectedPlaylistId(playlist.id)) {
+                      playlistForDeleteDialog = playlist
+                    }
                   },
                 )
               }
@@ -1597,6 +1745,87 @@ fun MusicPlayerScreen(
         onDismiss = { playlistForRenameDialog = null },
       )
     }
+
+    // 13. Rename Artist Dialog
+    artistForRenameDialog?.let { targetArtist ->
+      RenameMusicItemDialog(
+        title = "Rename Artist",
+        subtitle = targetArtist.summaryText,
+        initialValue = targetArtist.name,
+        label = "Artist Name",
+        onConfirm = { newName ->
+          session.renameArtist(targetArtist.name, newName)
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          artistForRenameDialog = null
+        },
+        onDismiss = { artistForRenameDialog = null },
+      )
+    }
+
+    // 14. Rename Album Dialog
+    albumForRenameDialog?.let { targetAlbum ->
+      RenameMusicItemDialog(
+        title = "Rename Album",
+        subtitle = targetAlbum.summaryText,
+        initialValue = targetAlbum.name,
+        label = "Album Name",
+        onConfirm = { newName ->
+          session.renameAlbum(targetAlbum.name, targetAlbum.artist, newName)
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          albumForRenameDialog = null
+        },
+        onDismiss = { albumForRenameDialog = null },
+      )
+    }
+
+    // 15. Rename Genre Dialog
+    genreForRenameDialog?.let { targetGenre ->
+      RenameMusicItemDialog(
+        title = "Rename Genre",
+        subtitle = targetGenre.summaryText,
+        initialValue = targetGenre.name,
+        label = "Genre Name",
+        onConfirm = { newName ->
+          session.renameGenre(targetGenre.name, newName)
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          genreForRenameDialog = null
+        },
+        onDismiss = { genreForRenameDialog = null },
+      )
+    }
+
+    // 16. Bulk Delete Artist / Album / Genre Confirmation Dialog (requires typing the name)
+    bulkDeleteTarget?.let { target ->
+      BulkDeleteMusicCollectionConfirmDialog(
+        target = target,
+        onConfirm = {
+          when (target.kind) {
+            BulkDeleteCollectionKind.ARTIST -> session.deleteArtist(target.name)
+            BulkDeleteCollectionKind.ALBUM -> session.deleteAlbum(target.name, target.artistScope)
+            BulkDeleteCollectionKind.GENRE -> session.deleteGenre(target.name)
+          }
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          bulkDeleteTarget = null
+        },
+        onDismiss = { bulkDeleteTarget = null },
+      )
+    }
+
+    // 17. Delete User-Created Playlist Confirmation Dialog
+    playlistForDeleteDialog?.let { targetPlaylist ->
+      DeletePlaylistConfirmDialog(
+        playlist = targetPlaylist,
+        onConfirm = {
+          deletePlaylist(targetPlaylist.id)
+          if (selectedPlaylistId == targetPlaylist.id) {
+            selectedPlaylistId = null
+            sectionFocusVersion++
+          }
+          playlistForDeleteDialog = null
+        },
+        onDismiss = { playlistForDeleteDialog = null },
+      )
+    }
   }
   }
 }
@@ -1750,6 +1979,7 @@ internal fun ViewModeSegmentedToggle(
 }
 
 private fun MusicLibraryTab.iconVector() = when (this) {
+  MusicLibraryTab.HOME -> Icons.Default.Home
   MusicLibraryTab.ARTISTS -> Icons.Default.Person
   MusicLibraryTab.ALBUMS -> Icons.Default.Album
   MusicLibraryTab.SONGS -> Icons.Default.MusicNote
@@ -2063,6 +2293,397 @@ private fun LazyGridState.isItemFullyVisible(index: Int): Boolean {
     (item.offset.y + item.size.height) <= info.viewportEndOffset
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HomeTabContent(
+  playlists: List<MusicPlaylist>,
+  viewMode: MusicViewMode,
+  cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
+  currentTrackId: String?,
+  isPlaying: Boolean,
+  refreshGeneration: Int = 0,
+  onRefresh: () -> Unit,
+  onPlayAll: () -> Unit,
+  onShuffleAll: () -> Unit,
+  onSelectPlaylist: (MusicPlaylist) -> Unit,
+  onPlayPlaylist: (MusicPlaylist) -> Unit,
+) {
+  val density = LocalDensity.current
+  val pullThresholdPx = with(density) { 44.dp.toPx() }
+  var lastRefreshTimeMs by remember { mutableLongStateOf(0L) }
+  var accumulatedPullPx by remember { mutableFloatStateOf(0f) }
+  val currentOnRefresh by rememberUpdatedState(onRefresh)
+
+  fun triggerPullRefresh() {
+    val now = System.currentTimeMillis()
+    if (now - lastRefreshTimeMs >= 120L) {
+      lastRefreshTimeMs = now
+      currentOnRefresh()
+    }
+  }
+
+  val pullNestedScrollConnection = remember(pullThresholdPx) {
+    object : NestedScrollConnection {
+      override fun onPostScroll(
+        consumed: Offset,
+        available: Offset,
+        source: NestedScrollSource,
+      ): Offset {
+        if (source == NestedScrollSource.UserInput && available.y > 0f) {
+          accumulatedPullPx += available.y
+        } else if (consumed.y < 0f) {
+          accumulatedPullPx = 0f
+        }
+        return Offset.Zero
+      }
+
+      override suspend fun onPreFling(available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
+        if (accumulatedPullPx >= pullThresholdPx) {
+          accumulatedPullPx = 0f
+          triggerPullRefresh()
+        } else {
+          accumulatedPullPx = 0f
+        }
+        return androidx.compose.ui.unit.Velocity.Zero
+      }
+    }
+  }
+
+  Column(
+    modifier = Modifier
+      .fillMaxSize()
+      .testTag("music_home_tab_content"),
+  ) {
+    // Quick Action Row: Play All, Shuffle, Refresh Mixes
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 12.dp, vertical = 4.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      FilledTonalButton(
+        onClick = onPlayAll,
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier.testTag("music_play_all_button"),
+      ) {
+        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Play All", style = MaterialTheme.typography.labelMedium)
+      }
+
+      OutlinedButton(
+        onClick = onShuffleAll,
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier.testTag("music_shuffle_all_button"),
+      ) {
+        Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Shuffle", style = MaterialTheme.typography.labelMedium)
+      }
+
+      Spacer(modifier = Modifier.weight(1f))
+
+      OutlinedButton(
+        onClick = onRefresh,
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier.testTag("music_home_refresh_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Refresh,
+          contentDescription = "Refresh mixes",
+          modifier = Modifier.size(16.dp),
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Refresh", style = MaterialTheme.typography.labelMedium)
+      }
+    }
+
+    PullToRefreshBox(
+      isRefreshing = false,
+      onRefresh = { triggerPullRefresh() },
+      modifier = Modifier
+        .fillMaxSize()
+        .nestedScroll(pullNestedScrollConnection)
+        .testTag("home_pull_to_refresh"),
+    ) {
+      if (playlists.isEmpty()) {
+        EmptyMusicState(
+          message = "No mixes match your search — pull down to refresh your 6 custom mixes",
+        )
+      } else if (viewMode == MusicViewMode.LIST) {
+        LazyColumn(
+          modifier = Modifier
+            .fillMaxSize()
+            .testTag("home_list_view"),
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          item(key = "home_mixes_banner") {
+            Surface(
+              shape = RoundedCornerShape(12.dp),
+              color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("home_mixes_header"),
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.AutoAwesome,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(18.dp),
+                )
+                Text(
+                  text = "Made for You • 6 ~1 hr mixes • Pull down to refresh",
+                  style = MaterialTheme.typography.labelMedium,
+                  color = MaterialTheme.colorScheme.onSecondaryContainer,
+                  fontWeight = FontWeight.Medium,
+                )
+              }
+            }
+          }
+
+          itemsIndexed(playlists, key = { idx, it -> "${it.id}_${refreshGeneration}_$idx" }) { index, playlist ->
+            val isActive = currentTrackId != null && playlist.tracks.any { it.id == currentTrackId }
+            Card(
+              shape = RoundedCornerShape(14.dp),
+              colors = CardDefaults.cardColors(
+                containerColor = if (isActive) {
+                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                } else {
+                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                },
+              ),
+              border = BorderStroke(
+                width = 1.dp,
+                color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+              ),
+              modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onSelectPlaylist(playlist) }
+                .semantics { selected = isActive }
+                .testTag("home_playlist_item_$index"),
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(12.dp)
+                  .testTag("playlist_item_${playlist.name}"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+              ) {
+                TrackArtworkThumbnail(
+                  track = playlist.representativeTrack,
+                  size = 56.dp,
+                  shape = RoundedCornerShape(12.dp),
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                  Text(
+                    text = playlist.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                  Text(
+                    text = playlist.summaryText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+                FilledIconButton(
+                  onClick = { onPlayPlaylist(playlist) },
+                  shape = CircleShape,
+                  modifier = Modifier
+                    .size(36.dp)
+                    .testTag("play_playlist_${playlist.name}"),
+                  colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                  ),
+                ) {
+                  Icon(
+                    imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                    contentDescription = "Play ${playlist.name}",
+                    modifier = Modifier.size(18.dp),
+                  )
+                }
+                MusicCollectionContextMenuButton(
+                  collectionTitle = playlist.name,
+                  tracks = playlist.tracks,
+                  moreButtonTestTag = "playlist_more_${playlist.name}",
+                  menuTestTag = "playlist_menu_${playlist.name}",
+                  onPlay = { onPlayPlaylist(playlist) },
+                )
+              }
+            }
+          }
+        }
+      } else {
+        LazyVerticalGrid(
+          columns = GridCells.Fixed(cardsPerRow),
+          modifier = Modifier
+            .fillMaxSize()
+            .testTag("home_card_view"),
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          item(span = { GridItemSpan(maxLineSpan) }, key = "home_mixes_banner") {
+            Surface(
+              shape = RoundedCornerShape(12.dp),
+              color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("home_mixes_header"),
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.AutoAwesome,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(18.dp),
+                )
+                Text(
+                  text = "Made for You • 6 ~1 hr mixes • Pull down to refresh",
+                  style = MaterialTheme.typography.labelMedium,
+                  color = MaterialTheme.colorScheme.onSecondaryContainer,
+                  fontWeight = FontWeight.Medium,
+                )
+              }
+            }
+          }
+
+          gridItemsIndexed(playlists, key = { idx, it -> "${it.id}_${refreshGeneration}_$idx" }) { index, playlist ->
+            val isActive = currentTrackId != null && playlist.tracks.any { it.id == currentTrackId }
+            Card(
+              shape = RoundedCornerShape(14.dp),
+              colors = CardDefaults.cardColors(
+                containerColor = if (isActive) {
+                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                } else {
+                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                },
+              ),
+              border = BorderStroke(
+                width = 1.dp,
+                color = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+              ),
+              modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onSelectPlaylist(playlist) }
+                .semantics { selected = isActive }
+                .testTag("home_playlist_item_$index"),
+            ) {
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(10.dp)
+                  .testTag("playlist_item_${playlist.name}"),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Box(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1.15f)
+                    .clip(RoundedCornerShape(12.dp)),
+                ) {
+                  TrackArtworkBanner(
+                    track = playlist.representativeTrack,
+                    modifier = Modifier.fillMaxSize(),
+                  )
+                  Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color.Black.copy(alpha = 0.55f),
+                    modifier = Modifier
+                      .align(Alignment.TopStart)
+                      .padding(6.dp),
+                  ) {
+                    Text(
+                      text = playlist.totalDurationFormatted,
+                      style = MaterialTheme.typography.labelSmall,
+                      fontFamily = FontFamily.Monospace,
+                      color = Color.White,
+                      modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                  }
+                  MusicCollectionContextMenuButton(
+                    collectionTitle = playlist.name,
+                    tracks = playlist.tracks,
+                    moreButtonTestTag = "playlist_more_${playlist.name}",
+                    menuTestTag = "playlist_menu_${playlist.name}",
+                    onPlay = { onPlayPlaylist(playlist) },
+                    tint = Color.White,
+                    containerColor = ArtworkOverlayButtonBackground,
+                    modifier = Modifier
+                      .align(Alignment.BottomStart)
+                      .padding(6.dp),
+                  )
+                  FilledIconButton(
+                    onClick = { onPlayPlaylist(playlist) },
+                    shape = CircleShape,
+                    modifier = Modifier
+                      .align(Alignment.BottomEnd)
+                      .padding(6.dp)
+                      .size(30.dp)
+                      .testTag("play_playlist_${playlist.name}"),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                      containerColor = ArtworkOverlayButtonBackground,
+                      contentColor = Color.White,
+                    ),
+                  ) {
+                    Icon(
+                      imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                      contentDescription = "Play ${playlist.name}",
+                      modifier = Modifier.size(16.dp),
+                    )
+                  }
+                }
+                Text(
+                  text = playlist.name,
+                  style = MaterialTheme.typography.bodyLarge,
+                  fontWeight = FontWeight.SemiBold,
+                  color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                  text = playlist.summaryText,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 2,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 @Composable
 private fun ArtistsTabContent(
   artists: List<MusicArtist>,
@@ -2258,6 +2879,7 @@ private fun ArtistsTabContent(
                   modifier = Modifier.size(18.dp),
                 )
               }
+              val itemActions = LocalMusicItemActions.current
               MusicCollectionContextMenuButton(
                 collectionTitle = artist.name,
                 tracks = artist.tracks,
@@ -2266,6 +2888,8 @@ private fun ArtistsTabContent(
                 isFavorite = isFavorite,
                 onToggleFavorite = { onToggleFavoriteArtist(artist) },
                 onPlay = { onPlayArtist(artist) },
+                onRenamePlaylist = { itemActions.onRenameArtist(artist) },
+                onDeletePlaylist = { itemActions.onDeleteArtist(artist) },
               )
             }
           }
@@ -2338,15 +2962,18 @@ private fun ArtistsTabContent(
                   modifier = Modifier
                     .size(30.dp)
                     .align(Alignment.TopEnd)
+                    .clip(CircleShape)
+                    .background(ArtworkOverlayButtonBackground, CircleShape)
                     .testTag("favorite_artist_${artist.name}"),
                 ) {
                   Icon(
                     imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
                     contentDescription = if (isFavorite) "Remove ${artist.name} from favorites" else "Add ${artist.name} to favorites",
-                    tint = if (isFavorite) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = if (isFavorite) Color(0xFFFF80AB) else Color.White,
                     modifier = Modifier.size(16.dp),
                   )
                 }
+                val itemActions = LocalMusicItemActions.current
                 MusicCollectionContextMenuButton(
                   collectionTitle = artist.name,
                   tracks = artist.tracks,
@@ -2355,6 +2982,10 @@ private fun ArtistsTabContent(
                   isFavorite = isFavorite,
                   onToggleFavorite = { onToggleFavoriteArtist(artist) },
                   onPlay = { onPlayArtist(artist) },
+                  onRenamePlaylist = { itemActions.onRenameArtist(artist) },
+                  onDeletePlaylist = { itemActions.onDeleteArtist(artist) },
+                  tint = Color.White,
+                  containerColor = ArtworkOverlayButtonBackground,
                   modifier = Modifier.align(Alignment.BottomStart),
                 )
                 FilledIconButton(
@@ -2365,8 +2996,8 @@ private fun ArtistsTabContent(
                     .align(Alignment.BottomEnd)
                     .testTag("play_artist_${artist.name}"),
                   colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.primary,
+                    containerColor = ArtworkOverlayButtonBackground,
+                    contentColor = Color.White,
                   ),
                 ) {
                   Icon(
@@ -2596,6 +3227,7 @@ private fun AlbumsTabContent(
                   modifier = Modifier.size(18.dp),
                 )
               }
+              val itemActions = LocalMusicItemActions.current
               MusicCollectionContextMenuButton(
                 collectionTitle = album.name,
                 tracks = album.tracks,
@@ -2604,6 +3236,8 @@ private fun AlbumsTabContent(
                 isFavorite = isFavorite,
                 onToggleFavorite = { onToggleFavoriteAlbum(album) },
                 onPlay = { onPlayAlbum(album) },
+                onRenamePlaylist = { itemActions.onRenameAlbum(album) },
+                onDeletePlaylist = { itemActions.onDeleteAlbum(album) },
               )
             }
           }
@@ -2673,8 +3307,10 @@ private fun AlbumsTabContent(
                   onClick = { onToggleFavoriteAlbum(album) },
                   modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(4.dp)
+                    .padding(6.dp)
                     .size(30.dp)
+                    .clip(CircleShape)
+                    .background(ArtworkOverlayButtonBackground, CircleShape)
                     .testTag("favorite_album_${album.name}"),
                 ) {
                   Icon(
@@ -2684,6 +3320,7 @@ private fun AlbumsTabContent(
                     modifier = Modifier.size(16.dp),
                   )
                 }
+                val itemActions = LocalMusicItemActions.current
                 MusicCollectionContextMenuButton(
                   collectionTitle = album.name,
                   tracks = album.tracks,
@@ -2692,28 +3329,31 @@ private fun AlbumsTabContent(
                   isFavorite = isFavorite,
                   onToggleFavorite = { onToggleFavoriteAlbum(album) },
                   onPlay = { onPlayAlbum(album) },
+                  onRenamePlaylist = { itemActions.onRenameAlbum(album) },
+                  onDeletePlaylist = { itemActions.onDeleteAlbum(album) },
                   tint = Color.White,
+                  containerColor = ArtworkOverlayButtonBackground,
                   modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(4.dp),
+                    .padding(6.dp),
                 )
                 FilledIconButton(
                   onClick = { onPlayAlbum(album) },
                   shape = CircleShape,
                   modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(8.dp)
-                    .size(34.dp)
+                    .padding(6.dp)
+                    .size(30.dp)
                     .testTag("play_album_${album.name}"),
                   colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.primary,
+                    containerColor = ArtworkOverlayButtonBackground,
+                    contentColor = Color.White,
                   ),
                 ) {
                   Icon(
                     imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
                     contentDescription = "Play ${album.name}",
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(16.dp),
                   )
                 }
               }
@@ -3087,6 +3727,7 @@ private fun GenresTabContent(
                   modifier = Modifier.size(18.dp),
                 )
               }
+              val itemActions = LocalMusicItemActions.current
               MusicCollectionContextMenuButton(
                 collectionTitle = genre.name,
                 tracks = genre.tracks,
@@ -3095,6 +3736,8 @@ private fun GenresTabContent(
                 isFavorite = isFavorite,
                 onToggleFavorite = { onToggleFavoriteGenre(genre) },
                 onPlay = { onPlayGenre(genre) },
+                onRenamePlaylist = { itemActions.onRenameGenre(genre) },
+                onDeletePlaylist = { itemActions.onDeleteGenre(genre) },
               )
             }
           }
@@ -3178,6 +3821,8 @@ private fun GenresTabContent(
                   modifier = Modifier
                     .size(30.dp)
                     .align(Alignment.TopEnd)
+                    .clip(CircleShape)
+                    .background(ArtworkOverlayButtonBackground, CircleShape)
                     .testTag("favorite_genre_${genre.name}"),
                 ) {
                   Icon(
@@ -3187,6 +3832,7 @@ private fun GenresTabContent(
                     modifier = Modifier.size(16.dp),
                   )
                 }
+                val itemActions = LocalMusicItemActions.current
                 MusicCollectionContextMenuButton(
                   collectionTitle = genre.name,
                   tracks = genre.tracks,
@@ -3195,7 +3841,10 @@ private fun GenresTabContent(
                   isFavorite = isFavorite,
                   onToggleFavorite = { onToggleFavoriteGenre(genre) },
                   onPlay = { onPlayGenre(genre) },
+                  onRenamePlaylist = { itemActions.onRenameGenre(genre) },
+                  onDeletePlaylist = { itemActions.onDeleteGenre(genre) },
                   tint = Color.White,
+                  containerColor = ArtworkOverlayButtonBackground,
                   modifier = Modifier.align(Alignment.BottomStart),
                 )
                 FilledIconButton(
@@ -3203,9 +3852,10 @@ private fun GenresTabContent(
                   shape = CircleShape,
                   modifier = Modifier
                     .size(30.dp)
-                    .align(Alignment.BottomEnd),
+                    .align(Alignment.BottomEnd)
+                    .testTag("play_genre_${genre.name}"),
                   colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = Color.White.copy(alpha = 0.22f),
+                    containerColor = ArtworkOverlayButtonBackground,
                     contentColor = Color.White,
                   ),
                 ) {
@@ -3518,6 +4168,7 @@ private fun PlaylistsTabContent(
                     { onDeletePlaylist(playlist) }
                   } else null,
                   tint = Color.White,
+                  containerColor = ArtworkOverlayButtonBackground,
                   modifier = Modifier.align(Alignment.BottomStart),
                 )
                 FilledIconButton(
@@ -3525,9 +4176,10 @@ private fun PlaylistsTabContent(
                   shape = CircleShape,
                   modifier = Modifier
                     .size(30.dp)
-                    .align(Alignment.BottomEnd),
+                    .align(Alignment.BottomEnd)
+                    .testTag("play_playlist_${playlist.name}"),
                   colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = Color.White.copy(alpha = 0.22f),
+                    containerColor = ArtworkOverlayButtonBackground,
                     contentColor = Color.White,
                   ),
                 ) {
@@ -4508,8 +5160,10 @@ private fun SongGridItemCard(
           onClick = onToggleFavorite,
           modifier = Modifier
             .align(Alignment.TopEnd)
-            .padding(4.dp)
+            .padding(6.dp)
             .size(30.dp)
+            .clip(CircleShape)
+            .background(ArtworkOverlayButtonBackground, CircleShape)
             .testTag("favorite_song_${track.id}"),
         ) {
           Icon(
@@ -4525,24 +5179,25 @@ private fun SongGridItemCard(
           onPlay = onClick,
           onToggleFavorite = onToggleFavorite,
           tint = Color.White,
+          containerColor = ArtworkOverlayButtonBackground,
           modifier = Modifier
             .align(Alignment.BottomStart)
-            .padding(4.dp),
+            .padding(6.dp),
         )
         if (isCurrent) {
           Box(
             modifier = Modifier
               .align(Alignment.BottomEnd)
               .padding(6.dp)
-              .size(28.dp)
+              .size(30.dp)
               .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.primaryContainer),
+              .background(ArtworkOverlayButtonBackground, CircleShape),
             contentAlignment = Alignment.Center,
           ) {
             Icon(
               imageVector = if (isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
               contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
+              tint = Color.White,
               modifier = Modifier.size(16.dp),
             )
           }
@@ -4579,6 +5234,7 @@ private fun SongContextMenuButton(
   onPlay: () -> Unit,
   onToggleFavorite: () -> Unit,
   tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+  containerColor: Color = Color.Transparent,
   modifier: Modifier = Modifier,
 ) {
   val actions = LocalMusicItemActions.current
@@ -4588,7 +5244,16 @@ private fun SongContextMenuButton(
     IconButton(
       onClick = { expanded = true },
       modifier = Modifier
-        .size(32.dp)
+        .size(if (containerColor != Color.Transparent) 30.dp else 32.dp)
+        .then(
+          if (containerColor != Color.Transparent) {
+            Modifier
+              .clip(CircleShape)
+              .background(containerColor, CircleShape)
+          } else {
+            Modifier
+          }
+        )
         .testTag("song_more_${track.id}"),
     ) {
       Icon(
@@ -4604,15 +5269,6 @@ private fun SongContextMenuButton(
       onDismissRequest = { expanded = false },
       modifier = Modifier.testTag("song_menu_${track.id}"),
     ) {
-      DropdownMenuItem(
-        text = { Text("Play") },
-        leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
-        onClick = {
-          expanded = false
-          onPlay()
-        },
-        modifier = Modifier.testTag("song_menu_play_${track.id}"),
-      )
       DropdownMenuItem(
         text = { Text("Play Next") },
         leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistPlay, contentDescription = null) },
@@ -4651,20 +5307,6 @@ private fun SongContextMenuButton(
           modifier = Modifier.testTag("song_menu_remove_from_playlist_${track.id}"),
         )
       }
-      DropdownMenuItem(
-        text = { Text(if (isFavorite) "Remove from Favorites" else "Add to Favorites") },
-        leadingIcon = {
-          Icon(
-            imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-            contentDescription = null,
-          )
-        },
-        onClick = {
-          expanded = false
-          onToggleFavorite()
-        },
-        modifier = Modifier.testTag("song_menu_favorite_${track.id}"),
-      )
       DropdownMenuItem(
         text = { Text("Go to Artist") },
         leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
@@ -4710,24 +5352,6 @@ private fun SongContextMenuButton(
           actions.onConvertTrack(track)
         },
         modifier = Modifier.testTag("song_menu_convert_${track.id}"),
-      )
-      DropdownMenuItem(
-        text = { Text("Archive") },
-        leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
-        onClick = {
-          expanded = false
-          actions.onArchiveTracks(listOf(track))
-        },
-        modifier = Modifier.testTag("song_menu_archive_${track.id}"),
-      )
-      DropdownMenuItem(
-        text = { Text("Add Note") },
-        leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
-        onClick = {
-          expanded = false
-          actions.onSaveToNotes(track.title, listOf(track))
-        },
-        modifier = Modifier.testTag("song_menu_save_to_notes_${track.id}"),
       )
       DropdownMenuItem(
         text = { Text("Folder") },
@@ -4797,6 +5421,7 @@ private fun MusicCollectionContextMenuButton(
   onRenamePlaylist: (() -> Unit)? = null,
   onDeletePlaylist: (() -> Unit)? = null,
   tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+  containerColor: Color = Color.Transparent,
   modifier: Modifier = Modifier,
 ) {
   val actions = LocalMusicItemActions.current
@@ -4807,6 +5432,15 @@ private fun MusicCollectionContextMenuButton(
       onClick = { expanded = true },
       modifier = Modifier
         .size(30.dp)
+        .then(
+          if (containerColor != Color.Transparent) {
+            Modifier
+              .clip(CircleShape)
+              .background(containerColor, CircleShape)
+          } else {
+            Modifier
+          }
+        )
         .testTag(moreButtonTestTag),
     ) {
       Icon(
@@ -4822,14 +5456,6 @@ private fun MusicCollectionContextMenuButton(
       onDismissRequest = { expanded = false },
       modifier = Modifier.testTag(menuTestTag),
     ) {
-      DropdownMenuItem(
-        text = { Text("Play") },
-        leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
-        onClick = {
-          expanded = false
-          onPlay()
-        },
-      )
       DropdownMenuItem(
         text = { Text("Shuffle") },
         leadingIcon = { Icon(Icons.Default.Shuffle, contentDescription = null) },
@@ -4862,38 +5488,7 @@ private fun MusicCollectionContextMenuButton(
           actions.onAddToPlaylist(tracks)
         },
       )
-      if (isFavorite != null && onToggleFavorite != null) {
-        DropdownMenuItem(
-          text = { Text(if (isFavorite) "Remove from Favorites" else "Add to Favorites") },
-          leadingIcon = {
-            Icon(
-              imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-              contentDescription = null,
-            )
-          },
-          onClick = {
-            expanded = false
-            onToggleFavorite()
-          },
-        )
-      }
       HorizontalDivider()
-      DropdownMenuItem(
-        text = { Text("Archive") },
-        leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
-        onClick = {
-          expanded = false
-          actions.onArchiveTracks(tracks)
-        },
-      )
-      DropdownMenuItem(
-        text = { Text("Save Tracklist to Notes") },
-        leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
-        onClick = {
-          expanded = false
-          actions.onSaveToNotes(collectionTitle, tracks)
-        },
-      )
       DropdownMenuItem(
         text = { Text("Share") },
         leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
@@ -4904,17 +5499,18 @@ private fun MusicCollectionContextMenuButton(
       )
       if (onRenamePlaylist != null) {
         DropdownMenuItem(
-          text = { Text("Rename Playlist") },
+          text = { Text("Rename") },
           leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null) },
           onClick = {
             expanded = false
             onRenamePlaylist()
           },
+          modifier = Modifier.testTag(menuTestTag.replace("_menu_", "_menu_rename_")),
         )
       }
       if (onDeletePlaylist != null) {
         DropdownMenuItem(
-          text = { Text("Delete Playlist", color = MaterialTheme.colorScheme.error) },
+          text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
           leadingIcon = {
             Icon(
               Icons.Default.Delete,
@@ -4926,6 +5522,7 @@ private fun MusicCollectionContextMenuButton(
             expanded = false
             onDeletePlaylist()
           },
+          modifier = Modifier.testTag(menuTestTag.replace("_menu_", "_menu_delete_")),
         )
       }
     }
@@ -5245,6 +5842,184 @@ private fun DeleteTrackConfirmDialog(
           contentColor = MaterialTheme.colorScheme.onError,
         ),
         modifier = Modifier.testTag("confirm_delete_track_button"),
+      ) {
+        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Delete")
+      }
+    },
+    dismissButton = {
+      OutlinedButton(onClick = onDismiss, shape = CircleShape) {
+        Text("Cancel")
+      }
+    },
+  )
+}
+
+@Composable
+private fun BulkDeleteMusicCollectionConfirmDialog(
+  target: BulkDeleteMusicCollectionTarget,
+  onConfirm: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  var typedConfirmation by rememberSaveable(target.kind, target.name) { mutableStateOf("") }
+  val canConfirm = typedConfirmation.trim() == target.name.trim()
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    modifier = Modifier.testTag("bulk_delete_music_dialog"),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.errorContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Delete,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "Delete ${target.kind.label}?",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = target.subtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        Text(
+          text = "This will permanently remove all ${target.songCount} ${if (target.songCount == 1) "song" else "songs"} in ${target.kind.label.lowercase()} \"${target.name}\" from your library. Type \"${target.name}\" below to confirm.",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+        OutlinedTextField(
+          value = typedConfirmation,
+          onValueChange = { typedConfirmation = it },
+          label = { Text("Type \"${target.name}\" to confirm") },
+          placeholder = { Text(target.name) },
+          singleLine = true,
+          shape = RoundedCornerShape(14.dp),
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("bulk_delete_name_input"),
+        )
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = onConfirm,
+        enabled = canConfirm,
+        shape = CircleShape,
+        colors = ButtonDefaults.buttonColors(
+          containerColor = MaterialTheme.colorScheme.error,
+          contentColor = MaterialTheme.colorScheme.onError,
+        ),
+        modifier = Modifier.testTag("confirm_bulk_delete_button"),
+      ) {
+        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Delete")
+      }
+    },
+    dismissButton = {
+      OutlinedButton(onClick = onDismiss, shape = CircleShape) {
+        Text("Cancel")
+      }
+    },
+  )
+}
+
+@Composable
+private fun DeletePlaylistConfirmDialog(
+  playlist: MusicPlaylist,
+  onConfirm: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    modifier = Modifier.testTag("delete_playlist_dialog"),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.errorContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Delete,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "Delete Playlist?",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "${playlist.name} • ${playlist.summaryText}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+    },
+    text = {
+      Text(
+        text = "Are you sure you want to delete the playlist \"${playlist.name}\"? Your songs will remain in your library.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurface,
+      )
+    },
+    confirmButton = {
+      Button(
+        onClick = onConfirm,
+        shape = CircleShape,
+        colors = ButtonDefaults.buttonColors(
+          containerColor = MaterialTheme.colorScheme.error,
+          contentColor = MaterialTheme.colorScheme.onError,
+        ),
+        modifier = Modifier.testTag("confirm_delete_playlist_button"),
       ) {
         Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(6.dp))
@@ -5689,7 +6464,7 @@ private fun ExpandedMusicPlayerOverlay(
                     .padding(8.dp)
                     .size(40.dp)
                     .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = 0.38f))
+                    .background(ArtworkOverlayButtonBackground, CircleShape)
                     .testTag("expanded_player_favorite_button"),
                 ) {
                   Icon(

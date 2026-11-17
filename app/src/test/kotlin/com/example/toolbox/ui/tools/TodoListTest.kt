@@ -690,21 +690,50 @@ class TodoListTest {
   }
 
   @Test
-  fun repository_persistsGridViewAndColumnsPerRow() {
-    val repo = InMemoryTodoListRepository()
-    assertFalse(repo.isGridView())
-    assertEquals(DEFAULT_TODO_GRID_COLUMNS, repo.getGridColumnsPerRow())
+  fun engine_getMainViewTasks_hidesScheduledTasksMoreThan24HoursInFuture() {
+    val now = 1_700_000_000_000L
+    val unscheduled = TodoItem(id = "unsched", title = "Unscheduled task")
+    val overdue = TodoItem(id = "overdue", title = "Overdue task", scheduledAtMillis = now - 3_600_000L)
+    val within24h = TodoItem(
+      id = "within_24h",
+      title = "In 12 hours",
+      scheduledAtMillis = now + 12L * 3_600_000L,
+    )
+    val exact24h = TodoItem(
+      id = "exact_24h",
+      title = "In exactly 24 hours",
+      scheduledAtMillis = now + MAIN_TASKS_SCHEDULE_HORIZON_MILLIS,
+    )
+    val beyond24h = TodoItem(
+      id = "beyond_24h",
+      title = "In 24 hours + 1 ms",
+      scheduledAtMillis = now + MAIN_TASKS_SCHEDULE_HORIZON_MILLIS + 1L,
+    )
+    val nextWeek = TodoItem(
+      id = "next_week",
+      title = "Next week",
+      scheduledAtMillis = now + 7L * MAIN_TASKS_SCHEDULE_HORIZON_MILLIS,
+    )
 
-    repo.setGridView(true)
-    assertTrue(repo.isGridView())
+    val allTasks = listOf(unscheduled, overdue, within24h, exact24h, beyond24h, nextWeek)
 
-    repo.setGridColumnsPerRow(4)
-    assertEquals(4, repo.getGridColumnsPerRow())
+    // Main tasks view only includes unscheduled and tasks scheduled <= 24 hours in the future
+    val mainTasks = TodoListEngine.getMainViewTasks(allTasks, nowMillis = now)
+    assertEquals(
+      listOf("unsched", "overdue", "within_24h", "exact_24h"),
+      mainTasks.map { it.id },
+    )
 
-    // Clamps out-of-range values
-    repo.setGridColumnsPerRow(99)
-    assertEquals(MAX_TODO_GRID_COLUMNS, repo.getGridColumnsPerRow())
-    repo.setGridColumnsPerRow(0)
-    assertEquals(MIN_TODO_GRID_COLUMNS, repo.getGridColumnsPerRow())
+    assertFalse(exact24h.isScheduledBeyondHorizon(now))
+    assertTrue(exact24h.isVisibleInMainTasksView(now))
+    assertTrue(beyond24h.isScheduledBeyondHorizon(now))
+    assertFalse(beyond24h.isVisibleInMainTasksView(now))
+
+    // Once time advances so beyond24h is within 24 hours, it becomes visible in main tasks view
+    val mainTasksLater = TodoListEngine.getMainViewTasks(allTasks, nowMillis = now + 1_000L)
+    assertEquals(
+      listOf("unsched", "overdue", "within_24h", "exact_24h", "beyond_24h"),
+      mainTasksLater.map { it.id },
+    )
   }
 }

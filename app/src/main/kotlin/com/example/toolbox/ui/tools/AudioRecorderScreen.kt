@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -48,22 +49,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.HeadsetMic
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
@@ -93,6 +90,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -118,6 +116,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.VectorGroup
+import androidx.compose.ui.graphics.vector.VectorPath
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -133,6 +135,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -386,7 +389,7 @@ fun AudioRecorderScreen(
       },
       icon = when {
         isRecording && activeCaptureSource == AudioCaptureSource.DEVICE_AUDIO -> Icons.Default.PhoneAndroid
-        isRecording && activeCaptureSource == AudioCaptureSource.DEVICE_AND_MIC -> Icons.Default.HeadsetMic
+        isRecording && activeCaptureSource == AudioCaptureSource.DEVICE_AND_MIC -> DeviceAndMicIcon
         else -> Icons.Default.Mic
       },
       badgeContainerColor = if (isRecording) {
@@ -728,12 +731,9 @@ fun AudioRecorderScreen(
                       .testTag("fab_both_stop_icon"),
                   )
                 } else {
-                  Icon(
-                    imageVector = Icons.Default.HeadsetMic,
-                    contentDescription = null,
-                    modifier = Modifier
-                      .size(26.dp)
-                      .testTag("fab_both_audio_icon"),
+                  DeviceAndMicOverlayIcon(
+                    size = 26.dp,
+                    modifier = Modifier.testTag("fab_both_audio_icon"),
                   )
                 }
               }
@@ -1075,12 +1075,6 @@ fun AudioRecorderScreen(
               onConvert = {
                 crossToolHostState.fileForConverter = item.file
               },
-              onCompress = {
-                crossToolHostState.filesForCompression = listOf(item.file)
-              },
-              onSaveToNotes = {
-                CrossToolActions.saveFileToNotes(context, item.file)
-              },
               onOpenInFiles = {
                 crossToolHostState.directoryForFiles = item.file.parentFile ?: recordingsDirectory
               },
@@ -1089,13 +1083,6 @@ fun AudioRecorderScreen(
               },
               onShare = {
                 CrossToolActions.shareFile(context, item.file)
-              },
-              onDuplicate = {
-                val res = FileManagerEngine.duplicateFile(item.file)
-                if (res.isSuccess) {
-                  refreshTrigger++
-                  Toast.makeText(context, "Duplicated ${item.name}", Toast.LENGTH_SHORT).show()
-                }
               },
               onRename = {
                 recordingToRename = item
@@ -1185,12 +1172,9 @@ private fun RecordingListItemCard(
   onPlayInMusic: () -> Unit = {},
   onEdit: () -> Unit = {},
   onConvert: () -> Unit = {},
-  onCompress: () -> Unit = {},
-  onSaveToNotes: () -> Unit = {},
   onOpenInFiles: () -> Unit = {},
   onOpenWith: () -> Unit = {},
   onShare: () -> Unit = {},
-  onDuplicate: () -> Unit = {},
   onRename: () -> Unit,
   onInfo: () -> Unit = {},
   onDelete: () -> Unit,
@@ -1225,16 +1209,23 @@ private fun RecordingListItemCard(
           .background(MaterialTheme.colorScheme.primaryContainer),
         contentAlignment = Alignment.Center,
       ) {
-        Icon(
-          imageVector = when (item.captureSource) {
-            AudioCaptureSource.DEVICE_AUDIO -> Icons.Default.PhoneAndroid
-            AudioCaptureSource.DEVICE_AND_MIC -> Icons.Default.HeadsetMic
-            AudioCaptureSource.MICROPHONE -> Icons.Default.GraphicEq
-          },
-          contentDescription = null,
-          tint = MaterialTheme.colorScheme.primary,
-          modifier = Modifier.size(20.dp),
-        )
+        if (item.captureSource == AudioCaptureSource.DEVICE_AND_MIC) {
+          DeviceAndMicOverlayIcon(
+            size = 20.dp,
+            tint = MaterialTheme.colorScheme.primary,
+          )
+        } else {
+          Icon(
+            imageVector = when (item.captureSource) {
+              AudioCaptureSource.DEVICE_AUDIO -> Icons.Default.PhoneAndroid
+              AudioCaptureSource.DEVICE_AND_MIC -> DeviceAndMicIcon
+              AudioCaptureSource.MICROPHONE -> Icons.Default.GraphicEq
+            },
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+          )
+        }
       }
 
       // Title + Metadata
@@ -1321,16 +1312,7 @@ private fun RecordingListItemCard(
           onDismissRequest = { menuExpanded = false },
         ) {
           DropdownMenuItem(
-            text = { Text("Play") },
-            leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
-            onClick = {
-              menuExpanded = false
-              onClick()
-            },
-            modifier = Modifier.testTag("recording_play_${item.name}"),
-          )
-          DropdownMenuItem(
-            text = { Text("Play in Music") },
+            text = { Text("Music") },
             leadingIcon = { Icon(Icons.Default.MusicNote, contentDescription = null) },
             onClick = {
               menuExpanded = false
@@ -1355,24 +1337,6 @@ private fun RecordingListItemCard(
               onConvert()
             },
             modifier = Modifier.testTag("action_convert_file"),
-          )
-          DropdownMenuItem(
-            text = { Text("Archive") },
-            leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
-            onClick = {
-              menuExpanded = false
-              onCompress()
-            },
-            modifier = Modifier.testTag("action_compress_to_archive"),
-          )
-          DropdownMenuItem(
-            text = { Text("Add Note") },
-            leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, contentDescription = null) },
-            onClick = {
-              menuExpanded = false
-              onSaveToNotes()
-            },
-            modifier = Modifier.testTag("action_save_to_notes"),
           )
           HorizontalDivider()
           DropdownMenuItem(
@@ -2222,6 +2186,102 @@ private fun DeleteRecordingDialog(
       }
     },
   )
+}
+
+/**
+ * Combined Device + Microphone icon with the microphone icon (`Icons.Default.Mic`)
+ * overlaid on the inside of the device icon (`Icons.Default.PhoneAndroid`).
+ */
+@Composable
+internal fun DeviceAndMicOverlayIcon(
+  modifier: Modifier = Modifier,
+  size: Dp = 26.dp,
+  tint: Color = LocalContentColor.current,
+) {
+  Box(
+    contentAlignment = Alignment.Center,
+    modifier = modifier.size(size),
+  ) {
+    Icon(
+      imageVector = Icons.Default.PhoneAndroid,
+      contentDescription = null,
+      tint = tint,
+      modifier = Modifier
+        .size(size)
+        .testTag("fab_both_device_icon"),
+    )
+    Icon(
+      imageVector = Icons.Default.Mic,
+      contentDescription = null,
+      tint = tint,
+      modifier = Modifier
+        .size(size * 0.46f)
+        .offset(y = -(size * 0.042f))
+        .testTag("fab_both_mic_icon"),
+    )
+  }
+}
+
+internal val DeviceAndMicIcon: ImageVector by lazy {
+  val phone = Icons.Default.PhoneAndroid
+  val mic = Icons.Default.Mic
+  ImageVector.Builder(
+    name = "DeviceAndMic",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+  ).apply {
+    addVectorNodes(phone.root)
+    addGroup(
+      name = "mic_overlay",
+      pivotX = 12f,
+      pivotY = 12f,
+      scaleX = 0.46f,
+      scaleY = 0.46f,
+      translationY = -1f,
+    )
+    addVectorNodes(mic.root)
+    clearGroup()
+  }.build()
+}
+
+private fun ImageVector.Builder.addVectorNodes(group: VectorGroup) {
+  for (node in group) {
+    when (node) {
+      is VectorPath -> addPath(
+        pathData = node.pathData,
+        pathFillType = node.pathFillType,
+        name = node.name,
+        fill = node.fill,
+        fillAlpha = node.fillAlpha,
+        stroke = node.stroke,
+        strokeAlpha = node.strokeAlpha,
+        strokeLineWidth = node.strokeLineWidth,
+        strokeLineCap = node.strokeLineCap,
+        strokeLineJoin = node.strokeLineJoin,
+        strokeLineMiter = node.strokeLineMiter,
+        trimPathStart = node.trimPathStart,
+        trimPathEnd = node.trimPathEnd,
+        trimPathOffset = node.trimPathOffset,
+      )
+      is VectorGroup -> {
+        addGroup(
+          name = node.name,
+          rotate = node.rotation,
+          pivotX = node.pivotX,
+          pivotY = node.pivotY,
+          scaleX = node.scaleX,
+          scaleY = node.scaleY,
+          translationX = node.translationX,
+          translationY = node.translationY,
+          clipPathData = node.clipPathData,
+        )
+        addVectorNodes(node)
+        clearGroup()
+      }
+    }
+  }
 }
 
 @Preview(showBackground = true)

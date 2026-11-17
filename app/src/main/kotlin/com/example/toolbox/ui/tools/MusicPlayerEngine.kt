@@ -59,8 +59,10 @@ const val MUSIC_PLAYER_PREFS_NAME = "music_player_preferences"
 const val PREF_KEY_MUSIC_VIEW_MODE = "music_player_view_mode"
 const val PREF_KEY_MUSIC_CARDS_PER_ROW = "music_player_cards_per_row"
 const val MIN_MUSIC_CARDS_PER_ROW = 2
-const val MAX_MUSIC_CARDS_PER_ROW = 4
+const val MAX_MUSIC_CARDS_PER_ROW = 3
 const val DEFAULT_MUSIC_CARDS_PER_ROW = 2
+const val HOME_PLAYLIST_COUNT = 6
+const val TARGET_HOME_PLAYLIST_DURATION_MS = 60L * 60_000L // ~1 hour target per generated Home playlist
 const val PREF_KEY_MUSIC_TAB = "music_player_selected_tab"
 const val PREF_KEY_MUSIC_TAB_ORDER = "music_player_tab_order"
 const val PREF_KEY_MUSIC_SORT_ORDER = "music_player_sort_order"
@@ -83,6 +85,7 @@ val DEFAULT_MUSIC_FOLDER_NAMES: List<String> = listOf("Music", "Audio")
 enum class MusicLibraryTab(
   val displayName: String,
 ) {
+  HOME("Home"),
   ARTISTS("Artists"),
   ALBUMS("Albums"),
   SONGS("Songs"),
@@ -91,7 +94,7 @@ enum class MusicLibraryTab(
   ;
 
   companion object {
-    val DEFAULT: MusicLibraryTab = ARTISTS
+    val DEFAULT: MusicLibraryTab = HOME
 
     fun fromNameOrDefault(name: String?): MusicLibraryTab {
       if (name.isNullOrBlank()) return DEFAULT
@@ -479,20 +482,27 @@ data class MusicPlaylist(
   val name: String,
   val tracks: List<MusicTrack>,
   val createdAtMs: Long = 0L,
+  val subtitle: String = "",
+  val isGeneratedHomeMix: Boolean = false,
 ) {
   val isFavorites: Boolean get() = id == MusicPlayerEngine.FAVORITES_PLAYLIST_ID
   val isMostPlayed: Boolean get() = id == MusicPlayerEngine.MOST_PLAYED_PLAYLIST_ID
   val isRecentlyPlayed: Boolean get() = id == MusicPlayerEngine.RECENTLY_PLAYED_PLAYLIST_ID
-  val isBuiltIn: Boolean get() = isFavorites || isMostPlayed || isRecentlyPlayed
+  val isBuiltIn: Boolean get() = isFavorites || isMostPlayed || isRecentlyPlayed || isGeneratedHomeMix
   val songCount: Int get() = tracks.size
   val totalDurationMs: Long get() = tracks.sumOf { it.durationMs }
   val totalDurationFormatted: String get() = AudioRecorderEngine.formatDurationMs(totalDurationMs)
   val representativeTrack: MusicTrack? get() = tracks.firstOrNull()
   val artists: List<String> get() = tracks.map { it.artist }.distinct()
+  val genres: List<String> get() = tracks.map { it.genre }.filter { it.isNotBlank() }.distinct()
   val summaryText: String
     get() {
       val songLabel = if (songCount == 1) "1 song" else "$songCount songs"
-      return "$songLabel • $totalDurationFormatted"
+      return if (subtitle.isNotBlank()) {
+        "$subtitle • $songLabel • $totalDurationFormatted"
+      } else {
+        "$songLabel • $totalDurationFormatted"
+      }
     }
 }
 
@@ -1835,6 +1845,20 @@ object MusicPlayerEngine {
     RECENTLY_PLAYED_PLAYLIST_ID,
   )
 
+  /** IDs of the 6 generated Home playlists. */
+  val HOME_PLAYLIST_IDS: Set<String> = (1..HOME_PLAYLIST_COUNT).map { "home_mix_$it" }.toSet()
+
+  /**
+   * Returns `true` if [playlistId] belongs to a protected default playlist (Favorites, Most Played,
+   * Recently Played) or a generated Home playlist (`home_mix_*`), which cannot be deleted.
+   */
+  fun isProtectedPlaylistId(playlistId: String): Boolean {
+    val trimmed = playlistId.trim()
+    return trimmed in BUILT_IN_PLAYLIST_IDS ||
+      trimmed in HOME_PLAYLIST_IDS ||
+      trimmed.startsWith("home_mix_")
+  }
+
   /** IDs of sample playlists shipped by older versions; stripped from persisted playlists on load. */
   val LEGACY_SAMPLE_PLAYLIST_IDS: Set<String> = setOf("playlist_synth_night", "playlist_chill_focus")
 
@@ -2554,6 +2578,7 @@ object MusicPlayerEngine {
   /**
    * Parses a persisted `|`-separated list of [MusicLibraryTab] names, deduplicating entries and
    * appending any missing tabs in their default order so all library sections are always present.
+   * If [MusicLibraryTab.HOME] is missing from a legacy persisted string, it is placed at the front.
    */
   fun parseTabOrder(raw: String?): List<MusicLibraryTab> {
     if (raw.isNullOrBlank()) return MusicLibraryTab.entries.toList()
@@ -2566,7 +2591,453 @@ object MusicPlayerEngine {
       }
       .distinct()
     val missing = MusicLibraryTab.entries.filterNot { it in parsed }
-    return parsed + missing
+    return if (MusicLibraryTab.HOME in missing) {
+      listOf(MusicLibraryTab.HOME) + parsed + (missing - MusicLibraryTab.HOME)
+    } else {
+      parsed + missing
+    }
+  }
+
+  /**
+   * Genre affinity families used to mash similar or complementary genres together when generating
+   * Home mixes.
+   */
+  private val GENRE_AFFINITY_FAMILIES: List<Set<String>> = listOf(
+    setOf(
+      "synthwave", "electronic", "edm", "electro", "dance", "house", "techno", "trance",
+      "cyberpunk", "chillwave", "drum & bass", "dubstep", "vaporwave", "synthpop",
+    ),
+    setOf(
+      "rock", "alternative", "indie", "punk", "metal", "hard rock", "grunge", "classic rock",
+      "garage", "post-rock", "pop rock", "new wave", "shoegaze",
+    ),
+    setOf(
+      "jazz", "blues", "soul", "r&b", "funk", "lounge", "bossa nova", "swing", "neo-soul",
+      "gospel", "lo-fi", "chill",
+    ),
+    setOf(
+      "acoustic", "folk", "country", "indie folk", "americana", "singer-songwriter", "bluegrass",
+      "unplugged",
+    ),
+    setOf(
+      "classical", "soundtrack", "score", "instrumental", "orchestral", "piano", "ambient",
+      "cinematic", "new age", "chamber",
+    ),
+    setOf(
+      "pop", "hip-hop", "rap", "dance pop", "indie pop", "disco", "reggae", "latin", "afrobeats",
+    ),
+  )
+
+  /**
+   * Returns `true` if [genreA] and [genreB] belong to the same musical affinity family or share
+   * overlapping keywords.
+   */
+  fun areGenresSimilar(genreA: String, genreB: String): Boolean {
+    val normA = genreA.trim().lowercase(Locale.ROOT)
+    val normB = genreB.trim().lowercase(Locale.ROOT)
+    if (normA.isEmpty() || normB.isEmpty()) return false
+    if (normA == normB) return true
+    if (normA.contains(normB) || normB.contains(normA)) return true
+    return GENRE_AFFINITY_FAMILIES.any { family ->
+      val aMatches = family.any { normA == it || normA.contains(it) || it.contains(normA) }
+      val bMatches = family.any { normB == it || normB.contains(it) || it.contains(normB) }
+      aMatches && bMatches
+    }
+  }
+
+  /**
+   * Selects tracks from [primaryTracks] (and optionally [fallbackTracks]) targeting approximately
+   * [targetDurationMs] (~1 hour by default, not strict) without duplicating tracks.
+   */
+  fun selectTracksTowardTargetDuration(
+    primaryTracks: List<MusicTrack>,
+    fallbackTracks: List<MusicTrack> = emptyList(),
+    targetDurationMs: Long = TARGET_HOME_PLAYLIST_DURATION_MS,
+    minTracks: Int = 4,
+    fillWithFallbackTowardTarget: Boolean = false,
+  ): List<MusicTrack> {
+    if (primaryTracks.isEmpty() && fallbackTracks.isEmpty()) return emptyList()
+    val selected = ArrayList<MusicTrack>()
+    val seenIds = HashSet<String>()
+    var accumulatedMs = 0L
+
+    for (track in primaryTracks) {
+      if (!seenIds.add(track.id)) continue
+      val dur = track.durationMs.coerceAtLeast(1_000L)
+      if (selected.size >= minTracks && accumulatedMs >= targetDurationMs) {
+        break
+      }
+      if (
+        selected.size >= minTracks &&
+        accumulatedMs >= (targetDurationMs * 3L) / 4L &&
+        accumulatedMs + dur > targetDurationMs &&
+        (accumulatedMs + dur - targetDurationMs) > (targetDurationMs - accumulatedMs)
+      ) {
+        break
+      }
+      selected.add(track)
+      accumulatedMs += dur
+    }
+
+    val shouldPullFallback = selected.size < minTracks ||
+      (fillWithFallbackTowardTarget && accumulatedMs < (targetDurationMs * 85L) / 100L)
+    if (shouldPullFallback && fallbackTracks.isNotEmpty()) {
+      for (track in fallbackTracks) {
+        if (!seenIds.add(track.id)) continue
+        val dur = track.durationMs.coerceAtLeast(1_000L)
+        val hasMinTracks = selected.size >= minTracks
+        if (hasMinTracks && (!fillWithFallbackTowardTarget || accumulatedMs >= targetDurationMs)) {
+          break
+        }
+        if (
+          hasMinTracks &&
+          fillWithFallbackTowardTarget &&
+          accumulatedMs >= (targetDurationMs * 3L) / 4L &&
+          accumulatedMs + dur > targetDurationMs &&
+          (accumulatedMs + dur - targetDurationMs) > (targetDurationMs - accumulatedMs)
+        ) {
+          break
+        }
+        selected.add(track)
+        accumulatedMs += dur
+      }
+    }
+
+    return selected
+  }
+
+  private fun interleaveTrackLists(lists: List<List<MusicTrack>>): List<MusicTrack> {
+    if (lists.isEmpty()) return emptyList()
+    val maxLen = lists.maxOfOrNull { it.size } ?: 0
+    val result = ArrayList<MusicTrack>()
+    val seen = HashSet<String>()
+    for (i in 0 until maxLen) {
+      for (list in lists) {
+        if (i < list.size) {
+          val track = list[i]
+          if (seen.add(track.id)) {
+            result.add(track)
+          }
+        }
+      }
+    }
+    return result
+  }
+
+  private fun buildGenreMashupClusters(
+    genres: List<MusicGenre>,
+    refreshGeneration: Int,
+    random: kotlin.random.Random,
+  ): Pair<List<MusicGenre>, List<MusicGenre>> {
+    if (genres.isEmpty()) return emptyList<MusicGenre>() to emptyList()
+    if (genres.size == 1) return genres to genres
+
+    // Build all candidate pairs/trios, prioritizing similar genres first and complementary vibes next
+    val candidateClusters = mutableListOf<List<MusicGenre>>()
+    for (i in genres.indices) {
+      for (j in i + 1 until genres.size) {
+        val gA = genres[i]
+        val gB = genres[j]
+        if (areGenresSimilar(gA.name, gB.name)) {
+          candidateClusters.add(listOf(gA, gB))
+        }
+      }
+    }
+
+    // Add affinity-adjacent / complementary pairings (e.g., Jazz + Acoustic, Classical + Acoustic, Rock + Synthwave/Electronic)
+    val complementaryPairs = listOf(
+      "jazz" to "acoustic",
+      "jazz" to "classical",
+      "acoustic" to "classical",
+      "rock" to "electronic",
+      "rock" to "synthwave",
+    )
+    for ((p1, p2) in complementaryPairs) {
+      val match1 = genres.find { it.name.equals(p1, ignoreCase = true) || it.name.lowercase(Locale.ROOT).contains(p1) }
+      val match2 = genres.find { it.name.equals(p2, ignoreCase = true) || it.name.lowercase(Locale.ROOT).contains(p2) }
+      if (match1 != null && match2 != null && match1.name != match2.name) {
+        val pair = listOf(match1, match2)
+        if (candidateClusters.none { it.map { g -> g.name }.toSet() == pair.map { g -> g.name }.toSet() }) {
+          candidateClusters.add(pair)
+        }
+      }
+    }
+
+    // Add all remaining distinct genre pairs so every refresh can explore new combinations
+    val shuffledGenres = genres.shuffled(random)
+    for (i in shuffledGenres.indices) {
+      for (j in i + 1 until shuffledGenres.size) {
+        val pair = listOf(shuffledGenres[i], shuffledGenres[j])
+        if (candidateClusters.none { it.map { g -> g.name }.toSet() == pair.map { g -> g.name }.toSet() }) {
+          candidateClusters.add(pair)
+        }
+      }
+    }
+
+    val clusterA = candidateClusters[refreshGeneration.coerceAtLeast(0) % candidateClusters.size]
+    val clusterANames = clusterA.map { it.name }.toSet()
+    val nonOverlapping = candidateClusters.filter { cluster ->
+      cluster.none { it.name in clusterANames }
+    }
+    val clusterBPool = nonOverlapping.ifEmpty {
+      candidateClusters.filter { cluster ->
+        cluster.map { it.name }.toSet() != clusterANames
+      }.ifEmpty { candidateClusters }
+    }
+    val clusterB = clusterBPool[(refreshGeneration.coerceAtLeast(0) + 1) % clusterBPool.size]
+    return clusterA to clusterB
+  }
+
+  /**
+   * Generates [HOME_PLAYLIST_COUNT] (6) curated Home playlists targeting approximately
+   * [targetDurationMs] (~1 hour each, not strict):
+   * 1. **Genre Mashup #1**: Mashes similar genres together (e.g., Synthwave × Electronic).
+   * 2. **Genre Mashup #2**: Mashes a second pair of similar/complementary genres together (e.g., Jazz × Acoustic).
+   * 3. **Play Stats Powerhouse**: Uses play counts, full plays, total listen time, and low skips.
+   * 4. **Favorites Spotlight**: Uses favorite songs, favorite artists, favorite albums, and favorite genres.
+   * 5. **Stats & Favorites Rediscovery**: Mixes lesser-played hidden gems with favorite/top-played anchors.
+   * 6. **The Everything Blender**: Mixes genres, play stats, and favorite artists/albums/songs all together.
+   */
+  fun generateHomePlaylists(
+    allTracks: List<MusicTrack>,
+    playStats: Map<String, TrackPlayStats> = emptyMap(),
+    favoriteIds: Set<String> = emptySet(),
+    favoriteArtists: Set<String> = emptySet(),
+    favoriteAlbums: Set<String> = emptySet(),
+    favoriteGenres: Set<String> = emptySet(),
+    refreshGeneration: Int = 0,
+    targetDurationMs: Long = TARGET_HOME_PLAYLIST_DURATION_MS,
+    random: kotlin.random.Random = kotlin.random.Random(
+      refreshGeneration.toLong() * 6364136223846793005L + 1442695040888963407L
+    ),
+  ): List<MusicPlaylist> {
+    val gen = refreshGeneration.coerceAtLeast(0)
+    if (allTracks.isEmpty()) {
+      return listOf(
+        MusicPlaylist(id = "home_mix_1", name = "Genre Fusion #1", tracks = emptyList(), subtitle = "Genre Mashup • ~1 hr target", isGeneratedHomeMix = true),
+        MusicPlaylist(id = "home_mix_2", name = "Genre Fusion #2", tracks = emptyList(), subtitle = "Genre Mashup • ~1 hr target", isGeneratedHomeMix = true),
+        MusicPlaylist(id = "home_mix_3", name = "Heavy Rotation Hour", tracks = emptyList(), subtitle = "Play Stats • Heavy Rotation", isGeneratedHomeMix = true),
+        MusicPlaylist(id = "home_mix_4", name = "VIP Favorites Mix", tracks = emptyList(), subtitle = "Favorites • Artists, Albums & Songs", isGeneratedHomeMix = true),
+        MusicPlaylist(id = "home_mix_5", name = "Rediscovery Radar", tracks = emptyList(), subtitle = "Play Stats & Favorites • Deep Cuts", isGeneratedHomeMix = true),
+        MusicPlaylist(id = "home_mix_6", name = "Cosmic Everything Blender", tracks = emptyList(), subtitle = "All-In Mix • Genres, Stats & Favorites", isGeneratedHomeMix = true),
+      )
+    }
+
+    val totalLibraryDurationMs = allTracks.sumOf { it.durationMs.coerceAtLeast(1_000L) }
+    val fillTowardOneHour = totalLibraryDurationMs >= targetDurationMs / 2L
+    val genres = buildGenres(allTracks)
+    val (clusterA, clusterB) = buildGenreMashupClusters(genres, gen, random)
+
+    // 1. Genre Mashup #1 (Similar genres mashed together)
+    val clusterANames = clusterA.map { it.name }
+    val mash1Primary = interleaveTrackLists(
+      clusterA.map { g -> g.tracks.shuffled(random) }
+    )
+    val mash1Fallback = allTracks
+      .filterNot { t -> clusterANames.any { it.equals(t.genre, ignoreCase = true) } }
+      .shuffled(random)
+    val mash1Tracks = selectTracksTowardTargetDuration(
+      primaryTracks = mash1Primary,
+      fallbackTracks = mash1Fallback,
+      targetDurationMs = targetDurationMs,
+      minTracks = minOf(4, allTracks.size),
+      fillWithFallbackTowardTarget = fillTowardOneHour,
+    )
+    val mash1Label = if (clusterANames.size >= 2) {
+      "${clusterANames[0]} × ${clusterANames[1]}"
+    } else {
+      clusterANames.firstOrNull() ?: "Multi-Genre"
+    }
+    val mash1Titles = listOf(
+      "$mash1Label Fusion",
+      "Wavelength Mashup: $mash1Label",
+      "Neon & Pulse: $mash1Label",
+      "$mash1Label Power Hour",
+    )
+    val playlist1 = MusicPlaylist(
+      id = "home_mix_1",
+      name = mash1Titles[gen % mash1Titles.size],
+      tracks = mash1Tracks,
+      subtitle = "Genre Mashup • ${clusterANames.joinToString(" & ").ifEmpty { "Mixed Genres" }}",
+      isGeneratedHomeMix = true,
+    )
+
+    // 2. Genre Mashup #2 (Second distinct similar/complementary genre mashup)
+    val clusterBNames = clusterB.map { it.name }
+    val mash2Primary = interleaveTrackLists(
+      clusterB.map { g -> g.tracks.shuffled(random) }
+    )
+    val mash2Fallback = allTracks
+      .filterNot { t -> clusterBNames.any { it.equals(t.genre, ignoreCase = true) } }
+      .shuffled(random)
+    val mash2Tracks = selectTracksTowardTargetDuration(
+      primaryTracks = mash2Primary,
+      fallbackTracks = mash2Fallback,
+      targetDurationMs = targetDurationMs,
+      minTracks = minOf(4, allTracks.size),
+      fillWithFallbackTowardTarget = fillTowardOneHour,
+    )
+    val mash2Label = if (clusterBNames.size >= 2) {
+      "${clusterBNames[0]} × ${clusterBNames[1]}"
+    } else {
+      clusterBNames.firstOrNull() ?: "Cross-Genre"
+    }
+    val mash2Titles = listOf(
+      "Crossfade: $mash2Label",
+      "$mash2Label Sessions",
+      "Velvet & Voltage: $mash2Label",
+      "After Hours: $mash2Label",
+    )
+    val playlist2 = MusicPlaylist(
+      id = "home_mix_2",
+      name = mash2Titles[gen % mash2Titles.size],
+      tracks = mash2Tracks,
+      subtitle = "Genre Mashup • ${clusterBNames.joinToString(" & ").ifEmpty { "Mixed Vibes" }}",
+      isGeneratedHomeMix = true,
+    )
+
+    // 3. Play Stats Powerhouse (Most played, high completion, low skips, smart-shuffled)
+    val sortedByStats = sortTracksByPlayStats(
+      tracks = allTracks,
+      playStats = playStats,
+      favoriteIds = favoriteIds,
+      favoriteArtists = favoriteArtists,
+      favoriteAlbums = favoriteAlbums,
+      favoriteGenres = favoriteGenres,
+    )
+    val playedTracks = sortedByStats.filter { playStats[it.id]?.hasBeenPlayed == true }
+    val statsSeedPool = if (playedTracks.isNotEmpty()) {
+      smartShuffleTracks(playedTracks, playStats, random) +
+        smartShuffleTracks(sortedByStats.filterNot { playStats[it.id]?.hasBeenPlayed == true }, playStats, random)
+    } else {
+      smartShuffleTracks(sortedByStats, playStats, random)
+    }
+    val statsTargetCount = if (fillTowardOneHour) allTracks.size else minOf(maxOf(5, (allTracks.size * 2) / 3), allTracks.size)
+    val statsTracks = selectTracksTowardTargetDuration(
+      primaryTracks = statsSeedPool.take(statsTargetCount),
+      fallbackTracks = statsSeedPool.drop(statsTargetCount),
+      targetDurationMs = targetDurationMs,
+      minTracks = minOf(5, allTracks.size),
+      fillWithFallbackTowardTarget = fillTowardOneHour,
+    )
+    val statsTitles = listOf(
+      "Heavy Rotation Hour",
+      "On Repeat: Stats Powerhouse",
+      "Zero-Skip Obsessions",
+      "Top Replay Sessions",
+    )
+    val playlist3 = MusicPlaylist(
+      id = "home_mix_3",
+      name = statsTitles[gen % statsTitles.size],
+      tracks = statsTracks,
+      subtitle = "Play Stats • Heavy Rotation & Top Plays",
+      isGeneratedHomeMix = true,
+    )
+
+    // 4. Favorites Spotlight (Favorite songs, favorite artists, favorite albums, and favorite genres)
+    val directFavSongs = allTracks.filter { it.id in favoriteIds }.shuffled(random)
+    val favArtistSongs = allTracks.filter { isArtistFavorite(it.artist, favoriteArtists) }.shuffled(random)
+    val favAlbumSongs = allTracks.filter { isAlbumFavorite(it.album, it.artist, favoriteAlbums) }.shuffled(random)
+    val favGenreSongs = allTracks.filter { isGenreFavorite(it.genre, favoriteGenres) }.shuffled(random)
+    val interleavedFavorites = interleaveTrackLists(
+      listOf(directFavSongs, favArtistSongs, favAlbumSongs, favGenreSongs).filter { it.isNotEmpty() }
+    )
+    // Also include album-mates and artist-mates of favorited songs
+    val favoriteArtistNamesFromSongs = directFavSongs.map { it.artist.lowercase(Locale.ROOT) }.toSet()
+    val favoriteAlbumKeysFromSongs = directFavSongs.map { "${it.album.lowercase(Locale.ROOT)}|${it.artist.lowercase(Locale.ROOT)}" }.toSet()
+    val relatedToFavorites = allTracks.filter { track ->
+      track.artist.lowercase(Locale.ROOT) in favoriteArtistNamesFromSongs ||
+        "${track.album.lowercase(Locale.ROOT)}|${track.artist.lowercase(Locale.ROOT)}" in favoriteAlbumKeysFromSongs
+    }.shuffled(random)
+    val favoritesPrimary = (interleavedFavorites + relatedToFavorites).distinctBy { it.id }
+    val favoritesFallback = allTracks.shuffled(random)
+    val favTracks = selectTracksTowardTargetDuration(
+      primaryTracks = favoritesPrimary.ifEmpty { favoritesFallback.take(minOf(6, allTracks.size)) },
+      fallbackTracks = favoritesFallback,
+      targetDurationMs = targetDurationMs,
+      minTracks = minOf(5, allTracks.size),
+      fillWithFallbackTowardTarget = fillTowardOneHour,
+    )
+    val favTitles = listOf(
+      "Starlight Vault: All Favorites",
+      "VIP Pass: Favorite Artists & Albums",
+      "Crown Jewels & Starred Cuts",
+      "Hall of Fame: Favorites Mix",
+    )
+    val playlist4 = MusicPlaylist(
+      id = "home_mix_4",
+      name = favTitles[gen % favTitles.size],
+      tracks = favTracks,
+      subtitle = "Favorites • Artists, Albums & Songs",
+      isGeneratedHomeMix = true,
+    )
+
+    // 5. Play Stats + Favorites Rediscovery Mix (Hidden gems interleaved with familiar favorites & recent plays)
+    val lesserPlayed = allTracks
+      .sortedWith(
+        compareBy<MusicTrack> { playStats[it.id]?.playCount ?: 0 }
+          .thenBy { playStats[it.id]?.totalPlayTimeMs ?: 0L }
+          .thenBy { playStats[it.id]?.skipCount ?: 0 }
+      )
+      .take(maxOf(3, (allTracks.size + 1) / 2))
+      .shuffled(random)
+    val anchors = (interleavedFavorites + sortTracksByRecentlyPlayed(allTracks, playStats).take(maxOf(3, allTracks.size / 2)))
+      .distinctBy { it.id }
+      .shuffled(random)
+    val rediscoveryPrimary = interleaveTrackLists(listOf(lesserPlayed, anchors))
+    val rediscoveryTargetCount = if (fillTowardOneHour) allTracks.size else minOf(maxOf(5, (allTracks.size * 2) / 3), allTracks.size)
+    val rediscoveryTracks = selectTracksTowardTargetDuration(
+      primaryTracks = rediscoveryPrimary.take(rediscoveryTargetCount),
+      fallbackTracks = allTracks.shuffled(random),
+      targetDurationMs = targetDurationMs,
+      minTracks = minOf(5, allTracks.size),
+      fillWithFallbackTowardTarget = fillTowardOneHour,
+    )
+    val rediscoveryTitles = listOf(
+      "Hidden Gems & Heavy Hitters",
+      "Rediscovery Radar",
+      "Deep Cuts & Familiar Favorites",
+      "Crate Digger's Replay Mix",
+    )
+    val playlist5 = MusicPlaylist(
+      id = "home_mix_5",
+      name = rediscoveryTitles[gen % rediscoveryTitles.size],
+      tracks = rediscoveryTracks,
+      subtitle = "Stats & Favorites • Deep Cuts + Replay",
+      isGeneratedHomeMix = true,
+    )
+
+    // 6. The Everything Mega-Blender (Mixes genres, play stats, and favorites all together!)
+    val genreShuffledStreams = genres.shuffled(random).map { it.tracks.shuffled(random) }
+    val everythingPrimary = interleaveTrackLists(
+      listOf(
+        interleavedFavorites.shuffled(random),
+        smartShuffleTracks(allTracks, playStats, random),
+        interleaveTrackLists(genreShuffledStreams),
+      ).filter { it.isNotEmpty() }
+    )
+    val everythingTracks = selectTracksTowardTargetDuration(
+      primaryTracks = everythingPrimary,
+      fallbackTracks = allTracks.shuffled(random),
+      targetDurationMs = targetDurationMs,
+      minTracks = minOf(6, allTracks.size),
+      fillWithFallbackTowardTarget = true,
+    )
+    val everythingTitles = listOf(
+      "Cosmic Blender: The Everything Mix",
+      "Sonic Kaleidoscope: All-In Mix",
+      "Chaos & Harmony: Full Mashup",
+      "Hyperdrive Jukebox: Everything Mix",
+    )
+    val playlist6 = MusicPlaylist(
+      id = "home_mix_6",
+      name = everythingTitles[gen % everythingTitles.size],
+      tracks = everythingTracks,
+      subtitle = "Everything Mix • Genres, Stats & Favorites",
+      isGeneratedHomeMix = true,
+    )
+
+    return listOf(playlist1, playlist2, playlist3, playlist4, playlist5, playlist6)
   }
 
   /**
@@ -3102,7 +3573,7 @@ class MusicPlaybackSession(
     prefs?.edit()?.putString(PREF_KEY_MUSIC_VIEW_MODE, mode.name)?.apply()
   }
 
-  // Card View Columns per Row (2..4)
+  // Card View Columns per Row (2..3)
   var cardsPerRow by mutableIntStateOf(
     (prefs?.getInt(PREF_KEY_MUSIC_CARDS_PER_ROW, DEFAULT_MUSIC_CARDS_PER_ROW) ?: DEFAULT_MUSIC_CARDS_PER_ROW)
       .coerceIn(MIN_MUSIC_CARDS_PER_ROW, MAX_MUSIC_CARDS_PER_ROW)
@@ -3328,6 +3799,26 @@ class MusicPlaybackSession(
     prefs?.edit()?.putString(PREF_KEY_MUSIC_PLAY_STATS, MusicPlayerEngine.serializePlayStats(playStats))?.apply()
   }
 
+  // Generated Home Playlists (6 dynamic ~1 hr mixes refreshed on pull-to-refresh)
+  var homeRefreshGeneration by mutableIntStateOf(0)
+    private set
+
+  val homePlaylists: List<MusicPlaylist>
+    get() = MusicPlayerEngine.generateHomePlaylists(
+      allTracks = allTracks,
+      playStats = playStats,
+      favoriteIds = favoriteIds,
+      favoriteArtists = favoriteArtists,
+      favoriteAlbums = favoriteAlbums,
+      favoriteGenres = favoriteGenres,
+      refreshGeneration = homeRefreshGeneration,
+    )
+
+  fun refreshHomePlaylists(): List<MusicPlaylist> {
+    homeRefreshGeneration += 1
+    return homePlaylists
+  }
+
   // Playlists
   var savedPlaylistEntries by mutableStateOf(
     MusicPlayerEngine.deserializePlaylists(prefs?.getString(PREF_KEY_MUSIC_PLAYLISTS, ""))
@@ -3352,13 +3843,16 @@ class MusicPlaybackSession(
     updateSavedPlaylists(listOf(newEntry) + savedPlaylistEntries)
   }
 
-  fun deletePlaylist(playlistId: String) {
-    if (playlistId in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS) return
-    updateSavedPlaylists(savedPlaylistEntries.filterNot { it.id == playlistId })
+  fun deletePlaylist(playlistId: String): Boolean {
+    if (MusicPlayerEngine.isProtectedPlaylistId(playlistId)) return false
+    val updated = savedPlaylistEntries.filterNot { it.id == playlistId }
+    if (updated.size == savedPlaylistEntries.size) return false
+    updateSavedPlaylists(updated)
+    return true
   }
 
   fun renamePlaylist(playlistId: String, newName: String): Boolean {
-    if (playlistId in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS) return false
+    if (MusicPlayerEngine.isProtectedPlaylistId(playlistId)) return false
     val trimmed = newName.trim()
     if (trimmed.isEmpty()) return false
     var changed = false
@@ -4132,19 +4626,188 @@ class MusicPlaybackSession(
     return updatedTrack
   }
 
-  fun deleteTrack(track: MusicTrack) {
-    track.file?.let { file ->
-      if (file.exists()) {
-        FileManagerEngine.deleteFileOrDirectory(file)
+  /**
+   * Renames an entire artist across all matching tracks in the library and active playback queues,
+   * updating favorite artist/album references and active drill-down state.
+   */
+  fun renameArtist(oldArtistName: String, newArtistName: String): Int {
+    val oldTrimmed = oldArtistName.trim()
+    val newTrimmed = newArtistName.trim()
+    if (oldTrimmed.isEmpty() || newTrimmed.isEmpty() || oldTrimmed == newTrimmed) return 0
+    var updatedCount = 0
+    allTracks = allTracks.map { track ->
+      if (track.artist.trim().equals(oldTrimmed, ignoreCase = true)) {
+        updatedCount++
+        track.copy(artist = newTrimmed)
+      } else {
+        track
       }
     }
-    val wasCurrent = currentTrack?.id == track.id
+    if (updatedCount == 0) return 0
+    unshuffledQueue = unshuffledQueue.map { track ->
+      if (track.artist.trim().equals(oldTrimmed, ignoreCase = true)) track.copy(artist = newTrimmed) else track
+    }
+    playbackQueue = playbackQueue.map { track ->
+      if (track.artist.trim().equals(oldTrimmed, ignoreCase = true)) track.copy(artist = newTrimmed) else track
+    }
+    if (favoriteArtists.any { it.equals(oldTrimmed, ignoreCase = true) }) {
+      val updatedFavArtists = favoriteArtists
+        .filterNot { it.equals(oldTrimmed, ignoreCase = true) }
+        .toSet() + newTrimmed
+      favoriteArtists = updatedFavArtists
+      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_ARTISTS, MusicPlayerEngine.serializeFavoriteSet(updatedFavArtists))?.apply()
+    }
+    val updatedFavAlbums = favoriteAlbums.map { entry ->
+      if (entry.contains("|")) {
+        val albumPart = entry.substringBefore("|")
+        val artistPart = entry.substringAfter("|")
+        if (artistPart.trim().equals(oldTrimmed, ignoreCase = true)) {
+          "$albumPart|$newTrimmed"
+        } else {
+          entry
+        }
+      } else {
+        entry
+      }
+    }.toSet()
+    if (updatedFavAlbums != favoriteAlbums) {
+      favoriteAlbums = updatedFavAlbums
+      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_ALBUMS, MusicPlayerEngine.serializeFavoriteSet(updatedFavAlbums))?.apply()
+    }
+    if (selectedArtistName?.trim()?.equals(oldTrimmed, ignoreCase = true) == true) {
+      selectedArtistName = newTrimmed
+    }
+    selectedAlbumKey?.let { key ->
+      if (key.contains("|")) {
+        val albumPart = key.substringBefore("|")
+        val artistPart = key.substringAfter("|")
+        if (artistPart.trim().equals(oldTrimmed, ignoreCase = true)) {
+          selectedAlbumKey = "$albumPart|$newTrimmed"
+        }
+      }
+    }
+    MusicPlayerEngine.clearTrackMetadataCache()
+    return updatedCount
+  }
+
+  /**
+   * Renames an entire album across all matching tracks in the library and active playback queues,
+   * updating favorite album references and active drill-down state.
+   */
+  fun renameAlbum(oldAlbumName: String, artistName: String = "", newAlbumName: String): Int {
+    val oldTrimmed = oldAlbumName.trim()
+    val artistTrimmed = artistName.trim()
+    val newTrimmed = newAlbumName.trim()
+    if (oldTrimmed.isEmpty() || newTrimmed.isEmpty() || oldTrimmed == newTrimmed) return 0
+    fun matches(track: MusicTrack): Boolean {
+      return track.album.trim().equals(oldTrimmed, ignoreCase = true) &&
+        (artistTrimmed.isEmpty() || track.artist.trim().equals(artistTrimmed, ignoreCase = true))
+    }
+    var updatedCount = 0
+    var matchedArtist = artistTrimmed
+    allTracks = allTracks.map { track ->
+      if (matches(track)) {
+        updatedCount++
+        if (matchedArtist.isEmpty()) matchedArtist = track.artist
+        track.copy(album = newTrimmed)
+      } else {
+        track
+      }
+    }
+    if (updatedCount == 0) return 0
+    unshuffledQueue = unshuffledQueue.map { track ->
+      if (matches(track)) track.copy(album = newTrimmed) else track
+    }
+    playbackQueue = playbackQueue.map { track ->
+      if (matches(track)) track.copy(album = newTrimmed) else track
+    }
+    if (MusicPlayerEngine.isAlbumFavorite(oldTrimmed, matchedArtist, favoriteAlbums)) {
+      val withoutOld = MusicPlayerEngine.toggleFavoriteAlbum(favoriteAlbums, oldTrimmed, matchedArtist)
+      val withNew = MusicPlayerEngine.toggleFavoriteAlbum(withoutOld, newTrimmed, matchedArtist)
+      favoriteAlbums = withNew
+      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_ALBUMS, MusicPlayerEngine.serializeFavoriteSet(withNew))?.apply()
+    }
+    selectedAlbumKey?.let { key ->
+      val keyAlbum = key.substringBefore("|").trim()
+      val keyArtist = key.substringAfter("|", "").trim()
+      if (
+        keyAlbum.equals(oldTrimmed, ignoreCase = true) &&
+        (artistTrimmed.isEmpty() || keyArtist.isEmpty() || keyArtist.equals(artistTrimmed, ignoreCase = true))
+      ) {
+        val targetArtist = keyArtist.ifEmpty { matchedArtist }
+        selectedAlbumKey = if (targetArtist.isNotEmpty()) "$newTrimmed|$targetArtist" else newTrimmed
+      }
+    }
+    MusicPlayerEngine.clearTrackMetadataCache()
+    return updatedCount
+  }
+
+  /**
+   * Renames an entire genre across all matching tracks in the library and active playback queues,
+   * updating favorite genre references and active drill-down state.
+   */
+  fun renameGenre(oldGenreName: String, newGenreName: String): Int {
+    val oldTrimmed = oldGenreName.trim()
+    val newTrimmed = newGenreName.trim()
+    if (oldTrimmed.isEmpty() || newTrimmed.isEmpty() || oldTrimmed == newTrimmed) return 0
+    var updatedCount = 0
+    allTracks = allTracks.map { track ->
+      if (track.genre.trim().equals(oldTrimmed, ignoreCase = true)) {
+        updatedCount++
+        track.copy(genre = newTrimmed)
+      } else {
+        track
+      }
+    }
+    if (updatedCount == 0) return 0
+    unshuffledQueue = unshuffledQueue.map { track ->
+      if (track.genre.trim().equals(oldTrimmed, ignoreCase = true)) track.copy(genre = newTrimmed) else track
+    }
+    playbackQueue = playbackQueue.map { track ->
+      if (track.genre.trim().equals(oldTrimmed, ignoreCase = true)) track.copy(genre = newTrimmed) else track
+    }
+    if (favoriteGenres.any { it.equals(oldTrimmed, ignoreCase = true) }) {
+      val updatedFavGenres = favoriteGenres
+        .filterNot { it.equals(oldTrimmed, ignoreCase = true) }
+        .toSet() + newTrimmed
+      favoriteGenres = updatedFavGenres
+      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_GENRES, MusicPlayerEngine.serializeFavoriteSet(updatedFavGenres))?.apply()
+    }
+    if (selectedGenreName?.trim()?.equals(oldTrimmed, ignoreCase = true) == true) {
+      selectedGenreName = newTrimmed
+    }
+    MusicPlayerEngine.clearTrackMetadataCache()
+    return updatedCount
+  }
+
+  /**
+   * Deletes all [tracksToDelete] from disk (when backed by local files), the library, and the
+   * playback queue, updating playback state cleanly.
+   */
+  fun deleteTracks(tracksToDelete: Collection<MusicTrack>): Int {
+    if (tracksToDelete.isEmpty()) return 0
+    val idsToDelete = tracksToDelete.map { it.id }.toSet()
+    tracksToDelete.forEach { track ->
+      track.file?.let { file ->
+        if (file.exists()) {
+          FileManagerEngine.deleteFileOrDirectory(file)
+        }
+      }
+    }
+    val wasCurrentDeleted = currentTrack?.id in idsToDelete
     val oldQueueIdx = currentQueueIndex
-    val removedBeforeCurrent = playbackQueue.take(oldQueueIdx).count { it.id == track.id }
-    allTracks = allTracks.filterNot { it.id == track.id }
-    unshuffledQueue = unshuffledQueue.filterNot { it.id == track.id }
-    val newPlaybackQueue = playbackQueue.filterNot { it.id == track.id }
+    val removedBeforeCurrent = playbackQueue.take(oldQueueIdx).count { it.id in idsToDelete }
+    val beforeCount = allTracks.size
+    allTracks = allTracks.filterNot { it.id in idsToDelete }
+    val deletedCount = beforeCount - allTracks.size
+    unshuffledQueue = unshuffledQueue.filterNot { it.id in idsToDelete }
+    val newPlaybackQueue = playbackQueue.filterNot { it.id in idsToDelete }
     playbackQueue = newPlaybackQueue
+    if (favoriteIds.any { it in idsToDelete }) {
+      val nextFavs = favoriteIds - idsToDelete
+      favoriteIds = nextFavs
+      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITES, nextFavs.joinToString("|"))?.apply()
+    }
     if (newPlaybackQueue.isEmpty()) {
       currentQueueIndex = 0
       isPlaying = false
@@ -4152,12 +4815,85 @@ class MusicPlaybackSession(
       releaseMediaPlayer()
     } else {
       currentQueueIndex = (oldQueueIdx - removedBeforeCurrent).coerceIn(0, newPlaybackQueue.lastIndex)
-      if (wasCurrent) {
+      if (wasCurrentDeleted) {
         currentPositionMs = 0L
         prepareAndSyncMediaPlayer(forceRestart = true)
       }
     }
     MusicPlayerEngine.clearTrackMetadataCache()
+    return deletedCount
+  }
+
+  fun deleteTrack(track: MusicTrack) {
+    deleteTracks(listOf(track))
+  }
+
+  /**
+   * Bulk-deletes an entire artist and all of their songs from the library.
+   */
+  fun deleteArtist(artistName: String): Int {
+    val trimmed = artistName.trim()
+    if (trimmed.isEmpty()) return 0
+    val matching = allTracks.filter { it.artist.trim().equals(trimmed, ignoreCase = true) }
+    val deleted = deleteTracks(matching)
+    if (favoriteArtists.any { it.equals(trimmed, ignoreCase = true) }) {
+      val next = favoriteArtists.filterNot { it.equals(trimmed, ignoreCase = true) }.toSet()
+      favoriteArtists = next
+      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_ARTISTS, MusicPlayerEngine.serializeFavoriteSet(next))?.apply()
+    }
+    if (selectedArtistName?.trim()?.equals(trimmed, ignoreCase = true) == true) {
+      selectedArtistName = null
+    }
+    return deleted
+  }
+
+  /**
+   * Bulk-deletes an entire album and all of its songs from the library.
+   */
+  fun deleteAlbum(albumName: String, artistName: String = ""): Int {
+    val trimmedAlbum = albumName.trim()
+    val trimmedArtist = artistName.trim()
+    if (trimmedAlbum.isEmpty()) return 0
+    val matching = allTracks.filter { track ->
+      track.album.trim().equals(trimmedAlbum, ignoreCase = true) &&
+        (trimmedArtist.isEmpty() || track.artist.trim().equals(trimmedArtist, ignoreCase = true))
+    }
+    val deleted = deleteTracks(matching)
+    if (MusicPlayerEngine.isAlbumFavorite(trimmedAlbum, trimmedArtist, favoriteAlbums)) {
+      val next = MusicPlayerEngine.toggleFavoriteAlbum(favoriteAlbums, trimmedAlbum, trimmedArtist)
+      favoriteAlbums = next
+      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_ALBUMS, MusicPlayerEngine.serializeFavoriteSet(next))?.apply()
+    }
+    selectedAlbumKey?.let { key ->
+      val keyAlbum = key.substringBefore("|").trim()
+      val keyArtist = key.substringAfter("|", "").trim()
+      if (
+        keyAlbum.equals(trimmedAlbum, ignoreCase = true) &&
+        (trimmedArtist.isEmpty() || keyArtist.isEmpty() || keyArtist.equals(trimmedArtist, ignoreCase = true))
+      ) {
+        selectedAlbumKey = null
+      }
+    }
+    return deleted
+  }
+
+  /**
+   * Bulk-deletes an entire genre and all of its songs from the library.
+   */
+  fun deleteGenre(genreName: String): Int {
+    val trimmed = genreName.trim()
+    if (trimmed.isEmpty()) return 0
+    val matching = allTracks.filter { it.genre.trim().equals(trimmed, ignoreCase = true) }
+    val deleted = deleteTracks(matching)
+    if (favoriteGenres.any { it.equals(trimmed, ignoreCase = true) }) {
+      val next = favoriteGenres.filterNot { it.equals(trimmed, ignoreCase = true) }.toSet()
+      favoriteGenres = next
+      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_GENRES, MusicPlayerEngine.serializeFavoriteSet(next))?.apply()
+    }
+    if (selectedGenreName?.trim()?.equals(trimmed, ignoreCase = true) == true) {
+      selectedGenreName = null
+    }
+    return deleted
   }
 
   fun updateSeekDrag(fraction: Float) {

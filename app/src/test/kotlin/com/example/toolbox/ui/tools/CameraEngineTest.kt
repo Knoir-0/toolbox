@@ -480,4 +480,38 @@ class CameraEngineTest {
     assertEquals("Sprint Architecture Review", storedNotes.first().title)
     assertEquals(createdNote.content, storedNotes.first().content)
   }
+
+  @Test
+  fun captureMode_supportsVisionModeAndMlKitTagAccuracyAnalysis() {
+    assertEquals(CameraCaptureMode.VISION, CameraCaptureMode.fromNameOrDefault("VISION"))
+    assertEquals(CameraCaptureMode.VISION, CameraCaptureMode.fromNameOrDefault("Vision"))
+    assertEquals(CameraCaptureMode.VISION, CameraCaptureMode.fromNameOrDefault("tags"))
+    assertEquals(CameraCaptureMode.VISION, CameraCaptureMode.fromNameOrDefault("mlkit"))
+    assertEquals("Vision", CameraCaptureMode.VISION.displayName)
+    assertEquals("VISION", CameraCaptureMode.VISION.shortLabel)
+
+    val rawTags = CameraVisionSamplePreset.BOTANICAL.sampleTags
+    val standardResult = CameraEngine.buildVisionAnalysisResult(
+      rawTags = rawTags,
+      confidenceThreshold = CameraVisionThresholdPreset.STANDARD_50.minConfidence,
+      inferenceLatencyMs = 18L,
+      sourceDescription = "Indoor Monstera Plant",
+    )
+    // 5 tags >= 50% (Furniture at 39.4% is filtered out at 50% threshold)
+    assertEquals(5, standardResult.tags.size)
+    assertEquals(6, standardResult.allCandidateTags.size)
+    assertEquals(3, standardResult.galleryPassingCount)
+    assertEquals("Plant", standardResult.topTag?.label)
+    assertEquals("96.2%", standardResult.topTag?.confidenceFormatted)
+    assertTrue(standardResult.topTag?.passesGalleryThreshold == true)
+
+    // Filtering with 80% Gallery threshold keeps only the 3 >= 80% tags
+    val galleryStrictResult = standardResult.withThreshold(CameraVisionThresholdPreset.GALLERY_80.minConfidence)
+    assertEquals(3, galleryStrictResult.tags.size)
+    assertTrue(galleryStrictResult.tags.all { it.passesGalleryThreshold })
+
+    val report = galleryStrictResult.formatSummaryReport()
+    assertTrue(report.contains("ML Kit Vision Tagging Report (Indoor Monstera Plant)"))
+    assertTrue(report.contains("Plant: 96.2%"))
+  }
 }

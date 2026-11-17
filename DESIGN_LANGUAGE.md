@@ -250,7 +250,8 @@ AlertDialog(
   - **Changeable `# per row` Control (`ToolboxFloatingColumnsButton`)**: Whenever a tool is displaying a tile/grid/card layout, place `ToolboxFloatingColumnsButton` immediately to the left of the floating filter/sort/labels button (`[#] [Filter/Sort]`). It displays only the current column count in bold (`typography.labelLarge`, `FontWeight.Bold`, `colorScheme.onSurfaceVariant`); tapping cycles `columnsPerRow` from `minColumns` to `maxColumns` and wraps around.
   - **Pinch-to-Zoom (`Modifier.pinchToChangeColumns`)**: Attach `.pinchToChangeColumns(...)` to the grid content container so two-finger pinch-out (fewer columns, larger tiles) and pinch-in (more columns, smaller tiles) smoothly adjust `columnsPerRow` within the same range:
     - **Gallery**, **Files** (Grid view), **Archive** (Grid view): `3..6` per row (default `3`).
-    - **Music Player** (Card view), **Notes** (Grid view), **To Do** (Grid view): `2..4` per row (default `2`).
+    - **Music Player** (Card view): `2..3` per row (default `2`).
+    - **Notes** (Grid view): `2..4` per row (default `2`).
 
 ---
 

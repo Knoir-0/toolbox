@@ -10,6 +10,8 @@ import android.graphics.Paint
 import android.graphics.RadialGradient
 import android.graphics.Shader
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.label.ImageLabeling
+import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
 import com.google.mlkit.vision.text.Text as MlKitText
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -55,6 +57,8 @@ const val PREF_KEY_CAMERA_FORMAT = "camera_photo_format"
 const val PREF_KEY_CAMERA_MIRROR_FRONT = "camera_mirror_front"
 const val PREF_KEY_CAMERA_SCAN_FILTER = "camera_scan_filter"
 const val PREF_KEY_CAMERA_NOTE_PRESET = "camera_note_preset"
+const val PREF_KEY_CAMERA_VISION_THRESHOLD = "camera_vision_threshold"
+const val PREF_KEY_CAMERA_VISION_PRESET = "camera_vision_preset"
 
 const val DEFAULT_CAMERA_FOLDER_SUBPATH = "DCIM/Camera"
 const val DEFAULT_CAMERA_FOLDER_DISPLAY = "/DCIM/Camera"
@@ -78,6 +82,7 @@ enum class CameraCaptureMode(
   VIDEO(displayName = "Video", shortLabel = "VIDEO"),
   SCANNER(displayName = "Scan", shortLabel = "SCAN"),
   NOTE(displayName = "Note", shortLabel = "NOTE"),
+  VISION(displayName = "Vision", shortLabel = "VISION"),
   ;
 
   companion object {
@@ -92,12 +97,212 @@ enum class CameraCaptureMode(
       ) {
         return NOTE
       }
+      if (trimmed.equals("vision", ignoreCase = true) ||
+        trimmed.equals("tag", ignoreCase = true) ||
+        trimmed.equals("tags", ignoreCase = true) ||
+        trimmed.equals("tagging", ignoreCase = true) ||
+        trimmed.equals("label", ignoreCase = true) ||
+        trimmed.equals("labels", ignoreCase = true) ||
+        trimmed.equals("mlkit", ignoreCase = true) ||
+        trimmed.equals("eye", ignoreCase = true)
+      ) {
+        return VISION
+      }
       return entries.find {
         it.name.equals(trimmed, ignoreCase = true) ||
           it.displayName.equals(trimmed, ignoreCase = true) ||
           it.shortLabel.equals(trimmed, ignoreCase = true)
       } ?: DEFAULT
     }
+  }
+}
+
+/**
+ * Confidence threshold presets for live ML Kit Image Labeling in [CameraCaptureMode.VISION] mode.
+ */
+enum class CameraVisionThresholdPreset(
+  val label: String,
+  val shortLabel: String,
+  val minConfidence: Float,
+  val description: String,
+) {
+  EXPLORE_30(
+    label = "≥30% All",
+    shortLabel = "≥30%",
+    minConfidence = 0.30f,
+    description = "Show all candidate ML Kit labels down to 30% confidence",
+  ),
+  STANDARD_50(
+    label = "≥50% Standard",
+    shortLabel = "≥50%",
+    minConfidence = 0.50f,
+    description = "Standard ML Kit base model confidence threshold (50%)",
+  ),
+  HIGH_70(
+    label = "≥70% High",
+    shortLabel = "≥70%",
+    minConfidence = 0.70f,
+    description = "High-confidence visual scene and object labels (70%)",
+  ),
+  GALLERY_80(
+    label = "≥80% Gallery",
+    shortLabel = "≥80% Gallery",
+    minConfidence = GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD,
+    description = "Exact confidence threshold used by Gallery smart auto-tagging (80%)",
+  ),
+  ;
+
+  companion object {
+    val DEFAULT: CameraVisionThresholdPreset = STANDARD_50
+
+    fun fromNameOrDefault(name: String?): CameraVisionThresholdPreset {
+      if (name.isNullOrBlank()) return DEFAULT
+      val trimmed = name.trim()
+      return entries.find {
+        it.name.equals(trimmed, ignoreCase = true) ||
+          it.label.equals(trimmed, ignoreCase = true) ||
+          it.shortLabel.equals(trimmed, ignoreCase = true)
+      } ?: DEFAULT
+    }
+  }
+}
+
+/**
+ * Represents a single ML Kit Image Labeling tag with its confidence score (`0.0f..1.0f`)
+ * and optional knowledge-graph label index.
+ */
+data class CameraVisionTag(
+  val label: String,
+  val confidence: Float,
+  val index: Int = -1,
+) {
+  val confidenceClamped: Float get() = confidence.coerceIn(0f, 1f)
+  val confidencePercent: Int get() = (confidenceClamped * 100f).roundToInt().coerceIn(0, 100)
+  val confidenceFormatted: String
+    get() = String.format(Locale.US, "%.1f%%", confidenceClamped * 100f)
+  val passesGalleryThreshold: Boolean
+    get() = confidenceClamped >= GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD
+}
+
+/**
+ * Sample visual scene presets for testing ML Kit tagging accuracy and threshold filtering
+ * when a live physical scene is not in front of the camera lens.
+ */
+enum class CameraVisionSamplePreset(
+  val label: String,
+  val sceneTitle: String,
+  val sampleTags: List<CameraVisionTag>,
+) {
+  BOTANICAL(
+    label = "Plant & Nature",
+    sceneTitle = "Indoor Monstera Plant",
+    sampleTags = listOf(
+      CameraVisionTag(label = "Plant", confidence = 0.962f, index = 284),
+      CameraVisionTag(label = "Houseplant", confidence = 0.914f, index = 192),
+      CameraVisionTag(label = "Flowerpot", confidence = 0.841f, index = 148),
+      CameraVisionTag(label = "Leaf", confidence = 0.758f, index = 211),
+      CameraVisionTag(label = "Room", confidence = 0.582f, index = 305),
+      CameraVisionTag(label = "Furniture", confidence = 0.394f, index = 166),
+    ),
+  ),
+  DESK_SETUP(
+    label = "Tech & Desk",
+    sceneTitle = "Developer Workstation",
+    sampleTags = listOf(
+      CameraVisionTag(label = "Laptop", confidence = 0.954f, index = 174),
+      CameraVisionTag(label = "Computer keyboard", confidence = 0.892f, index = 118),
+      CameraVisionTag(label = "Monitor", confidence = 0.825f, index = 230),
+      CameraVisionTag(label = "Desk", confidence = 0.734f, index = 134),
+      CameraVisionTag(label = "Electronics", confidence = 0.640f, index = 152),
+      CameraVisionTag(label = "Gadget", confidence = 0.420f, index = 170),
+    ),
+  ),
+  COFFEE_FOOD(
+    label = "Food & Drink",
+    sceneTitle = "Espresso & Croissant",
+    sampleTags = listOf(
+      CameraVisionTag(label = "Food", confidence = 0.946f, index = 162),
+      CameraVisionTag(label = "Coffee cup", confidence = 0.884f, index = 112),
+      CameraVisionTag(label = "Tableware", confidence = 0.812f, index = 340),
+      CameraVisionTag(label = "Baked goods", confidence = 0.691f, index = 74),
+      CameraVisionTag(label = "Table", confidence = 0.545f, index = 338),
+      CameraVisionTag(label = "Cuisine", confidence = 0.365f, index = 126),
+    ),
+  ),
+  OUTDOOR_STREET(
+    label = "Architecture",
+    sceneTitle = "City Street & Sky",
+    sampleTags = listOf(
+      CameraVisionTag(label = "Building", confidence = 0.935f, index = 88),
+      CameraVisionTag(label = "Sky", confidence = 0.902f, index = 319),
+      CameraVisionTag(label = "Car", confidence = 0.831f, index = 96),
+      CameraVisionTag(label = "Road", confidence = 0.715f, index = 298),
+      CameraVisionTag(label = "Tree", confidence = 0.612f, index = 351),
+      CameraVisionTag(label = "Urban area", confidence = 0.448f, index = 368),
+    ),
+  ),
+  ;
+
+  companion object {
+    val DEFAULT: CameraVisionSamplePreset = BOTANICAL
+
+    fun fromNameOrDefault(name: String?): CameraVisionSamplePreset {
+      if (name.isNullOrBlank()) return DEFAULT
+      val trimmed = name.trim()
+      return entries.find {
+        it.name.equals(trimmed, ignoreCase = true) ||
+          it.label.equals(trimmed, ignoreCase = true) ||
+          it.sceneTitle.equals(trimmed, ignoreCase = true)
+      } ?: DEFAULT
+    }
+  }
+}
+
+/**
+ * Represents a live or snapshot ML Kit Vision tagging analysis result in [CameraCaptureMode.VISION] mode.
+ */
+data class CameraVisionAnalysisResult(
+  val id: String,
+  val tags: List<CameraVisionTag>,
+  val allCandidateTags: List<CameraVisionTag> = tags,
+  val confidenceThreshold: Float = CameraVisionThresholdPreset.DEFAULT.minConfidence,
+  val inferenceLatencyMs: Long = 0L,
+  val frameWidth: Int = 0,
+  val frameHeight: Int = 0,
+  val sourceDescription: String = "Live Camera Frame",
+  val analyzedAtMs: Long = System.currentTimeMillis(),
+) {
+  val topTag: CameraVisionTag? get() = tags.firstOrNull()
+  val galleryPassingCount: Int get() = tags.count { it.passesGalleryThreshold }
+  val averageConfidence: Float
+    get() = if (tags.isEmpty()) 0f else tags.map { it.confidenceClamped }.average().toFloat()
+  val averageConfidenceFormatted: String
+    get() = String.format(Locale.US, "%.1f%%", averageConfidence * 100f)
+  val timestampFormatted: String get() = FileManagerEngine.formatTimestamp(analyzedAtMs)
+
+  fun withThreshold(newThreshold: Float): CameraVisionAnalysisResult {
+    val clamped = newThreshold.coerceIn(0.05f, 0.99f)
+    val filtered = allCandidateTags
+      .filter { it.confidenceClamped >= clamped }
+      .sortedByDescending { it.confidenceClamped }
+    return copy(
+      tags = filtered,
+      confidenceThreshold = clamped,
+    )
+  }
+
+  fun formatSummaryReport(): String {
+    return buildString {
+      appendLine("ML Kit Vision Tagging Report ($sourceDescription)")
+      appendLine(
+        "Threshold: ${(confidenceThreshold * 100f).roundToInt()}% • Latency: ${inferenceLatencyMs}ms • Gallery (≥80%): $galleryPassingCount/${tags.size}"
+      )
+      tags.forEachIndexed { idx, tag ->
+        val galleryBadge = if (tag.passesGalleryThreshold) "[GALLERY ≥80%]" else "[BELOW 80%]"
+        val indexSuffix = if (tag.index >= 0) " (#${tag.index})" else ""
+        appendLine("${idx + 1}. ${tag.label}: ${tag.confidenceFormatted}$indexSuffix $galleryBadge")
+      }
+    }.trim()
   }
 }
 
@@ -2752,6 +2957,132 @@ object CameraEngine {
         rawText = rawText,
         blocks = blocks,
         scannedAtMs = scannedAtMs,
+      )
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  // =========================================================================
+  // Live ML Kit Image Labeling / Vision Tagging Engine
+  // =========================================================================
+
+  /**
+   * Normalizes, deduplicates, and filters raw [CameraVisionTag] items into a structured
+   * [CameraVisionAnalysisResult] sorted by descending confidence.
+   */
+  fun buildVisionAnalysisResult(
+    rawTags: List<CameraVisionTag>,
+    confidenceThreshold: Float = CameraVisionThresholdPreset.DEFAULT.minConfidence,
+    inferenceLatencyMs: Long = 14L,
+    frameWidth: Int = 640,
+    frameHeight: Int = 640,
+    sourceDescription: String = "Live Camera Frame",
+    analyzedAtMs: Long = System.currentTimeMillis(),
+    maxLabels: Int = 10,
+  ): CameraVisionAnalysisResult {
+    val clampedThreshold = confidenceThreshold.coerceIn(0.05f, 0.99f)
+    val dedupByLabel = linkedMapOf<String, CameraVisionTag>()
+
+    val sortedCandidates = rawTags
+      .mapNotNull { item ->
+        val cleanText = item.label.trim()
+        if (cleanText.isEmpty()) return@mapNotNull null
+        val formattedText = cleanText.replaceFirstChar { ch ->
+          if (ch.isLowerCase()) ch.titlecase(Locale.US) else ch.toString()
+        }
+        CameraVisionTag(
+          label = formattedText,
+          confidence = item.confidence.coerceIn(0f, 1f),
+          index = item.index,
+        )
+      }
+      .sortedByDescending { it.confidenceClamped }
+
+    for (tag in sortedCandidates) {
+      val key = tag.label.lowercase(Locale.US)
+      if (!dedupByLabel.containsKey(key)) {
+        dedupByLabel[key] = tag
+      }
+    }
+
+    val allCandidates = dedupByLabel.values.take(maxLabels.coerceAtLeast(1))
+    val filteredTags = allCandidates.filter { it.confidenceClamped >= clampedThreshold }
+
+    return CameraVisionAnalysisResult(
+      id = "VISION_${analyzedAtMs}_${sourceDescription.hashCode()}",
+      tags = filteredTags,
+      allCandidateTags = allCandidates,
+      confidenceThreshold = clampedThreshold,
+      inferenceLatencyMs = inferenceLatencyMs.coerceAtLeast(1L),
+      frameWidth = frameWidth.coerceAtLeast(0),
+      frameHeight = frameHeight.coerceAtLeast(0),
+      sourceDescription = sourceDescription,
+      analyzedAtMs = analyzedAtMs,
+    )
+  }
+
+  /**
+   * Runs Google ML Kit on-device Image Labeling (`com.google.mlkit:image-labeling`) on [bitmap]
+   * and returns a [CameraVisionAnalysisResult] with each detected tag's exact confidence score,
+   * label index, and inference latency in milliseconds.
+   */
+  suspend fun recognizeVisionTagsFromBitmapWithMlKit(
+    bitmap: Bitmap,
+    rotationDegrees: Int = 0,
+    confidenceThreshold: Float = CameraVisionThresholdPreset.DEFAULT.minConfidence,
+    baseDetectorMinConfidence: Float = 0.25f,
+    maxLabels: Int = 10,
+    sourceDescription: String = "Live Camera Frame",
+    analyzedAtMs: Long = System.currentTimeMillis(),
+  ): CameraVisionAnalysisResult? {
+    if (bitmap.width <= 16 || bitmap.height <= 16) return null
+    val detectorMin = minOf(confidenceThreshold, baseDetectorMinConfidence).coerceIn(0.15f, 0.95f)
+    return try {
+      val startNs = System.nanoTime()
+      val options = ImageLabelerOptions.Builder()
+        .setConfidenceThreshold(detectorMin)
+        .build()
+      val labeler = ImageLabeling.getClient(options)
+      val inputImage = InputImage.fromBitmap(bitmap, rotationDegrees)
+      val rawTags = suspendCancellableCoroutine<List<CameraVisionTag>?> { continuation ->
+        labeler.process(inputImage)
+          .addOnSuccessListener { results ->
+            labeler.close()
+            val mapped = results.mapNotNull { item ->
+              val text = item.text.trim()
+              if (text.isNotEmpty()) {
+                CameraVisionTag(
+                  label = text,
+                  confidence = item.confidence,
+                  index = item.index,
+                )
+              } else {
+                null
+              }
+            }
+            if (continuation.isActive) {
+              continuation.resume(mapped)
+            }
+          }
+          .addOnFailureListener {
+            labeler.close()
+            if (continuation.isActive) {
+              continuation.resume(null)
+            }
+          }
+      } ?: return null
+
+      val latencyMs = ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(1L)
+      buildVisionAnalysisResult(
+        rawTags = rawTags,
+        confidenceThreshold = confidenceThreshold,
+        inferenceLatencyMs = latencyMs,
+        frameWidth = bitmap.width,
+        frameHeight = bitmap.height,
+        sourceDescription = sourceDescription,
+        analyzedAtMs = analyzedAtMs,
+        maxLabels = maxLabels,
       )
     } catch (_: Throwable) {
       null
