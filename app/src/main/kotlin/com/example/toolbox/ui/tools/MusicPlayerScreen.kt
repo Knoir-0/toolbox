@@ -399,8 +399,10 @@ fun MusicPlayerScreen(
   var showFavoriteSongsOnly by session::showFavoriteSongsOnly
   var showFavoriteGenresOnly by session::showFavoriteGenresOnly
 
-  // Play Statistics (persisted in SharedPreferences: play count + total playtime per track)
-  val playStats = session.playStats
+  // Frozen UI snapshots of play statistics so views and playlists do not reorder or update live
+  // while music is playing and the user is viewing them.
+  val viewPlayStats = session.viewPlayStats
+  val homePlayStats = session.homePlayStats
 
   // Playlists (persisted in SharedPreferences; Favorites, Most Played & Recently Played are built-in dynamic playlists)
   val savedPlaylistEntries = session.savedPlaylistEntries
@@ -432,35 +434,30 @@ fun MusicPlayerScreen(
   }
 
   val allTracks = session.allTracks
+  val hasDrillDown = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
 
+  val songsSearchQuery = if (!hasDrillDown && selectedTab == MusicLibraryTab.SONGS) searchQuery else ""
   val sortedTracks = remember(
     allTracks,
     sortOrder,
-    playStats,
+    viewPlayStats,
     showFavoriteSongsOnly,
     favoriteIds,
     favoriteArtists,
     favoriteAlbums,
     favoriteGenres,
-    searchQuery,
-    selectedTab,
-    selectedArtistName,
-    selectedAlbumKey,
-    selectedGenreName,
-    selectedPlaylistId,
+    songsSearchQuery,
   ) {
     val base = if (showFavoriteSongsOnly) {
       allTracks.filter { it.id in favoriteIds }
     } else {
       allTracks
     }
-    val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
-    val activeQuery = if (!hasDrill && selectedTab == MusicLibraryTab.SONGS) searchQuery else ""
-    val filtered = MusicPlayerEngine.filterTracks(base, activeQuery)
+    val filtered = MusicPlayerEngine.filterTracks(base, songsSearchQuery)
     MusicPlayerEngine.sortTracks(
       tracks = filtered,
       sortOrder = sortOrder,
-      playStats = playStats,
+      playStats = viewPlayStats,
       favoriteIds = favoriteIds,
       favoriteArtists = favoriteArtists,
       favoriteAlbums = favoriteAlbums,
@@ -471,43 +468,40 @@ fun MusicPlayerScreen(
   val baseArtists = remember(allTracks) {
     MusicPlayerEngine.buildArtists(allTracks)
   }
-  val allArtists = remember(baseArtists, showFavoriteArtistsOnly, favoriteArtists, searchQuery, selectedTab, selectedArtistName, selectedAlbumKey, selectedGenreName, selectedPlaylistId) {
+  val artistsSearchQuery = if (!hasDrillDown && selectedTab == MusicLibraryTab.ARTISTS) searchQuery else ""
+  val allArtists = remember(baseArtists, showFavoriteArtistsOnly, favoriteArtists, artistsSearchQuery) {
     val base = if (showFavoriteArtistsOnly) {
       baseArtists.filter { MusicPlayerEngine.isArtistFavorite(it, favoriteArtists) }
     } else {
       baseArtists
     }
-    val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
-    val activeQuery = if (!hasDrill && selectedTab == MusicLibraryTab.ARTISTS) searchQuery else ""
-    MusicPlayerEngine.filterArtists(base, activeQuery)
+    MusicPlayerEngine.filterArtists(base, artistsSearchQuery)
   }
 
   val baseAlbums = remember(allTracks) {
     MusicPlayerEngine.buildAlbums(allTracks)
   }
-  val allAlbums = remember(baseAlbums, showFavoriteAlbumsOnly, favoriteAlbums, searchQuery, selectedTab, selectedArtistName, selectedAlbumKey, selectedGenreName, selectedPlaylistId) {
+  val albumsSearchQuery = if (!hasDrillDown && selectedTab == MusicLibraryTab.ALBUMS) searchQuery else ""
+  val allAlbums = remember(baseAlbums, showFavoriteAlbumsOnly, favoriteAlbums, albumsSearchQuery) {
     val base = if (showFavoriteAlbumsOnly) {
       baseAlbums.filter { MusicPlayerEngine.isAlbumFavorite(it, favoriteAlbums) }
     } else {
       baseAlbums
     }
-    val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
-    val activeQuery = if (!hasDrill && selectedTab == MusicLibraryTab.ALBUMS) searchQuery else ""
-    MusicPlayerEngine.filterAlbums(base, activeQuery)
+    MusicPlayerEngine.filterAlbums(base, albumsSearchQuery)
   }
 
   val baseGenres = remember(allTracks) {
     MusicPlayerEngine.buildGenres(allTracks)
   }
-  val allGenres = remember(baseGenres, showFavoriteGenresOnly, favoriteGenres, searchQuery, selectedTab, selectedArtistName, selectedAlbumKey, selectedGenreName, selectedPlaylistId) {
+  val genresSearchQuery = if (!hasDrillDown && selectedTab == MusicLibraryTab.GENRES) searchQuery else ""
+  val allGenres = remember(baseGenres, showFavoriteGenresOnly, favoriteGenres, genresSearchQuery) {
     val base = if (showFavoriteGenresOnly) {
       baseGenres.filter { MusicPlayerEngine.isGenreFavorite(it, favoriteGenres) }
     } else {
       baseGenres
     }
-    val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
-    val activeQuery = if (!hasDrill && selectedTab == MusicLibraryTab.GENRES) searchQuery else ""
-    MusicPlayerEngine.filterGenres(base, activeQuery)
+    MusicPlayerEngine.filterGenres(base, genresSearchQuery)
   }
 
   val basePlaylists = remember(
@@ -517,31 +511,30 @@ fun MusicPlayerScreen(
     favoriteArtists,
     favoriteAlbums,
     favoriteGenres,
-    playStats,
+    viewPlayStats,
   ) {
     listOf(
       MusicPlayerEngine.buildFavoritesPlaylist(favoriteIds, allTracks),
       MusicPlayerEngine.buildMostPlayedPlaylist(
-        playStats = playStats,
+        playStats = viewPlayStats,
         allTracks = allTracks,
         favoriteIds = favoriteIds,
         favoriteArtists = favoriteArtists,
         favoriteAlbums = favoriteAlbums,
         favoriteGenres = favoriteGenres,
       ),
-      MusicPlayerEngine.buildRecentlyPlayedPlaylist(playStats, allTracks),
+      MusicPlayerEngine.buildRecentlyPlayedPlaylist(viewPlayStats, allTracks),
     ) + MusicPlayerEngine.buildPlaylists(savedPlaylistEntries, allTracks)
   }
-  val allPlaylists = remember(basePlaylists, searchQuery, selectedTab, selectedArtistName, selectedAlbumKey, selectedGenreName, selectedPlaylistId) {
-    val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
-    val activeQuery = if (!hasDrill && selectedTab == MusicLibraryTab.PLAYLISTS) searchQuery else ""
-    MusicPlayerEngine.filterPlaylists(basePlaylists, activeQuery)
+  val playlistsSearchQuery = if (!hasDrillDown && selectedTab == MusicLibraryTab.PLAYLISTS) searchQuery else ""
+  val allPlaylists = remember(basePlaylists, playlistsSearchQuery) {
+    MusicPlayerEngine.filterPlaylists(basePlaylists, playlistsSearchQuery)
   }
 
   val homeRefreshGeneration = session.homeRefreshGeneration
   val baseHomePlaylists = remember(
     allTracks,
-    playStats,
+    homePlayStats,
     favoriteIds,
     favoriteArtists,
     favoriteAlbums,
@@ -550,7 +543,7 @@ fun MusicPlayerScreen(
   ) {
     MusicPlayerEngine.generateHomePlaylists(
       allTracks = allTracks,
-      playStats = playStats,
+      playStats = homePlayStats,
       favoriteIds = favoriteIds,
       favoriteArtists = favoriteArtists,
       favoriteAlbums = favoriteAlbums,
@@ -558,18 +551,12 @@ fun MusicPlayerScreen(
       refreshGeneration = homeRefreshGeneration,
     )
   }
+  val homeSearchQuery = if (!hasDrillDown && selectedTab == MusicLibraryTab.HOME) searchQuery else ""
   val allHomePlaylists = remember(
     baseHomePlaylists,
-    searchQuery,
-    selectedTab,
-    selectedArtistName,
-    selectedAlbumKey,
-    selectedGenreName,
-    selectedPlaylistId,
+    homeSearchQuery,
   ) {
-    val hasDrill = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
-    val activeQuery = if (!hasDrill && selectedTab == MusicLibraryTab.HOME) searchQuery else ""
-    MusicPlayerEngine.filterPlaylists(baseHomePlaylists, activeQuery)
+    MusicPlayerEngine.filterPlaylists(baseHomePlaylists, homeSearchQuery)
   }
 
   // Playback Queue & Active Track State (managed by MusicPlaybackSession so playback continues across tool switches)
@@ -579,15 +566,10 @@ fun MusicPlayerScreen(
 
   val isPlaying = session.isPlaying
   var isPlayerExpanded by session::isPlayerExpanded
-  val currentPositionMs = session.currentPositionMs
-  val trackDurationMs = session.trackDurationMs
-  val isDraggingSeek = session.isDraggingSeek
-  val dragSeekFraction = session.dragSeekFraction
 
   // Speed & Sleep Timer & Modals (volume is left to the system media volume)
   val playbackSpeed = session.playbackSpeed
   val sleepTimerPreset = session.sleepTimerPreset
-  val sleepRemainingMs = session.sleepRemainingMs
   var showQueueSheet by session::showQueueSheet
   var showSavePlaylistDialog by rememberSaveable { mutableStateOf(false) }
   var showTrackInfoDialog by rememberSaveable { mutableStateOf(false) }
@@ -722,8 +704,6 @@ fun MusicPlayerScreen(
     animationSpec = tween(durationMillis = 450),
     label = "deepBgAlbumColor",
   )
-
-  val hasDrillDown = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
 
   val activeInlineColorHex = inlineColorPickerHex
   if (activeInlineColorHex != null) {
@@ -1209,7 +1189,7 @@ fun MusicPlayerScreen(
               currentTrackId = currentTrack?.id,
               isPlaying = isPlaying,
               favoriteIds = favoriteIds,
-              playStats = playStats,
+              playStats = viewPlayStats,
               sectionFocusVersion = sectionFocusVersion,
               onPlayPlaylist = { shuffle ->
                 if (activePlaylist.tracks.isNotEmpty()) {
@@ -1505,16 +1485,11 @@ fun MusicPlayerScreen(
 
       // 4. Docked Collapsible Mini-Player Bar (follows current track's album art colors)
       if (currentTrack != null) {
-        val progressFraction = if (trackDurationMs > 0L) {
-          (currentPositionMs.toFloat() / trackDurationMs.toFloat()).coerceIn(0f, 1f)
-        } else {
-          0f
-        }
-        CollapsedMiniMusicPlayer(
+        DockedMiniMusicPlayerSection(
+          session = session,
           track = currentTrack,
           isPlaying = isPlaying,
           isFavorite = currentTrack.id in favoriteIds,
-          progressFraction = progressFraction,
           dominantColor = animatedDominant,
           darkSurfaceColor = animatedDarkSurface,
           accentColor = animatedAccent,
@@ -1538,6 +1513,11 @@ fun MusicPlayerScreen(
       exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
     ) {
       if (currentTrack != null) {
+        val currentPositionMs = session.currentPositionMs
+        val trackDurationMs = session.trackDurationMs
+        val isDraggingSeek = session.isDraggingSeek
+        val dragSeekFraction = session.dragSeekFraction
+        val sleepRemainingMs = session.sleepRemainingMs
         val seekFraction = if (isDraggingSeek) {
           dragSeekFraction
         } else if (trackDurationMs > 0L) {
@@ -1667,7 +1647,7 @@ fun MusicPlayerScreen(
       TrackDetailsDialog(
         track = detailTrack,
         palette = detailPalette,
-        playStat = playStats[detailTrack.id] ?: TrackPlayStats(),
+        playStat = session.playStats[detailTrack.id] ?: TrackPlayStats(),
         onSelectColor = { hex ->
           showTrackInfoDialog = false
           trackForDetailsDialog = null
@@ -2959,11 +2939,12 @@ private fun ArtistsTabContent(
                 )
                 IconButton(
                   onClick = { onToggleFavoriteArtist(artist) },
+                  colors = IconButtonDefaults.iconButtonColors(
+                    containerColor = ArtworkOverlayButtonBackground,
+                  ),
                   modifier = Modifier
                     .size(30.dp)
                     .align(Alignment.TopEnd)
-                    .clip(CircleShape)
-                    .background(ArtworkOverlayButtonBackground, CircleShape)
                     .testTag("favorite_artist_${artist.name}"),
                 ) {
                   Icon(
@@ -3305,12 +3286,13 @@ private fun AlbumsTabContent(
                 )
                 IconButton(
                   onClick = { onToggleFavoriteAlbum(album) },
+                  colors = IconButtonDefaults.iconButtonColors(
+                    containerColor = ArtworkOverlayButtonBackground,
+                  ),
                   modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(6.dp)
                     .size(30.dp)
-                    .clip(CircleShape)
-                    .background(ArtworkOverlayButtonBackground, CircleShape)
                     .testTag("favorite_album_${album.name}"),
                 ) {
                   Icon(
@@ -3818,11 +3800,12 @@ private fun GenresTabContent(
                 )
                 IconButton(
                   onClick = { onToggleFavoriteGenre(genre) },
+                  colors = IconButtonDefaults.iconButtonColors(
+                    containerColor = ArtworkOverlayButtonBackground,
+                  ),
                   modifier = Modifier
                     .size(30.dp)
                     .align(Alignment.TopEnd)
-                    .clip(CircleShape)
-                    .background(ArtworkOverlayButtonBackground, CircleShape)
                     .testTag("favorite_genre_${genre.name}"),
                 ) {
                   Icon(
@@ -5158,12 +5141,13 @@ private fun SongGridItemCard(
         }
         IconButton(
           onClick = onToggleFavorite,
+          colors = IconButtonDefaults.iconButtonColors(
+            containerColor = ArtworkOverlayButtonBackground,
+          ),
           modifier = Modifier
             .align(Alignment.TopEnd)
             .padding(6.dp)
             .size(30.dp)
-            .clip(CircleShape)
-            .background(ArtworkOverlayButtonBackground, CircleShape)
             .testTag("favorite_song_${track.id}"),
         ) {
           Icon(
@@ -5243,24 +5227,19 @@ private fun SongContextMenuButton(
   Box(modifier = modifier) {
     IconButton(
       onClick = { expanded = true },
+      colors = IconButtonDefaults.iconButtonColors(
+        containerColor = containerColor,
+        contentColor = tint,
+      ),
       modifier = Modifier
         .size(if (containerColor != Color.Transparent) 30.dp else 32.dp)
-        .then(
-          if (containerColor != Color.Transparent) {
-            Modifier
-              .clip(CircleShape)
-              .background(containerColor, CircleShape)
-          } else {
-            Modifier
-          }
-        )
         .testTag("song_more_${track.id}"),
     ) {
       Icon(
         imageVector = Icons.Default.MoreVert,
         contentDescription = "More options for ${track.title}",
         tint = tint,
-        modifier = Modifier.size(18.dp),
+        modifier = Modifier.size(if (containerColor != Color.Transparent) 16.dp else 18.dp),
       )
     }
 
@@ -5430,24 +5409,19 @@ private fun MusicCollectionContextMenuButton(
   Box(modifier = modifier) {
     IconButton(
       onClick = { expanded = true },
+      colors = IconButtonDefaults.iconButtonColors(
+        containerColor = containerColor,
+        contentColor = tint,
+      ),
       modifier = Modifier
         .size(30.dp)
-        .then(
-          if (containerColor != Color.Transparent) {
-            Modifier
-              .clip(CircleShape)
-              .background(containerColor, CircleShape)
-          } else {
-            Modifier
-          }
-        )
         .testTag(moreButtonTestTag),
     ) {
       Icon(
         imageVector = Icons.Default.MoreVert,
         contentDescription = "More options for $collectionTitle",
         tint = tint,
-        modifier = Modifier.size(18.dp),
+        modifier = Modifier.size(if (containerColor != Color.Transparent) 16.dp else 18.dp),
       )
     }
 
@@ -6034,6 +6008,46 @@ private fun DeletePlaylistConfirmDialog(
   )
 }
 
+@Composable
+private fun DockedMiniMusicPlayerSection(
+  session: MusicPlaybackSession,
+  track: MusicTrack,
+  isPlaying: Boolean,
+  isFavorite: Boolean,
+  dominantColor: Color,
+  darkSurfaceColor: Color,
+  accentColor: Color,
+  dominantHex: String,
+  onExpand: () -> Unit,
+  onToggleFavorite: () -> Unit,
+  onPrevious: () -> Unit,
+  onPlayPause: () -> Unit,
+  onNext: () -> Unit,
+) {
+  val currentPositionMs = session.currentPositionMs
+  val trackDurationMs = session.trackDurationMs
+  val progressFraction = if (trackDurationMs > 0L) {
+    (currentPositionMs.toFloat() / trackDurationMs.toFloat()).coerceIn(0f, 1f)
+  } else {
+    0f
+  }
+  CollapsedMiniMusicPlayer(
+    track = track,
+    isPlaying = isPlaying,
+    isFavorite = isFavorite,
+    progressFraction = progressFraction,
+    dominantColor = dominantColor,
+    darkSurfaceColor = darkSurfaceColor,
+    accentColor = accentColor,
+    dominantHex = dominantHex,
+    onExpand = onExpand,
+    onToggleFavorite = onToggleFavorite,
+    onPrevious = onPrevious,
+    onPlayPause = onPlayPause,
+    onNext = onNext,
+  )
+}
+
 /**
  * Collapsible Mini-Player docked at the bottom of the Music Player screen.
  * Its background dynamically follows the current song's album art colors.
@@ -6459,19 +6473,20 @@ private fun ExpandedMusicPlayerOverlay(
                 )
                 IconButton(
                   onClick = onToggleFavorite,
+                  colors = IconButtonDefaults.iconButtonColors(
+                    containerColor = ArtworkOverlayButtonBackground,
+                  ),
                   modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(8.dp)
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(ArtworkOverlayButtonBackground, CircleShape)
+                    .size(30.dp)
                     .testTag("expanded_player_favorite_button"),
                 ) {
                   Icon(
                     imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
                     contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
                     tint = if (isFavorite) accentColor else Color.White,
-                    modifier = Modifier.size(24.dp),
+                    modifier = Modifier.size(16.dp),
                   )
                 }
               }
@@ -6577,10 +6592,11 @@ private fun ExpandedMusicPlayerOverlay(
           ) {
             IconButton(
               onClick = onToggleShuffle,
+              colors = IconButtonDefaults.iconButtonColors(
+                containerColor = if (shuffleMode.isEnabled) accentColor.copy(alpha = 0.25f) else Color.Transparent,
+              ),
               modifier = Modifier
                 .size(40.dp)
-                .clip(CircleShape)
-                .background(if (shuffleMode.isEnabled) accentColor.copy(alpha = 0.25f) else Color.Transparent)
                 .testTag("expanded_player_shuffle_button"),
             ) {
               Box(contentAlignment = Alignment.Center) {
@@ -6655,10 +6671,11 @@ private fun ExpandedMusicPlayerOverlay(
 
             IconButton(
               onClick = onCycleRepeat,
+              colors = IconButtonDefaults.iconButtonColors(
+                containerColor = if (repeatMode != MusicRepeatMode.OFF) accentColor.copy(alpha = 0.25f) else Color.Transparent,
+              ),
               modifier = Modifier
                 .size(40.dp)
-                .clip(CircleShape)
-                .background(if (repeatMode != MusicRepeatMode.OFF) accentColor.copy(alpha = 0.25f) else Color.Transparent)
                 .testTag("expanded_player_repeat_button"),
             ) {
               Icon(
@@ -7261,9 +7278,10 @@ internal fun TrackArtworkThumbnail(
     contentAlignment = Alignment.Center,
   ) {
     val activeBitmap = bitmap
-    if (activeBitmap != null) {
+    val imageBitmap = remember(activeBitmap) { activeBitmap?.asImageBitmap() }
+    if (imageBitmap != null) {
       Image(
-        bitmap = activeBitmap.asImageBitmap(),
+        bitmap = imageBitmap,
         contentDescription = track?.album ?: "Album Art",
         contentScale = ContentScale.Crop,
         modifier = Modifier.fillMaxSize(),
@@ -7311,9 +7329,10 @@ private fun TrackArtworkBanner(
     contentAlignment = Alignment.Center,
   ) {
     val activeBitmap = bitmap
-    if (activeBitmap != null) {
+    val imageBitmap = remember(activeBitmap) { activeBitmap?.asImageBitmap() }
+    if (imageBitmap != null) {
       Image(
-        bitmap = activeBitmap.asImageBitmap(),
+        bitmap = imageBitmap,
         contentDescription = track?.album ?: "Album Art",
         contentScale = ContentScale.Crop,
         modifier = Modifier.fillMaxSize(),

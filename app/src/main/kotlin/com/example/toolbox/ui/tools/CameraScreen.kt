@@ -370,12 +370,7 @@ fun CameraScreen(
     mutableStateOf(false)
   }
 
-  // Live ML Kit Vision Tagging states
-  var visionThresholdPreset by rememberSaveable {
-    val saved = prefs?.getString(PREF_KEY_CAMERA_VISION_THRESHOLD, null)
-    mutableStateOf(CameraVisionThresholdPreset.fromNameOrDefault(saved))
-  }
-
+  // Live ML Kit Vision Tagging states (>= 50% confidence)
   var visionSamplePreset by rememberSaveable {
     val saved = prefs?.getString(PREF_KEY_CAMERA_VISION_PRESET, null)
     mutableStateOf(CameraVisionSamplePreset.fromNameOrDefault(saved))
@@ -386,7 +381,7 @@ fun CameraScreen(
       if (isInspection && initialCaptureMode == CameraCaptureMode.VISION) {
         CameraEngine.buildVisionAnalysisResult(
           rawTags = CameraVisionSamplePreset.DEFAULT.sampleTags,
-          confidenceThreshold = CameraVisionThresholdPreset.DEFAULT.minConfidence,
+          confidenceThreshold = MIN_VISION_CONFIDENCE_THRESHOLD,
           inferenceLatencyMs = 15L,
           sourceDescription = CameraVisionSamplePreset.DEFAULT.sceneTitle,
         )
@@ -394,16 +389,6 @@ fun CameraScreen(
         null
       }
     )
-  }
-
-  var isVisionFrozen by rememberSaveable {
-    mutableStateOf(false)
-  }
-
-  fun updateVisionThresholdPreset(preset: CameraVisionThresholdPreset) {
-    visionThresholdPreset = preset
-    prefs?.edit()?.putString(PREF_KEY_CAMERA_VISION_THRESHOLD, preset.name)?.apply()
-    latestVisionResult = latestVisionResult?.withThreshold(preset.minConfidence)
   }
 
   fun updateVisionSamplePreset(preset: CameraVisionSamplePreset) {
@@ -747,11 +732,11 @@ fun CameraScreen(
   }
 
   // Continuous live frame ML Kit Image Labeling when in VISION mode and hardware TextureView is rendering
-  LaunchedEffect(captureMode, visionThresholdPreset, isVisionFrozen, activeTextureView) {
-    if (captureMode != CameraCaptureMode.VISION || isVisionFrozen || isInspection) {
+  LaunchedEffect(captureMode, activeTextureView) {
+    if (captureMode != CameraCaptureMode.VISION || isInspection) {
       return@LaunchedEffect
     }
-    while (isActive && captureMode == CameraCaptureMode.VISION && !isVisionFrozen) {
+    while (isActive && captureMode == CameraCaptureMode.VISION) {
       val tv = activeTextureView
       if (tv != null && tv.isAvailable) {
         val rawFrame = try {
@@ -763,16 +748,16 @@ fun CameraScreen(
           val analyzed = withContext(Dispatchers.Default) {
             CameraEngine.recognizeVisionTagsFromBitmapWithMlKit(
               bitmap = rawFrame,
-              confidenceThreshold = visionThresholdPreset.minConfidence,
+              confidenceThreshold = MIN_VISION_CONFIDENCE_THRESHOLD,
               sourceDescription = "Live Camera Frame",
             )
           }
-          if (analyzed != null && analyzed.allCandidateTags.isNotEmpty()) {
+          if (analyzed != null && analyzed.tags.isNotEmpty()) {
             latestVisionResult = analyzed
           }
         }
       }
-      delay(450L)
+      delay(350L)
     }
   }
 
@@ -782,25 +767,22 @@ fun CameraScreen(
 
     val fallbackResult = CameraEngine.buildVisionAnalysisResult(
       rawTags = visionSamplePreset.sampleTags,
-      confidenceThreshold = visionThresholdPreset.minConfidence,
+      confidenceThreshold = MIN_VISION_CONFIDENCE_THRESHOLD,
       inferenceLatencyMs = 16L,
       frameWidth = 640,
       frameHeight = 640,
       sourceDescription = visionSamplePreset.sceneTitle,
     )
 
-    // Immediately show either the latest live hardware result or the selected sample preset
     val currentLive = latestVisionResult?.takeIf {
-      it.sourceDescription == "Live Camera Frame" && it.allCandidateTags.isNotEmpty()
+      it.sourceDescription == "Live Camera Frame" && it.tags.isNotEmpty()
     }
-    val initialResult = currentLive?.withThreshold(visionThresholdPreset.minConfidence) ?: fallbackResult
+    val initialResult = currentLive?.withThreshold(MIN_VISION_CONFIDENCE_THRESHOLD) ?: fallbackResult
     latestVisionResult = initialResult
 
-    val topSummary = initialResult.topTag?.let { "${it.label} (${it.confidenceFormatted})" }
-      ?: "${initialResult.tags.size} tags above ${(visionThresholdPreset.minConfidence * 100f).roundToInt()}%"
-    if (!isInspection) {
-      Toast.makeText(context, "ML Kit Vision: $topSummary", Toast.LENGTH_SHORT).show()
-    }
+    // Advance sample preset for subsequent fallback test triggers
+    val nextPresetIndex = (visionSamplePreset.ordinal + 1) % CameraVisionSamplePreset.entries.size
+    updateVisionSamplePreset(CameraVisionSamplePreset.entries[nextPresetIndex])
 
     // Also run on-device ML Kit Image Labeling asynchronously on the current hardware frame if available
     val tv = activeTextureView
@@ -814,11 +796,11 @@ fun CameraScreen(
         val hwResult = withContext(Dispatchers.Default) {
           CameraEngine.recognizeVisionTagsFromBitmapWithMlKit(
             bitmap = rawHardwareBitmap,
-            confidenceThreshold = visionThresholdPreset.minConfidence,
+            confidenceThreshold = MIN_VISION_CONFIDENCE_THRESHOLD,
             sourceDescription = "Live Camera Frame",
           )
         }
-        if (hwResult != null && hwResult.allCandidateTags.isNotEmpty()) {
+        if (hwResult != null && hwResult.tags.isNotEmpty()) {
           latestVisionResult = hwResult
         }
       }
@@ -1110,15 +1092,13 @@ fun CameraScreen(
           )
         }
 
-        // Live ML Kit Vision Tagging Viewfinder Reticle & HUD Overlay
+        // Live ML Kit Vision Dynamic Bounding Boxes Overlay
         if (captureMode == CameraCaptureMode.VISION) {
           val frameTopInScreen = (containerH - frameH) / 2
           val topOverlayHeight = with(density) { topOverlayHeightPx.toDp() }
-          val reticleTopInset = (topOverlayHeight + 20.dp - frameTopInScreen).coerceAtLeast(20.dp)
+          val reticleTopInset = (topOverlayHeight + 16.dp - frameTopInScreen).coerceAtLeast(16.dp)
           VisionReticleOverlayCanvas(
             visionResult = latestVisionResult,
-            thresholdPreset = visionThresholdPreset,
-            isFrozen = isVisionFrozen,
             topInset = reticleTopInset,
             modifier = Modifier
               .fillMaxSize()
@@ -1923,130 +1903,6 @@ fun CameraScreen(
                 shape = RoundedCornerShape(20.dp),
                 modifier = Modifier.testTag("open_notes_tool_chip"),
               )
-            }
-          }
-
-          // Live ML Kit Vision Tagging Accuracy Card
-          val activeVisionResult = latestVisionResult
-          AnimatedVisibility(
-            visible = activeVisionResult != null && captureMode == CameraCaptureMode.VISION,
-            enter = expandVertically() + fadeIn(),
-            exit = shrinkVertically() + fadeOut(),
-          ) {
-            if (activeVisionResult != null) {
-              VisionLiveTaggingCard(
-                result = activeVisionResult,
-                isFrozen = isVisionFrozen,
-                onToggleFreeze = {
-                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                  isVisionFrozen = !isVisionFrozen
-                },
-                onCopyReport = {
-                  copyTextToClipboard(
-                    context = context,
-                    label = "ML Kit Vision Tagging",
-                    text = activeVisionResult.formatSummaryReport(),
-                    isInspection = isInspection,
-                  )
-                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                },
-                onSaveTaggedPhoto = {
-                  val outFile = CameraEngine.createTimestampedPhotoFile(
-                    directory = cameraDirectory,
-                    format = CameraPhotoFormat.PNG,
-                  )
-                  GalleryEngine.writeTextDocumentPng(
-                    outputFile = outFile,
-                    ocrText = activeVisionResult.sourceDescription,
-                    imageLabels = activeVisionResult.tags.map { it.label },
-                  )
-                  refreshTrigger++
-                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                  if (!isInspection) {
-                    Toast.makeText(context, "Saved tagged ${outFile.name}", Toast.LENGTH_SHORT).show()
-                  }
-                },
-                onDismiss = {
-                  latestVisionResult = null
-                  isVisionFrozen = false
-                },
-              )
-            }
-          }
-
-          // Live ML Kit Vision Threshold & Sample Scene Controls Row
-          AnimatedVisibility(
-            visible = captureMode == CameraCaptureMode.VISION,
-            enter = expandVertically() + fadeIn(),
-            exit = shrinkVertically() + fadeOut(),
-          ) {
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .testTag("vision_controls_bar"),
-              horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              CameraVisionThresholdPreset.entries.forEach { thresholdOption ->
-                val selected = thresholdOption == visionThresholdPreset
-                FilterChip(
-                  selected = selected,
-                  onClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    updateVisionThresholdPreset(thresholdOption)
-                  },
-                  label = {
-                    Text(
-                      text = thresholdOption.shortLabel,
-                      style = MaterialTheme.typography.labelMedium,
-                      fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                    )
-                  },
-                  leadingIcon = {
-                    Icon(
-                      imageVector = Icons.Default.Visibility,
-                      contentDescription = null,
-                      modifier = Modifier.size(16.dp),
-                    )
-                  },
-                  shape = RoundedCornerShape(20.dp),
-                  modifier = Modifier.testTag("vision_threshold_${thresholdOption.name}"),
-                )
-              }
-
-              CameraVisionSamplePreset.entries.forEach { preset ->
-                val selected = preset == visionSamplePreset
-                FilterChip(
-                  selected = selected,
-                  onClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    updateVisionSamplePreset(preset)
-                    latestVisionResult = CameraEngine.buildVisionAnalysisResult(
-                      rawTags = preset.sampleTags,
-                      confidenceThreshold = visionThresholdPreset.minConfidence,
-                      inferenceLatencyMs = 15L,
-                      sourceDescription = preset.sceneTitle,
-                    )
-                  },
-                  label = {
-                    Text(
-                      text = preset.label,
-                      style = MaterialTheme.typography.labelMedium,
-                      fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                    )
-                  },
-                  leadingIcon = {
-                    Icon(
-                      imageVector = Icons.AutoMirrored.Filled.Label,
-                      contentDescription = null,
-                      modifier = Modifier.size(16.dp),
-                    )
-                  },
-                  shape = RoundedCornerShape(20.dp),
-                  modifier = Modifier.testTag("vision_preset_${preset.name}"),
-                )
-              }
             }
           }
 
@@ -3582,507 +3438,215 @@ private fun DocumentNoteReticleOverlayCanvas(
 }
 
 /**
- * Viewfinder reticle and live ML Kit tagging telemetry HUD rendered when [CameraCaptureMode.VISION] is active.
+ * Dynamically drawn colored bounding boxes over detected visual elements in [CameraCaptureMode.VISION] mode,
+ * displaying each element's label and confidence percentage (only for tags >= 50% confidence).
  */
 @Composable
 private fun VisionReticleOverlayCanvas(
   visionResult: CameraVisionAnalysisResult?,
-  thresholdPreset: CameraVisionThresholdPreset,
-  isFrozen: Boolean,
   modifier: Modifier = Modifier,
-  topInset: Dp = 20.dp,
+  topInset: Dp = 16.dp,
 ) {
-  val hasDetectedTags = visionResult != null && visionResult.tags.isNotEmpty()
-  val bracketColor = if (hasDetectedTags) {
-    MaterialTheme.colorScheme.tertiary
-  } else {
-    MaterialTheme.colorScheme.primary
+  val visibleTags = remember(visionResult) {
+    visionResult?.tags
+      ?.filter { it.confidenceClamped >= MIN_VISION_CONFIDENCE_THRESHOLD }
+      ?.take(5)
+      .orEmpty()
   }
-  val crosshairColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.28f)
-  val borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
 
-  Box(modifier = modifier) {
+  val boxStrokeColors = listOf(
+    MaterialTheme.colorScheme.tertiary,
+    MaterialTheme.colorScheme.primary,
+    MaterialTheme.colorScheme.secondary,
+    MaterialTheme.colorScheme.inversePrimary,
+    MaterialTheme.colorScheme.error,
+  )
+  val badgeContainerColors = listOf(
+    MaterialTheme.colorScheme.tertiaryContainer,
+    MaterialTheme.colorScheme.primaryContainer,
+    MaterialTheme.colorScheme.secondaryContainer,
+    MaterialTheme.colorScheme.surfaceContainerHigh,
+    MaterialTheme.colorScheme.errorContainer,
+  )
+  val badgeContentColors = listOf(
+    MaterialTheme.colorScheme.onTertiaryContainer,
+    MaterialTheme.colorScheme.onPrimaryContainer,
+    MaterialTheme.colorScheme.onSecondaryContainer,
+    MaterialTheme.colorScheme.onSurface,
+    MaterialTheme.colorScheme.onErrorContainer,
+  )
+
+  val density = LocalDensity.current
+
+  BoxWithConstraints(modifier = modifier) {
+    val stageW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+    val stageH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+    val topInsetPx = with(density) { topInset.toPx() }
+    val bottomMarginPx = with(density) { 170.dp.toPx() }.coerceAtMost(stageH * 0.35f)
+    val usableTop = topInsetPx.coerceAtMost(stageH * 0.3f)
+    val usableBottom = (stageH - bottomMarginPx).coerceAtLeast(usableTop + 80f)
+    val usableHeight = (usableBottom - usableTop).coerceAtLeast(1f)
+
     Canvas(modifier = Modifier.fillMaxSize()) {
-      val minDim = size.minDimension
-      val frameW = (minDim * 0.72f).coerceAtMost(280.dp.toPx())
-      val frameH = (frameW * 0.88f).coerceAtMost(size.height * 0.65f)
-      val left = (size.width - frameW) / 2f
-      val top = topInset.toPx().coerceAtMost((size.height - frameH).coerceAtLeast(0f))
-      val right = left + frameW
-      val bottom = top + frameH
-      val cx = (left + right) / 2f
-      val cy = (top + bottom) / 2f
-      val armLen = minOf(frameW, frameH) * 0.16f
-      val strokePx = 3.5.dp.toPx()
+      val cornerRadiusPx = 10.dp.toPx()
+      val strokePx = 2.dp.toPx()
+      val bracketStrokePx = 3.5.dp.toPx()
 
-      // Subtle vision target frame
-      drawRoundRect(
-        color = borderColor,
-        topLeft = Offset(left, top),
-        size = Size(frameW, frameH),
-        cornerRadius = CornerRadius(18.dp.toPx(), 18.dp.toPx()),
-        style = Stroke(width = 1.dp.toPx()),
-      )
+      visibleTags.forEachIndexed { idx, tag ->
+        val normBox = (tag.boundingBox ?: CameraEngine.defaultVisionBoundingBoxForRank(idx)).coerceNormalized()
+        val boxColor = boxStrokeColors[idx % boxStrokeColors.size]
 
-      // Center optical target ring
-      val centerRadius = 18.dp.toPx()
-      drawCircle(
-        color = crosshairColor,
-        radius = centerRadius,
-        center = Offset(cx, cy),
-        style = Stroke(width = 1.2.dp.toPx()),
-      )
-      drawCircle(
-        color = bracketColor.copy(alpha = 0.65f),
-        radius = 3.dp.toPx(),
-        center = Offset(cx, cy),
-      )
+        val leftPx = (normBox.left * size.width).coerceIn(12.dp.toPx(), size.width - 64.dp.toPx())
+        val rightPx = (normBox.right * size.width).coerceIn(leftPx + 52.dp.toPx(), size.width - 12.dp.toPx())
+        val topPx = (usableTop + normBox.top * usableHeight).coerceIn(usableTop, usableBottom - 44.dp.toPx())
+        val bottomPx = (usableTop + normBox.bottom * usableHeight).coerceIn(topPx + 40.dp.toPx(), usableBottom)
+        val boxW = rightPx - leftPx
+        val boxH = bottomPx - topPx
+        val armLen = (minOf(boxW, boxH) * 0.20f).coerceIn(10.dp.toPx(), 26.dp.toPx())
 
-      // Corner brackets
-      drawLine(
-        color = bracketColor,
-        start = Offset(left, top + armLen),
-        end = Offset(left, top),
-        strokeWidth = strokePx,
-        cap = StrokeCap.Round,
-      )
-      drawLine(
-        color = bracketColor,
-        start = Offset(left, top),
-        end = Offset(left + armLen, top),
-        strokeWidth = strokePx,
-        cap = StrokeCap.Round,
-      )
+        // Translucent colored region fill
+        drawRoundRect(
+          color = boxColor.copy(alpha = 0.12f),
+          topLeft = Offset(leftPx, topPx),
+          size = Size(boxW, boxH),
+          cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx),
+        )
 
-      drawLine(
-        color = bracketColor,
-        start = Offset(right - armLen, top),
-        end = Offset(right, top),
-        strokeWidth = strokePx,
-        cap = StrokeCap.Round,
-      )
-      drawLine(
-        color = bracketColor,
-        start = Offset(right, top),
-        end = Offset(right, top + armLen),
-        strokeWidth = strokePx,
-        cap = StrokeCap.Round,
-      )
+        // Colored bounding box outline
+        drawRoundRect(
+          color = boxColor.copy(alpha = 0.85f),
+          topLeft = Offset(leftPx, topPx),
+          size = Size(boxW, boxH),
+          cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx),
+          style = Stroke(width = strokePx),
+        )
 
-      drawLine(
-        color = bracketColor,
-        start = Offset(left, bottom - armLen),
-        end = Offset(left, bottom),
-        strokeWidth = strokePx,
-        cap = StrokeCap.Round,
-      )
-      drawLine(
-        color = bracketColor,
-        start = Offset(left, bottom),
-        end = Offset(left + armLen, bottom),
-        strokeWidth = strokePx,
-        cap = StrokeCap.Round,
-      )
+        // Corner accent brackets
+        drawLine(
+          color = boxColor,
+          start = Offset(leftPx, topPx + armLen),
+          end = Offset(leftPx, topPx),
+          strokeWidth = bracketStrokePx,
+          cap = StrokeCap.Round,
+        )
+        drawLine(
+          color = boxColor,
+          start = Offset(leftPx, topPx),
+          end = Offset(leftPx + armLen, topPx),
+          strokeWidth = bracketStrokePx,
+          cap = StrokeCap.Round,
+        )
 
-      drawLine(
-        color = bracketColor,
-        start = Offset(right - armLen, bottom),
-        end = Offset(right, bottom),
-        strokeWidth = strokePx,
-        cap = StrokeCap.Round,
-      )
-      drawLine(
-        color = bracketColor,
-        start = Offset(right, bottom - armLen),
-        end = Offset(right, bottom),
-        strokeWidth = strokePx,
-        cap = StrokeCap.Round,
-      )
-    }
+        drawLine(
+          color = boxColor,
+          start = Offset(rightPx - armLen, topPx),
+          end = Offset(rightPx, topPx),
+          strokeWidth = bracketStrokePx,
+          cap = StrokeCap.Round,
+        )
+        drawLine(
+          color = boxColor,
+          start = Offset(rightPx, topPx),
+          end = Offset(rightPx, topPx + armLen),
+          strokeWidth = bracketStrokePx,
+          cap = StrokeCap.Round,
+        )
 
-    // Live ML Kit Telemetry Status Pill inside the top of the Vision Reticle
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(top = topInset + 10.dp, start = 24.dp, end = 24.dp),
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-      Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-        modifier = Modifier.testTag("vision_hud_status_pill"),
-      ) {
-        Row(
-          modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Visibility,
-            contentDescription = null,
-            tint = if (isFrozen) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(14.dp),
-          )
-          Text(
-            text = buildString {
-              append(if (isFrozen) "PAUSED" else "LIVE ML KIT")
-              append(" • ")
-              append(thresholdPreset.shortLabel)
-              if (visionResult != null) {
-                append(" • ${visionResult.inferenceLatencyMs}ms")
-                append(" • ${visionResult.galleryPassingCount} ≥80%")
-              }
-            },
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
-        }
-      }
+        drawLine(
+          color = boxColor,
+          start = Offset(leftPx, bottomPx - armLen),
+          end = Offset(leftPx, bottomPx),
+          strokeWidth = bracketStrokePx,
+          cap = StrokeCap.Round,
+        )
+        drawLine(
+          color = boxColor,
+          start = Offset(leftPx, bottomPx),
+          end = Offset(leftPx + armLen, bottomPx),
+          strokeWidth = bracketStrokePx,
+          cap = StrokeCap.Round,
+        )
 
-      // Top 3 live floating tag pills in the viewfinder when tags are active
-      if (visionResult != null && visionResult.tags.isNotEmpty()) {
-        Row(
-          modifier = Modifier
-            .horizontalScroll(rememberScrollState())
-            .testTag("vision_hud_top_tags_row"),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          visionResult.tags.take(3).forEach { tag ->
-            Surface(
-              shape = RoundedCornerShape(14.dp),
-              color = if (tag.passesGalleryThreshold) {
-                MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
-              } else {
-                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f)
-              },
-              border = BorderStroke(
-                width = 1.dp,
-                color = if (tag.passesGalleryThreshold) {
-                  MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f)
-                } else {
-                  MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
-                },
-              ),
-            ) {
-              Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-              ) {
-                Text(
-                  text = tag.label,
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.Bold,
-                  color = if (tag.passesGalleryThreshold) {
-                    MaterialTheme.colorScheme.onTertiaryContainer
-                  } else {
-                    MaterialTheme.colorScheme.onSurface
-                  },
-                )
-                Text(
-                  text = tag.confidenceFormatted,
-                  style = MaterialTheme.typography.labelSmall,
-                  fontFamily = FontFamily.Monospace,
-                  color = if (tag.passesGalleryThreshold) {
-                    MaterialTheme.colorScheme.onTertiaryContainer
-                  } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                  },
-                )
-              }
-            }
-          }
-        }
+        drawLine(
+          color = boxColor,
+          start = Offset(rightPx - armLen, bottomPx),
+          end = Offset(rightPx, bottomPx),
+          strokeWidth = bracketStrokePx,
+          cap = StrokeCap.Round,
+        )
+        drawLine(
+          color = boxColor,
+          start = Offset(rightPx, bottomPx - armLen),
+          end = Offset(rightPx, bottomPx),
+          strokeWidth = bracketStrokePx,
+          cap = StrokeCap.Round,
+        )
       }
     }
-  }
-}
 
-/**
- * Floating card displayed above the bottom controls in [CameraCaptureMode.VISION] mode,
- * showing live or snapshot ML Kit Image Labeling tags, exact confidence scores, 80% Gallery
- * auto-tag threshold comparison bars, and quick actions.
- */
-@Composable
-private fun VisionLiveTaggingCard(
-  result: CameraVisionAnalysisResult,
-  isFrozen: Boolean,
-  onToggleFreeze: () -> Unit,
-  onCopyReport: () -> Unit,
-  onSaveTaggedPhoto: () -> Unit,
-  onDismiss: () -> Unit,
-) {
-  Card(
-    shape = RoundedCornerShape(18.dp),
-    colors = CardDefaults.cardColors(
-      containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.95f),
-    ),
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.6f)),
-    modifier = Modifier
-      .fillMaxWidth()
-      .testTag("vision_detected_card"),
-  ) {
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(horizontal = 14.dp, vertical = 10.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      // Header Row
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+    // Attached Label + Confidence Percentage Pills on each colored bounding box
+    if (visibleTags.isNotEmpty()) {
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag("vision_detected_card"),
       ) {
-        Row(
-          modifier = Modifier.weight(1f),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-          Box(
+        visibleTags.forEachIndexed { idx, tag ->
+          val normBox = (tag.boundingBox ?: CameraEngine.defaultVisionBoundingBoxForRank(idx)).coerceNormalized()
+          val borderColor = boxStrokeColors[idx % boxStrokeColors.size]
+          val containerColor = badgeContainerColors[idx % badgeContainerColors.size]
+          val contentColor = badgeContentColors[idx % badgeContentColors.size]
+
+          val minX = with(density) { 12.dp.toPx() }
+          val maxX = (stageW - with(density) { 140.dp.toPx() }).coerceAtLeast(minX)
+          val leftPx = (normBox.left * stageW).coerceIn(minX, maxX)
+          val topPx = (usableTop + normBox.top * usableHeight).coerceIn(
+            usableTop,
+            (usableBottom - with(density) { 44.dp.toPx() }).coerceAtLeast(usableTop),
+          )
+
+          Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = containerColor.copy(alpha = 0.92f),
+            border = BorderStroke(1.5.dp, borderColor),
+            tonalElevation = 3.dp,
             modifier = Modifier
-              .size(38.dp)
-              .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.tertiaryContainer),
-            contentAlignment = Alignment.Center,
+              .offset {
+                IntOffset(
+                  x = leftPx.roundToInt(),
+                  y = (topPx + with(density) { 6.dp.toPx() }).roundToInt(),
+                )
+              }
+              .testTag("vision_box_badge_${tag.label}"),
           ) {
-            Icon(
-              imageVector = Icons.Default.Visibility,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.onTertiaryContainer,
-              modifier = Modifier.size(20.dp),
-            )
-          }
-
-          Column(modifier = Modifier.weight(1f)) {
             Row(
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-              Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
-              ) {
-                Text(
-                  text = "${result.galleryPassingCount}/${result.tags.size} ≥80% GALLERY",
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.onPrimaryContainer,
-                  modifier = Modifier
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                    .testTag("vision_gallery_threshold_badge"),
-                )
-              }
+              Box(
+                modifier = Modifier
+                  .size(7.dp)
+                  .clip(CircleShape)
+                  .background(borderColor),
+              )
               Text(
-                text = "${result.inferenceLatencyMs}ms · Avg ${result.averageConfidenceFormatted}",
+                text = tag.label,
                 style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.Bold,
+                color = contentColor,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
-            }
-            Text(
-              text = result.sourceDescription,
-              style = MaterialTheme.typography.bodyMedium,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurface,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.testTag("vision_detected_source_title"),
-            )
-          }
-        }
-
-        IconButton(
-          onClick = onDismiss,
-          modifier = Modifier
-            .size(32.dp)
-            .testTag("vision_result_dismiss_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Close,
-            contentDescription = "Dismiss ML Kit Vision result",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
-          )
-        }
-      }
-
-      // Tag Confidence Accuracy Rows
-      if (result.tags.isEmpty()) {
-        Text(
-          text = "No labels met the ${(result.confidenceThreshold * 100f).roundToInt()}% confidence threshold (${result.allCandidateTags.size} lower-confidence candidates filtered).",
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.testTag("vision_empty_threshold_message"),
-        )
-      } else {
-        Column(
-          modifier = Modifier
-            .fillMaxWidth()
-            .testTag("vision_tags_list"),
-          verticalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-          result.tags.take(5).forEach { tag ->
-            val passesGallery = tag.passesGalleryThreshold
-            val barFillColor = if (passesGallery) {
-              MaterialTheme.colorScheme.tertiary
-            } else {
-              MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
-            }
-            val barTrackColor = MaterialTheme.colorScheme.surfaceVariant
-            val markerColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
-
-            Column(
-              modifier = Modifier
-                .fillMaxWidth()
-                .testTag("vision_tag_row_${tag.label}"),
-              verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Row(
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(6.dp),
-                  modifier = Modifier.weight(1f),
-                ) {
-                  Text(
-                    text = tag.label,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                  )
-                  if (tag.index >= 0) {
-                    Text(
-                      text = "#${tag.index}",
-                      style = MaterialTheme.typography.labelSmall,
-                      fontFamily = FontFamily.Monospace,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                  }
-                  if (passesGallery) {
-                    Surface(
-                      shape = RoundedCornerShape(6.dp),
-                      color = MaterialTheme.colorScheme.tertiaryContainer,
-                    ) {
-                      Text(
-                        text = "≥80%",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
-                      )
-                    }
-                  }
-                }
-
-                Text(
-                  text = tag.confidenceFormatted,
-                  style = MaterialTheme.typography.labelMedium,
-                  fontFamily = FontFamily.Monospace,
-                  fontWeight = FontWeight.Bold,
-                  color = if (passesGallery) {
-                    MaterialTheme.colorScheme.tertiary
-                  } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                  },
-                )
-              }
-
-              // Confidence Bar with 80% Gallery Threshold Marker
-              Canvas(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .height(6.dp)
-                  .clip(RoundedCornerShape(3.dp)),
-              ) {
-                drawRoundRect(
-                  color = barTrackColor,
-                  size = size,
-                  cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
-                )
-                drawRoundRect(
-                  color = barFillColor,
-                  size = Size(size.width * tag.confidenceClamped, size.height),
-                  cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
-                )
-                // 80% Gallery threshold tick mark
-                val galleryTickX = size.width * GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD
-                drawLine(
-                  color = markerColor,
-                  start = Offset(galleryTickX, 0f),
-                  end = Offset(galleryTickX, size.height),
-                  strokeWidth = 1.5.dp.toPx(),
-                )
-              }
+              Text(
+                text = "${tag.confidencePercent}%",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.ExtraBold,
+                color = contentColor,
+              )
             }
           }
-        }
-      }
-
-      // Action Buttons Row
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Button(
-          onClick = onToggleFreeze,
-          shape = RoundedCornerShape(12.dp),
-          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-          modifier = Modifier
-            .height(34.dp)
-            .testTag("vision_freeze_toggle_button"),
-        ) {
-          Icon(
-            imageVector = if (isFrozen) Icons.Default.PlayArrow else Icons.Default.Pause,
-            contentDescription = null,
-            modifier = Modifier.size(15.dp),
-          )
-          Spacer(modifier = Modifier.width(5.dp))
-          Text(
-            text = if (isFrozen) "Resume Live" else "Pause Live",
-            style = MaterialTheme.typography.labelMedium,
-          )
-        }
-
-        TextButton(
-          onClick = onCopyReport,
-          shape = RoundedCornerShape(12.dp),
-          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-          modifier = Modifier
-            .height(34.dp)
-            .testTag("vision_copy_report_button"),
-        ) {
-          Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
-          Spacer(modifier = Modifier.width(4.dp))
-          Text("Copy Report", style = MaterialTheme.typography.labelMedium)
-        }
-
-        TextButton(
-          onClick = onSaveTaggedPhoto,
-          shape = RoundedCornerShape(12.dp),
-          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-          modifier = Modifier
-            .height(34.dp)
-            .testTag("vision_save_tagged_photo_button"),
-        ) {
-          Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(15.dp))
-          Spacer(modifier = Modifier.width(4.dp))
-          Text("Save Tagged PNG", style = MaterialTheme.typography.labelMedium)
         }
       }
     }

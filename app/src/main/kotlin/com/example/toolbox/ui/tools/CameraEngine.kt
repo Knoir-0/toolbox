@@ -117,8 +117,11 @@ enum class CameraCaptureMode(
   }
 }
 
+const val MIN_VISION_CONFIDENCE_THRESHOLD = 0.50f
+
 /**
  * Confidence threshold presets for live ML Kit Image Labeling in [CameraCaptureMode.VISION] mode.
+ * Anything lower than 50% confidence ([MIN_VISION_CONFIDENCE_THRESHOLD]) is hidden.
  */
 enum class CameraVisionThresholdPreset(
   val label: String,
@@ -126,17 +129,11 @@ enum class CameraVisionThresholdPreset(
   val minConfidence: Float,
   val description: String,
 ) {
-  EXPLORE_30(
-    label = "≥30% All",
-    shortLabel = "≥30%",
-    minConfidence = 0.30f,
-    description = "Show all candidate ML Kit labels down to 30% confidence",
-  ),
   STANDARD_50(
     label = "≥50% Standard",
     shortLabel = "≥50%",
-    minConfidence = 0.50f,
-    description = "Standard ML Kit base model confidence threshold (50%)",
+    minConfidence = MIN_VISION_CONFIDENCE_THRESHOLD,
+    description = "Standard ML Kit confidence threshold (50% minimum)",
   ),
   HIGH_70(
     label = "≥70% High",
@@ -168,13 +165,38 @@ enum class CameraVisionThresholdPreset(
 }
 
 /**
- * Represents a single ML Kit Image Labeling tag with its confidence score (`0.0f..1.0f`)
- * and optional knowledge-graph label index.
+ * Normalized bounding box (`0.0f..1.0f` in viewfinder coordinates) indicating where
+ * a detected visual element is located in the camera frame.
+ */
+data class CameraVisionBoundingBox(
+  val left: Float,
+  val top: Float,
+  val right: Float,
+  val bottom: Float,
+) {
+  val width: Float get() = (right - left).coerceAtLeast(0f)
+  val height: Float get() = (bottom - top).coerceAtLeast(0f)
+  val centerX: Float get() = (left + right) * 0.5f
+  val centerY: Float get() = (top + bottom) * 0.5f
+
+  fun coerceNormalized(): CameraVisionBoundingBox {
+    val l = left.coerceIn(0.04f, 0.88f)
+    val t = top.coerceIn(0.10f, 0.84f)
+    val r = right.coerceIn(l + 0.12f, 0.96f)
+    val b = bottom.coerceIn(t + 0.10f, 0.90f)
+    return CameraVisionBoundingBox(left = l, top = t, right = r, bottom = b)
+  }
+}
+
+/**
+ * Represents a single ML Kit Image Labeling tag with its confidence score (`0.50f..1.0f`),
+ * knowledge-graph label index, and spatial [boundingBox] in normalized viewfinder coordinates.
  */
 data class CameraVisionTag(
   val label: String,
   val confidence: Float,
   val index: Int = -1,
+  val boundingBox: CameraVisionBoundingBox? = null,
 ) {
   val confidenceClamped: Float get() = confidence.coerceIn(0f, 1f)
   val confidencePercent: Int get() = (confidenceClamped * 100f).roundToInt().coerceIn(0, 100)
@@ -185,7 +207,7 @@ data class CameraVisionTag(
 }
 
 /**
- * Sample visual scene presets for testing ML Kit tagging accuracy and threshold filtering
+ * Sample visual scene presets for testing ML Kit tagging accuracy and spatial bounding boxes
  * when a live physical scene is not in front of the camera lens.
  */
 enum class CameraVisionSamplePreset(
@@ -197,48 +219,168 @@ enum class CameraVisionSamplePreset(
     label = "Plant & Nature",
     sceneTitle = "Indoor Monstera Plant",
     sampleTags = listOf(
-      CameraVisionTag(label = "Plant", confidence = 0.962f, index = 284),
-      CameraVisionTag(label = "Houseplant", confidence = 0.914f, index = 192),
-      CameraVisionTag(label = "Flowerpot", confidence = 0.841f, index = 148),
-      CameraVisionTag(label = "Leaf", confidence = 0.758f, index = 211),
-      CameraVisionTag(label = "Room", confidence = 0.582f, index = 305),
-      CameraVisionTag(label = "Furniture", confidence = 0.394f, index = 166),
+      CameraVisionTag(
+        label = "Plant",
+        confidence = 0.962f,
+        index = 284,
+        boundingBox = CameraVisionBoundingBox(0.16f, 0.18f, 0.84f, 0.64f),
+      ),
+      CameraVisionTag(
+        label = "Houseplant",
+        confidence = 0.914f,
+        index = 192,
+        boundingBox = CameraVisionBoundingBox(0.22f, 0.24f, 0.78f, 0.78f),
+      ),
+      CameraVisionTag(
+        label = "Flowerpot",
+        confidence = 0.841f,
+        index = 148,
+        boundingBox = CameraVisionBoundingBox(0.32f, 0.56f, 0.68f, 0.82f),
+      ),
+      CameraVisionTag(
+        label = "Leaf",
+        confidence = 0.758f,
+        index = 211,
+        boundingBox = CameraVisionBoundingBox(0.12f, 0.22f, 0.52f, 0.48f),
+      ),
+      CameraVisionTag(
+        label = "Room",
+        confidence = 0.582f,
+        index = 305,
+        boundingBox = CameraVisionBoundingBox(0.08f, 0.14f, 0.92f, 0.86f),
+      ),
+      CameraVisionTag(
+        label = "Furniture",
+        confidence = 0.394f,
+        index = 166,
+        boundingBox = CameraVisionBoundingBox(0.20f, 0.70f, 0.80f, 0.88f),
+      ),
     ),
   ),
   DESK_SETUP(
     label = "Tech & Desk",
     sceneTitle = "Developer Workstation",
     sampleTags = listOf(
-      CameraVisionTag(label = "Laptop", confidence = 0.954f, index = 174),
-      CameraVisionTag(label = "Computer keyboard", confidence = 0.892f, index = 118),
-      CameraVisionTag(label = "Monitor", confidence = 0.825f, index = 230),
-      CameraVisionTag(label = "Desk", confidence = 0.734f, index = 134),
-      CameraVisionTag(label = "Electronics", confidence = 0.640f, index = 152),
-      CameraVisionTag(label = "Gadget", confidence = 0.420f, index = 170),
+      CameraVisionTag(
+        label = "Laptop",
+        confidence = 0.954f,
+        index = 174,
+        boundingBox = CameraVisionBoundingBox(0.18f, 0.28f, 0.82f, 0.68f),
+      ),
+      CameraVisionTag(
+        label = "Computer keyboard",
+        confidence = 0.892f,
+        index = 118,
+        boundingBox = CameraVisionBoundingBox(0.24f, 0.54f, 0.76f, 0.74f),
+      ),
+      CameraVisionTag(
+        label = "Monitor",
+        confidence = 0.825f,
+        index = 230,
+        boundingBox = CameraVisionBoundingBox(0.20f, 0.18f, 0.80f, 0.52f),
+      ),
+      CameraVisionTag(
+        label = "Desk",
+        confidence = 0.734f,
+        index = 134,
+        boundingBox = CameraVisionBoundingBox(0.10f, 0.50f, 0.90f, 0.84f),
+      ),
+      CameraVisionTag(
+        label = "Electronics",
+        confidence = 0.640f,
+        index = 152,
+        boundingBox = CameraVisionBoundingBox(0.64f, 0.36f, 0.90f, 0.62f),
+      ),
+      CameraVisionTag(
+        label = "Gadget",
+        confidence = 0.420f,
+        index = 170,
+        boundingBox = CameraVisionBoundingBox(0.68f, 0.40f, 0.88f, 0.60f),
+      ),
     ),
   ),
   COFFEE_FOOD(
     label = "Food & Drink",
     sceneTitle = "Espresso & Croissant",
     sampleTags = listOf(
-      CameraVisionTag(label = "Food", confidence = 0.946f, index = 162),
-      CameraVisionTag(label = "Coffee cup", confidence = 0.884f, index = 112),
-      CameraVisionTag(label = "Tableware", confidence = 0.812f, index = 340),
-      CameraVisionTag(label = "Baked goods", confidence = 0.691f, index = 74),
-      CameraVisionTag(label = "Table", confidence = 0.545f, index = 338),
-      CameraVisionTag(label = "Cuisine", confidence = 0.365f, index = 126),
+      CameraVisionTag(
+        label = "Food",
+        confidence = 0.946f,
+        index = 162,
+        boundingBox = CameraVisionBoundingBox(0.14f, 0.38f, 0.58f, 0.74f),
+      ),
+      CameraVisionTag(
+        label = "Coffee cup",
+        confidence = 0.884f,
+        index = 112,
+        boundingBox = CameraVisionBoundingBox(0.52f, 0.24f, 0.86f, 0.62f),
+      ),
+      CameraVisionTag(
+        label = "Tableware",
+        confidence = 0.812f,
+        index = 340,
+        boundingBox = CameraVisionBoundingBox(0.12f, 0.22f, 0.88f, 0.78f),
+      ),
+      CameraVisionTag(
+        label = "Baked goods",
+        confidence = 0.691f,
+        index = 74,
+        boundingBox = CameraVisionBoundingBox(0.18f, 0.42f, 0.54f, 0.70f),
+      ),
+      CameraVisionTag(
+        label = "Table",
+        confidence = 0.545f,
+        index = 338,
+        boundingBox = CameraVisionBoundingBox(0.08f, 0.16f, 0.92f, 0.84f),
+      ),
+      CameraVisionTag(
+        label = "Cuisine",
+        confidence = 0.365f,
+        index = 126,
+        boundingBox = CameraVisionBoundingBox(0.20f, 0.40f, 0.60f, 0.72f),
+      ),
     ),
   ),
   OUTDOOR_STREET(
     label = "Architecture",
     sceneTitle = "City Street & Sky",
     sampleTags = listOf(
-      CameraVisionTag(label = "Building", confidence = 0.935f, index = 88),
-      CameraVisionTag(label = "Sky", confidence = 0.902f, index = 319),
-      CameraVisionTag(label = "Car", confidence = 0.831f, index = 96),
-      CameraVisionTag(label = "Road", confidence = 0.715f, index = 298),
-      CameraVisionTag(label = "Tree", confidence = 0.612f, index = 351),
-      CameraVisionTag(label = "Urban area", confidence = 0.448f, index = 368),
+      CameraVisionTag(
+        label = "Building",
+        confidence = 0.935f,
+        index = 88,
+        boundingBox = CameraVisionBoundingBox(0.10f, 0.22f, 0.64f, 0.68f),
+      ),
+      CameraVisionTag(
+        label = "Sky",
+        confidence = 0.902f,
+        index = 319,
+        boundingBox = CameraVisionBoundingBox(0.12f, 0.12f, 0.88f, 0.36f),
+      ),
+      CameraVisionTag(
+        label = "Car",
+        confidence = 0.831f,
+        index = 96,
+        boundingBox = CameraVisionBoundingBox(0.46f, 0.54f, 0.88f, 0.78f),
+      ),
+      CameraVisionTag(
+        label = "Road",
+        confidence = 0.715f,
+        index = 298,
+        boundingBox = CameraVisionBoundingBox(0.10f, 0.62f, 0.90f, 0.86f),
+      ),
+      CameraVisionTag(
+        label = "Tree",
+        confidence = 0.612f,
+        index = 351,
+        boundingBox = CameraVisionBoundingBox(0.62f, 0.26f, 0.92f, 0.58f),
+      ),
+      CameraVisionTag(
+        label = "Urban area",
+        confidence = 0.448f,
+        index = 368,
+        boundingBox = CameraVisionBoundingBox(0.08f, 0.18f, 0.92f, 0.84f),
+      ),
     ),
   ),
   ;
@@ -260,12 +402,13 @@ enum class CameraVisionSamplePreset(
 
 /**
  * Represents a live or snapshot ML Kit Vision tagging analysis result in [CameraCaptureMode.VISION] mode.
+ * Only tags with confidence >= 50% ([MIN_VISION_CONFIDENCE_THRESHOLD]) are included in [tags].
  */
 data class CameraVisionAnalysisResult(
   val id: String,
   val tags: List<CameraVisionTag>,
   val allCandidateTags: List<CameraVisionTag> = tags,
-  val confidenceThreshold: Float = CameraVisionThresholdPreset.DEFAULT.minConfidence,
+  val confidenceThreshold: Float = MIN_VISION_CONFIDENCE_THRESHOLD,
   val inferenceLatencyMs: Long = 0L,
   val frameWidth: Int = 0,
   val frameHeight: Int = 0,
@@ -281,7 +424,7 @@ data class CameraVisionAnalysisResult(
   val timestampFormatted: String get() = FileManagerEngine.formatTimestamp(analyzedAtMs)
 
   fun withThreshold(newThreshold: Float): CameraVisionAnalysisResult {
-    val clamped = newThreshold.coerceIn(0.05f, 0.99f)
+    val clamped = newThreshold.coerceIn(MIN_VISION_CONFIDENCE_THRESHOLD, 0.99f)
     val filtered = allCandidateTags
       .filter { it.confidenceClamped >= clamped }
       .sortedByDescending { it.confidenceClamped }
@@ -2968,12 +3111,231 @@ object CameraEngine {
   // =========================================================================
 
   /**
+   * Returns a well-spaced fallback [CameraVisionBoundingBox] for a given tag rank (`0..N`)
+   * when an explicit region bounding box is not provided.
+   */
+  fun defaultVisionBoundingBoxForRank(rank: Int): CameraVisionBoundingBox {
+    return when (rank % 5) {
+      0 -> CameraVisionBoundingBox(0.16f, 0.20f, 0.84f, 0.66f)
+      1 -> CameraVisionBoundingBox(0.24f, 0.30f, 0.78f, 0.78f)
+      2 -> CameraVisionBoundingBox(0.12f, 0.48f, 0.58f, 0.82f)
+      3 -> CameraVisionBoundingBox(0.42f, 0.16f, 0.88f, 0.52f)
+      else -> CameraVisionBoundingBox(0.10f, 0.14f, 0.90f, 0.84f)
+    }
+  }
+
+  /**
+   * Analyzes an ARGB pixel buffer (`width` × `height`) on a spatial grid to locate distinct
+   * high-saliency foreground element regions (based on color contrast against the frame perimeter
+   * and local edge gradient energy) and returns their normalized [CameraVisionBoundingBox] bounds.
+   */
+  fun extractSalientRegionsFromArgbPixels(
+    pixels: IntArray,
+    width: Int,
+    height: Int,
+    maxRegions: Int = 5,
+  ): List<CameraVisionBoundingBox> {
+    if (width <= 8 || height <= 8 || pixels.size < width * height) {
+      return listOf(defaultVisionBoundingBoxForRank(0))
+    }
+
+    val cols = 16
+    val rows = 16
+    val cellR = FloatArray(cols * rows)
+    val cellG = FloatArray(cols * rows)
+    val cellB = FloatArray(cols * rows)
+
+    for (gy in 0 until rows) {
+      val yStart = (gy * height) / rows
+      val yEnd = (((gy + 1) * height) / rows).coerceAtLeast(yStart + 1)
+      val yStep = ((yEnd - yStart) / 4).coerceAtLeast(1)
+      for (gx in 0 until cols) {
+        val xStart = (gx * width) / cols
+        val xEnd = (((gx + 1) * width) / cols).coerceAtLeast(xStart + 1)
+        val xStep = ((xEnd - xStart) / 4).coerceAtLeast(1)
+
+        var sumR = 0f
+        var sumG = 0f
+        var sumB = 0f
+        var count = 0
+        var y = yStart
+        while (y < yEnd) {
+          val rowOffset = y * width
+          var x = xStart
+          while (x < xEnd) {
+            val argb = pixels[rowOffset + x]
+            sumR += (argb shr 16) and 0xFF
+            sumG += (argb shr 8) and 0xFF
+            sumB += argb and 0xFF
+            count++
+            x += xStep
+          }
+          y += yStep
+        }
+        val idx = gy * cols + gx
+        if (count > 0) {
+          cellR[idx] = sumR / count
+          cellG[idx] = sumG / count
+          cellB[idx] = sumB / count
+        }
+      }
+    }
+
+    // Compute perimeter background mean color
+    var bgR = 0f
+    var bgG = 0f
+    var bgB = 0f
+    var bgCount = 0
+    for (gy in 0 until rows) {
+      for (gx in 0 until cols) {
+        if (gx == 0 || gx == cols - 1 || gy == 0 || gy == rows - 1) {
+          val idx = gy * cols + gx
+          bgR += cellR[idx]
+          bgG += cellG[idx]
+          bgB += cellB[idx]
+          bgCount++
+        }
+      }
+    }
+    if (bgCount > 0) {
+      bgR /= bgCount
+      bgG /= bgCount
+      bgB /= bgCount
+    }
+
+    val saliency = FloatArray(cols * rows)
+    var totalSaliency = 0f
+    for (gy in 0 until rows) {
+      for (gx in 0 until cols) {
+        val idx = gy * cols + gx
+        val dr = cellR[idx] - bgR
+        val dg = cellG[idx] - bgG
+        val db = cellB[idx] - bgB
+        val colorContrast = kotlin.math.sqrt(dr * dr + dg * dg + db * db)
+
+        val rightIdx = gy * cols + (gx + 1).coerceAtMost(cols - 1)
+        val downIdx = (gy + 1).coerceAtMost(rows - 1) * cols + gx
+        val edgeR = abs(cellR[idx] - cellR[rightIdx]) + abs(cellR[idx] - cellR[downIdx])
+        val edgeG = abs(cellG[idx] - cellG[rightIdx]) + abs(cellG[idx] - cellG[downIdx])
+        val edgeB = abs(cellB[idx] - cellB[rightIdx]) + abs(cellB[idx] - cellB[downIdx])
+        val edgeEnergy = (edgeR + edgeG + edgeB) / 3f
+
+        // Mild center bias so central subjects are prioritized over edge noise
+        val normDx = (gx + 0.5f) / cols - 0.5f
+        val normDy = (gy + 0.5f) / rows - 0.5f
+        val centerWeight = (1.15f - (normDx * normDx + normDy * normDy) * 0.9f).coerceIn(0.6f, 1.15f)
+
+        val score = (colorContrast * 0.65f + edgeEnergy * 0.95f) * centerWeight
+        saliency[idx] = score
+        totalSaliency += score
+      }
+    }
+
+    val meanSaliency = totalSaliency / (cols * rows).toFloat()
+    val visited = BooleanArray(cols * rows)
+    val regions = mutableListOf<CameraVisionBoundingBox>()
+
+    for (regionIdx in 0 until maxRegions.coerceAtLeast(1)) {
+      var peakIdx = -1
+      var peakScore = meanSaliency * 1.05f
+      for (i in saliency.indices) {
+        if (!visited[i] && saliency[i] > peakScore) {
+          peakScore = saliency[i]
+          peakIdx = i
+        }
+      }
+      if (peakIdx < 0) break
+
+      val peakGx = peakIdx % cols
+      val peakGy = peakIdx / cols
+      val seedR = cellR[peakIdx]
+      val seedG = cellG[peakIdx]
+      val seedB = cellB[peakIdx]
+
+      var minGx = peakGx
+      var maxGx = peakGx
+      var minGy = peakGy
+      var maxGy = peakGy
+
+      val queue = ArrayDeque<Int>()
+      queue.add(peakIdx)
+      visited[peakIdx] = true
+
+      while (queue.isNotEmpty()) {
+        val curr = queue.removeFirst()
+        val cx = curr % cols
+        val cy = curr / cols
+        if (cx < minGx) minGx = cx
+        if (cx > maxGx) maxGx = cx
+        if (cy < minGy) minGy = cy
+        if (cy > maxGy) maxGy = cy
+
+        val neighbors = intArrayOf(
+          if (cx > 0) cy * cols + (cx - 1) else -1,
+          if (cx + 1 < cols) cy * cols + (cx + 1) else -1,
+          if (cy > 0) (cy - 1) * cols + cx else -1,
+          if (cy + 1 < rows) (cy + 1) * cols + cx else -1,
+        )
+        for (nb in neighbors) {
+          if (nb < 0 || visited[nb]) continue
+          val cdR = cellR[nb] - seedR
+          val cdG = cellG[nb] - seedG
+          val cdB = cellB[nb] - seedB
+          val colorDistToSeed = kotlin.math.sqrt(cdR * cdR + cdG * cdG + cdB * cdB)
+          if (saliency[nb] >= meanSaliency * 0.85f && (colorDistToSeed <= 72f || saliency[nb] >= peakScore * 0.65f)) {
+            visited[nb] = true
+            queue.add(nb)
+          }
+        }
+      }
+
+      val leftNorm = (minGx.toFloat() / cols).coerceIn(0.06f, 0.82f)
+      val topNorm = (minGy.toFloat() / rows).coerceIn(0.12f, 0.78f)
+      val rightNorm = ((maxGx + 1).toFloat() / cols).coerceIn(leftNorm + 0.18f, 0.94f)
+      val bottomNorm = ((maxGy + 1).toFloat() / rows).coerceIn(topNorm + 0.14f, 0.88f)
+      regions.add(
+        CameraVisionBoundingBox(
+          left = leftNorm,
+          top = topNorm,
+          right = rightNorm,
+          bottom = bottomNorm,
+        ).coerceNormalized()
+      )
+    }
+
+    if (regions.isEmpty()) {
+      regions.add(defaultVisionBoundingBoxForRank(0))
+    }
+    return regions
+  }
+
+  /**
+   * Extracts salient visual object regions from [bitmap] as normalized [CameraVisionBoundingBox] coordinates.
+   */
+  fun extractSalientRegionsFromBitmap(
+    bitmap: Bitmap,
+    maxRegions: Int = 5,
+  ): List<CameraVisionBoundingBox> {
+    return try {
+      val w = bitmap.width
+      val h = bitmap.height
+      if (w <= 8 || h <= 8) return listOf(defaultVisionBoundingBoxForRank(0))
+      val pixels = IntArray(w * h)
+      bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
+      extractSalientRegionsFromArgbPixels(pixels, w, h, maxRegions = maxRegions)
+    } catch (_: Throwable) {
+      listOf(defaultVisionBoundingBoxForRank(0))
+    }
+  }
+
+  /**
    * Normalizes, deduplicates, and filters raw [CameraVisionTag] items into a structured
    * [CameraVisionAnalysisResult] sorted by descending confidence.
+   * Anything lower than 50% confidence ([MIN_VISION_CONFIDENCE_THRESHOLD]) is hidden.
    */
   fun buildVisionAnalysisResult(
     rawTags: List<CameraVisionTag>,
-    confidenceThreshold: Float = CameraVisionThresholdPreset.DEFAULT.minConfidence,
+    confidenceThreshold: Float = MIN_VISION_CONFIDENCE_THRESHOLD,
     inferenceLatencyMs: Long = 14L,
     frameWidth: Int = 640,
     frameHeight: Int = 640,
@@ -2981,7 +3343,7 @@ object CameraEngine {
     analyzedAtMs: Long = System.currentTimeMillis(),
     maxLabels: Int = 10,
   ): CameraVisionAnalysisResult {
-    val clampedThreshold = confidenceThreshold.coerceIn(0.05f, 0.99f)
+    val clampedThreshold = confidenceThreshold.coerceIn(MIN_VISION_CONFIDENCE_THRESHOLD, 0.99f)
     val dedupByLabel = linkedMapOf<String, CameraVisionTag>()
 
     val sortedCandidates = rawTags
@@ -2995,6 +3357,7 @@ object CameraEngine {
           label = formattedText,
           confidence = item.confidence.coerceIn(0f, 1f),
           index = item.index,
+          boundingBox = item.boundingBox,
         )
       }
       .sortedByDescending { it.confidenceClamped }
@@ -3002,7 +3365,9 @@ object CameraEngine {
     for (tag in sortedCandidates) {
       val key = tag.label.lowercase(Locale.US)
       if (!dedupByLabel.containsKey(key)) {
-        dedupByLabel[key] = tag
+        val rank = dedupByLabel.size
+        val resolvedBox = (tag.boundingBox ?: defaultVisionBoundingBoxForRank(rank)).coerceNormalized()
+        dedupByLabel[key] = tag.copy(boundingBox = resolvedBox)
       }
     }
 
@@ -3024,59 +3389,121 @@ object CameraEngine {
 
   /**
    * Runs Google ML Kit on-device Image Labeling (`com.google.mlkit:image-labeling`) on [bitmap]
-   * and returns a [CameraVisionAnalysisResult] with each detected tag's exact confidence score,
-   * label index, and inference latency in milliseconds.
+   * and its salient foreground regions, returning a [CameraVisionAnalysisResult] with each
+   * detected element's localized [CameraVisionBoundingBox], label, and confidence score (>= 50%).
    */
   suspend fun recognizeVisionTagsFromBitmapWithMlKit(
     bitmap: Bitmap,
     rotationDegrees: Int = 0,
-    confidenceThreshold: Float = CameraVisionThresholdPreset.DEFAULT.minConfidence,
-    baseDetectorMinConfidence: Float = 0.25f,
-    maxLabels: Int = 10,
+    confidenceThreshold: Float = MIN_VISION_CONFIDENCE_THRESHOLD,
+    baseDetectorMinConfidence: Float = MIN_VISION_CONFIDENCE_THRESHOLD,
+    maxLabels: Int = 6,
     sourceDescription: String = "Live Camera Frame",
     analyzedAtMs: Long = System.currentTimeMillis(),
   ): CameraVisionAnalysisResult? {
     if (bitmap.width <= 16 || bitmap.height <= 16) return null
-    val detectorMin = minOf(confidenceThreshold, baseDetectorMinConfidence).coerceIn(0.15f, 0.95f)
+    val effectiveThreshold = confidenceThreshold.coerceIn(MIN_VISION_CONFIDENCE_THRESHOLD, 0.98f)
+    val detectorMin = maxOf(MIN_VISION_CONFIDENCE_THRESHOLD, minOf(effectiveThreshold, baseDetectorMinConfidence))
+      .coerceIn(MIN_VISION_CONFIDENCE_THRESHOLD, 0.95f)
     return try {
       val startNs = System.nanoTime()
+      val salientRegions = extractSalientRegionsFromBitmap(bitmap, maxRegions = 5)
       val options = ImageLabelerOptions.Builder()
         .setConfidenceThreshold(detectorMin)
         .build()
       val labeler = ImageLabeling.getClient(options)
-      val inputImage = InputImage.fromBitmap(bitmap, rotationDegrees)
-      val rawTags = suspendCancellableCoroutine<List<CameraVisionTag>?> { continuation ->
-        labeler.process(inputImage)
-          .addOnSuccessListener { results ->
-            labeler.close()
-            val mapped = results.mapNotNull { item ->
-              val text = item.text.trim()
-              if (text.isNotEmpty()) {
-                CameraVisionTag(
-                  label = text,
-                  confidence = item.confidence,
-                  index = item.index,
-                )
-              } else {
-                null
+
+      suspend fun runLabelerOnBitmap(targetBmp: Bitmap): List<Pair<String, Pair<Float, Int>>> {
+        val inputImage = InputImage.fromBitmap(targetBmp, rotationDegrees)
+        return suspendCancellableCoroutine { continuation ->
+          labeler.process(inputImage)
+            .addOnSuccessListener { results ->
+              val mapped = results.mapNotNull { item ->
+                val text = item.text.trim()
+                if (text.isNotEmpty() && item.confidence >= MIN_VISION_CONFIDENCE_THRESHOLD) {
+                  text to (item.confidence to item.index)
+                } else {
+                  null
+                }
+              }
+              if (continuation.isActive) {
+                continuation.resume(mapped)
               }
             }
-            if (continuation.isActive) {
-              continuation.resume(mapped)
+            .addOnFailureListener {
+              if (continuation.isActive) {
+                continuation.resume(emptyList())
+              }
+            }
+        }
+      }
+
+      val fullFrameLabels = runLabelerOnBitmap(bitmap)
+
+      // Also run ML Kit on up to 2 distinct salient sub-region crops to localize specific objects
+      val localizedByLabel = linkedMapOf<String, CameraVisionTag>()
+      val bw = bitmap.width
+      val bh = bitmap.height
+      for (region in salientRegions.take(2)) {
+        val area = region.width * region.height
+        if (area in 0.04f..0.72f) {
+          val cropLeft = (region.left * bw).roundToInt().coerceIn(0, bw - 16)
+          val cropTop = (region.top * bh).roundToInt().coerceIn(0, bh - 16)
+          val cropW = (region.width * bw).roundToInt().coerceIn(16, bw - cropLeft)
+          val cropH = (region.height * bh).roundToInt().coerceIn(16, bh - cropTop)
+          if (cropW >= 24 && cropH >= 24) {
+            val cropBmp = try {
+              Bitmap.createBitmap(bitmap, cropLeft, cropTop, cropW, cropH)
+            } catch (_: Throwable) {
+              null
+            }
+            if (cropBmp != null) {
+              val regionLabels = runLabelerOnBitmap(cropBmp)
+              for ((text, scoreAndIdx) in regionLabels) {
+                val key = text.lowercase(Locale.US)
+                val existing = localizedByLabel[key]
+                if (existing == null || scoreAndIdx.first > existing.confidence) {
+                  localizedByLabel[key] = CameraVisionTag(
+                    label = text,
+                    confidence = scoreAndIdx.first,
+                    index = scoreAndIdx.second,
+                    boundingBox = region,
+                  )
+                }
+              }
             }
           }
-          .addOnFailureListener {
-            labeler.close()
-            if (continuation.isActive) {
-              continuation.resume(null)
-            }
-          }
-      } ?: return null
+        }
+      }
+
+      try {
+        labeler.close()
+      } catch (_: Throwable) {}
+
+      // Merge full-frame labels with salient region bounding boxes
+      val combinedTags = mutableListOf<CameraVisionTag>()
+      combinedTags.addAll(localizedByLabel.values)
+
+      fullFrameLabels.forEachIndexed { idx, (text, scoreAndIdx) ->
+        val key = text.lowercase(Locale.US)
+        val localized = localizedByLabel[key]
+        val assignedBox = localized?.boundingBox
+          ?: salientRegions.getOrNull(idx % salientRegions.size)
+          ?: defaultVisionBoundingBoxForRank(idx)
+        combinedTags.add(
+          CameraVisionTag(
+            label = text,
+            confidence = maxOf(scoreAndIdx.first, localized?.confidence ?: 0f),
+            index = scoreAndIdx.second,
+            boundingBox = assignedBox,
+          )
+        )
+      }
 
       val latencyMs = ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(1L)
       buildVisionAnalysisResult(
-        rawTags = rawTags,
-        confidenceThreshold = confidenceThreshold,
+        rawTags = combinedTags,
+        confidenceThreshold = effectiveThreshold,
         inferenceLatencyMs = latencyMs,
         frameWidth = bitmap.width,
         frameHeight = bitmap.height,

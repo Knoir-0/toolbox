@@ -54,6 +54,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 
 const val MUSIC_PLAYER_PREFS_NAME = "music_player_preferences"
 const val PREF_KEY_MUSIC_VIEW_MODE = "music_player_view_mode"
@@ -523,6 +525,8 @@ object MusicPlayerEngine {
 
   val PLAYBACK_SPEED_OPTIONS: List<Float> = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
 
+  const val MUSIC_INDEX_CACHE_FILE_NAME = "music_library_index_v1.json"
+
   private const val MAX_ARTWORK_CACHE_ENTRIES = 256
   private const val MAX_TRACK_METADATA_CACHE_ENTRIES = 2048
   private const val MAX_NO_ARTWORK_CACHE_ENTRIES = 1024
@@ -534,6 +538,12 @@ object MusicPlayerEngine {
 
   @Volatile
   private var artworkDiskCacheDir: File? = null
+
+  @Volatile
+  private var trackIndexDiskCacheFile: File? = null
+
+  @Volatile
+  private var diskIndexLoadedForPath: String? = null
 
   private val artworkBitmapCache = object : LinkedHashMap<String, Bitmap>(64, 0.75f, true) {
     override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
@@ -555,6 +565,11 @@ object MusicPlayerEngine {
       return size > MAX_TRACK_METADATA_CACHE_ENTRIES
     }
   }
+  private val trackIndexByPath = object : LinkedHashMap<String, MusicTrack>(256, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, MusicTrack>?): Boolean {
+      return size > MAX_TRACK_METADATA_CACHE_ENTRIES
+    }
+  }
   private val libraryTracksCache = object : LinkedHashMap<String, List<MusicTrack>>(8, 0.75f, true) {
     override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<MusicTrack>>?): Boolean {
       return size > 8
@@ -562,11 +577,21 @@ object MusicPlayerEngine {
   }
 
   /**
-   * Configures an optional disk cache directory for persisted album art thumbnails.
+   * Returns the default persistent JSON cache file for Music library track metadata indexing.
    */
-  fun configureDiskCache(cacheDir: File?) {
+  fun getDefaultIndexCacheFile(context: Context): File {
+    return File(context.filesDir, MUSIC_INDEX_CACHE_FILE_NAME)
+  }
+
+  /**
+   * Configures an optional disk cache directory for persisted album art thumbnails and track metadata index.
+   */
+  fun configureDiskCache(cacheDir: File?, indexCacheFile: File? = null) {
     if (cacheDir == null) {
       artworkDiskCacheDir = null
+      if (indexCacheFile == null) {
+        trackIndexDiskCacheFile = null
+      }
       return
     }
     val dir = File(cacheDir, "music_player_artwork_cache")
@@ -575,6 +600,11 @@ object MusicPlayerEngine {
       artworkDiskCacheDir = dir
     } catch (_: Throwable) {
       artworkDiskCacheDir = null
+    }
+    try {
+      trackIndexDiskCacheFile = indexCacheFile ?: File(cacheDir, MUSIC_INDEX_CACHE_FILE_NAME)
+    } catch (_: Throwable) {
+      trackIndexDiskCacheFile = null
     }
   }
 
@@ -598,7 +628,227 @@ object MusicPlayerEngine {
   fun clearTrackMetadataCache() {
     synchronized(metadataCacheLock) {
       trackMetadataCache.clear()
+      trackIndexByPath.clear()
       libraryTracksCache.clear()
+      diskIndexLoadedForPath = null
+    }
+  }
+
+  /**
+   * Returns a cached [MusicTrack] for [file] from the in-memory index if its `lastModifiedMs` and
+   * `sizeBytes` signature still matches [file].
+   */
+  fun getCachedTrackIndex(file: File): MusicTrack? {
+    val path = file.absolutePath
+    val cached = synchronized(metadataCacheLock) {
+      trackIndexByPath[path]
+    } ?: return null
+    return if (file.lastModified() == cached.lastModifiedMs && file.length() == cached.sizeBytes) {
+      cached
+    } else {
+      null
+    }
+  }
+
+  /**
+   * Stores or updates [track] in the in-memory metadata and path index caches.
+   */
+  fun putCachedTrackIndex(track: MusicTrack) {
+    val file = track.file ?: return
+    val path = file.absolutePath
+    val baseKey = "$path:${track.lastModifiedMs}:${track.sizeBytes}"
+    synchronized(metadataCacheLock) {
+      trackIndexByPath[path] = track
+      trackMetadataCache["$baseKey:true"] = track
+      trackMetadataCache["$baseKey:false"] = track
+    }
+  }
+
+  /**
+   * Updates all in-memory cached library track lists and path index entries after an in-place
+   * rename, duplicate, or delete operation without invalidating the entire library cache.
+   */
+  internal fun updateCachedLibrarySnapshot(updatedTracks: List<MusicTrack>) {
+    synchronized(metadataCacheLock) {
+      trackIndexByPath.clear()
+      for (track in updatedTracks) {
+        val file = track.file ?: continue
+        val path = file.absolutePath
+        val baseKey = "$path:${track.lastModifiedMs}:${track.sizeBytes}"
+        trackIndexByPath[path] = track
+        trackMetadataCache["$baseKey:true"] = track
+        trackMetadataCache["$baseKey:false"] = track
+      }
+      val existingKeys = libraryTracksCache.keys.toList()
+      for (key in existingKeys) {
+        libraryTracksCache[key] = updatedTracks
+      }
+    }
+  }
+
+  private fun trackToJson(track: MusicTrack): JSONObject? {
+    val file = track.file ?: return null
+    if (track.isSampleTrack) return null
+    return JSONObject().apply {
+      put("id", track.id)
+      put("path", file.absolutePath)
+      put("lastModifiedMs", track.lastModifiedMs)
+      put("sizeBytes", track.sizeBytes)
+      put("title", track.title)
+      put("artist", track.artist)
+      put("album", track.album)
+      put("genre", track.genre)
+      put("durationMs", track.durationMs)
+      put("trackNumber", track.trackNumber)
+      put("year", track.year)
+      put("artworkPrimaryRgb", track.artworkPrimaryRgb)
+      put("artworkSecondaryRgb", track.artworkSecondaryRgb)
+      put("artworkAccentRgb", track.artworkAccentRgb)
+      put("bitrateKbps", track.bitrateKbps)
+      put("sampleRateHz", track.sampleRateHz)
+    }
+  }
+
+  private fun trackFromJson(obj: JSONObject): MusicTrack? {
+    val path = obj.optString("path", "").trim()
+    if (path.isEmpty()) return null
+    val file = File(path)
+    val lastMod = obj.optLong("lastModifiedMs", 0L)
+    val sizeBytes = obj.optLong("sizeBytes", 0L)
+    val title = obj.optString("title", "").trim().ifEmpty { file.nameWithoutExtension }
+    val artist = obj.optString("artist", "Local Artist").trim().ifEmpty { "Local Artist" }
+    val album = obj.optString("album", "Local Recordings").trim().ifEmpty { "Local Recordings" }
+    val genre = obj.optString("genre", "Local Audio").trim().ifEmpty { "Local Audio" }
+    val durationMs = obj.optLong("durationMs", 180_000L).coerceAtLeast(1_000L)
+    val trackNumber = obj.optInt("trackNumber", 1).coerceAtLeast(1)
+    val year = obj.optInt("year", 2026)
+    val (fallbackPrimary, fallbackSecondary, fallbackAccent) = computeDeterministicArtworkColors(
+      album = album,
+      artist = artist,
+      genre = genre,
+    )
+    val primaryRgb = obj.optInt("artworkPrimaryRgb", fallbackPrimary)
+    val secondaryRgb = obj.optInt("artworkSecondaryRgb", fallbackSecondary)
+    val accentRgb = obj.optInt("artworkAccentRgb", fallbackAccent)
+    val bitrateKbps = obj.optInt("bitrateKbps", 320)
+    val sampleRateHz = obj.optInt("sampleRateHz", 44_100)
+    val id = obj.optString("id", "file_$path").ifBlank { "file_$path" }
+    return MusicTrack(
+      id = id,
+      title = title,
+      artist = artist,
+      album = album,
+      genre = genre,
+      durationMs = durationMs,
+      trackNumber = trackNumber,
+      year = year,
+      file = file,
+      sizeBytes = sizeBytes,
+      lastModifiedMs = lastMod,
+      artworkPrimaryRgb = primaryRgb,
+      artworkSecondaryRgb = secondaryRgb,
+      artworkAccentRgb = accentRgb,
+      isSampleTrack = false,
+      bitrateKbps = bitrateKbps,
+      sampleRateHz = sampleRateHz,
+    )
+  }
+
+  /**
+   * Loads persisted [MusicTrack] metadata entries from [cacheFile] on disk and merges them into
+   * the in-memory metadata cache, pruning entries whose files no longer exist or have modified signatures.
+   */
+  fun loadTrackIndexCacheFromDisk(
+    cacheFile: File? = trackIndexDiskCacheFile,
+  ): Map<String, MusicTrack> {
+    if (cacheFile == null || !cacheFile.exists() || !cacheFile.isFile) {
+      synchronized(metadataCacheLock) {
+        return LinkedHashMap(trackIndexByPath)
+      }
+    }
+    val absPath = cacheFile.absolutePath
+    synchronized(metadataCacheLock) {
+      if (diskIndexLoadedForPath == absPath && trackIndexByPath.isNotEmpty()) {
+        return LinkedHashMap(trackIndexByPath)
+      }
+    }
+    try {
+      val raw = cacheFile.readText(Charsets.UTF_8)
+      if (raw.isNotBlank()) {
+        val root = JSONObject(raw)
+        val entriesArray = root.optJSONArray("entries")
+        if (entriesArray != null) {
+          val validated = ArrayList<MusicTrack>(entriesArray.length())
+          for (i in 0 until entriesArray.length()) {
+            val obj = entriesArray.optJSONObject(i) ?: continue
+            val parsed = trackFromJson(obj) ?: continue
+            val file = parsed.file ?: continue
+            if (file.exists() && file.isFile &&
+              file.lastModified() == parsed.lastModifiedMs &&
+              file.length() == parsed.sizeBytes
+            ) {
+              validated.add(parsed)
+            }
+          }
+          synchronized(metadataCacheLock) {
+            for (track in validated) {
+              val path = track.file!!.absolutePath
+              val baseKey = "$path:${track.lastModifiedMs}:${track.sizeBytes}"
+              trackIndexByPath[path] = track
+              trackMetadataCache["$baseKey:true"] = track
+              trackMetadataCache["$baseKey:false"] = track
+            }
+            diskIndexLoadedForPath = absPath
+          }
+        }
+      }
+    } catch (_: Throwable) {
+      // Ignore corrupt cache file and rebuild on next pass
+    }
+    synchronized(metadataCacheLock) {
+      return LinkedHashMap(trackIndexByPath)
+    }
+  }
+
+  /**
+   * Persists the provided [tracks] (or current in-memory indexed tracks) to [cacheFile] on disk.
+   */
+  fun saveTrackIndexCacheToDisk(
+    cacheFile: File? = trackIndexDiskCacheFile,
+    tracks: Collection<MusicTrack>? = null,
+  ) {
+    val targetFile = cacheFile ?: return
+    val snapshot = synchronized(metadataCacheLock) {
+      if (tracks != null) {
+        for (t in tracks) {
+          val f = t.file ?: continue
+          if (!t.isSampleTrack) {
+            trackIndexByPath[f.absolutePath] = t
+          }
+        }
+      }
+      trackIndexByPath.values.toList()
+    }
+    try {
+      targetFile.parentFile?.mkdirs()
+      val arr = JSONArray()
+      for (track in snapshot) {
+        val json = trackToJson(track) ?: continue
+        arr.put(json)
+      }
+      val root = JSONObject().apply {
+        put("version", 1)
+        put("entries", arr)
+      }
+      val tmpFile = File(targetFile.parentFile, "${targetFile.name}.tmp")
+      tmpFile.writeText(root.toString(), Charsets.UTF_8)
+      if (tmpFile.exists() && tmpFile.length() > 0L) {
+        tmpFile.renameTo(targetFile)
+      } else {
+        tmpFile.delete()
+      }
+    } catch (_: Throwable) {
+      // Best-effort persistence
     }
   }
 
@@ -946,7 +1196,7 @@ object MusicPlayerEngine {
       normalizedAlbum == "unknown album"
     val file = track.file
     return if (isGenericAlbum && file != null) {
-      "file:${file.absolutePath}:${file.lastModified()}"
+      "file:${file.absolutePath}:${track.lastModifiedMs}"
     } else {
       val parentPath = file?.parentFile?.absolutePath.orEmpty()
       "album:$parentPath|$normalizedAlbum|$normalizedArtist"
@@ -1007,25 +1257,17 @@ object MusicPlayerEngine {
    */
   fun getCachedAlbumArtBitmap(track: MusicTrack, sizePx: Int = 320): Bitmap? {
     val safeSize = sizePx.coerceIn(64, 1024)
+    val bucketSize = if (safeSize <= 256) 240 else 360
+    val altBucketSize = if (bucketSize == 240) 360 else 240
     val identity = albumArtIdentityKey(track)
-    val primaryKey = "$identity|$safeSize"
-    val legacyKey = "${track.album}|${track.artist}|${track.artworkPrimaryRgb}|$safeSize"
-    val file = track.file
-    val fileKey = if (file != null) "file:${file.absolutePath}:${file.lastModified()}|$safeSize" else null
+    val primaryKey = "$identity|$bucketSize"
+    val exactKey = "$identity|$safeSize"
+    val altKey = "$identity|$altBucketSize"
 
     synchronized(artworkCacheLock) {
       artworkBitmapCache[primaryKey]?.let { return it }
-      artworkBitmapCache[legacyKey]?.let { return it }
-      if (fileKey != null) {
-        artworkBitmapCache[fileKey]?.let { return it }
-      }
-      // Reuse a higher-resolution cached bitmap for the same album if already decoded
-      val candidatePrefix = "$identity|"
-      for ((k, bmp) in artworkBitmapCache) {
-        if (k.startsWith(candidatePrefix) && bmp.width >= safeSize) {
-          return bmp
-        }
-      }
+      artworkBitmapCache[exactKey]?.let { return it }
+      artworkBitmapCache[altKey]?.let { return it }
       return null
     }
   }
@@ -1037,17 +1279,14 @@ object MusicPlayerEngine {
     extractedPalette: AlbumArtPalette? = null,
   ) {
     val safeSize = sizePx.coerceIn(64, 1024)
+    val bucketSize = if (safeSize <= 256) 240 else 360
     val identity = albumArtIdentityKey(track)
-    val primaryKey = "$identity|$safeSize"
-    val legacyKey = "${track.album}|${track.artist}|${track.artworkPrimaryRgb}|$safeSize"
-    val file = track.file
-    val fileKey = if (file != null) "file:${file.absolutePath}:${file.lastModified()}|$safeSize" else null
+    val primaryKey = "$identity|$bucketSize"
 
     synchronized(artworkCacheLock) {
       artworkBitmapCache[primaryKey] = bitmap
-      artworkBitmapCache[legacyKey] = bitmap
-      if (fileKey != null) {
-        artworkBitmapCache[fileKey] = bitmap
+      if (safeSize != bucketSize) {
+        artworkBitmapCache["$identity|$safeSize"] = bitmap
       }
       if (extractedPalette != null) {
         paletteCache[trackPaletteKey(track)] = extractedPalette
@@ -1428,6 +1667,11 @@ object MusicPlayerEngine {
       trackMetadataCache["$cacheKeyBase:true"]?.let { cached ->
         if (deferAlbumArt) return cached
       }
+      trackIndexByPath[file.absolutePath]?.let { indexed ->
+        if (indexed.lastModifiedMs == fileLastMod && indexed.sizeBytes == fileLength && deferAlbumArt) {
+          return indexed
+        }
+      }
       if (!inspectMetadataRetriever) {
         trackMetadataCache["$cacheKeyBase:false"]?.let { return it }
       }
@@ -1558,6 +1802,10 @@ object MusicPlayerEngine {
 
     synchronized(metadataCacheLock) {
       trackMetadataCache["$cacheKeyBase:$inspectMetadataRetriever"] = finalTrack
+      if (inspectMetadataRetriever) {
+        trackIndexByPath[file.absolutePath] = finalTrack
+        trackMetadataCache["$cacheKeyBase:false"] = finalTrack
+      }
     }
     return finalTrack
   }
@@ -1650,6 +1898,9 @@ object MusicPlayerEngine {
     inspectMetadataRetriever: Boolean = true,
     deferAlbumArt: Boolean = true,
   ): List<MusicTrack> {
+    if (trackIndexDiskCacheFile != null) {
+      loadTrackIndexCacheFromDisk(trackIndexDiskCacheFile)
+    }
     val targetDirs = if (initialDirectory != null) {
       listOf(initialDirectory)
     } else {
@@ -1666,11 +1917,14 @@ object MusicPlayerEngine {
       includeSamples -> DEFAULT_SAMPLE_TRACKS
       else -> emptyList()
     }
-    if (inspectMetadataRetriever) {
-      val key = libraryCacheKey(rootDirectory, initialDirectory, includeSamples)
-      synchronized(metadataCacheLock) {
+    val key = libraryCacheKey(rootDirectory, initialDirectory, includeSamples)
+    synchronized(metadataCacheLock) {
+      if (inspectMetadataRetriever || libraryTracksCache[key] == null) {
         libraryTracksCache[key] = result
       }
+    }
+    if (inspectMetadataRetriever && trackIndexDiskCacheFile != null && localTracks.isNotEmpty()) {
+      saveTrackIndexCacheToDisk(trackIndexDiskCacheFile, localTracks)
     }
     return result
   }
@@ -3559,6 +3813,9 @@ class MusicPlaybackSession(
   )
 
   fun updateTab(tab: MusicLibraryTab) {
+    if (selectedTab != tab) {
+      syncViewPlayStatsSnapshot()
+    }
     selectedTab = tab
     prefs?.edit()?.putString(PREF_KEY_MUSIC_TAB, tab.name)?.apply()
   }
@@ -3591,6 +3848,7 @@ class MusicPlaybackSession(
   )
 
   fun updateSortOrder(order: MusicSortOrder) {
+    syncViewPlayStatsSnapshot()
     sortOrder = order
     prefs?.edit()?.putString(PREF_KEY_MUSIC_SORT_ORDER, order.name)?.apply()
   }
@@ -3768,10 +4026,27 @@ class MusicPlaybackSession(
     get() = isFavoritesOnlyEnabled(selectedTab)
     set(value) = setFavoritesOnly(selectedTab, value)
 
-  // Play Statistics (persisted in SharedPreferences: play count + total playtime per track)
-  var playStats by mutableStateOf(
+  // Play Statistics (persisted in SharedPreferences: play count + total playtime per track).
+  // Kept as a plain property so 200ms playback progress ticks and background track transitions
+  // do not cause live recompositions or list/playlist jumping while the user is viewing them.
+  var playStats: Map<String, TrackPlayStats> =
     MusicPlayerEngine.deserializePlayStats(prefs?.getString(PREF_KEY_MUSIC_PLAY_STATS, ""))
-  )
+
+  // Frozen UI snapshot of play statistics for views and playlists; only refreshed when navigating
+  // between tabs/views or changing sort order (or when not actively playing).
+  var viewPlayStats by mutableStateOf(playStats)
+    internal set
+
+  // Frozen UI snapshot of play statistics for Home playlists; only refreshed on initial load
+  // and when the user explicitly pulls down to refresh (or taps Refresh).
+  var homePlayStats by mutableStateOf(playStats)
+    internal set
+
+  fun syncViewPlayStatsSnapshot() {
+    if (viewPlayStats !== playStats) {
+      viewPlayStats = playStats
+    }
+  }
 
   fun recordTrackPlayStats(
     trackId: String,
@@ -3806,7 +4081,7 @@ class MusicPlaybackSession(
   val homePlaylists: List<MusicPlaylist>
     get() = MusicPlayerEngine.generateHomePlaylists(
       allTracks = allTracks,
-      playStats = playStats,
+      playStats = homePlayStats,
       favoriteIds = favoriteIds,
       favoriteArtists = favoriteArtists,
       favoriteAlbums = favoriteAlbums,
@@ -3815,6 +4090,8 @@ class MusicPlaybackSession(
     )
 
   fun refreshHomePlaylists(): List<MusicPlaylist> {
+    homePlayStats = playStats
+    viewPlayStats = playStats
     homeRefreshGeneration += 1
     return homePlaylists
   }
@@ -3916,6 +4193,7 @@ class MusicPlaybackSession(
   var selectedPlaylistId by mutableStateOf<String?>(null)
 
   fun clearDrillDown() {
+    syncViewPlayStatsSnapshot()
     selectedArtistName = null
     selectedAlbumKey = null
     selectedGenreName = null
@@ -3978,14 +4256,22 @@ class MusicPlaybackSession(
       false
     }
 
+  var isLoadingLibrary by mutableStateOf(false)
+    internal set
+
   init {
     if (!isInspection && cacheDir != null) {
-      MusicPlayerEngine.configureDiskCache(cacheDir)
+      val indexFile = appContext?.let { MusicPlayerEngine.getDefaultIndexCacheFile(it) }
+      MusicPlayerEngine.configureDiskCache(cacheDir, indexFile)
     }
     val includeSamples = prefs?.getBoolean(PREF_KEY_MUSIC_INCLUDE_SAMPLES, false) ?: false
     val initialLoaded = when {
       initialTracks != null -> initialTracks
       isInspection -> MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+      appContext != null -> MusicPlayerEngine.getCachedLibraryTracks(
+        initialDirectory = initialDirectory,
+        includeSamples = includeSamples,
+      ) ?: emptyList()
       else -> MusicPlayerEngine.getCachedLibraryTracks(
         initialDirectory = initialDirectory,
         includeSamples = includeSamples,
@@ -4045,6 +4331,10 @@ class MusicPlaybackSession(
       val includeSamples = prefs?.getBoolean(PREF_KEY_MUSIC_INCLUDE_SAMPLES, false) ?: false
       val reloaded = when {
         initialTracks != null -> initialTracks
+        appContext != null -> MusicPlayerEngine.getCachedLibraryTracks(
+          initialDirectory = initialDirectory,
+          includeSamples = includeSamples,
+        ) ?: allTracks
         else -> MusicPlayerEngine.getCachedLibraryTracks(
           initialDirectory = initialDirectory,
           includeSamples = includeSamples,
@@ -4071,39 +4361,68 @@ class MusicPlaybackSession(
     }
   }
 
+  private fun applyLoadedLibraryTracks(loaded: List<MusicTrack>) {
+    val prevTrackId = currentTrack?.id
+    val activeId = playbackQueue.getOrNull(currentQueueIndex)?.id
+    if (allTracks != loaded) {
+      allTracks = loaded
+    }
+    val byId = loaded.associateBy { it.id }
+    if (unshuffledQueue.isNotEmpty()) {
+      unshuffledQueue = unshuffledQueue.map { existing -> byId[existing.id] ?: existing }
+    }
+    if (playbackQueue.isNotEmpty()) {
+      playbackQueue = playbackQueue.map { existing -> byId[existing.id] ?: existing }
+    }
+    if (activeId != null) {
+      val newIdx = playbackQueue.indexOfFirst { it.id == activeId }
+      if (newIdx >= 0) {
+        currentQueueIndex = newIdx
+      }
+    }
+    val newTrack = currentTrack
+    if (newTrack != null && (newTrack.id != prevTrackId || mediaPlayer == null)) {
+      trackDurationMs = newTrack.durationMs.coerceAtLeast(1000L)
+      prepareAndSyncMediaPlayer(forceRestart = false)
+    }
+  }
+
   private fun startAsyncLibraryLoadAndArtworkPrefetch() {
     if (isInspection || appContext == null) return
     libraryLoadJob?.cancel()
     libraryLoadJob = scope.launch {
       val explicitTracks = configuredInitialTracks
       if (explicitTracks == null) {
-        val includeSamples = prefs?.getBoolean(PREF_KEY_MUSIC_INCLUDE_SAMPLES, false) ?: false
-        val loaded = MusicPlayerEngine.loadLibraryTracksAsync(
-          initialDirectory = configuredInitialDirectory,
-          includeSamples = includeSamples,
-          inspectMetadataRetriever = true,
-          deferAlbumArt = true,
-        )
-        val prevTrackId = currentTrack?.id
-        val activeId = playbackQueue.getOrNull(currentQueueIndex)?.id
-        allTracks = loaded
-        val byId = loaded.associateBy { it.id }
-        if (unshuffledQueue.isNotEmpty()) {
-          unshuffledQueue = unshuffledQueue.map { existing -> byId[existing.id] ?: existing }
-        }
-        if (playbackQueue.isNotEmpty()) {
-          playbackQueue = playbackQueue.map { existing -> byId[existing.id] ?: existing }
-        }
-        if (activeId != null) {
-          val newIdx = playbackQueue.indexOfFirst { it.id == activeId }
-          if (newIdx >= 0) {
-            currentQueueIndex = newIdx
+        isLoadingLibrary = allTracks.isEmpty()
+        try {
+          val includeSamples = prefs?.getBoolean(PREF_KEY_MUSIC_INCLUDE_SAMPLES, false) ?: false
+          val indexFile = MusicPlayerEngine.getDefaultIndexCacheFile(appContext)
+          withContext(Dispatchers.IO) {
+            MusicPlayerEngine.loadTrackIndexCacheFromDisk(indexFile)
           }
-        }
-        val newTrack = currentTrack
-        if (newTrack != null && (newTrack.id != prevTrackId || mediaPlayer == null)) {
-          trackDurationMs = newTrack.durationMs.coerceAtLeast(1000L)
-          prepareAndSyncMediaPlayer(forceRestart = false)
+          // Fast pass: uses persisted disk index cache entries for unchanged files without blocking on MediaMetadataRetriever
+          if (allTracks.isEmpty()) {
+            val fastLoaded = MusicPlayerEngine.loadLibraryTracksAsync(
+              initialDirectory = configuredInitialDirectory,
+              includeSamples = includeSamples,
+              inspectMetadataRetriever = false,
+              deferAlbumArt = true,
+            )
+            if (fastLoaded.isNotEmpty()) {
+              applyLoadedLibraryTracks(fastLoaded)
+              isLoadingLibrary = false
+            }
+          }
+          // Full background pass: inspects only new/modified files and saves updated index to disk
+          val loaded = MusicPlayerEngine.loadLibraryTracksAsync(
+            initialDirectory = configuredInitialDirectory,
+            includeSamples = includeSamples,
+            inspectMetadataRetriever = true,
+            deferAlbumArt = true,
+          )
+          applyLoadedLibraryTracks(loaded)
+        } finally {
+          isLoadingLibrary = false
         }
       }
       val tracksToPrefetch = allTracks
@@ -4588,7 +4907,10 @@ class MusicPlaybackSession(
       updatedAll.add(0, duplicatedTrack)
     }
     allTracks = updatedAll
-    MusicPlayerEngine.clearTrackMetadataCache()
+    MusicPlayerEngine.updateCachedLibrarySnapshot(updatedAll)
+    scope.launch(Dispatchers.IO) {
+      MusicPlayerEngine.saveTrackIndexCacheToDisk(tracks = updatedAll)
+    }
     return duplicatedTrack
   }
 
@@ -4622,7 +4944,11 @@ class MusicPlaybackSession(
     allTracks = allTracks.map { if (it.id == track.id) updatedTrack else it }
     unshuffledQueue = unshuffledQueue.map { if (it.id == track.id) updatedTrack else it }
     playbackQueue = playbackQueue.map { if (it.id == track.id) updatedTrack else it }
-    MusicPlayerEngine.clearTrackMetadataCache()
+    val snapshot = allTracks
+    MusicPlayerEngine.updateCachedLibrarySnapshot(snapshot)
+    scope.launch(Dispatchers.IO) {
+      MusicPlayerEngine.saveTrackIndexCacheToDisk(tracks = snapshot)
+    }
     return updatedTrack
   }
 
@@ -4686,7 +5012,11 @@ class MusicPlaybackSession(
         }
       }
     }
-    MusicPlayerEngine.clearTrackMetadataCache()
+    val snapshot = allTracks
+    MusicPlayerEngine.updateCachedLibrarySnapshot(snapshot)
+    scope.launch(Dispatchers.IO) {
+      MusicPlayerEngine.saveTrackIndexCacheToDisk(tracks = snapshot)
+    }
     return updatedCount
   }
 
@@ -4738,7 +5068,11 @@ class MusicPlaybackSession(
         selectedAlbumKey = if (targetArtist.isNotEmpty()) "$newTrimmed|$targetArtist" else newTrimmed
       }
     }
-    MusicPlayerEngine.clearTrackMetadataCache()
+    val snapshot = allTracks
+    MusicPlayerEngine.updateCachedLibrarySnapshot(snapshot)
+    scope.launch(Dispatchers.IO) {
+      MusicPlayerEngine.saveTrackIndexCacheToDisk(tracks = snapshot)
+    }
     return updatedCount
   }
 
@@ -4776,7 +5110,11 @@ class MusicPlaybackSession(
     if (selectedGenreName?.trim()?.equals(oldTrimmed, ignoreCase = true) == true) {
       selectedGenreName = newTrimmed
     }
-    MusicPlayerEngine.clearTrackMetadataCache()
+    val snapshot = allTracks
+    MusicPlayerEngine.updateCachedLibrarySnapshot(snapshot)
+    scope.launch(Dispatchers.IO) {
+      MusicPlayerEngine.saveTrackIndexCacheToDisk(tracks = snapshot)
+    }
     return updatedCount
   }
 
@@ -4820,7 +5158,11 @@ class MusicPlaybackSession(
         prepareAndSyncMediaPlayer(forceRestart = true)
       }
     }
-    MusicPlayerEngine.clearTrackMetadataCache()
+    val snapshot = allTracks
+    MusicPlayerEngine.updateCachedLibrarySnapshot(snapshot)
+    scope.launch(Dispatchers.IO) {
+      MusicPlayerEngine.saveTrackIndexCacheToDisk(tracks = snapshot)
+    }
     return deletedCount
   }
 

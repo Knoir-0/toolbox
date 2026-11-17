@@ -199,24 +199,21 @@ class CameraScreenTest {
     val savedNotes = SharedPreferencesNotesRepository(composeTestRule.activity).loadNotes()
     assertTrue(savedNotes.any { it.title == "Product Roadmap Sync" && it.labels.contains("Scanned") })
 
-    // Select Vision mode (ML Kit live tagging accuracy inspector)
+    // Select Vision mode (ML Kit live bounding-box tagging overlay)
     composeTestRule.onNodeWithTag("mode_tab_VISION").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("camera_vision_reticle_overlay").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("vision_controls_bar").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_shutter_vision_icon", useUnmergedTree = true).assertIsDisplayed()
 
-    // Trigger ML Kit Vision analysis via the shutter button and verify live accuracy card & threshold controls
+    // Trigger ML Kit Vision analysis via the shutter button and verify dynamic colored bounding boxes with labels & percentages >= 50%
     composeTestRule.onNodeWithTag("camera_shutter_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("vision_detected_card").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("vision_gallery_threshold_badge").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("vision_tags_list").assertIsDisplayed()
-
-    // Switch threshold to >=80% Gallery strict mode
-    composeTestRule.onNodeWithTag("vision_threshold_GALLERY_80").performClick()
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("vision_detected_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("vision_box_badge_Plant").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("vision_box_badge_Houseplant").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("vision_box_badge_Flowerpot").assertIsDisplayed()
+    // Furniture (39.4% confidence) is below 50% and must be hidden
+    composeTestRule.onNodeWithTag("vision_box_badge_Furniture").assertDoesNotExist()
 
     // Switch back to Note mode and open Notes directly from the scanned note card
     composeTestRule.onNodeWithTag("mode_tab_NOTE").performClick()

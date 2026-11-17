@@ -493,17 +493,33 @@ class CameraEngineTest {
     val rawTags = CameraVisionSamplePreset.BOTANICAL.sampleTags
     val standardResult = CameraEngine.buildVisionAnalysisResult(
       rawTags = rawTags,
-      confidenceThreshold = CameraVisionThresholdPreset.STANDARD_50.minConfidence,
+      confidenceThreshold = MIN_VISION_CONFIDENCE_THRESHOLD,
       inferenceLatencyMs = 18L,
       sourceDescription = "Indoor Monstera Plant",
     )
-    // 5 tags >= 50% (Furniture at 39.4% is filtered out at 50% threshold)
+    // 5 tags >= 50% (Furniture at 39.4% is hidden because it is below 50% confidence)
     assertEquals(5, standardResult.tags.size)
+    assertTrue(standardResult.tags.all { it.confidence >= 0.50f && it.boundingBox != null })
     assertEquals(6, standardResult.allCandidateTags.size)
     assertEquals(3, standardResult.galleryPassingCount)
     assertEquals("Plant", standardResult.topTag?.label)
     assertEquals("96.2%", standardResult.topTag?.confidenceFormatted)
     assertTrue(standardResult.topTag?.passesGalleryThreshold == true)
+
+    // Verify salient region extraction locates foreground object bounding box in pixel buffer
+    val w = 64
+    val h = 64
+    val pixels = IntArray(w * h) { 0xFF101014.toInt() }
+    for (y in 16 until 48) {
+      for (x in 20 until 52) {
+        pixels[y * w + x] = 0xFF34D399.toInt()
+      }
+    }
+    val salientBoxes = CameraEngine.extractSalientRegionsFromArgbPixels(pixels, w, h, maxRegions = 2)
+    assertTrue(salientBoxes.isNotEmpty())
+    val primaryBox = salientBoxes.first()
+    assertTrue(primaryBox.left >= 0.04f && primaryBox.right <= 0.96f)
+    assertTrue(primaryBox.width >= 0.12f && primaryBox.height >= 0.10f)
 
     // Filtering with 80% Gallery threshold keeps only the 3 >= 80% tags
     val galleryStrictResult = standardResult.withThreshold(CameraVisionThresholdPreset.GALLERY_80.minConfidence)

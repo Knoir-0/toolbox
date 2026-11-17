@@ -1217,4 +1217,77 @@ class MusicPlayerEngineTest {
       session.release()
     }
   }
+
+  @Test
+  fun diskIndexCache_andFrozenViewPlayStatsDuringPlayback_workCorrectly() {
+    val tmpDir = Files.createTempDirectory("music_index_cache_test").toFile()
+    val indexFile = File(tmpDir, MusicPlayerEngine.MUSIC_INDEX_CACHE_FILE_NAME)
+    val musicDir = File(tmpDir, "Music").apply { mkdirs() }
+    val baseSample = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS.first()
+    val baseWav = MusicPlayerEngine.ensurePlayableSampleWavFile(tmpDir, baseSample)
+    val wavFile = File(musicDir, "Aurora Synth - Cached Anthem.wav")
+    baseWav.copyTo(wavFile, overwrite = true)
+    try {
+      MusicPlayerEngine.clearTrackMetadataCache()
+      val customTrack = MusicPlayerEngine.buildTrackFromFile(
+        file = wavFile,
+        inspectMetadataRetriever = false,
+      ).copy(
+        title = "Cached Anthem Custom Title",
+        artist = "Aurora Synth",
+        album = "Cached Album",
+        genre = "Synthwave",
+        durationMs = 245_000L,
+      )
+      MusicPlayerEngine.putCachedTrackIndex(customTrack)
+      MusicPlayerEngine.saveTrackIndexCacheToDisk(indexFile, listOf(customTrack))
+      assertTrue(indexFile.exists())
+
+      // Clear in-memory cache and reload from disk -> custom metadata is restored without re-parsing
+      MusicPlayerEngine.clearTrackMetadataCache()
+      assertNull(MusicPlayerEngine.getCachedTrackIndex(wavFile))
+      val loadedMap = MusicPlayerEngine.loadTrackIndexCacheFromDisk(indexFile)
+      assertEquals(1, loadedMap.size)
+      val restored = MusicPlayerEngine.buildTrackFromFile(wavFile, inspectMetadataRetriever = true)
+      assertEquals("Cached Anthem Custom Title", restored.title)
+      assertEquals("Cached Album", restored.album)
+      assertEquals(245_000L, restored.durationMs)
+
+      // Verify viewPlayStats and homePlayStats remain frozen while music is actively playing
+      val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+      val session = MusicPlaybackSession(context = null, initialTracks = tracks)
+      try {
+        assertTrue(session.viewPlayStats.isEmpty())
+        assertTrue(session.homePlayStats.isEmpty())
+        val initialHomeMixTracks = session.homePlaylists.map { it.tracks.map { t -> t.id } }
+
+        // Start playing track 0 -> playStats updates immediately, but viewPlayStats and homePlayStats stay frozen while playing
+        session.playTrackInContext(tracks[0], tracks)
+        assertTrue(session.isPlaying)
+        assertEquals(1, session.playStats[tracks[0].id]?.playCount)
+        assertNull(session.viewPlayStats[tracks[0].id])
+        assertNull(session.homePlayStats[tracks[0].id])
+
+        // Simulate playback ticks -> playStats accumulates time, viewPlayStats & homePlaylists remain unchanged
+        session.recordTrackPlayStats(tracks[0].id, addedPlayTimeMs = 5_000L)
+        assertEquals(5_000L, session.playStats[tracks[0].id]?.totalPlayTimeMs)
+        assertNull(session.viewPlayStats[tracks[0].id])
+        assertEquals(initialHomeMixTracks, session.homePlaylists.map { it.tracks.map { t -> t.id } })
+
+        // Switching tabs or changing sort order snapshots the latest playStats into viewPlayStats
+        session.updateTab(MusicLibraryTab.PLAYLISTS)
+        assertEquals(1, session.viewPlayStats[tracks[0].id]?.playCount)
+        assertEquals(5_000L, session.viewPlayStats[tracks[0].id]?.totalPlayTimeMs)
+        // Home play stats remain frozen until refreshHomePlaylists() is called
+        assertNull(session.homePlayStats[tracks[0].id])
+        session.refreshHomePlaylists()
+        assertEquals(1, session.homePlayStats[tracks[0].id]?.playCount)
+      } finally {
+        session.release()
+      }
+    } finally {
+      MusicPlayerEngine.clearTrackMetadataCache()
+      tmpDir.deleteRecursively()
+    }
+  }
 }
