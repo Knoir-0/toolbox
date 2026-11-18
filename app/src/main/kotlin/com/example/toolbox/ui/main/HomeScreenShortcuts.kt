@@ -5,11 +5,13 @@ import android.app.ActivityManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.os.Build
 import android.widget.Toast
+import androidx.annotation.DrawableRes
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
@@ -27,9 +29,7 @@ import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import com.example.toolbox.MainActivity
 import com.example.toolbox.R
-import com.example.toolbox.ui.theme.MusicPlayerColorOption
 import com.example.toolbox.ui.theme.parseHexColor
-import com.example.toolbox.ui.tools.MusicPlayerEngine
 import java.io.File
 
 const val EXTRA_STANDALONE_TOOL = "extra_standalone_tool"
@@ -39,160 +39,6 @@ const val EXTRA_EXPAND_MUSIC_PLAYER = "extra_expand_music_player"
 private const val SHORTCUT_ICON_SIZE_PX = 216
 private const val SHORTCUT_ADAPTIVE_VIEWPORT_DP = 108f
 private const val SHORTCUT_FOREGROUND_ICON_DP = 50f
-
-/**
- * Represents the launcher `<activity-alias>` variants in `AndroidManifest.xml`, each configured
- * with a themed adaptive icon background matching the corresponding theme color.
- */
-enum class LauncherIconVariant(
-  val aliasClassName: String,
-  val hexColor: String?,
-  val color: Color,
-) {
-  SYSTEM(
-    aliasClassName = "com.example.toolbox.MainActivityLauncherSystem",
-    hexColor = null,
-    color = Color(0xFF8E66A6),
-  ),
-  PURPLE(
-    aliasClassName = "com.example.toolbox.MainActivityLauncherPurple",
-    hexColor = FALLBACK_THEME_COLOR_HEX,
-    color = Color(0xFF8E66A6),
-  ),
-  OCEAN_BLUE(
-    aliasClassName = "com.example.toolbox.MainActivityLauncherOceanBlue",
-    hexColor = "#00668B",
-    color = Color(0xFF00668B),
-  ),
-  FOREST_GREEN(
-    aliasClassName = "com.example.toolbox.MainActivityLauncherForestGreen",
-    hexColor = "#386A20",
-    color = Color(0xFF386A20),
-  ),
-  AMBER_ORANGE(
-    aliasClassName = "com.example.toolbox.MainActivityLauncherAmberOrange",
-    hexColor = "#E65100",
-    color = Color(0xFFE65100),
-  ),
-  CRIMSON_RED(
-    aliasClassName = "com.example.toolbox.MainActivityLauncherCrimsonRed",
-    hexColor = "#B3261E",
-    color = Color(0xFFB3261E),
-  ),
-  TEAL(
-    aliasClassName = "com.example.toolbox.MainActivityLauncherTeal",
-    hexColor = "#006A60",
-    color = Color(0xFF006A60),
-  ),
-  ROSE_PINK(
-    aliasClassName = "com.example.toolbox.MainActivityLauncherRosePink",
-    hexColor = "#984061",
-    color = Color(0xFF984061),
-  ),
-  INDIGO(
-    aliasClassName = "com.example.toolbox.MainActivityLauncherIndigo",
-    hexColor = "#3F51B5",
-    color = Color(0xFF3F51B5),
-  ),
-}
-
-/**
- * Resolves the [LauncherIconVariant] whose background matches (or is closest to) [themeColor].
- */
-fun resolveLauncherIconVariant(themeColor: String?): LauncherIconVariant {
-  if (
-    themeColor.isNullOrBlank() ||
-    themeColor.equals(DEFAULT_THEME_COLOR_SYSTEM, ignoreCase = true) ||
-    MusicPlayerColorOption.fromPrefValue(themeColor) != null
-  ) {
-    return LauncherIconVariant.SYSTEM
-  }
-  val exactMatch = LauncherIconVariant.entries.find {
-    it.hexColor != null && it.hexColor.equals(themeColor, ignoreCase = true)
-  }
-  if (exactMatch != null) return exactMatch
-
-  val parsedColor = parseHexColor(themeColor) ?: return LauncherIconVariant.SYSTEM
-  return LauncherIconVariant.entries
-    .filter { it != LauncherIconVariant.SYSTEM }
-    .minByOrNull { variant ->
-      val dr = parsedColor.red - variant.color.red
-      val dg = parsedColor.green - variant.color.green
-      val db = parsedColor.blue - variant.color.blue
-      dr * dr + dg * dg + db * db
-    } ?: LauncherIconVariant.PURPLE
-}
-
-/**
- * Returns `true` if [variant]'s `<activity-alias>` is currently enabled in [pm].
- */
-private fun isLauncherVariantEnabled(
-  pm: PackageManager,
-  packageName: String,
-  variant: LauncherIconVariant,
-): Boolean {
-  val component = ComponentName(packageName, variant.aliasClassName)
-  val state = pm.getComponentEnabledSetting(component)
-  val isEnabledByDefault = variant == LauncherIconVariant.SYSTEM
-  return state == PackageManager.COMPONENT_ENABLED_STATE_ENABLED ||
-    (isEnabledByDefault && state == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT)
-}
-
-/**
- * Resolves the currently enabled [LauncherIconVariant] in [PackageManager], falling back to
- * [resolveLauncherIconVariant] when [PackageManager] is unavailable.
- */
-fun resolveEnabledLauncherIconVariant(
-  context: Context,
-  themeColor: String? = null,
-): LauncherIconVariant {
-  val targetVariant = resolveLauncherIconVariant(themeColor)
-  return try {
-    val appContext = context.applicationContext ?: context
-    val pm = appContext.packageManager
-    val packageName = appContext.packageName
-    if (isLauncherVariantEnabled(pm, packageName, targetVariant)) {
-      return targetVariant
-    }
-    LauncherIconVariant.entries.firstOrNull { isLauncherVariantEnabled(pm, packageName, it) }
-      ?: targetVariant
-  } catch (_: Throwable) {
-    targetVariant
-  }
-}
-
-/**
- * Ensures a launcher `<activity-alias>` is enabled without disabling the active launcher component
- * of a running [Activity] (which would cause Android's ActivityTaskManagerService to force-finish
- * the foreground activity on launch after an update or theme change).
- */
-fun syncAppLauncherIcon(
-  context: Context,
-  themeColor: String? = null,
-) {
-  try {
-    val appContext = context.applicationContext ?: context
-    val effectiveThemeColor = themeColor
-      ?: DefaultNavigationPreferencesRepository(appContext).getThemeColor()
-    val targetVariant = resolveLauncherIconVariant(effectiveThemeColor)
-    val pm = appContext.packageManager
-    val packageName = appContext.packageName
-
-    val enabledVariants = LauncherIconVariant.entries.filter {
-      isLauncherVariantEnabled(pm, packageName, it)
-    }
-    if (enabledVariants.isEmpty()) {
-      val targetComponent = ComponentName(packageName, targetVariant.aliasClassName)
-      pm.setComponentEnabledSetting(
-        targetComponent,
-        PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-        PackageManager.DONT_KILL_APP,
-      )
-    }
-  } catch (_: Throwable) {
-    // Ignore when PackageManager is unavailable in unit tests
-  }
-}
 
 /**
  * Resolves the manifest `<activity-alias>` class name dedicated to launching [tool] as a standalone
@@ -229,6 +75,46 @@ fun resolveToolShortcutAliasClassName(tool: Tool): String {
     Tool.OBD2_SCANNER -> "com.example.toolbox.MainActivityToolObd2Scanner"
     Tool.SEARCH -> "com.example.toolbox.MainActivityToolSearch"
     Tool.SETTINGS -> "com.example.toolbox.MainActivityToolSettings"
+  }
+}
+
+/**
+ * Resolves the `<adaptive-icon>` mipmap resource ID for [tool], sharing the system preset
+ * background (`@drawable/ic_launcher_background`) and providing a `<monochrome>` layer for
+ * Android 13+ themed home screen icons.
+ */
+@DrawableRes
+fun resolveToolShortcutMipmapResId(tool: Tool): Int {
+  return when (tool) {
+    Tool.CALCULATOR -> R.mipmap.ic_tool_calculator
+    Tool.NOTES -> R.mipmap.ic_tool_notes
+    Tool.TODO_LIST -> R.mipmap.ic_tool_todo_list
+    Tool.CAMERA -> R.mipmap.ic_tool_camera
+    Tool.GALLERY -> R.mipmap.ic_tool_gallery
+    Tool.FILES -> R.mipmap.ic_tool_files
+    Tool.UNIT_CONVERTER -> R.mipmap.ic_tool_unit_converter
+    Tool.AUDIO_RECORDER -> R.mipmap.ic_tool_audio_recorder
+    Tool.BLUETOOTH_REMOTE -> R.mipmap.ic_tool_bluetooth_remote
+    Tool.IMAGE_EDITOR -> R.mipmap.ic_tool_image_editor
+    Tool.FILE_CONVERTER -> R.mipmap.ic_tool_file_converter
+    Tool.RULER -> R.mipmap.ic_tool_ruler
+    Tool.VIDEO_EDITOR -> R.mipmap.ic_tool_video_editor
+    Tool.AUDIO_EDITOR -> R.mipmap.ic_tool_audio_editor
+    Tool.COLOR_PICKER -> R.mipmap.ic_tool_color_picker
+    Tool.DICE_ROLLER -> R.mipmap.ic_tool_dice_roller
+    Tool.GUITAR_TUNER -> R.mipmap.ic_tool_guitar_tuner
+    Tool.METRONOME -> R.mipmap.ic_tool_metronome
+    Tool.CHORD_BOOK -> R.mipmap.ic_tool_chord_book
+    Tool.PLANT_SCHEDULE -> R.mipmap.ic_tool_plant_schedule
+    Tool.BLUETOOTH_GAMEPAD -> R.mipmap.ic_tool_bluetooth_gamepad
+    Tool.DECIBEL_METER -> R.mipmap.ic_tool_decibel_meter
+    Tool.ARCHIVE -> R.mipmap.ic_tool_archive
+    Tool.MUSIC -> R.mipmap.ic_tool_music_player
+    Tool.PDF_VIEWER -> R.mipmap.ic_tool_pdf_viewer
+    Tool.RECIPES -> R.mipmap.ic_tool_recipe_book
+    Tool.OBD2_SCANNER -> R.mipmap.ic_tool_obd2_scanner
+    Tool.SEARCH -> R.mipmap.ic_tool_search
+    Tool.SETTINGS -> R.mipmap.ic_tool_settings
   }
 }
 
@@ -316,18 +202,17 @@ fun resolveStandaloneTaskIconVector(
 
 /**
  * Updates [activity]'s [ActivityManager.TaskDescription] so the Recent Apps switcher displays the
- * matching tool (or folder) icon, title, and themed background color when opened from a shortcut.
+ * matching tool (or folder) icon, title, and system preset background color when opened from a shortcut.
  */
 fun syncStandaloneTaskDescription(
   activity: Activity,
   standaloneTool: Tool?,
   initialFolder: String? = null,
-  themeColor: String? = null,
 ) {
   val label = resolveStandaloneTaskLabel(standaloneTool, initialFolder) ?: return
   val iconVector = resolveStandaloneTaskIconVector(standaloneTool, initialFolder) ?: return
   try {
-    val backgroundColor = resolveShortcutBackgroundColor(themeColor = themeColor, context = activity)
+    val backgroundColor = resolveShortcutBackgroundColor(context = activity)
     val foregroundColor = resolveShortcutForegroundColor(backgroundColor)
     val iconBitmap = createToolShortcutBitmap(
       imageVector = iconVector,
@@ -372,35 +257,19 @@ fun createFolderShortcutIntent(context: Context, folder: File): Intent {
 }
 
 /**
- * Resolves the background [Color] for a home screen shortcut icon according to [themeColor].
- *
- * When [themeColor] is a valid hex string (preset or custom), returns the parsed color.
- * When [themeColor] is [DEFAULT_THEME_COLOR_SYSTEM] (or null/invalid), falls back to
- * Toolbox Purple (`#8E66A6`).
+ * Resolves the system preset background [Color] for shortcut icons (Material You dynamic primary
+ * color on Android 12+ when [context] is provided, falling back to Toolbox Purple `#8E66A6`).
  */
 fun resolveShortcutBackgroundColor(
-  themeColor: String?,
   context: Context? = null,
 ): Color {
-  val effectiveThemeColor = themeColor ?: run {
-    if (context != null) {
-      try {
-        DefaultNavigationPreferencesRepository(context.applicationContext).getThemeColor()
-      } catch (_: Exception) {
-        DEFAULT_THEME_COLOR_SYSTEM
-      }
-    } else {
-      DEFAULT_THEME_COLOR_SYSTEM
+  if (context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    try {
+      return dynamicLightColorScheme(context).primary
+    } catch (_: Exception) {
+      // Fall back to default theme color below
     }
   }
-
-  if (!effectiveThemeColor.equals(DEFAULT_THEME_COLOR_SYSTEM, ignoreCase = true)) {
-    MusicPlayerColorOption.fromPrefValue(effectiveThemeColor)?.let { musicOption ->
-      return musicOption.resolveColor(MusicPlayerEngine.activeTrackPalette)
-    }
-    parseHexColor(effectiveThemeColor)?.let { return it }
-  }
-
   return parseHexColor(FALLBACK_THEME_COLOR_HEX) ?: Color(0xFF8E66A6)
 }
 
@@ -423,7 +292,7 @@ fun createToolShortcutBitmap(
   val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
   val canvas = Canvas(bitmap.asImageBitmap())
 
-  // Draw themed background
+  // Draw background
   val bgPaint = Paint().apply {
     isAntiAlias = true
     style = PaintingStyle.Fill
@@ -507,22 +376,14 @@ private fun drawVectorGroup(
 }
 
 /**
- * Creates an [IconCompat] for a given [Tool] shortcut with the tool's icon and themed background color.
+ * Creates an [IconCompat] for a given [Tool] shortcut using its system-preset `<adaptive-icon>` resource.
  */
 fun createToolShortcutIcon(
   context: Context,
   tool: Tool,
-  themeColor: String? = null,
 ): IconCompat {
   return try {
-    val backgroundColor = resolveShortcutBackgroundColor(themeColor = themeColor, context = context)
-    val foregroundColor = resolveShortcutForegroundColor(backgroundColor)
-    val bitmap = createToolShortcutBitmap(
-      imageVector = tool.icon,
-      backgroundColor = backgroundColor,
-      foregroundColor = foregroundColor,
-    )
-    IconCompat.createWithAdaptiveBitmap(bitmap)
+    IconCompat.createWithResource(context, resolveToolShortcutMipmapResId(tool))
   } catch (_: Exception) {
     try {
       IconCompat.createWithResource(context, R.mipmap.ic_launcher)
@@ -538,38 +399,13 @@ fun createToolShortcutIcon(
 val FOLDER_SHORTCUT_ICON: ImageVector = Icons.Default.Folder
 
 /**
- * Renders an adaptive shortcut icon [Bitmap] displaying the app's folder icon ([FOLDER_SHORTCUT_ICON])
- * centered over the themed [backgroundColor].
- */
-fun createFolderShortcutBitmap(
-  backgroundColor: Color,
-  foregroundColor: Color = resolveShortcutForegroundColor(backgroundColor),
-  sizePx: Int = SHORTCUT_ICON_SIZE_PX,
-): Bitmap {
-  return createToolShortcutBitmap(
-    imageVector = FOLDER_SHORTCUT_ICON,
-    backgroundColor = backgroundColor,
-    foregroundColor = foregroundColor,
-    sizePx = sizePx,
-  )
-}
-
-/**
- * Creates an [IconCompat] for a folder shortcut using the same folder icon as the Files tool
- * and a background color themed according to [themeColor].
+ * Creates an [IconCompat] for a folder shortcut using the system-preset Files `<adaptive-icon>` resource.
  */
 fun createFolderShortcutIcon(
   context: Context,
-  themeColor: String? = null,
 ): IconCompat {
   return try {
-    val backgroundColor = resolveShortcutBackgroundColor(themeColor = themeColor, context = context)
-    val foregroundColor = resolveShortcutForegroundColor(backgroundColor)
-    val bitmap = createFolderShortcutBitmap(
-      backgroundColor = backgroundColor,
-      foregroundColor = foregroundColor,
-    )
-    IconCompat.createWithAdaptiveBitmap(bitmap)
+    IconCompat.createWithResource(context, R.mipmap.ic_tool_files)
   } catch (_: Exception) {
     try {
       IconCompat.createWithResource(context, R.mipmap.ic_launcher)
@@ -585,26 +421,15 @@ fun createFolderShortcutIcon(
 fun addToolToHomeScreen(
   context: Context,
   tool: Tool,
-  themeColor: String? = null,
 ): Boolean {
   val intent = createStandaloneToolIntent(context, tool)
 
   return try {
     if (ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
-      val effectiveThemeColor = themeColor ?: run {
-        try {
-          DefaultNavigationPreferencesRepository(context.applicationContext ?: context).getThemeColor()
-        } catch (_: Exception) {
-          DEFAULT_THEME_COLOR_SYSTEM
-        }
-      }
-      syncAppLauncherIcon(context, effectiveThemeColor)
-      val activeVariant = resolveEnabledLauncherIconVariant(context, effectiveThemeColor)
       val pinShortcutInfo = ShortcutInfoCompat.Builder(context, "shortcut_tool_${tool.name}")
         .setShortLabel(tool.title)
         .setLongLabel(tool.title)
-        .setIcon(createToolShortcutIcon(context, tool, effectiveThemeColor))
-        .setActivity(ComponentName(context.packageName, activeVariant.aliasClassName))
+        .setIcon(createToolShortcutIcon(context, tool))
         .setIntent(intent)
         .setAlwaysBadged()
         .build()
@@ -628,28 +453,17 @@ fun addToolToHomeScreen(
 fun addFolderToHomeScreen(
   context: Context,
   folder: File,
-  themeColor: String? = null,
 ): Boolean {
   val folderName = folder.name.ifBlank { "Files" }
   val intent = createFolderShortcutIntent(context, folder)
 
   return try {
     if (ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
-      val effectiveThemeColor = themeColor ?: run {
-        try {
-          DefaultNavigationPreferencesRepository(context.applicationContext ?: context).getThemeColor()
-        } catch (_: Exception) {
-          DEFAULT_THEME_COLOR_SYSTEM
-        }
-      }
-      syncAppLauncherIcon(context, effectiveThemeColor)
-      val activeVariant = resolveEnabledLauncherIconVariant(context, effectiveThemeColor)
       val shortcutId = "shortcut_folder_${folder.absolutePath.hashCode()}"
       val pinShortcutInfo = ShortcutInfoCompat.Builder(context, shortcutId)
         .setShortLabel(folderName)
         .setLongLabel(folderName)
-        .setIcon(createFolderShortcutIcon(context, effectiveThemeColor))
-        .setActivity(ComponentName(context.packageName, activeVariant.aliasClassName))
+        .setIcon(createFolderShortcutIcon(context))
         .setIntent(intent)
         .setAlwaysBadged()
         .build()

@@ -15,6 +15,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -24,6 +26,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -35,10 +39,12 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -72,6 +78,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -91,7 +98,6 @@ import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -108,20 +114,19 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -148,7 +153,9 @@ import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -258,6 +265,7 @@ fun NotesScreen(
 ) {
   val context = LocalContext.current
   val haptic = LocalHapticFeedback.current
+  val focusManager = LocalFocusManager.current
 
   val repo = remember(repository) {
     repository ?: SharedPreferencesNotesRepository(context)
@@ -290,11 +298,12 @@ fun NotesScreen(
   var selectedNoteIds by remember { mutableStateOf(setOf<String>()) }
   val isSelectionMode = selectedNoteIds.isNotEmpty()
 
-  BackHandler(enabled = isSelectionMode) {
-    selectedNoteIds = emptySet()
-  }
+  // Slide-up Add Note state (from the bottom "Take a note..." bar)
+  var isAddNoteOpen by remember { mutableStateOf(false) }
+  var addingNoteDraft by remember { mutableStateOf(NoteItem()) }
+  var addingNoteNewLabels by remember { mutableStateOf(listOf<String>()) }
 
-  // Editor state
+  // Single Note View state (when tapping an existing note on the board)
   var editingNote by remember { mutableStateOf<NoteItem?>(null) }
 
   // Dialog states
@@ -438,9 +447,42 @@ fun NotesScreen(
     }
   }
 
-  val noteCardActionDispatcher = remember(notes, savedLabels, context) {
+  fun saveAndCloseAddingNote() {
+    if (!isAddNoteOpen) return
+    val updatedNotes = NotesEngine.saveOrDiscardNote(notes, addingNoteDraft)
+    val mergedLabels = (savedLabels + addingNoteNewLabels)
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .distinct()
+    applyStateChange(updatedNotes, mergedLabels)
+    isAddNoteOpen = false
+    addingNoteNewLabels = emptyList()
+    focusManager.clearFocus()
+  }
+
+  fun openSingleNoteView(note: NoteItem) {
+    if (isAddNoteOpen) {
+      saveAndCloseAddingNote()
+    }
+    editingNote = note
+  }
+
+  BackHandler(enabled = isAddNoteOpen || isSelectionMode) {
+    when {
+      isAddNoteOpen -> saveAndCloseAddingNote()
+      isSelectionMode -> selectedNoteIds = emptySet()
+    }
+  }
+
+  var rootBottomInsetPx by remember { mutableIntStateOf(0) }
+  val imeBottomPx = WindowInsets.ime.getBottom(density)
+  val extraImeBottomPadding = with(density) {
+    (imeBottomPx - rootBottomInsetPx).coerceAtLeast(0).toDp()
+  }
+
+  val noteCardActionDispatcher = remember(notes, savedLabels, context, isAddNoteOpen, addingNoteDraft, addingNoteNewLabels) {
     NoteCardActionDispatcher(
-      onEdit = { note -> editingNote = note },
+      onEdit = { note -> openSingleNoteView(note) },
       onTogglePin = { note ->
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         applyStateChange(NotesEngine.togglePin(notes, note.id))
@@ -515,8 +557,55 @@ fun NotesScreen(
     modifier = modifier
       .fillMaxSize()
       .background(MaterialTheme.colorScheme.background)
+      .onGloballyPositioned { coords ->
+        val rootHeight = coords.findRootCoordinates().size.height
+        val bottomInRoot = (coords.positionInRoot().y + coords.size.height).roundToInt()
+        rootBottomInsetPx = (rootHeight - bottomInRoot).coerceAtLeast(0)
+      }
+      .padding(bottom = extraImeBottomPadding)
       .testTag("notes_screen"),
   ) {
+    val activeSingleNote = editingNote
+    if (activeSingleNote != null) {
+      SingleNoteView(
+        initialNote = activeSingleNote,
+        availableLabels = allLabels,
+        onSaveAndDismiss = { updatedDraft, newlyCreatedLabels ->
+          val updatedNotes = NotesEngine.saveOrDiscardNote(notes, updatedDraft)
+          val mergedLabels = (savedLabels + newlyCreatedLabels)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+          applyStateChange(updatedNotes, mergedLabels)
+          editingNote = null
+        },
+        onMoveToTrash = { noteId ->
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          if (notes.any { it.id == noteId }) {
+            applyStateChange(NotesEngine.moveToTrash(notes, setOf(noteId)))
+          }
+          editingNote = null
+        },
+        onDeletePermanently = { noteId ->
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          if (notes.any { it.id == noteId }) {
+            applyStateChange(NotesEngine.deletePermanently(notes, setOf(noteId)))
+          }
+          editingNote = null
+        },
+        onRestoreFromTrash = { noteId ->
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          if (notes.any { it.id == noteId }) {
+            applyStateChange(NotesEngine.restoreFromTrash(notes, setOf(noteId)))
+          }
+          editingNote = null
+        },
+        onCopyToClipboard = { draftToCopy ->
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          copyNoteToClipboard(context, draftToCopy)
+        },
+      )
+    } else {
     Column(modifier = Modifier.fillMaxSize()) {
       // 1. Standard Tool Header or Multi-Selection Action Toolbar
       if (isSelectionMode) {
@@ -946,7 +1035,7 @@ fun NotesScreen(
                           selectedNoteIds + note.id
                         }
                       } else {
-                        editingNote = note
+                        openSingleNoteView(note)
                       }
                     },
                     onLongClick = null,
@@ -1017,7 +1106,7 @@ fun NotesScreen(
                           selectedNoteIds + note.id
                         }
                       } else {
-                        editingNote = note
+                        openSingleNoteView(note)
                       }
                     },
                     onLongClick = null,
@@ -1088,83 +1177,139 @@ fun NotesScreen(
           }
         }
 
-        // 5. Bottom Google Keep-inspired Quick-Capture Bar ("Take a note..." + Checklist shortcut)
+        // 5. Floating 28.dp Quick-Capture Bar ("Take a note..." + Checklist shortcut) with Slide-Up Add Note View
         if (!isSelectionMode && activeFilter != NotesFilter.Trash) {
           val preselectedLabels = when (val filter = activeFilter) {
             is NotesFilter.Label -> listOf(filter.name)
             else -> emptyList()
           }
           val defaultPinned = activeFilter == NotesFilter.Pinned
+          val containerColor = if (isAddNoteOpen) {
+            resolveNoteCardColor(addingNoteDraft.color, isElevatedSurface = true)
+          } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+          }
+          var addNoteDragOffsetY by remember(isAddNoteOpen) { mutableFloatStateOf(0f) }
+          val dismissDragThresholdPx = with(density) { 48.dp.toPx() }
+          val handleDragDownDelta: (Float) -> Unit = { deltaY ->
+            addNoteDragOffsetY = (addNoteDragOffsetY + deltaY).coerceAtLeast(0f)
+          }
+          val handleDragDownEnd: () -> Unit = {
+            if (addNoteDragOffsetY >= dismissDragThresholdPx) {
+              addNoteDragOffsetY = 0f
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              saveAndCloseAddingNote()
+            } else {
+              addNoteDragOffsetY = 0f
+            }
+          }
+          val handleDragDownCancel: () -> Unit = {
+            addNoteDragOffsetY = 0f
+          }
 
-          NotesQuickCaptureBar(
-            onTakeTextNote = {
-              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-              editingNote = NoteItem(
-                isChecklist = false,
-                isPinned = defaultPinned,
-                labels = preselectedLabels,
-              )
-            },
-            onTakeChecklistNote = {
-              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-              editingNote = NoteItem(
-                isChecklist = true,
-                checklistItems = emptyList(),
-                isPinned = defaultPinned,
-                labels = preselectedLabels,
-              )
-            },
+          Box(
             modifier = Modifier
               .align(Alignment.BottomCenter)
+              .fillMaxWidth()
               .padding(horizontal = 14.dp, vertical = 12.dp),
-          )
+          ) {
+            Surface(
+              shape = RoundedCornerShape(28.dp),
+              color = containerColor,
+              tonalElevation = 6.dp,
+              shadowElevation = 4.dp,
+              border = BorderStroke(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+              ),
+              modifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer {
+                  translationY = if (isAddNoteOpen) addNoteDragOffsetY else 0f
+                }
+                .testTag("notes_quick_capture_card"),
+            ) {
+              Column(modifier = Modifier.fillMaxWidth()) {
+                NotesQuickCaptureBar(
+                  isAddNoteOpen = isAddNoteOpen,
+                  isChecklistMode = isAddNoteOpen && addingNoteDraft.isChecklist,
+                  onTakeTextNote = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    if (!isAddNoteOpen) {
+                      addingNoteNewLabels = emptyList()
+                      addingNoteDraft = NoteItem(
+                        isChecklist = false,
+                        isPinned = defaultPinned,
+                        labels = preselectedLabels,
+                      )
+                      isAddNoteOpen = true
+                    } else if (addingNoteDraft.isChecklist) {
+                      addingNoteDraft = NotesEngine.toggleChecklistMode(addingNoteDraft)
+                    } else {
+                      saveAndCloseAddingNote()
+                    }
+                  },
+                  onTakeChecklistNote = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    if (!isAddNoteOpen) {
+                      addingNoteNewLabels = emptyList()
+                      addingNoteDraft = NoteItem(
+                        isChecklist = true,
+                        checklistItems = emptyList(),
+                        isPinned = defaultPinned,
+                        labels = preselectedLabels,
+                      )
+                      isAddNoteOpen = true
+                    } else {
+                      addingNoteDraft = NotesEngine.toggleChecklistMode(addingNoteDraft)
+                    }
+                  },
+                  onDragDownDelta = handleDragDownDelta,
+                  onDragDownEnd = handleDragDownEnd,
+                  onDragDownCancel = handleDragDownCancel,
+                )
+
+                // Add Note view slides up inside the floating 28.dp pill bar (similar to Todo schedule panel)
+                AnimatedVisibility(
+                  visible = isAddNoteOpen,
+                  enter = slideInVertically(initialOffsetY = { it }) +
+                    expandVertically(expandFrom = Alignment.Top) +
+                    fadeIn(),
+                  exit = slideOutVertically(targetOffsetY = { it }) +
+                    shrinkVertically(shrinkTowards = Alignment.Top) +
+                    fadeOut(),
+                ) {
+                  AddNoteSlideUpPanel(
+                    draft = addingNoteDraft,
+                    onDraftChange = { addingNoteDraft = it },
+                    availableLabels = allLabels,
+                    newlyCreatedLabels = addingNoteNewLabels,
+                    onNewlyCreatedLabelsChange = { addingNoteNewLabels = it },
+                    autoFocusTitle = isAddNoteOpen,
+                    onSaveAndDismiss = { saveAndCloseAddingNote() },
+                    onDiscard = {
+                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                      isAddNoteOpen = false
+                      addingNoteNewLabels = emptyList()
+                      focusManager.clearFocus()
+                    },
+                    onCopyToClipboard = { draftToCopy ->
+                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                      copyNoteToClipboard(context, draftToCopy)
+                    },
+                    onDragDownDelta = handleDragDownDelta,
+                    onDragDownEnd = handleDragDownEnd,
+                    onDragDownCancel = handleDragDownCancel,
+                  )
+                }
+              }
+            }
+          }
         }
       }
     }
+    }
   }
-  }
-
-  // Note Editor Sheet
-  val currentDraft = editingNote
-  if (currentDraft != null) {
-    NoteEditorSheet(
-      initialNote = currentDraft,
-      availableLabels = allLabels,
-      onSaveAndDismiss = { updatedDraft, newlyCreatedLabels ->
-        val updatedNotes = NotesEngine.saveOrDiscardNote(notes, updatedDraft)
-        val mergedLabels = (savedLabels + newlyCreatedLabels)
-          .map { it.trim() }
-          .filter { it.isNotEmpty() }
-          .distinct()
-        applyStateChange(updatedNotes, mergedLabels)
-        editingNote = null
-      },
-      onMoveToTrash = { noteId ->
-        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        if (notes.any { it.id == noteId }) {
-          applyStateChange(NotesEngine.moveToTrash(notes, setOf(noteId)))
-        }
-        editingNote = null
-      },
-      onDeletePermanently = { noteId ->
-        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        if (notes.any { it.id == noteId }) {
-          applyStateChange(NotesEngine.deletePermanently(notes, setOf(noteId)))
-        }
-        editingNote = null
-      },
-      onRestoreFromTrash = { noteId ->
-        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        if (notes.any { it.id == noteId }) {
-          applyStateChange(NotesEngine.restoreFromTrash(notes, setOf(noteId)))
-        }
-        editingNote = null
-      },
-      onCopyToClipboard = { draftToCopy ->
-        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        copyNoteToClipboard(context, draftToCopy)
-      },
-    )
   }
 
   // Manage Labels Dialog
@@ -2027,7 +2172,7 @@ fun NoteCard(
         .padding(12.dp),
       verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      // Header row: Selection checkbox + Title + Pin indicator/toggle
+      // Header row: Title + Pin/More actions (or Selection checkbox at top right)
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -2038,15 +2183,6 @@ fun NoteCard(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-          if (isSelectionMode) {
-            Checkbox(
-              checked = isSelected,
-              onCheckedChange = { onClick() },
-              modifier = Modifier
-                .size(22.dp)
-                .testTag("note_card_checkbox_${note.id}"),
-            )
-          }
           if (note.title.isNotBlank()) {
             Text(
               text = note.title,
@@ -2062,7 +2198,15 @@ fun NoteCard(
           }
         }
 
-        if (!isSelectionMode) {
+        if (isSelectionMode) {
+          Checkbox(
+            checked = isSelected,
+            onCheckedChange = { onClick() },
+            modifier = Modifier
+              .size(22.dp)
+              .testTag("note_card_checkbox_${note.id}"),
+          )
+        } else {
           val noteActions = LocalNoteCardActions.current
           var noteMenuExpanded by remember { mutableStateOf(false) }
 
@@ -2124,7 +2268,7 @@ fun NoteCard(
                     },
                   )
                   DropdownMenuItem(
-                    text = { Text("Copy Text") },
+                    text = { Text("Copy") },
                     leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                     onClick = {
                       noteMenuExpanded = false
@@ -2148,7 +2292,7 @@ fun NoteCard(
                   )
                 } else {
                   DropdownMenuItem(
-                    text = { Text("Copy Text") },
+                    text = { Text("Copy") },
                     leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                     onClick = {
                       noteMenuExpanded = false
@@ -2300,24 +2444,53 @@ fun NoteCard(
 
 @Composable
 private fun NotesQuickCaptureBar(
+  isAddNoteOpen: Boolean = false,
+  isChecklistMode: Boolean = false,
   onTakeTextNote: () -> Unit,
   onTakeChecklistNote: () -> Unit,
+  onDragDownDelta: (Float) -> Unit = {},
+  onDragDownEnd: () -> Unit = {},
+  onDragDownCancel: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
-  Surface(
-    shape = RoundedCornerShape(28.dp),
-    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    tonalElevation = 6.dp,
-    border = BorderStroke(
-      width = 1.dp,
-      color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-    ),
-    modifier = modifier.fillMaxWidth(),
+  val currentOnDragDownDelta by rememberUpdatedState(onDragDownDelta)
+  val currentOnDragDownEnd by rememberUpdatedState(onDragDownEnd)
+  val currentOnDragDownCancel by rememberUpdatedState(onDragDownCancel)
+
+  Column(
+    modifier = modifier
+      .fillMaxWidth()
+      .pointerInput(isAddNoteOpen) {
+        if (!isAddNoteOpen) return@pointerInput
+        detectVerticalDragGestures(
+          onVerticalDrag = { change, dragAmount ->
+            if (dragAmount > 0f) {
+              change.consume()
+              currentOnDragDownDelta(dragAmount)
+            }
+          },
+          onDragEnd = { currentOnDragDownEnd() },
+          onDragCancel = { currentOnDragDownCancel() },
+        )
+      },
+    horizontalAlignment = Alignment.CenterHorizontally,
   ) {
+    AnimatedVisibility(visible = isAddNoteOpen) {
+      Box(
+        modifier = Modifier
+          .padding(top = 8.dp)
+          .width(36.dp)
+          .height(4.dp)
+          .clip(CircleShape)
+          .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
+          .testTag("add_note_drag_handle"),
+      )
+    }
+
     Row(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+        .padding(start = 16.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.SpaceBetween,
     ) {
@@ -2335,13 +2508,23 @@ private fun NotesQuickCaptureBar(
           modifier = Modifier
             .size(28.dp)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primaryContainer),
+            .background(
+              if (isAddNoteOpen) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.primaryContainer
+              },
+            ),
           contentAlignment = Alignment.Center,
         ) {
           Icon(
             imageVector = Icons.Default.Add,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            tint = if (isAddNoteOpen) {
+              MaterialTheme.colorScheme.onPrimary
+            } else {
+              MaterialTheme.colorScheme.onPrimaryContainer
+            },
             modifier = Modifier.size(18.dp),
           )
         }
@@ -2355,12 +2538,27 @@ private fun NotesQuickCaptureBar(
 
       IconButton(
         onClick = onTakeChecklistNote,
-        modifier = Modifier.testTag("new_checklist_button"),
+        modifier = Modifier
+          .size(28.dp)
+          .clip(CircleShape)
+          .background(
+            if (isChecklistMode) {
+              MaterialTheme.colorScheme.primaryContainer
+            } else {
+              Color.Transparent
+            },
+          )
+          .testTag("new_checklist_button"),
       ) {
         Icon(
           imageVector = Icons.Default.CheckBox,
           contentDescription = "New checklist note",
-          tint = MaterialTheme.colorScheme.primary,
+          tint = if (isChecklistMode) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+          } else {
+            MaterialTheme.colorScheme.primary
+          },
+          modifier = Modifier.size(18.dp),
         )
       }
     }
@@ -2450,9 +2648,149 @@ private fun NotesEmptyState(
   }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+/**
+ * Panel that slides up inside the floating 28.dp bottom pill bar for creating a new note,
+ * similar to the Todo tool's schedule panel, and autofocuses the title input.
+ */
 @Composable
-private fun NoteEditorSheet(
+private fun AddNoteSlideUpPanel(
+  draft: NoteItem,
+  onDraftChange: (NoteItem) -> Unit,
+  availableLabels: List<String>,
+  newlyCreatedLabels: List<String>,
+  onNewlyCreatedLabelsChange: (List<String>) -> Unit,
+  autoFocusTitle: Boolean,
+  onSaveAndDismiss: () -> Unit,
+  onDiscard: () -> Unit,
+  onCopyToClipboard: (NoteItem) -> Unit,
+  onDragDownDelta: (Float) -> Unit = {},
+  onDragDownEnd: () -> Unit = {},
+  onDragDownCancel: () -> Unit = {},
+) {
+  val scrollState = rememberScrollState()
+  var isChecklistDragActive by remember { mutableStateOf(false) }
+  val currentOnDragDownDelta by rememberUpdatedState(onDragDownDelta)
+  val currentOnDragDownEnd by rememberUpdatedState(onDragDownEnd)
+
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .pointerInput(Unit) {
+        val touchSlop = viewConfiguration.touchSlop
+        awaitEachGesture {
+          val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+          var totalDx = 0f
+          var totalDy = 0f
+          var isPanelDragging = false
+
+          while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (change.changedToUpIgnoreConsumed()) {
+              if (isPanelDragging) {
+                change.consume()
+              }
+              break
+            }
+            val delta = change.positionChangeIgnoreConsumed()
+            if (delta == Offset.Zero) continue
+
+            if (isChecklistDragActive) {
+              break
+            }
+
+            if (!isPanelDragging) {
+              totalDx += delta.x
+              totalDy += delta.y
+              if (abs(totalDx) > touchSlop && abs(totalDx) > abs(totalDy)) {
+                break
+              }
+              if (totalDy > touchSlop && totalDy > abs(totalDx) && scrollState.value == 0) {
+                isPanelDragging = true
+                change.consume()
+                currentOnDragDownDelta(totalDy)
+              }
+            } else {
+              change.consume()
+              currentOnDragDownDelta(delta.y)
+            }
+          }
+
+          if (isPanelDragging) {
+            currentOnDragDownEnd()
+          }
+        }
+      }
+      .testTag("add_note_panel"),
+  ) {
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(max = 440.dp)
+        .verticalScroll(scrollState)
+        .padding(horizontal = 16.dp, vertical = 12.dp),
+    ) {
+      NoteEditorContent(
+        draft = draft,
+        onDraftChange = onDraftChange,
+        availableLabels = availableLabels,
+        newlyCreatedLabels = newlyCreatedLabels,
+        onNewlyCreatedLabelsChange = onNewlyCreatedLabelsChange,
+        autoFocusTitle = autoFocusTitle,
+        minContentLines = 3,
+        showArchiveAndCopyButtons = false,
+        showTimestampFooter = false,
+        onChecklistDragActiveChange = { isChecklistDragActive = it },
+        onSaveAndDismiss = onSaveAndDismiss,
+        onMoveToTrash = { onDiscard() },
+        onDeletePermanently = { onDiscard() },
+        onRestoreFromTrash = {},
+        onCopyToClipboard = onCopyToClipboard,
+      )
+    }
+
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = "Edited ${NotesEngine.formatTimestamp(draft.updatedAt)}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+
+      FilledIconButton(
+        onClick = onSaveAndDismiss,
+        shape = CircleShape,
+        colors = IconButtonDefaults.filledIconButtonColors(
+          containerColor = MaterialTheme.colorScheme.primary,
+          contentColor = MaterialTheme.colorScheme.onPrimary,
+        ),
+        modifier = Modifier
+          .size(28.dp)
+          .testTag("add_note_confirm_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Check,
+          contentDescription = "Add note",
+          modifier = Modifier.size(18.dp),
+        )
+      }
+    }
+  }
+}
+
+/**
+ * Full-screen single note view for viewing and editing an existing note when tapped on the board,
+ * containing all of the content of the old add a note panel.
+ */
+@Composable
+private fun SingleNoteView(
   initialNote: NoteItem,
   availableLabels: List<String>,
   onSaveAndDismiss: (NoteItem, List<String>) -> Unit,
@@ -2463,127 +2801,450 @@ private fun NoteEditorSheet(
 ) {
   var draft by remember(initialNote.id) { mutableStateOf(initialNote) }
   var newlyCreatedLabels by remember(initialNote.id) { mutableStateOf(listOf<String>()) }
-  var newChecklistItemText by remember { mutableStateOf("") }
-  var newLabelInput by remember { mutableStateOf("") }
-  var showLabelPicker by remember { mutableStateOf(false) }
-  var isCheckedSectionExpanded by remember { mutableStateOf(true) }
+  var newChecklistItemText by remember(initialNote.id) { mutableStateOf("") }
 
-  val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-  val sheetBackgroundColor = resolveNoteCardColor(draft.color, isElevatedSurface = true)
+  BackHandler {
+    onSaveAndDismiss(draft, newlyCreatedLabels)
+  }
 
-  ModalBottomSheet(
-    onDismissRequest = { onSaveAndDismiss(draft, newlyCreatedLabels) },
-    sheetState = sheetState,
-    shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-    containerColor = sheetBackgroundColor,
-    tonalElevation = 6.dp,
-    dragHandle = {
-      Box(
-        modifier = Modifier.fillMaxWidth(),
-        contentAlignment = Alignment.Center,
-      ) {
-        BottomSheetDefaults.DragHandle()
-      }
-    },
-    modifier = Modifier.testTag("note_editor_sheet"),
+  val backgroundColor = resolveNoteCardColor(draft.color, isElevatedSurface = false)
+  val topBarColor = resolveNoteCardColor(draft.color, isElevatedSurface = true)
+
+  Column(
+    modifier = Modifier
+      .fillMaxSize()
+      .background(backgroundColor)
+      .testTag("single_note_view"),
   ) {
+    ToolboxTopBar(
+      title = draft.title.ifBlank { if (draft.isChecklist) "Checklist Note" else "Edit Note" },
+      subtext = "Edited ${NotesEngine.formatTimestamp(draft.updatedAt)}",
+      icon = Icons.AutoMirrored.Filled.StickyNote2,
+      containerColor = topBarColor,
+      onNavigateBack = { onSaveAndDismiss(draft, newlyCreatedLabels) },
+      backContentDescription = "Back to notes",
+      backButtonTestTag = "single_note_back_button",
+      titleTestTag = "single_note_title",
+      subtextTestTag = "single_note_subtext",
+    )
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
     Column(
       modifier = Modifier
+        .weight(1f)
         .fillMaxWidth()
         .verticalScroll(rememberScrollState())
-        .padding(horizontal = 16.dp)
-        .padding(bottom = 24.dp),
-      verticalArrangement = Arrangement.spacedBy(12.dp),
+        .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-      // Editor Top Toolbar
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        IconButton(
-          onClick = { onSaveAndDismiss(draft, newlyCreatedLabels) },
-          modifier = Modifier.testTag("editor_save_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Check,
-            contentDescription = "Done",
-            tint = MaterialTheme.colorScheme.primary,
-          )
-        }
+      NoteEditorContent(
+        draft = draft,
+        onDraftChange = { draft = it },
+        availableLabels = availableLabels,
+        newlyCreatedLabels = newlyCreatedLabels,
+        onNewlyCreatedLabelsChange = { newlyCreatedLabels = it },
+        autoFocusTitle = false,
+        minContentLines = 5,
+        showInlineChecklistInput = false,
+        showColorPicker = false,
+        onSaveAndDismiss = { onSaveAndDismiss(draft, newlyCreatedLabels) },
+        onMoveToTrash = onMoveToTrash,
+        onDeletePermanently = onDeletePermanently,
+        onRestoreFromTrash = onRestoreFromTrash,
+        onCopyToClipboard = onCopyToClipboard,
+      )
+    }
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          if (draft.isTrashed) {
-            IconButton(
-              onClick = { onRestoreFromTrash(draft.id) },
-              modifier = Modifier.testTag("editor_restore_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.RestoreFromTrash,
-                contentDescription = "Restore note",
-                tint = MaterialTheme.colorScheme.primary,
-              )
-            }
-            IconButton(
-              onClick = { onDeletePermanently(draft.id) },
-              modifier = Modifier.testTag("editor_delete_forever_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.DeleteForever,
-                contentDescription = "Delete forever",
-                tint = MaterialTheme.colorScheme.error,
-              )
-            }
-          } else {
-            IconButton(
-              onClick = {
-                val newPinned = !draft.isPinned
-                draft = draft.copy(
+    if (draft.isChecklist && !draft.isTrashed) {
+      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+      Surface(
+        color = backgroundColor,
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("single_note_bottom_checklist_input_bar"),
+      ) {
+        ChecklistItemInputRow(
+          text = newChecklistItemText,
+          onTextChange = { newChecklistItemText = it },
+          onAddItem = { itemText ->
+            draft = draft.copy(
+              checklistItems = draft.checklistItems + NoteChecklistItem(text = itemText),
+            )
+            newChecklistItemText = ""
+          },
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        )
+      }
+    }
+
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    Surface(
+      color = topBarColor,
+      tonalElevation = 2.dp,
+      modifier = Modifier
+        .fillMaxWidth()
+        .testTag("single_note_bottom_color_bar"),
+    ) {
+      NoteColorPickerSection(
+        selectedColor = draft.color,
+        onSelectColor = { draft = draft.copy(color = it) },
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 16.dp, vertical = 12.dp),
+      )
+    }
+  }
+}
+
+@Composable
+private fun ChecklistItemInputRow(
+  text: String,
+  onTextChange: (String) -> Unit,
+  onAddItem: (String) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val trimmed = text.trim()
+  val canAdd = trimmed.isNotEmpty()
+  val submit = {
+    if (canAdd) {
+      onAddItem(trimmed)
+    }
+  }
+  Row(
+    modifier = modifier.fillMaxWidth(),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    OutlinedTextField(
+      value = text,
+      onValueChange = onTextChange,
+      placeholder = { Text("List item...") },
+      singleLine = true,
+      shape = CircleShape,
+      trailingIcon = {
+        if (text.isNotEmpty()) {
+          IconButton(
+            onClick = { onTextChange("") },
+            modifier = Modifier.size(28.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Clear,
+              contentDescription = "Clear list item input",
+              modifier = Modifier.size(16.dp),
+            )
+          }
+        }
+      },
+      keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+      keyboardActions = KeyboardActions(onDone = { submit() }),
+      modifier = Modifier
+        .weight(1f)
+        .testTag("editor_new_checklist_input"),
+    )
+
+    FilledIconButton(
+      onClick = submit,
+      enabled = canAdd,
+      shape = CircleShape,
+      colors = IconButtonDefaults.filledIconButtonColors(
+        containerColor = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+      ),
+      modifier = Modifier
+        .size(56.dp)
+        .testTag("editor_add_checklist_item"),
+    ) {
+      Icon(
+        imageVector = Icons.Default.Add,
+        contentDescription = "Add list item",
+        modifier = Modifier.size(24.dp),
+      )
+    }
+  }
+}
+
+@Composable
+private fun NoteColorPickerSection(
+  selectedColor: NoteColor,
+  onSelectColor: (NoteColor) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Column(
+    modifier = modifier.fillMaxWidth(),
+    verticalArrangement = Arrangement.spacedBy(6.dp),
+  ) {
+    Text(
+      text = "Card Color (${selectedColor.displayName})",
+      style = MaterialTheme.typography.labelMedium,
+      fontWeight = FontWeight.SemiBold,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      NoteColor.entries.forEach { colorOption ->
+        val isSelected = selectedColor == colorOption
+        val swatch = resolveNoteSwatchColor(colorOption)
+        Box(
+          modifier = Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .background(swatch)
+            .border(
+              width = if (isSelected) 2.dp else 1.dp,
+              color = if (isSelected) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.outlineVariant
+              },
+              shape = CircleShape,
+            )
+            .clickable { onSelectColor(colorOption) }
+            .testTag("editor_color_${colorOption.name}"),
+          contentAlignment = Alignment.Center,
+        ) {
+          if (isSelected) {
+            Icon(
+              imageVector = Icons.Default.Check,
+              contentDescription = "${colorOption.displayName} selected",
+              tint = MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier.size(15.dp),
+            )
+          } else if (colorOption == NoteColor.DEFAULT) {
+            Icon(
+              imageVector = Icons.Default.FormatColorReset,
+              contentDescription = colorOption.displayName,
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(14.dp),
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun NoteEditorContent(
+  draft: NoteItem,
+  onDraftChange: (NoteItem) -> Unit,
+  availableLabels: List<String>,
+  newlyCreatedLabels: List<String>,
+  onNewlyCreatedLabelsChange: (List<String>) -> Unit,
+  autoFocusTitle: Boolean,
+  minContentLines: Int = 5,
+  showArchiveAndCopyButtons: Boolean = true,
+  showInlineChecklistInput: Boolean = true,
+  showColorPicker: Boolean = true,
+  showTimestampFooter: Boolean = true,
+  onChecklistDragActiveChange: (Boolean) -> Unit = {},
+  onSaveAndDismiss: () -> Unit,
+  onMoveToTrash: (String) -> Unit,
+  onDeletePermanently: (String) -> Unit,
+  onRestoreFromTrash: (String) -> Unit,
+  onCopyToClipboard: (NoteItem) -> Unit,
+) {
+  var newChecklistItemText by remember(draft.id) { mutableStateOf("") }
+  var newLabelInput by remember(draft.id) { mutableStateOf("") }
+  var showLabelPicker by remember(draft.id) { mutableStateOf(false) }
+  var isCheckedSectionExpanded by remember(draft.id) { mutableStateOf(true) }
+
+  // Drag-and-drop reorder state for checklist items
+  val density = LocalDensity.current
+  val haptic = LocalHapticFeedback.current
+  val itemSpacingPx = with(density) { 6.dp.toPx() }
+  val defaultItemHeightPx = with(density) { 44.dp.toPx() }
+  val maxOverscrollPx = with(density) { 4.dp.toPx() }
+  var draggedChecklistItemId by remember(draft.id) { mutableStateOf<String?>(null) }
+  var isChecklistHandlePressed by remember(draft.id) { mutableStateOf(false) }
+  var checklistDragOffsetY by remember(draft.id) { mutableFloatStateOf(0f) }
+  val checklistItemHeightsPx = remember(draft.id) { mutableStateMapOf<String, Float>() }
+  val currentDraft by rememberUpdatedState(draft)
+  val currentOnDraftChange by rememberUpdatedState(onDraftChange)
+  val currentOnChecklistDragActiveChange by rememberUpdatedState(onChecklistDragActiveChange)
+
+  LaunchedEffect(draggedChecklistItemId, isChecklistHandlePressed) {
+    currentOnChecklistDragActiveChange(draggedChecklistItemId != null || isChecklistHandlePressed)
+  }
+
+  fun startDraggingChecklistItem(itemId: String) {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    draggedChecklistItemId = itemId
+    checklistDragOffsetY = 0f
+  }
+
+  fun onDragChecklistItemDelta(itemId: String, deltaY: Float) {
+    if (draggedChecklistItemId != itemId) return
+    val liveDraft = currentDraft
+    val item = liveDraft.checklistItems.firstOrNull { it.id == itemId } ?: return
+    val sectionItems = if (item.isChecked) liveDraft.checkedItems else liveDraft.uncheckedItems
+
+    val stepResult = TodoListEngine.calculateDragReorder(
+      items = sectionItems,
+      draggedId = itemId,
+      idSelector = { it.id },
+      currentOffsetY = checklistDragOffsetY + deltaY,
+      itemHeightsPx = checklistItemHeightsPx,
+      defaultItemHeightPx = defaultItemHeightPx,
+      itemSpacingPx = itemSpacingPx,
+      maxOverscrollPx = maxOverscrollPx,
+    )
+
+    checklistDragOffsetY = stepResult.remainingOffsetY
+    if (stepResult.moved) {
+      val updatedList = if (item.isChecked) {
+        liveDraft.uncheckedItems + stepResult.items
+      } else {
+        stepResult.items + liveDraft.checkedItems
+      }
+      currentOnDraftChange(liveDraft.copy(checklistItems = updatedList))
+      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    }
+  }
+
+  fun endDraggingChecklistItem() {
+    draggedChecklistItemId = null
+    checklistDragOffsetY = 0f
+  }
+
+  val titleFocusRequester = remember { FocusRequester() }
+  val keyboardController = LocalSoftwareKeyboardController.current
+
+  LaunchedEffect(autoFocusTitle, draft.id) {
+    if (autoFocusTitle) {
+      runCatching { titleFocusRequester.requestFocus() }
+      delay(80)
+      runCatching { titleFocusRequester.requestFocus() }
+      keyboardController?.show()
+    }
+  }
+
+  Column(
+    modifier = Modifier.fillMaxWidth(),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
+  ) {
+    // Editor Top Toolbar
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      IconButton(
+        onClick = onSaveAndDismiss,
+        modifier = Modifier
+          .size(28.dp)
+          .testTag("editor_save_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Check,
+          contentDescription = "Done",
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(18.dp),
+        )
+      }
+
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        if (draft.isTrashed) {
+          IconButton(
+            onClick = { onRestoreFromTrash(draft.id) },
+            modifier = Modifier
+              .size(28.dp)
+              .testTag("editor_restore_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.RestoreFromTrash,
+              contentDescription = "Restore note",
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(18.dp),
+            )
+          }
+          IconButton(
+            onClick = { onDeletePermanently(draft.id) },
+            modifier = Modifier
+              .size(28.dp)
+              .testTag("editor_delete_forever_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.DeleteForever,
+              contentDescription = "Delete forever",
+              tint = MaterialTheme.colorScheme.error,
+              modifier = Modifier.size(18.dp),
+            )
+          }
+        } else {
+          IconButton(
+            onClick = {
+              val newPinned = !draft.isPinned
+              onDraftChange(
+                draft.copy(
                   isPinned = newPinned,
                   isArchived = if (newPinned) false else draft.isArchived,
-                )
+                ),
+              )
+            },
+            modifier = Modifier
+              .size(28.dp)
+              .testTag("editor_pin_button"),
+          ) {
+            Icon(
+              imageVector = if (draft.isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+              contentDescription = if (draft.isPinned) "Unpin note" else "Pin note",
+              tint = if (draft.isPinned) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
               },
-              modifier = Modifier.testTag("editor_pin_button"),
-            ) {
-              Icon(
-                imageVector = if (draft.isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
-                contentDescription = if (draft.isPinned) "Unpin note" else "Pin note",
-                tint = if (draft.isPinned) {
-                  MaterialTheme.colorScheme.primary
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant
-                },
-              )
-            }
+              modifier = Modifier.size(18.dp),
+            )
+          }
 
-            IconButton(
-              onClick = { draft = NotesEngine.toggleChecklistMode(draft) },
-              modifier = Modifier.testTag("editor_checklist_toggle"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.CheckBox,
-                contentDescription = if (draft.isChecklist) {
-                  "Hide checkboxes"
-                } else {
-                  "Show checkboxes"
-                },
-                tint = if (draft.isChecklist) {
-                  MaterialTheme.colorScheme.primary
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant
-                },
-              )
-            }
+          IconButton(
+            onClick = { onDraftChange(NotesEngine.toggleChecklistMode(draft)) },
+            modifier = Modifier
+              .size(28.dp)
+              .testTag("editor_checklist_toggle"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.CheckBox,
+              contentDescription = if (draft.isChecklist) {
+                "Hide checkboxes"
+              } else {
+                "Show checkboxes"
+              },
+              tint = if (draft.isChecklist) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+              },
+              modifier = Modifier.size(18.dp),
+            )
+          }
 
+          if (showArchiveAndCopyButtons) {
             IconButton(
               onClick = {
                 val newArchived = !draft.isArchived
-                draft = draft.copy(
-                  isArchived = newArchived,
-                  isPinned = if (newArchived) false else draft.isPinned,
+                onDraftChange(
+                  draft.copy(
+                    isArchived = newArchived,
+                    isPinned = if (newArchived) false else draft.isPinned,
+                  ),
                 )
               },
-              modifier = Modifier.testTag("editor_archive_button"),
+              modifier = Modifier
+                .size(28.dp)
+                .testTag("editor_archive_button"),
             ) {
               Icon(
                 imageVector = if (draft.isArchived) Icons.Default.Unarchive else Icons.Default.Archive,
@@ -2593,445 +3254,424 @@ private fun NoteEditorSheet(
                 } else {
                   MaterialTheme.colorScheme.onSurfaceVariant
                 },
+                modifier = Modifier.size(18.dp),
               )
             }
 
             IconButton(
               onClick = { onCopyToClipboard(draft) },
-              modifier = Modifier.testTag("editor_copy_button"),
+              modifier = Modifier
+                .size(28.dp)
+                .testTag("editor_copy_button"),
             ) {
               Icon(
                 imageVector = Icons.Default.ContentCopy,
                 contentDescription = "Copy note text",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-
-            IconButton(
-              onClick = { onMoveToTrash(draft.id) },
-              modifier = Modifier.testTag("editor_delete_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Delete,
-                contentDescription = "Move to trash",
-                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(18.dp),
               )
             }
           }
-        }
-      }
 
-      // Title Field
-      OutlinedTextField(
-        value = draft.title,
-        onValueChange = { draft = draft.copy(title = it) },
-        placeholder = {
-          Text(
-            text = "Title",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-          )
-        },
-        textStyle = MaterialTheme.typography.titleLarge.copy(
-          fontWeight = FontWeight.Bold,
-          color = MaterialTheme.colorScheme.onSurface,
-        ),
-        singleLine = true,
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier
-          .fillMaxWidth()
-          .testTag("editor_title_input"),
-      )
-
-      // Body Content or Checklist Items
-      if (draft.isChecklist) {
-        val uncheckedItems = draft.uncheckedItems
-        val checkedItems = draft.checkedItems
-
-        Column(
-          modifier = Modifier.fillMaxWidth(),
-          verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          uncheckedItems.forEach { item ->
-            ChecklistEditorRow(
-              item = item,
-              onToggleChecked = {
-                draft = draft.copy(
-                  checklistItems = draft.checklistItems.map {
-                    if (it.id == item.id) it.copy(isChecked = !it.isChecked) else it
-                  },
-                )
-              },
-              onTextChange = { updatedText ->
-                draft = draft.copy(
-                  checklistItems = draft.checklistItems.map {
-                    if (it.id == item.id) it.copy(text = updatedText) else it
-                  },
-                )
-              },
-              onDelete = {
-                draft = draft.copy(
-                  checklistItems = draft.checklistItems.filterNot { it.id == item.id },
-                )
-              },
-            )
-          }
-
-          // Add new checklist item row
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          IconButton(
+            onClick = { onMoveToTrash(draft.id) },
+            modifier = Modifier
+              .size(28.dp)
+              .testTag("editor_delete_button"),
           ) {
-            OutlinedTextField(
-              value = newChecklistItemText,
-              onValueChange = { newChecklistItemText = it },
-              placeholder = { Text("List item...") },
-              singleLine = true,
-              shape = RoundedCornerShape(14.dp),
-              leadingIcon = {
-                Icon(
-                  imageVector = Icons.Default.Add,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
-                )
-              },
-              keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-              keyboardActions = KeyboardActions(
-                onDone = {
-                  val trimmed = newChecklistItemText.trim()
-                  if (trimmed.isNotEmpty()) {
-                    draft = draft.copy(
-                      checklistItems = draft.checklistItems + NoteChecklistItem(text = trimmed),
-                    )
-                    newChecklistItemText = ""
-                  }
-                },
-              ),
-              modifier = Modifier
-                .weight(1f)
-                .testTag("editor_new_checklist_input"),
+            Icon(
+              imageVector = Icons.Default.Delete,
+              contentDescription = "Move to trash",
+              tint = MaterialTheme.colorScheme.error,
+              modifier = Modifier.size(18.dp),
             )
-
-            Button(
-              onClick = {
-                val trimmed = newChecklistItemText.trim()
-                if (trimmed.isNotEmpty()) {
-                  draft = draft.copy(
-                    checklistItems = draft.checklistItems + NoteChecklistItem(text = trimmed),
-                  )
-                  newChecklistItemText = ""
-                }
-              },
-              enabled = newChecklistItemText.isNotBlank(),
-              shape = RoundedCornerShape(12.dp),
-              modifier = Modifier.testTag("editor_add_checklist_item"),
-            ) {
-              Text("Add")
-            }
-          }
-
-          // Checked items section
-          if (checkedItems.isNotEmpty()) {
-            HorizontalDivider(
-              color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-              modifier = Modifier.padding(vertical = 4.dp),
-            )
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                  .weight(1f)
-                  .clip(RoundedCornerShape(8.dp))
-                  .clickable { isCheckedSectionExpanded = !isCheckedSectionExpanded }
-                  .padding(vertical = 4.dp, horizontal = 4.dp),
-              ) {
-                Icon(
-                  imageVector = if (isCheckedSectionExpanded) {
-                    Icons.Default.ExpandLess
-                  } else {
-                    Icons.Default.ExpandMore
-                  },
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier.size(18.dp),
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                  text = "${checkedItems.size} checked",
-                  style = MaterialTheme.typography.labelLarge,
-                  fontWeight = FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-
-              Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(
-                  onClick = { draft = NotesEngine.uncheckAllItems(draft) },
-                  shape = RoundedCornerShape(10.dp),
-                  modifier = Modifier.testTag("editor_uncheck_all_button"),
-                ) {
-                  Text("Uncheck all")
-                }
-                TextButton(
-                  onClick = { draft = NotesEngine.deleteCheckedItems(draft) },
-                  shape = RoundedCornerShape(10.dp),
-                  modifier = Modifier.testTag("editor_delete_checked_button"),
-                ) {
-                  Text(
-                    text = "Delete checked",
-                    color = MaterialTheme.colorScheme.error,
-                  )
-                }
-              }
-            }
-
-            if (isCheckedSectionExpanded) {
-              checkedItems.forEach { item ->
-                ChecklistEditorRow(
-                  item = item,
-                  onToggleChecked = {
-                    draft = draft.copy(
-                      checklistItems = draft.checklistItems.map {
-                        if (it.id == item.id) it.copy(isChecked = !it.isChecked) else it
-                      },
-                    )
-                  },
-                  onTextChange = { updatedText ->
-                    draft = draft.copy(
-                      checklistItems = draft.checklistItems.map {
-                        if (it.id == item.id) it.copy(text = updatedText) else it
-                      },
-                    )
-                  },
-                  onDelete = {
-                    draft = draft.copy(
-                      checklistItems = draft.checklistItems.filterNot { it.id == item.id },
-                    )
-                  },
-                )
-              }
-            }
           }
         }
-      } else {
-        OutlinedTextField(
-          value = draft.content,
-          onValueChange = { draft = draft.copy(content = it) },
-          placeholder = { Text("Take a note...") },
-          minLines = 5,
-          shape = RoundedCornerShape(14.dp),
-          modifier = Modifier
-            .fillMaxWidth()
-            .testTag("editor_content_input"),
-        )
       }
+    }
 
-      // Color Picker Strip
+    // Title Field
+    OutlinedTextField(
+      value = draft.title,
+      onValueChange = { onDraftChange(draft.copy(title = it)) },
+      placeholder = {
+        Text(
+          text = "Title",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold,
+        )
+      },
+      textStyle = MaterialTheme.typography.titleLarge.copy(
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurface,
+      ),
+      singleLine = true,
+      shape = RoundedCornerShape(14.dp),
+      modifier = Modifier
+        .fillMaxWidth()
+        .focusRequester(titleFocusRequester)
+        .testTag("editor_title_input"),
+    )
+
+    // Body Content or Checklist Items
+    if (draft.isChecklist) {
+      val uncheckedItems = draft.uncheckedItems
+      val checkedItems = draft.checkedItems
+
       Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp),
       ) {
+        uncheckedItems.forEach { item ->
+          key(item.id) {
+            val isDraggingThis = draggedChecklistItemId == item.id
+            ChecklistEditorRow(
+              item = item,
+              isBeingDragged = isDraggingThis,
+              dragOffsetY = if (isDraggingThis) checklistDragOffsetY else 0f,
+              onDragHandlePressedChange = { isChecklistHandlePressed = it },
+              onStartDrag = { startDraggingChecklistItem(item.id) },
+              onDrag = { deltaY -> onDragChecklistItemDelta(item.id, deltaY) },
+              onEndDrag = { endDraggingChecklistItem() },
+              onHeightMeasured = { heightPx ->
+                if (heightPx > 0f) {
+                  checklistItemHeightsPx[item.id] = heightPx
+                }
+              },
+              onToggleChecked = {
+                onDraftChange(
+                  draft.copy(
+                    checklistItems = draft.checklistItems.map {
+                      if (it.id == item.id) it.copy(isChecked = !it.isChecked) else it
+                    },
+                  ),
+                )
+              },
+              onTextChange = { updatedText ->
+                onDraftChange(
+                  draft.copy(
+                    checklistItems = draft.checklistItems.map {
+                      if (it.id == item.id) it.copy(text = updatedText) else it
+                    },
+                  ),
+                )
+              },
+              onDelete = {
+                onDraftChange(
+                  draft.copy(
+                    checklistItems = draft.checklistItems.filterNot { it.id == item.id },
+                  ),
+                )
+              },
+            )
+          }
+        }
+
+        // Add new checklist item row (shown inline in add-note view; pinned at bottom in full edit view)
+        if (showInlineChecklistInput) {
+          ChecklistItemInputRow(
+            text = newChecklistItemText,
+            onTextChange = { newChecklistItemText = it },
+            onAddItem = { itemText ->
+              onDraftChange(
+                draft.copy(
+                  checklistItems = draft.checklistItems + NoteChecklistItem(text = itemText),
+                ),
+              )
+              newChecklistItemText = ""
+            },
+          )
+        }
+
+        // Checked items section
+        if (checkedItems.isNotEmpty()) {
+          HorizontalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            modifier = Modifier.padding(vertical = 4.dp),
+          )
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { isCheckedSectionExpanded = !isCheckedSectionExpanded }
+                .padding(vertical = 4.dp, horizontal = 4.dp),
+            ) {
+              Icon(
+                imageVector = if (isCheckedSectionExpanded) {
+                  Icons.Default.ExpandLess
+                } else {
+                  Icons.Default.ExpandMore
+                },
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+              )
+              Spacer(modifier = Modifier.width(4.dp))
+              Text(
+                text = "${checkedItems.size} checked",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+              TextButton(
+                onClick = { onDraftChange(NotesEngine.uncheckAllItems(draft)) },
+                shape = CircleShape,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                modifier = Modifier
+                  .height(28.dp)
+                  .testTag("editor_uncheck_all_button"),
+              ) {
+                Text("Uncheck all", style = MaterialTheme.typography.labelMedium)
+              }
+              TextButton(
+                onClick = { onDraftChange(NotesEngine.deleteCheckedItems(draft)) },
+                shape = CircleShape,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                modifier = Modifier
+                  .height(28.dp)
+                  .testTag("editor_delete_checked_button"),
+              ) {
+                Text(
+                  text = "Delete checked",
+                  style = MaterialTheme.typography.labelMedium,
+                  color = MaterialTheme.colorScheme.error,
+                )
+              }
+            }
+          }
+
+          if (isCheckedSectionExpanded) {
+            checkedItems.forEach { item ->
+              key(item.id) {
+                val isDraggingThis = draggedChecklistItemId == item.id
+                ChecklistEditorRow(
+                  item = item,
+                  isBeingDragged = isDraggingThis,
+                  dragOffsetY = if (isDraggingThis) checklistDragOffsetY else 0f,
+                  onDragHandlePressedChange = { isChecklistHandlePressed = it },
+                  onStartDrag = { startDraggingChecklistItem(item.id) },
+                  onDrag = { deltaY -> onDragChecklistItemDelta(item.id, deltaY) },
+                  onEndDrag = { endDraggingChecklistItem() },
+                  onHeightMeasured = { heightPx ->
+                    if (heightPx > 0f) {
+                      checklistItemHeightsPx[item.id] = heightPx
+                    }
+                  },
+                  onToggleChecked = {
+                    onDraftChange(
+                      draft.copy(
+                        checklistItems = draft.checklistItems.map {
+                          if (it.id == item.id) it.copy(isChecked = !it.isChecked) else it
+                        },
+                      ),
+                    )
+                  },
+                  onTextChange = { updatedText ->
+                    onDraftChange(
+                      draft.copy(
+                        checklistItems = draft.checklistItems.map {
+                          if (it.id == item.id) it.copy(text = updatedText) else it
+                        },
+                      ),
+                    )
+                  },
+                  onDelete = {
+                    onDraftChange(
+                      draft.copy(
+                        checklistItems = draft.checklistItems.filterNot { it.id == item.id },
+                      ),
+                    )
+                  },
+                )
+              }
+            }
+          }
+        }
+      }
+    } else {
+      OutlinedTextField(
+        value = draft.content,
+        onValueChange = { onDraftChange(draft.copy(content = it)) },
+        placeholder = { Text("Take a note...") },
+        minLines = minContentLines,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("editor_content_input"),
+      )
+    }
+
+    // Color Picker Strip
+    if (showColorPicker) {
+      NoteColorPickerSection(
+        selectedColor = draft.color,
+        onSelectColor = { onDraftChange(draft.copy(color = it)) },
+      )
+    }
+
+    // Labels assignment section
+    Column(
+      modifier = Modifier.fillMaxWidth(),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
         Text(
-          text = "Card Color (${draft.color.displayName})",
+          text = "Labels",
           style = MaterialTheme.typography.labelMedium,
           fontWeight = FontWeight.SemiBold,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Row(
+        TextButton(
+          onClick = { showLabelPicker = !showLabelPicker },
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
           modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
-          verticalAlignment = Alignment.CenterVertically,
+            .height(28.dp)
+            .testTag("editor_toggle_label_picker"),
         ) {
-          NoteColor.entries.forEach { colorOption ->
-            val isSelected = draft.color == colorOption
-            val swatch = resolveNoteSwatchColor(colorOption)
-            Box(
-              modifier = Modifier
-                .size(34.dp)
-                .clip(CircleShape)
-                .background(swatch)
-                .border(
-                  width = if (isSelected) 2.5.dp else 1.dp,
-                  color = if (isSelected) {
-                    MaterialTheme.colorScheme.primary
-                  } else {
-                    MaterialTheme.colorScheme.outlineVariant
-                  },
-                  shape = CircleShape,
-                )
-                .clickable { draft = draft.copy(color = colorOption) }
-                .testTag("editor_color_${colorOption.name}"),
-              contentAlignment = Alignment.Center,
-            ) {
-              if (isSelected) {
-                Icon(
-                  imageVector = Icons.Default.Check,
-                  contentDescription = "${colorOption.displayName} selected",
-                  tint = MaterialTheme.colorScheme.onSurface,
-                  modifier = Modifier.size(18.dp),
-                )
-              } else if (colorOption == NoteColor.DEFAULT) {
-                Icon(
-                  imageVector = Icons.Default.FormatColorReset,
-                  contentDescription = colorOption.displayName,
-                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier.size(16.dp),
-                )
-              }
-            }
-          }
+          Icon(
+            imageVector = Icons.Default.NewLabel,
+            contentDescription = null,
+            modifier = Modifier.size(15.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(
+            text = if (showLabelPicker) "Hide label input" else "Add label",
+            style = MaterialTheme.typography.labelMedium,
+          )
         }
       }
 
-      // Labels assignment section
-      Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
+      val combinedLabels = (availableLabels + newlyCreatedLabels + draft.labels)
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+
+      if (combinedLabels.isNotEmpty()) {
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-          Text(
-            text = "Labels",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          TextButton(
-            onClick = { showLabelPicker = !showLabelPicker },
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.testTag("editor_toggle_label_picker"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.NewLabel,
-              contentDescription = null,
-              modifier = Modifier.size(16.dp),
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            Text(if (showLabelPicker) "Hide label input" else "Add label")
-          }
-        }
-
-        val combinedLabels = (availableLabels + newlyCreatedLabels + draft.labels)
-          .map { it.trim() }
-          .filter { it.isNotEmpty() }
-          .distinct()
-
-        if (combinedLabels.isNotEmpty()) {
-          FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-          ) {
-            combinedLabels.forEach { label ->
-              val isAttached = draft.labels.any { it.equals(label, ignoreCase = true) }
-              FilterChip(
-                selected = isAttached,
-                onClick = {
-                  draft = if (isAttached) {
+          combinedLabels.forEach { label ->
+            val isAttached = draft.labels.any { it.equals(label, ignoreCase = true) }
+            FilterChip(
+              selected = isAttached,
+              onClick = {
+                onDraftChange(
+                  if (isAttached) {
                     draft.copy(labels = draft.labels.filterNot { it.equals(label, ignoreCase = true) })
                   } else {
                     draft.copy(labels = draft.labels + label)
-                  }
-                },
-                label = { Text(label) },
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.testTag("editor_label_chip_$label"),
-              )
-            }
-          }
-        }
-
-        AnimatedVisibility(visible = showLabelPicker) {
-          val newLabelFocusRequester = remember { FocusRequester() }
-          val keyboardController = LocalSoftwareKeyboardController.current
-          val trimmedInlineLabel = newLabelInput.trim()
-          val canAttachInlineLabel = trimmedInlineLabel.isNotEmpty()
-          val attachInlineLabel = {
-            if (canAttachInlineLabel) {
-              if (draft.labels.none { it.equals(trimmedInlineLabel, ignoreCase = true) }) {
-                draft = draft.copy(labels = draft.labels + trimmedInlineLabel)
-              }
-              if (newlyCreatedLabels.none { it.equals(trimmedInlineLabel, ignoreCase = true) }) {
-                newlyCreatedLabels = newlyCreatedLabels + trimmedInlineLabel
-              }
-              newLabelInput = ""
-            }
-          }
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            OutlinedTextField(
-              value = newLabelInput,
-              onValueChange = { newLabelInput = it },
-              placeholder = { Text("New label name...") },
-              singleLine = true,
-              shape = CircleShape,
-              leadingIcon = {
-                Icon(
-                  imageVector = Icons.AutoMirrored.Filled.Label,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.primary,
+                  },
                 )
               },
-              trailingIcon = {
-                if (newLabelInput.isNotEmpty()) {
-                  IconButton(onClick = { newLabelInput = "" }) {
-                    Icon(
-                      imageVector = Icons.Default.Clear,
-                      contentDescription = "Clear label input",
-                    )
-                  }
-                }
-              },
-              keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-              keyboardActions = KeyboardActions(onDone = { attachInlineLabel() }),
-              modifier = Modifier
-                .weight(1f)
-                .focusRequester(newLabelFocusRequester)
-                .testTag("editor_new_label_input"),
+              label = { Text(label) },
+              shape = RoundedCornerShape(20.dp),
+              modifier = Modifier.testTag("editor_label_chip_$label"),
             )
-            FilledIconButton(
-              onClick = attachInlineLabel,
-              enabled = canAttachInlineLabel,
-              shape = CircleShape,
-              colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-              ),
-              modifier = Modifier
-                .size(48.dp)
-                .testTag("editor_add_label_confirm"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Add,
-                contentDescription = "Attach label",
-                modifier = Modifier.size(22.dp),
-              )
-            }
-          }
-          LaunchedEffect(Unit) {
-            try {
-              newLabelFocusRequester.requestFocus()
-              keyboardController?.show()
-            } catch (_: Exception) {}
           }
         }
       }
 
-      // Edited timestamp footer
+      AnimatedVisibility(visible = showLabelPicker) {
+        val newLabelFocusRequester = remember { FocusRequester() }
+        val trimmedInlineLabel = newLabelInput.trim()
+        val canAttachInlineLabel = trimmedInlineLabel.isNotEmpty()
+        val attachInlineLabel = {
+          if (canAttachInlineLabel) {
+            if (draft.labels.none { it.equals(trimmedInlineLabel, ignoreCase = true) }) {
+              onDraftChange(draft.copy(labels = draft.labels + trimmedInlineLabel))
+            }
+            if (newlyCreatedLabels.none { it.equals(trimmedInlineLabel, ignoreCase = true) }) {
+              onNewlyCreatedLabelsChange(newlyCreatedLabels + trimmedInlineLabel)
+            }
+            newLabelInput = ""
+          }
+        }
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          OutlinedTextField(
+            value = newLabelInput,
+            onValueChange = { newLabelInput = it },
+            placeholder = { Text("New label name...") },
+            singleLine = true,
+            shape = CircleShape,
+            leadingIcon = {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.Label,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+              )
+            },
+            trailingIcon = {
+              if (newLabelInput.isNotEmpty()) {
+                IconButton(
+                  onClick = { newLabelInput = "" },
+                  modifier = Modifier.size(28.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Clear,
+                    contentDescription = "Clear label input",
+                    modifier = Modifier.size(16.dp),
+                  )
+                }
+              }
+            },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { attachInlineLabel() }),
+            modifier = Modifier
+              .weight(1f)
+              .focusRequester(newLabelFocusRequester)
+              .testTag("editor_new_label_input"),
+          )
+          FilledIconButton(
+            onClick = attachInlineLabel,
+            enabled = canAttachInlineLabel,
+            shape = CircleShape,
+            colors = IconButtonDefaults.filledIconButtonColors(
+              containerColor = MaterialTheme.colorScheme.primary,
+              contentColor = MaterialTheme.colorScheme.onPrimary,
+              disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+              disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+            ),
+            modifier = Modifier
+              .size(28.dp)
+              .testTag("editor_add_label_confirm"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Add,
+              contentDescription = "Attach label",
+              modifier = Modifier.size(18.dp),
+            )
+          }
+        }
+        LaunchedEffect(Unit) {
+          try {
+            newLabelFocusRequester.requestFocus()
+            keyboardController?.show()
+          } catch (_: Exception) {}
+        }
+      }
+    }
+
+    // Edited timestamp footer
+    if (showTimestampFooter) {
       Text(
         text = "Edited ${NotesEngine.formatTimestamp(draft.updatedAt)}",
         style = MaterialTheme.typography.bodySmall,
@@ -3044,21 +3684,112 @@ private fun NoteEditorSheet(
 @Composable
 private fun ChecklistEditorRow(
   item: NoteChecklistItem,
+  isBeingDragged: Boolean = false,
+  dragOffsetY: Float = 0f,
+  onDragHandlePressedChange: (Boolean) -> Unit = {},
+  onStartDrag: () -> Unit = {},
+  onDrag: (Float) -> Unit = {},
+  onEndDrag: () -> Unit = {},
+  onHeightMeasured: (Float) -> Unit = {},
   onToggleChecked: () -> Unit,
   onTextChange: (String) -> Unit,
   onDelete: () -> Unit,
 ) {
+  val currentOnDragHandlePressedChange by rememberUpdatedState(onDragHandlePressedChange)
+  val currentOnStartDrag by rememberUpdatedState(onStartDrag)
+  val currentOnDrag by rememberUpdatedState(onDrag)
+  val currentOnEndDrag by rememberUpdatedState(onEndDrag)
+
   Surface(
-    shape = RoundedCornerShape(12.dp),
-    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
-    modifier = Modifier.fillMaxWidth(),
+    shape = CircleShape,
+    color = if (isBeingDragged) {
+      MaterialTheme.colorScheme.surfaceContainerHigh
+    } else {
+      Color.Transparent
+    },
+    tonalElevation = if (isBeingDragged) 4.dp else 0.dp,
+    border = if (isBeingDragged) {
+      BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+    } else {
+      BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+    },
+    modifier = Modifier
+      .fillMaxWidth()
+      .zIndex(if (isBeingDragged) 2f else 0f)
+      .graphicsLayer {
+        translationY = if (isBeingDragged) dragOffsetY else 0f
+      }
+      .onGloballyPositioned { coords ->
+        val height = coords.size.height.toFloat()
+        if (height > 0f) {
+          onHeightMeasured(height)
+        }
+      }
+      .testTag("editor_checklist_row_${item.id}"),
   ) {
     Row(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(horizontal = 6.dp, vertical = 2.dp),
+        .padding(start = 8.dp, end = 6.dp, top = 2.dp, bottom = 2.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
+      Box(
+        modifier = Modifier
+          .size(28.dp)
+          .clip(CircleShape)
+          .pointerInput(item.id) {
+            awaitPointerEventScope {
+              while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                currentOnDragHandlePressedChange(event.changes.any { it.pressed })
+              }
+            }
+          }
+          .pointerInput(item.id) {
+            var draggingThis = false
+            try {
+              detectDragGestures(
+                onDragStart = {
+                  draggingThis = true
+                  currentOnStartDrag()
+                },
+                onDrag = { change, dragAmount ->
+                  change.consume()
+                  currentOnDrag(dragAmount.y)
+                },
+                onDragEnd = {
+                  draggingThis = false
+                  currentOnDragHandlePressedChange(false)
+                  currentOnEndDrag()
+                },
+                onDragCancel = {
+                  draggingThis = false
+                  currentOnDragHandlePressedChange(false)
+                  currentOnEndDrag()
+                },
+              )
+            } finally {
+              if (draggingThis) {
+                currentOnDragHandlePressedChange(false)
+                currentOnEndDrag()
+              }
+            }
+          }
+          .testTag("editor_checklist_drag_${item.id}"),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Default.DragHandle,
+          contentDescription = "Drag to reorder item",
+          tint = if (isBeingDragged) {
+            MaterialTheme.colorScheme.primary
+          } else {
+            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+          },
+          modifier = Modifier.size(16.dp),
+        )
+      }
+
       Checkbox(
         checked = item.isChecked,
         onCheckedChange = { onToggleChecked() },
@@ -3082,7 +3813,7 @@ private fun ChecklistEditorRow(
       )
       IconButton(
         onClick = onDelete,
-        modifier = Modifier.size(32.dp),
+        modifier = Modifier.size(28.dp),
       ) {
         Icon(
           imageVector = Icons.Default.Close,

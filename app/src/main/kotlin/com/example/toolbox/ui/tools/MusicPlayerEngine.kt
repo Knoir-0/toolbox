@@ -53,12 +53,14 @@ import android.service.notification.StatusBarNotification
 import android.view.KeyEvent
 import android.widget.Toast
 import java.util.concurrent.ConcurrentHashMap
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
@@ -131,11 +133,11 @@ enum class MusicLibraryTab(
   val displayName: String,
 ) {
   HOME("Home"),
-  ARTISTS("Artists"),
-  ALBUMS("Albums"),
-  SONGS("Songs"),
-  GENRES("Genres"),
   PLAYLISTS("Playlists"),
+  SONGS("Songs"),
+  ALBUMS("Albums"),
+  ARTISTS("Artists"),
+  GENRES("Genres"),
   ;
 
   companion object {
@@ -276,6 +278,7 @@ enum class SleepTimerPreset(
  * Color palette extracted from a track or album's artwork [Bitmap] so the Music Player
  * background, mini-player bar, and controls dynamically follow the album art.
  */
+@Immutable
 data class AlbumArtPalette(
   val dominantColor: Color,
   val secondaryColor: Color,
@@ -292,6 +295,7 @@ data class AlbumArtPalette(
 /**
  * Represents a single music track in the library.
  */
+@Immutable
 data class MusicTrack(
   val id: String,
   val title: String,
@@ -313,8 +317,7 @@ data class MusicTrack(
   val sampleRateHz: Int = 44_100,
   val channels: Int = 2,
 ) {
-  val durationFormatted: String
-    get() = AudioRecorderEngine.formatDurationMs(durationMs)
+  val durationFormatted: String = AudioRecorderEngine.formatDurationMs(durationMs)
 
   val sizeFormatted: String
     get() = if (sizeBytes > 0L) FileManagerEngine.formatFileSize(sizeBytes) else "2.4 MB"
@@ -348,6 +351,7 @@ data class MusicTrack(
 /**
  * Represents an Album aggregated from tracks in the library.
  */
+@Immutable
 data class MusicAlbum(
   val name: String,
   val artist: String,
@@ -355,66 +359,78 @@ data class MusicAlbum(
   val genre: String,
   val tracks: List<MusicTrack>,
 ) {
-  val key: String get() = "$name|$artist"
-  val songCount: Int get() = tracks.size
-  val totalDurationMs: Long get() = tracks.sumOf { it.durationMs }
-  val totalDurationFormatted: String get() = AudioRecorderEngine.formatDurationMs(totalDurationMs)
-  val representativeTrack: MusicTrack? get() = tracks.firstOrNull()
-  val summaryText: String
-    get() {
-      val countLabel = if (songCount == 1) "1 song" else "$songCount songs"
-      return "$artist • $countLabel"
-    }
+  val key: String = "$name|$artist"
+  val songCount: Int = tracks.size
+  val totalDurationMs: Long = tracks.sumOf { it.durationMs }
+  val totalDurationFormatted: String = AudioRecorderEngine.formatDurationMs(totalDurationMs)
+  val representativeTrack: MusicTrack? = tracks.firstOrNull()
+  val summaryText: String = run {
+    val countLabel = if (songCount == 1) "1 song" else "$songCount songs"
+    "$artist • $countLabel"
+  }
+  private val trackIdSet: Set<String> =
+    if (tracks.isEmpty()) emptySet() else tracks.mapTo(HashSet(tracks.size)) { it.id }
+
+  fun containsTrack(trackId: String?): Boolean = !trackId.isNullOrBlank() && trackId in trackIdSet
 }
 
 /**
  * Represents an Artist aggregated from tracks and albums in the library.
  */
+@Immutable
 data class MusicArtist(
   val name: String,
   val albums: List<MusicAlbum>,
   val tracks: List<MusicTrack>,
 ) {
-  val albumCount: Int get() = albums.size
-  val songCount: Int get() = tracks.size
-  val totalDurationMs: Long get() = tracks.sumOf { it.durationMs }
-  val totalDurationFormatted: String get() = AudioRecorderEngine.formatDurationMs(totalDurationMs)
-  val representativeTrack: MusicTrack? get() = tracks.firstOrNull()
-  val genres: List<String> get() = tracks.map { it.genre }.distinct()
-  val summaryText: String
-    get() {
-      val albumLabel = if (albumCount == 1) "1 album" else "$albumCount albums"
-      val songLabel = if (songCount == 1) "1 song" else "$songCount songs"
-      return "$albumLabel • $songLabel"
-    }
+  val albumCount: Int = albums.size
+  val songCount: Int = tracks.size
+  val totalDurationMs: Long = tracks.sumOf { it.durationMs }
+  val totalDurationFormatted: String = AudioRecorderEngine.formatDurationMs(totalDurationMs)
+  val representativeTrack: MusicTrack? = tracks.firstOrNull()
+  val genres: List<String> = if (tracks.isEmpty()) emptyList() else tracks.map { it.genre }.distinct()
+  val summaryText: String = run {
+    val albumLabel = if (albumCount == 1) "1 album" else "$albumCount albums"
+    val songLabel = if (songCount == 1) "1 song" else "$songCount songs"
+    "$albumLabel • $songLabel"
+  }
+  private val trackIdSet: Set<String> =
+    if (tracks.isEmpty()) emptySet() else tracks.mapTo(HashSet(tracks.size)) { it.id }
+
+  fun containsTrack(trackId: String?): Boolean = !trackId.isNullOrBlank() && trackId in trackIdSet
 }
 
 /**
  * Represents a musical Genre aggregated from tracks in the library.
  */
+@Immutable
 data class MusicGenre(
   val name: String,
   val tracks: List<MusicTrack>,
   val albums: List<MusicAlbum>,
   val artists: List<String>,
 ) {
-  val songCount: Int get() = tracks.size
-  val albumCount: Int get() = albums.size
-  val artistCount: Int get() = artists.size
-  val totalDurationMs: Long get() = tracks.sumOf { it.durationMs }
-  val totalDurationFormatted: String get() = AudioRecorderEngine.formatDurationMs(totalDurationMs)
-  val representativeTrack: MusicTrack? get() = tracks.firstOrNull()
-  val summaryText: String
-    get() {
-      val songLabel = if (songCount == 1) "1 song" else "$songCount songs"
-      val artistLabel = if (artistCount == 1) "1 artist" else "$artistCount artists"
-      return "$songLabel • $artistLabel"
-    }
+  val songCount: Int = tracks.size
+  val albumCount: Int = albums.size
+  val artistCount: Int = artists.size
+  val totalDurationMs: Long = tracks.sumOf { it.durationMs }
+  val totalDurationFormatted: String = AudioRecorderEngine.formatDurationMs(totalDurationMs)
+  val representativeTrack: MusicTrack? = tracks.firstOrNull()
+  val summaryText: String = run {
+    val songLabel = if (songCount == 1) "1 song" else "$songCount songs"
+    val artistLabel = if (artistCount == 1) "1 artist" else "$artistCount artists"
+    "$songLabel • $artistLabel"
+  }
+  private val trackIdSet: Set<String> =
+    if (tracks.isEmpty()) emptySet() else tracks.mapTo(HashSet(tracks.size)) { it.id }
+
+  fun containsTrack(trackId: String?): Boolean = !trackId.isNullOrBlank() && trackId in trackIdSet
 }
 
 /**
  * Persisted playback statistics for a single track.
  */
+@Immutable
 data class TrackPlayStats(
   val playCount: Int = 0,
   val totalPlayTimeMs: Long = 0L,
@@ -512,6 +528,7 @@ data class TrackPlayStats(
 /**
  * Persisted metadata entry for a user-saved Playlist.
  */
+@Immutable
 data class SavedPlaylistEntry(
   val id: String,
   val name: String,
@@ -522,6 +539,7 @@ data class SavedPlaylistEntry(
 /**
  * Represents a resolved Playlist of tracks in the Music Player.
  */
+@Immutable
 data class MusicPlaylist(
   val id: String,
   val name: String,
@@ -530,25 +548,29 @@ data class MusicPlaylist(
   val subtitle: String = "",
   val isGeneratedHomeMix: Boolean = false,
 ) {
-  val isFavorites: Boolean get() = id == MusicPlayerEngine.FAVORITES_PLAYLIST_ID
-  val isMostPlayed: Boolean get() = id == MusicPlayerEngine.MOST_PLAYED_PLAYLIST_ID
-  val isRecentlyPlayed: Boolean get() = id == MusicPlayerEngine.RECENTLY_PLAYED_PLAYLIST_ID
-  val isBuiltIn: Boolean get() = isFavorites || isMostPlayed || isRecentlyPlayed || isGeneratedHomeMix
-  val songCount: Int get() = tracks.size
-  val totalDurationMs: Long get() = tracks.sumOf { it.durationMs }
-  val totalDurationFormatted: String get() = AudioRecorderEngine.formatDurationMs(totalDurationMs)
-  val representativeTrack: MusicTrack? get() = tracks.firstOrNull()
-  val artists: List<String> get() = tracks.map { it.artist }.distinct()
-  val genres: List<String> get() = tracks.map { it.genre }.filter { it.isNotBlank() }.distinct()
-  val summaryText: String
-    get() {
-      val songLabel = if (songCount == 1) "1 song" else "$songCount songs"
-      return if (subtitle.isNotBlank()) {
-        "$subtitle • $songLabel • $totalDurationFormatted"
-      } else {
-        "$songLabel • $totalDurationFormatted"
-      }
+  val isFavorites: Boolean = id == MusicPlayerEngine.FAVORITES_PLAYLIST_ID
+  val isMostPlayed: Boolean = id == MusicPlayerEngine.MOST_PLAYED_PLAYLIST_ID
+  val isRecentlyPlayed: Boolean = id == MusicPlayerEngine.RECENTLY_PLAYED_PLAYLIST_ID
+  val isBuiltIn: Boolean = isFavorites || isMostPlayed || isRecentlyPlayed || isGeneratedHomeMix
+  val songCount: Int = tracks.size
+  val totalDurationMs: Long = tracks.sumOf { it.durationMs }
+  val totalDurationFormatted: String = AudioRecorderEngine.formatDurationMs(totalDurationMs)
+  val representativeTrack: MusicTrack? = tracks.firstOrNull()
+  val artists: List<String> = if (tracks.isEmpty()) emptyList() else tracks.map { it.artist }.distinct()
+  val genres: List<String> =
+    if (tracks.isEmpty()) emptyList() else tracks.map { it.genre }.filter { it.isNotBlank() }.distinct()
+  val summaryText: String = run {
+    val songLabel = if (songCount == 1) "1 song" else "$songCount songs"
+    if (subtitle.isNotBlank()) {
+      "$subtitle • $songLabel • $totalDurationFormatted"
+    } else {
+      "$songLabel • $totalDurationFormatted"
     }
+  }
+  private val trackIdSet: Set<String> =
+    if (tracks.isEmpty()) emptySet() else tracks.mapTo(HashSet(tracks.size)) { it.id }
+
+  fun containsTrack(trackId: String?): Boolean = !trackId.isNullOrBlank() && trackId in trackIdSet
 }
 
 /**
@@ -2678,6 +2700,131 @@ object MusicPlayerEngine {
     genre: MusicGenre,
   ): Set<String> = toggleFavoriteGenre(current, genre.name)
 
+  internal class NormalizedFavoriteLookup(
+    val favoriteIds: Set<String>,
+    favoriteArtists: Set<String>,
+    favoriteAlbums: Set<String>,
+    favoriteGenres: Set<String>,
+  ) {
+    val artistLowerSet: Set<String> = if (favoriteArtists.isEmpty()) {
+      emptySet()
+    } else {
+      favoriteArtists.mapNotNullTo(HashSet(favoriteArtists.size)) {
+        it.trim().lowercase(Locale.ROOT).takeIf { s -> s.isNotEmpty() }
+      }
+    }
+    val genreLowerSet: Set<String> = if (favoriteGenres.isEmpty()) {
+      emptySet()
+    } else {
+      favoriteGenres.mapNotNullTo(HashSet(favoriteGenres.size)) {
+        it.trim().lowercase(Locale.ROOT).takeIf { s -> s.isNotEmpty() }
+      }
+    }
+    val albumExactLowerSet: Set<String>
+    val albumNameOnlyLowerSet: Set<String>
+
+    init {
+      if (favoriteAlbums.isEmpty()) {
+        albumExactLowerSet = emptySet()
+        albumNameOnlyLowerSet = emptySet()
+      } else {
+        val exact = HashSet<String>(favoriteAlbums.size * 2)
+        val nameOnly = HashSet<String>(favoriteAlbums.size)
+        for (entry in favoriteAlbums) {
+          val trimmed = entry.trim().lowercase(Locale.ROOT)
+          if (trimmed.isNotEmpty()) {
+            exact.add(trimmed)
+            nameOnly.add(trimmed.substringBefore("|").trim())
+          }
+        }
+        albumExactLowerSet = exact
+        albumNameOnlyLowerSet = nameOnly
+      }
+    }
+
+    val isEmpty: Boolean
+      get() = favoriteIds.isEmpty() && artistLowerSet.isEmpty() && albumExactLowerSet.isEmpty() && genreLowerSet.isEmpty()
+
+    fun isArtistFav(artistName: String): Boolean {
+      if (artistLowerSet.isEmpty()) return false
+      val target = artistName.trim().lowercase(Locale.ROOT)
+      return target.isNotEmpty() && target in artistLowerSet
+    }
+
+    fun isAlbumFav(albumName: String, artistName: String): Boolean {
+      if (albumExactLowerSet.isEmpty()) return false
+      val trimmedAlbum = albumName.trim().lowercase(Locale.ROOT)
+      if (trimmedAlbum.isEmpty()) return false
+      if (trimmedAlbum in albumExactLowerSet) return true
+      val trimmedArtist = artistName.trim().lowercase(Locale.ROOT)
+      if (trimmedArtist.isEmpty()) {
+        return trimmedAlbum in albumNameOnlyLowerSet
+      }
+      val key = if (!trimmedAlbum.contains("|")) "$trimmedAlbum|$trimmedArtist" else trimmedAlbum
+      return key in albumExactLowerSet
+    }
+
+    fun isGenreFav(genreName: String): Boolean {
+      if (genreLowerSet.isEmpty()) return false
+      val target = genreName.trim().lowercase(Locale.ROOT)
+      return target.isNotEmpty() && target in genreLowerSet
+    }
+
+    fun isTrackOrCategoryFav(track: MusicTrack): Boolean {
+      if (isEmpty) return false
+      return track.id in favoriteIds ||
+        isArtistFav(track.artist) ||
+        isAlbumFav(track.album, track.artist) ||
+        isGenreFav(track.genre)
+    }
+  }
+
+  private class PlayStatSortEntry(
+    val track: MusicTrack,
+    val engagementScore: Long,
+    val fullPlays: Double,
+    val playCount: Int,
+    val totalPlayTimeMs: Long,
+    val effectiveSkipCount: Int,
+    val lastPlayedAtMs: Long,
+  ) : Comparable<PlayStatSortEntry> {
+    override fun compareTo(other: PlayStatSortEntry): Int {
+      var cmp = other.engagementScore.compareTo(this.engagementScore)
+      if (cmp != 0) return cmp
+      cmp = other.fullPlays.compareTo(this.fullPlays)
+      if (cmp != 0) return cmp
+      cmp = other.playCount.compareTo(this.playCount)
+      if (cmp != 0) return cmp
+      cmp = other.totalPlayTimeMs.compareTo(this.totalPlayTimeMs)
+      if (cmp != 0) return cmp
+      cmp = this.effectiveSkipCount.compareTo(other.effectiveSkipCount)
+      if (cmp != 0) return cmp
+      cmp = other.lastPlayedAtMs.compareTo(this.lastPlayedAtMs)
+      if (cmp != 0) return cmp
+      return String.CASE_INSENSITIVE_ORDER.compare(this.track.title, other.track.title)
+    }
+  }
+
+  private class RecentlyPlayedSortEntry(
+    val track: MusicTrack,
+    val lastPlayedAtMs: Long,
+    val engagementScore: Long,
+    val playCount: Int,
+    val totalPlayTimeMs: Long,
+  ) : Comparable<RecentlyPlayedSortEntry> {
+    override fun compareTo(other: RecentlyPlayedSortEntry): Int {
+      var cmp = other.lastPlayedAtMs.compareTo(this.lastPlayedAtMs)
+      if (cmp != 0) return cmp
+      cmp = other.engagementScore.compareTo(this.engagementScore)
+      if (cmp != 0) return cmp
+      cmp = other.playCount.compareTo(this.playCount)
+      if (cmp != 0) return cmp
+      cmp = other.totalPlayTimeMs.compareTo(this.totalPlayTimeMs)
+      if (cmp != 0) return cmp
+      return String.CASE_INSENSITIVE_ORDER.compare(this.track.title, other.track.title)
+    }
+  }
+
   /**
    * Returns `true` if [track] is favorited directly (`track.id in favoriteIds`) or belongs to a
    * favorited artist, album, or genre.
@@ -2700,6 +2847,9 @@ object MusicPlayerEngine {
    * time, with a light recency weight from [TrackPlayStats.lastPlayedAtMs] and skips as a light
    * tie-breaker unless the song or its artist/album/genre is favorited), falling back to
    * most-recently-played and alphabetical title order for ties.
+   *
+   * Precomputes per-track sort keys and normalized favorite lookup sets in `O(N)` so sorting does
+   * not repeat logarithm calculations or linear set scans inside the comparator.
    */
   fun sortTracksByPlayStats(
     tracks: List<MusicTrack>,
@@ -2710,38 +2860,49 @@ object MusicPlayerEngine {
     favoriteGenres: Set<String> = activeSessionState?.favoriteGenres ?: emptySet(),
   ): List<MusicTrack> {
     if (tracks.isEmpty()) return emptyList()
+    if (tracks.size == 1) return tracks.toList()
+    if (playStats.isEmpty()) {
+      return tracks.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+    }
     val referenceTimeMs = playStats.values.maxOfOrNull { it.lastPlayedAtMs } ?: 0L
-    return tracks.sortedWith(
-      compareByDescending<MusicTrack> { track ->
-        val ignoreSkips = isTrackOrCategoryFavorite(
-          track = track,
-          favoriteIds = favoriteIds,
-          favoriteArtists = favoriteArtists,
-          favoriteAlbums = favoriteAlbums,
-          favoriteGenres = favoriteGenres,
-        )
-        playStats[track.id]?.engagementScoreForTrack(
-          trackDurationMs = track.durationMs,
-          referenceTimeMs = referenceTimeMs,
-          ignoreSkips = ignoreSkips,
-        ) ?: 0L
-      }
-        .thenByDescending { playStats[it.id]?.calculatedFullPlays(it.durationMs) ?: 0.0 }
-        .thenByDescending { playStats[it.id]?.playCount ?: 0 }
-        .thenByDescending { playStats[it.id]?.totalPlayTimeMs ?: 0L }
-        .thenBy { track ->
-          val ignoreSkips = isTrackOrCategoryFavorite(
-            track = track,
-            favoriteIds = favoriteIds,
-            favoriteArtists = favoriteArtists,
-            favoriteAlbums = favoriteAlbums,
-            favoriteGenres = favoriteGenres,
-          )
-          if (ignoreSkips) 0 else (playStats[track.id]?.skipCount ?: 0)
-        }
-        .thenByDescending { playStats[it.id]?.lastPlayedAtMs ?: 0L }
-        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
+    val favLookup = NormalizedFavoriteLookup(
+      favoriteIds = favoriteIds,
+      favoriteArtists = favoriteArtists,
+      favoriteAlbums = favoriteAlbums,
+      favoriteGenres = favoriteGenres,
     )
+    val entries = Array(tracks.size) { index ->
+      val track = tracks[index]
+      val stat = playStats[track.id]
+      if (stat == null || !stat.hasRecordedActivity) {
+        PlayStatSortEntry(
+          track = track,
+          engagementScore = 0L,
+          fullPlays = 0.0,
+          playCount = 0,
+          totalPlayTimeMs = 0L,
+          effectiveSkipCount = 0,
+          lastPlayedAtMs = 0L,
+        )
+      } else {
+        val ignoreSkips = stat.skipCount > 0 && favLookup.isTrackOrCategoryFav(track)
+        PlayStatSortEntry(
+          track = track,
+          engagementScore = stat.engagementScoreForTrack(
+            trackDurationMs = track.durationMs,
+            referenceTimeMs = referenceTimeMs,
+            ignoreSkips = ignoreSkips,
+          ),
+          fullPlays = stat.calculatedFullPlays(track.durationMs),
+          playCount = stat.playCount,
+          totalPlayTimeMs = stat.totalPlayTimeMs,
+          effectiveSkipCount = if (ignoreSkips) 0 else stat.skipCount,
+          lastPlayedAtMs = stat.lastPlayedAtMs,
+        )
+      }
+    }
+    entries.sort()
+    return List(entries.size) { entries[it].track }
   }
 
   /**
@@ -2782,16 +2943,34 @@ object MusicPlayerEngine {
     playStats: Map<String, TrackPlayStats>,
   ): List<MusicTrack> {
     if (tracks.isEmpty()) return emptyList()
+    if (tracks.size == 1) return tracks.toList()
+    if (playStats.isEmpty()) {
+      return tracks.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+    }
     val referenceTimeMs = playStats.values.maxOfOrNull { it.lastPlayedAtMs } ?: 0L
-    return tracks.sortedWith(
-      compareByDescending<MusicTrack> { playStats[it.id]?.lastPlayedAtMs ?: 0L }
-        .thenByDescending {
-          playStats[it.id]?.engagementScoreForTrack(it.durationMs, referenceTimeMs) ?: 0L
-        }
-        .thenByDescending { playStats[it.id]?.playCount ?: 0 }
-        .thenByDescending { playStats[it.id]?.totalPlayTimeMs ?: 0L }
-        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
-    )
+    val entries = Array(tracks.size) { index ->
+      val track = tracks[index]
+      val stat = playStats[track.id]
+      if (stat == null || !stat.hasRecordedActivity) {
+        RecentlyPlayedSortEntry(
+          track = track,
+          lastPlayedAtMs = 0L,
+          engagementScore = 0L,
+          playCount = 0,
+          totalPlayTimeMs = 0L,
+        )
+      } else {
+        RecentlyPlayedSortEntry(
+          track = track,
+          lastPlayedAtMs = stat.lastPlayedAtMs,
+          engagementScore = stat.engagementScoreForTrack(track.durationMs, referenceTimeMs),
+          playCount = stat.playCount,
+          totalPlayTimeMs = stat.totalPlayTimeMs,
+        )
+      }
+    }
+    entries.sort()
+    return List(entries.size) { entries[it].track }
   }
 
   /**
@@ -2999,9 +3178,9 @@ object MusicPlayerEngine {
   fun smartShuffleWeight(
     track: MusicTrack,
     playStats: Map<String, TrackPlayStats>,
+    referenceTimeMs: Long = playStats.values.maxOfOrNull { it.lastPlayedAtMs } ?: 0L,
   ): Double {
     val stat = playStats[track.id] ?: return 1.0
-    val referenceTimeMs = playStats.values.maxOfOrNull { it.lastPlayedAtMs } ?: 0L
     val score = stat.engagementScoreForTrack(track.durationMs, referenceTimeMs).coerceAtLeast(0L)
     val fullPlays = stat.calculatedFullPlays(track.durationMs).coerceAtLeast(0.0)
     return (1.0 + (score.toDouble() / 30_000.0) + (fullPlays * 2.5) + (stat.playCount * 1.5))
@@ -3019,7 +3198,12 @@ object MusicPlayerEngine {
   ): List<MusicTrack> {
     if (tracks.size <= 1) return tracks.toList()
     val pool = tracks.toMutableList()
-    val weights = pool.map { smartShuffleWeight(it, playStats) }.toMutableList()
+    val referenceTimeMs = if (playStats.isEmpty()) {
+      0L
+    } else {
+      playStats.values.maxOfOrNull { it.lastPlayedAtMs } ?: 0L
+    }
+    val weights = pool.map { smartShuffleWeight(it, playStats, referenceTimeMs) }.toMutableList()
     val result = ArrayList<MusicTrack>(pool.size)
     while (pool.isNotEmpty()) {
       val totalWeight = weights.sum()
@@ -3198,7 +3382,7 @@ object MusicPlayerEngine {
   /**
    * Parses a persisted `|`-separated list of [MusicLibraryTab] names, deduplicating entries and
    * appending any missing tabs in their default order so all library sections are always present.
-   * If [MusicLibraryTab.HOME] is missing from a legacy persisted string, it is placed at the front.
+   * [MusicLibraryTab.HOME] is always fixed at index `0` at the front of the pill list.
    */
   fun parseTabOrder(raw: String?): List<MusicLibraryTab> {
     if (raw.isNullOrBlank()) return MusicLibraryTab.entries.toList()
@@ -3211,11 +3395,8 @@ object MusicPlayerEngine {
       }
       .distinct()
     val missing = MusicLibraryTab.entries.filterNot { it in parsed }
-    return if (MusicLibraryTab.HOME in missing) {
-      listOf(MusicLibraryTab.HOME) + parsed + (missing - MusicLibraryTab.HOME)
-    } else {
-      parsed + missing
-    }
+    val others = (parsed + missing).filterNot { it == MusicLibraryTab.HOME }
+    return listOf(MusicLibraryTab.HOME) + others
   }
 
   /**
@@ -3430,6 +3611,8 @@ object MusicPlayerEngine {
     random: kotlin.random.Random = kotlin.random.Random(
       refreshGeneration.toLong() * 6364136223846793005L + 1442695040888963407L
     ),
+    precomputedGenres: List<MusicGenre>? = null,
+    precomputedSortedByStats: List<MusicTrack>? = null,
   ): List<MusicPlaylist> {
     val gen = refreshGeneration.coerceAtLeast(0)
     if (allTracks.isEmpty()) {
@@ -3445,16 +3628,23 @@ object MusicPlayerEngine {
 
     val totalLibraryDurationMs = allTracks.sumOf { it.durationMs.coerceAtLeast(1_000L) }
     val fillTowardOneHour = totalLibraryDurationMs >= targetDurationMs / 2L
-    val genres = buildGenres(allTracks)
+    val genres = precomputedGenres ?: buildGenres(allTracks)
     val (clusterA, clusterB) = buildGenreMashupClusters(genres, gen, random)
+    val favLookup = NormalizedFavoriteLookup(
+      favoriteIds = favoriteIds,
+      favoriteArtists = favoriteArtists,
+      favoriteAlbums = favoriteAlbums,
+      favoriteGenres = favoriteGenres,
+    )
 
     // 1. Genre Mashup #1 (Similar genres mashed together)
     val clusterANames = clusterA.map { it.name }
+    val clusterALowerSet = clusterANames.mapTo(HashSet(clusterANames.size)) { it.lowercase(Locale.ROOT) }
     val mash1Primary = interleaveTrackLists(
       clusterA.map { g -> g.tracks.shuffled(random) }
     )
     val mash1Fallback = allTracks
-      .filterNot { t -> clusterANames.any { it.equals(t.genre, ignoreCase = true) } }
+      .filterNot { t -> t.genre.lowercase(Locale.ROOT) in clusterALowerSet }
       .shuffled(random)
     val mash1Tracks = selectTracksTowardTargetDuration(
       primaryTracks = mash1Primary,
@@ -3484,11 +3674,12 @@ object MusicPlayerEngine {
 
     // 2. Genre Mashup #2 (Second distinct similar/complementary genre mashup)
     val clusterBNames = clusterB.map { it.name }
+    val clusterBLowerSet = clusterBNames.mapTo(HashSet(clusterBNames.size)) { it.lowercase(Locale.ROOT) }
     val mash2Primary = interleaveTrackLists(
       clusterB.map { g -> g.tracks.shuffled(random) }
     )
     val mash2Fallback = allTracks
-      .filterNot { t -> clusterBNames.any { it.equals(t.genre, ignoreCase = true) } }
+      .filterNot { t -> t.genre.lowercase(Locale.ROOT) in clusterBLowerSet }
       .shuffled(random)
     val mash2Tracks = selectTracksTowardTargetDuration(
       primaryTracks = mash2Primary,
@@ -3517,7 +3708,7 @@ object MusicPlayerEngine {
     )
 
     // 3. Play Stats Powerhouse (Most played, high completion, low skips, smart-shuffled)
-    val sortedByStats = sortTracksByPlayStats(
+    val sortedByStats = precomputedSortedByStats ?: sortTracksByPlayStats(
       tracks = allTracks,
       playStats = playStats,
       favoriteIds = favoriteIds,
@@ -3555,20 +3746,43 @@ object MusicPlayerEngine {
     )
 
     // 4. Favorites Spotlight (Favorite songs, favorite artists, favorite albums, and favorite genres)
-    val directFavSongs = allTracks.filter { it.id in favoriteIds }.shuffled(random)
-    val favArtistSongs = allTracks.filter { isArtistFavorite(it.artist, favoriteArtists) }.shuffled(random)
-    val favAlbumSongs = allTracks.filter { isAlbumFavorite(it.album, it.artist, favoriteAlbums) }.shuffled(random)
-    val favGenreSongs = allTracks.filter { isGenreFavorite(it.genre, favoriteGenres) }.shuffled(random)
+    val directFavSongs = if (favLookup.favoriteIds.isEmpty()) {
+      emptyList()
+    } else {
+      allTracks.filter { it.id in favLookup.favoriteIds }.shuffled(random)
+    }
+    val favArtistSongs = if (favLookup.artistLowerSet.isEmpty()) {
+      emptyList()
+    } else {
+      allTracks.filter { favLookup.isArtistFav(it.artist) }.shuffled(random)
+    }
+    val favAlbumSongs = if (favLookup.albumExactLowerSet.isEmpty()) {
+      emptyList()
+    } else {
+      allTracks.filter { favLookup.isAlbumFav(it.album, it.artist) }.shuffled(random)
+    }
+    val favGenreSongs = if (favLookup.genreLowerSet.isEmpty()) {
+      emptyList()
+    } else {
+      allTracks.filter { favLookup.isGenreFav(it.genre) }.shuffled(random)
+    }
     val interleavedFavorites = interleaveTrackLists(
       listOf(directFavSongs, favArtistSongs, favAlbumSongs, favGenreSongs).filter { it.isNotEmpty() }
     )
     // Also include album-mates and artist-mates of favorited songs
-    val favoriteArtistNamesFromSongs = directFavSongs.map { it.artist.lowercase(Locale.ROOT) }.toSet()
-    val favoriteAlbumKeysFromSongs = directFavSongs.map { "${it.album.lowercase(Locale.ROOT)}|${it.artist.lowercase(Locale.ROOT)}" }.toSet()
-    val relatedToFavorites = allTracks.filter { track ->
-      track.artist.lowercase(Locale.ROOT) in favoriteArtistNamesFromSongs ||
-        "${track.album.lowercase(Locale.ROOT)}|${track.artist.lowercase(Locale.ROOT)}" in favoriteAlbumKeysFromSongs
-    }.shuffled(random)
+    val favoriteArtistNamesFromSongs = directFavSongs.mapTo(HashSet(directFavSongs.size)) { it.artist.lowercase(Locale.ROOT) }
+    val favoriteAlbumKeysFromSongs = directFavSongs.mapTo(HashSet(directFavSongs.size)) {
+      "${it.album.lowercase(Locale.ROOT)}|${it.artist.lowercase(Locale.ROOT)}"
+    }
+    val relatedToFavorites = if (favoriteArtistNamesFromSongs.isEmpty() && favoriteAlbumKeysFromSongs.isEmpty()) {
+      emptyList()
+    } else {
+      allTracks.filter { track ->
+        val artistLower = track.artist.lowercase(Locale.ROOT)
+        artistLower in favoriteArtistNamesFromSongs ||
+          "${track.album.lowercase(Locale.ROOT)}|$artistLower" in favoriteAlbumKeysFromSongs
+      }.shuffled(random)
+    }
     val favoritesPrimary = (interleavedFavorites + relatedToFavorites).distinctBy { it.id }
     val favoritesFallback = allTracks.shuffled(random)
     val favTracks = selectTracksTowardTargetDuration(
@@ -3661,28 +3875,42 @@ object MusicPlayerEngine {
   }
 
   /**
-   * Serializes an ordered list of [MusicLibraryTab]s for `SharedPreferences`.
+   * Serializes an ordered list of [MusicLibraryTab]s for `SharedPreferences`, keeping
+   * [MusicLibraryTab.HOME] fixed at the front.
    */
   fun serializeTabOrder(tabs: List<MusicLibraryTab>): String {
-    val normalized = (tabs.distinct() + MusicLibraryTab.entries.filterNot { it in tabs })
+    val others = (tabs.distinct() + MusicLibraryTab.entries.filterNot { it in tabs })
+      .filterNot { it == MusicLibraryTab.HOME }
+    val normalized = listOf(MusicLibraryTab.HOME) + others
     return normalized.joinToString("|") { it.name }
   }
 
   /**
    * Moves the library section tab at [fromIndex] to [toIndex] in [tabs], returning the new order.
+   * [MusicLibraryTab.HOME] is always fixed at index `0` at the front of the list: attempting to
+   * move index `0` returns the list unchanged, and moving any other tab to index `<= 0` places it
+   * at index `1` right after [MusicLibraryTab.HOME].
    */
   fun reorderTabs(
     tabs: List<MusicLibraryTab>,
     fromIndex: Int,
     toIndex: Int,
   ): List<MusicLibraryTab> {
-    val base = if (tabs.isEmpty()) MusicLibraryTab.entries.toList() else tabs
-    if (fromIndex !in base.indices || toIndex !in base.indices || fromIndex == toIndex) {
-      return base
+    val others = (if (tabs.isEmpty()) MusicLibraryTab.entries.toList() else tabs)
+      .distinct()
+      .filterNot { it == MusicLibraryTab.HOME }
+    val missingOthers = MusicLibraryTab.entries.filterNot { it == MusicLibraryTab.HOME || it in others }
+    val normalized = listOf(MusicLibraryTab.HOME) + others + missingOthers
+    if (fromIndex <= 0 || fromIndex !in normalized.indices) {
+      return normalized
     }
-    val mutable = base.toMutableList()
+    val clampedTarget = toIndex.coerceIn(1, normalized.lastIndex)
+    if (fromIndex == clampedTarget) {
+      return normalized
+    }
+    val mutable = normalized.toMutableList()
     val moved = mutable.removeAt(fromIndex)
-    mutable.add(toIndex, moved)
+    mutable.add(clampedTarget, moved)
     return mutable.toList()
   }
 
@@ -3698,7 +3926,7 @@ object MusicPlayerEngine {
     val trackId = currentTrack?.id
     if (!trackId.isNullOrBlank()) {
       val byTrackId = artists.indexOfFirst { artist ->
-        artist.tracks.any { it.id == trackId }
+        artist.containsTrack(trackId)
       }
       if (byTrackId >= 0) return byTrackId
     }
@@ -3723,7 +3951,7 @@ object MusicPlayerEngine {
     val trackId = currentTrack?.id
     if (!trackId.isNullOrBlank()) {
       val byTrackId = albums.indexOfFirst { album ->
-        album.tracks.any { it.id == trackId }
+        album.containsTrack(trackId)
       }
       if (byTrackId >= 0) return byTrackId
     }
@@ -3754,7 +3982,7 @@ object MusicPlayerEngine {
     val trackId = currentTrack?.id
     if (!trackId.isNullOrBlank()) {
       val byTrackId = genres.indexOfFirst { genre ->
-        genre.tracks.any { it.id == trackId }
+        genre.containsTrack(trackId)
       }
       if (byTrackId >= 0) return byTrackId
     }
@@ -3787,15 +4015,15 @@ object MusicPlayerEngine {
   ): Int {
     if (currentTrackId.isNullOrBlank() || playlists.isEmpty()) return -1
     val savedMatch = playlists.indexOfFirst { playlist ->
-      !playlist.isBuiltIn && playlist.tracks.any { it.id == currentTrackId }
+      !playlist.isBuiltIn && playlist.containsTrack(currentTrackId)
     }
     if (savedMatch >= 0) return savedMatch
     val favoritesMatch = playlists.indexOfFirst { playlist ->
-      playlist.isFavorites && playlist.tracks.any { it.id == currentTrackId }
+      playlist.isFavorites && playlist.containsTrack(currentTrackId)
     }
     if (favoritesMatch >= 0) return favoritesMatch
     return playlists.indexOfFirst { playlist ->
-      playlist.tracks.any { it.id == currentTrackId }
+      playlist.containsTrack(currentTrackId)
     }
   }
 
@@ -5020,8 +5248,8 @@ object MusicPlayerEngine {
   }
 }
 
-private fun defaultPlaybackDispatcher(): CoroutineDispatcher {
-  return try {
+private val DEFAULT_PLAYBACK_DISPATCHER: CoroutineDispatcher by lazy {
+  try {
     if (Looper.getMainLooper() != null) {
       Dispatchers.Main
     } else {
@@ -5032,11 +5260,21 @@ private fun defaultPlaybackDispatcher(): CoroutineDispatcher {
   }
 }
 
+private fun defaultPlaybackDispatcher(): CoroutineDispatcher = DEFAULT_PLAYBACK_DISPATCHER
+
+private fun defaultBackgroundDispatcher(playbackContext: CoroutineContext): CoroutineContext =
+  if (playbackContext === DEFAULT_PLAYBACK_DISPATCHER) Dispatchers.Default else playbackContext
+
+private fun defaultIoDispatcher(playbackContext: CoroutineContext): CoroutineContext =
+  if (playbackContext === DEFAULT_PLAYBACK_DISPATCHER) Dispatchers.IO else playbackContext
+
 /**
  * Persistent playback session and state holder for the Music Player tool.
  *
  * Continues playing audio, advancing the playback queue, tracking listening statistics, and
  * counting down the sleep timer in the background when the user switches to another tool.
+ * Heavy play-stats sorting, playlist rebuilding, and Home mix generation are delegated to
+ * background coroutines so foreground interactions (such as starring a song) remain instantaneous.
  */
 class MusicPlaybackSession(
   context: Context? = null,
@@ -5048,6 +5286,8 @@ class MusicPlaybackSession(
   initialQueueExpanded: Boolean = false,
   val isInspection: Boolean = false,
   coroutineContext: CoroutineContext = defaultPlaybackDispatcher(),
+  private val backgroundCoroutineContext: CoroutineContext = defaultBackgroundDispatcher(coroutineContext),
+  private val ioCoroutineContext: CoroutineContext = defaultIoDispatcher(coroutineContext),
 ) {
   private val appContext: Context? = context?.applicationContext ?: context
   private val cacheDir: File? = if (isInspection) null else appContext?.cacheDir
@@ -5066,6 +5306,12 @@ class MusicPlaybackSession(
   private var libraryLoadJob: Job? = null
   private var paletteLoadJob: Job? = null
   private var mediaArtworkLoadJob: Job? = null
+  internal var favoritesRecalcJob: Job? = null
+  internal var statsAndSortRecalcJob: Job? = null
+  internal var libraryRebuildJob: Job? = null
+  internal var prefsPersistJob: Job? = null
+  internal var playStatsPersistJob: Job? = null
+  internal var mediaControlSyncJob: Job? = null
 
   private val audioManager: AudioManager? = if (isInspection || appContext == null) {
     null
@@ -5080,6 +5326,11 @@ class MusicPlaybackSession(
   private var lastSyncedMediaMetadataTrackId: String? = null
   private var lastSyncedMediaMetadataDurationMs: Long = -1L
   private var lastSyncedMediaArtworkBitmap: Bitmap? = null
+  private var lastNotifiedTrackId: String? = null
+  private var lastNotifiedIsPlaying: Boolean? = null
+  private var lastNotifiedShuffleIconRes: Int = 0
+  private var lastNotifiedRepeatIconRes: Int = 0
+  private var lastNotifiedArtworkBitmap: Bitmap? = null
   private var audioDisconnectReceiver: BroadcastReceiver? = null
   private var mediaControlReceiver: BroadcastReceiver? = null
   private var audioDeviceCallback: AudioDeviceCallback? = null
@@ -5104,6 +5355,18 @@ class MusicPlaybackSession(
   var isReleased: Boolean = false
     private set
 
+  /**
+   * Indicates whether a background playlist / play-statistics recalculation task is currently running.
+   */
+  var isRecalculatingInBackground by mutableStateOf(false)
+    internal set
+
+  /**
+   * Count of completed background favorite/stats/playlist recalculation tasks.
+   */
+  var backgroundRecalculationCount by mutableIntStateOf(0)
+    internal set
+
   internal var configuredInitialDirectory: File? = initialDirectory
     private set
   internal var configuredInitialTracks: List<MusicTrack>? = initialTracks
@@ -5117,7 +5380,7 @@ class MusicPlaybackSession(
   internal var configuredInitialQueueExpanded: Boolean = initialQueueExpanded
     private set
 
-  // Library Tab Order & Selected Tab: Artists, Albums, Songs, Genres, Playlists
+  // Library Tab Order & Selected Tab: Home, Playlists, Songs, Albums, Artists, Genres
   var tabOrder by mutableStateOf(
     MusicPlayerEngine.parseTabOrder(prefs?.getString(PREF_KEY_MUSIC_TAB_ORDER, null))
   )
@@ -5126,7 +5389,7 @@ class MusicPlaybackSession(
     val updated = MusicPlayerEngine.reorderTabs(tabOrder, fromIndex, toIndex)
     if (updated != tabOrder) {
       tabOrder = updated
-      prefs?.edit()?.putString(PREF_KEY_MUSIC_TAB_ORDER, MusicPlayerEngine.serializeTabOrder(updated))?.apply()
+      persistStringPrefInBackground(PREF_KEY_MUSIC_TAB_ORDER, MusicPlayerEngine.serializeTabOrder(updated))
       return true
     }
     return false
@@ -5136,7 +5399,7 @@ class MusicPlaybackSession(
     val normalized = MusicPlayerEngine.parseTabOrder(MusicPlayerEngine.serializeTabOrder(newOrder))
     if (normalized != tabOrder) {
       tabOrder = normalized
-      prefs?.edit()?.putString(PREF_KEY_MUSIC_TAB_ORDER, MusicPlayerEngine.serializeTabOrder(normalized))?.apply()
+      persistStringPrefInBackground(PREF_KEY_MUSIC_TAB_ORDER, MusicPlayerEngine.serializeTabOrder(normalized))
     }
   }
 
@@ -5156,7 +5419,7 @@ class MusicPlaybackSession(
       syncViewPlayStatsSnapshot()
     }
     selectedTab = tab
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_TAB, tab.name)?.apply()
+    persistStringPrefInBackground(PREF_KEY_MUSIC_TAB, tab.name)
   }
 
   // View Mode: List vs Card
@@ -5166,7 +5429,7 @@ class MusicPlaybackSession(
 
   fun updateViewMode(mode: MusicViewMode) {
     viewMode = mode
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_VIEW_MODE, mode.name)?.apply()
+    persistStringPrefInBackground(PREF_KEY_MUSIC_VIEW_MODE, mode.name)
   }
 
   // Card View Columns per Row (2..3)
@@ -5178,7 +5441,9 @@ class MusicPlaybackSession(
   fun updateCardsPerRow(count: Int) {
     val coerced = count.coerceIn(MIN_MUSIC_CARDS_PER_ROW, MAX_MUSIC_CARDS_PER_ROW)
     cardsPerRow = coerced
-    prefs?.edit()?.putInt(PREF_KEY_MUSIC_CARDS_PER_ROW, coerced)?.apply()
+    scope.launch(ioCoroutineContext) {
+      prefs?.edit()?.putInt(PREF_KEY_MUSIC_CARDS_PER_ROW, coerced)?.apply()
+    }
   }
 
   // Sort Order
@@ -5187,9 +5452,35 @@ class MusicPlaybackSession(
   )
 
   fun updateSortOrder(order: MusicSortOrder) {
-    syncViewPlayStatsSnapshot()
+    val statsChanged = viewPlayStats !== playStats
+    if (statsChanged) {
+      viewPlayStats = playStats
+    }
+    val orderChanged = sortOrder != order
     sortOrder = order
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_SORT_ORDER, order.name)?.apply()
+    persistStringPrefInBackground(PREF_KEY_MUSIC_SORT_ORDER, order.name)
+    if (statsChanged) {
+      scheduleStatsAndSortRecalculation(statsChanged = true)
+    } else if (orderChanged) {
+      // Reuse already-sorted Most Played or Recently Played track lists immediately when possible
+      when (order) {
+        MusicSortOrder.MOST_PLAYED -> {
+          if (mostPlayedPlaylist.tracks.size == allTracks.size) {
+            sortedLibraryTracks = mostPlayedPlaylist.tracks
+          } else {
+            scheduleStatsAndSortRecalculation(statsChanged = false)
+          }
+        }
+        MusicSortOrder.RECENTLY_PLAYED -> {
+          if (recentlyPlayedPlaylist.tracks.size == allTracks.size) {
+            sortedLibraryTracks = recentlyPlayedPlaylist.tracks
+          } else {
+            scheduleStatsAndSortRecalculation(statsChanged = false)
+          }
+        }
+        else -> scheduleStatsAndSortRecalculation(statsChanged = false)
+      }
+    }
   }
 
   // Shuffle & Repeat
@@ -5214,10 +5505,12 @@ class MusicPlaybackSession(
     random: kotlin.random.Random = kotlin.random.Random.Default,
   ) {
     shuffleMode = mode
-    prefs?.edit()
-      ?.putString(PREF_KEY_MUSIC_SHUFFLE_MODE, mode.name)
-      ?.putBoolean(PREF_KEY_MUSIC_SHUFFLE, mode.isEnabled)
-      ?.apply()
+    scope.launch(ioCoroutineContext) {
+      prefs?.edit()
+        ?.putString(PREF_KEY_MUSIC_SHUFFLE_MODE, mode.name)
+        ?.putBoolean(PREF_KEY_MUSIC_SHUFFLE, mode.isEnabled)
+        ?.apply()
+    }
     if (playbackQueue.isNotEmpty()) {
       val anchorId = currentTrack?.id
       val base = if (unshuffledQueue.isNotEmpty()) unshuffledQueue else playbackQueue
@@ -5251,7 +5544,7 @@ class MusicPlaybackSession(
 
   fun cycleRepeatMode() {
     repeatMode = repeatMode.next()
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_REPEAT, repeatMode.name)?.apply()
+    persistStringPrefInBackground(PREF_KEY_MUSIC_REPEAT, repeatMode.name)
     syncSystemMediaControls(forceMetadataUpdate = false)
   }
 
@@ -5268,10 +5561,18 @@ class MusicPlaybackSession(
   fun toggleFavorite(trackId: String) {
     val next = if (trackId in favoriteIds) favoriteIds - trackId else favoriteIds + trackId
     favoriteIds = next
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITES, next.joinToString("|"))?.apply()
+    persistFavoritesInBackground(PREF_KEY_MUSIC_FAVORITES, next, separator = "|")
     if (currentTrack?.id == trackId) {
-      syncSystemMediaControls(forceMetadataUpdate = false)
+      syncSystemMediaControls(forceMetadataUpdate = false, notifyPlatformInBackground = true)
     }
+    val trackSkipCount = max(
+      viewPlayStats[trackId]?.skipCount ?: 0,
+      playStats[trackId]?.skipCount ?: 0,
+    )
+    scheduleFavoritesAndStatsRecalculation(
+      favoritesChanged = true,
+      mostPlayedAffected = trackSkipCount > 0,
+    )
   }
 
   var favoriteArtists by mutableStateOf(
@@ -5287,7 +5588,11 @@ class MusicPlaybackSession(
   fun toggleFavoriteArtist(artistName: String) {
     val next = MusicPlayerEngine.toggleFavoriteArtist(favoriteArtists, artistName)
     favoriteArtists = next
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_ARTISTS, MusicPlayerEngine.serializeFavoriteSet(next))?.apply()
+    persistFavoritesInBackground(PREF_KEY_MUSIC_FAVORITE_ARTISTS, next, separator = "\n")
+    scheduleFavoritesAndStatsRecalculation(
+      favoritesChanged = false,
+      mostPlayedAffected = hasAnySkippedTracksInStats(),
+    )
   }
 
   fun toggleFavoriteArtist(artist: MusicArtist) {
@@ -5307,7 +5612,11 @@ class MusicPlaybackSession(
   fun toggleFavoriteAlbum(albumName: String, artistName: String = "") {
     val next = MusicPlayerEngine.toggleFavoriteAlbum(favoriteAlbums, albumName, artistName)
     favoriteAlbums = next
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_ALBUMS, MusicPlayerEngine.serializeFavoriteSet(next))?.apply()
+    persistFavoritesInBackground(PREF_KEY_MUSIC_FAVORITE_ALBUMS, next, separator = "\n")
+    scheduleFavoritesAndStatsRecalculation(
+      favoritesChanged = false,
+      mostPlayedAffected = hasAnySkippedTracksInStats(),
+    )
   }
 
   fun toggleFavoriteAlbum(album: MusicAlbum) {
@@ -5327,7 +5636,11 @@ class MusicPlaybackSession(
   fun toggleFavoriteGenre(genreName: String) {
     val next = MusicPlayerEngine.toggleFavoriteGenre(favoriteGenres, genreName)
     favoriteGenres = next
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_GENRES, MusicPlayerEngine.serializeFavoriteSet(next))?.apply()
+    persistFavoritesInBackground(PREF_KEY_MUSIC_FAVORITE_GENRES, next, separator = "\n")
+    scheduleFavoritesAndStatsRecalculation(
+      favoritesChanged = false,
+      mostPlayedAffected = hasAnySkippedTracksInStats(),
+    )
   }
 
   fun toggleFavoriteGenre(genre: MusicGenre) {
@@ -5386,9 +5699,15 @@ class MusicPlaybackSession(
   var homePlayStats by mutableStateOf(playStats)
     internal set
 
+  private fun hasAnySkippedTracksInStats(): Boolean {
+    return viewPlayStats.values.any { it.skipCount > 0 } ||
+      playStats.values.any { it.skipCount > 0 }
+  }
+
   fun syncViewPlayStatsSnapshot() {
     if (viewPlayStats !== playStats) {
       viewPlayStats = playStats
+      scheduleStatsAndSortRecalculation(statsChanged = true)
     }
   }
 
@@ -5409,21 +5728,111 @@ class MusicPlaybackSession(
     if (next !== playStats) {
       playStats = next
       if (persistImmediately) {
-        prefs?.edit()?.putString(PREF_KEY_MUSIC_PLAY_STATS, MusicPlayerEngine.serializePlayStats(next))?.apply()
+        persistPlayStatsInBackground(next)
       }
     }
   }
 
+  private fun persistPlayStatsInBackground(statsSnapshot: Map<String, TrackPlayStats>) {
+    if (prefs == null) return
+    playStatsPersistJob?.cancel()
+    playStatsPersistJob = scope.launch(ioCoroutineContext) {
+      val serialized = MusicPlayerEngine.serializePlayStats(statsSnapshot)
+      prefs.edit().putString(PREF_KEY_MUSIC_PLAY_STATS, serialized).apply()
+    }
+  }
+
+  private fun persistFavoritesInBackground(
+    prefKey: String,
+    values: Set<String>,
+    separator: String,
+  ) {
+    if (prefs == null) return
+    prefsPersistJob = scope.launch(ioCoroutineContext) {
+      val serialized = if (separator == "\n") {
+        MusicPlayerEngine.serializeFavoriteSet(values)
+      } else {
+        values.joinToString(separator)
+      }
+      prefs.edit().putString(prefKey, serialized).apply()
+    }
+  }
+
+  private fun persistStringPrefInBackground(prefKey: String, value: String) {
+    if (prefs == null) return
+    scope.launch(ioCoroutineContext) {
+      prefs.edit().putString(prefKey, value).apply()
+    }
+  }
+
   fun flushPlayStats() {
+    playStatsPersistJob?.cancel()
     prefs?.edit()?.putString(PREF_KEY_MUSIC_PLAY_STATS, MusicPlayerEngine.serializePlayStats(playStats))?.apply()
   }
 
-  // Generated Home Playlists (6 dynamic ~1 hr mixes refreshed on pull-to-refresh)
+  //Playlists & Background-Derived Library Collections
+  var savedPlaylistEntries by mutableStateOf(
+    MusicPlayerEngine.deserializePlaylists(prefs?.getString(PREF_KEY_MUSIC_PLAYLISTS, ""))
+      .filterNot { it.id in MusicPlayerEngine.LEGACY_SAMPLE_PLAYLIST_IDS || it.id in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS }
+  )
+
+  var libraryArtists by mutableStateOf<List<MusicArtist>>(emptyList())
+    internal set
+  var libraryAlbums by mutableStateOf<List<MusicAlbum>>(emptyList())
+    internal set
+  var libraryGenres by mutableStateOf<List<MusicGenre>>(emptyList())
+    internal set
+  var sortedLibraryTracks by mutableStateOf<List<MusicTrack>>(emptyList())
+    internal set
+
+  var favoritesPlaylist by mutableStateOf(
+    MusicPlayerEngine.buildFavoritesPlaylist(emptySet(), emptyList())
+  )
+    internal set
+  var mostPlayedPlaylist by mutableStateOf(
+    MusicPlayerEngine.buildMostPlayedPlaylist(emptyMap(), emptyList())
+  )
+    internal set
+  var recentlyPlayedPlaylist by mutableStateOf(
+    MusicPlayerEngine.buildRecentlyPlayedPlaylist(emptyMap(), emptyList())
+  )
+    internal set
+  var userPlaylists by mutableStateOf<List<MusicPlaylist>>(emptyList())
+    internal set
+  var basePlaylists by mutableStateOf<List<MusicPlaylist>>(
+    listOf(favoritesPlaylist, mostPlayedPlaylist, recentlyPlayedPlaylist)
+  )
+    internal set
+
+  // Generated Home Playlists (6 dynamic ~1 hr mixes refreshed on pull-to-refresh or background favorite updates)
   var homeRefreshGeneration by mutableIntStateOf(0)
     private set
 
+  var homePlaylistsState by mutableStateOf<List<MusicPlaylist>>(
+    MusicPlayerEngine.generateHomePlaylists(emptyList())
+  )
+    internal set
+
   val homePlaylists: List<MusicPlaylist>
-    get() = MusicPlayerEngine.generateHomePlaylists(
+    get() = homePlaylistsState
+
+  /**
+   * Synchronously refreshes the 6 Home playlists and returns the updated list.
+   */
+  fun refreshHomePlaylists(): List<MusicPlaylist> {
+    homePlayStats = playStats
+    viewPlayStats = playStats
+    homeRefreshGeneration += 1
+    val nextMostPlayed = MusicPlayerEngine.buildMostPlayedPlaylist(
+      playStats = viewPlayStats,
+      allTracks = allTracks,
+      favoriteIds = favoriteIds,
+      favoriteArtists = favoriteArtists,
+      favoriteAlbums = favoriteAlbums,
+      favoriteGenres = favoriteGenres,
+    )
+    val nextRecentlyPlayed = MusicPlayerEngine.buildRecentlyPlayedPlaylist(viewPlayStats, allTracks)
+    val nextHome = MusicPlayerEngine.generateHomePlaylists(
       allTracks = allTracks,
       playStats = homePlayStats,
       favoriteIds = favoriteIds,
@@ -5431,24 +5840,469 @@ class MusicPlaybackSession(
       favoriteAlbums = favoriteAlbums,
       favoriteGenres = favoriteGenres,
       refreshGeneration = homeRefreshGeneration,
+      precomputedGenres = libraryGenres.takeIf { it.isNotEmpty() || allTracks.isEmpty() },
+      precomputedSortedByStats = nextMostPlayed.tracks,
     )
+    Snapshot.withMutableSnapshot {
+      mostPlayedPlaylist = nextMostPlayed
+      recentlyPlayedPlaylist = nextRecentlyPlayed
+      basePlaylists = listOf(favoritesPlaylist, nextMostPlayed, nextRecentlyPlayed) + userPlaylists
+      homePlaylistsState = nextHome
+      if (sortOrder == MusicSortOrder.MOST_PLAYED) {
+        sortedLibraryTracks = nextMostPlayed.tracks
+      } else if (sortOrder == MusicSortOrder.RECENTLY_PLAYED) {
+        sortedLibraryTracks = nextRecentlyPlayed.tracks
+      }
+    }
+    return nextHome
+  }
 
-  fun refreshHomePlaylists(): List<MusicPlaylist> {
+  /**
+   * Refreshes the 6 Home playlists and view play stats on a background task (`Dispatchers.Default`)
+   * so pull-to-refresh and Refresh button taps never block the UI thread.
+   */
+  fun refreshHomePlaylistsAsync() {
     homePlayStats = playStats
     viewPlayStats = playStats
     homeRefreshGeneration += 1
-    return homePlaylists
+    val tracksSnapshot = allTracks
+    val homeStatsSnapshot = homePlayStats
+    val viewStatsSnapshot = viewPlayStats
+    val favIdsSnapshot = favoriteIds
+    val favArtistsSnapshot = favoriteArtists
+    val favAlbumsSnapshot = favoriteAlbums
+    val favGenresSnapshot = favoriteGenres
+    val genSnapshot = homeRefreshGeneration
+    val genresSnapshot = libraryGenres.takeIf { it.isNotEmpty() || tracksSnapshot.isEmpty() }
+    val sortOrderSnapshot = sortOrder
+
+    favoritesRecalcJob?.cancel()
+    isRecalculatingInBackground = true
+    favoritesRecalcJob = scope.launch(backgroundCoroutineContext) {
+      try {
+        val nextMostPlayed = MusicPlayerEngine.buildMostPlayedPlaylist(
+          playStats = viewStatsSnapshot,
+          allTracks = tracksSnapshot,
+          favoriteIds = favIdsSnapshot,
+          favoriteArtists = favArtistsSnapshot,
+          favoriteAlbums = favAlbumsSnapshot,
+          favoriteGenres = favGenresSnapshot,
+        )
+        ensureActive()
+        val nextRecentlyPlayed = MusicPlayerEngine.buildRecentlyPlayedPlaylist(
+          playStats = viewStatsSnapshot,
+          allTracks = tracksSnapshot,
+        )
+        ensureActive()
+        val nextHome = MusicPlayerEngine.generateHomePlaylists(
+          allTracks = tracksSnapshot,
+          playStats = homeStatsSnapshot,
+          favoriteIds = favIdsSnapshot,
+          favoriteArtists = favArtistsSnapshot,
+          favoriteAlbums = favAlbumsSnapshot,
+          favoriteGenres = favGenresSnapshot,
+          refreshGeneration = genSnapshot,
+          precomputedGenres = genresSnapshot,
+          precomputedSortedByStats = nextMostPlayed.tracks,
+        )
+        ensureActive()
+        if (!isReleased) {
+          Snapshot.withMutableSnapshot {
+            if (allTracks === tracksSnapshot) {
+              mostPlayedPlaylist = nextMostPlayed
+              recentlyPlayedPlaylist = nextRecentlyPlayed
+              basePlaylists = listOf(favoritesPlaylist, nextMostPlayed, nextRecentlyPlayed) + userPlaylists
+              if (homeRefreshGeneration == genSnapshot) {
+                homePlaylistsState = nextHome
+              }
+              if (sortOrder == sortOrderSnapshot) {
+                when (sortOrderSnapshot) {
+                  MusicSortOrder.MOST_PLAYED -> sortedLibraryTracks = nextMostPlayed.tracks
+                  MusicSortOrder.RECENTLY_PLAYED -> sortedLibraryTracks = nextRecentlyPlayed.tracks
+                  else -> {}
+                }
+              }
+            }
+            backgroundRecalculationCount += 1
+            isRecalculatingInBackground = false
+          }
+        }
+      } finally {
+        if (!isReleased) {
+          isRecalculatingInBackground = false
+        }
+      }
+    }
   }
 
-  // Playlists
-  var savedPlaylistEntries by mutableStateOf(
-    MusicPlayerEngine.deserializePlaylists(prefs?.getString(PREF_KEY_MUSIC_PLAYLISTS, ""))
-      .filterNot { it.id in MusicPlayerEngine.LEGACY_SAMPLE_PLAYLIST_IDS || it.id in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS }
+  /**
+   * Delegates Favorites playlist updates, Most Played play-stats recalculation, and Home mix
+   * regeneration to a background task ([backgroundCoroutineContext]) so starring a song, artist,
+   * album, or genre never blocks the foreground UI thread.
+   */
+  private fun scheduleFavoritesAndStatsRecalculation(
+    favoritesChanged: Boolean,
+    mostPlayedAffected: Boolean,
+  ) {
+    val tracksSnapshot = allTracks
+    val favIdsSnapshot = favoriteIds
+    val favArtistsSnapshot = favoriteArtists
+    val favAlbumsSnapshot = favoriteAlbums
+    val favGenresSnapshot = favoriteGenres
+    val viewStatsSnapshot = viewPlayStats
+    val homeStatsSnapshot = homePlayStats
+    val homeGenSnapshot = homeRefreshGeneration
+    val sortOrderSnapshot = sortOrder
+    val genresSnapshot = libraryGenres.takeIf { it.isNotEmpty() || tracksSnapshot.isEmpty() }
+
+    favoritesRecalcJob?.cancel()
+    isRecalculatingInBackground = true
+    favoritesRecalcJob = scope.launch(backgroundCoroutineContext) {
+      try {
+        val nextFavPlaylist = if (favoritesChanged) {
+          MusicPlayerEngine.buildFavoritesPlaylist(favIdsSnapshot, tracksSnapshot)
+        } else {
+          null
+        }
+        ensureActive()
+        if (nextFavPlaylist != null && !isReleased) {
+          Snapshot.withMutableSnapshot {
+            if (favoriteIds == favIdsSnapshot && allTracks === tracksSnapshot) {
+              favoritesPlaylist = nextFavPlaylist
+              basePlaylists = listOf(nextFavPlaylist, mostPlayedPlaylist, recentlyPlayedPlaylist) + userPlaylists
+            }
+          }
+        }
+
+        val nextMostPlayed = if (mostPlayedAffected) {
+          MusicPlayerEngine.buildMostPlayedPlaylist(
+            playStats = viewStatsSnapshot,
+            allTracks = tracksSnapshot,
+            favoriteIds = favIdsSnapshot,
+            favoriteArtists = favArtistsSnapshot,
+            favoriteAlbums = favAlbumsSnapshot,
+            favoriteGenres = favGenresSnapshot,
+          )
+        } else {
+          null
+        }
+        ensureActive()
+        if (nextMostPlayed != null && !isReleased) {
+          Snapshot.withMutableSnapshot {
+            if (allTracks === tracksSnapshot) {
+              mostPlayedPlaylist = nextMostPlayed
+              basePlaylists = listOf(favoritesPlaylist, nextMostPlayed, recentlyPlayedPlaylist) + userPlaylists
+              if (sortOrder == sortOrderSnapshot && sortOrderSnapshot == MusicSortOrder.MOST_PLAYED) {
+                sortedLibraryTracks = nextMostPlayed.tracks
+              }
+            }
+          }
+        }
+
+        val effectiveSortedByStats = if (homeStatsSnapshot === viewStatsSnapshot) {
+          (nextMostPlayed ?: mostPlayedPlaylist).tracks.takeIf { it.size == tracksSnapshot.size }
+        } else {
+          null
+        }
+        val nextHomePlaylists = MusicPlayerEngine.generateHomePlaylists(
+          allTracks = tracksSnapshot,
+          playStats = homeStatsSnapshot,
+          favoriteIds = favIdsSnapshot,
+          favoriteArtists = favArtistsSnapshot,
+          favoriteAlbums = favAlbumsSnapshot,
+          favoriteGenres = favGenresSnapshot,
+          refreshGeneration = homeGenSnapshot,
+          precomputedGenres = genresSnapshot,
+          precomputedSortedByStats = effectiveSortedByStats,
+        )
+        ensureActive()
+        if (!isReleased) {
+          Snapshot.withMutableSnapshot {
+            if (homeRefreshGeneration == homeGenSnapshot && allTracks === tracksSnapshot) {
+              homePlaylistsState = nextHomePlaylists
+            }
+            backgroundRecalculationCount += 1
+            isRecalculatingInBackground = false
+          }
+        }
+      } finally {
+        if (!isReleased) {
+          isRecalculatingInBackground = false
+        }
+      }
+    }
+  }
+
+  /**
+   * Delegates play-statistics playlist rebuilding (`Most Played`, `Recently Played`) and track
+   * sorting (`sortedLibraryTracks`) to a background task ([backgroundCoroutineContext]).
+   */
+  private fun scheduleStatsAndSortRecalculation(statsChanged: Boolean) {
+    val tracksSnapshot = allTracks
+    val viewStatsSnapshot = viewPlayStats
+    val sortOrderSnapshot = sortOrder
+    val favIdsSnapshot = favoriteIds
+    val favArtistsSnapshot = favoriteArtists
+    val favAlbumsSnapshot = favoriteAlbums
+    val favGenresSnapshot = favoriteGenres
+
+    statsAndSortRecalcJob?.cancel()
+    isRecalculatingInBackground = true
+    statsAndSortRecalcJob = scope.launch(backgroundCoroutineContext) {
+      try {
+        val nextMostPlayed = if (statsChanged) {
+          MusicPlayerEngine.buildMostPlayedPlaylist(
+            playStats = viewStatsSnapshot,
+            allTracks = tracksSnapshot,
+            favoriteIds = favIdsSnapshot,
+            favoriteArtists = favArtistsSnapshot,
+            favoriteAlbums = favAlbumsSnapshot,
+            favoriteGenres = favGenresSnapshot,
+          )
+        } else {
+          null
+        }
+        ensureActive()
+        val nextRecentlyPlayed = if (statsChanged) {
+          MusicPlayerEngine.buildRecentlyPlayedPlaylist(
+            playStats = viewStatsSnapshot,
+            allTracks = tracksSnapshot,
+          )
+        } else {
+          null
+        }
+        ensureActive()
+        val effectiveMostPlayed = nextMostPlayed ?: mostPlayedPlaylist
+        val effectiveRecentlyPlayed = nextRecentlyPlayed ?: recentlyPlayedPlaylist
+        val nextSorted = when (sortOrderSnapshot) {
+          MusicSortOrder.MOST_PLAYED -> {
+            if (effectiveMostPlayed.tracks.size == tracksSnapshot.size) {
+              effectiveMostPlayed.tracks
+            } else {
+              MusicPlayerEngine.sortTracks(
+                tracks = tracksSnapshot,
+                sortOrder = sortOrderSnapshot,
+                playStats = viewStatsSnapshot,
+                favoriteIds = favIdsSnapshot,
+                favoriteArtists = favArtistsSnapshot,
+                favoriteAlbums = favAlbumsSnapshot,
+                favoriteGenres = favGenresSnapshot,
+              )
+            }
+          }
+          MusicSortOrder.RECENTLY_PLAYED -> {
+            if (effectiveRecentlyPlayed.tracks.size == tracksSnapshot.size) {
+              effectiveRecentlyPlayed.tracks
+            } else {
+              MusicPlayerEngine.sortTracksByRecentlyPlayed(tracksSnapshot, viewStatsSnapshot)
+            }
+          }
+          else -> MusicPlayerEngine.sortTracks(
+            tracks = tracksSnapshot,
+            sortOrder = sortOrderSnapshot,
+            playStats = viewStatsSnapshot,
+            favoriteIds = favIdsSnapshot,
+            favoriteArtists = favArtistsSnapshot,
+            favoriteAlbums = favAlbumsSnapshot,
+            favoriteGenres = favGenresSnapshot,
+          )
+        }
+        ensureActive()
+        if (!isReleased) {
+          Snapshot.withMutableSnapshot {
+            if (allTracks === tracksSnapshot) {
+              if (nextMostPlayed != null) mostPlayedPlaylist = nextMostPlayed
+              if (nextRecentlyPlayed != null) recentlyPlayedPlaylist = nextRecentlyPlayed
+              if (nextMostPlayed != null || nextRecentlyPlayed != null) {
+                basePlaylists = listOf(favoritesPlaylist, effectiveMostPlayed, effectiveRecentlyPlayed) + userPlaylists
+              }
+              if (sortOrder == sortOrderSnapshot) {
+                sortedLibraryTracks = nextSorted
+              }
+            }
+            backgroundRecalculationCount += 1
+            isRecalculatingInBackground = false
+          }
+        }
+      } finally {
+        if (!isReleased) {
+          isRecalculatingInBackground = false
+        }
+      }
+    }
+  }
+
+  private data class ComputedLibraryState(
+    val tracks: List<MusicTrack>,
+    val artists: List<MusicArtist>,
+    val albums: List<MusicAlbum>,
+    val genres: List<MusicGenre>,
+    val favorites: MusicPlaylist,
+    val mostPlayed: MusicPlaylist,
+    val recentlyPlayed: MusicPlaylist,
+    val savedPlaylists: List<MusicPlaylist>,
+    val sortedTracks: List<MusicTrack>,
+    val homeMixes: List<MusicPlaylist>,
   )
+
+  private fun computeFullLibraryState(
+    tracks: List<MusicTrack>,
+    viewStats: Map<String, TrackPlayStats> = viewPlayStats,
+    homeStats: Map<String, TrackPlayStats> = homePlayStats,
+    favIds: Set<String> = favoriteIds,
+    favArtists: Set<String> = favoriteArtists,
+    favAlbums: Set<String> = favoriteAlbums,
+    favGenres: Set<String> = favoriteGenres,
+    savedEntries: List<SavedPlaylistEntry> = savedPlaylistEntries,
+    order: MusicSortOrder = sortOrder,
+    homeGen: Int = homeRefreshGeneration,
+  ): ComputedLibraryState {
+    val artists = MusicPlayerEngine.buildArtists(tracks)
+    val albums = MusicPlayerEngine.buildAlbums(tracks)
+    val genres = MusicPlayerEngine.buildGenres(tracks)
+    val favPlaylist = MusicPlayerEngine.buildFavoritesPlaylist(favIds, tracks)
+    val mostPlayed = MusicPlayerEngine.buildMostPlayedPlaylist(
+      playStats = viewStats,
+      allTracks = tracks,
+      favoriteIds = favIds,
+      favoriteArtists = favArtists,
+      favoriteAlbums = favAlbums,
+      favoriteGenres = favGenres,
+    )
+    val recentlyPlayed = MusicPlayerEngine.buildRecentlyPlayedPlaylist(viewStats, tracks)
+    val resolvedUserPlaylists = MusicPlayerEngine.buildPlaylists(savedEntries, tracks)
+    val sorted = when (order) {
+      MusicSortOrder.MOST_PLAYED -> mostPlayed.tracks
+      MusicSortOrder.RECENTLY_PLAYED -> recentlyPlayed.tracks
+      else -> MusicPlayerEngine.sortTracks(
+        tracks = tracks,
+        sortOrder = order,
+        playStats = viewStats,
+        favoriteIds = favIds,
+        favoriteArtists = favArtists,
+        favoriteAlbums = favAlbums,
+        favoriteGenres = favGenres,
+      )
+    }
+    val homeMixes = MusicPlayerEngine.generateHomePlaylists(
+      allTracks = tracks,
+      playStats = homeStats,
+      favoriteIds = favIds,
+      favoriteArtists = favArtists,
+      favoriteAlbums = favAlbums,
+      favoriteGenres = favGenres,
+      refreshGeneration = homeGen,
+      precomputedGenres = genres,
+      precomputedSortedByStats = if (homeStats === viewStats) mostPlayed.tracks else null,
+    )
+    return ComputedLibraryState(
+      tracks = tracks,
+      artists = artists,
+      albums = albums,
+      genres = genres,
+      favorites = favPlaylist,
+      mostPlayed = mostPlayed,
+      recentlyPlayed = recentlyPlayed,
+      savedPlaylists = resolvedUserPlaylists,
+      sortedTracks = sorted,
+      homeMixes = homeMixes,
+    )
+  }
+
+  private fun applyComputedLibraryState(computed: ComputedLibraryState) {
+    Snapshot.withMutableSnapshot {
+      libraryArtists = computed.artists
+      libraryAlbums = computed.albums
+      libraryGenres = computed.genres
+      favoritesPlaylist = computed.favorites
+      mostPlayedPlaylist = computed.mostPlayed
+      recentlyPlayedPlaylist = computed.recentlyPlayed
+      userPlaylists = computed.savedPlaylists
+      basePlaylists = listOf(computed.favorites, computed.mostPlayed, computed.recentlyPlayed) + computed.savedPlaylists
+      sortedLibraryTracks = computed.sortedTracks
+      homePlaylistsState = computed.homeMixes
+    }
+  }
+
+  private fun refreshLibraryDerivedStateAfterMutation(tracks: List<MusicTrack>) {
+    if (tracks.size <= 100) {
+      applyComputedLibraryState(computeFullLibraryState(tracks))
+    } else {
+      val tracksSnapshot = tracks
+      val viewStatsSnapshot = viewPlayStats
+      val homeStatsSnapshot = homePlayStats
+      val favIdsSnapshot = favoriteIds
+      val favArtistsSnapshot = favoriteArtists
+      val favAlbumsSnapshot = favoriteAlbums
+      val favGenresSnapshot = favoriteGenres
+      val savedSnapshot = savedPlaylistEntries
+      val orderSnapshot = sortOrder
+      val homeGenSnapshot = homeRefreshGeneration
+      libraryRebuildJob?.cancel()
+      isRecalculatingInBackground = true
+      libraryRebuildJob = scope.launch(backgroundCoroutineContext) {
+        try {
+          val computed = computeFullLibraryState(
+            tracks = tracksSnapshot,
+            viewStats = viewStatsSnapshot,
+            homeStats = homeStatsSnapshot,
+            favIds = favIdsSnapshot,
+            favArtists = favArtistsSnapshot,
+            favAlbums = favAlbumsSnapshot,
+            favGenres = favGenresSnapshot,
+            savedEntries = savedSnapshot,
+            order = orderSnapshot,
+            homeGen = homeGenSnapshot,
+          )
+          ensureActive()
+          if (!isReleased && allTracks === tracksSnapshot) {
+            applyComputedLibraryState(computed)
+            backgroundRecalculationCount += 1
+          }
+        } finally {
+          if (!isReleased) {
+            isRecalculatingInBackground = false
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Suspends until all pending background favorite, play-stats, playlist, and persistence tasks complete.
+   */
+  suspend fun awaitBackgroundRecalculations() {
+    favoritesRecalcJob?.join()
+    statsAndSortRecalcJob?.join()
+    libraryRebuildJob?.join()
+    prefsPersistJob?.join()
+    playStatsPersistJob?.join()
+    mediaControlSyncJob?.join()
+  }
 
   fun updateSavedPlaylists(next: List<SavedPlaylistEntry>) {
     savedPlaylistEntries = next
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_PLAYLISTS, MusicPlayerEngine.serializePlaylists(next))?.apply()
+    scope.launch(ioCoroutineContext) {
+      prefs?.edit()?.putString(PREF_KEY_MUSIC_PLAYLISTS, MusicPlayerEngine.serializePlaylists(next))?.apply()
+    }
+    val tracksSnapshot = allTracks
+    if (tracksSnapshot.size <= 100) {
+      val resolved = MusicPlayerEngine.buildPlaylists(next, tracksSnapshot)
+      Snapshot.withMutableSnapshot {
+        userPlaylists = resolved
+        basePlaylists = listOf(favoritesPlaylist, mostPlayedPlaylist, recentlyPlayedPlaylist) + resolved
+      }
+    } else {
+      scope.launch(backgroundCoroutineContext) {
+        val resolved = MusicPlayerEngine.buildPlaylists(next, tracksSnapshot)
+        if (!isReleased && savedPlaylistEntries === next && allTracks === tracksSnapshot) {
+          Snapshot.withMutableSnapshot {
+            userPlaylists = resolved
+            basePlaylists = listOf(favoritesPlaylist, mostPlayedPlaylist, recentlyPlayedPlaylist) + resolved
+          }
+        }
+      }
+    }
   }
 
   fun saveQueueAsPlaylist(name: String, tracksToSave: List<MusicTrack>) {
@@ -5627,6 +6481,7 @@ class MusicPlaybackSession(
       )
     }
     allTracks = initialLoaded
+    refreshLibraryDerivedStateAfterMutation(initialLoaded)
     if ((initialPlayerExpanded || initialQueueExpanded) && initialLoaded.isNotEmpty()) {
       unshuffledQueue = initialLoaded
       playbackQueue = initialLoaded
@@ -5709,6 +6564,7 @@ class MusicPlaybackSession(
       }
       val activeId = currentTrack?.id
       allTracks = reloaded
+      refreshLibraryDerivedStateAfterMutation(reloaded)
       val byId = reloaded.associateBy { it.id }
       if (unshuffledQueue.isNotEmpty()) {
         unshuffledQueue = unshuffledQueue.mapNotNull { existing -> byId[existing.id] ?: existing }
@@ -5723,11 +6579,19 @@ class MusicPlaybackSession(
     }
   }
 
-  private fun applyLoadedLibraryTracks(loaded: List<MusicTrack>) {
+  private fun applyLoadedLibraryTracks(
+    loaded: List<MusicTrack>,
+    precomputedState: ComputedLibraryState? = null,
+  ) {
     val prevTrackId = currentTrack?.id
     val activeId = playbackQueue.getOrNull(currentQueueIndex)?.id
     if (allTracks != loaded) {
       allTracks = loaded
+    }
+    if (precomputedState != null) {
+      applyComputedLibraryState(precomputedState)
+    } else {
+      refreshLibraryDerivedStateAfterMutation(loaded)
     }
     val byId = loaded.associateBy { it.id }
     if (unshuffledQueue.isNotEmpty()) {
@@ -5775,7 +6639,10 @@ class MusicPlaybackSession(
               deferAlbumArt = true,
             )
             if (fastLoaded.isNotEmpty()) {
-              applyLoadedLibraryTracks(fastLoaded)
+              val fastComputed = withContext(backgroundCoroutineContext) {
+                computeFullLibraryState(fastLoaded)
+              }
+              applyLoadedLibraryTracks(fastLoaded, fastComputed)
               isLoadingLibrary = false
             }
           }
@@ -5786,7 +6653,10 @@ class MusicPlaybackSession(
             inspectMetadataRetriever = true,
             deferAlbumArt = true,
           )
-          applyLoadedLibraryTracks(loaded)
+          val fullComputed = withContext(backgroundCoroutineContext) {
+            computeFullLibraryState(loaded)
+          }
+          applyLoadedLibraryTracks(loaded, fullComputed)
         } finally {
           isLoadingLibrary = false
         }
@@ -6286,7 +7156,8 @@ class MusicPlaybackSession(
     }
     allTracks = updatedAll
     MusicPlayerEngine.updateCachedLibrarySnapshot(updatedAll)
-    scope.launch(Dispatchers.IO) {
+    refreshLibraryDerivedStateAfterMutation(updatedAll)
+    scope.launch(ioCoroutineContext) {
       MusicPlayerEngine.saveTrackIndexCacheToDisk(tracks = updatedAll)
     }
     return duplicatedTrack
@@ -6324,7 +7195,8 @@ class MusicPlaybackSession(
     playbackQueue = playbackQueue.map { if (it.id == track.id) updatedTrack else it }
     val snapshot = allTracks
     MusicPlayerEngine.updateCachedLibrarySnapshot(snapshot)
-    scope.launch(Dispatchers.IO) {
+    refreshLibraryDerivedStateAfterMutation(snapshot)
+    scope.launch(ioCoroutineContext) {
       MusicPlayerEngine.saveTrackIndexCacheToDisk(tracks = snapshot)
     }
     return updatedTrack
@@ -6359,7 +7231,7 @@ class MusicPlaybackSession(
         .filterNot { it.equals(oldTrimmed, ignoreCase = true) }
         .toSet() + newTrimmed
       favoriteArtists = updatedFavArtists
-      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_ARTISTS, MusicPlayerEngine.serializeFavoriteSet(updatedFavArtists))?.apply()
+      persistFavoritesInBackground(PREF_KEY_MUSIC_FAVORITE_ARTISTS, updatedFavArtists, separator = "\n")
     }
     val updatedFavAlbums = favoriteAlbums.map { entry ->
       if (entry.contains("|")) {
@@ -6376,7 +7248,7 @@ class MusicPlaybackSession(
     }.toSet()
     if (updatedFavAlbums != favoriteAlbums) {
       favoriteAlbums = updatedFavAlbums
-      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_ALBUMS, MusicPlayerEngine.serializeFavoriteSet(updatedFavAlbums))?.apply()
+      persistFavoritesInBackground(PREF_KEY_MUSIC_FAVORITE_ALBUMS, updatedFavAlbums, separator = "\n")
     }
     if (selectedArtistName?.trim()?.equals(oldTrimmed, ignoreCase = true) == true) {
       selectedArtistName = newTrimmed
@@ -6392,7 +7264,8 @@ class MusicPlaybackSession(
     }
     val snapshot = allTracks
     MusicPlayerEngine.updateCachedLibrarySnapshot(snapshot)
-    scope.launch(Dispatchers.IO) {
+    refreshLibraryDerivedStateAfterMutation(snapshot)
+    scope.launch(ioCoroutineContext) {
       MusicPlayerEngine.saveTrackIndexCacheToDisk(tracks = snapshot)
     }
     return updatedCount
@@ -6436,7 +7309,7 @@ class MusicPlaybackSession(
       val withoutOld = MusicPlayerEngine.toggleFavoriteAlbum(favoriteAlbums, oldTrimmed, matchedArtist)
       val withNew = MusicPlayerEngine.toggleFavoriteAlbum(withoutOld, newTrimmed, matchedArtist)
       favoriteAlbums = withNew
-      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_ALBUMS, MusicPlayerEngine.serializeFavoriteSet(withNew))?.apply()
+      persistFavoritesInBackground(PREF_KEY_MUSIC_FAVORITE_ALBUMS, withNew, separator = "\n")
     }
     selectedAlbumKey?.let { key ->
       val keyAlbum = key.substringBefore("|").trim()
@@ -6451,7 +7324,8 @@ class MusicPlaybackSession(
     }
     val snapshot = allTracks
     MusicPlayerEngine.updateCachedLibrarySnapshot(snapshot)
-    scope.launch(Dispatchers.IO) {
+    refreshLibraryDerivedStateAfterMutation(snapshot)
+    scope.launch(ioCoroutineContext) {
       MusicPlayerEngine.saveTrackIndexCacheToDisk(tracks = snapshot)
     }
     return updatedCount
@@ -6486,14 +7360,15 @@ class MusicPlaybackSession(
         .filterNot { it.equals(oldTrimmed, ignoreCase = true) }
         .toSet() + newTrimmed
       favoriteGenres = updatedFavGenres
-      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_GENRES, MusicPlayerEngine.serializeFavoriteSet(updatedFavGenres))?.apply()
+      persistFavoritesInBackground(PREF_KEY_MUSIC_FAVORITE_GENRES, updatedFavGenres, separator = "\n")
     }
     if (selectedGenreName?.trim()?.equals(oldTrimmed, ignoreCase = true) == true) {
       selectedGenreName = newTrimmed
     }
     val snapshot = allTracks
     MusicPlayerEngine.updateCachedLibrarySnapshot(snapshot)
-    scope.launch(Dispatchers.IO) {
+    refreshLibraryDerivedStateAfterMutation(snapshot)
+    scope.launch(ioCoroutineContext) {
       MusicPlayerEngine.saveTrackIndexCacheToDisk(tracks = snapshot)
     }
     return updatedCount
@@ -6525,7 +7400,7 @@ class MusicPlaybackSession(
     if (favoriteIds.any { it in idsToDelete }) {
       val nextFavs = favoriteIds - idsToDelete
       favoriteIds = nextFavs
-      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITES, nextFavs.joinToString("|"))?.apply()
+      persistFavoritesInBackground(PREF_KEY_MUSIC_FAVORITES, nextFavs, separator = "|")
     }
     if (newPlaybackQueue.isEmpty()) {
       currentQueueIndex = 0
@@ -6543,7 +7418,8 @@ class MusicPlaybackSession(
     }
     val snapshot = allTracks
     MusicPlayerEngine.updateCachedLibrarySnapshot(snapshot)
-    scope.launch(Dispatchers.IO) {
+    refreshLibraryDerivedStateAfterMutation(snapshot)
+    scope.launch(ioCoroutineContext) {
       MusicPlayerEngine.saveTrackIndexCacheToDisk(tracks = snapshot)
     }
     return deletedCount
@@ -6564,7 +7440,7 @@ class MusicPlaybackSession(
     if (favoriteArtists.any { it.equals(trimmed, ignoreCase = true) }) {
       val next = favoriteArtists.filterNot { it.equals(trimmed, ignoreCase = true) }.toSet()
       favoriteArtists = next
-      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_ARTISTS, MusicPlayerEngine.serializeFavoriteSet(next))?.apply()
+      persistFavoritesInBackground(PREF_KEY_MUSIC_FAVORITE_ARTISTS, next, separator = "\n")
     }
     if (selectedArtistName?.trim()?.equals(trimmed, ignoreCase = true) == true) {
       selectedArtistName = null
@@ -6590,7 +7466,7 @@ class MusicPlaybackSession(
     if (MusicPlayerEngine.isAlbumFavorite(trimmedAlbum, trimmedArtist, favoriteAlbums)) {
       val next = MusicPlayerEngine.toggleFavoriteAlbum(favoriteAlbums, trimmedAlbum, trimmedArtist)
       favoriteAlbums = next
-      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_ALBUMS, MusicPlayerEngine.serializeFavoriteSet(next))?.apply()
+      persistFavoritesInBackground(PREF_KEY_MUSIC_FAVORITE_ALBUMS, next, separator = "\n")
     }
     selectedAlbumKey?.let { key ->
       val keyAlbum = key.substringBefore("|").trim()
@@ -6616,7 +7492,7 @@ class MusicPlaybackSession(
     if (favoriteGenres.any { it.equals(trimmed, ignoreCase = true) }) {
       val next = favoriteGenres.filterNot { it.equals(trimmed, ignoreCase = true) }.toSet()
       favoriteGenres = next
-      prefs?.edit()?.putString(PREF_KEY_MUSIC_FAVORITE_GENRES, MusicPlayerEngine.serializeFavoriteSet(next))?.apply()
+      persistFavoritesInBackground(PREF_KEY_MUSIC_FAVORITE_GENRES, next, separator = "\n")
     }
     if (selectedGenreName?.trim()?.equals(trimmed, ignoreCase = true) == true) {
       selectedGenreName = null
@@ -6955,7 +7831,10 @@ class MusicPlaybackSession(
     }
   }
 
-  internal fun syncSystemMediaControls(forceMetadataUpdate: Boolean = false) {
+  internal fun syncSystemMediaControls(
+    forceMetadataUpdate: Boolean = false,
+    notifyPlatformInBackground: Boolean = false,
+  ) {
     val track = currentTrack
     // Strictly reflects the individual song's favorite state (not artist or album favorite status)
     val isFav = track != null && track.id in favoriteIds
@@ -6968,6 +7847,13 @@ class MusicPlaybackSession(
       null
     }
 
+    val snapshotPositionMs = currentPositionMs
+    val snapshotDurationMs = trackDurationMs
+    val snapshotIsPlaying = isPlaying
+    val snapshotSpeed = playbackSpeed
+    val snapshotShuffleMode = shuffleMode
+    val snapshotRepeatMode = repeatMode
+
     systemMediaControlState = if (track == null || isReleased) {
       SystemMediaControlState(isActive = false)
     } else {
@@ -6978,13 +7864,13 @@ class MusicPlaybackSession(
         artist = track.artist,
         album = track.album,
         genre = track.genre,
-        durationMs = trackDurationMs,
-        positionMs = currentPositionMs,
-        isPlaying = isPlaying,
-        playbackSpeed = playbackSpeed,
+        durationMs = snapshotDurationMs,
+        positionMs = snapshotPositionMs,
+        isPlaying = snapshotIsPlaying,
+        playbackSpeed = snapshotSpeed,
         isFavorite = isFav,
-        shuffleMode = shuffleMode,
-        repeatMode = repeatMode,
+        shuffleMode = snapshotShuffleMode,
+        repeatMode = snapshotRepeatMode,
         shuffleIconRes = shuffleIconRes,
         repeatIconRes = repeatIconRes,
         favoriteIconRes = favIconRes,
@@ -7001,111 +7887,140 @@ class MusicPlaybackSession(
     if (isInspection || appContext == null) return
     val session = mediaSession ?: return
 
-    try {
-      if (track == null || isReleased) {
-        session.isActive = false
-        val stopState = PlaybackState.Builder()
-          .setState(PlaybackState.STATE_STOPPED, 0L, 0f)
-          .setActions(MusicPlayerEngine.SYSTEM_MEDIA_PLAYBACK_ACTIONS)
-          .build()
-        session.setPlaybackState(stopState)
-        val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        nm?.cancel(MusicPlayerEngine.MEDIA_NOTIFICATION_ID)
-        return
-      }
+    val applyPlatformSync = {
+      try {
+        if (track == null || isReleased) {
+          session.isActive = false
+          val stopState = PlaybackState.Builder()
+            .setState(PlaybackState.STATE_STOPPED, 0L, 0f)
+            .setActions(MusicPlayerEngine.SYSTEM_MEDIA_PLAYBACK_ACTIONS)
+            .build()
+          session.setPlaybackState(stopState)
+          val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+          nm?.cancel(MusicPlayerEngine.MEDIA_NOTIFICATION_ID)
+          lastNotifiedTrackId = null
+          lastNotifiedIsPlaying = null
+          lastNotifiedShuffleIconRes = 0
+          lastNotifiedRepeatIconRes = 0
+          lastNotifiedArtworkBitmap = null
+        } else {
+          session.isActive = true
 
-      session.isActive = true
+          // 1. Update PlaybackState:
+          //    - CustomAction 0 (left of playback controls): Shuffle (reflects OFF / SHUFFLE / SMART_SHUFFLE)
+          //    - Transport controls: Previous / Play-Pause / Next
+          //    - CustomAction 1 (right of playback controls): Repeat/Replay (reflects OFF / REPEAT_ALL / REPEAT_ONE)
+          //    - CustomAction 2: Favorite for the individual song (reflects track.id in favoriteIds)
+          val stateInt = if (snapshotIsPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
+          val effectiveSpeed = if (snapshotIsPlaying) snapshotSpeed else 0f
+          val shuffleLabel = MusicPlayerEngine.resolveSystemMediaShuffleLabel(snapshotShuffleMode)
+          val repeatLabel = MusicPlayerEngine.resolveSystemMediaRepeatLabel(snapshotRepeatMode)
+          val favLabel = MusicPlayerEngine.resolveSystemMediaFavoriteLabel(isFav)
+          val playbackState = PlaybackState.Builder()
+            .setState(stateInt, snapshotPositionMs.coerceAtLeast(0L), effectiveSpeed)
+            .setActions(MusicPlayerEngine.SYSTEM_MEDIA_PLAYBACK_ACTIONS)
+            .addCustomAction(
+              PlaybackState.CustomAction.Builder(
+                MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE,
+                shuffleLabel,
+                shuffleIconRes,
+              ).build()
+            )
+            .addCustomAction(
+              PlaybackState.CustomAction.Builder(
+                MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT,
+                repeatLabel,
+                repeatIconRes,
+              ).build()
+            )
+            .addCustomAction(
+              PlaybackState.CustomAction.Builder(
+                MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE,
+                favLabel,
+                favIconRes,
+              ).build()
+            )
+            .build()
+          session.setPlaybackState(playbackState)
 
-      // 1. Update PlaybackState:
-      //    - CustomAction 0 (left of playback controls): Shuffle (reflects OFF / SHUFFLE / SMART_SHUFFLE)
-      //    - Transport controls: Previous / Play-Pause / Next
-      //    - CustomAction 1 (right of playback controls): Repeat/Replay (reflects OFF / REPEAT_ALL / REPEAT_ONE)
-      //    - CustomAction 2: Favorite for the individual song (reflects track.id in favoriteIds)
-      val stateInt = if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
-      val effectiveSpeed = if (isPlaying) playbackSpeed else 0f
-      val shuffleLabel = MusicPlayerEngine.resolveSystemMediaShuffleLabel(shuffleMode)
-      val repeatLabel = MusicPlayerEngine.resolveSystemMediaRepeatLabel(repeatMode)
-      val favLabel = MusicPlayerEngine.resolveSystemMediaFavoriteLabel(isFav)
-      val playbackState = PlaybackState.Builder()
-        .setState(stateInt, currentPositionMs.coerceAtLeast(0L), effectiveSpeed)
-        .setActions(MusicPlayerEngine.SYSTEM_MEDIA_PLAYBACK_ACTIONS)
-        .addCustomAction(
-          PlaybackState.CustomAction.Builder(
-            MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE,
-            shuffleLabel,
-            shuffleIconRes,
-          ).build()
-        )
-        .addCustomAction(
-          PlaybackState.CustomAction.Builder(
-            MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT,
-            repeatLabel,
-            repeatIconRes,
-          ).build()
-        )
-        .addCustomAction(
-          PlaybackState.CustomAction.Builder(
-            MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE,
-            favLabel,
-            favIconRes,
-          ).build()
-        )
-        .build()
-      session.setPlaybackState(playbackState)
-
-      // 2. Load artwork asynchronously if not yet in memory
-      if (cachedArt == null && mediaArtworkLoadJob?.isActive != true) {
-        val targetId = track.id
-        mediaArtworkLoadJob = scope.launch {
-          try {
-            val loadedArt = MusicPlayerEngine.loadAlbumArtBitmapAsync(track, sizePx = 360)
-            if (!isReleased && currentTrack?.id == targetId && loadedArt != lastSyncedMediaArtworkBitmap) {
-              syncSystemMediaControls(forceMetadataUpdate = true)
+          // 2. Load artwork asynchronously if not yet in memory
+          if (cachedArt == null && mediaArtworkLoadJob?.isActive != true) {
+            val targetId = track.id
+            mediaArtworkLoadJob = scope.launch {
+              try {
+                val loadedArt = MusicPlayerEngine.loadAlbumArtBitmapAsync(track, sizePx = 360)
+                if (!isReleased && currentTrack?.id == targetId && loadedArt != lastSyncedMediaArtworkBitmap) {
+                  syncSystemMediaControls(forceMetadataUpdate = true)
+                }
+              } catch (_: kotlinx.coroutines.CancellationException) {
+                throw kotlinx.coroutines.CancellationException()
+              } catch (_: Throwable) {}
             }
-          } catch (_: kotlinx.coroutines.CancellationException) {
-            throw kotlinx.coroutines.CancellationException()
-          } catch (_: Throwable) {}
+          }
+
+          // 3. Update MediaMetadata when track, duration, or artwork changes
+          val metadataChanged = forceMetadataUpdate ||
+            lastSyncedMediaMetadataTrackId != track.id ||
+            lastSyncedMediaMetadataDurationMs != snapshotDurationMs ||
+            lastSyncedMediaArtworkBitmap !== cachedArt
+          if (metadataChanged) {
+            lastSyncedMediaMetadataTrackId = track.id
+            lastSyncedMediaMetadataDurationMs = snapshotDurationMs
+            lastSyncedMediaArtworkBitmap = cachedArt
+
+            val metaBuilder = MediaMetadata.Builder()
+              .putString(MediaMetadata.METADATA_KEY_MEDIA_ID, track.id)
+              .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
+              .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
+              .putString(MediaMetadata.METADATA_KEY_ALBUM, track.album)
+              .putString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST, track.artist)
+              .putString(MediaMetadata.METADATA_KEY_GENRE, track.genre)
+              .putLong(MediaMetadata.METADATA_KEY_DURATION, snapshotDurationMs)
+              .putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, track.trackNumber.toLong())
+              .putLong(MediaMetadata.METADATA_KEY_YEAR, track.year.toLong())
+            if (cachedArt != null) {
+              metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, cachedArt)
+              metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ART, cachedArt)
+            }
+            session.setMetadata(metaBuilder.build())
+          }
+
+          // 4. Only post/update the MediaStyle Notification when notification-visible fields change
+          //    (skipping expensive NotificationManager IPC when only favorite status or seek position changed)
+          val notificationNeedsUpdate = forceMetadataUpdate ||
+            lastNotifiedTrackId != track.id ||
+            lastNotifiedIsPlaying != snapshotIsPlaying ||
+            lastNotifiedShuffleIconRes != shuffleIconRes ||
+            lastNotifiedRepeatIconRes != repeatIconRes ||
+            lastNotifiedArtworkBitmap !== cachedArt
+          if (notificationNeedsUpdate) {
+            lastNotifiedTrackId = track.id
+            lastNotifiedIsPlaying = snapshotIsPlaying
+            lastNotifiedShuffleIconRes = shuffleIconRes
+            lastNotifiedRepeatIconRes = repeatIconRes
+            lastNotifiedArtworkBitmap = cachedArt
+            postSystemMediaNotification(
+              track = track,
+              isFavorite = isFav,
+              shuffleIconRes = shuffleIconRes,
+              repeatIconRes = repeatIconRes,
+              favIconRes = favIconRes,
+              artworkBitmap = cachedArt,
+              session = session,
+            )
+          }
         }
+      } catch (_: Throwable) {}
+    }
+
+    if (notifyPlatformInBackground) {
+      mediaControlSyncJob?.cancel()
+      mediaControlSyncJob = scope.launch(ioCoroutineContext) {
+        applyPlatformSync()
       }
-
-      // 3. Update MediaMetadata when track, duration, or artwork changes
-      val metadataChanged = forceMetadataUpdate ||
-        lastSyncedMediaMetadataTrackId != track.id ||
-        lastSyncedMediaMetadataDurationMs != trackDurationMs ||
-        lastSyncedMediaArtworkBitmap !== cachedArt
-      if (metadataChanged) {
-        lastSyncedMediaMetadataTrackId = track.id
-        lastSyncedMediaMetadataDurationMs = trackDurationMs
-        lastSyncedMediaArtworkBitmap = cachedArt
-
-        val metaBuilder = MediaMetadata.Builder()
-          .putString(MediaMetadata.METADATA_KEY_MEDIA_ID, track.id)
-          .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
-          .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
-          .putString(MediaMetadata.METADATA_KEY_ALBUM, track.album)
-          .putString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST, track.artist)
-          .putString(MediaMetadata.METADATA_KEY_GENRE, track.genre)
-          .putLong(MediaMetadata.METADATA_KEY_DURATION, trackDurationMs)
-          .putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, track.trackNumber.toLong())
-          .putLong(MediaMetadata.METADATA_KEY_YEAR, track.year.toLong())
-        if (cachedArt != null) {
-          metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, cachedArt)
-          metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ART, cachedArt)
-        }
-        session.setMetadata(metaBuilder.build())
-      }
-
-      // 4. Post / update MediaStyle system media notification
-      postSystemMediaNotification(
-        track = track,
-        isFavorite = isFav,
-        shuffleIconRes = shuffleIconRes,
-        repeatIconRes = repeatIconRes,
-        favIconRes = favIconRes,
-        artworkBitmap = cachedArt,
-        session = session,
-      )
-    } catch (_: Throwable) {}
+    } else {
+      applyPlatformSync()
+    }
   }
 
   private fun buildMediaActionPendingIntent(action: String, requestCode: Int): PendingIntent {
@@ -7288,6 +8203,12 @@ class MusicPlaybackSession(
     libraryLoadJob?.cancel()
     paletteLoadJob?.cancel()
     mediaArtworkLoadJob?.cancel()
+    favoritesRecalcJob?.cancel()
+    statsAndSortRecalcJob?.cancel()
+    libraryRebuildJob?.cancel()
+    prefsPersistJob?.cancel()
+    playStatsPersistJob?.cancel()
+    mediaControlSyncJob?.cancel()
     scope.cancel()
     releaseMediaPlayer()
     releaseSystemAudioAndMediaControls()

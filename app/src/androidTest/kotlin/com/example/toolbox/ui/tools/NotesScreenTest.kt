@@ -34,6 +34,10 @@ class NotesScreenTest {
     composeTestRule.onNodeWithTag("take_a_note_button").performClick()
     composeTestRule.waitForIdle()
 
+    composeTestRule.onNodeWithTag("add_note_panel").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("editor_archive_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("editor_copy_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("editor_title_input").assertIsFocused()
     composeTestRule.onNodeWithTag("editor_title_input").performTextInput("Trail Mix Recipe")
     composeTestRule.onNodeWithTag("editor_content_input").performTextInput("Almonds, cashews, dark chocolate")
     composeTestRule.onNodeWithTag("editor_color_PEACH").performClick()
@@ -45,12 +49,60 @@ class NotesScreenTest {
     composeTestRule.onNodeWithTag("editor_add_label_confirm").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("editor_label_chip_snacks").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("editor_save_button").performClick()
+    composeTestRule.onNodeWithTag("add_note_confirm_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("add_note_confirm_button").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithText("Trail Mix Recipe").assertIsDisplayed()
     composeTestRule.onNodeWithText("Almonds, cashews, dark chocolate").assertIsDisplayed()
     composeTestRule.onNodeWithTag("notes_section_pinned").assertIsDisplayed()
+  }
+
+  @Test
+  fun notesScreen_tappingNote_opensSingleNoteViewWithAllEditorControls() {
+    val repo = InMemoryNotesRepository(
+      initialNotes = listOf(
+        NoteItem(
+          id = "n1",
+          title = "Sourdough Starter",
+          content = "25g starter, 50g water, 50g flour",
+          color = NoteColor.SAND,
+          labels = listOf("baking"),
+        ),
+      ),
+      initialLabels = listOf("baking"),
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        NotesScreen(repository = repo)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("note_card_n1").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("single_note_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("single_note_back_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("editor_save_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("editor_pin_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("editor_checklist_toggle").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("editor_archive_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("editor_copy_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("editor_delete_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("editor_title_input").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("editor_content_input").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("single_note_bottom_color_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("editor_color_SAGE").performClick()
+    composeTestRule.onNodeWithTag("editor_pin_button").performClick()
+    composeTestRule.onNodeWithTag("single_note_back_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("single_note_view").assertIsNotDisplayed()
+    val updated = repo.loadNotes().first()
+    assertEquals(NoteColor.SAGE, updated.color)
+    assertTrue(updated.isPinned)
   }
 
   @Test
@@ -247,8 +299,8 @@ class NotesScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // Open Add & Manage Labels dialog from the '+ Label' chip
-    composeTestRule.onNodeWithTag("notes_add_label_chip").performClick()
+    // Open Add & Manage Labels dialog from the Manage Labels button
+    composeTestRule.onNodeWithTag("notes_manage_labels_button").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("manage_labels_dialog").assertIsDisplayed()

@@ -18,7 +18,6 @@ import com.example.toolbox.ui.main.parseExpandMusicPlayer
 import com.example.toolbox.ui.main.parseFolderShortcut
 import com.example.toolbox.ui.main.parseStandaloneTool
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
-import com.example.toolbox.ui.main.syncAppLauncherIcon
 import com.example.toolbox.ui.main.syncStandaloneTaskDescription
 import com.example.toolbox.ui.theme.ToolboxTheme
 import com.example.toolbox.ui.tools.MusicPlayerEngine
@@ -65,18 +64,11 @@ class MainActivity : ComponentActivity() {
       val initialFolder by initialFolderState
       val expandMusicPlayerInitial by expandMusicPlayerState
 
-      LaunchedEffect(themeColor, standaloneTool) {
-        if (standaloneTool == null) {
-          syncAppLauncherIcon(this@MainActivity, themeColor)
-        }
-      }
-
-      LaunchedEffect(standaloneTool, initialFolder, themeColor) {
+      LaunchedEffect(standaloneTool, initialFolder) {
         syncStandaloneTaskDescription(
           activity = this@MainActivity,
           standaloneTool = standaloneTool,
           initialFolder = initialFolder,
-          themeColor = themeColor,
         )
       }
 

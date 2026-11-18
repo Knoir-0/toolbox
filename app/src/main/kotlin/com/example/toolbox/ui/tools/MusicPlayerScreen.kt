@@ -454,123 +454,69 @@ fun MusicPlayerScreen(
   }
 
   val allTracks = session.allTracks
+  val sortedLibraryTracks = session.sortedLibraryTracks
   val hasDrillDown = selectedArtistName != null || selectedAlbumKey != null || selectedGenreName != null || selectedPlaylistId != null
 
   val songsSearchQuery = if (!hasDrillDown && selectedTab == MusicLibraryTab.SONGS) searchQuery else ""
+  val activeFavoriteSongIdsForFilter = if (showFavoriteSongsOnly) favoriteIds else emptySet()
   val sortedTracks = remember(
-    allTracks,
-    sortOrder,
-    viewPlayStats,
+    sortedLibraryTracks,
     showFavoriteSongsOnly,
-    favoriteIds,
-    favoriteArtists,
-    favoriteAlbums,
-    favoriteGenres,
+    activeFavoriteSongIdsForFilter,
     songsSearchQuery,
   ) {
     val base = if (showFavoriteSongsOnly) {
-      allTracks.filter { it.id in favoriteIds }
+      sortedLibraryTracks.filter { it.id in activeFavoriteSongIdsForFilter }
     } else {
-      allTracks
+      sortedLibraryTracks
     }
-    val filtered = MusicPlayerEngine.filterTracks(base, songsSearchQuery)
-    MusicPlayerEngine.sortTracks(
-      tracks = filtered,
-      sortOrder = sortOrder,
-      playStats = viewPlayStats,
-      favoriteIds = favoriteIds,
-      favoriteArtists = favoriteArtists,
-      favoriteAlbums = favoriteAlbums,
-      favoriteGenres = favoriteGenres,
-    )
+    MusicPlayerEngine.filterTracks(base, songsSearchQuery)
   }
 
-  val baseArtists = remember(allTracks) {
-    MusicPlayerEngine.buildArtists(allTracks)
-  }
+  val baseArtists = session.libraryArtists
   val artistsSearchQuery = if (!hasDrillDown && selectedTab == MusicLibraryTab.ARTISTS) searchQuery else ""
-  val allArtists = remember(baseArtists, showFavoriteArtistsOnly, favoriteArtists, artistsSearchQuery) {
+  val activeFavoriteArtistsForFilter = if (showFavoriteArtistsOnly) favoriteArtists else emptySet()
+  val allArtists = remember(baseArtists, showFavoriteArtistsOnly, activeFavoriteArtistsForFilter, artistsSearchQuery) {
     val base = if (showFavoriteArtistsOnly) {
-      baseArtists.filter { MusicPlayerEngine.isArtistFavorite(it, favoriteArtists) }
+      baseArtists.filter { MusicPlayerEngine.isArtistFavorite(it, activeFavoriteArtistsForFilter) }
     } else {
       baseArtists
     }
     MusicPlayerEngine.filterArtists(base, artistsSearchQuery)
   }
 
-  val baseAlbums = remember(allTracks) {
-    MusicPlayerEngine.buildAlbums(allTracks)
-  }
+  val baseAlbums = session.libraryAlbums
   val albumsSearchQuery = if (!hasDrillDown && selectedTab == MusicLibraryTab.ALBUMS) searchQuery else ""
-  val allAlbums = remember(baseAlbums, showFavoriteAlbumsOnly, favoriteAlbums, albumsSearchQuery) {
+  val activeFavoriteAlbumsForFilter = if (showFavoriteAlbumsOnly) favoriteAlbums else emptySet()
+  val allAlbums = remember(baseAlbums, showFavoriteAlbumsOnly, activeFavoriteAlbumsForFilter, albumsSearchQuery) {
     val base = if (showFavoriteAlbumsOnly) {
-      baseAlbums.filter { MusicPlayerEngine.isAlbumFavorite(it, favoriteAlbums) }
+      baseAlbums.filter { MusicPlayerEngine.isAlbumFavorite(it, activeFavoriteAlbumsForFilter) }
     } else {
       baseAlbums
     }
     MusicPlayerEngine.filterAlbums(base, albumsSearchQuery)
   }
 
-  val baseGenres = remember(allTracks) {
-    MusicPlayerEngine.buildGenres(allTracks)
-  }
+  val baseGenres = session.libraryGenres
   val genresSearchQuery = if (!hasDrillDown && selectedTab == MusicLibraryTab.GENRES) searchQuery else ""
-  val allGenres = remember(baseGenres, showFavoriteGenresOnly, favoriteGenres, genresSearchQuery) {
+  val activeFavoriteGenresForFilter = if (showFavoriteGenresOnly) favoriteGenres else emptySet()
+  val allGenres = remember(baseGenres, showFavoriteGenresOnly, activeFavoriteGenresForFilter, genresSearchQuery) {
     val base = if (showFavoriteGenresOnly) {
-      baseGenres.filter { MusicPlayerEngine.isGenreFavorite(it, favoriteGenres) }
+      baseGenres.filter { MusicPlayerEngine.isGenreFavorite(it, activeFavoriteGenresForFilter) }
     } else {
       baseGenres
     }
     MusicPlayerEngine.filterGenres(base, genresSearchQuery)
   }
 
-  val basePlaylists = remember(
-    savedPlaylistEntries,
-    allTracks,
-    favoriteIds,
-    favoriteArtists,
-    favoriteAlbums,
-    favoriteGenres,
-    viewPlayStats,
-  ) {
-    listOf(
-      MusicPlayerEngine.buildFavoritesPlaylist(favoriteIds, allTracks),
-      MusicPlayerEngine.buildMostPlayedPlaylist(
-        playStats = viewPlayStats,
-        allTracks = allTracks,
-        favoriteIds = favoriteIds,
-        favoriteArtists = favoriteArtists,
-        favoriteAlbums = favoriteAlbums,
-        favoriteGenres = favoriteGenres,
-      ),
-      MusicPlayerEngine.buildRecentlyPlayedPlaylist(viewPlayStats, allTracks),
-    ) + MusicPlayerEngine.buildPlaylists(savedPlaylistEntries, allTracks)
-  }
+  val basePlaylists = session.basePlaylists
   val playlistsSearchQuery = if (!hasDrillDown && selectedTab == MusicLibraryTab.PLAYLISTS) searchQuery else ""
   val allPlaylists = remember(basePlaylists, playlistsSearchQuery) {
     MusicPlayerEngine.filterPlaylists(basePlaylists, playlistsSearchQuery)
   }
 
   val homeRefreshGeneration = session.homeRefreshGeneration
-  val baseHomePlaylists = remember(
-    allTracks,
-    homePlayStats,
-    favoriteIds,
-    favoriteArtists,
-    favoriteAlbums,
-    favoriteGenres,
-    homeRefreshGeneration,
-  ) {
-    MusicPlayerEngine.generateHomePlaylists(
-      allTracks = allTracks,
-      playStats = homePlayStats,
-      favoriteIds = favoriteIds,
-      favoriteArtists = favoriteArtists,
-      favoriteAlbums = favoriteAlbums,
-      favoriteGenres = favoriteGenres,
-      refreshGeneration = homeRefreshGeneration,
-    )
-  }
+  val baseHomePlaylists = session.homePlaylists
   val homeSearchQuery = if (!hasDrillDown && selectedTab == MusicLibraryTab.HOME) searchQuery else ""
   val allHomePlaylists = remember(
     baseHomePlaylists,
@@ -1096,6 +1042,7 @@ fun MusicPlayerScreen(
       }
 
       val currentSelectableKeys: List<String> = remember(
+        isSelectionMode,
         activeAlbum,
         activeArtist,
         activeGenre,
@@ -1108,18 +1055,22 @@ fun MusicPlayerScreen(
         allGenres,
         allPlaylists,
       ) {
-        when {
-          activeAlbum != null -> activeAlbum.tracks.map { "song:${it.id}" }
-          activeArtist != null -> activeArtist.tracks.map { "song:${it.id}" }
-          activeGenre != null -> activeGenre.tracks.map { "song:${it.id}" }
-          activePlaylist != null -> activePlaylist.tracks.map { "song:${it.id}" }
-          else -> when (selectedTab) {
-            MusicLibraryTab.HOME -> allHomePlaylists.map { "playlist:${it.id}" }
-            MusicLibraryTab.ARTISTS -> allArtists.map { "artist:${it.name}" }
-            MusicLibraryTab.ALBUMS -> allAlbums.map { "album:${it.name}|${it.artist}" }
-            MusicLibraryTab.SONGS -> sortedTracks.map { "song:${it.id}" }
-            MusicLibraryTab.GENRES -> allGenres.map { "genre:${it.name}" }
-            MusicLibraryTab.PLAYLISTS -> allPlaylists.map { "playlist:${it.id}" }
+        if (!isSelectionMode) {
+          emptyList()
+        } else {
+          when {
+            activeAlbum != null -> activeAlbum.tracks.map { "song:${it.id}" }
+            activeArtist != null -> activeArtist.tracks.map { "song:${it.id}" }
+            activeGenre != null -> activeGenre.tracks.map { "song:${it.id}" }
+            activePlaylist != null -> activePlaylist.tracks.map { "song:${it.id}" }
+            else -> when (selectedTab) {
+              MusicLibraryTab.HOME -> allHomePlaylists.map { "playlist:${it.id}" }
+              MusicLibraryTab.ARTISTS -> allArtists.map { "artist:${it.name}" }
+              MusicLibraryTab.ALBUMS -> allAlbums.map { "album:${it.name}|${it.artist}" }
+              MusicLibraryTab.SONGS -> sortedTracks.map { "song:${it.id}" }
+              MusicLibraryTab.GENRES -> allGenres.map { "genre:${it.name}" }
+              MusicLibraryTab.PLAYLISTS -> allPlaylists.map { "playlist:${it.id}" }
+            }
           }
         }
       }
@@ -1306,7 +1257,7 @@ fun MusicPlayerScreen(
         },
       )
 
-      // 2. Category Tabs (Artists, Albums, Songs, Genres, Playlists; reorderable on press and hold) + Pinned Floating Sort Button
+      // 2. Category Tabs (Home, Playlists, Songs, Albums, Artists, Genres; reorderable on press and hold) + Pinned Floating Sort Button
       MusicCategoryAndViewBar(
         tabs = tabOrder,
         selectedTab = selectedTab,
@@ -1474,7 +1425,7 @@ fun MusicPlayerScreen(
                   isPlaying = isPlaying,
                   refreshGeneration = homeRefreshGeneration,
                   onRefresh = {
-                    session.refreshHomePlaylists()
+                    session.refreshHomePlaylistsAsync()
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                   },
                   onPlayAll = {
@@ -2559,10 +2510,15 @@ private fun MusicCategoryAndViewBar(
             if (barWidth > 0f && startOffset.x >= barWidth - sortButtonExcludeZonePx) {
               return@detectDragGesturesAfterLongPress
             }
-            val directHit = currentTabs.firstOrNull { tab ->
+            // The "Home" pill is fixed to the front of the list and cannot be dragged
+            if (tabBounds[MusicLibraryTab.HOME]?.contains(startOffset) == true) {
+              return@detectDragGesturesAfterLongPress
+            }
+            val reorderableTabs = currentTabs.filterNot { it == MusicLibraryTab.HOME }
+            val directHit = reorderableTabs.firstOrNull { tab ->
               tabBounds[tab]?.contains(startOffset) == true
             }
-            val hitTab = directHit ?: currentTabs.minByOrNull { tab ->
+            val hitTab = directHit ?: reorderableTabs.minByOrNull { tab ->
               val rect = tabBounds[tab] ?: return@minByOrNull Float.MAX_VALUE
               val dx = when {
                 startOffset.x < rect.left -> rect.left - startOffset.x
@@ -2582,7 +2538,10 @@ private fun MusicCategoryAndViewBar(
                 startOffset.x > rect.right -> startOffset.x - rect.right
                 else -> 0f
               }
-              dx <= maxHitSlopPx
+              val homeRect = tabBounds[MusicLibraryTab.HOME]
+              val closerToHome = homeRect != null &&
+                abs(startOffset.x - homeRect.center.x) < abs(startOffset.x - rect.center.x)
+              dx <= maxHitSlopPx && !closerToHome
             }
 
             if (hitTab != null) {
@@ -2614,8 +2573,9 @@ private fun MusicCategoryAndViewBar(
             }
 
             val fromIndex = currentTabs.indexOf(activeTab)
-            if (fromIndex >= 0 && currentTabs.size > 1) {
-              val targetIndex = currentTabs.indices.minByOrNull { idx ->
+            if (fromIndex > 0 && currentTabs.size > 2) {
+              // Target index is constrained to indices >= 1 (after the fixed "Home" pill at the front)
+              val targetIndex = (1..currentTabs.lastIndex).minByOrNull { idx ->
                 val rect = tabBounds[currentTabs[idx]]
                 if (rect != null) abs(desiredCenter.x - rect.center.x) else Float.MAX_VALUE
               }
@@ -2977,7 +2937,7 @@ private fun HomeTabContent(
           }
 
           itemsIndexed(playlists, key = { idx, it -> "${it.id}_${refreshGeneration}_$idx" }) { index, playlist ->
-            val isActive = currentTrackId != null && playlist.tracks.any { it.id == currentTrackId }
+            val isActive = playlist.containsTrack(currentTrackId)
             val selection = LocalMusicSelectionController.current
             val selectionKey = "playlist:${playlist.id}"
             val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
@@ -3124,7 +3084,7 @@ private fun HomeTabContent(
           }
 
           gridItemsIndexed(playlists, key = { idx, it -> "${it.id}_${refreshGeneration}_$idx" }) { index, playlist ->
-            val isActive = currentTrackId != null && playlist.tracks.any { it.id == currentTrackId }
+            val isActive = playlist.containsTrack(currentTrackId)
             val selection = LocalMusicSelectionController.current
             val selectionKey = "playlist:${playlist.id}"
             val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
@@ -4704,7 +4664,7 @@ private fun PlaylistsTabContent(
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         items(playlists, key = { it.id }) { playlist ->
-          val isActive = currentTrackId != null && playlist.tracks.any { it.id == currentTrackId }
+          val isActive = playlist.containsTrack(currentTrackId)
           val selection = LocalMusicSelectionController.current
           val selectionKey = "playlist:${playlist.id}"
           val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
@@ -4851,7 +4811,7 @@ private fun PlaylistsTabContent(
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
         items(playlists, key = { it.id }) { playlist ->
-          val isActive = currentTrackId != null && playlist.tracks.any { it.id == currentTrackId }
+          val isActive = playlist.containsTrack(currentTrackId)
           val selection = LocalMusicSelectionController.current
           val selectionKey = "playlist:${playlist.id}"
           val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
@@ -5111,7 +5071,7 @@ private fun ArtistDetailContent(
           ) {
             itemsIndexed(artist.albums, key = { _, it -> it.name }) { index, album ->
               val isActiveAlbum = index == focusedAlbumIndex ||
-                (currentTrackId != null && album.tracks.any { it.id == currentTrackId })
+                album.containsTrack(currentTrackId)
               Surface(
                 shape = CircleShape,
                 color = if (isActiveAlbum) {

@@ -837,7 +837,7 @@ fun ToolsPullUpPanelContent(
               if (onAddToHomeScreen != null) {
                 onAddToHomeScreen(selectedTool)
               } else {
-                addToolToHomeScreen(context, selectedTool, themeColor = themeColor)
+                addToolToHomeScreen(context, selectedTool)
               }
             },
             toolSorting = toolSorting,
@@ -2525,10 +2525,8 @@ fun ToolContentView(
       Tool.IMAGE_EDITOR -> ImageEditorScreen(modifier = Modifier.padding(bottom = bottomPadding))
       Tool.TODO_LIST -> TodoListScreen(modifier = Modifier.padding(bottom = bottomPadding))
       Tool.FILES -> {
-        val activeThemeColor = preferencesRepository?.themeColorFlow?.collectAsState()?.value
         FilesScreen(
           initialDirectory = initialDirectory,
-          themeColor = activeThemeColor,
           onOpenFileConverter = { preferencesRepository?.incrementToolUsage(Tool.FILE_CONVERTER) },
           onOpenImageEditor = { preferencesRepository?.incrementToolUsage(Tool.IMAGE_EDITOR) },
           onOpenVideoEditor = { preferencesRepository?.incrementToolUsage(Tool.VIDEO_EDITOR) },

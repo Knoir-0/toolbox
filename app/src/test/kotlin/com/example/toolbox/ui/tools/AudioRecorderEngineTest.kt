@@ -249,4 +249,82 @@ class AudioRecorderEngineTest {
     assertEquals(1, filteredByDevice.size)
     assertEquals("Recording_Device_20261110_120000.wav", filteredByDevice.first().name)
   }
+
+  @Test
+  fun parseAndSerializeGrantedFolders_andFolderDocumentId_workAccurately() {
+    assertTrue(AudioRecorderEngine.parseGrantedFolders(null).isEmpty())
+    assertTrue(AudioRecorderEngine.parseGrantedFolders("").isEmpty())
+    assertTrue(AudioRecorderEngine.parseGrantedFolders("   ").isEmpty())
+
+    val parsed = AudioRecorderEngine.parseGrantedFolders("AUDIO, Download, /Recordings")
+    assertEquals(
+      setOf(
+        AudioRecorderDefaultFolder.AUDIO,
+        AudioRecorderDefaultFolder.RECORDINGS,
+        AudioRecorderDefaultFolder.DOWNLOADS,
+      ),
+      parsed,
+    )
+
+    val serialized = AudioRecorderEngine.serializeGrantedFolders(
+      setOf(AudioRecorderDefaultFolder.DOWNLOADS, AudioRecorderDefaultFolder.AUDIO)
+    )
+    assertEquals("AUDIO,DOWNLOADS", serialized)
+    assertEquals(
+      setOf(AudioRecorderDefaultFolder.AUDIO, AudioRecorderDefaultFolder.DOWNLOADS),
+      AudioRecorderEngine.parseGrantedFolders(serialized),
+    )
+
+    assertEquals("primary:Audio", AudioRecorderEngine.buildFolderDocumentId(AudioRecorderDefaultFolder.AUDIO))
+    assertEquals("primary:Recordings", AudioRecorderEngine.buildFolderDocumentId(AudioRecorderDefaultFolder.RECORDINGS))
+    assertEquals("primary:Download", AudioRecorderEngine.buildFolderDocumentId(AudioRecorderDefaultFolder.DOWNLOADS))
+
+    assertEquals(
+      AudioRecorderDefaultFolder.AUDIO,
+      AudioRecorderDefaultFolder.fromPathOrName("content://com.android.externalstorage.documents/tree/primary%3AAudio"),
+    )
+    assertEquals(
+      AudioRecorderDefaultFolder.RECORDINGS,
+      AudioRecorderDefaultFolder.fromPathOrName("primary:Recordings"),
+    )
+    assertEquals(
+      AudioRecorderDefaultFolder.DOWNLOADS,
+      AudioRecorderDefaultFolder.fromPathOrName("primary:Download"),
+    )
+
+    // Reordering and persisting custom + default folder pills
+    val customPodcasts = AudioRecorderFolder(
+      folderName = "Podcasts",
+      displayPath = "/Podcasts",
+      customAbsolutePath = "/storage/emulated/0/Podcasts",
+    )
+    val withCustom = DEFAULT_AUDIO_RECORDER_FOLDERS + customPodcasts
+    val reordered = AudioRecorderEngine.reorderFolders(withCustom, fromIndex = 3, toIndex = 0)
+    assertEquals(listOf("Podcasts", "Audio", "Recordings", "Download"), reordered.map { it.folderName })
+
+    val serializedPills = AudioRecorderEngine.serializeFolderPills(reordered)
+    val parsedPills = AudioRecorderEngine.parseFolderPills(serializedPills)
+    assertEquals(reordered, parsedPills)
+
+    // findRecordingListIndex accounts for flat and grouped lists
+    val sampleItems = (1..3).map { idx ->
+      AudioRecordingItem(
+        file = File("/storage/emulated/0/Audio/Rec_$idx.m4a"),
+        name = "Rec_$idx.m4a",
+        path = "/storage/emulated/0/Audio/Rec_$idx.m4a",
+        sizeBytes = 1000L * idx,
+        lastModifiedMs = 1000L * idx,
+        extension = "m4a",
+        durationMs = 1000L,
+      )
+    }
+    val flatGroups = AudioRecorderEngine.groupRecordings(sampleItems, AudioRecorderGroupOption.NONE)
+    assertEquals(0, AudioRecorderEngine.findRecordingListIndex(flatGroups, "/storage/emulated/0/Audio/Rec_3.m4a"))
+    assertEquals(2, AudioRecorderEngine.findRecordingListIndex(flatGroups, "/storage/emulated/0/Audio/Rec_1.m4a"))
+
+    val formatGroups = AudioRecorderEngine.groupRecordings(sampleItems, AudioRecorderGroupOption.FORMAT)
+    // Header at index 0, items at 1..3
+    assertEquals(1, AudioRecorderEngine.findRecordingListIndex(formatGroups, "/storage/emulated/0/Audio/Rec_3.m4a"))
+    assertEquals(3, AudioRecorderEngine.findRecordingListIndex(formatGroups, "/storage/emulated/0/Audio/Rec_1.m4a"))
+  }
 }

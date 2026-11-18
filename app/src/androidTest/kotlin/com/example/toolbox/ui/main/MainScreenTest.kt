@@ -1014,7 +1014,10 @@ class MainScreenTest {
 
       // 2. Test GalleryScreen Edit button for Image & Video
       composeTestRule.setContent {
-        com.example.toolbox.ui.tools.GalleryScreen(rootDirectory = tempDir)
+        com.example.toolbox.ui.tools.GalleryScreen(
+          rootDirectory = tempDir,
+          initialGrantedFolders = com.example.toolbox.ui.tools.GalleryDefaultFolder.entries.toSet(),
+        )
       }
       composeTestRule.waitForIdle()
 

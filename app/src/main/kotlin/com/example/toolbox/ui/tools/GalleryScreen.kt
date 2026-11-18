@@ -1,5 +1,6 @@
 package com.example.toolbox.ui.tools
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -44,6 +45,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -128,6 +130,7 @@ import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Pause
@@ -193,6 +196,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -202,6 +206,8 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -212,6 +218,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -236,6 +243,7 @@ import androidx.core.view.WindowInsetsCompat
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -288,6 +296,10 @@ fun GalleryScreen(
   initialViewMode: GalleryViewMode? = null,
   initialSortOrder: GallerySortOrder? = null,
   initialGroupOption: GalleryGroupOption? = null,
+  initialGrantedFolders: Set<GalleryDefaultFolder>? = null,
+  onRequestFolderSystemAccess: ((GalleryDefaultFolder, (Boolean) -> Unit) -> Unit)? = null,
+  onRequestFolderPathSystemAccess: ((GalleryFolder, (Boolean) -> Unit) -> Unit)? = null,
+  onRequestAddCustomFolder: (((GalleryFolder?) -> Unit) -> Unit)? = null,
   videoPreviewPlayDurationMs: Long = DEFAULT_VIDEO_PREVIEW_PLAY_DURATION_MS,
   videoPreviewCyclePauseDurationMs: Long = DEFAULT_VIDEO_PREVIEW_CYCLE_PAUSE_DURATION_MS,
   videoPreviewScrollCooldownMs: Long = DEFAULT_VIDEO_PREVIEW_SCROLL_OUT_COOLDOWN_MS,
@@ -313,50 +325,49 @@ fun GalleryScreen(
     }
   }
 
-  // Storage permission state
-  var hasPermission by remember {
+  var refreshTrigger by remember { mutableIntStateOf(0) }
+
+  // Ordered list of navigation folder pills (defaults + any custom folders added via scoped storage; "Albums" is always fixed to the front)
+  var folderPills by remember(isInspection) {
     mutableStateOf(
-      isInspection ||
-        rootDirectory != null ||
-        initialFolders != null ||
-        initialAlbumDirectory != null ||
-        FileManagerEngine.hasStoragePermission(context)
+      if (isInspection) DEFAULT_GALLERY_FOLDERS
+      else GalleryEngine.getFolderPills(context)
     )
   }
 
-  var refreshTrigger by remember { mutableIntStateOf(0) }
-
-  val manageStorageLauncher = rememberLauncherForActivityResult(
-    contract = ActivityResultContracts.StartActivityForResult()
-  ) {
-    hasPermission = FileManagerEngine.hasStoragePermission(context)
-    refreshTrigger++
-  }
-
-  val legacyPermissionLauncher = rememberLauncherForActivityResult(
-    contract = ActivityResultContracts.RequestPermission()
-  ) { isGranted ->
-    hasPermission = isGranted
-    refreshTrigger++
-  }
-
-  fun requestStoragePermission() {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-      try {
-        val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-          data = Uri.parse("package:${context.packageName}")
-        }
-        manageStorageLauncher.launch(intent)
-      } catch (_: Exception) {
-        try {
-          manageStorageLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-        } catch (_: Exception) {
-          Toast.makeText(context, "Please grant storage access in System Settings", Toast.LENGTH_SHORT).show()
-        }
+  // Scoped folder access states (initially empty until at least one folder is granted access)
+  var grantedFolderPaths by remember(initialGrantedFolders, isInspection) {
+    mutableStateOf(
+      when {
+        initialGrantedFolders != null -> initialGrantedFolders.map { it.displayPath }.toSet()
+        isInspection -> emptySet()
+        else -> GalleryEngine.getGrantedFolderPaths(context)
       }
-    } else {
-      legacyPermissionLauncher.launch(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+    )
+  }
+
+  fun isFolderGranted(folder: GalleryFolder): Boolean {
+    return grantedFolderPaths.any { it.equals(folder.displayPath, ignoreCase = true) }
+  }
+
+  val grantedFolders: List<GalleryFolder> = remember(folderPills, grantedFolderPaths) {
+    folderPills.filter { isFolderGranted(it) }
+  }
+  val hasAnyGrantedFolder = grantedFolders.isNotEmpty() || initialFolders != null
+
+  // Folder display path for which the in-app permission view is currently displayed after tapping a locked folder pill or its lock icon
+  var pendingPermissionFolderPath by rememberSaveable {
+    mutableStateOf<String?>(null)
+  }
+  val pendingPermissionFolder: GalleryFolder? = remember(pendingPermissionFolderPath, folderPills) {
+    pendingPermissionFolderPath?.let { path ->
+      folderPills.find { it.displayPath.equals(path, ignoreCase = true) }
     }
+  }
+
+  // Folder display path currently awaiting the Android system directory access prompt result
+  var pendingSystemPromptFolderPath by rememberSaveable {
+    mutableStateOf<String?>(null)
   }
 
   // View mode: defaults to TILE view
@@ -441,15 +452,29 @@ fun GalleryScreen(
     refreshTrigger++
   }
 
-  // Load un-nested root contents (Pictures and DCIM merged as if they were the same folder)
-  val baseRootContents = remember(effectiveRootDir, initialFolders, additionalFolderPaths, refreshTrigger, isInspection) {
-    if (isInspection && rootDirectory == null && initialFolders == null) {
+  // Load un-nested root contents across all granted folders (Pictures and DCIM merged as if they were the same folder)
+  val baseRootContents = remember(
+    effectiveRootDir,
+    initialFolders,
+    additionalFolderPaths,
+    grantedFolders,
+    hasAnyGrantedFolder,
+    refreshTrigger,
+    isInspection,
+  ) {
+    if (!hasAnyGrantedFolder && initialAlbumDirectory == null && initialPhotoFile == null) {
+      AlbumContents(
+        directory = File(effectiveRootDir, DEFAULT_NEW_ALBUM_FOLDER_NAME),
+        nestedAlbums = emptyList(),
+        photos = emptyList(),
+        directories = emptyList(),
+      )
+    } else if (isInspection && rootDirectory == null && initialFolders == null) {
       AlbumContents(
         directory = File("/storage/emulated/0/Pictures"),
         directories = listOf(
           File("/storage/emulated/0/DCIM"),
           File("/storage/emulated/0/Pictures"),
-          File("/storage/emulated/0/Photos"),
           File("/storage/emulated/0/Download"),
         ),
         nestedAlbums = listOf(
@@ -496,10 +521,31 @@ fun GalleryScreen(
         ),
         photos = emptyList(),
       )
-    } else {
+    } else if (initialFolders != null) {
       GalleryEngine.loadRootContents(
         rootDirectory = effectiveRootDir,
         folders = initialFolders,
+        additionalPaths = additionalFolderPaths,
+      )
+    } else {
+      val grantedDirs = mutableListOf<File>()
+      for (folder in grantedFolders) {
+        val dir = GalleryEngine.resolveDirectoryForFolder(folder, effectiveRootDir)
+        if (grantedDirs.none { existing -> existing.absolutePath.equals(dir.absolutePath, ignoreCase = true) }) {
+          grantedDirs.add(dir)
+        }
+        if (folder.defaultFolder == GalleryDefaultFolder.DOWNLOADS) {
+          val pluralDownloads = File(effectiveRootDir, "Downloads")
+          if (pluralDownloads.exists() && pluralDownloads.isDirectory &&
+            grantedDirs.none { existing -> existing.absolutePath.equals(pluralDownloads.absolutePath, ignoreCase = true) }
+          ) {
+            grantedDirs.add(pluralDownloads)
+          }
+        }
+      }
+      GalleryEngine.loadRootContents(
+        rootDirectory = effectiveRootDir,
+        folders = grantedDirs,
         additionalPaths = additionalFolderPaths,
       )
     }
@@ -711,6 +757,165 @@ fun GalleryScreen(
     }
   }
 
+  fun grantFolderAccess(folder: GalleryFolder) {
+    if (folderPills.none { it.displayPath.equals(folder.displayPath, ignoreCase = true) }) {
+      val updatedPills = folderPills + folder
+      folderPills = updatedPills
+      if (!isInspection) {
+        GalleryEngine.setFolderPills(context, updatedPills)
+      }
+    }
+    grantedFolderPaths = if (isInspection) {
+      grantedFolderPaths + folder.displayPath
+    } else {
+      GalleryEngine.setFolderPathAccessGranted(context, folder.displayPath, true)
+    }
+    pendingPermissionFolderPath = null
+    selectedDefaultFolder = folder.folderName
+    albumStack.clear()
+    refreshTrigger++
+  }
+
+  fun moveFolderPill(fromIndex: Int, toIndex: Int) {
+    val updated = GalleryEngine.reorderFolders(folderPills, fromIndex, toIndex)
+    if (updated != folderPills) {
+      folderPills = updated
+      if (!isInspection) {
+        GalleryEngine.setFolderPills(context, updated)
+      }
+    }
+  }
+
+  val folderAccessLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.StartActivityForResult(),
+  ) { result ->
+    val targetPath = pendingSystemPromptFolderPath ?: pendingPermissionFolderPath
+    val targetFolder = folderPills.find {
+      it.displayPath.equals(targetPath, ignoreCase = true) ||
+        it.folderName.equals(selectedDefaultFolder, ignoreCase = true)
+    } ?: folderPills.firstOrNull() ?: GalleryDefaultFolder.DEFAULT.toGalleryFolder()
+    if (result.resultCode == Activity.RESULT_OK) {
+      val treeUri = result.data?.data
+      if (treeUri != null) {
+        try {
+          val takeFlags = (result.data?.flags ?: 0) and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+          val effectiveFlags = if (takeFlags != 0) {
+            takeFlags
+          } else {
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+          }
+          context.contentResolver.takePersistableUriPermission(treeUri, effectiveFlags)
+        } catch (_: Throwable) {}
+      }
+      val resolvedFromUri = treeUri?.let { GalleryEngine.resolveFolderFromTreeUri(it)?.toGalleryFolder() }
+      grantFolderAccess(targetFolder)
+      if (resolvedFromUri != null && !resolvedFromUri.displayPath.equals(targetFolder.displayPath, ignoreCase = true)) {
+        grantFolderAccess(resolvedFromUri)
+      }
+    }
+    pendingSystemPromptFolderPath = null
+  }
+
+  val addCustomFolderLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.StartActivityForResult(),
+  ) { result ->
+    if (result.resultCode == Activity.RESULT_OK) {
+      val treeUri = result.data?.data
+      if (treeUri != null) {
+        try {
+          val takeFlags = (result.data?.flags ?: 0) and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+          val effectiveFlags = if (takeFlags != 0) {
+            takeFlags
+          } else {
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+          }
+          context.contentResolver.takePersistableUriPermission(treeUri, effectiveFlags)
+        } catch (_: Throwable) {}
+        val resolvedFolder = GalleryEngine.resolveCustomFolderFromTreeUri(treeUri, effectiveRootDir)
+        if (resolvedFolder != null) {
+          grantFolderAccess(resolvedFolder)
+        }
+      }
+    }
+  }
+
+  fun requestAddCustomFolder() {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    val customAddHandler = onRequestAddCustomFolder
+    if (customAddHandler != null) {
+      customAddHandler { addedFolder ->
+        if (addedFolder != null) {
+          grantFolderAccess(addedFolder)
+        }
+      }
+    } else {
+      try {
+        val intent = GalleryEngine.createAddCustomFolderIntent(
+          context = context,
+          userRoot = effectiveRootDir,
+        )
+        addCustomFolderLauncher.launch(intent)
+      } catch (_: Throwable) {}
+    }
+  }
+
+  fun requestSystemFolderAccess(folder: GalleryFolder) {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    pendingSystemPromptFolderPath = folder.displayPath
+    val customPathHandler = onRequestFolderPathSystemAccess
+    val customDefaultHandler = onRequestFolderSystemAccess
+    if (customPathHandler != null) {
+      customPathHandler(folder) { granted ->
+        if (granted) {
+          grantFolderAccess(folder)
+        }
+        pendingSystemPromptFolderPath = null
+      }
+    } else if (customDefaultHandler != null && folder.defaultFolder != null) {
+      customDefaultHandler(folder.defaultFolder!!) { granted ->
+        if (granted) {
+          grantFolderAccess(folder)
+        }
+        pendingSystemPromptFolderPath = null
+      }
+    } else {
+      try {
+        val intent = GalleryEngine.createFolderAccessIntent(
+          context = context,
+          folder = folder,
+          userRoot = effectiveRootDir,
+        )
+        folderAccessLauncher.launch(intent)
+      } catch (_: Throwable) {
+        grantFolderAccess(folder)
+        pendingSystemPromptFolderPath = null
+      }
+    }
+  }
+
+  fun handleFolderPillTap(folder: GalleryFolder) {
+    isFabExpanded = false
+    exitSelectionMode()
+    navigatedToRootFromInitial = true
+    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    if (isFolderGranted(folder)) {
+      pendingPermissionFolderPath = null
+      if (albumStack.isEmpty() && selectedDefaultFolder.equals(folder.folderName, ignoreCase = true)) {
+        selectedDefaultFolder = null
+      } else {
+        selectedDefaultFolder = folder.folderName
+        albumStack.clear()
+      }
+      refreshTrigger++
+    } else {
+      selectedDefaultFolder = folder.folderName
+      pendingPermissionFolderPath = folder.displayPath
+      albumStack.clear()
+    }
+  }
+
   fun handleGalleryBack() {
     isFabExpanded = false
     exitSelectionMode()
@@ -725,7 +930,8 @@ fun GalleryScreen(
           albumStack.removeAt(albumStack.lastIndex)
         }
       }
-      selectedDefaultFolder != null -> {
+      pendingPermissionFolderPath != null || selectedDefaultFolder != null -> {
+        pendingPermissionFolderPath = null
         selectedDefaultFolder = null
       }
       else -> {
@@ -734,7 +940,7 @@ fun GalleryScreen(
     }
   }
 
-  BackHandler(enabled = isFabExpanded || isSelectionMode || isSearchActive || albumStack.isNotEmpty() || selectedDefaultFolder != null || onNavigateBack != null) {
+  BackHandler(enabled = isFabExpanded || isSelectionMode || isSearchActive || albumStack.isNotEmpty() || pendingPermissionFolderPath != null || selectedDefaultFolder != null || onNavigateBack != null) {
     when {
       isFabExpanded -> {
         isFabExpanded = false
@@ -754,6 +960,8 @@ fun GalleryScreen(
   val activeRootContents: AlbumContents = remember(
     rootContents,
     selectedDefaultFolder,
+    folderPills,
+    grantedFolderPaths,
     effectiveRootDir,
     refreshTrigger,
     isInspection,
@@ -761,23 +969,44 @@ fun GalleryScreen(
     val folderName = selectedDefaultFolder
     if (folderName.isNullOrBlank()) {
       rootContents
-    } else if (isInspection && rootDirectory == null && initialFolders == null) {
-      rootContents.copy(
-        nestedAlbums = rootContents.nestedAlbums.filter {
-          it.path.contains("/$folderName", ignoreCase = true) || it.name.equals(folderName, ignoreCase = true)
-        }
-      )
     } else {
-      val matchingDirs = rootContents.directories.filter { dir ->
-        if (folderName.equals("Download", ignoreCase = true) || folderName.equals("Downloads", ignoreCase = true)) {
-          GalleryEngine.isDownloadsDirectory(dir)
-        } else {
-          dir.name.equals(folderName, ignoreCase = true)
-        }
-      }.ifEmpty {
-        listOf(File(effectiveRootDir, folderName))
+      val matchingPill = folderPills.find {
+        it.folderName.equals(folderName, ignoreCase = true) ||
+          it.displayPath.equals(folderName, ignoreCase = true)
       }
-      GalleryEngine.loadMergedAlbumContents(matchingDirs)
+      if (matchingPill != null && !isFolderGranted(matchingPill)) {
+        AlbumContents(
+          directory = GalleryEngine.resolveDirectoryForFolder(matchingPill, effectiveRootDir),
+          nestedAlbums = emptyList(),
+          photos = emptyList(),
+          directories = emptyList(),
+        )
+      } else if (isInspection && rootDirectory == null && initialFolders == null) {
+        rootContents.copy(
+          nestedAlbums = rootContents.nestedAlbums.filter {
+            it.path.contains("/$folderName", ignoreCase = true) || it.name.equals(folderName, ignoreCase = true)
+          }
+        )
+      } else {
+        val matchingDirs = if (matchingPill != null && !matchingPill.customAbsolutePath.isNullOrBlank()) {
+          listOf(File(matchingPill.customAbsolutePath))
+        } else {
+          rootContents.directories.filter { dir ->
+            if (folderName.equals("Download", ignoreCase = true) || folderName.equals("Downloads", ignoreCase = true)) {
+              GalleryEngine.isDownloadsDirectory(dir)
+            } else {
+              dir.name.equals(folderName, ignoreCase = true)
+            }
+          }.ifEmpty {
+            if (matchingPill != null) {
+              listOf(GalleryEngine.resolveDirectoryForFolder(matchingPill, effectiveRootDir))
+            } else {
+              listOf(File(effectiveRootDir, folderName))
+            }
+          }
+        }
+        GalleryEngine.loadMergedAlbumContents(matchingDirs)
+      }
     }
   }
 
@@ -1336,7 +1565,9 @@ fun GalleryScreen(
       // Pill & Filter Controls Bar underneath the toolbar (shows Smart Tags when in search view, otherwise navigation pills)
       GalleryNavigationAndDensityBar(
         albumStack = albumStack.toList(),
-        defaultFolderNames = DEFAULT_GALLERY_FOLDER_NAMES,
+        folders = folderPills,
+        grantedFolderPaths = grantedFolderPaths,
+        pendingPermissionFolder = pendingPermissionFolder,
         selectedDefaultFolder = selectedDefaultFolder,
         viewMode = viewMode,
         albumsPerRow = albumsPerRow,
@@ -1358,24 +1589,26 @@ fun GalleryScreen(
           isFabExpanded = false
           exitSelectionMode()
           navigatedToRootFromInitial = true
+          pendingPermissionFolderPath = null
           selectedDefaultFolder = null
           albumStack.clear()
         },
-        onSelectDefaultFolder = { folderName ->
-          isFabExpanded = false
-          exitSelectionMode()
-          navigatedToRootFromInitial = true
-          if (albumStack.isEmpty() && selectedDefaultFolder.equals(folderName, ignoreCase = true)) {
-            selectedDefaultFolder = null
-          } else {
-            selectedDefaultFolder = folderName
-            albumStack.clear()
-          }
-          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        onSelectFolder = { folder ->
+          handleFolderPillTap(folder)
+        },
+        onTapFolderIcon = { folder ->
+          handleFolderPillTap(folder)
+        },
+        onMoveFolder = { fromIndex, toIndex ->
+          moveFolderPill(fromIndex, toIndex)
+        },
+        onAddCustomFolder = {
+          requestAddCustomFolder()
         },
         onNavigateToIndex = { index ->
           isFabExpanded = false
           exitSelectionMode()
+          pendingPermissionFolderPath = null
           while (albumStack.size > index + 1) {
             albumStack.removeAt(albumStack.lastIndex)
           }
@@ -1400,13 +1633,16 @@ fun GalleryScreen(
         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
       )
 
-      if (!hasPermission) {
-        GalleryPermissionBanner(
-          onGrantPermission = { requestStoragePermission() },
-        )
-      }
+      val folderAwaitingPermission = (
+        pendingPermissionFolder ?: selectedDefaultFolder?.let { sel ->
+          folderPills.find {
+            it.folderName.equals(sel, ignoreCase = true) ||
+              it.displayPath.equals(sel, ignoreCase = true)
+          }
+        }
+      )?.takeIf { !isFolderGranted(it) }
 
-      // Main Content Area (Tile View with pinch-to-zoom 3..6 per row, or List View)
+      // Main Content Area (Tile View with pinch-to-zoom 3..6 per row, List View, or Scoped Storage Permission / Locked View)
       Box(
         modifier = Modifier
           .weight(1f)
@@ -1420,7 +1656,16 @@ fun GalleryScreen(
             onColumnsChange = { updateAlbumsPerRow(it) },
           ),
       ) {
-        if (activeAlbums.isEmpty() && activePhotos.isEmpty()) {
+        if (folderAwaitingPermission != null) {
+          GalleryFolderPermissionRequestView(
+            folder = folderAwaitingPermission,
+            onAllowAccess = {
+              requestSystemFolderAccess(folderAwaitingPermission)
+            },
+          )
+        } else if (currentAlbum == null && !hasAnyGrantedFolder) {
+          GalleryLockedStorageStateView()
+        } else if (activeAlbums.isEmpty() && activePhotos.isEmpty()) {
           if (hasActiveSearchQueryOrTag) {
             GallerySearchEmptyStateView(
               searchQuery = searchQuery,
@@ -2193,7 +2438,9 @@ private fun GalleryTopBar(
 @Composable
 private fun GalleryNavigationAndDensityBar(
   albumStack: List<GalleryAlbum>,
-  defaultFolderNames: List<String> = DEFAULT_GALLERY_FOLDER_NAMES,
+  folders: List<GalleryFolder> = DEFAULT_GALLERY_FOLDERS,
+  grantedFolderPaths: Set<String> = emptySet(),
+  pendingPermissionFolder: GalleryFolder? = null,
   selectedDefaultFolder: String? = null,
   viewMode: GalleryViewMode,
   albumsPerRow: Int,
@@ -2209,7 +2456,10 @@ private fun GalleryNavigationAndDensityBar(
   totalCount: Int = 0,
   onSelectTag: (String) -> Unit = {},
   onNavigateToRoot: () -> Unit,
-  onSelectDefaultFolder: (String) -> Unit = {},
+  onSelectFolder: (GalleryFolder) -> Unit = {},
+  onTapFolderIcon: (GalleryFolder) -> Unit = {},
+  onMoveFolder: (fromIndex: Int, toIndex: Int) -> Unit = { _, _ -> },
+  onAddCustomFolder: () -> Unit = {},
   onNavigateToIndex: (Int) -> Unit,
   onAlbumsPerRowChange: (Int) -> Unit,
   onOpenSortMenu: () -> Unit,
@@ -2218,6 +2468,31 @@ private fun GalleryNavigationAndDensityBar(
   onSelectSortOrder: (GallerySortOrder) -> Unit,
   onToggleSaveSortGroupForFolder: () -> Unit = {},
 ) {
+  val density = LocalDensity.current
+  val haptic = LocalHapticFeedback.current
+  val scrollState = rememberScrollState()
+
+  val currentFolders by rememberUpdatedState(folders)
+  val currentOnMoveFolder by rememberUpdatedState(onMoveFolder)
+  val pillBounds = remember { mutableMapOf<String, Rect>() }
+  var albumsPillBounds by remember { mutableStateOf<Rect?>(null) }
+  var barCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+
+  var draggedFolder by remember { mutableStateOf<GalleryFolder?>(null) }
+  var dragPointerOffset by remember { mutableStateOf(Offset.Zero) }
+  var grabOffsetFromCenter by remember { mutableStateOf(Offset.Zero) }
+  var draggedPillSize by remember { mutableStateOf<IntSize?>(null) }
+
+  val maxHitSlopPx = with(density) { 24.dp.toPx() }
+  val leftEdgeScrollZonePx = with(density) { 36.dp.toPx() }
+  val rightEdgeScrollZonePx = with(density) { (if (viewMode == GalleryViewMode.TILE) 152.dp else 112.dp).toPx() }
+  val floatingButtonsExcludeZonePx = with(density) { (if (viewMode == GalleryViewMode.TILE) 132.dp else 92.dp).toPx() }
+  val edgeScrollStepPx = with(density) { 10.dp.toPx() }
+
+  fun isGrantedFolder(folder: GalleryFolder): Boolean {
+    return grantedFolderPaths.any { it.equals(folder.displayPath, ignoreCase = true) }
+  }
+
   Surface(
     color = MaterialTheme.colorScheme.surface,
     modifier = Modifier.fillMaxWidth(),
@@ -2225,17 +2500,120 @@ private fun GalleryNavigationAndDensityBar(
     Box(
       modifier = Modifier
         .fillMaxWidth()
-        .testTag("gallery_pill_bar"),
+        .testTag("gallery_pill_bar")
+        .onGloballyPositioned { coords ->
+          barCoordinates = coords
+        }
+        .pointerInput(isSearchView, viewMode) {
+          if (isSearchView) return@pointerInput
+          detectDragGesturesAfterLongPress(
+            onDragStart = { startOffset ->
+              val barWidth = (barCoordinates?.size?.width ?: 0).toFloat()
+              if (barWidth > 0f && startOffset.x >= barWidth - floatingButtonsExcludeZonePx) {
+                return@detectDragGesturesAfterLongPress
+              }
+              // The "Albums" pill is fixed to the front of the list and cannot be dragged
+              if (albumsPillBounds?.contains(startOffset) == true) {
+                return@detectDragGesturesAfterLongPress
+              }
+              val directHit = currentFolders.firstOrNull { folder ->
+                pillBounds[folder.displayPath]?.contains(startOffset) == true
+              }
+              val hitFolder = directHit ?: currentFolders.minByOrNull { folder ->
+                val rect = pillBounds[folder.displayPath] ?: return@minByOrNull Float.MAX_VALUE
+                val dx = when {
+                  startOffset.x < rect.left -> rect.left - startOffset.x
+                  startOffset.x > rect.right -> startOffset.x - rect.right
+                  else -> 0f
+                }
+                val dy = when {
+                  startOffset.y < rect.top -> rect.top - startOffset.y
+                  startOffset.y > rect.bottom -> startOffset.y - rect.bottom
+                  else -> 0f
+                }
+                dx + dy
+              }?.takeIf { folder ->
+                val rect = pillBounds[folder.displayPath] ?: return@takeIf false
+                val dx = when {
+                  startOffset.x < rect.left -> rect.left - startOffset.x
+                  startOffset.x > rect.right -> startOffset.x - rect.right
+                  else -> 0f
+                }
+                val albumsRect = albumsPillBounds
+                val closerToAlbums = albumsRect != null &&
+                  abs(startOffset.x - albumsRect.center.x) < abs(startOffset.x - rect.center.x)
+                dx <= maxHitSlopPx && !closerToAlbums
+              }
+
+              if (hitFolder != null) {
+                val rect = pillBounds[hitFolder.displayPath]
+                draggedFolder = hitFolder
+                dragPointerOffset = startOffset
+                grabOffsetFromCenter = if (rect != null) {
+                  startOffset - rect.center
+                } else {
+                  Offset.Zero
+                }
+                draggedPillSize = rect?.let { IntSize(it.width.roundToInt(), it.height.roundToInt()) }
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              }
+            },
+            onDrag = { change, dragAmount ->
+              val activeFolder = draggedFolder ?: return@detectDragGesturesAfterLongPress
+              change.consume()
+              dragPointerOffset += dragAmount
+              val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+
+              val barWidth = (barCoordinates?.size?.width ?: 0).toFloat()
+              if (barWidth > 0f && scrollState.maxValue > 0) {
+                if (dragPointerOffset.x < leftEdgeScrollZonePx && scrollState.value > 0) {
+                  scrollState.dispatchRawDelta(-edgeScrollStepPx)
+                } else if (dragPointerOffset.x > barWidth - rightEdgeScrollZonePx && scrollState.value < scrollState.maxValue) {
+                  scrollState.dispatchRawDelta(edgeScrollStepPx)
+                }
+              }
+
+              val fromIndex = currentFolders.indexOfFirst {
+                it.displayPath.equals(activeFolder.displayPath, ignoreCase = true)
+              }
+              if (fromIndex >= 0 && currentFolders.size > 1) {
+                // Target index is constrained within currentFolders (after the fixed "Albums" pill at the front)
+                val targetIndex = currentFolders.indices.minByOrNull { idx ->
+                  val rect = pillBounds[currentFolders[idx].displayPath]
+                  if (rect != null) abs(desiredCenter.x - rect.center.x) else Float.MAX_VALUE
+                }
+                if (targetIndex != null && targetIndex != fromIndex) {
+                  currentOnMoveFolder(fromIndex, targetIndex)
+                }
+              }
+            },
+            onDragEnd = {
+              draggedFolder = null
+              dragPointerOffset = Offset.Zero
+              grabOffsetFromCenter = Offset.Zero
+              draggedPillSize = null
+            },
+            onDragCancel = {
+              draggedFolder = null
+              dragPointerOffset = Offset.Zero
+              grabOffsetFromCenter = Offset.Zero
+              draggedPillSize = null
+            },
+          )
+        },
       contentAlignment = Alignment.CenterStart,
     ) {
       Row(
         modifier = Modifier
           .fillMaxWidth()
-          .fadingPillRowUnderFloatingControls(hasColumnsButton = viewMode == GalleryViewMode.TILE)
-          .horizontalScroll(rememberScrollState())
+          .fadingPillRowUnderFloatingControls(
+            hasColumnsButton = viewMode == GalleryViewMode.TILE,
+            extraControlButtonsCount = 1,
+          )
+          .horizontalScroll(scrollState, enabled = draggedFolder == null)
           .padding(
             start = 12.dp,
-            end = if (viewMode == GalleryViewMode.TILE) 96.dp else 56.dp,
+            end = if (viewMode == GalleryViewMode.TILE) 136.dp else 96.dp,
             top = 6.dp,
             bottom = 6.dp,
           ),
@@ -2311,16 +2689,21 @@ private fun GalleryNavigationAndDensityBar(
             }
           }
         } else {
-          // Navigation pills sized identically to navigation pills in other tools (FilterChip with 20.dp shape)
+          // Navigation pills sized identically to navigation pills in other tools (FilterChip with 20.dp shape);
+          // "Albums" is always fixed to the front of the list, followed by reorderable folder pills.
           Row(
             modifier = Modifier.testTag("gallery_breadcrumbs"),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
           ) {
-            val isAtRootAll = albumStack.isEmpty() && selectedDefaultFolder.isNullOrBlank()
+            val isAtRootAll = albumStack.isEmpty() && selectedDefaultFolder.isNullOrBlank() && pendingPermissionFolder == null
             FilterChip(
               selected = isAtRootAll,
-              onClick = onNavigateToRoot,
+              onClick = {
+                if (draggedFolder == null) {
+                  onNavigateToRoot()
+                }
+              },
               shape = RoundedCornerShape(20.dp),
               leadingIcon = {
                 Icon(
@@ -2331,7 +2714,7 @@ private fun GalleryNavigationAndDensityBar(
               },
               label = {
                 Text(
-                  text = "Albums",
+                  text = GALLERY_ALBUMS_PILL_NAME,
                   style = MaterialTheme.typography.labelMedium,
                   fontWeight = if (isAtRootAll) FontWeight.Bold else FontWeight.Medium,
                 )
@@ -2341,7 +2724,14 @@ private fun GalleryNavigationAndDensityBar(
                 selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
               ),
-              modifier = Modifier.testTag("gallery_breadcrumb_root"),
+              modifier = Modifier
+                .onGloballyPositioned { coords ->
+                  val barCoords = barCoordinates
+                  if (barCoords != null && barCoords.isAttached && coords.isAttached) {
+                    albumsPillBounds = barCoords.localBoundingBoxOf(coords, clipBounds = false)
+                  }
+                }
+                .testTag("gallery_breadcrumb_root"),
             )
 
             albumStack.forEachIndexed { index, album ->
@@ -2354,7 +2744,11 @@ private fun GalleryNavigationAndDensityBar(
               val isCurrent = index == albumStack.lastIndex
               FilterChip(
                 selected = isCurrent,
-                onClick = { onNavigateToIndex(index) },
+                onClick = {
+                  if (draggedFolder == null) {
+                    onNavigateToIndex(index)
+                  }
+                },
                 shape = RoundedCornerShape(20.dp),
                 leadingIcon = {
                   Icon(
@@ -2379,39 +2773,92 @@ private fun GalleryNavigationAndDensityBar(
               )
             }
 
-            defaultFolderNames.forEach { folderName ->
-              val isSelectedFolder = albumStack.isEmpty() && selectedDefaultFolder.equals(folderName, ignoreCase = true)
-              FilterChip(
-                selected = isSelectedFolder,
-                onClick = { onSelectDefaultFolder(folderName) },
-                shape = RoundedCornerShape(20.dp),
-                leadingIcon = {
-                  Icon(
-                    imageVector = Icons.Default.Folder,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                  )
-                },
-                label = {
-                  Text(
-                    text = folderName,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (isSelectedFolder) FontWeight.Bold else FontWeight.Medium,
-                  )
-                },
-                colors = FilterChipDefaults.filterChipColors(
-                  selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                  selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                  selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-                ),
-                modifier = Modifier.testTag("gallery_folder_pill_$folderName"),
-              )
+            folders.forEach { folder ->
+              val isGranted = isGrantedFolder(folder)
+              val isSelectedFolder = if (pendingPermissionFolder != null) {
+                pendingPermissionFolder.displayPath.equals(folder.displayPath, ignoreCase = true)
+              } else {
+                albumStack.isEmpty() && (
+                  selectedDefaultFolder.equals(folder.folderName, ignoreCase = true) ||
+                    selectedDefaultFolder.equals(folder.displayPath, ignoreCase = true)
+                )
+              }
+              val isBeingDragged = draggedFolder?.displayPath?.equals(folder.displayPath, ignoreCase = true) == true
+              Box(
+                modifier = Modifier.testTag("folder_pill_${folder.folderName}"),
+              ) {
+                FilterChip(
+                  selected = isSelectedFolder,
+                  onClick = {
+                    if (draggedFolder == null) {
+                      onSelectFolder(folder)
+                    }
+                  },
+                  shape = RoundedCornerShape(20.dp),
+                  leadingIcon = {
+                    Box(
+                      contentAlignment = Alignment.Center,
+                      modifier = Modifier
+                        .semantics(mergeDescendants = true) {
+                          if (draggedFolder == null) {
+                            onClick {
+                              onTapFolderIcon(folder)
+                              true
+                            }
+                          }
+                        }
+                        .testTag(
+                          if (isGranted) {
+                            "folder_unlocked_icon_${folder.folderName}"
+                          } else {
+                            "folder_lock_icon_${folder.folderName}"
+                          }
+                        ),
+                    ) {
+                      Icon(
+                        imageVector = if (isGranted) Icons.Default.Folder else Icons.Default.Lock,
+                        contentDescription = if (isGranted) {
+                          "${folder.pillLabel} folder unlocked"
+                        } else {
+                          "Unlock ${folder.pillLabel} folder"
+                        },
+                        modifier = Modifier
+                          .size(16.dp)
+                          .testTag("folder_pill_icon_${folder.folderName}"),
+                      )
+                    }
+                  },
+                  label = {
+                    Text(
+                      text = folder.pillLabel,
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = if (isSelectedFolder) FontWeight.Bold else FontWeight.Medium,
+                    )
+                  },
+                  colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+                  ),
+                  modifier = Modifier
+                    .onGloballyPositioned { coords ->
+                      val barCoords = barCoordinates
+                      if (barCoords != null && barCoords.isAttached && coords.isAttached) {
+                        pillBounds[folder.displayPath] = barCoords.localBoundingBoxOf(coords, clipBounds = false)
+                      }
+                    }
+                    .graphicsLayer {
+                      alpha = if (isBeingDragged) 0.3f else 1f
+                    }
+                    .testTag("gallery_folder_pill_${folder.folderName}"),
+                )
+              }
             }
           }
         }
       }
 
-      // Pinned floating [# per row] and [Sort/Filter] buttons on the right edge of the pill bar
+      // Pinned floating [# per row], [Add Storage Location], and [Sort/Filter] buttons on the right edge of the pill bar
       Row(
         modifier = Modifier
           .align(Alignment.CenterEnd)
@@ -2431,6 +2878,30 @@ private fun GalleryNavigationAndDensityBar(
             countTestTag = "gallery_albums_per_row_count",
             contentDescription = "$albumsPerRow albums per row",
           )
+        }
+
+        Surface(
+          onClick = onAddCustomFolder,
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surfaceContainerHigh,
+          tonalElevation = 3.dp,
+          shadowElevation = 4.dp,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+          modifier = Modifier
+            .size(34.dp)
+            .testTag("gallery_add_storage_location_button"),
+        ) {
+          Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.testTag("add_folder_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.CreateNewFolder,
+              contentDescription = "Add storage location",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(18.dp),
+            )
+          }
         }
 
         Box {
@@ -2607,50 +3078,196 @@ private fun GalleryNavigationAndDensityBar(
           }
         }
       }
+
+      val activeDraggedFolder = draggedFolder
+      if (activeDraggedFolder != null && barCoordinates != null) {
+        val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+        val fallbackWidthPx = with(density) { 96.dp.toPx() }
+        val fallbackHeightPx = with(density) { 32.dp.toPx() }
+        val widthPx = draggedPillSize?.width?.toFloat() ?: fallbackWidthPx
+        val heightPx = draggedPillSize?.height?.toFloat() ?: fallbackHeightPx
+        val isGranted = isGrantedFolder(activeDraggedFolder)
+        val isSelected = if (pendingPermissionFolder != null) {
+          pendingPermissionFolder.displayPath.equals(activeDraggedFolder.displayPath, ignoreCase = true)
+        } else {
+          albumStack.isEmpty() && (
+            selectedDefaultFolder.equals(activeDraggedFolder.folderName, ignoreCase = true) ||
+              selectedDefaultFolder.equals(activeDraggedFolder.displayPath, ignoreCase = true)
+          )
+        }
+
+        Box(
+          modifier = Modifier
+            .graphicsLayer {
+              translationX = desiredCenter.x - widthPx / 2f
+              translationY = desiredCenter.y - heightPx / 2f
+              scaleX = 1.06f
+              scaleY = 1.06f
+            }
+            .zIndex(100f),
+        ) {
+          FilterChip(
+            selected = isSelected,
+            onClick = {},
+            shape = RoundedCornerShape(20.dp),
+            leadingIcon = {
+              Icon(
+                imageVector = if (isGranted) Icons.Default.Folder else Icons.Default.Lock,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+              )
+            },
+            label = {
+              Text(
+                text = activeDraggedFolder.pillLabel,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+              )
+            },
+            colors = FilterChipDefaults.filterChipColors(
+              selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+              selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+              selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+            ),
+          )
+        }
+      }
     }
   }
 }
 
+/**
+ * View displayed in the Album view when storage access is locked (no folders have been granted
+ * scoped storage access yet), matching the Audio Recorder tool.
+ */
 @Composable
-private fun GalleryPermissionBanner(
-  onGrantPermission: () -> Unit,
+private fun GalleryLockedStorageStateView(
+  modifier: Modifier = Modifier,
 ) {
   Card(
     shape = RoundedCornerShape(14.dp),
     colors = CardDefaults.cardColors(
-      containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f),
+      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
     ),
-    modifier = Modifier
-      .fillMaxWidth()
-      .padding(horizontal = 12.dp, vertical = 8.dp)
-      .testTag("gallery_permission_banner"),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+    modifier = modifier
+      .fillMaxSize()
+      .padding(16.dp)
+      .testTag("locked_storage_state"),
   ) {
-    Row(
+    Column(
       modifier = Modifier
-        .fillMaxWidth()
-        .padding(horizontal = 14.dp, vertical = 10.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
+        .fillMaxSize()
+        .padding(24.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
     ) {
-      Column(modifier = Modifier.weight(1f)) {
-        Text(
-          text = "Storage access enables full photo scanning",
-          style = MaterialTheme.typography.bodyMedium,
-          fontWeight = FontWeight.SemiBold,
-          color = MaterialTheme.colorScheme.onSecondaryContainer,
-        )
-        Text(
-          text = "Grant access to view all photos in Pictures and DCIM",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
+      Box(
+        modifier = Modifier
+          .size(48.dp)
+          .clip(CircleShape)
+          .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Default.Lock,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(24.dp),
         )
       }
-      Spacer(modifier = Modifier.width(8.dp))
-      Button(
-        onClick = onGrantPermission,
-        shape = RoundedCornerShape(12.dp),
+      Spacer(modifier = Modifier.height(10.dp))
+      Text(
+        text = "Storage access is locked",
+        style = MaterialTheme.typography.bodyLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurface,
+        textAlign = TextAlign.Center,
+      )
+      Spacer(modifier = Modifier.height(4.dp))
+      Text(
+        text = "Tap the lock icon on a folder pill above to grant permission to access files in that location.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+      )
+    }
+  }
+}
+
+/**
+ * View displayed when the user taps a locked folder navigation pill or its lock icon in the Gallery,
+ * asking for permission to access files in that storage location and launching the Android system
+ * directory access prompt when the user taps "Allow", matching the Audio Recorder tool.
+ */
+@Composable
+private fun GalleryFolderPermissionRequestView(
+  folder: GalleryFolder,
+  onAllowAccess: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Card(
+    shape = RoundedCornerShape(14.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    ),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+    modifier = modifier
+      .fillMaxSize()
+      .padding(16.dp)
+      .testTag("folder_permission_view"),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(horizontal = 24.dp, vertical = 16.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
+    ) {
+      Box(
+        modifier = Modifier
+          .size(48.dp)
+          .clip(CircleShape)
+          .background(MaterialTheme.colorScheme.primaryContainer),
+        contentAlignment = Alignment.Center,
       ) {
-        Text("Grant")
+        Icon(
+          imageVector = Icons.Default.Lock,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(24.dp),
+        )
+      }
+      Spacer(modifier = Modifier.height(10.dp))
+      Text(
+        text = "Allow access to files in ${folder.displayPath}?",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurface,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.testTag("folder_permission_title"),
+      )
+      Spacer(modifier = Modifier.height(4.dp))
+      Text(
+        text = "Gallery needs permission to access files in ${folder.displayPath} (${folder.pillLabel}) to view and manage photos and videos in this location.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.testTag("folder_permission_message"),
+      )
+      Spacer(modifier = Modifier.height(14.dp))
+      Button(
+        onClick = onAllowAccess,
+        shape = CircleShape,
+        modifier = Modifier.testTag("allow_folder_permission_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Check,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Allow")
       }
     }
   }

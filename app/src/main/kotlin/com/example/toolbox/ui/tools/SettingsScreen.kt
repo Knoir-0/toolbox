@@ -2273,7 +2273,7 @@ fun SettingsScreen(
 
                           IconButton(
                             onClick = {
-                              addToolToHomeScreen(context, tool, themeColor = themeColor)
+                              addToolToHomeScreen(context, tool)
                             },
                             modifier = Modifier.testTag("add_to_home_${tool.name}"),
                           ) {

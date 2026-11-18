@@ -1,9 +1,14 @@
 package com.example.toolbox.ui.tools
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -11,8 +16,12 @@ import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.geometry.Offset
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
+import junit.framework.TestCase.assertEquals
+import junit.framework.TestCase.assertNotNull
 import junit.framework.TestCase.assertTrue
 import org.junit.After
 import org.junit.Before
@@ -45,10 +54,271 @@ class AudioRecorderScreenTest {
   }
 
   @Test
+  fun scopedStorageAccess_locksPillsDisablesRecorder_andPromptsPermissionFlowOnLockTap() {
+    var systemPromptFolder: AudioRecorderDefaultFolder? = null
+    var pendingSystemGrantCallback: ((Boolean) -> Unit)? = null
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        AudioRecorderScreen(
+          initialDirectory = testAudioDir,
+          onRequestFolderSystemAccess = { folder, onResult ->
+            systemPromptFolder = folder
+            pendingSystemGrantCallback = onResult
+          },
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // 1. Initially all navigation pills show a lock icon and no folder has been granted access
+    composeTestRule.onNodeWithTag("folder_lock_icon_Audio").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_lock_icon_Recordings").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_lock_icon_Download").assertIsDisplayed()
+
+    // 2. Recorder is entirely disabled and bottom message reflects that while disabled
+    composeTestRule.onNodeWithTag("audio_recorder_fab").assertIsDisplayed().assertIsNotEnabled()
+    composeTestRule.onNodeWithTag("device_audio_recorder_fab").assertIsDisplayed().assertIsNotEnabled()
+    composeTestRule.onNodeWithTag("both_audio_recorder_fab").assertIsDisplayed().assertIsNotEnabled()
+    composeTestRule.onNodeWithTag("format_selector_button").assertIsDisplayed().assertIsNotEnabled()
+    composeTestRule.onNodeWithText("RECORDER DISABLED").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("recorder_instruction_text")
+      .assertIsDisplayed()
+      .assertTextEquals("Recorder disabled • Grant access to at least one folder above to record")
+
+    // Tapping the disabled mic FAB does not start recording
+    composeTestRule.onNodeWithTag("audio_recorder_fab").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("audio_recorder_fab").assertContentDescriptionEquals("Start recording")
+
+    // 3. Tapping the lock icon on Audio displays the view asking for permission to access files in /Audio
+    composeTestRule.onNodeWithTag("folder_lock_icon_Audio").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("folder_permission_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_permission_title")
+      .assertIsDisplayed()
+      .assertTextEquals("Allow access to files in /Audio?")
+    composeTestRule.onNodeWithTag("allow_folder_permission_button").assertIsDisplayed()
+
+    // 4. Tapping the lock icon on Recordings updates the permission view for /Recordings
+    composeTestRule.onNodeWithTag("folder_lock_icon_Recordings").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("folder_permission_title")
+      .assertIsDisplayed()
+      .assertTextEquals("Allow access to files in /Recordings?")
+
+    // Switch back to Audio lock icon and tap Allow -> system prompt for /Audio pops up
+    composeTestRule.onNodeWithTag("folder_lock_icon_Audio").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("allow_folder_permission_button").performClick()
+    composeTestRule.waitForIdle()
+
+    assertEquals(AudioRecorderDefaultFolder.AUDIO, systemPromptFolder)
+    assertNotNull(pendingSystemGrantCallback)
+
+    // Verify system intent targets ACTION_OPEN_DOCUMENT_TREE with initial URI for Audio
+    val systemIntent = AudioRecorderEngine.createFolderAccessIntent(
+      context = composeTestRule.activity,
+      folder = AudioRecorderDefaultFolder.AUDIO,
+      userRoot = testAudioDir.parentFile ?: testAudioDir,
+    )
+    assertEquals(Intent.ACTION_OPEN_DOCUMENT_TREE, systemIntent.action)
+    @Suppress("DEPRECATION")
+    val initialUri = systemIntent.getParcelableExtra<Uri>(DocumentsContract.EXTRA_INITIAL_URI)
+    assertNotNull(initialUri)
+    assertTrue(initialUri.toString().contains("Audio"))
+
+    // 5. Completing system prompt grant unlocks Audio, enables the recorder, and restores bottom message
+    composeTestRule.runOnUiThread {
+      pendingSystemGrantCallback?.invoke(true)
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("folder_unlocked_icon_Audio").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_lock_icon_Recordings").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_lock_icon_Download").assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("audio_recorder_fab").assertIsEnabled()
+    composeTestRule.onNodeWithTag("device_audio_recorder_fab").assertIsEnabled()
+    composeTestRule.onNodeWithTag("both_audio_recorder_fab").assertIsEnabled()
+    composeTestRule.onNodeWithTag("format_selector_button").assertIsEnabled()
+    composeTestRule.onNodeWithText("READY TO RECORD").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("recorder_instruction_text")
+      .assertIsDisplayed()
+      .assertTextEquals("Tap mic, phone, or combined button to record (M4A (AAC))")
+
+    // 6. Selecting a locked folder (Recordings) disables the recorder and restores the disabled bottom message
+    composeTestRule.onNodeWithTag("folder_pill_Recordings").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("folder_permission_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("audio_recorder_fab").assertIsNotEnabled()
+    composeTestRule.onNodeWithTag("device_audio_recorder_fab").assertIsNotEnabled()
+    composeTestRule.onNodeWithTag("both_audio_recorder_fab").assertIsNotEnabled()
+    composeTestRule.onNodeWithTag("format_selector_button").assertIsNotEnabled()
+    composeTestRule.onNodeWithText("RECORDER DISABLED").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("recorder_instruction_text")
+      .assertIsDisplayed()
+      .assertTextEquals("Recorder disabled • Grant access to at least one folder above to record")
+
+    // Switching back to unlocked Audio re-enables the recorder
+    composeTestRule.onNodeWithTag("folder_pill_Audio").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("audio_recorder_fab").assertIsEnabled()
+    composeTestRule.onNodeWithTag("recorder_instruction_text")
+      .assertIsDisplayed()
+      .assertTextEquals("Tap mic, phone, or combined button to record (M4A (AAC))")
+  }
+
+  @Test
+  fun addingNewRecording_scrollsToNewlyAddedRecordingInList() {
+    val baseTimeMs = 1_700_000_000_000L
+    for (i in 1..20) {
+      val file = File(testAudioDir, String.format("Existing_%02d.wav", i))
+      AudioRecorderEngine.writeFallbackAudioFile(file, durationMs = 1000L)
+      file.setLastModified(baseTimeMs + i * 1000L)
+    }
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        AudioRecorderScreen(
+          initialDirectory = testAudioDir,
+          initialGrantedFolders = setOf(AudioRecorderDefaultFolder.AUDIO),
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Switch sort order to Date (Oldest first) so new recordings are added at the very bottom of the 20+ item list
+    composeTestRule.onNodeWithTag("audio_recorder_filter_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("audio_recorder_sort_option_date_asc").performClick()
+    composeTestRule.waitForIdle()
+
+    // Record a new audio file -> should automatically scroll the list down to the newly added recording at the bottom
+    composeTestRule.onNodeWithTag("audio_recorder_fab").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("audio_recorder_fab").performClick()
+    composeTestRule.waitForIdle()
+
+    val newRecording = testAudioDir.listFiles()
+      ?.filter { it.isFile && it.name.startsWith("Recording_") }
+      ?.maxByOrNull { it.lastModified() }
+    assertNotNull("Expected a newly saved recording file", newRecording)
+    composeTestRule.onNodeWithTag("recording_item_${newRecording!!.name}").assertIsDisplayed()
+  }
+
+  @Test
+  fun addCustomFolderButton_andDragAndDropPillReordering_workCorrectly() {
+    val customDir = File(testAudioDir.parentFile, "VoiceMemos")
+    customDir.mkdirs()
+    try {
+      var addFolderCallback: ((AudioRecorderFolder?) -> Unit)? = null
+
+      composeTestRule.setContent {
+        ToolboxTheme {
+          AudioRecorderScreen(
+            initialDirectory = testAudioDir,
+            onRequestAddCustomFolder = { onAdded ->
+              addFolderCallback = onAdded
+            },
+          )
+        }
+      }
+      composeTestRule.waitForIdle()
+
+      // 1. Add folder icon button is displayed in the floating section to the left of the filter button
+      val addButtonBounds = composeTestRule.onNodeWithTag("audio_recorder_add_folder_button")
+        .assertIsDisplayed()
+        .fetchSemanticsNode()
+        .boundsInRoot
+      val filterButtonBounds = composeTestRule.onNodeWithTag("audio_recorder_filter_button")
+        .assertIsDisplayed()
+        .fetchSemanticsNode()
+        .boundsInRoot
+      assertTrue(
+        "Add folder button should be in the floating section to the left of the filter button",
+        addButtonBounds.right <= filterButtonBounds.left + 4f,
+      )
+
+      // Verify Android scoped storage intent for adding custom folders
+      val addCustomIntent = AudioRecorderEngine.createAddCustomFolderIntent(
+        context = composeTestRule.activity,
+        userRoot = testAudioDir.parentFile ?: testAudioDir,
+      )
+      assertEquals(Intent.ACTION_OPEN_DOCUMENT_TREE, addCustomIntent.action)
+
+      // 2. Tap Add Folder button -> triggers scoped storage folder selection and adds unlocked custom folder pill
+      composeTestRule.onNodeWithTag("audio_recorder_add_folder_button").performClick()
+      composeTestRule.waitForIdle()
+      assertNotNull(addFolderCallback)
+
+      composeTestRule.runOnUiThread {
+        addFolderCallback?.invoke(
+          AudioRecorderFolder(
+            folderName = "VoiceMemos",
+            displayPath = "/VoiceMemos",
+            customAbsolutePath = customDir.absolutePath,
+          )
+        )
+      }
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("folder_pill_VoiceMemos").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("folder_unlocked_icon_VoiceMemos").assertIsDisplayed()
+      composeTestRule.onNodeWithText("No recordings in /VoiceMemos").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("audio_recorder_fab").assertIsEnabled()
+
+      // 3. Verify initial pill order (Audio is to the left of Recordings) and drag Recordings to the left of Audio
+      val initialAudioBounds = composeTestRule.onNodeWithTag("folder_pill_Audio")
+        .fetchSemanticsNode()
+        .boundsInRoot
+      val initialRecordingsBounds = composeTestRule.onNodeWithTag("folder_pill_Recordings")
+        .fetchSemanticsNode()
+        .boundsInRoot
+      assertTrue(initialAudioBounds.left < initialRecordingsBounds.left)
+
+      val barBounds = composeTestRule.onNodeWithTag("audio_recorder_pill_bar")
+        .fetchSemanticsNode()
+        .boundsInRoot
+      val startX = initialRecordingsBounds.center.x - barBounds.left
+      val startY = initialRecordingsBounds.center.y - barBounds.top
+      val endX = (initialAudioBounds.left - barBounds.left).coerceAtLeast(10f)
+
+      composeTestRule.onNodeWithTag("audio_recorder_pill_bar").performTouchInput {
+        down(Offset(startX, startY))
+        advanceEventTime(650L)
+        moveTo(Offset(endX, startY))
+        advanceEventTime(100L)
+        up()
+      }
+      composeTestRule.waitForIdle()
+
+      val reorderedRecordingsBounds = composeTestRule.onNodeWithTag("folder_pill_Recordings")
+        .fetchSemanticsNode()
+        .boundsInRoot
+      val reorderedAudioBounds = composeTestRule.onNodeWithTag("folder_pill_Audio")
+        .fetchSemanticsNode()
+        .boundsInRoot
+      assertTrue(
+        "Recordings pill should now be positioned to the left of Audio pill after drag-and-drop reorder",
+        reorderedRecordingsBounds.left < reorderedAudioBounds.left,
+      )
+    } finally {
+      customDir.deleteRecursively()
+    }
+  }
+
+  @Test
   fun micFab_startsAndStopsRecording_savesTimestampedFile_andOpensMiniPlayerWithLeftPlayPauseToggle() {
     composeTestRule.setContent {
       ToolboxTheme {
-        AudioRecorderScreen(initialDirectory = testAudioDir)
+        AudioRecorderScreen(
+          initialDirectory = testAudioDir,
+          initialGrantedFolders = AudioRecorderDefaultFolder.entries.toSet(),
+        )
       }
     }
 
@@ -108,7 +378,10 @@ class AudioRecorderScreenTest {
   fun formatSelector_folderPills_filterButton_andTopListLayout_workCorrectly() {
     composeTestRule.setContent {
       ToolboxTheme {
-        AudioRecorderScreen(initialDirectory = testAudioDir)
+        AudioRecorderScreen(
+          initialDirectory = testAudioDir,
+          initialGrantedFolders = AudioRecorderDefaultFolder.entries.toSet(),
+        )
       }
     }
 
@@ -219,7 +492,10 @@ class AudioRecorderScreenTest {
 
     composeTestRule.setContent {
       ToolboxTheme {
-        AudioRecorderScreen(initialDirectory = testAudioDir)
+        AudioRecorderScreen(
+          initialDirectory = testAudioDir,
+          initialGrantedFolders = AudioRecorderDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()
@@ -251,7 +527,10 @@ class AudioRecorderScreenTest {
   fun deviceAudioFab_isSmallerAndPositionedToRightOfMicFab_andRecordsDeviceAudio() {
     composeTestRule.setContent {
       ToolboxTheme {
-        AudioRecorderScreen(initialDirectory = testAudioDir)
+        AudioRecorderScreen(
+          initialDirectory = testAudioDir,
+          initialGrantedFolders = AudioRecorderDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()
@@ -296,7 +575,10 @@ class AudioRecorderScreenTest {
   fun bothAudioFab_isSmallerAndPositionedToLeftOfMicFab_andRecordsDeviceAndMicAudio() {
     composeTestRule.setContent {
       ToolboxTheme {
-        AudioRecorderScreen(initialDirectory = testAudioDir)
+        AudioRecorderScreen(
+          initialDirectory = testAudioDir,
+          initialGrantedFolders = AudioRecorderDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()

@@ -88,7 +88,18 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("home_playlist_item_0").assertIsDisplayed()
     val session = MusicPlayerEngine.getActivePlaybackSession()
     assertNotNull(session)
-    assertEquals(MusicLibraryTab.HOME, session!!.tabOrder.first())
+    assertEquals(
+      listOf(
+        MusicLibraryTab.HOME,
+        MusicLibraryTab.PLAYLISTS,
+        MusicLibraryTab.SONGS,
+        MusicLibraryTab.ALBUMS,
+        MusicLibraryTab.ARTISTS,
+        MusicLibraryTab.GENRES,
+      ),
+      session!!.tabOrder,
+    )
+    assertEquals(MusicLibraryTab.HOME, session.tabOrder.first())
     assertEquals(6, session.homePlaylists.size)
     val initialFirstMixName = session.homePlaylists.first().name
     composeTestRule.onNodeWithText(initialFirstMixName).assertIsDisplayed()
@@ -192,10 +203,10 @@ class MusicPlayerScreenTest {
     assertTrue(sortBounds.top >= barBounds.top - 1f && sortBounds.bottom <= barBounds.bottom + 1f)
     assertTrue(sortBounds.center.x > barBounds.center.x)
     val homeBoundsBefore = composeTestRule.onNodeWithTag("music_tab_HOME").fetchSemanticsNode().boundsInRoot
-    val artistsBoundsBefore = composeTestRule.onNodeWithTag("music_tab_ARTISTS").fetchSemanticsNode().boundsInRoot
+    val playlistsBoundsBefore = composeTestRule.onNodeWithTag("music_tab_PLAYLISTS").fetchSemanticsNode().boundsInRoot
     val songsBoundsBefore = composeTestRule.onNodeWithTag("music_tab_SONGS").fetchSemanticsNode().boundsInRoot
-    assertTrue(homeBoundsBefore.left < artistsBoundsBefore.left)
-    assertTrue(artistsBoundsBefore.left < songsBoundsBefore.left)
+    assertTrue(homeBoundsBefore.left < playlistsBoundsBefore.left)
+    assertTrue(playlistsBoundsBefore.left < songsBoundsBefore.left)
 
     val startLocal = Offset(
       x = songsBoundsBefore.center.x - barBounds.left,
@@ -213,10 +224,13 @@ class MusicPlayerScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    assertEquals(MusicLibraryTab.SONGS, session.tabOrder.first())
-    val artistsBoundsAfter = composeTestRule.onNodeWithTag("music_tab_ARTISTS").fetchSemanticsNode().boundsInRoot
+    assertEquals(MusicLibraryTab.HOME, session.tabOrder.first())
+    assertEquals(MusicLibraryTab.SONGS, session.tabOrder[1])
+    val homeBoundsAfter = composeTestRule.onNodeWithTag("music_tab_HOME").fetchSemanticsNode().boundsInRoot
+    val playlistsBoundsAfter = composeTestRule.onNodeWithTag("music_tab_PLAYLISTS").fetchSemanticsNode().boundsInRoot
     val songsBoundsAfter = composeTestRule.onNodeWithTag("music_tab_SONGS").fetchSemanticsNode().boundsInRoot
-    assertTrue(songsBoundsAfter.left < artistsBoundsAfter.left)
+    assertTrue(homeBoundsAfter.left < songsBoundsAfter.left)
+    assertTrue(songsBoundsAfter.left < playlistsBoundsAfter.left)
   }
 
   @Test

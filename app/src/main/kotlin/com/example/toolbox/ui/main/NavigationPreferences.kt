@@ -111,6 +111,7 @@ enum class AppPermission(
       Tool.IMAGE_EDITOR,
       Tool.VIDEO_EDITOR,
       Tool.AUDIO_EDITOR,
+      Tool.AUDIO_RECORDER,
       Tool.FILE_CONVERTER,
       Tool.ARCHIVE,
       Tool.PDF_VIEWER,

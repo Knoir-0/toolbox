@@ -285,6 +285,18 @@ fun TodoListScreen(
   // Drag-and-drop reorder state
   val density = LocalDensity.current
   val listState = rememberLazyListState()
+  var scrollToTopTrigger by remember { mutableIntStateOf(0) }
+
+  fun scrollTaskListToTop() {
+    listState.requestScrollToItem(0)
+    scrollToTopTrigger += 1
+  }
+
+  LaunchedEffect(scrollToTopTrigger) {
+    if (scrollToTopTrigger > 0) {
+      listState.scrollToItem(0)
+    }
+  }
   val taskSpacingPx = with(density) { 8.dp.toPx() }
   val defaultTaskHeightPx = with(density) { 64.dp.toPx() }
   val taskMaxOverscrollPx = with(density) { 12.dp.toPx() }
@@ -500,6 +512,7 @@ fun TodoListScreen(
         recurrenceRule = recurrence,
       )
       applyAction(listOf(newItem) + tasks)
+      scrollTaskListToTop()
       val label = TodoListEngine.formatScheduleLabel(startMillis, null)
       val repeatSuffix = recurrence?.let { " (${it.formatLabel()})" } ?: ""
       Toast.makeText(context, "Scheduled for $label$repeatSuffix", Toast.LENGTH_SHORT).show()
@@ -511,6 +524,7 @@ fun TodoListScreen(
       haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
       val newItem = TodoItem(title = trimmed)
       applyAction(listOf(newItem) + tasks)
+      scrollTaskListToTop()
       newTaskTitle = ""
     }
   }
@@ -524,6 +538,7 @@ fun TodoListScreen(
       isSubtasksCollapsed = false,
     )
     applyAction(listOf(freshItem) + tasks)
+    scrollTaskListToTop()
   }
 
   fun saveTaskTemplate(task: TodoItem) {
@@ -2977,11 +2992,12 @@ private fun RoundedQuickAddBar(
     // Trailing action icons inside the input pill (Clear when typing, Schedule task, Saved tasks)
     Row(
       verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       if (title.isNotEmpty()) {
         IconButton(
           onClick = { onTitleChange("") },
-          modifier = Modifier.size(36.dp),
+          modifier = Modifier.size(28.dp),
         ) {
           Icon(
             imageVector = Icons.Default.Clear,
@@ -2995,6 +3011,7 @@ private fun RoundedQuickAddBar(
       IconButton(
         onClick = onToggleSchedule,
         modifier = Modifier
+          .size(28.dp)
           .clip(CircleShape)
           .background(
             if (isScheduleOpen || hasPendingSchedule) {
@@ -3013,18 +3030,23 @@ private fun RoundedQuickAddBar(
           } else {
             MaterialTheme.colorScheme.primary
           },
+          modifier = Modifier.size(18.dp),
         )
       }
 
       if (!isScheduleOpen) {
         IconButton(
           onClick = onOpenSavedTasks,
-          modifier = Modifier.testTag("todo_saved_tasks_button"),
+          modifier = Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .testTag("todo_saved_tasks_button"),
         ) {
           Icon(
             imageVector = Icons.Default.Bookmarks,
             contentDescription = "Saved tasks",
             tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
           )
         }
       }
@@ -4870,15 +4892,17 @@ private fun ScheduleTaskPanel(
       ) {
         OutlinedButton(
           onClick = { showStartDatePicker = true },
-          shape = RoundedCornerShape(14.dp),
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
           modifier = Modifier
             .weight(1f)
+            .height(28.dp)
             .testTag("todo_schedule_start_date_button"),
         ) {
           Icon(
             imageVector = Icons.Default.CalendarToday,
             contentDescription = null,
-            modifier = Modifier.size(16.dp),
+            modifier = Modifier.size(15.dp),
           )
           Spacer(modifier = Modifier.width(6.dp))
           Text(
@@ -4891,14 +4915,16 @@ private fun ScheduleTaskPanel(
 
         OutlinedButton(
           onClick = { showStartTimePicker = true },
-          shape = RoundedCornerShape(14.dp),
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
           modifier = Modifier
+            .height(28.dp)
             .testTag("todo_schedule_start_time_button"),
         ) {
           Icon(
             imageVector = Icons.Default.AccessTime,
             contentDescription = null,
-            modifier = Modifier.size(16.dp),
+            modifier = Modifier.size(15.dp),
           )
           Spacer(modifier = Modifier.width(6.dp))
           Text(
@@ -4918,29 +4944,48 @@ private fun ScheduleTaskPanel(
           if (isExistingScheduled) {
             TextButton(
               onClick = onUnschedule,
-              shape = RoundedCornerShape(12.dp),
-              modifier = Modifier.testTag("todo_schedule_clear_button"),
+              shape = CircleShape,
+              contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+              modifier = Modifier
+                .height(28.dp)
+                .testTag("todo_schedule_clear_button"),
             ) {
-              Text("Unschedule", color = MaterialTheme.colorScheme.error)
+              Text(
+                text = "Unschedule",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.error,
+              )
             }
           }
           TextButton(
             onClick = onDismiss,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.testTag("todo_schedule_cancel_button"),
+            shape = CircleShape,
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+            modifier = Modifier
+              .height(28.dp)
+              .testTag("todo_schedule_cancel_button"),
           ) {
-            Text("Cancel")
+            Text(
+              text = "Cancel",
+              style = MaterialTheme.typography.labelMedium,
+            )
           }
         }
 
         Button(
           onClick = onConfirmSchedule,
-          shape = RoundedCornerShape(12.dp),
-          modifier = Modifier.testTag("todo_schedule_confirm_button"),
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+          modifier = Modifier
+            .height(28.dp)
+            .testTag("todo_schedule_confirm_button"),
         ) {
-          Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+          Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
           Spacer(modifier = Modifier.width(6.dp))
-          Text(if (isExistingScheduled) "Reschedule" else "Schedule")
+          Text(
+            text = if (isExistingScheduled) "Reschedule" else "Schedule",
+            style = MaterialTheme.typography.labelMedium,
+          )
         }
       }
     }

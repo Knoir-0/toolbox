@@ -2,11 +2,13 @@ package com.example.toolbox.ui.tools
 
 import android.content.Context
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
 import java.nio.file.Files
@@ -73,6 +75,7 @@ class CameraScreenTest {
     composeTestRule.onNodeWithTag("camera_viewfinder_stage").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_viewfinder_box").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_top_overlay").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_top_bar").assertIsDisplayed().assertHeightIsEqualTo(68.dp)
     composeTestRule.onNodeWithTag("camera_bottom_overlay").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_shutter_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_shutter_photo_icon", useUnmergedTree = true).assertIsDisplayed()

@@ -113,7 +113,7 @@ object TodoNotificationHelper {
       pendingIntentFlags,
     )
 
-    val backgroundColor = resolveShortcutBackgroundColor(themeColor = null, context = context)
+    val backgroundColor = resolveShortcutBackgroundColor(context = context)
     val foregroundColor = resolveShortcutForegroundColor(backgroundColor)
     val todoIconBitmap = try {
       createToolShortcutBitmap(

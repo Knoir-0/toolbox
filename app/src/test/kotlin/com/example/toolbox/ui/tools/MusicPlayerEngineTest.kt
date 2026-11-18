@@ -69,26 +69,52 @@ class MusicPlayerEngineTest {
     assertEquals(MusicLibraryTab.GENRES, MusicLibraryTab.fromNameOrDefault("genres"))
     assertEquals(MusicLibraryTab.PLAYLISTS, MusicLibraryTab.fromNameOrDefault("playlists"))
 
-    // Section tab order parsing, serialization, and reordering (HOME is at the front of the pill list)
+    // Section tab order parsing, serialization, and reordering (HOME is fixed at the front of the pill list;
+    // default order: Home, Playlists, Songs, Albums, Artists, Genres)
+    assertEquals(
+      listOf(
+        MusicLibraryTab.HOME,
+        MusicLibraryTab.PLAYLISTS,
+        MusicLibraryTab.SONGS,
+        MusicLibraryTab.ALBUMS,
+        MusicLibraryTab.ARTISTS,
+        MusicLibraryTab.GENRES,
+      ),
+      MusicPlayerEngine.parseTabOrder(null),
+    )
     assertEquals(MusicLibraryTab.entries.toList(), MusicPlayerEngine.parseTabOrder(null))
     assertEquals(MusicLibraryTab.HOME, MusicPlayerEngine.parseTabOrder(null).first())
     assertEquals(
       MusicLibraryTab.HOME,
       MusicPlayerEngine.parseTabOrder("ARTISTS|ALBUMS|SONGS|GENRES|PLAYLISTS").first(),
     )
+    assertEquals(
+      MusicLibraryTab.HOME,
+      MusicPlayerEngine.parseTabOrder("SONGS|HOME|PLAYLISTS|ALBUMS|ARTISTS|GENRES").first(),
+    )
+    // Attempting to move HOME (index 0) leaves the tab order unchanged
+    assertEquals(
+      MusicLibraryTab.entries.toList(),
+      MusicPlayerEngine.reorderTabs(
+        tabs = MusicLibraryTab.entries.toList(),
+        fromIndex = 0,
+        toIndex = 3,
+      ),
+    )
+    // Moving SONGS (index 2) to the front (index 0) places it at index 1 right after HOME
     val reordered = MusicPlayerEngine.reorderTabs(
       tabs = MusicLibraryTab.entries.toList(),
-      fromIndex = 3, // SONGS
+      fromIndex = 2, // SONGS
       toIndex = 0,
     )
     assertEquals(
       listOf(
-        MusicLibraryTab.SONGS,
         MusicLibraryTab.HOME,
-        MusicLibraryTab.ARTISTS,
-        MusicLibraryTab.ALBUMS,
-        MusicLibraryTab.GENRES,
+        MusicLibraryTab.SONGS,
         MusicLibraryTab.PLAYLISTS,
+        MusicLibraryTab.ALBUMS,
+        MusicLibraryTab.ARTISTS,
+        MusicLibraryTab.GENRES,
       ),
       reordered,
     )
@@ -1535,6 +1561,49 @@ class MusicPlayerEngineTest {
       assertFalse(MusicPlayerEngine.isPlaybackStateActive(android.media.session.PlaybackState.STATE_STOPPED))
     } finally {
       MusicPlayerEngine.updateExternalSystemMediaSession(null)
+      session.release()
+    }
+  }
+
+  @Test
+  fun starringSongUpdatesFavoriteIdsImmediatelyAndRecalculatesPlaylistsInBackground() = kotlinx.coroutines.runBlocking {
+    val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+    val session = MusicPlaybackSession(
+      context = null,
+      isInspection = true,
+      initialTracks = tracks,
+    )
+    try {
+      val firstTrack = tracks[0]
+      val secondTrack = tracks[1]
+      assertFalse(firstTrack.id in session.favoriteIds)
+      assertTrue(session.favoritesPlaylist.tracks.isEmpty())
+
+      // Star first song: favoriteIds updates immediately, and background task updates playlists
+      session.toggleFavorite(firstTrack.id)
+      assertTrue(firstTrack.id in session.favoriteIds)
+      session.awaitBackgroundRecalculations()
+
+      assertEquals(listOf(firstTrack.id), session.favoritesPlaylist.tracks.map { it.id })
+      assertTrue(session.favoritesPlaylist.containsTrack(firstTrack.id))
+      assertFalse(session.favoritesPlaylist.containsTrack(secondTrack.id))
+      assertEquals(
+        listOf(firstTrack.id),
+        session.basePlaylists.first { it.isFavorites }.tracks.map { it.id },
+      )
+      assertEquals(6, session.homePlaylists.size)
+
+      // Star second song and unstar first song
+      session.toggleFavorite(secondTrack.id)
+      session.toggleFavorite(firstTrack.id)
+      assertFalse(firstTrack.id in session.favoriteIds)
+      assertTrue(secondTrack.id in session.favoriteIds)
+      session.awaitBackgroundRecalculations()
+
+      assertEquals(listOf(secondTrack.id), session.favoritesPlaylist.tracks.map { it.id })
+      assertTrue(session.favoritesPlaylist.containsTrack(secondTrack.id))
+      assertFalse(session.favoritesPlaylist.containsTrack(firstTrack.id))
+    } finally {
       session.release()
     }
   }

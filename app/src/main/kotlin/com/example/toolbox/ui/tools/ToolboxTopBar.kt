@@ -608,13 +608,15 @@ fun Modifier.pinchToChangeColumns(
 fun Modifier.fadingPillRowUnderFloatingControls(
   hasColumnsButton: Boolean,
   fadeWidth: Dp = 32.dp,
+  extraControlButtonsCount: Int = 0,
 ): Modifier = this
   .graphicsLayer {
     compositingStrategy = CompositingStrategy.Offscreen
   }
   .drawWithContent {
     drawContent()
-    val controlsOccupiedWidthPx = (if (hasColumnsButton) 86.dp else 46.dp).toPx()
+    val baseOccupiedWidth = if (hasColumnsButton) 86.dp else 46.dp
+    val controlsOccupiedWidthPx = (baseOccupiedWidth + (extraControlButtonsCount * 40).dp).toPx()
     val fadeWidthPx = fadeWidth.toPx()
     val fadeEndPx = (size.width - controlsOccupiedWidthPx + 2.dp.toPx()).coerceAtLeast(0f)
     val fadeStartPx = (fadeEndPx - fadeWidthPx).coerceAtLeast(0f)

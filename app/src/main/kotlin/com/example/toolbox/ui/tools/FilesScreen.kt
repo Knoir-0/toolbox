@@ -191,7 +191,6 @@ fun FilesScreen(
   initialDirectory: File? = null,
   rootDirectory: File? = null,
   initialSearchActive: Boolean = false,
-  themeColor: String? = null,
   onOpenFile: ((File, Boolean) -> Unit)? = null,
   onOpenFileConverter: ((File) -> Unit)? = null,
   onOpenImageEditor: ((File) -> Unit)? = null,
@@ -980,7 +979,7 @@ fun FilesScreen(
             files.firstOrNull()?.let { onOpenArchive?.invoke(it) }
           }
         },
-        onAddFolderToHomeScreen = { folder -> addFolderToHomeScreen(context, folder, themeColor) },
+        onAddFolderToHomeScreen = { folder -> addFolderToHomeScreen(context, folder) },
       )
 
       // 2. Storage Pill Buttons Row + Pinned Floating [# per row] & Sort/Group Buttons:
@@ -1238,7 +1237,7 @@ fun FilesScreen(
                         onRename = { fileToRename = item },
                         onDetails = { fileForDetails = item },
                         onDelete = { fileToDelete = item },
-                        onAddToHomeScreen = { addFolderToHomeScreen(context, item.file, themeColor) },
+                        onAddToHomeScreen = { addFolderToHomeScreen(context, item.file) },
                       )
                     }
                   }
@@ -1393,7 +1392,7 @@ fun FilesScreen(
                       onRename = { fileToRename = item },
                       onDetails = { fileForDetails = item },
                       onDelete = { fileToDelete = item },
-                      onAddToHomeScreen = { addFolderToHomeScreen(context, item.file, themeColor) },
+                      onAddToHomeScreen = { addFolderToHomeScreen(context, item.file) },
                     )
                   }
                 }

@@ -1,15 +1,21 @@
 package com.example.toolbox.ui.tools
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
+import android.net.Uri
+import android.os.Build
+import android.os.storage.StorageManager
+import android.provider.DocumentsContract
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.label.ImageLabeling
 import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.net.URLDecoder
 import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -35,7 +41,20 @@ const val PREF_KEY_GALLERY_SORT_ORDER = "gallery_sort_order"
 const val PREF_KEY_GALLERY_GROUP_OPTION = "gallery_group_option"
 const val PREF_KEY_GALLERY_DEFAULT_SORT_GROUP = "gallery_default_sort_group"
 const val PREF_PREFIX_GALLERY_FOLDER_SORT_GROUP = "gallery_folder_sort_group_"
+const val PREF_KEY_GRANTED_GALLERY_FOLDERS = "granted_gallery_folders"
+const val PREF_KEY_GRANTED_GALLERY_FOLDER_PATHS = "granted_gallery_folder_paths"
+const val PREF_KEY_GALLERY_FOLDER_PILLS = "gallery_folder_pills"
 const val GALLERY_ROOT_FOLDER_KEY = "__gallery_root__"
+const val GALLERY_ALBUMS_PILL_NAME = "Albums"
+
+const val DEFAULT_DCIM_FOLDER_NAME = "DCIM"
+const val DEFAULT_DCIM_PILL_LABEL = "Camera"
+const val DEFAULT_PICTURES_FOLDER_NAME = "Pictures"
+const val DEFAULT_GALLERY_DOWNLOADS_FOLDER_NAME = "Download"
+
+const val DEFAULT_DCIM_FOLDER_DISPLAY = "/DCIM"
+const val DEFAULT_PICTURES_FOLDER_DISPLAY = "/Pictures"
+const val DEFAULT_GALLERY_DOWNLOADS_FOLDER_DISPLAY = "/Download"
 
 const val MIN_ALBUMS_PER_ROW = 3
 const val MAX_ALBUMS_PER_ROW = 6
@@ -74,8 +93,104 @@ data class GalleryVideoPreviewState(
   val playSessionToken: Int = 0,
 )
 
-val DEFAULT_GALLERY_FOLDER_NAMES: List<String> = listOf("DCIM", "Pictures", "Photos", "Download")
+val DEFAULT_GALLERY_FOLDER_NAMES: List<String> = listOf(
+  DEFAULT_DCIM_FOLDER_NAME,
+  DEFAULT_PICTURES_FOLDER_NAME,
+  DEFAULT_GALLERY_DOWNLOADS_FOLDER_NAME,
+)
+
+val DEFAULT_GALLERY_FOLDER_DISPLAY_PATHS: List<String> = listOf(
+  DEFAULT_DCIM_FOLDER_DISPLAY,
+  DEFAULT_PICTURES_FOLDER_DISPLAY,
+  DEFAULT_GALLERY_DOWNLOADS_FOLDER_DISPLAY,
+)
+
 const val DEFAULT_NEW_ALBUM_FOLDER_NAME: String = "Pictures"
+
+/**
+ * Default folders accessed by the Gallery tool (`DCIM`, `Pictures`, `Download`).
+ */
+enum class GalleryDefaultFolder(
+  val folderName: String,
+  val displayPath: String,
+  val pillLabel: String = folderName,
+) {
+  DCIM(
+    folderName = DEFAULT_DCIM_FOLDER_NAME,
+    displayPath = DEFAULT_DCIM_FOLDER_DISPLAY,
+    pillLabel = DEFAULT_DCIM_PILL_LABEL,
+  ),
+  PICTURES(
+    folderName = DEFAULT_PICTURES_FOLDER_NAME,
+    displayPath = DEFAULT_PICTURES_FOLDER_DISPLAY,
+  ),
+  DOWNLOADS(
+    folderName = DEFAULT_GALLERY_DOWNLOADS_FOLDER_NAME,
+    displayPath = DEFAULT_GALLERY_DOWNLOADS_FOLDER_DISPLAY,
+  ),
+  ;
+
+  companion object {
+    val DEFAULT: GalleryDefaultFolder = DCIM
+
+    fun fromPathOrName(pathOrName: String?): GalleryDefaultFolder? {
+      if (pathOrName.isNullOrBlank()) return null
+      val decoded = try {
+        URLDecoder.decode(pathOrName, "UTF-8")
+      } catch (_: Throwable) {
+        pathOrName
+      }
+      val cleaned = decoded
+        .trim()
+        .trim('/')
+        .substringAfterLast('/')
+        .substringAfterLast(':')
+        .trim()
+      return when {
+        cleaned.equals(DEFAULT_DCIM_FOLDER_NAME, ignoreCase = true) ||
+          cleaned.equals(DCIM.name, ignoreCase = true) -> DCIM
+        cleaned.equals(DEFAULT_PICTURES_FOLDER_NAME, ignoreCase = true) ||
+          cleaned.equals(PICTURES.name, ignoreCase = true) -> PICTURES
+        cleaned.equals(DEFAULT_GALLERY_DOWNLOADS_FOLDER_NAME, ignoreCase = true) ||
+          cleaned.equals("Downloads", ignoreCase = true) ||
+          cleaned.equals(DOWNLOADS.name, ignoreCase = true) -> DOWNLOADS
+        else -> null
+      }
+    }
+  }
+
+  fun toGalleryFolder(): GalleryFolder = GalleryFolder(
+    folderName = folderName,
+    displayPath = displayPath,
+  )
+}
+
+/**
+ * Represents a folder navigation pill in the Gallery tool (either one of the default folders
+ * `DCIM`, `Pictures`, `Download` or a user-added custom folder via Android's scoped storage access).
+ */
+data class GalleryFolder(
+  val folderName: String,
+  val displayPath: String,
+  val treeUri: String? = null,
+  val customAbsolutePath: String? = null,
+) {
+  val defaultFolder: GalleryDefaultFolder?
+    get() = if (customAbsolutePath == null && displayPath.count { it == '/' } <= 1) {
+      GalleryDefaultFolder.fromPathOrName(displayPath)
+    } else {
+      null
+    }
+
+  val isDefault: Boolean
+    get() = defaultFolder != null
+
+  val pillLabel: String
+    get() = defaultFolder?.pillLabel ?: folderName
+}
+
+val DEFAULT_GALLERY_FOLDERS: List<GalleryFolder> =
+  GalleryDefaultFolder.entries.map { it.toGalleryFolder() }
 
 /**
  * Presentation modes for the Gallery tool:
@@ -691,7 +806,7 @@ object GalleryEngine {
 
   /**
    * Resolves the list of folders loaded into the gallery, starting with the default `DCIM`, `Pictures`,
-   * `Photos`, and `Download` folders and appending any user-added folder paths.
+   * and `Download` folders and appending any user-added folder paths.
    */
   fun resolveGalleryFolders(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
@@ -725,6 +840,525 @@ object GalleryEngine {
       }
     }
     return combined
+  }
+
+  /**
+   * Resolves a user-friendly display path for [directory] (e.g. `/DCIM` when inside [userRoot]).
+   */
+  fun formatDirectoryDisplayPath(
+    directory: File,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): String {
+    val absPath = directory.absolutePath
+    val rootPath = userRoot.absolutePath.trimEnd('/')
+    if (absPath == rootPath) return "/"
+    if (absPath.startsWith("$rootPath/")) {
+      return absPath.removePrefix(rootPath)
+    }
+    GalleryDefaultFolder.fromPathOrName(directory.name)?.let { defaultFolder ->
+      return defaultFolder.displayPath
+    }
+    return absPath
+  }
+
+  /**
+   * Resolves the concrete [File] directory on disk for a [GalleryFolder] pill.
+   */
+  fun resolveDirectoryForFolder(
+    folder: GalleryFolder,
+    rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
+  ): File {
+    if (!folder.customAbsolutePath.isNullOrBlank()) {
+      return File(folder.customAbsolutePath)
+    }
+    val defaultFolder = folder.defaultFolder
+    if (defaultFolder != null) {
+      return File(rootDirectory, defaultFolder.folderName)
+    }
+    val subPath = folder.displayPath.trim().trimStart('/')
+    return if (subPath.isEmpty()) rootDirectory else File(rootDirectory, subPath)
+  }
+
+  /**
+   * Parses a comma-separated string of folder names or enum names into a set of [GalleryDefaultFolder]s
+   * that have been granted storage access. Returns an empty set when [rawString] is null or blank.
+   */
+  fun parseGrantedFolders(rawString: String?): Set<GalleryDefaultFolder> {
+    if (rawString.isNullOrBlank()) return emptySet()
+    return rawString
+      .split(",")
+      .mapNotNull { token -> GalleryDefaultFolder.fromPathOrName(token) }
+      .toSet()
+  }
+
+  /**
+   * Serializes a set of granted [GalleryDefaultFolder]s into a comma-separated string.
+   */
+  fun serializeGrantedFolders(folders: Set<GalleryDefaultFolder>): String {
+    return GalleryDefaultFolder.entries
+      .filter { it in folders }
+      .joinToString(",") { it.name }
+  }
+
+  /**
+   * Returns the set of [GalleryDefaultFolder]s that have been granted scoped storage access.
+   */
+  fun getGrantedFolders(context: Context): Set<GalleryDefaultFolder> {
+    val prefs = context.getSharedPreferences(GALLERY_PREFS_NAME, Context.MODE_PRIVATE)
+    return parseGrantedFolders(prefs.getString(PREF_KEY_GRANTED_GALLERY_FOLDERS, null))
+  }
+
+  /**
+   * Persists the set of [GalleryDefaultFolder]s that have been granted scoped storage access.
+   */
+  fun setGrantedFolders(context: Context, folders: Set<GalleryDefaultFolder>) {
+    val prefs = context.getSharedPreferences(GALLERY_PREFS_NAME, Context.MODE_PRIVATE)
+    prefs.edit().putString(PREF_KEY_GRANTED_GALLERY_FOLDERS, serializeGrantedFolders(folders)).apply()
+  }
+
+  /**
+   * Returns whether [folder] has been granted scoped storage access.
+   */
+  fun isFolderAccessGranted(context: Context, folder: GalleryDefaultFolder): Boolean {
+    return folder in getGrantedFolders(context)
+  }
+
+  /**
+   * Updates the granted state of [folder] in preferences and returns the updated set of granted folders.
+   */
+  fun setFolderAccessGranted(
+    context: Context,
+    folder: GalleryDefaultFolder,
+    granted: Boolean = true,
+  ): Set<GalleryDefaultFolder> {
+    val current = getGrantedFolders(context).toMutableSet()
+    if (granted) {
+      current.add(folder)
+    } else {
+      current.remove(folder)
+    }
+    val updated = GalleryDefaultFolder.entries.filter { it in current }.toSet()
+    setGrantedFolders(context, updated)
+    return updated
+  }
+
+  /**
+   * Builds the external storage document ID for [folder] (e.g. `primary:DCIM`, `primary:Pictures`, `primary:Download`).
+   */
+  fun buildFolderDocumentId(folder: GalleryDefaultFolder): String {
+    return "primary:${folder.folderName}"
+  }
+
+  /**
+   * Builds the initial [Uri] targeting [folder] for `Intent.ACTION_OPEN_DOCUMENT_TREE`.
+   */
+  fun buildInitialDocumentUriForFolder(folder: GalleryDefaultFolder): Uri {
+    val docId = buildFolderDocumentId(folder)
+    return try {
+      DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY, docId)
+    } catch (_: Throwable) {
+      Uri.parse("content://$EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY/document/primary%3A${folder.folderName}")
+    }
+  }
+
+  /**
+   * Resolves a [GalleryDefaultFolder] from a SAF tree or document [Uri] if it matches one of the default folders.
+   */
+  fun resolveFolderFromTreeUri(uri: Uri?): GalleryDefaultFolder? {
+    if (uri == null) return null
+    val docId = try {
+      DocumentsContract.getTreeDocumentId(uri)
+    } catch (_: Throwable) {
+      null
+    }
+    if (!docId.isNullOrBlank()) {
+      GalleryDefaultFolder.fromPathOrName(docId)?.let { return it }
+    }
+    return GalleryDefaultFolder.fromPathOrName(uri.toString())
+  }
+
+  /**
+   * Creates the Android system prompt [Intent] (`Intent.ACTION_OPEN_DOCUMENT_TREE`) scoped to [folder]
+   * so the user can grant access to files in that location.
+   */
+  fun createFolderAccessIntent(
+    context: Context? = null,
+    folder: GalleryDefaultFolder,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): Intent {
+    try {
+      val targetDir = File(userRoot, folder.folderName)
+      if (!targetDir.exists()) {
+        targetDir.mkdirs()
+      }
+    } catch (_: Throwable) {}
+
+    val initialUri = buildInitialDocumentUriForFolder(folder)
+    val baseIntent = if (context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      try {
+        val storageManager = context.getSystemService(Context.STORAGE_SERVICE) as? StorageManager
+        storageManager?.primaryStorageVolume?.createOpenDocumentTreeIntent()
+      } catch (_: Throwable) {
+        null
+      }
+    } else {
+      null
+    } ?: Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+
+    return baseIntent.apply {
+      action = Intent.ACTION_OPEN_DOCUMENT_TREE
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
+      }
+      addFlags(
+        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+          Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+          Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+          Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+      )
+    }
+  }
+
+  /**
+   * Creates the Android system prompt [Intent] (`Intent.ACTION_OPEN_DOCUMENT_TREE`) scoped to a
+   * [GalleryFolder] (default or custom) so the user can grant access to files in that location.
+   */
+  fun createFolderAccessIntent(
+    context: Context? = null,
+    folder: GalleryFolder,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): Intent {
+    folder.defaultFolder?.let { defaultFolder ->
+      return createFolderAccessIntent(context = context, folder = defaultFolder, userRoot = userRoot)
+    }
+    val relativePath = folder.displayPath.trim().trim('/')
+    try {
+      val targetDir = if (!folder.customAbsolutePath.isNullOrBlank()) {
+        File(folder.customAbsolutePath)
+      } else {
+        File(userRoot, relativePath)
+      }
+      if (!targetDir.exists()) {
+        targetDir.mkdirs()
+      }
+    } catch (_: Throwable) {}
+
+    val docId = "primary:$relativePath"
+    val initialUri = try {
+      DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY, docId)
+    } catch (_: Throwable) {
+      Uri.parse("content://$EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY/document/primary%3A$relativePath")
+    }
+    val baseIntent = if (context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      try {
+        val storageManager = context.getSystemService(Context.STORAGE_SERVICE) as? StorageManager
+        storageManager?.primaryStorageVolume?.createOpenDocumentTreeIntent()
+      } catch (_: Throwable) {
+        null
+      }
+    } else {
+      null
+    } ?: Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+
+    return baseIntent.apply {
+      action = Intent.ACTION_OPEN_DOCUMENT_TREE
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
+      }
+      addFlags(
+        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+          Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+          Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+          Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+      )
+    }
+  }
+
+  /**
+   * Builds the Android system prompt [Intent] (`Intent.ACTION_OPEN_DOCUMENT_TREE`) for adding a
+   * custom storage location via Android's scoped storage access.
+   */
+  fun createAddCustomFolderIntent(
+    context: Context? = null,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): Intent {
+    return AudioRecorderEngine.createAddCustomFolderIntent(context = context, userRoot = userRoot)
+  }
+
+  /**
+   * Resolves a custom or default [GalleryFolder] from a SAF tree/document [Uri] or file path.
+   */
+  fun resolveCustomFolderFromTreeUri(
+    uri: Uri?,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): GalleryFolder? {
+    if (uri == null) return null
+    if (uri.scheme.equals("file", ignoreCase = true)) {
+      val path = uri.path ?: return null
+      val file = File(path)
+      val displayPath = formatDirectoryDisplayPath(file, userRoot)
+      val name = file.name.ifBlank { displayPath.trim('/').substringAfterLast('/').ifBlank { "Custom" } }
+      return GalleryFolder(
+        folderName = name,
+        displayPath = if (displayPath.startsWith("/")) displayPath else "/$displayPath",
+        treeUri = uri.toString(),
+        customAbsolutePath = file.absolutePath,
+      )
+    }
+
+    val rawDocId = try {
+      DocumentsContract.getTreeDocumentId(uri)
+    } catch (_: Throwable) {
+      null
+    } ?: try {
+      DocumentsContract.getDocumentId(uri)
+    } catch (_: Throwable) {
+      null
+    } ?: run {
+      val decoded = try {
+        URLDecoder.decode(uri.toString(), "UTF-8")
+      } catch (_: Throwable) {
+        uri.toString()
+      }
+      decoded.substringAfterLast("/tree/", "").ifEmpty {
+        decoded.substringAfterLast("/document/", "")
+      }.ifEmpty {
+        decoded
+      }
+    }
+
+    val cleanedSubpath = rawDocId
+      .substringAfter(':', rawDocId)
+      .trim()
+      .trim('/')
+    if (cleanedSubpath.isEmpty()) {
+      return GalleryDefaultFolder.DEFAULT.toGalleryFolder().copy(treeUri = uri.toString())
+    }
+    if (!cleanedSubpath.contains('/')) {
+      GalleryDefaultFolder.fromPathOrName(cleanedSubpath)?.let { defaultFolder ->
+        return defaultFolder.toGalleryFolder().copy(treeUri = uri.toString())
+      }
+    }
+    val folderName = cleanedSubpath.substringAfterLast('/').ifBlank { cleanedSubpath }
+    val displayPath = "/$cleanedSubpath"
+    val resolvedFile = File(userRoot, cleanedSubpath)
+    return GalleryFolder(
+      folderName = folderName,
+      displayPath = displayPath,
+      treeUri = uri.toString(),
+      customAbsolutePath = resolvedFile.absolutePath,
+    )
+  }
+
+  /**
+   * Moves the folder pill at [fromIndex] to [toIndex] in [folders], returning the new order.
+   */
+  fun reorderFolders(
+    folders: List<GalleryFolder>,
+    fromIndex: Int,
+    toIndex: Int,
+  ): List<GalleryFolder> {
+    val base = if (folders.isEmpty()) DEFAULT_GALLERY_FOLDERS else folders
+    if (fromIndex !in base.indices || toIndex !in base.indices || fromIndex == toIndex) {
+      return base
+    }
+    val mutable = base.toMutableList()
+    val moved = mutable.removeAt(fromIndex)
+    mutable.add(toIndex, moved)
+    return mutable.toList()
+  }
+
+  /**
+   * Reorders the full Gallery navigation pill list (where the `"Albums"` pill is always fixed at index `0`
+   * at the front of the list). Attempting to move index `0` returns the list unchanged, and moving any
+   * folder pill to index `<= 0` places it at index `1` right after `"Albums"`.
+   */
+  fun reorderNavigationPills(
+    pills: List<String>,
+    fromIndex: Int,
+    toIndex: Int,
+  ): List<String> {
+    val folderNames = pills.filterNot { it.equals(GALLERY_ALBUMS_PILL_NAME, ignoreCase = true) }
+    val normalized = listOf(GALLERY_ALBUMS_PILL_NAME) +
+      (if (folderNames.isEmpty()) DEFAULT_GALLERY_FOLDER_NAMES else folderNames)
+    if (fromIndex <= 0 || fromIndex !in normalized.indices) {
+      return normalized
+    }
+    val clampedTarget = toIndex.coerceIn(1, normalized.lastIndex)
+    if (fromIndex == clampedTarget) return normalized
+    val mutable = normalized.toMutableList()
+    val moved = mutable.removeAt(fromIndex)
+    mutable.add(clampedTarget, moved)
+    return mutable.toList()
+  }
+
+  /**
+   * Serializes an ordered list of [GalleryFolder] pills into a persistent string.
+   */
+  fun serializeFolderPills(folders: List<GalleryFolder>): String {
+    val seenPaths = mutableSetOf<String>()
+    val deduplicated = mutableListOf<GalleryFolder>()
+    for (folder in folders) {
+      val normKey = folder.displayPath.trim().lowercase(Locale.ROOT)
+      if (normKey.isNotEmpty() && seenPaths.add(normKey)) {
+        deduplicated.add(folder)
+      }
+    }
+    for (defaultFolder in DEFAULT_GALLERY_FOLDERS) {
+      val normKey = defaultFolder.displayPath.lowercase(Locale.ROOT)
+      if (seenPaths.add(normKey)) {
+        deduplicated.add(defaultFolder)
+      }
+    }
+    return deduplicated.joinToString("\n") { folder ->
+      listOf(
+        folder.folderName.replace("\t", " ").replace("\n", " "),
+        folder.displayPath.replace("\t", " ").replace("\n", " "),
+        (folder.treeUri ?: "").replace("\t", " ").replace("\n", " "),
+        (folder.customAbsolutePath ?: "").replace("\t", " ").replace("\n", " "),
+      ).joinToString("\t")
+    }
+  }
+
+  /**
+   * Parses a serialized folder pills string into an ordered list of [GalleryFolder]s,
+   * preserving the saved order and ensuring all default folders (`DCIM`, `Pictures`, `Download`) are included.
+   */
+  fun parseFolderPills(rawString: String?): List<GalleryFolder> {
+    if (rawString.isNullOrBlank()) return DEFAULT_GALLERY_FOLDERS
+    val seenPaths = mutableSetOf<String>()
+    val parsed = mutableListOf<GalleryFolder>()
+    val lines = if (rawString.contains("\n") || rawString.contains("\t")) {
+      rawString.lines()
+    } else {
+      rawString.split("|", ",")
+    }
+    for (line in lines) {
+      val trimmed = line.trim()
+      if (trimmed.isEmpty() || trimmed.equals(GALLERY_ALBUMS_PILL_NAME, ignoreCase = true)) continue
+      val folder = if (trimmed.contains("\t")) {
+        val parts = trimmed.split("\t")
+        val name = parts.getOrNull(0)?.trim().orEmpty()
+        val display = parts.getOrNull(1)?.trim().orEmpty()
+        val uri = parts.getOrNull(2)?.trim()?.takeIf { it.isNotEmpty() }
+        val absPath = parts.getOrNull(3)?.trim()?.takeIf { it.isNotEmpty() }
+        if (name.isNotEmpty() && display.isNotEmpty()) {
+          GalleryFolder(
+            folderName = name,
+            displayPath = if (display.startsWith("/")) display else "/$display",
+            treeUri = uri,
+            customAbsolutePath = absPath,
+          )
+        } else {
+          null
+        }
+      } else {
+        GalleryDefaultFolder.fromPathOrName(trimmed)?.toGalleryFolder() ?: run {
+          val cleanPath = "/" + trimmed.trim('/')
+          val name = cleanPath.substringAfterLast('/')
+          if (name.isNotEmpty()) GalleryFolder(folderName = name, displayPath = cleanPath) else null
+        }
+      }
+      if (folder != null) {
+        val normKey = folder.displayPath.lowercase(Locale.ROOT)
+        if (seenPaths.add(normKey)) {
+          parsed.add(folder)
+        }
+      }
+    }
+    for (defaultFolder in DEFAULT_GALLERY_FOLDERS) {
+      val normKey = defaultFolder.displayPath.lowercase(Locale.ROOT)
+      if (seenPaths.add(normKey)) {
+        parsed.add(defaultFolder)
+      }
+    }
+    return if (parsed.isEmpty()) DEFAULT_GALLERY_FOLDERS else parsed
+  }
+
+  fun getFolderPills(context: Context): List<GalleryFolder> {
+    val prefs = context.getSharedPreferences(GALLERY_PREFS_NAME, Context.MODE_PRIVATE)
+    return parseFolderPills(prefs.getString(PREF_KEY_GALLERY_FOLDER_PILLS, null))
+  }
+
+  fun setFolderPills(context: Context, folders: List<GalleryFolder>) {
+    val prefs = context.getSharedPreferences(GALLERY_PREFS_NAME, Context.MODE_PRIVATE)
+    prefs.edit().putString(PREF_KEY_GALLERY_FOLDER_PILLS, serializeFolderPills(folders)).apply()
+  }
+
+  /**
+   * Parses a serialized string of granted folder display paths (and/or default folder names) into
+   * a canonical set of display paths (e.g. `"/DCIM"`, `"/Pictures"`, `"/Download"`, `"/Vacation"`).
+   */
+  fun parseGrantedFolderPaths(rawString: String?): Set<String> {
+    if (rawString.isNullOrBlank()) return emptySet()
+    return rawString
+      .split(",", "|", "\n")
+      .mapNotNull { token ->
+        val trimmed = token.trim()
+        if (trimmed.isEmpty()) {
+          null
+        } else {
+          val defaultMatch = if (trimmed.count { it == '/' } <= 1) {
+            GalleryDefaultFolder.fromPathOrName(trimmed)
+          } else {
+            null
+          }
+          defaultMatch?.displayPath ?: ("/" + trimmed.trim('/'))
+        }
+      }
+      .toSet()
+  }
+
+  fun serializeGrantedFolderPaths(paths: Set<String>): String {
+    return paths
+      .map { path ->
+        val trimmed = path.trim()
+        val defaultMatch = if (trimmed.count { it == '/' } <= 1) {
+          GalleryDefaultFolder.fromPathOrName(trimmed)
+        } else {
+          null
+        }
+        defaultMatch?.displayPath ?: ("/" + trimmed.trim('/'))
+      }
+      .distinct()
+      .joinToString("|")
+  }
+
+  fun getGrantedFolderPaths(context: Context): Set<String> {
+    val prefs = context.getSharedPreferences(GALLERY_PREFS_NAME, Context.MODE_PRIVATE)
+    val fromPaths = parseGrantedFolderPaths(prefs.getString(PREF_KEY_GRANTED_GALLERY_FOLDER_PATHS, null))
+    val fromDefaults = getGrantedFolders(context).map { it.displayPath }.toSet()
+    return fromPaths + fromDefaults
+  }
+
+  fun setGrantedFolderPaths(context: Context, paths: Set<String>) {
+    val prefs = context.getSharedPreferences(GALLERY_PREFS_NAME, Context.MODE_PRIVATE)
+    val defaultSet = paths.mapNotNull { path ->
+      if (path.count { it == '/' } <= 1) GalleryDefaultFolder.fromPathOrName(path) else null
+    }.toSet()
+    prefs.edit()
+      .putString(PREF_KEY_GRANTED_GALLERY_FOLDER_PATHS, serializeGrantedFolderPaths(paths))
+      .putString(PREF_KEY_GRANTED_GALLERY_FOLDERS, serializeGrantedFolders(defaultSet))
+      .apply()
+  }
+
+  fun setFolderPathAccessGranted(
+    context: Context,
+    displayPath: String,
+    granted: Boolean = true,
+  ): Set<String> {
+    val normalized = GalleryDefaultFolder.fromPathOrName(displayPath)
+      ?.takeIf { displayPath.count { ch -> ch == '/' } <= 1 }
+      ?.displayPath
+      ?: ("/" + displayPath.trim().trim('/'))
+    val current = getGrantedFolderPaths(context).toMutableSet()
+    if (granted) {
+      current.add(normalized)
+    } else {
+      current.removeAll { it.equals(normalized, ignoreCase = true) }
+    }
+    setGrantedFolderPaths(context, current)
+    return current.toSet()
   }
 
   /**
@@ -1284,7 +1918,7 @@ object GalleryEngine {
   }
 
   /**
-   * Resolves the root folder group title (`"DCIM"`, `"Pictures"`, `"Photos"`, `"Download"`, etc.) for [file].
+   * Resolves the root folder group title (`"DCIM"`, `"Pictures"`, `"Download"`, etc.) for [file].
    */
   fun resolveDefaultFolderGroupTitle(file: File): String {
     var current: File? = file.absoluteFile
@@ -1292,7 +1926,6 @@ object GalleryEngine {
       val name = current.name
       if (name.equals("DCIM", ignoreCase = true)) return "DCIM"
       if (name.equals("Pictures", ignoreCase = true)) return "Pictures"
-      if (name.equals("Photos", ignoreCase = true)) return "Photos"
       if (name.equals("Downloads", ignoreCase = true) || name.equals("Download", ignoreCase = true)) {
         return "Download"
       }
@@ -1302,7 +1935,7 @@ object GalleryEngine {
   }
 
   /**
-   * Groups albums and photos by their root folders (`"DCIM"`, `"Pictures"`, `"Photos"`, and `"Download"`,
+   * Groups albums and photos by their root folders (`"DCIM"`, `"Pictures"`, and `"Download"`,
    * plus any custom loaded root folders) when [GalleryGroupOption.FOLDERS] is selected.
    */
   fun groupByDefaultFolders(
@@ -1324,7 +1957,6 @@ object GalleryEngine {
       val title = when {
         dir.name.equals("DCIM", ignoreCase = true) -> "DCIM"
         dir.name.equals("Pictures", ignoreCase = true) -> "Pictures"
-        dir.name.equals("Photos", ignoreCase = true) -> "Photos"
         dir.name.equals("Downloads", ignoreCase = true) || dir.name.equals("Download", ignoreCase = true) -> "Download"
         currentAlbum == null && dir.name.isNotBlank() -> dir.name
         else -> resolveDefaultFolderGroupTitle(dir)
@@ -1402,8 +2034,8 @@ object GalleryEngine {
       }
     }
 
-    // Order standard default folders ("DCIM", "Pictures", "Photos", "Download") consistently
-    val folderPriority = listOf("DCIM", "Pictures", "Photos", "Download")
+    // Order standard default folders ("DCIM", "Pictures", "Download") consistently
+    val folderPriority = listOf("DCIM", "Pictures", "Download")
     return groups.sortedWith(
       compareBy<GalleryFolderGroup> { group ->
         val idx = folderPriority.indexOfFirst { it.equals(group.title, ignoreCase = true) }

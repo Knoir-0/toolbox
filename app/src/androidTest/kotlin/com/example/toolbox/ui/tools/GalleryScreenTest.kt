@@ -1,6 +1,9 @@
 package com.example.toolbox.ui.tools
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertContentDescriptionEquals
@@ -17,6 +20,8 @@ import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.swipeLeft
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
+import junit.framework.TestCase.assertEquals
+import junit.framework.TestCase.assertNotNull
 import junit.framework.TestCase.assertTrue
 import org.junit.After
 import org.junit.Before
@@ -102,7 +107,10 @@ class GalleryScreenTest {
 
     composeTestRule.setContent {
       ToolboxTheme {
-        GalleryScreen(rootDirectory = testRootDir)
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialGrantedFolders = GalleryDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()
@@ -112,10 +120,10 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("3")
     composeTestRule.onNodeWithTag("gallery_density_indicator").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_breadcrumb_root").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("gallery_folder_pill_DCIM").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("gallery_folder_pill_Pictures").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("gallery_folder_pill_Photos").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("gallery_folder_pill_Download").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_folder_pill_DCIM").assertIsDisplayed().assertTextEquals("Camera")
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Pictures").assertIsDisplayed().assertTextEquals("Pictures")
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Download").assertIsDisplayed().assertTextEquals("Download")
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Photos").assertDoesNotExist()
 
     // 2. Contents of Pictures and DCIM are un-nested at the root level as if they were the same folder
     val cameraTile = composeTestRule.onNodeWithTag("album_tile_Camera", useUnmergedTree = true)
@@ -189,7 +197,10 @@ class GalleryScreenTest {
 
     composeTestRule.setContent {
       ToolboxTheme {
-        GalleryScreen(rootDirectory = testRootDir)
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialGrantedFolders = GalleryDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()
@@ -258,7 +269,10 @@ class GalleryScreenTest {
 
     composeTestRule.setContent {
       ToolboxTheme {
-        GalleryScreen(rootDirectory = testRootDir)
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialGrantedFolders = GalleryDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()
@@ -305,7 +319,10 @@ class GalleryScreenTest {
 
     composeTestRule.setContent {
       ToolboxTheme {
-        GalleryScreen(rootDirectory = testRootDir)
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialGrantedFolders = GalleryDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()
@@ -350,7 +367,10 @@ class GalleryScreenTest {
   fun emptyState_displaysNoPhotosOrAlbumsFoundAndCreateAlbumButton_andDefaultsNewAlbumLocationToPictures() {
     composeTestRule.setContent {
       ToolboxTheme {
-        GalleryScreen(rootDirectory = testRootDir)
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialGrantedFolders = GalleryDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()
@@ -403,7 +423,10 @@ class GalleryScreenTest {
 
     composeTestRule.setContent {
       ToolboxTheme {
-        GalleryScreen(rootDirectory = testRootDir)
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialGrantedFolders = GalleryDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()
@@ -503,7 +526,10 @@ class GalleryScreenTest {
 
     composeTestRule.setContent {
       ToolboxTheme {
-        GalleryScreen(rootDirectory = testRootDir)
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialGrantedFolders = GalleryDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()
@@ -581,7 +607,10 @@ class GalleryScreenTest {
 
     composeTestRule.setContent {
       ToolboxTheme {
-        GalleryScreen(rootDirectory = testRootDir)
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialGrantedFolders = GalleryDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()
@@ -650,7 +679,10 @@ class GalleryScreenTest {
 
     composeTestRule.setContent {
       ToolboxTheme {
-        GalleryScreen(rootDirectory = testRootDir)
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialGrantedFolders = GalleryDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()
@@ -723,7 +755,10 @@ class GalleryScreenTest {
 
     composeTestRule.setContent {
       ToolboxTheme {
-        GalleryScreen(rootDirectory = testRootDir)
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialGrantedFolders = GalleryDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()
@@ -772,7 +807,10 @@ class GalleryScreenTest {
 
     composeTestRule.setContent {
       ToolboxTheme {
-        GalleryScreen(rootDirectory = testRootDir)
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialGrantedFolders = GalleryDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()
@@ -845,7 +883,10 @@ class GalleryScreenTest {
 
     composeTestRule.setContent {
       ToolboxTheme {
-        GalleryScreen(rootDirectory = testRootDir)
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialGrantedFolders = GalleryDefaultFolder.entries.toSet(),
+        )
       }
     }
     composeTestRule.waitForIdle()
@@ -945,5 +986,223 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("photo_viewer_video_controls").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_viewer_video_play_state_label", useUnmergedTree = true)
       .assertTextEquals("Playing")
+  }
+
+  @Test
+  fun scopedStorageAccess_locksAlbumView_andPromptsPermissionFlowOnFolderPillOrLockTap() {
+    val dcimCameraDir = File(testRootDir, "DCIM/Camera").apply { mkdirs() }
+    val picturesVacationDir = File(testRootDir, "Pictures/Vacation").apply { mkdirs() }
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(dcimCameraDir, "dcim_photo.png"),
+      lastModifiedMs = 5_000_000L,
+    )
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(picturesVacationDir, "pictures_photo.png"),
+      lastModifiedMs = 6_000_000L,
+    )
+
+    var systemPromptFolder: GalleryDefaultFolder? = null
+    var pendingSystemGrantCallback: ((Boolean) -> Unit)? = null
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          onRequestFolderSystemAccess = { folder, onResult ->
+            systemPromptFolder = folder
+            pendingSystemGrantCallback = onResult
+          },
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // 1. Initially all folder navigation pills show a lock icon and the Album view informs the user that storage access is locked
+    composeTestRule.onNodeWithTag("gallery_breadcrumb_root").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_lock_icon_DCIM").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_lock_icon_Pictures").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_lock_icon_Download").assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("locked_storage_state").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Storage access is locked").assertIsDisplayed()
+    composeTestRule.onNodeWithText(
+      "Tap the lock icon on a folder pill above to grant permission to access files in that location."
+    ).assertIsDisplayed()
+
+    // 2. Tapping the lock icon or pill on DCIM displays the prompt to grant access to /DCIM
+    composeTestRule.onNodeWithTag("folder_lock_icon_DCIM").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("folder_permission_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_permission_title")
+      .assertIsDisplayed()
+      .assertTextEquals("Allow access to files in /DCIM?")
+    composeTestRule.onNodeWithTag("allow_folder_permission_button").assertIsDisplayed()
+
+    // 3. Tapping the Pictures pill updates the permission prompt to /Pictures
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Pictures").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("folder_permission_title")
+      .assertIsDisplayed()
+      .assertTextEquals("Allow access to files in /Pictures?")
+
+    // 4. Tapping the Albums pill while no folders are granted returns to the locked storage state
+    composeTestRule.onNodeWithTag("gallery_breadcrumb_root").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("locked_storage_state").assertIsDisplayed()
+
+    // 5. Switch back to DCIM and tap Allow -> system prompt for /DCIM pops up
+    composeTestRule.onNodeWithTag("gallery_folder_pill_DCIM").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("allow_folder_permission_button").performClick()
+    composeTestRule.waitForIdle()
+
+    assertEquals(GalleryDefaultFolder.DCIM, systemPromptFolder)
+    assertNotNull(pendingSystemGrantCallback)
+
+    val systemIntent = GalleryEngine.createFolderAccessIntent(
+      context = composeTestRule.activity,
+      folder = GalleryDefaultFolder.DCIM,
+      userRoot = testRootDir,
+    )
+    assertEquals(Intent.ACTION_OPEN_DOCUMENT_TREE, systemIntent.action)
+    @Suppress("DEPRECATION")
+    val initialUri = systemIntent.getParcelableExtra<Uri>(DocumentsContract.EXTRA_INITIAL_URI)
+    assertNotNull(initialUri)
+    assertTrue(initialUri.toString().contains("DCIM"))
+
+    // 6. Completing system prompt grant unlocks DCIM and shows its albums, while Pictures & Download remain locked
+    composeTestRule.runOnUiThread {
+      pendingSystemGrantCallback?.invoke(true)
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("folder_unlocked_icon_DCIM").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_lock_icon_Pictures").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_lock_icon_Download").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("album_tile_item_Camera").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("album_tile_item_Vacation").assertDoesNotExist()
+
+    // 7. Tapping Albums pill now shows albums from unlocked DCIM (without locked Pictures)
+    composeTestRule.onNodeWithTag("gallery_breadcrumb_root").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("album_tile_item_Camera").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("album_tile_item_Vacation").assertDoesNotExist()
+  }
+
+  @Test
+  fun addStorageLocationButton_betweenGridRowsAndSortFilter_andReorderableNavigationPillsWithAlbumsFixedAtFront() {
+    val customDir = File(testRootDir, "Wallpapers").apply { mkdirs() }
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(customDir, "wallpaper_01.png"),
+      lastModifiedMs = 4_000_000L,
+    )
+
+    var addFolderCallback: ((GalleryFolder?) -> Unit)? = null
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          onRequestAddCustomFolder = { onAdded ->
+            addFolderCallback = onAdded
+          },
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // 1. Add new storage location button is positioned between the grid rows option and the sort / group filter
+    val densityBounds = composeTestRule.onNodeWithTag("gallery_density_indicator")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val addStorageBounds = composeTestRule.onNodeWithTag("gallery_add_storage_location_button")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val sortBounds = composeTestRule.onNodeWithTag("gallery_sort_button")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+
+    assertTrue(
+      "Add storage location button (${addStorageBounds.left}) should be to the right of grid rows option (${densityBounds.right})",
+      densityBounds.right <= addStorageBounds.left + 4f,
+    )
+    assertTrue(
+      "Add storage location button (${addStorageBounds.right}) should be to the left of sort / group filter (${sortBounds.left})",
+      addStorageBounds.right <= sortBounds.left + 4f,
+    )
+
+    // 2. Tap Add storage location button -> triggers scoped storage folder picker and adds unlocked custom folder pill
+    composeTestRule.onNodeWithTag("gallery_add_storage_location_button").performClick()
+    composeTestRule.waitForIdle()
+    assertNotNull(addFolderCallback)
+
+    composeTestRule.runOnUiThread {
+      addFolderCallback?.invoke(
+        GalleryFolder(
+          folderName = "Wallpapers",
+          displayPath = "/Wallpapers",
+          customAbsolutePath = customDir.absolutePath,
+        )
+      )
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Wallpapers").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_unlocked_icon_Wallpapers").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_tile_item_wallpaper_01.png").assertIsDisplayed()
+
+    // 3. Verify initial pill order (Albums is first, then DCIM, then Pictures) and drag Pictures to the left of DCIM
+    val initialAlbumsBounds = composeTestRule.onNodeWithTag("gallery_breadcrumb_root")
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val initialDcimBounds = composeTestRule.onNodeWithTag("gallery_folder_pill_DCIM")
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val initialPicturesBounds = composeTestRule.onNodeWithTag("gallery_folder_pill_Pictures")
+      .fetchSemanticsNode()
+      .boundsInRoot
+    assertTrue(initialAlbumsBounds.left < initialDcimBounds.left)
+    assertTrue(initialDcimBounds.left < initialPicturesBounds.left)
+
+    val barBounds = composeTestRule.onNodeWithTag("gallery_pill_bar")
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val startX = initialPicturesBounds.center.x - barBounds.left
+    val startY = initialPicturesBounds.center.y - barBounds.top
+    // Drag Pictures all the way toward the left edge (past Albums) -> Pictures should move before DCIM, while Albums stays fixed at index 0!
+    val endX = 8f
+
+    composeTestRule.onNodeWithTag("gallery_pill_bar").performTouchInput {
+      down(Offset(startX, startY))
+      advanceEventTime(650L)
+      moveTo(Offset(endX, startY))
+      advanceEventTime(100L)
+      up()
+    }
+    composeTestRule.waitForIdle()
+
+    val reorderedAlbumsBounds = composeTestRule.onNodeWithTag("gallery_breadcrumb_root")
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val reorderedPicturesBounds = composeTestRule.onNodeWithTag("gallery_folder_pill_Pictures")
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val reorderedDcimBounds = composeTestRule.onNodeWithTag("gallery_folder_pill_DCIM")
+      .fetchSemanticsNode()
+      .boundsInRoot
+
+    assertTrue(
+      "Albums pill should remain fixed at the front of the list to the left of Pictures",
+      reorderedAlbumsBounds.left < reorderedPicturesBounds.left,
+    )
+    assertTrue(
+      "Pictures pill should now be positioned to the left of DCIM pill after drag-and-drop reorder",
+      reorderedPicturesBounds.left < reorderedDcimBounds.left,
+    )
   }
 }

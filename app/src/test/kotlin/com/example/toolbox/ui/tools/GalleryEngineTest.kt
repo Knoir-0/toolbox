@@ -28,13 +28,13 @@ class GalleryEngineTest {
   }
 
   @Test
-  fun defaultFolders_areDcimPicturesPhotosAndDownloads_andContentsAreUnNestedAsSameFolder_andDefaultNewAlbumIsPictures() {
-    assertEquals(listOf("DCIM", "Pictures", "Photos", "Download"), DEFAULT_GALLERY_FOLDER_NAMES)
+  fun defaultFolders_areDcimPicturesAndDownloads_andContentsAreUnNestedAsSameFolder_andDefaultNewAlbumIsPictures() {
+    assertEquals(listOf("DCIM", "Pictures", "Download"), DEFAULT_GALLERY_FOLDER_NAMES)
     assertEquals("Pictures", DEFAULT_NEW_ALBUM_FOLDER_NAME)
 
     val folders = GalleryEngine.getDefaultGalleryFolders(tempRootDir)
-    assertEquals(4, folders.size)
-    assertEquals(listOf("DCIM", "Pictures", "Photos", "Download"), folders.map { it.name })
+    assertEquals(3, folders.size)
+    assertEquals(listOf("DCIM", "Pictures", "Download"), folders.map { it.name })
 
     val defaultNewAlbumFolder = GalleryEngine.getDefaultNewAlbumFolder(tempRootDir)
     assertEquals(File(tempRootDir, "Pictures").absolutePath, defaultNewAlbumFolder.absolutePath)
@@ -789,7 +789,6 @@ class GalleryEngineTest {
 
     val dcimDir = File(tempRootDir, "DCIM").apply { mkdirs() }
     val picturesDir = File(tempRootDir, "Pictures").apply { mkdirs() }
-    val photosDir = File(tempRootDir, "Photos").apply { mkdirs() }
     val downloadsDir = File(tempRootDir, "Download").apply { mkdirs() }
 
     val photoFile = File(dcimDir, "Camera/portrait.jpg").apply {
@@ -807,26 +806,22 @@ class GalleryEngineTest {
       parentFile?.mkdirs()
       writeBytes(byteArrayOf(1, 2, 3, 4))
     }
-    val exportedPhoto = File(photosDir, "exported.png").apply {
-      writeBytes(byteArrayOf(1, 2, 3))
-    }
     val downloadedPhoto = File(downloadsDir, "downloaded.png").apply {
       writeBytes(byteArrayOf(1, 2, 3))
     }
 
-    // 0. FOLDERS groups by the default root folders ("DCIM", "Pictures", "Photos", and "Download")
+    // 0. FOLDERS groups by the default root folders ("DCIM", "Pictures", and "Download")
     val folderGroups = GalleryEngine.groupByDefaultFolders(
-      rootDirectories = listOf(dcimDir, picturesDir, photosDir, downloadsDir),
+      rootDirectories = listOf(dcimDir, picturesDir, downloadsDir),
       sortOrder = GallerySortOrder.NAME_ASC,
     )
-    assertEquals(listOf("DCIM", "Pictures", "Photos", "Download"), folderGroups.map { it.title })
+    assertEquals(listOf("DCIM", "Pictures", "Download"), folderGroups.map { it.title })
     assertEquals(listOf("Camera"), folderGroups[0].albums.map { it.name })
     assertEquals(listOf("Screenshots"), folderGroups[1].albums.map { it.name })
     assertEquals(listOf("meme.gif"), folderGroups[1].photos.map { it.name })
-    assertEquals(listOf("exported.png"), folderGroups[2].photos.map { it.name })
-    assertEquals(listOf("Download"), folderGroups[3].albums.map { it.name })
-    assertEquals(1, folderGroups[3].albums.single().totalPhotoCount)
-    assertTrue(folderGroups[3].photos.isEmpty())
+    assertEquals(listOf("Download"), folderGroups[2].albums.map { it.name })
+    assertEquals(1, folderGroups[2].albums.single().totalPhotoCount)
+    assertTrue(folderGroups[2].photos.isEmpty())
 
     // Verify saving default and folder-specific sort & group configurations
     val customDefault = GallerySortGroupConfig(GalleryGroupOption.DATE, GallerySortOrder.NAME_ASC)
@@ -978,5 +973,89 @@ class GalleryEngineTest {
     assertTrue(photosByName.getValue("dance.gif").supportsInlinePreview)
     assertTrue(photosByName.getValue("clip.mp4").supportsInlinePreview)
     assertTrue(!photosByName.getValue("still.png").supportsInlinePreview)
+  }
+
+  @Test
+  fun parseAndSerializeGrantedFolders_folderDocumentId_andReorderPillsWithAlbumsFixedAtFront() {
+    assertEquals(listOf("DCIM", "Pictures", "Download"), DEFAULT_GALLERY_FOLDER_NAMES)
+    assertEquals(listOf("/DCIM", "/Pictures", "/Download"), DEFAULT_GALLERY_FOLDER_DISPLAY_PATHS)
+    assertEquals(listOf("Camera", "Pictures", "Download"), DEFAULT_GALLERY_FOLDERS.map { it.pillLabel })
+    assertEquals(
+      listOf(
+        GalleryDefaultFolder.DCIM,
+        GalleryDefaultFolder.PICTURES,
+        GalleryDefaultFolder.DOWNLOADS,
+      ),
+      GalleryDefaultFolder.entries,
+    )
+
+    assertTrue(GalleryEngine.parseGrantedFolders(null).isEmpty())
+    assertTrue(GalleryEngine.parseGrantedFolders("").isEmpty())
+    assertTrue(GalleryEngine.parseGrantedFolders("   ").isEmpty())
+
+    val parsed = GalleryEngine.parseGrantedFolders("DCIM, Download, /Pictures")
+    assertEquals(
+      setOf(
+        GalleryDefaultFolder.DCIM,
+        GalleryDefaultFolder.PICTURES,
+        GalleryDefaultFolder.DOWNLOADS,
+      ),
+      parsed,
+    )
+
+    val serialized = GalleryEngine.serializeGrantedFolders(
+      setOf(GalleryDefaultFolder.DOWNLOADS, GalleryDefaultFolder.DCIM)
+    )
+    assertEquals("DCIM,DOWNLOADS", serialized)
+    assertEquals(
+      setOf(GalleryDefaultFolder.DCIM, GalleryDefaultFolder.DOWNLOADS),
+      GalleryEngine.parseGrantedFolders(serialized),
+    )
+
+    assertEquals("primary:DCIM", GalleryEngine.buildFolderDocumentId(GalleryDefaultFolder.DCIM))
+    assertEquals("primary:Pictures", GalleryEngine.buildFolderDocumentId(GalleryDefaultFolder.PICTURES))
+    assertEquals("primary:Download", GalleryEngine.buildFolderDocumentId(GalleryDefaultFolder.DOWNLOADS))
+
+    assertEquals(
+      GalleryDefaultFolder.DCIM,
+      GalleryDefaultFolder.fromPathOrName("content://com.android.externalstorage.documents/tree/primary%3ADCIM"),
+    )
+    assertEquals(
+      GalleryDefaultFolder.PICTURES,
+      GalleryDefaultFolder.fromPathOrName("primary:Pictures"),
+    )
+    assertEquals(
+      GalleryDefaultFolder.DOWNLOADS,
+      GalleryDefaultFolder.fromPathOrName("primary:Download"),
+    )
+
+    // Reordering and persisting custom + default folder pills
+    val customScreenshots = GalleryFolder(
+      folderName = "Screenshots",
+      displayPath = "/Screenshots",
+      customAbsolutePath = "/storage/emulated/0/Screenshots",
+    )
+    val withCustom = DEFAULT_GALLERY_FOLDERS + customScreenshots
+    val reordered = GalleryEngine.reorderFolders(withCustom, fromIndex = 3, toIndex = 0)
+    assertEquals(listOf("Screenshots", "DCIM", "Pictures", "Download"), reordered.map { it.folderName })
+
+    val serializedPills = GalleryEngine.serializeFolderPills(reordered)
+    val parsedPills = GalleryEngine.parseFolderPills(serializedPills)
+    assertEquals(reordered, parsedPills)
+
+    // Full navigation pill reordering keeps "Albums" fixed at the front of the list (index 0)
+    val navPills = listOf("Albums", "DCIM", "Pictures", "Download")
+    assertEquals(
+      listOf("Albums", "DCIM", "Pictures", "Download"),
+      GalleryEngine.reorderNavigationPills(navPills, fromIndex = 0, toIndex = 2),
+    )
+    assertEquals(
+      listOf("Albums", "Pictures", "DCIM", "Download"),
+      GalleryEngine.reorderNavigationPills(navPills, fromIndex = 2, toIndex = 0),
+    )
+    assertEquals(
+      listOf("Albums", "Download", "DCIM", "Pictures"),
+      GalleryEngine.reorderNavigationPills(navPills, fromIndex = 3, toIndex = 1),
+    )
   }
 }

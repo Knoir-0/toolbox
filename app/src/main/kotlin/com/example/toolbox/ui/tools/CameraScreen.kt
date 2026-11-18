@@ -61,7 +61,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -1335,14 +1334,14 @@ fun CameraScreen(
         Box(
           modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 68.dp),
+            .height(68.dp),
           contentAlignment = Alignment.Center,
         ) {
           // Top Bar Quick Camera Controls: Flash, Timer, Aspect Ratio, Grid, Settings
           Row(
             modifier = Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 12.dp, vertical = 12.dp),
+              .fillMaxSize()
+              .padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
           ) {
