@@ -1123,7 +1123,7 @@ object ArchiveEngine {
         bytes = """
           {
             "app": "Toolbox",
-            "tool": "Archives",
+            "tool": "Archive",
             "supportedFormats": ["ZIP", "TAR", "TAR.GZ", "GZIP"],
             "defaultCompression": "BALANCED"
           }

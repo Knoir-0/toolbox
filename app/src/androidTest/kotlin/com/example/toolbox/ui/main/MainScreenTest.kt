@@ -58,16 +58,7 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("notes_empty_state").assertExists()
 
-    // Panel auto-collapsed back to one row; pull up and navigate to Page 1 for Units and Ruler
-    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
-    composeTestRule.waitForIdle()
-
-    composeTestRule.onAllNodesWithText("Units").onFirst().performClick()
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("From Unit (Meter)").assertExists()
-
+    // Panel auto-collapsed back to one row; pull up and navigate to Page 1 for Ruler
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
@@ -80,10 +71,19 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("ruler_unit_toggle").assertIsDisplayed()
     composeTestRule.onNodeWithTag("ruler_unit_toggle").performClick()
 
-    // Unhide Colors and Metronome to verify switching to them
+    // Unhide Units, Colors, and Metronome to verify switching to them
     DefaultNavigationPreferencesRepository(composeTestRule.activity)
-      .setHiddenTools(DEFAULT_HIDDEN_TOOLS - Tool.COLOR_PICKER - Tool.METRONOME)
+      .setHiddenTools(DEFAULT_HIDDEN_TOOLS - Tool.UNIT_CONVERTER - Tool.COLOR_PICKER - Tool.METRONOME)
     composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onAllNodesWithText("Units").onFirst().performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("From Unit (Meter)").assertExists()
 
     // Pull up and navigate to Page 2 for Guitar Tuner and Metronome
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
@@ -447,8 +447,8 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("Math & Measure").assertIsDisplayed()
     composeTestRule.onNodeWithText("Calculate").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Units").assertIsDisplayed()
     composeTestRule.onNodeWithText("Ruler").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Units").assertDoesNotExist()
 
     // Check Instruments category
     val musicIndex = 4
@@ -1152,6 +1152,7 @@ class MainScreenTest {
   @Test
   fun categorySorting_manualToolsWithinCategory_longPressAndDragReordersWithinCategoryAndPersists() {
     val repo = DefaultNavigationPreferencesRepository(composeTestRule.activity)
+    repo.setHiddenTools(DEFAULT_HIDDEN_TOOLS - Tool.UNIT_CONVERTER)
     repo.setToolSorting(ToolSortingOption.TOOL_CATEGORIES)
     repo.setCategoryToolSorting(CategoryToolSortingOption.MANUAL)
     repo.setToolsPerRow(3)
@@ -1252,5 +1253,45 @@ class MainScreenTest {
     } finally {
       tempDir.deleteRecursively()
     }
+  }
+
+  @Test
+  fun rulerTool_calculatorAndUnitConverterButtons_areLeftAndRightOfMeasurementLabel_andPrefillValue() {
+    // Navigate to Ruler tool
+    composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_1").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onAllNodesWithText("Ruler").onFirst().performClick()
+    composeTestRule.waitForIdle()
+
+    val calcButton = composeTestRule.onNodeWithTag("ruler_calculator_button")
+    val labelNode = composeTestRule.onNodeWithTag("ruler_measurement_label")
+    val converterButton = composeTestRule.onNodeWithTag("ruler_unit_converter_button")
+
+    calcButton.assertIsDisplayed()
+    labelNode.assertIsDisplayed()
+    converterButton.assertIsDisplayed()
+    labelNode.assertTextEquals("5.40 cm")
+
+    val calcBounds = calcButton.fetchSemanticsNode().boundsInRoot
+    val labelBounds = labelNode.fetchSemanticsNode().boundsInRoot
+    val converterBounds = converterButton.fetchSemanticsNode().boundsInRoot
+    assertTrue(calcBounds.right <= labelBounds.left)
+    assertTrue(converterBounds.left >= labelBounds.right)
+
+    // Tapping Calculator link opens Calculator prefilled with "5.40"
+    calcButton.performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("calculator_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("calculator_display_expression").assertTextEquals("5.40")
+
+    // Return to Ruler and tap Unit Converter link -> opens Unit Converter prefilled with "5.40"
+    composeTestRule.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("ruler_unit_converter_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("unit_converter_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("unit_converter_input").assertTextEquals("5.40")
   }
 }

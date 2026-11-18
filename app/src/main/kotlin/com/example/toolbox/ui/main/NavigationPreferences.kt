@@ -233,6 +233,7 @@ data class PermissionToolUsageStat(
  * [com.example.toolbox.ui.theme.ToolboxTheme] and tool screens stay synchronized.
  */
 object NavigationPreferencesBridge {
+  var themeMode by mutableStateOf(ThemeMode.SYSTEM)
   var musicPlayerThemeEnabled by mutableStateOf(DEFAULT_MUSIC_PLAYER_THEME_ENABLED)
   var musicPlayerColorOption by mutableStateOf(DEFAULT_MUSIC_PLAYER_COLOR_OPTION)
   var permissionGrantStates by mutableStateOf(AppPermission.entries.associateWith { true })
@@ -242,6 +243,7 @@ object NavigationPreferencesBridge {
 }
 
 val DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
+  Tool.UNIT_CONVERTER,
   Tool.IMAGE_EDITOR,
   Tool.VIDEO_EDITOR,
   Tool.AUDIO_EDITOR,
@@ -752,6 +754,7 @@ class DefaultNavigationPreferencesRepository(
   override val accentColorFlow: StateFlow<String> = _accentColorFlow.asStateFlow()
 
   init {
+    NavigationPreferencesBridge.themeMode = _themeModeFlow.value
     NavigationPreferencesBridge.musicPlayerThemeEnabled = _musicPlayerThemeEnabledFlow.value
     NavigationPreferencesBridge.musicPlayerColorOption = _musicPlayerColorOptionFlow.value
   }
@@ -824,6 +827,7 @@ class DefaultNavigationPreferencesRepository(
   override fun setThemeMode(mode: ThemeMode) {
     sharedPreferences.edit().putString(PREF_KEY_THEME_MODE, mode.name).apply()
     _themeModeFlow.value = mode
+    NavigationPreferencesBridge.themeMode = mode
   }
 
   override fun getThemeColor(): String {
@@ -1173,6 +1177,7 @@ class InMemoryNavigationPreferencesRepository(
   override val accentColorFlow: StateFlow<String> = _accentColorFlow.asStateFlow()
 
   init {
+    NavigationPreferencesBridge.themeMode = _themeModeFlow.value
     NavigationPreferencesBridge.musicPlayerThemeEnabled = _musicPlayerThemeEnabledFlow.value
     NavigationPreferencesBridge.musicPlayerColorOption = _musicPlayerColorOptionFlow.value
   }
@@ -1228,6 +1233,7 @@ class InMemoryNavigationPreferencesRepository(
 
   override fun setThemeMode(mode: ThemeMode) {
     _themeModeFlow.value = mode
+    NavigationPreferencesBridge.themeMode = mode
   }
 
   override fun getThemeColor(): String = _themeColorFlow.value

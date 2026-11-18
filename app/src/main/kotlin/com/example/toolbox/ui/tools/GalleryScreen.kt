@@ -240,6 +240,8 @@ import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import com.example.toolbox.ui.main.NavigationPreferencesBridge
+import com.example.toolbox.ui.theme.LocalIsDarkTheme
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
 import java.util.Locale
@@ -531,6 +533,10 @@ fun GalleryScreen(
       val grantedDirs = mutableListOf<File>()
       for (folder in grantedFolders) {
         val dir = GalleryEngine.resolveDirectoryForFolder(folder, effectiveRootDir)
+        // Do not include any custom folders with .nomedia files in the root Album view
+        if (folder.isCustom && GalleryEngine.containsNoMediaFile(dir)) {
+          continue
+        }
         if (grantedDirs.none { existing -> existing.absolutePath.equals(dir.absolutePath, ignoreCase = true) }) {
           grantedDirs.add(dir)
         }
@@ -543,10 +549,14 @@ fun GalleryScreen(
           }
         }
       }
+      val nonNoMediaAdditionalPaths = additionalFolderPaths.filterNot { rawPath ->
+        val candidate = File(rawPath).let { if (it.isAbsolute) it else File(effectiveRootDir, rawPath.trimStart('/')) }
+        GalleryEngine.containsNoMediaFile(candidate)
+      }
       GalleryEngine.loadRootContents(
         rootDirectory = effectiveRootDir,
         folders = grantedDirs,
-        additionalPaths = additionalFolderPaths,
+        additionalPaths = nonNoMediaAdditionalPaths,
       )
     }
   }
@@ -759,7 +769,11 @@ fun GalleryScreen(
 
   fun grantFolderAccess(folder: GalleryFolder) {
     if (folderPills.none { it.displayPath.equals(folder.displayPath, ignoreCase = true) }) {
-      val updatedPills = folderPills + folder
+      val updatedPills = if (folder.isCustom) {
+        listOf(folder) + folderPills
+      } else {
+        folderPills + folder
+      }
       folderPills = updatedPills
       if (!isInspection) {
         GalleryEngine.setFolderPills(context, updatedPills)
@@ -768,7 +782,7 @@ fun GalleryScreen(
     grantedFolderPaths = if (isInspection) {
       grantedFolderPaths + folder.displayPath
     } else {
-      GalleryEngine.setFolderPathAccessGranted(context, folder.displayPath, true)
+      grantedFolderPaths + GalleryEngine.setFolderPathAccessGranted(context, folder.displayPath, true)
     }
     pendingPermissionFolderPath = null
     selectedDefaultFolder = folder.folderName
@@ -784,6 +798,52 @@ fun GalleryScreen(
         GalleryEngine.setFolderPills(context, updated)
       }
     }
+  }
+
+  fun deleteCustomFolder(folder: GalleryFolder) {
+    if (folder.isDefault) return
+    isFabExpanded = false
+    exitSelectionMode()
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    val updatedPills = GalleryEngine.removeCustomFolder(folderPills, folder)
+    folderPills = updatedPills
+    if (!isInspection) {
+      GalleryEngine.removeCustomFolder(context, folder)
+    }
+    grantedFolderPaths = grantedFolderPaths.filterNot { it.equals(folder.displayPath, ignoreCase = true) }.toSet()
+    if (additionalFolderPaths.isNotEmpty()) {
+      val folderAbsPath = folder.customAbsolutePath
+      val updatedAdditional = additionalFolderPaths.filterNot { path ->
+        path.equals(folder.displayPath, ignoreCase = true) ||
+          path.equals(folder.folderName, ignoreCase = true) ||
+          (!folderAbsPath.isNullOrBlank() && path.equals(folderAbsPath, ignoreCase = true))
+      }
+      if (updatedAdditional != additionalFolderPaths) {
+        additionalFolderPaths = updatedAdditional
+        prefs?.edit()?.putString(PREF_KEY_GALLERY_FOLDERS, updatedAdditional.joinToString("|"))?.apply()
+      }
+    }
+    if (pendingPermissionFolderPath?.equals(folder.displayPath, ignoreCase = true) == true) {
+      pendingPermissionFolderPath = null
+    }
+    if (selectedDefaultFolder.equals(folder.folderName, ignoreCase = true) ||
+      selectedDefaultFolder.equals(folder.displayPath, ignoreCase = true)
+    ) {
+      selectedDefaultFolder = null
+      albumStack.clear()
+    } else if (albumStack.isNotEmpty()) {
+      val removedDir = GalleryEngine.resolveDirectoryForFolder(folder, effectiveRootDir)
+      val isInsideRemovedFolder = albumStack.any { album ->
+        album.directories.any { dir ->
+          dir.absolutePath.equals(removedDir.absolutePath, ignoreCase = true) ||
+            dir.absolutePath.startsWith("${removedDir.absolutePath}/", ignoreCase = true)
+        }
+      }
+      if (isInsideRemovedFolder) {
+        albumStack.clear()
+      }
+    }
+    refreshTrigger++
   }
 
   val folderAccessLauncher = rememberLauncherForActivityResult(
@@ -987,6 +1047,11 @@ fun GalleryScreen(
             it.path.contains("/$folderName", ignoreCase = true) || it.name.equals(folderName, ignoreCase = true)
           }
         )
+      } else if (matchingPill != null && matchingPill.isCustom) {
+        GalleryEngine.loadFolderPillContents(
+          folder = matchingPill,
+          rootDirectory = effectiveRootDir,
+        )
       } else {
         val matchingDirs = if (matchingPill != null && !matchingPill.customAbsolutePath.isNullOrBlank()) {
           listOf(File(matchingPill.customAbsolutePath))
@@ -1029,13 +1094,18 @@ fun GalleryScreen(
   }
 
   // All photos in the gallery (for background indexing) and all photos in the current scope (root or current album subtree)
-  val allGalleryPhotos: List<GalleryPhoto> = remember(rootContents, refreshTrigger) {
+  val rootAlbumViewPhotos: List<GalleryPhoto> = remember(rootContents, refreshTrigger) {
     GalleryEngine.collectAllGalleryPhotos(rootContents)
   }
 
-  val allScopePhotos: List<GalleryPhoto> = remember(currentAlbum, selectedDefaultFolder, activeRootContents, currentAlbumContents, allGalleryPhotos, refreshTrigger) {
+  val allGalleryPhotos: List<GalleryPhoto> = remember(rootAlbumViewPhotos, activeRootContents, refreshTrigger) {
+    val activePhotosList = GalleryEngine.collectAllGalleryPhotos(activeRootContents)
+    (rootAlbumViewPhotos + activePhotosList).distinctBy { it.path }
+  }
+
+  val allScopePhotos: List<GalleryPhoto> = remember(currentAlbum, selectedDefaultFolder, activeRootContents, currentAlbumContents, rootAlbumViewPhotos, refreshTrigger) {
     if (currentAlbum == null && selectedDefaultFolder.isNullOrBlank()) {
-      allGalleryPhotos
+      rootAlbumViewPhotos
     } else if (currentAlbum == null) {
       GalleryEngine.collectAllGalleryPhotos(activeRootContents)
     } else {
@@ -1118,6 +1188,21 @@ fun GalleryScreen(
   val searchMatchingPhotos: List<GalleryPhoto> = searchResult.matchingPhotos
   val matchSnippetsByPath: Map<String, String> = searchResult.matchSnippetsByPath
 
+  val isViewingCustomFolder = remember(currentAlbum, selectedDefaultFolder, folderPills) {
+    if (currentAlbum != null) {
+      currentAlbum.bypassNoMedia
+    } else if (!selectedDefaultFolder.isNullOrBlank()) {
+      folderPills.any {
+        it.isCustom && (
+          it.folderName.equals(selectedDefaultFolder, ignoreCase = true) ||
+            it.displayPath.equals(selectedDefaultFolder, ignoreCase = true)
+        )
+      }
+    } else {
+      false
+    }
+  }
+
   val folderGroups: List<GalleryFolderGroup> = remember(
     groupOption,
     sortOrder,
@@ -1127,6 +1212,7 @@ fun GalleryScreen(
     searchQuery,
     selectedTagFilter,
     photoIndexMap,
+    isViewingCustomFolder,
   ) {
     if (groupOption == GalleryGroupOption.FOLDERS) {
       GalleryEngine.groupByDefaultFolders(
@@ -1136,6 +1222,7 @@ fun GalleryScreen(
         searchQuery = if (hasActiveSearchQueryOrTag) searchQuery else "",
         selectedTag = if (hasActiveSearchQueryOrTag) selectedTagFilter else null,
         indexMap = photoIndexMap,
+        bypassNoMedia = isViewingCustomFolder,
       )
     } else {
       emptyList()
@@ -1602,6 +1689,9 @@ fun GalleryScreen(
         onMoveFolder = { fromIndex, toIndex ->
           moveFolderPill(fromIndex, toIndex)
         },
+        onDeleteCustomFolder = { folder ->
+          deleteCustomFolder(folder)
+        },
         onAddCustomFolder = {
           requestAddCustomFolder()
         },
@@ -1642,11 +1732,17 @@ fun GalleryScreen(
         }
       )?.takeIf { !isFolderGranted(it) }
 
+      val contentBackgroundColor = GalleryEngine.resolveContentBackgroundColor(
+        themeMode = NavigationPreferencesBridge.themeMode,
+        systemInDarkTheme = LocalIsDarkTheme.current,
+      )
+
       // Main Content Area (Tile View with pinch-to-zoom 3..6 per row, List View, or Scoped Storage Permission / Locked View)
       Box(
         modifier = Modifier
           .weight(1f)
           .fillMaxWidth()
+          .background(contentBackgroundColor)
           .testTag("gallery_content_container")
           .pinchToChangeColumns(
             enabled = viewMode == GalleryViewMode.TILE,
@@ -2036,6 +2132,27 @@ fun GalleryScreen(
       },
       onShare = { sharedPhoto ->
         sharePhotoFile(context, sharedPhoto.file)
+      },
+      onDelete = { deletedPhoto ->
+        val currentIndex = activePhotos.indexOfFirst { it.path == deletedPhoto.path }
+        val remainingPhotos = activePhotos.filterNot { it.path == deletedPhoto.path }
+        val deletedCount = GalleryEngine.deleteSelectedItems(emptyList(), listOf(deletedPhoto))
+        if (deletedCount > 0) {
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          selectedPhotoPaths = selectedPhotoPaths - deletedPhoto.path
+          refreshTrigger++
+          selectedPhotoForViewer = if (remainingPhotos.isEmpty()) {
+            null
+          } else {
+            val nextIndex = currentIndex.coerceIn(0, remainingPhotos.lastIndex)
+            remainingPhotos[nextIndex]
+          }
+          Toast.makeText(
+            context,
+            "Deleted ${deletedPhoto.name}",
+            Toast.LENGTH_SHORT,
+          ).show()
+        }
       },
       onOpenColorPicker = { hex ->
         openColorInColorsTool(hex)
@@ -2459,6 +2576,7 @@ private fun GalleryNavigationAndDensityBar(
   onSelectFolder: (GalleryFolder) -> Unit = {},
   onTapFolderIcon: (GalleryFolder) -> Unit = {},
   onMoveFolder: (fromIndex: Int, toIndex: Int) -> Unit = { _, _ -> },
+  onDeleteCustomFolder: (GalleryFolder) -> Unit = {},
   onAddCustomFolder: () -> Unit = {},
   onNavigateToIndex: (Int) -> Unit,
   onAlbumsPerRowChange: (Int) -> Unit,
@@ -2491,6 +2609,13 @@ private fun GalleryNavigationAndDensityBar(
 
   fun isGrantedFolder(folder: GalleryFolder): Boolean {
     return grantedFolderPaths.any { it.equals(folder.displayPath, ignoreCase = true) }
+  }
+
+  LaunchedEffect(folders) {
+    val activePaths = folders.map { it.displayPath }
+    pillBounds.keys.retainAll { path ->
+      activePaths.any { it.equals(path, ignoreCase = true) }
+    }
   }
 
   Surface(
@@ -2607,13 +2732,17 @@ private fun GalleryNavigationAndDensityBar(
         modifier = Modifier
           .fillMaxWidth()
           .fadingPillRowUnderFloatingControls(
-            hasColumnsButton = viewMode == GalleryViewMode.TILE,
-            extraControlButtonsCount = 1,
+            hasColumnsButton = !isSearchView && viewMode == GalleryViewMode.TILE,
+            extraControlButtonsCount = if (isSearchView) 0 else 1,
           )
           .horizontalScroll(scrollState, enabled = draggedFolder == null)
           .padding(
             start = 12.dp,
-            end = if (viewMode == GalleryViewMode.TILE) 136.dp else 96.dp,
+            end = when {
+              isSearchView -> 56.dp
+              viewMode == GalleryViewMode.TILE -> 136.dp
+              else -> 96.dp
+            },
             top = 6.dp,
             bottom = 6.dp,
           ),
@@ -2696,72 +2825,32 @@ private fun GalleryNavigationAndDensityBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
           ) {
-            val isAtRootAll = albumStack.isEmpty() && selectedDefaultFolder.isNullOrBlank() && pendingPermissionFolder == null
-            FilterChip(
-              selected = isAtRootAll,
-              onClick = {
-                if (draggedFolder == null) {
-                  onNavigateToRoot()
-                }
-              },
-              shape = RoundedCornerShape(20.dp),
-              leadingIcon = {
-                Icon(
-                  imageVector = Icons.Default.PhotoLibrary,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
-              },
-              label = {
-                Text(
-                  text = GALLERY_ALBUMS_PILL_NAME,
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = if (isAtRootAll) FontWeight.Bold else FontWeight.Medium,
-                )
-              },
-              colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-              ),
-              modifier = Modifier
-                .onGloballyPositioned { coords ->
-                  val barCoords = barCoordinates
-                  if (barCoords != null && barCoords.isAttached && coords.isAttached) {
-                    albumsPillBounds = barCoords.localBoundingBoxOf(coords, clipBounds = false)
-                  }
-                }
-                .testTag("gallery_breadcrumb_root"),
-            )
-
-            albumStack.forEachIndexed { index, album ->
-              Icon(
-                imageVector = Icons.Default.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp),
-              )
-              val isCurrent = index == albumStack.lastIndex
+            Row(
+              modifier = Modifier.testTag("gallery_breadcrumb_chain"),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(1.dp),
+            ) {
+              val isAtRootAll = albumStack.isEmpty() && selectedDefaultFolder.isNullOrBlank() && pendingPermissionFolder == null
               FilterChip(
-                selected = isCurrent,
+                selected = isAtRootAll,
                 onClick = {
                   if (draggedFolder == null) {
-                    onNavigateToIndex(index)
+                    onNavigateToRoot()
                   }
                 },
                 shape = RoundedCornerShape(20.dp),
                 leadingIcon = {
                   Icon(
-                    imageVector = Icons.Default.Folder,
+                    imageVector = Icons.Default.PhotoLibrary,
                     contentDescription = null,
                     modifier = Modifier.size(16.dp),
                   )
                 },
                 label = {
                   Text(
-                    text = album.name,
+                    text = GALLERY_ALBUMS_PILL_NAME,
                     style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                    fontWeight = if (isAtRootAll) FontWeight.Bold else FontWeight.Medium,
                   )
                 },
                 colors = FilterChipDefaults.filterChipColors(
@@ -2769,8 +2858,56 @@ private fun GalleryNavigationAndDensityBar(
                   selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
                   selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
                 ),
-                modifier = Modifier.testTag("gallery_breadcrumb_${album.name}"),
+                modifier = Modifier
+                  .onGloballyPositioned { coords ->
+                    val barCoords = barCoordinates
+                    if (barCoords != null && barCoords.isAttached && coords.isAttached) {
+                      albumsPillBounds = barCoords.localBoundingBoxOf(coords, clipBounds = false)
+                    }
+                  }
+                  .testTag("gallery_breadcrumb_root"),
               )
+
+              albumStack.forEachIndexed { index, album ->
+                Icon(
+                  imageVector = Icons.Default.ChevronRight,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier
+                    .size(16.dp)
+                    .testTag("gallery_breadcrumb_chevron_${album.name}"),
+                )
+                val isCurrent = index == albumStack.lastIndex
+                FilterChip(
+                  selected = isCurrent,
+                  onClick = {
+                    if (draggedFolder == null) {
+                      onNavigateToIndex(index)
+                    }
+                  },
+                  shape = RoundedCornerShape(20.dp),
+                  leadingIcon = {
+                    Icon(
+                      imageVector = Icons.Default.Folder,
+                      contentDescription = null,
+                      modifier = Modifier.size(16.dp),
+                    )
+                  },
+                  label = {
+                    Text(
+                      text = album.name,
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                    )
+                  },
+                  colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+                  ),
+                  modifier = Modifier.testTag("gallery_breadcrumb_${album.name}"),
+                )
+              }
             }
 
             folders.forEach { folder ->
@@ -2835,10 +2972,34 @@ private fun GalleryNavigationAndDensityBar(
                       fontWeight = if (isSelectedFolder) FontWeight.Bold else FontWeight.Medium,
                     )
                   },
+                  trailingIcon = if (folder.isCustom) {
+                    {
+                      Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                          .clip(CircleShape)
+                          .clickable(enabled = draggedFolder == null) {
+                            onDeleteCustomFolder(folder)
+                          }
+                          .testTag("folder_delete_icon_${folder.folderName}"),
+                      ) {
+                        Icon(
+                          imageVector = Icons.Default.Close,
+                          contentDescription = "Delete ${folder.pillLabel} folder",
+                          modifier = Modifier
+                            .size(16.dp)
+                            .testTag("folder_pill_delete_icon_${folder.folderName}"),
+                        )
+                      }
+                    }
+                  } else {
+                    null
+                  },
                   colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                     selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
                     selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+                    selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
                   ),
                   modifier = Modifier
                     .onGloballyPositioned { coords ->
@@ -2868,39 +3029,41 @@ private fun GalleryNavigationAndDensityBar(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        if (viewMode == GalleryViewMode.TILE) {
-          ToolboxFloatingColumnsButton(
-            columnsPerRow = albumsPerRow,
-            minColumns = MIN_ALBUMS_PER_ROW,
-            maxColumns = MAX_ALBUMS_PER_ROW,
-            onColumnsChange = onAlbumsPerRowChange,
-            buttonTestTag = "gallery_density_indicator",
-            countTestTag = "gallery_albums_per_row_count",
-            contentDescription = "$albumsPerRow albums per row",
-          )
-        }
-
-        Surface(
-          onClick = onAddCustomFolder,
-          shape = CircleShape,
-          color = MaterialTheme.colorScheme.surfaceContainerHigh,
-          tonalElevation = 3.dp,
-          shadowElevation = 4.dp,
-          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-          modifier = Modifier
-            .size(34.dp)
-            .testTag("gallery_add_storage_location_button"),
-        ) {
-          Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.testTag("add_folder_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.CreateNewFolder,
-              contentDescription = "Add storage location",
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier.size(18.dp),
+        if (!isSearchView) {
+          if (viewMode == GalleryViewMode.TILE) {
+            ToolboxFloatingColumnsButton(
+              columnsPerRow = albumsPerRow,
+              minColumns = MIN_ALBUMS_PER_ROW,
+              maxColumns = MAX_ALBUMS_PER_ROW,
+              onColumnsChange = onAlbumsPerRowChange,
+              buttonTestTag = "gallery_density_indicator",
+              countTestTag = "gallery_albums_per_row_count",
+              contentDescription = "$albumsPerRow albums per row",
             )
+          }
+
+          Surface(
+            onClick = onAddCustomFolder,
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 3.dp,
+            shadowElevation = 4.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+            modifier = Modifier
+              .size(34.dp)
+              .testTag("gallery_add_storage_location_button"),
+          ) {
+            Box(
+              contentAlignment = Alignment.Center,
+              modifier = Modifier.testTag("add_folder_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.CreateNewFolder,
+                contentDescription = "Add storage location",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+              )
+            }
           }
         }
 
@@ -3124,10 +3287,22 @@ private fun GalleryNavigationAndDensityBar(
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
               )
             },
+            trailingIcon = if (activeDraggedFolder.isCustom) {
+              {
+                Icon(
+                  imageVector = Icons.Default.Close,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+              }
+            } else {
+              null
+            },
             colors = FilterChipDefaults.filterChipColors(
               selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
               selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
               selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+              selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
             ),
           )
         }
@@ -4544,7 +4719,7 @@ private fun GalleryAlbumContextMenuButton(
 
   Box(modifier = modifier, contentAlignment = Alignment.Center) {
     IconButton(
-      onClick = { expanded = true },
+      onClick = { expanded = !expanded },
       modifier = Modifier
         .size(32.dp)
         .testTag("album_more_${album.name}"),
@@ -4562,15 +4737,6 @@ private fun GalleryAlbumContextMenuButton(
       onDismissRequest = { expanded = false },
       modifier = Modifier.testTag("album_menu_${album.name}"),
     ) {
-      DropdownMenuItem(
-        text = { Text("Open Album") },
-        leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
-        onClick = {
-          expanded = false
-          onOpen()
-        },
-        modifier = Modifier.testTag("album_menu_open_${album.name}"),
-      )
       DropdownMenuItem(
         text = { Text("Archive") },
         leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null) },
@@ -4598,24 +4764,6 @@ private fun GalleryAlbumContextMenuButton(
           actions.onShareAlbum(album)
         },
         modifier = Modifier.testTag("album_menu_share_${album.name}"),
-      )
-      DropdownMenuItem(
-        text = { Text("Cut") },
-        leadingIcon = { Icon(Icons.Default.ContentCut, contentDescription = null) },
-        onClick = {
-          expanded = false
-          actions.onCutAlbum(album)
-        },
-        modifier = Modifier.testTag("album_menu_cut_${album.name}"),
-      )
-      DropdownMenuItem(
-        text = { Text("Copy") },
-        leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-        onClick = {
-          expanded = false
-          actions.onCopyAlbum(album)
-        },
-        modifier = Modifier.testTag("album_menu_copy_${album.name}"),
       )
       DropdownMenuItem(
         text = { Text("Rename") },
@@ -4667,7 +4815,7 @@ private fun GalleryPhotoContextMenuButton(
 
   Box(modifier = modifier, contentAlignment = Alignment.Center) {
     IconButton(
-      onClick = { expanded = true },
+      onClick = { expanded = !expanded },
       modifier = Modifier
         .size(32.dp)
         .testTag("photo_more_${photo.name}"),
@@ -4686,16 +4834,7 @@ private fun GalleryPhotoContextMenuButton(
       modifier = Modifier.testTag("photo_menu_${photo.name}"),
     ) {
       DropdownMenuItem(
-        text = { Text("View") },
-        leadingIcon = { Icon(Icons.Default.Visibility, contentDescription = null) },
-        onClick = {
-          expanded = false
-          onView()
-        },
-        modifier = Modifier.testTag("photo_menu_view_${photo.name}"),
-      )
-      DropdownMenuItem(
-        text = { Text(if (photo.isVideo) "Edit in Video Editor" else "Edit in Image Editor") },
+        text = { Text("Edit") },
         leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
         onClick = {
           expanded = false
@@ -4703,17 +4842,6 @@ private fun GalleryPhotoContextMenuButton(
         },
         modifier = Modifier.testTag("photo_menu_edit_${photo.name}"),
       )
-      if (!photo.isVideo) {
-        DropdownMenuItem(
-          text = { Text("Inspect Color") },
-          leadingIcon = { Icon(Icons.Default.Palette, contentDescription = null) },
-          onClick = {
-            expanded = false
-            actions.onInspectPhotoColor(photo)
-          },
-          modifier = Modifier.testTag("photo_menu_inspect_color_${photo.name}"),
-        )
-      }
       DropdownMenuItem(
         text = { Text("Convert") },
         leadingIcon = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
@@ -4768,24 +4896,6 @@ private fun GalleryPhotoContextMenuButton(
           actions.onSharePhoto(photo)
         },
         modifier = Modifier.testTag("photo_menu_share_${photo.name}"),
-      )
-      DropdownMenuItem(
-        text = { Text("Cut") },
-        leadingIcon = { Icon(Icons.Default.ContentCut, contentDescription = null) },
-        onClick = {
-          expanded = false
-          actions.onCutPhoto(photo)
-        },
-        modifier = Modifier.testTag("photo_menu_cut_${photo.name}"),
-      )
-      DropdownMenuItem(
-        text = { Text("Copy") },
-        leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-        onClick = {
-          expanded = false
-          actions.onCopyPhoto(photo)
-        },
-        modifier = Modifier.testTag("photo_menu_copy_${photo.name}"),
       )
       DropdownMenuItem(
         text = { Text("Rename") },
@@ -5311,6 +5421,7 @@ internal fun GalleryPhotoViewerDialog(
   onDismiss: () -> Unit,
   onEdit: (GalleryPhoto) -> Unit = {},
   onShare: (GalleryPhoto) -> Unit,
+  onDelete: (GalleryPhoto) -> Unit = {},
   onOpenColorPicker: (String) -> Unit = {},
 ) {
   val context = LocalContext.current
@@ -5368,12 +5479,18 @@ internal fun GalleryPhotoViewerDialog(
     initialPage = initialPage,
     pageCount = { viewerPhotos.size },
   )
+  LaunchedEffect(initialPhoto.path, initialPage) {
+    if (pagerState.currentPage != initialPage && initialPage in viewerPhotos.indices) {
+      pagerState.scrollToPage(initialPage)
+    }
+  }
   val coroutineScope = rememberCoroutineScope()
   val previewListState = rememberLazyListState()
 
   // Controls whether the bottom preview scroll bar is visible (dismissed/restored with a tap on the image)
   var showPreviewBar by rememberSaveable { mutableStateOf(true) }
   var showRecognitionInfoSheet by rememberSaveable { mutableStateOf(false) }
+  var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
   var isColorPickerActive by rememberSaveable { mutableStateOf(false) }
 
   // Videos play automatically and muted by default in the viewer
@@ -5448,17 +5565,11 @@ internal fun GalleryPhotoViewerDialog(
       dialogCutout.calculateEndPadding(layoutDirection),
     )
 
-    // Full black background with the image/video rendered directly on top, inset clear of system status & nav bars
+    // Full black background with the image/video rendered directly on top and edge-to-edge translucent top/bottom panels
     Box(
       modifier = Modifier
         .fillMaxSize()
         .background(Color.Black)
-        .padding(
-          start = startSystemInset,
-          top = topSystemInset,
-          end = endSystemInset,
-          bottom = bottomSystemInset,
-        )
         .testTag("gallery_photo_viewer_dialog")
         .semantics {
           contentDescription = "Full black background photo viewer"
@@ -5494,136 +5605,93 @@ internal fun GalleryPhotoViewerDialog(
       }
 
       // Top overlay bar with Close, current photo title & index, zoom indicator, Info/OCR, Edit, and Share
-      Row(
-        modifier = Modifier
-          .align(Alignment.TopCenter)
-          .fillMaxWidth()
-          .background(Color.Black.copy(alpha = 0.65f))
-          .padding(horizontal = 12.dp, vertical = 10.dp)
-          .testTag("photo_viewer_top_bar"),
-        verticalAlignment = Alignment.CenterVertically,
+      // Extends all the way to the top edge of the screen and dismisses/restores together with the bottom bar on tap
+      AnimatedVisibility(
+        visible = showPreviewBar,
+        enter = fadeIn() + slideInVertically(initialOffsetY = { -it / 2 }),
+        exit = fadeOut() + slideOutVertically(targetOffsetY = { -it / 2 }),
+        modifier = Modifier.align(Alignment.TopCenter),
       ) {
-        IconButton(
-          onClick = onDismiss,
-          modifier = Modifier.testTag("photo_viewer_close_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Close,
-            contentDescription = "Close",
-            tint = Color.White,
-          )
-        }
-
-        Column(
+        Row(
           modifier = Modifier
-            .weight(1f)
-            .padding(horizontal = 4.dp),
+            .fillMaxWidth()
+            .background(Color.Black.copy(alpha = 0.65f))
+            .testTag("photo_viewer_top_bar")
+            .padding(
+              start = startSystemInset + 12.dp,
+              top = topSystemInset + 10.dp,
+              end = endSystemInset + 12.dp,
+              bottom = 10.dp,
+            ),
+          verticalAlignment = Alignment.CenterVertically,
         ) {
-          Text(
-            text = currentPhoto.name,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.testTag("photo_viewer_current_title"),
-          )
-          Text(
-            text = "${pagerState.currentPage + 1} / ${viewerPhotos.size} • ${currentPhoto.sizeFormatted}",
-            style = MaterialTheme.typography.bodySmall,
-            color = Color.White.copy(alpha = 0.78f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.testTag("photo_viewer_page_indicator"),
-          )
-        }
-
-        // Zoom scale badge (tap to reset zoom to 100%)
-        Surface(
-          shape = RoundedCornerShape(14.dp),
-          color = Color.White.copy(alpha = 0.16f),
-          modifier = Modifier
-            .clip(RoundedCornerShape(14.dp))
-            .clickable { currentZoomScale = MIN_PHOTO_ZOOM }
-            .testTag("photo_viewer_zoom_badge"),
-        ) {
-          Text(
-            text = "${(currentZoomScale * 100).roundToInt()}%",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            modifier = Modifier
-              .padding(horizontal = 10.dp, vertical = 5.dp)
-              .testTag("photo_viewer_zoom_label"),
-          )
-        }
-
-        Spacer(modifier = Modifier.width(4.dp))
-
-        if (!currentPhoto.isVideo) {
           IconButton(
-            onClick = {
-              isColorPickerActive = !isColorPickerActive
-              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            },
-            modifier = Modifier
-              .then(
-                if (isColorPickerActive) {
-                  Modifier
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.28f))
-                } else {
-                  Modifier
-                }
-              )
-              .testTag("photo_viewer_color_picker_button"),
+            onClick = onDismiss,
+            modifier = Modifier.testTag("photo_viewer_close_button"),
           ) {
             Icon(
-              imageVector = Icons.Default.Colorize,
-              contentDescription = if (isColorPickerActive) "Close color picker" else "Color picker",
-              tint = if (isColorPickerActive) MaterialTheme.colorScheme.tertiary else Color.White,
+              imageVector = Icons.Default.Close,
+              contentDescription = "Close",
+              tint = Color.White,
             )
           }
-        }
 
-        IconButton(
-          onClick = { showRecognitionInfoSheet = true },
-          modifier = Modifier.testTag("photo_viewer_info_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Info,
-            contentDescription = "Photo info, OCR text & smart tags",
-            tint = Color.White,
-          )
-        }
+          Column(
+            modifier = Modifier
+              .weight(1f)
+              .padding(horizontal = 4.dp),
+          ) {
+            Text(
+              text = currentPhoto.name,
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold,
+              color = Color.White,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.testTag("photo_viewer_current_title"),
+            )
+            Text(
+              text = "${pagerState.currentPage + 1} / ${viewerPhotos.size} • ${currentPhoto.sizeFormatted}",
+              style = MaterialTheme.typography.bodySmall,
+              color = Color.White.copy(alpha = 0.78f),
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.testTag("photo_viewer_page_indicator"),
+            )
+          }
 
-        TextButton(
-          onClick = { onEdit(currentPhoto) },
-          modifier = Modifier.testTag("photo_viewer_edit_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Edit,
-            contentDescription = "Edit",
-            tint = Color.White,
-            modifier = Modifier.size(18.dp),
-          )
+          // Zoom scale badge (tap to reset zoom to 100%)
+          Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = Color.White.copy(alpha = 0.16f),
+            modifier = Modifier
+              .clip(RoundedCornerShape(14.dp))
+              .clickable { currentZoomScale = MIN_PHOTO_ZOOM }
+              .testTag("photo_viewer_zoom_badge"),
+          ) {
+            Text(
+              text = "${(currentZoomScale * 100).roundToInt()}%",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.Bold,
+              color = Color.White,
+              modifier = Modifier
+                .padding(horizontal = 10.dp, vertical = 5.dp)
+                .testTag("photo_viewer_zoom_label"),
+            )
+          }
+
           Spacer(modifier = Modifier.width(4.dp))
-          Text(
-            text = "Edit",
-            color = Color.White,
-            style = MaterialTheme.typography.labelLarge,
-          )
-        }
 
-        IconButton(
-          onClick = { onShare(currentPhoto) },
-          modifier = Modifier.testTag("photo_viewer_share_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Share,
-            contentDescription = "Share",
-            tint = Color.White,
-          )
+          IconButton(
+            onClick = { onShare(currentPhoto) },
+            modifier = Modifier.testTag("photo_viewer_share_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Share,
+              contentDescription = "Share",
+              tint = Color.White,
+            )
+          }
         }
       }
 
@@ -5641,7 +5709,12 @@ internal fun GalleryPhotoViewerDialog(
             Row(
               modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .padding(
+                  start = startSystemInset + 16.dp,
+                  end = endSystemInset + 16.dp,
+                  top = 8.dp,
+                  bottom = 8.dp,
+                )
                 .testTag("photo_viewer_video_controls"),
               horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically,
@@ -5714,157 +5787,239 @@ internal fun GalleryPhotoViewerDialog(
             }
           }
 
-          if (currentIndexEntry != null &&
-            (currentIndexEntry.autoTags.isNotEmpty() || currentIndexEntry.hasOcrText || currentIndexEntry.hasBarcodes)
-          ) {
-            Surface(
-              color = Color.Black.copy(alpha = 0.68f),
-              modifier = Modifier
-                .fillMaxWidth()
-                .testTag("photo_viewer_recognition_bar"),
-            ) {
-              Row(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .horizontalScroll(rememberScrollState())
-                  .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                if (currentIndexEntry.hasOcrText) {
-                  Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier
-                      .clip(CircleShape)
-                      .clickable { showRecognitionInfoSheet = true }
-                      .testTag("photo_viewer_ocr_pill"),
-                  ) {
-                    Row(
-                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                      verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    ) {
-                      Icon(
-                        imageVector = Icons.Default.DocumentScanner,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(14.dp),
-                      )
-                      Text(
-                        text = "OCR Text",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                      )
-                    }
-                  }
-                }
-
-                if (currentIndexEntry.hasBarcodes) {
-                  Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    modifier = Modifier
-                      .clip(CircleShape)
-                      .clickable { showRecognitionInfoSheet = true }
-                      .testTag("photo_viewer_barcode_pill"),
-                  ) {
-                    Row(
-                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                      verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    ) {
-                      Icon(
-                        imageVector = Icons.Default.QrCode2,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.size(14.dp),
-                      )
-                      Text(
-                        text = currentIndexEntry.barcodePayloads.first().take(28),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                      )
-                    }
-                  }
-                }
-
-                currentIndexEntry.autoTags.forEach { tag ->
-                  Surface(
-                    shape = CircleShape,
-                    color = Color.White.copy(alpha = 0.16f),
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
-                    modifier = Modifier
-                      .clip(CircleShape)
-                      .clickable { showRecognitionInfoSheet = true }
-                      .testTag("photo_viewer_tag_$tag"),
-                  ) {
-                    Text(
-                      text = tag,
-                      style = MaterialTheme.typography.labelSmall,
-                      fontWeight = FontWeight.Medium,
-                      color = Color.White,
-                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                    )
-                  }
-                }
-              }
-            }
-          }
-
           Surface(
             color = Color.Black.copy(alpha = 0.76f),
             modifier = Modifier
               .fillMaxWidth()
               .testTag("photo_viewer_preview_bar"),
           ) {
-            LazyRow(
-              state = previewListState,
-              contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-              horizontalArrangement = Arrangement.spacedBy(10.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              modifier = Modifier
-                .fillMaxWidth()
-                .testTag("photo_viewer_preview_scroll_bar"),
+            Column(
+              modifier = Modifier.fillMaxWidth(),
             ) {
-              itemsIndexed(
-                items = viewerPhotos,
-                key = { _, item -> "preview_${item.path}" },
-              ) { index, itemPhoto ->
-                val isSelected = index == pagerState.currentPage
-                Box(
+              if (currentIndexEntry != null &&
+                (currentIndexEntry.autoTags.isNotEmpty() || currentIndexEntry.hasOcrText || currentIndexEntry.hasBarcodes)
+              ) {
+                Row(
                   modifier = Modifier
-                    .size(if (isSelected) 64.dp else 54.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .border(
-                      width = if (isSelected) 2.5.dp else 1.dp,
-                      color = if (isSelected) Color.White else Color.White.copy(alpha = 0.3f),
-                      shape = RoundedCornerShape(10.dp),
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(
+                      start = startSystemInset + 16.dp,
+                      end = endSystemInset + 16.dp,
+                      top = 10.dp,
+                      bottom = 4.dp,
                     )
-                    .alpha(if (isSelected) 1f else 0.65f)
-                    .clickable {
-                      coroutineScope.launch {
-                        pagerState.animateScrollToPage(index)
+                    .testTag("photo_viewer_recognition_bar"),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  if (currentIndexEntry.hasOcrText) {
+                    Surface(
+                      shape = CircleShape,
+                      color = MaterialTheme.colorScheme.primaryContainer,
+                      modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable { showRecognitionInfoSheet = true }
+                        .testTag("photo_viewer_ocr_pill"),
+                    ) {
+                      Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                      ) {
+                        Icon(
+                          imageVector = Icons.Default.DocumentScanner,
+                          contentDescription = null,
+                          tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                          modifier = Modifier.size(14.dp),
+                        )
+                        Text(
+                          text = "OCR Text",
+                          style = MaterialTheme.typography.labelSmall,
+                          fontWeight = FontWeight.Bold,
+                          color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
                       }
                     }
-                    .testTag("photo_viewer_preview_thumb_${itemPhoto.name}"),
-                  contentAlignment = Alignment.Center,
-                ) {
-                  PhotoThumbnailBox(
-                    photoFile = itemPhoto.file,
-                    contentDescription = "Preview ${itemPhoto.name}",
-                    iconSize = 22.dp,
-                    modifier = Modifier.fillMaxSize(),
+                  }
+
+                  if (currentIndexEntry.hasBarcodes) {
+                    Surface(
+                      shape = CircleShape,
+                      color = MaterialTheme.colorScheme.secondaryContainer,
+                      modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable { showRecognitionInfoSheet = true }
+                        .testTag("photo_viewer_barcode_pill"),
+                    ) {
+                      Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                      ) {
+                        Icon(
+                          imageVector = Icons.Default.QrCode2,
+                          contentDescription = null,
+                          tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                          modifier = Modifier.size(14.dp),
+                        )
+                        Text(
+                          text = currentIndexEntry.barcodePayloads.first().take(28),
+                          style = MaterialTheme.typography.labelSmall,
+                          fontWeight = FontWeight.Bold,
+                          color = MaterialTheme.colorScheme.onSecondaryContainer,
+                          maxLines = 1,
+                          overflow = TextOverflow.Ellipsis,
+                        )
+                      }
+                    }
+                  }
+
+                  currentIndexEntry.autoTags.forEach { tag ->
+                    Surface(
+                      shape = CircleShape,
+                      color = Color.White.copy(alpha = 0.16f),
+                      border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
+                      modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable { showRecognitionInfoSheet = true }
+                        .testTag("photo_viewer_tag_$tag"),
+                    ) {
+                      Text(
+                        text = tag,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                      )
+                    }
+                  }
+                }
+              }
+
+              // Action icon buttons row between smart tags and preview list, blending in with the translucent panel
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(
+                    start = startSystemInset + 16.dp,
+                    end = endSystemInset + 16.dp,
+                    top = 4.dp,
                   )
+                  .testTag("photo_viewer_actions_row"),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                IconButton(
+                  onClick = { showRecognitionInfoSheet = true },
+                  modifier = Modifier.testTag("photo_viewer_info_button"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = "Photo info, OCR text & smart tags",
+                    tint = Color.White,
+                  )
+                }
+
+                IconButton(
+                  onClick = { onEdit(currentPhoto) },
+                  modifier = Modifier.testTag("photo_viewer_edit_button"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Edit,
+                    contentDescription = "Edit",
+                    tint = Color.White,
+                  )
+                }
+
+                if (!currentPhoto.isVideo) {
+                  IconButton(
+                    onClick = {
+                      isColorPickerActive = !isColorPickerActive
+                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    },
+                    modifier = Modifier.testTag("photo_viewer_color_picker_button"),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.Colorize,
+                      contentDescription = if (isColorPickerActive) "Close color picker" else "Color picker",
+                      tint = if (isColorPickerActive) MaterialTheme.colorScheme.tertiary else Color.White,
+                    )
+                  }
+                }
+
+                IconButton(
+                  onClick = { showDeleteConfirmDialog = true },
+                  modifier = Modifier.testTag("photo_viewer_delete_button"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint = Color.White,
+                  )
+                }
+              }
+
+              LazyRow(
+                state = previewListState,
+                contentPadding = PaddingValues(
+                  start = startSystemInset + 16.dp,
+                  end = endSystemInset + 16.dp,
+                  top = 6.dp,
+                  bottom = bottomSystemInset + 12.dp,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .testTag("photo_viewer_preview_scroll_bar"),
+              ) {
+                itemsIndexed(
+                  items = viewerPhotos,
+                  key = { _, item -> "preview_${item.path}" },
+                ) { index, itemPhoto ->
+                  val isSelected = index == pagerState.currentPage
+                  Box(
+                    modifier = Modifier
+                      .size(if (isSelected) 64.dp else 54.dp)
+                      .clip(RoundedCornerShape(10.dp))
+                      .border(
+                        width = if (isSelected) 2.5.dp else 1.dp,
+                        color = if (isSelected) Color.White else Color.White.copy(alpha = 0.3f),
+                        shape = RoundedCornerShape(10.dp),
+                      )
+                      .alpha(if (isSelected) 1f else 0.65f)
+                      .clickable {
+                        coroutineScope.launch {
+                          pagerState.animateScrollToPage(index)
+                        }
+                      }
+                      .testTag("photo_viewer_preview_thumb_${itemPhoto.name}"),
+                    contentAlignment = Alignment.Center,
+                  ) {
+                    PhotoThumbnailBox(
+                      photoFile = itemPhoto.file,
+                      contentDescription = "Preview ${itemPhoto.name}",
+                      iconSize = 22.dp,
+                      modifier = Modifier.fillMaxSize(),
+                    )
+                  }
                 }
               }
             }
           }
         }
+      }
+
+      if (showDeleteConfirmDialog) {
+        GalleryViewerDeleteConfirmDialog(
+          photo = currentPhoto,
+          onDismiss = { showDeleteConfirmDialog = false },
+          onConfirm = {
+            showDeleteConfirmDialog = false
+            onDelete(currentPhoto)
+          },
+        )
       }
 
       if (showRecognitionInfoSheet) {
@@ -5904,6 +6059,115 @@ internal fun GalleryPhotoViewerDialog(
       }
     }
   }
+}
+
+@Composable
+private fun GalleryViewerDeleteConfirmDialog(
+  photo: GalleryPhoto,
+  onDismiss: () -> Unit,
+  onConfirm: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    modifier = Modifier.testTag("photo_viewer_delete_confirm_dialog"),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.errorContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Delete,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "Delete ${if (photo.isVideo) "video" else "photo"}?",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "Size: ${photo.sizeFormatted}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Text(
+          text = "Are you sure you want to permanently delete this ${if (photo.isVideo) "video" else "photo"}? This action cannot be undone.",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+
+        Card(
+          shape = RoundedCornerShape(12.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f),
+          ),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            Text(
+              text = "• ${photo.name}",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onErrorContainer,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+        }
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = onConfirm,
+        shape = CircleShape,
+        colors = ButtonDefaults.buttonColors(
+          containerColor = MaterialTheme.colorScheme.error,
+          contentColor = MaterialTheme.colorScheme.onError,
+        ),
+        modifier = Modifier.testTag("photo_viewer_confirm_delete_button"),
+      ) {
+        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Delete")
+      }
+    },
+    dismissButton = {
+      TextButton(
+        onClick = onDismiss,
+        shape = CircleShape,
+        modifier = Modifier.testTag("photo_viewer_cancel_delete_button"),
+      ) {
+        Text("Cancel")
+      }
+    },
+  )
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -6430,6 +6694,12 @@ private fun PhotoViewerPageContent(
         }
       }
 
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag("photo_viewer_image_${photo.name}"),
+        contentAlignment = Alignment.Center,
+      ) {
       BoxWithConstraints(
         modifier = Modifier
           .fillMaxSize()
@@ -6439,7 +6709,6 @@ private fun PhotoViewerPageContent(
             translationX = panOffsetX
             translationY = panOffsetY
           }
-          .testTag("photo_viewer_image_${photo.name}")
           .testTag("photo_viewer_video_${photo.name}"),
         contentAlignment = Alignment.Center,
       ) {
@@ -6575,6 +6844,7 @@ private fun PhotoViewerPageContent(
             )
           }
         }
+      }
       }
     } else if (isAnimatedImage) {
       AnimatedImagePlayerSurface(

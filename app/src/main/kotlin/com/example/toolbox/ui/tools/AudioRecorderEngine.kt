@@ -125,6 +125,9 @@ data class AudioRecorderFolder(
 
   val isDefault: Boolean
     get() = defaultFolder != null
+
+  val isCustom: Boolean
+    get() = !isDefault
 }
 
 val DEFAULT_AUDIO_RECORDER_FOLDERS: List<AudioRecorderFolder> =
@@ -1035,6 +1038,42 @@ object AudioRecorderEngine {
   fun setFolderPills(context: Context, folders: List<AudioRecorderFolder>) {
     val prefs = context.getSharedPreferences(AUDIO_RECORDER_PREFS_NAME, Context.MODE_PRIVATE)
     prefs.edit().putString(PREF_KEY_AUDIO_FOLDER_PILLS, serializeFolderPills(folders)).apply()
+  }
+
+  /**
+   * Removes [folderToRemove] from [folders] if it is a custom (non-default) folder, returning the
+   * updated list of folder pills while always preserving the default folders (`Audio`, `Recordings`, `Download`).
+   */
+  fun removeCustomFolder(
+    folders: List<AudioRecorderFolder>,
+    folderToRemove: AudioRecorderFolder,
+  ): List<AudioRecorderFolder> {
+    if (folderToRemove.isDefault) return folders
+    val filtered = folders.filterNot { folder ->
+      !folder.isDefault && (
+        folder.displayPath.equals(folderToRemove.displayPath, ignoreCase = true) ||
+          folder.folderName.equals(folderToRemove.folderName, ignoreCase = true) ||
+          (!folderToRemove.customAbsolutePath.isNullOrBlank() &&
+            folder.customAbsolutePath.equals(folderToRemove.customAbsolutePath, ignoreCase = true))
+        )
+    }
+    return if (filtered.isEmpty()) DEFAULT_AUDIO_RECORDER_FOLDERS else filtered
+  }
+
+  /**
+   * Removes a custom [folderToRemove] from persisted folder pills and revokes its granted folder path
+   * in preferences, returning the updated list of [AudioRecorderFolder] pills.
+   */
+  fun removeCustomFolder(
+    context: Context,
+    folderToRemove: AudioRecorderFolder,
+  ): List<AudioRecorderFolder> {
+    val updatedPills = removeCustomFolder(getFolderPills(context), folderToRemove)
+    setFolderPills(context, updatedPills)
+    if (!folderToRemove.isDefault) {
+      setFolderPathAccessGranted(context, folderToRemove.displayPath, false)
+    }
+    return updatedPills
   }
 
   /**

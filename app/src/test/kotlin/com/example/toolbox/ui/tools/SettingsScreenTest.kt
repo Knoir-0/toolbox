@@ -130,25 +130,25 @@ class SettingsScreenTest {
   fun resolveEffectiveAccentColor_autoResolvesThemeDefaultAndUserSetResolvesCustom() {
     val oceanBlue = Color(0xFF00668B)
 
-    // AUTO in dark theme -> Soft Tint (SHADES)
+    // AUTO in dark theme -> Analogous +30° (ANALOGOUS)
     val darkAutoAccent = resolveEffectiveAccentColor(
       themeColorHex = "#00668B",
       accentColorSetting = DEFAULT_ACCENT_COLOR_AUTO,
       darkTheme = true,
     )
     assertEquals(
-      calculateAccentHarmonyColor(oceanBlue, AccentHarmonyOption.SHADES),
+      calculateAccentHarmonyColor(oceanBlue, AccentHarmonyOption.ANALOGOUS),
       darkAutoAccent,
     )
 
-    // AUTO in light theme -> Mid Shade (SHADE_MID)
+    // AUTO in light theme -> Analogous +30° (ANALOGOUS)
     val lightAutoAccent = resolveEffectiveAccentColor(
       themeColorHex = "#00668B",
       accentColorSetting = DEFAULT_ACCENT_COLOR_AUTO,
       darkTheme = false,
     )
     assertEquals(
-      calculateAccentHarmonyColor(oceanBlue, AccentHarmonyOption.SHADE_MID),
+      calculateAccentHarmonyColor(oceanBlue, AccentHarmonyOption.ANALOGOUS),
       lightAutoAccent,
     )
 
@@ -206,19 +206,37 @@ class SettingsScreenTest {
 
   @Test
   fun accentHarmonyOptions_mapToAllColorsToolHarmonyModes() {
-    // Tints & Shades is at the front of the list
-    assertEquals(HarmonyMode.SHADES, HarmonyMode.entries.first())
-
-    // Default accent harmony is Soft Tint for dark theme and Mid Shade for light theme
-    assertEquals(AccentHarmonyOption.SHADES, AccentHarmonyOption.defaultForTheme(darkTheme = true))
-    assertEquals(AccentHarmonyOption.SHADE_MID, AccentHarmonyOption.defaultForTheme(darkTheme = false))
+    // Analogous is at the front of the list, matching between Settings and Colors tool
+    assertEquals(HarmonyMode.ANALOGOUS, HarmonyMode.entries.first())
     assertEquals(
-      AccentHarmonyOption.SHADES,
+      listOf(
+        HarmonyMode.ANALOGOUS,
+        HarmonyMode.SHADES,
+        HarmonyMode.COMPLEMENTARY,
+        HarmonyMode.TRIADIC,
+        HarmonyMode.SPLIT_COMPLEMENTARY,
+      ),
+      HarmonyMode.entries,
+    )
+
+    // Default accent harmony is Analogous (+30°)
+    assertEquals(AccentHarmonyOption.ANALOGOUS, AccentHarmonyOption.defaultForTheme(darkTheme = true))
+    assertEquals(AccentHarmonyOption.ANALOGOUS, AccentHarmonyOption.defaultForTheme(darkTheme = false))
+    assertEquals(
+      AccentHarmonyOption.ANALOGOUS,
       AccentHarmonyOption.fromPrefValue(DEFAULT_ACCENT_COLOR_AUTO, darkTheme = true),
     )
     assertEquals(
-      AccentHarmonyOption.SHADE_MID,
+      AccentHarmonyOption.ANALOGOUS,
       AccentHarmonyOption.fromPrefValue(DEFAULT_ACCENT_COLOR_AUTO, darkTheme = false),
+    )
+    assertEquals(
+      AccentHarmonyOption.ANALOGOUS,
+      AccentHarmonyOption.defaultForMode(HarmonyMode.ANALOGOUS, darkTheme = true),
+    )
+    assertEquals(
+      AccentHarmonyOption.ANALOGOUS,
+      AccentHarmonyOption.defaultForMode(HarmonyMode.ANALOGOUS, darkTheme = false),
     )
     assertEquals(
       AccentHarmonyOption.SHADES,
@@ -613,19 +631,19 @@ class SettingsScreenTest {
     try {
       assertEquals(track1.id, MusicPlayerEngine.activeTrack?.id)
       assertEquals(
-        calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.SHADE_MID),
+        calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.ANALOGOUS),
         resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = false),
       )
       assertEquals(
-        calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.SHADES),
+        calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.ANALOGOUS),
         resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = true),
       )
       assertEquals(
-        calculateAccentHarmonyColor(palette1.secondaryColor, AccentHarmonyOption.SHADE_MID),
+        calculateAccentHarmonyColor(palette1.secondaryColor, AccentHarmonyOption.ANALOGOUS),
         resolveEffectiveAccentColor(THEME_COLOR_MUSIC_SECONDARY, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = false),
       )
       assertEquals(
-        calculateAccentHarmonyColor(palette1.accentColor, AccentHarmonyOption.SHADE_MID),
+        calculateAccentHarmonyColor(palette1.accentColor, AccentHarmonyOption.ANALOGOUS),
         resolveEffectiveAccentColor(THEME_COLOR_MUSIC_ACCENT, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = false),
       )
       assertEquals(
@@ -645,19 +663,19 @@ class SettingsScreenTest {
       session.skipToNext(userInitiated = true)
       assertEquals(track2.id, MusicPlayerEngine.activeTrack?.id)
       assertEquals(
-        calculateAccentHarmonyColor(palette2.dominantColor, AccentHarmonyOption.SHADE_MID),
+        calculateAccentHarmonyColor(palette2.dominantColor, AccentHarmonyOption.ANALOGOUS),
         resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = false),
       )
       assertEquals(
-        calculateAccentHarmonyColor(palette2.dominantColor, AccentHarmonyOption.SHADES),
+        calculateAccentHarmonyColor(palette2.dominantColor, AccentHarmonyOption.ANALOGOUS),
         resolveEffectiveAccentColor(THEME_COLOR_MUSIC_PLAYER, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = true),
       )
       assertEquals(
-        calculateAccentHarmonyColor(palette2.secondaryColor, AccentHarmonyOption.SHADE_MID),
+        calculateAccentHarmonyColor(palette2.secondaryColor, AccentHarmonyOption.ANALOGOUS),
         resolveEffectiveAccentColor(THEME_COLOR_MUSIC_SECONDARY, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = false),
       )
       assertEquals(
-        calculateAccentHarmonyColor(palette2.accentColor, AccentHarmonyOption.SHADE_MID),
+        calculateAccentHarmonyColor(palette2.accentColor, AccentHarmonyOption.ANALOGOUS),
         resolveEffectiveAccentColor(THEME_COLOR_MUSIC_ACCENT, DEFAULT_ACCENT_COLOR_AUTO, darkTheme = false),
       )
       assertEquals(
@@ -690,7 +708,7 @@ class SettingsScreenTest {
     try {
       // 3. When checked AND music is playing, themes according to music player
       assertEquals(
-        calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.SHADE_MID),
+        calculateAccentHarmonyColor(palette1.dominantColor, AccentHarmonyOption.ANALOGOUS),
         resolveEffectiveAccentColor(
           themeColorHex = repo.getThemeColor(),
           accentColorSetting = DEFAULT_ACCENT_COLOR_AUTO,
@@ -704,7 +722,7 @@ class SettingsScreenTest {
 
       // 4. When checked and music is NOT playing, falls back to user's selected theme color (#00668B)
       assertEquals(
-        calculateAccentHarmonyColor(Color(0xFF00668B), AccentHarmonyOption.SHADE_MID),
+        calculateAccentHarmonyColor(Color(0xFF00668B), AccentHarmonyOption.ANALOGOUS),
         resolveEffectiveAccentColor(
           themeColorHex = repo.getThemeColor(),
           accentColorSetting = DEFAULT_ACCENT_COLOR_AUTO,
@@ -720,7 +738,7 @@ class SettingsScreenTest {
       repo.setMusicPlayerThemeEnabled(false)
       assertFalse(repo.getMusicPlayerThemeEnabled())
       assertEquals(
-        calculateAccentHarmonyColor(Color(0xFF00668B), AccentHarmonyOption.SHADE_MID),
+        calculateAccentHarmonyColor(Color(0xFF00668B), AccentHarmonyOption.ANALOGOUS),
         resolveEffectiveAccentColor(
           themeColorHex = repo.getThemeColor(),
           accentColorSetting = DEFAULT_ACCENT_COLOR_AUTO,

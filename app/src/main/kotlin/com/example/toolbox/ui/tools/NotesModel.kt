@@ -684,6 +684,18 @@ object NotesEngine {
   }
 
   /**
+   * Returns all active/archived (non-trashed) notes that currently use [label].
+   */
+  fun getNotesUsingLabel(
+    notes: List<NoteItem>,
+    label: String,
+  ): List<NoteItem> {
+    return notes.filter { note ->
+      !note.isTrashed && note.labels.any { it.equals(label, ignoreCase = true) }
+    }
+  }
+
+  /**
    * Deletes a label globally from both custom labels and all notes.
    */
   fun deleteLabelGlobally(

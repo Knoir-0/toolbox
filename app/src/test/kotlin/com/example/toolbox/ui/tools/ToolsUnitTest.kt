@@ -178,6 +178,11 @@ class ToolsUnitTest {
     assertEquals("2 3/8\"", RulerMath.formatImperialFraction(2.375))
     assertEquals("5/16\"", RulerMath.formatImperialFraction(5.0 / 16.0))
     assertEquals("Credit Card Width", RulerMath.closestReferenceObject(54.0f).name)
+
+    assertEquals("5.40", RulerMath.formatMeasurementValue(53.98f, RulerUnitSystem.METRIC))
+    assertEquals("5.40 cm", RulerMath.formatMeasurementLabel(53.98f, RulerUnitSystem.METRIC))
+    assertEquals("2.13", RulerMath.formatMeasurementValue(53.98f, RulerUnitSystem.IMPERIAL))
+    assertEquals("2.13 in", RulerMath.formatMeasurementLabel(53.98f, RulerUnitSystem.IMPERIAL))
   }
 
   @Test

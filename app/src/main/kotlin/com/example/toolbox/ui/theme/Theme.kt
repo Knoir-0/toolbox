@@ -25,7 +25,9 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
@@ -216,6 +218,24 @@ enum class AccentHarmonyOption(
     val harmonyMode: HarmonyMode,
     val hueShiftDegrees: Float = 0f,
 ) {
+    ANALOGOUS(
+        prefValue = ACCENT_COLOR_AUTO_ANALOGOUS,
+        label = "Auto (Analogous +30°)",
+        shortLabel = "Analogous (+30°)",
+        swatchLabel = "+30°",
+        description = "Adjacent on the color wheel (+30° hue shift) for smooth, cohesive highlights",
+        harmonyMode = HarmonyMode.ANALOGOUS,
+        hueShiftDegrees = 30f,
+    ),
+    ANALOGOUS_COOL(
+        prefValue = ACCENT_COLOR_AUTO_ANALOGOUS_MINUS_30,
+        label = "Auto (Analogous -30°)",
+        shortLabel = "Analogous (-30°)",
+        swatchLabel = "-30°",
+        description = "Adjacent on the color wheel (-30° hue shift) for smooth, cohesive highlights",
+        harmonyMode = HarmonyMode.ANALOGOUS,
+        hueShiftDegrees = -30f,
+    ),
     SHADES(
         prefValue = ACCENT_COLOR_AUTO_SHADES,
         label = "Auto (Soft Tint)",
@@ -270,24 +290,6 @@ enum class AccentHarmonyOption(
         harmonyMode = HarmonyMode.COMPLEMENTARY,
         hueShiftDegrees = 180f,
     ),
-    ANALOGOUS(
-        prefValue = ACCENT_COLOR_AUTO_ANALOGOUS,
-        label = "Auto (Analogous +30°)",
-        shortLabel = "Analogous (+30°)",
-        swatchLabel = "+30°",
-        description = "Adjacent on the color wheel (+30° hue shift) for smooth, cohesive highlights",
-        harmonyMode = HarmonyMode.ANALOGOUS,
-        hueShiftDegrees = 30f,
-    ),
-    ANALOGOUS_COOL(
-        prefValue = ACCENT_COLOR_AUTO_ANALOGOUS_MINUS_30,
-        label = "Auto (Analogous -30°)",
-        shortLabel = "Analogous (-30°)",
-        swatchLabel = "-30°",
-        description = "Adjacent on the color wheel (-30° hue shift) for smooth, cohesive highlights",
-        harmonyMode = HarmonyMode.ANALOGOUS,
-        hueShiftDegrees = -30f,
-    ),
     TRIADIC(
         prefValue = ACCENT_COLOR_AUTO_TRIADIC,
         label = "Auto (Triadic +120°)",
@@ -326,8 +328,8 @@ enum class AccentHarmonyOption(
     );
 
     companion object {
-        fun defaultForTheme(darkTheme: Boolean): AccentHarmonyOption =
-            if (darkTheme) SHADES else SHADE_MID
+        fun defaultForTheme(darkTheme: Boolean = false): AccentHarmonyOption =
+            ANALOGOUS
 
         fun fromPrefValue(value: String?, darkTheme: Boolean = false): AccentHarmonyOption? {
             if (value.isNullOrBlank()) return null
@@ -342,14 +344,19 @@ enum class AccentHarmonyOption(
         }
 
         fun defaultForMode(mode: HarmonyMode, darkTheme: Boolean = false): AccentHarmonyOption = when (mode) {
-            HarmonyMode.SHADES -> defaultForTheme(darkTheme)
-            HarmonyMode.COMPLEMENTARY -> COMPLEMENTARY
             HarmonyMode.ANALOGOUS -> ANALOGOUS
+            HarmonyMode.SHADES -> if (darkTheme) SHADES else SHADE_MID
+            HarmonyMode.COMPLEMENTARY -> COMPLEMENTARY
             HarmonyMode.TRIADIC -> TRIADIC
             HarmonyMode.SPLIT_COMPLEMENTARY -> SPLIT_COMPLEMENTARY
         }
 
         fun swatchesForMode(mode: HarmonyMode): List<AccentHarmonyOption> = when (mode) {
+            HarmonyMode.ANALOGOUS -> listOf(
+                ANALOGOUS_COOL,
+                MONOCHROMATIC,
+                ANALOGOUS,
+            )
             HarmonyMode.SHADES -> listOf(
                 TINT_LIGHT,
                 SHADES,
@@ -360,11 +367,6 @@ enum class AccentHarmonyOption(
             HarmonyMode.COMPLEMENTARY -> listOf(
                 MONOCHROMATIC,
                 COMPLEMENTARY,
-            )
-            HarmonyMode.ANALOGOUS -> listOf(
-                ANALOGOUS_COOL,
-                MONOCHROMATIC,
-                ANALOGOUS,
             )
             HarmonyMode.TRIADIC -> listOf(
                 MONOCHROMATIC,
@@ -745,9 +747,11 @@ fun createCustomColorScheme(
     }
 }
 
+val LocalIsDarkTheme = compositionLocalOf { false }
+
 @Composable
 fun ToolboxTheme(
-    themeMode: ThemeMode = ThemeMode.SYSTEM,
+    themeMode: ThemeMode = NavigationPreferencesBridge.themeMode,
     themeColor: String = DEFAULT_THEME_COLOR_SYSTEM,
     accentColor: String = DEFAULT_ACCENT_COLOR_AUTO,
     musicPlayerThemeEnabled: Boolean = NavigationPreferencesBridge.musicPlayerThemeEnabled,
@@ -854,10 +858,12 @@ fun ToolboxTheme(
         )
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content,
-    )
+    CompositionLocalProvider(LocalIsDarkTheme provides darkTheme) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = Typography,
+            content = content,
+        )
+    }
 }
 

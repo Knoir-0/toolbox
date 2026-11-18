@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import androidx.compose.ui.graphics.Color
+import com.example.toolbox.ui.main.ThemeMode
 import java.io.File
 import java.nio.file.Files
 import junit.framework.TestCase.assertEquals
@@ -170,6 +172,14 @@ class GalleryEngineTest {
     assertEquals(3, DEFAULT_ALBUMS_PER_ROW)
     assertEquals(3, MIN_ALBUMS_PER_ROW)
     assertEquals(6, MAX_ALBUMS_PER_ROW)
+
+    // Content background behind albums and photos is pure white in light mode and pure black in dark mode
+    assertEquals(Color.White, GalleryEngine.resolveContentBackgroundColor(ThemeMode.LIGHT, systemInDarkTheme = false))
+    assertEquals(Color.White, GalleryEngine.resolveContentBackgroundColor(ThemeMode.LIGHT, systemInDarkTheme = true))
+    assertEquals(Color.Black, GalleryEngine.resolveContentBackgroundColor(ThemeMode.DARK, systemInDarkTheme = false))
+    assertEquals(Color.Black, GalleryEngine.resolveContentBackgroundColor(ThemeMode.DARK, systemInDarkTheme = true))
+    assertEquals(Color.White, GalleryEngine.resolveContentBackgroundColor(ThemeMode.SYSTEM, systemInDarkTheme = false))
+    assertEquals(Color.Black, GalleryEngine.resolveContentBackgroundColor(ThemeMode.SYSTEM, systemInDarkTheme = true))
   }
 
   @Test
@@ -350,6 +360,23 @@ class GalleryEngineTest {
     assertTrue(rootContents.photos.isEmpty())
     assertEquals(listOf("Visible"), rootContents.nestedAlbums.map { it.name })
     assertTrue(GalleryEngine.isHiddenByNoMedia(hiddenNestedDir))
+    assertTrue(GalleryEngine.containsNoMediaFile(hiddenDir))
+
+    // Custom folder pill bypasses .nomedia files when viewing the custom folder directly,
+    // while remaining excluded from the root Album view
+    val customHiddenFolder = GalleryFolder(
+      folderName = "Hidden",
+      displayPath = "/Pictures/Hidden",
+      customAbsolutePath = hiddenDir.absolutePath,
+    )
+    val customFolderContents = GalleryEngine.loadFolderPillContents(
+      folder = customHiddenFolder,
+      rootDirectory = tempRootDir,
+    )
+    assertEquals(listOf("hidden.png"), customFolderContents.photos.map { it.name })
+    assertEquals(listOf("Nested"), customFolderContents.nestedAlbums.map { it.name })
+    val nestedContents = GalleryEngine.loadAlbumContents(customFolderContents.nestedAlbums.single())
+    assertEquals(listOf("hidden_nested.png"), nestedContents.photos.map { it.name })
   }
 
   @Test
@@ -1035,6 +1062,10 @@ class GalleryEngineTest {
       displayPath = "/Screenshots",
       customAbsolutePath = "/storage/emulated/0/Screenshots",
     )
+    assertTrue(customScreenshots.isCustom)
+    assertTrue(!customScreenshots.isDefault)
+    assertTrue(DEFAULT_GALLERY_FOLDERS.all { it.isDefault && !it.isCustom })
+
     val withCustom = DEFAULT_GALLERY_FOLDERS + customScreenshots
     val reordered = GalleryEngine.reorderFolders(withCustom, fromIndex = 3, toIndex = 0)
     assertEquals(listOf("Screenshots", "DCIM", "Pictures", "Download"), reordered.map { it.folderName })
@@ -1042,6 +1073,14 @@ class GalleryEngineTest {
     val serializedPills = GalleryEngine.serializeFolderPills(reordered)
     val parsedPills = GalleryEngine.parseFolderPills(serializedPills)
     assertEquals(reordered, parsedPills)
+
+    // Removing a custom folder removes it while preserving default folders
+    val afterRemoveCustom = GalleryEngine.removeCustomFolder(reordered, customScreenshots)
+    assertEquals(listOf("DCIM", "Pictures", "Download"), afterRemoveCustom.map { it.folderName })
+    assertEquals(
+      afterRemoveCustom,
+      GalleryEngine.removeCustomFolder(afterRemoveCustom, GalleryDefaultFolder.DCIM.toGalleryFolder()),
+    )
 
     // Full navigation pill reordering keeps "Albums" fixed at the front of the list (index 0)
     val navPills = listOf("Albums", "DCIM", "Pictures", "Download")

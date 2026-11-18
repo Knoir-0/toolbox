@@ -321,8 +321,44 @@ class NotesScreenTest {
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("notes_filter_label_recipes").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("notes_filter_label_delete_recipes").assertIsDisplayed()
     composeTestRule.onNodeWithText("recipes").assertIsDisplayed()
     composeTestRule.onNodeWithText("#recipes").assertDoesNotExist()
+
+    // 1. Deleting an unused custom label ("recipes") via the x icon on the pill removes it immediately without confirmation modal
+    composeTestRule.onNodeWithTag("notes_filter_label_delete_recipes").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("delete_label_confirm_dialog").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("notes_filter_label_recipes").assertDoesNotExist()
+    assertTrue(!repo.loadLabels().contains("recipes"))
+
+    // 2. Deleting a custom label in use by notes ("outdoors") via the x icon on the pill prompts confirmation modal
+    composeTestRule.onNodeWithTag("notes_filter_label_delete_outdoors").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("delete_label_confirm_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Delete Label?").assertIsDisplayed()
+
+    // Cancel keeps the label and note intact
+    composeTestRule.onNodeWithTag("cancel_delete_label_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("delete_label_confirm_dialog").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("notes_filter_label_outdoors").assertIsDisplayed()
+    assertEquals(listOf("outdoors"), repo.loadNotes().single().labels)
+
+    // Confirm removes the label from all notes and from the pill bar while preserving the note itself
+    composeTestRule.onNodeWithTag("notes_filter_label_delete_outdoors").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("confirm_delete_label_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("delete_label_confirm_dialog").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("notes_filter_label_outdoors").assertDoesNotExist()
+    assertTrue(repo.loadLabels().isEmpty())
+    assertTrue(repo.loadNotes().single().labels.isEmpty())
+    composeTestRule.onNodeWithText("Camping Gear").assertIsDisplayed()
   }
 
   @Test

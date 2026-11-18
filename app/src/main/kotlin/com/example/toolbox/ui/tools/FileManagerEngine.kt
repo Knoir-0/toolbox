@@ -1541,7 +1541,7 @@ object FileManagerEngine {
         - Videos/     — Sample MP4 clip for Video Editor
         - Audio/      — Sample WAV chord arpeggio for Audio Editor
         - Music/      — Sample synthesized music tracks for Music Player
-        - Archives/   — Sample ZIP project bundle for Archives
+        - Archives/   — Sample ZIP project bundle for Archive
         
         Tap any file or open its context menu to preview, edit, or convert it!
         """.trimIndent()

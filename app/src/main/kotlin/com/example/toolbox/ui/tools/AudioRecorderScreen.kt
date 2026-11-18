@@ -418,7 +418,11 @@ fun AudioRecorderScreen(
 
   fun grantFolderAccess(folder: AudioRecorderFolder) {
     if (folderPills.none { it.displayPath.equals(folder.displayPath, ignoreCase = true) }) {
-      val updatedPills = folderPills + folder
+      val updatedPills = if (folder.isCustom) {
+        listOf(folder) + folderPills
+      } else {
+        folderPills + folder
+      }
       folderPills = updatedPills
       if (!isInspection) {
         AudioRecorderEngine.setFolderPills(context, updatedPills)
@@ -427,7 +431,7 @@ fun AudioRecorderScreen(
     grantedFolderPaths = if (isInspection) {
       grantedFolderPaths + folder.displayPath
     } else {
-      AudioRecorderEngine.setFolderPathAccessGranted(context, folder.displayPath, true)
+      grantedFolderPaths + AudioRecorderEngine.setFolderPathAccessGranted(context, folder.displayPath, true)
     }
     pendingPermissionFolderPath = null
     selectRecordingsFolder(folder)
@@ -442,6 +446,29 @@ fun AudioRecorderScreen(
         AudioRecorderEngine.setFolderPills(context, updated)
       }
     }
+  }
+
+  fun deleteCustomFolder(folder: AudioRecorderFolder) {
+    if (folder.isDefault || isRecording) return
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    val updatedPills = AudioRecorderEngine.removeCustomFolder(folderPills, folder)
+    folderPills = updatedPills
+    if (!isInspection) {
+      AudioRecorderEngine.removeCustomFolder(context, folder)
+    }
+    grantedFolderPaths = grantedFolderPaths.filterNot { it.equals(folder.displayPath, ignoreCase = true) }.toSet()
+    if (pendingPermissionFolderPath?.equals(folder.displayPath, ignoreCase = true) == true) {
+      pendingPermissionFolderPath = null
+    }
+    if (selectedFolderPath.equals(folder.displayPath, ignoreCase = true) ||
+      selectedFolder.folderName.equals(folder.folderName, ignoreCase = true)
+    ) {
+      val fallbackFolder = updatedPills.firstOrNull { isFolderGranted(it) }
+        ?: updatedPills.firstOrNull()
+        ?: AudioRecorderDefaultFolder.DEFAULT.toAudioRecorderFolder()
+      selectRecordingsFolder(fallbackFolder)
+    }
+    refreshTrigger++
   }
 
   val folderAccessLauncher = rememberLauncherForActivityResult(
@@ -844,6 +871,9 @@ fun AudioRecorderScreen(
       },
       onMoveFolder = { fromIndex, toIndex ->
         moveFolderPill(fromIndex, toIndex)
+      },
+      onDeleteCustomFolder = { folder ->
+        deleteCustomFolder(folder)
       },
       onAddCustomFolder = {
         if (!isRecording) {
@@ -1734,6 +1764,7 @@ private fun AudioRecorderFolderPillBar(
   onSelectFolder: (AudioRecorderFolder) -> Unit,
   onTapFolderIcon: (AudioRecorderFolder) -> Unit,
   onMoveFolder: (fromIndex: Int, toIndex: Int) -> Unit = { _, _ -> },
+  onDeleteCustomFolder: (AudioRecorderFolder) -> Unit = {},
   onAddCustomFolder: () -> Unit = {},
   onOpenFilterMenu: () -> Unit,
   onDismissFilterMenu: () -> Unit,
@@ -1763,6 +1794,13 @@ private fun AudioRecorderFolderPillBar(
 
   fun isGrantedFolder(folder: AudioRecorderFolder): Boolean {
     return grantedFolderPaths.any { it.equals(folder.displayPath, ignoreCase = true) }
+  }
+
+  LaunchedEffect(folders) {
+    val activePaths = folders.map { it.displayPath }
+    pillBounds.keys.retainAll { path ->
+      activePaths.any { it.equals(path, ignoreCase = true) }
+    }
   }
 
   Surface(
@@ -1938,10 +1976,34 @@ private fun AudioRecorderFolderPillBar(
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
               )
             },
+            trailingIcon = if (folder.isCustom) {
+              {
+                Box(
+                  contentAlignment = Alignment.Center,
+                  modifier = Modifier
+                    .clip(CircleShape)
+                    .clickable(enabled = enabled && draggedFolder == null) {
+                      onDeleteCustomFolder(folder)
+                    }
+                    .testTag("folder_delete_icon_${folder.folderName}"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Delete ${folder.folderName} folder",
+                    modifier = Modifier
+                      .size(16.dp)
+                      .testTag("folder_pill_delete_icon_${folder.folderName}"),
+                  )
+                }
+              }
+            } else {
+              null
+            },
             colors = FilterChipDefaults.filterChipColors(
               selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
               selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
               selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+              selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
             ),
             modifier = Modifier
               .onGloballyPositioned { coords ->
@@ -2210,10 +2272,22 @@ private fun AudioRecorderFolderPillBar(
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
               )
             },
+            trailingIcon = if (activeDraggedFolder.isCustom) {
+              {
+                Icon(
+                  imageVector = Icons.Default.Close,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+              }
+            } else {
+              null
+            },
             colors = FilterChipDefaults.filterChipColors(
               selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
               selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
               selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+              selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
             ),
           )
         }

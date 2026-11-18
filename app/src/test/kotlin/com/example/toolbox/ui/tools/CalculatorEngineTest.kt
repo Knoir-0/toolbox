@@ -105,4 +105,15 @@ class CalculatorEngineTest {
     val error = CalculatorEngine.evaluateSafe("15 / 0")
     assertTrue(error is EvaluationResult.Error)
   }
+
+  @Test
+  fun testExtractParseableValueForUnitConverter() {
+    assertEquals("0", CalculatorEngine.extractParseableValue(""))
+    assertEquals("42", CalculatorEngine.extractParseableValue("42"))
+    assertEquals("15", CalculatorEngine.extractParseableValue("7+8"))
+    assertEquals("15", CalculatorEngine.extractParseableValue("7+8+"))
+    assertEquals("-25.5", CalculatorEngine.extractParseableValue("−25.5"))
+    assertEquals("1", CalculatorEngine.extractParseableValue("sin(90)", isDegreeMode = true))
+    assertEquals("10", CalculatorEngine.extractParseableValue("10÷0"))
+  }
 }

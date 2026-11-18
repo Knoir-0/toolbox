@@ -310,6 +310,7 @@ fun NotesScreen(
   var showManageLabelsDialog by remember { mutableStateOf(false) }
   var showBulkColorDialog by remember { mutableStateOf(false) }
   var showEmptyTrashDialog by remember { mutableStateOf(false) }
+  var labelPendingDelete by remember { mutableStateOf<String?>(null) }
 
   // Drag-and-drop and long-press selection state in both grid and list views
   val density = LocalDensity.current
@@ -398,6 +399,38 @@ fun NotesScreen(
 
   val allLabels = remember(notes, savedLabels) {
     NotesEngine.extractAllLabels(notes, savedLabels)
+  }
+
+  fun deleteLabelGloballyNow(labelToDelete: String) {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    val (updatedNotes, updatedLabels) = NotesEngine.deleteLabelGlobally(
+      notes = notes,
+      savedLabels = savedLabels,
+      labelToRemove = labelToDelete,
+    )
+    applyStateChange(updatedNotes, updatedLabels)
+    if (addingNoteDraft.labels.any { it.equals(labelToDelete, ignoreCase = true) }) {
+      addingNoteDraft = addingNoteDraft.copy(
+        labels = addingNoteDraft.labels.filterNot { it.equals(labelToDelete, ignoreCase = true) },
+      )
+    }
+    if (addingNoteNewLabels.any { it.equals(labelToDelete, ignoreCase = true) }) {
+      addingNoteNewLabels = addingNoteNewLabels.filterNot { it.equals(labelToDelete, ignoreCase = true) }
+    }
+    val currentFilter = activeFilter
+    if (currentFilter is NotesFilter.Label && currentFilter.name.equals(labelToDelete, ignoreCase = true)) {
+      activeFilter = NotesFilter.All
+    }
+  }
+
+  fun requestDeleteLabel(labelToDelete: String) {
+    val notesUsingLabel = NotesEngine.getNotesUsingLabel(notes, labelToDelete)
+    if (notesUsingLabel.isNotEmpty()) {
+      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+      labelPendingDelete = labelToDelete
+    } else {
+      deleteLabelGloballyNow(labelToDelete)
+    }
   }
 
   // If the currently selected label filter was deleted, reset to All
@@ -709,6 +742,9 @@ fun NotesScreen(
         onSelectFilter = { filter ->
           activeFilter = filter
           selectedNoteIds = emptySet()
+        },
+        onDeleteLabel = { labelToDelete ->
+          requestDeleteLabel(labelToDelete)
         },
         onManageLabels = { showManageLabelsDialog = true },
       )
@@ -1326,14 +1362,23 @@ fun NotesScreen(
         }
       },
       onDeleteLabel = { labelToDelete ->
-        val (updatedNotes, updatedLabels) = NotesEngine.deleteLabelGlobally(
-          notes = notes,
-          savedLabels = savedLabels,
-          labelToRemove = labelToDelete,
-        )
-        applyStateChange(updatedNotes, updatedLabels)
+        requestDeleteLabel(labelToDelete)
       },
       onDismiss = { showManageLabelsDialog = false },
+    )
+  }
+
+  // Delete Custom Label Confirmation Dialog (shown when notes are using the label)
+  labelPendingDelete?.let { pendingLabel ->
+    val notesUsingLabel = NotesEngine.getNotesUsingLabel(notes, pendingLabel)
+    DeleteLabelConfirmDialog(
+      label = pendingLabel,
+      matchingNotes = notesUsingLabel,
+      onConfirmDelete = {
+        deleteLabelGloballyNow(pendingLabel)
+        labelPendingDelete = null
+      },
+      onDismiss = { labelPendingDelete = null },
     )
   }
 
@@ -1792,6 +1837,7 @@ private fun NotesFilterChipsRow(
   gridColumnsPerRow: Int = DEFAULT_NOTES_GRID_COLUMNS,
   onGridColumnsPerRowChange: (Int) -> Unit = {},
   onSelectFilter: (NotesFilter) -> Unit,
+  onDeleteLabel: (String) -> Unit = {},
   onManageLabels: () -> Unit,
 ) {
   Box(
@@ -1818,6 +1864,40 @@ private fun NotesFilterChipsRow(
         ),
         modifier = Modifier.testTag("notes_filter_all"),
       )
+
+      labels.forEach { label ->
+        val isSelected = activeFilter is NotesFilter.Label &&
+          activeFilter.name.equals(label, ignoreCase = true)
+        FilterChip(
+          selected = isSelected,
+          onClick = { onSelectFilter(NotesFilter.Label(label)) },
+          label = { Text(label) },
+          trailingIcon = {
+            Box(
+              contentAlignment = Alignment.Center,
+              modifier = Modifier
+                .clip(CircleShape)
+                .clickable { onDeleteLabel(label) }
+                .testTag("notes_filter_label_delete_$label"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "Delete label $label",
+                modifier = Modifier
+                  .size(16.dp)
+                  .testTag("notes_filter_label_delete_icon_$label"),
+              )
+            }
+          },
+          shape = RoundedCornerShape(20.dp),
+          colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+          ),
+          modifier = Modifier.testTag("notes_filter_label_$label"),
+        )
+      }
 
       FilterChip(
         selected = activeFilter == NotesFilter.Pinned,
@@ -1856,22 +1936,6 @@ private fun NotesFilterChipsRow(
         ),
         modifier = Modifier.testTag("notes_filter_checklists"),
       )
-
-      labels.forEach { label ->
-        val isSelected = activeFilter is NotesFilter.Label &&
-          activeFilter.name.equals(label, ignoreCase = true)
-        FilterChip(
-          selected = isSelected,
-          onClick = { onSelectFilter(NotesFilter.Label(label)) },
-          label = { Text(label) },
-          shape = RoundedCornerShape(20.dp),
-          colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-          ),
-          modifier = Modifier.testTag("notes_filter_label_$label"),
-        )
-      }
 
       FilterChip(
         selected = activeFilter == NotesFilter.Archived,
@@ -4388,6 +4452,144 @@ private fun EmptyTrashConfirmDialog(
       TextButton(
         onClick = onDismiss,
         shape = CircleShape,
+      ) {
+        Text("Cancel")
+      }
+    },
+  )
+}
+
+@Composable
+private fun DeleteLabelConfirmDialog(
+  label: String,
+  matchingNotes: List<NoteItem>,
+  onConfirmDelete: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  val noteCount = matchingNotes.size
+  val noteWord = if (noteCount == 1) "note" else "notes"
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    modifier = Modifier.testTag("delete_label_confirm_dialog"),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.errorContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Delete,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "Delete Label?",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "\"$label\" • Used by $noteCount $noteWord",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        Text(
+          text = "Remove the label \"$label\" from $noteCount $noteWord? Your notes themselves will not be deleted.",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+
+        Card(
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+          ),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            Box(
+              modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.errorContainer),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.Label,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(18.dp),
+              )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              Text(
+                text = "$noteCount tagged $noteWord",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = onConfirmDelete,
+        shape = CircleShape,
+        colors = ButtonDefaults.buttonColors(
+          containerColor = MaterialTheme.colorScheme.error,
+          contentColor = MaterialTheme.colorScheme.onError,
+        ),
+        modifier = Modifier.testTag("confirm_delete_label_button"),
+      ) {
+        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Delete")
+      }
+    },
+    dismissButton = {
+      TextButton(
+        onClick = onDismiss,
+        shape = CircleShape,
+        modifier = Modifier.testTag("cancel_delete_label_button"),
       ) {
         Text("Cancel")
       }

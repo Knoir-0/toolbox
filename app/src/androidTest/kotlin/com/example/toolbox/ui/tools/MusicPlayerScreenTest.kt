@@ -476,7 +476,7 @@ class MusicPlayerScreenTest {
     )
     assertEquals(
       createTertiaryTokens(
-        calculateAccentHarmonyColor(firstPalette.dominantColor, AccentHarmonyOption.SHADE_MID),
+        calculateAccentHarmonyColor(firstPalette.dominantColor, AccentHarmonyOption.ANALOGOUS),
         darkTheme = false,
       ).tertiary,
       observedTertiaryColor,

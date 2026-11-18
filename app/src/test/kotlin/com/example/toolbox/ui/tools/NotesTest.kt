@@ -266,12 +266,16 @@ class NotesTest {
     assertTrue(duplicated[0].id != original.id)
     assertEquals("Template", duplicated[0].title)
 
+    assertEquals(2, NotesEngine.getNotesUsingLabel(duplicated, "work").size)
+    assertEquals(0, NotesEngine.getNotesUsingLabel(duplicated, "personal").size)
+
     val (afterLabelDelete, remainingLabels) = NotesEngine.deleteLabelGlobally(
       notes = duplicated,
       savedLabels = listOf("work", "personal"),
       labelToRemove = "WORK",
     )
     assertEquals(listOf("personal"), remainingLabels)
+    assertEquals(0, NotesEngine.getNotesUsingLabel(afterLabelDelete, "work").size)
     assertTrue(afterLabelDelete.all { "work" !in it.labels })
     assertTrue(afterLabelDelete.all { "urgent" in it.labels })
   }

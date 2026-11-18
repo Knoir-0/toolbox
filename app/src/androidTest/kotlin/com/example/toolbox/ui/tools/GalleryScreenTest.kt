@@ -11,6 +11,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -337,8 +338,17 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("album_tile_item_Vacation").performClick()
     composeTestRule.waitForIdle()
 
-    // Inside Vacation: nested album "Hawaii" is displayed
+    // Inside Vacation: nested album "Hawaii" is displayed, and linked breadcrumb pills have compact spacing around the chevron
     composeTestRule.onNodeWithTag("gallery_header_title").assertTextEquals("Vacation")
+    val rootPillBounds = composeTestRule.onNodeWithTag("gallery_breadcrumb_root").fetchSemanticsNode().boundsInRoot
+    val chevronBounds = composeTestRule.onNodeWithTag("gallery_breadcrumb_chevron_Vacation").fetchSemanticsNode().boundsInRoot
+    val vacationPillBounds = composeTestRule.onNodeWithTag("gallery_breadcrumb_Vacation").fetchSemanticsNode().boundsInRoot
+    val dcimPillBounds = composeTestRule.onNodeWithTag("gallery_folder_pill_DCIM").fetchSemanticsNode().boundsInRoot
+    val unlinkedGapPx = dcimPillBounds.left - vacationPillBounds.right
+    val chevronLeftGapPx = chevronBounds.left - rootPillBounds.right
+    val chevronRightGapPx = vacationPillBounds.left - chevronBounds.right
+    assertTrue("Expected compact spacing between root pill and chevron ($chevronLeftGapPx < $unlinkedGapPx)", chevronLeftGapPx < unlinkedGapPx)
+    assertTrue("Expected compact spacing between chevron and album pill ($chevronRightGapPx < $unlinkedGapPx)", chevronRightGapPx < unlinkedGapPx)
     composeTestRule.onNodeWithTag("album_tile_item_Hawaii").assertIsDisplayed()
     composeTestRule.onNodeWithTag("album_label_Hawaii", useUnmergedTree = true)
       .assertTextEquals("Hawaii")
@@ -444,12 +454,46 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("photo_viewer_current_title").assertTextEquals("photo_3.png")
     composeTestRule.onNodeWithTag("photo_viewer_image_photo_3.png", useUnmergedTree = true).assertIsDisplayed()
 
-    // 2. Preview scroll bar at the bottom shows all images in the same album
-    composeTestRule.onNodeWithTag("photo_viewer_preview_bar").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("photo_viewer_preview_scroll_bar").assertIsDisplayed()
+    // 2. Preview scroll bar at the bottom shows all images in the same album, and top/bottom panels extend to screen edges
+    val dialogBounds = composeTestRule.onNodeWithTag("gallery_photo_viewer_dialog")
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val topBarBounds = composeTestRule.onNodeWithTag("photo_viewer_top_bar")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val previewBarBounds = composeTestRule.onNodeWithTag("photo_viewer_preview_bar")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val actionsRowBounds = composeTestRule.onNodeWithTag("photo_viewer_actions_row")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val previewScrollBarBounds = composeTestRule.onNodeWithTag("photo_viewer_preview_scroll_bar")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+    assertEquals(dialogBounds.top, topBarBounds.top, 1f)
+    assertEquals(dialogBounds.bottom, previewBarBounds.bottom, 1f)
+    // Verify Info, Edit, Picker, and Delete buttons are in the actions row above the preview scroll bar
+    assertTrue(actionsRowBounds.bottom <= previewScrollBarBounds.top + 2f)
+    composeTestRule.onNodeWithTag("photo_viewer_info_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_edit_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_color_picker_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_delete_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_viewer_preview_thumb_photo_3.png").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_viewer_preview_thumb_photo_2.png").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_viewer_preview_thumb_photo_1.png").assertIsDisplayed()
+
+    // Test delete button with confirmation dialog (cancel first, then confirm delete on photo_3.png)
+    composeTestRule.onNodeWithTag("photo_viewer_delete_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_delete_confirm_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_cancel_delete_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_delete_confirm_dialog").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_viewer_current_title").assertTextEquals("photo_3.png")
 
     // 3. Swipe left to move to the next photo in the album (photo_2.png)
     composeTestRule.onNodeWithTag("photo_viewer_pager").performTouchInput {
@@ -463,13 +507,15 @@ class GalleryScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("photo_viewer_current_title").assertTextEquals("photo_1.png")
 
-    // 4. Tap on the image to dismiss the bottom preview scroll bar, and tap again to bring it back
+    // 4. Tap on the image to dismiss both the top bar and bottom preview scroll bar, and tap again to bring them back
     composeTestRule.onNodeWithTag("photo_viewer_active_page").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_top_bar").assertDoesNotExist()
     composeTestRule.onNodeWithTag("photo_viewer_preview_bar").assertDoesNotExist()
 
     composeTestRule.onNodeWithTag("photo_viewer_active_page").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_top_bar").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_viewer_preview_bar").assertIsDisplayed()
 
     // 5. Pinch to zoom on the photo
@@ -586,13 +632,27 @@ class GalleryScreenTest {
     // Open ... menu on video.mp4 tile and click Edit -> opens VideoEditorScreen
     composeTestRule.onNodeWithTag("photo_more_video.mp4").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("photo_menu_edit_video.mp4").performClick()
+    composeTestRule.onNodeWithTag("photo_menu_view_video.mp4").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_menu_inspect_color_video.mp4").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_menu_cut_video.mp4").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_menu_copy_video.mp4").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_menu_edit_video.mp4").assertTextEquals("Edit").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("video_editor_screen").assertIsDisplayed()
     composeTestRule.onNodeWithTag("action_navigate_back").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("gallery_screen").assertIsDisplayed()
+
+    // Verify ... menu on photo.png omits View, Inspect Color, Cut, and Copy, and labels the edit item "Edit"
+    composeTestRule.onNodeWithTag("photo_more_photo.png").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_menu_view_photo.png").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_menu_inspect_color_photo.png").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_menu_cut_photo.png").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_menu_copy_photo.png").assertDoesNotExist()
+    composeTestRule.onNodeWithText("Edit in Image Editor").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_menu_edit_photo.png").assertIsDisplayed().assertTextEquals("Edit")
   }
 
   @Test
@@ -891,10 +951,12 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // Before opening search, navigation breadcrumbs are shown
+    // Before opening search, navigation breadcrumbs, add new folder, and items per row icon buttons are shown
     composeTestRule.onNodeWithTag("gallery_breadcrumbs").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_density_indicator").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_add_storage_location_button").assertIsDisplayed()
 
-    // Open toolbar search bar -> smart tags replace the navigation breadcrumbs in the pill toolbar, keeping the icon without 'Smart Tags:' text
+    // Open toolbar search bar -> smart tags replace the navigation breadcrumbs in the pill toolbar, keeping the icon without 'Smart Tags:' text, and hiding add new folder and items per row icon buttons
     composeTestRule.onNodeWithTag("gallery_search_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("gallery_toolbar_search_bar").assertIsDisplayed()
@@ -902,6 +964,13 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("gallery_search_tags_icon").assertIsDisplayed()
     composeTestRule.onNodeWithText("Smart Tags:").assertDoesNotExist()
     composeTestRule.onNodeWithTag("gallery_breadcrumbs").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("gallery_density_indicator").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("gallery_add_storage_location_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("add_folder_button").assertDoesNotExist()
+
+    composeTestRule.waitUntil(timeoutMillis = 5_000L) {
+      composeTestRule.onAllNodesWithTag("gallery_tag_filter_Receipt").fetchSemanticsNodes().isNotEmpty()
+    }
 
     // Filter by OCR text inside bakery_receipt.png ("Sourdough")
     composeTestRule.onNodeWithTag("gallery_search_input").performTextInput("Sourdough")
@@ -1093,7 +1162,13 @@ class GalleryScreenTest {
 
   @Test
   fun addStorageLocationButton_betweenGridRowsAndSortFilter_andReorderableNavigationPillsWithAlbumsFixedAtFront() {
+    val dcimCameraDir = File(testRootDir, "DCIM/Camera").apply { mkdirs() }
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(dcimCameraDir, "camera_01.png"),
+      lastModifiedMs = 5_000_000L,
+    )
     val customDir = File(testRootDir, "Wallpapers").apply { mkdirs() }
+    File(customDir, ".nomedia").createNewFile()
     GalleryEngine.writeSolidColorPng(
       outputFile = File(customDir, "wallpaper_01.png"),
       lastModifiedMs = 4_000_000L,
@@ -1105,6 +1180,7 @@ class GalleryScreenTest {
       ToolboxTheme {
         GalleryScreen(
           rootDirectory = testRootDir,
+          initialGrantedFolders = setOf(GalleryDefaultFolder.DCIM),
           onRequestAddCustomFolder = { onAdded ->
             addFolderCallback = onAdded
           },
@@ -1154,7 +1230,52 @@ class GalleryScreenTest {
 
     composeTestRule.onNodeWithTag("gallery_folder_pill_Wallpapers").assertIsDisplayed()
     composeTestRule.onNodeWithTag("folder_unlocked_icon_Wallpapers").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_delete_icon_Wallpapers").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_delete_icon_DCIM").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("folder_delete_icon_Pictures").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("folder_delete_icon_Download").assertDoesNotExist()
+    // Custom folder bypasses .nomedia when selected
     composeTestRule.onNodeWithTag("photo_tile_item_wallpaper_01.png").assertIsDisplayed()
+
+    // Switching to the Albums view excludes custom folders with .nomedia files
+    composeTestRule.onNodeWithTag("gallery_breadcrumb_root").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("album_tile_item_Camera").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_tile_item_wallpaper_01.png").assertDoesNotExist()
+
+    // Album context menu omits Open Album, Cut, and Copy options
+    composeTestRule.onNodeWithTag("album_more_Camera").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("album_menu_Camera").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("album_menu_open_Camera").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("album_menu_cut_Camera").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("album_menu_copy_Camera").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("album_menu_archive_Camera").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("album_more_Camera").performClick()
+    composeTestRule.waitForIdle()
+
+    // Switching back to the custom folder pill shows the .nomedia-bypassed photo again
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Wallpapers").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_tile_item_wallpaper_01.png").assertIsDisplayed()
+
+    val wallpapersUnlockBounds = composeTestRule.onNodeWithTag("folder_unlocked_icon_Wallpapers")
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val wallpapersDeleteBounds = composeTestRule.onNodeWithTag("folder_delete_icon_Wallpapers")
+      .fetchSemanticsNode()
+      .boundsInRoot
+    assertTrue(
+      "Custom folder delete x icon (${wallpapersDeleteBounds.left}) should be on the right side of the pill (${wallpapersUnlockBounds.right})",
+      wallpapersUnlockBounds.right < wallpapersDeleteBounds.left,
+    )
+
+    // Tapping the x icon on the right side of the custom folder pill deletes the custom folder pill
+    composeTestRule.onNodeWithTag("folder_delete_icon_Wallpapers").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Wallpapers").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_tile_item_wallpaper_01.png").assertDoesNotExist()
 
     // 3. Verify initial pill order (Albums is first, then DCIM, then Pictures) and drag Pictures to the left of DCIM
     val initialAlbumsBounds = composeTestRule.onNodeWithTag("gallery_breadcrumb_root")

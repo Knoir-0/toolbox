@@ -111,6 +111,55 @@ object CalculatorEngine {
       .replace("-", "−")
   }
 
+  /**
+   * Resolves a parseable numeric string from the current calculator [expression] suitable for
+   * prefilling the Unit Converter tool.
+   *
+   * 1. If the expression evaluates cleanly (or after trimming trailing incomplete operators /
+   *    function prefixes), returns the formatted finite result.
+   * 2. Otherwise falls back to a parseable numeric literal in the expression, or `"0"` when
+   *    none is present.
+   */
+  fun extractParseableValue(expression: String, isDegreeMode: Boolean = true): String {
+    val trimmed = expression.trim()
+    if (trimmed.isEmpty()) return "0"
+
+    when (val direct = evaluateSafe(trimmed, isDegreeMode)) {
+      is EvaluationResult.Success -> {
+        if (direct.value.isFinite()) return direct.formatted
+      }
+      else -> Unit
+    }
+
+    var candidate = trimmed
+    val trailingCleanupRegex = Regex(
+      """([+\-−×*÷/^(]+|(?:asin|acos|atan|sqrt|cbrt|sin|cos|tan|log|ln|abs)\(?)$""",
+      RegexOption.IGNORE_CASE,
+    )
+    while (candidate.isNotEmpty()) {
+      val next = trailingCleanupRegex.replace(candidate, "").trim()
+      if (next == candidate) break
+      candidate = next
+    }
+    if (candidate.isNotEmpty()) {
+      when (val stripped = evaluateSafe(candidate, isDegreeMode)) {
+        is EvaluationResult.Success -> {
+          if (stripped.value.isFinite()) return stripped.formatted
+        }
+        else -> Unit
+      }
+    }
+
+    val normalized = trimmed.replace("−", "-")
+    val numberMatches = Regex("""-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?""")
+      .findAll(normalized)
+      .mapNotNull { it.value.toDoubleOrNull() }
+      .filter { it.isFinite() }
+      .toList()
+    val fallbackNumber = numberMatches.lastOrNull { it != 0.0 } ?: numberMatches.lastOrNull()
+    return if (fallbackNumber != null) formatResult(fallbackNumber) else "0"
+  }
+
   private fun sanitize(input: String): String {
     return input
       .replace("×", "*")

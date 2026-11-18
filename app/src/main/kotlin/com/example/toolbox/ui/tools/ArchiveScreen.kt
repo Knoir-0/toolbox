@@ -1382,7 +1382,7 @@ private fun ArchiveInitialTopBar(
   onNavigateBack: (() -> Unit)? = null,
 ) {
   ToolboxTopBar(
-    title = "Archives",
+    title = "Archive",
     subtext = "Tap + to open or zip files",
     icon = Icons.Default.FolderZip,
     onNavigateBack = onNavigateBack,

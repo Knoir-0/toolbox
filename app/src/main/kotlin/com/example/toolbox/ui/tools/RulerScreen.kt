@@ -1,5 +1,6 @@
 package com.example.toolbox.ui.tools
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -19,11 +20,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.SquareFoot
+import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -56,9 +60,11 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -69,6 +75,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.toolbox.ui.theme.ToolboxTheme
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
@@ -245,10 +252,37 @@ object RulerMath {
       if (startMm <= endMm) 1 else 0
     }
   }
+
+  /**
+   * Formats the numeric value displayed in the primary ruler measurement label (`%.2f` in `cm` or `in`).
+   */
+  fun formatMeasurementValue(measuredMm: Float, unitSystem: RulerUnitSystem): String {
+    return if (unitSystem == RulerUnitSystem.METRIC) {
+      String.format(Locale.US, "%.2f", mmToCm(measuredMm.toDouble()))
+    } else {
+      String.format(Locale.US, "%.2f", mmToInches(measuredMm.toDouble()))
+    }
+  }
+
+  /**
+   * Formats the primary ruler measurement label (`"%.2f cm"` in metric or `"%.2f in"` in imperial).
+   */
+  fun formatMeasurementLabel(measuredMm: Float, unitSystem: RulerUnitSystem): String {
+    val value = formatMeasurementValue(measuredMm, unitSystem)
+    return if (unitSystem == RulerUnitSystem.METRIC) {
+      "$value cm"
+    } else {
+      "$value in"
+    }
+  }
 }
 
 @Composable
-fun RulerScreen(modifier: Modifier = Modifier) {
+fun RulerScreen(
+  modifier: Modifier = Modifier,
+  onOpenCalculator: ((String) -> Unit)? = null,
+  onOpenUnitConverter: ((String) -> Unit)? = null,
+) {
   var rulerMode by rememberSaveable { mutableStateOf(RulerMode.SINGLE) }
   var primaryUnit by rememberSaveable { mutableStateOf(RulerUnitSystem.METRIC) }
   var activeAxis by rememberSaveable { mutableStateOf(RulerAxis.VERTICAL) }
@@ -259,8 +293,46 @@ fun RulerScreen(modifier: Modifier = Modifier) {
   var calibrationScale by rememberSaveable { mutableFloatStateOf(1.0f) }
   var showCalibrationPanel by rememberSaveable { mutableStateOf(false) }
 
+  var inlineCalculatorValue by rememberSaveable { mutableStateOf<String?>(null) }
+  var inlineUnitConverterValue by rememberSaveable { mutableStateOf<String?>(null) }
+
   val context = LocalContext.current
   val density = LocalDensity.current
+  val haptic = LocalHapticFeedback.current
+
+  val activeInlineCalc = inlineCalculatorValue
+  if (activeInlineCalc != null) {
+    BackHandler {
+      inlineCalculatorValue = null
+    }
+    CalculatorScreen(
+      modifier = modifier,
+      initialValue = activeInlineCalc,
+      onOpenUnitConverter = { valFromCalc ->
+        inlineCalculatorValue = null
+        if (onOpenUnitConverter != null) {
+          onOpenUnitConverter(valFromCalc)
+        } else {
+          inlineUnitConverterValue = valFromCalc
+        }
+      },
+      onNavigateBack = { inlineCalculatorValue = null },
+    )
+    return
+  }
+
+  val activeInlineConverter = inlineUnitConverterValue
+  if (activeInlineConverter != null) {
+    BackHandler {
+      inlineUnitConverterValue = null
+    }
+    UnitConverterScreen(
+      modifier = modifier,
+      initialValue = activeInlineConverter,
+      onNavigateBack = { inlineUnitConverterValue = null },
+    )
+    return
+  }
 
   // Extract exact physical display metrics (xdpi, ydpi, widthPixels, heightPixels) from the device
   val deviceMeasurements = remember(context, density, calibrationScale) {
@@ -340,6 +412,10 @@ fun RulerScreen(modifier: Modifier = Modifier) {
           ),
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
+        val currentMeasurementValue = remember(measuredMm, primaryUnit) {
+          RulerMath.formatMeasurementValue(measuredMm, primaryUnit)
+        }
+
         RulerHeroCard(
           rulerMode = rulerMode,
           onSelectMode = { mode ->
@@ -364,6 +440,22 @@ fun RulerScreen(modifier: Modifier = Modifier) {
           fractionInches = fractionInches,
           showCalibration = showCalibrationPanel,
           onToggleCalibration = { showCalibrationPanel = !showCalibrationPanel },
+          onOpenCalculator = {
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            if (onOpenCalculator != null) {
+              onOpenCalculator(currentMeasurementValue)
+            } else {
+              inlineCalculatorValue = currentMeasurementValue
+            }
+          },
+          onOpenUnitConverter = {
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            if (onOpenUnitConverter != null) {
+              onOpenUnitConverter(currentMeasurementValue)
+            } else {
+              inlineUnitConverterValue = currentMeasurementValue
+            }
+          },
         )
 
         AnimatedVisibility(visible = showCalibrationPanel) {
@@ -440,6 +532,8 @@ private fun RulerHeroCard(
   fractionInches: String,
   showCalibration: Boolean,
   onToggleCalibration: () -> Unit,
+  onOpenCalculator: () -> Unit = {},
+  onOpenUnitConverter: () -> Unit = {},
 ) {
   Card(
     shape = RoundedCornerShape(24.dp),
@@ -549,39 +643,86 @@ private fun RulerHeroCard(
           }
         }
 
-        // Main Digital Readout
+        // Main Digital Readout with left Calculator link and right Unit Converter link
         Column(
           modifier = Modifier.fillMaxWidth(),
           horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-          val headlineText = if (primaryUnit == RulerUnitSystem.METRIC) {
-            String.format("%.2f cm", measuredCm)
-          } else {
-            String.format("%.2f in", measuredInches)
-          }
+          val headlineText = RulerMath.formatMeasurementLabel(measuredMm, primaryUnit)
           val subText = if (primaryUnit == RulerUnitSystem.METRIC) {
-            String.format("%.1f mm  ·  %.2f in (%s)", measuredMm, measuredInches, fractionInches)
+            String.format(Locale.US, "%.1f mm  ·  %.2f in (%s)", measuredMm, measuredInches, fractionInches)
           } else {
-            String.format("%s  ·  %.1f mm (%.2f cm)", fractionInches, measuredMm, measuredCm)
+            String.format(Locale.US, "%s  ·  %.1f mm (%.2f cm)", fractionInches, measuredMm, measuredCm)
           }
 
-          AnimatedContent(
-            targetState = headlineText,
-            transitionSpec = { fadeIn() togetherWith fadeOut() },
-            contentAlignment = Alignment.Center,
-            label = "RulerPrimaryReadout",
-          ) { valueStr ->
-            Text(
-              text = valueStr,
-              style = MaterialTheme.typography.headlineMedium,
-              fontFamily = FontFamily.Monospace,
-              fontWeight = FontWeight.Black,
-              color = MaterialTheme.colorScheme.onSurface,
-              textAlign = TextAlign.Center,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Surface(
+              onClick = onOpenCalculator,
+              shape = CircleShape,
+              color = MaterialTheme.colorScheme.surfaceContainerHighest,
+              tonalElevation = 2.dp,
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+              modifier = Modifier
+                .size(34.dp)
+                .testTag("ruler_calculator_button"),
+            ) {
+              Box(contentAlignment = Alignment.Center) {
+                Icon(
+                  imageVector = Icons.Default.Calculate,
+                  contentDescription = "Open in Calculator",
+                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.size(18.dp),
+                )
+              }
+            }
+
+            AnimatedContent(
+              targetState = headlineText,
+              transitionSpec = { fadeIn() togetherWith fadeOut() },
+              contentAlignment = Alignment.Center,
+              label = "RulerPrimaryReadout",
+              modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 6.dp),
+            ) { valueStr ->
+              Text(
+                text = valueStr,
+                style = MaterialTheme.typography.headlineMedium,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Black,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("ruler_measurement_label"),
+              )
+            }
+
+            Surface(
+              onClick = onOpenUnitConverter,
+              shape = CircleShape,
+              color = MaterialTheme.colorScheme.surfaceContainerHighest,
+              tonalElevation = 2.dp,
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+              modifier = Modifier
+                .size(34.dp)
+                .testTag("ruler_unit_converter_button"),
+            ) {
+              Box(contentAlignment = Alignment.Center) {
+                Icon(
+                  imageVector = Icons.Default.Straighten,
+                  contentDescription = "Open in Unit Converter",
+                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.size(18.dp),
+                )
+              }
+            }
           }
+
           Text(
             text = subText,
             style = MaterialTheme.typography.labelSmall,

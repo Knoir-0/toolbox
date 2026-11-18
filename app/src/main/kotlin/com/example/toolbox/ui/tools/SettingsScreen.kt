@@ -1466,7 +1466,7 @@ fun SettingsScreen(
       AccentHarmonyOption.fromPrefValue(accentColor, darkTheme = isDarkTheme)
     }
     var selectedHarmonyMode by rememberSaveable {
-      mutableStateOf(activeAutoHarmony?.harmonyMode ?: HarmonyMode.SHADES)
+      mutableStateOf(activeAutoHarmony?.harmonyMode ?: HarmonyMode.ANALOGOUS)
     }
     LaunchedEffect(activeAutoHarmony) {
       if (activeAutoHarmony != null && activeAutoHarmony != AccentHarmonyOption.MONOCHROMATIC) {
@@ -1578,7 +1578,7 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
           ) {
             Text(
-              text = "Accent color used for key tool highlights (action keys, tuning needle, metronome downbeat, calipers). Defaults to Soft Tint in dark theme and Mid Shade in light theme.",
+              text = "Accent color used for key tool highlights (action keys, tuning needle, metronome downbeat, calipers). Defaults to Analogous (+30°) of the main theme color.",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1588,7 +1588,7 @@ fun SettingsScreen(
             // Auto Option Card
             OutlinedCard(
               onClick = {
-                selectedHarmonyMode = HarmonyMode.SHADES
+                selectedHarmonyMode = HarmonyMode.ANALOGOUS
                 preferencesRepository.setAccentColor(DEFAULT_ACCENT_COLOR_AUTO)
                 customAccentHexInput = ""
               },
@@ -2973,7 +2973,7 @@ fun SettingsScreen(
               resetAllSettingsToDefaults(preferencesRepository)
               customHexInput = ""
               customAccentHexInput = ""
-              selectedHarmonyMode = HarmonyMode.SHADES
+              selectedHarmonyMode = HarmonyMode.ANALOGOUS
               collapsedCategories = ToolCategory.entries.toSet()
               isToolSettingsExpanded = true
               isThemeColorExpanded = false

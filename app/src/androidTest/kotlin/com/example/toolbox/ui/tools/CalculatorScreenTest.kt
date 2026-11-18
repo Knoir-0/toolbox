@@ -158,4 +158,33 @@ class CalculatorScreenTest {
 
     composeTestRule.onNodeWithTag("calculator_history_sheet").assertDoesNotExist()
   }
+
+  @Test
+  fun testToolbarAndPillNavigationBarAndUnitConverterLink() {
+    // Toolbar and pill navigation bar are displayed at the top
+    composeTestRule.onNodeWithTag("calculator_toolbar_title").assertTextEquals("Calculator")
+    composeTestRule.onNodeWithTag("calculator_pill_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("calculator_angle_mode_chip").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("calculator_scientific_toggle_chip").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("calculator_unit_converter_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("calculator_copy_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("calculator_history_button").assertIsDisplayed()
+
+    // Enter an expression: 25 + 17 (live preview = 42)
+    composeTestRule.onNodeWithTag("calculator_key_2").performClick()
+    composeTestRule.onNodeWithTag("calculator_key_5").performClick()
+    composeTestRule.onNodeWithTag("calculator_key_+").performClick()
+    composeTestRule.onNodeWithTag("calculator_key_1").performClick()
+    composeTestRule.onNodeWithTag("calculator_key_7").performClick()
+    composeTestRule.waitForIdle()
+
+    // Click the Unit Converter link button on the pill navigation bar
+    composeTestRule.onNodeWithTag("calculator_unit_converter_button").performClick()
+    composeTestRule.waitForIdle()
+
+    // Unit Converter opens with its toolbar and the prefilled parseable value ("42")
+    composeTestRule.onNodeWithTag("unit_converter_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("unit_converter_toolbar_title").assertTextEquals("Unit Converter")
+    composeTestRule.onNodeWithTag("unit_converter_input").assertTextEquals("42")
+  }
 }

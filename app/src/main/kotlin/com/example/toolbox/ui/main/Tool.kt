@@ -172,7 +172,7 @@ enum class Tool(
     category = ToolCategory.FILES_AND_STORAGE,
   ),
   ARCHIVE(
-    title = "Archives",
+    title = "Archive",
     icon = Icons.Default.FolderZip,
     category = ToolCategory.FILES_AND_STORAGE,
   ),

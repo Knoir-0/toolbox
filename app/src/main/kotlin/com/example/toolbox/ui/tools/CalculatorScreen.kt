@@ -1,6 +1,7 @@
 package com.example.toolbox.ui.tools
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -42,6 +43,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Backspace
+import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -49,6 +51,7 @@ import androidx.compose.material.icons.filled.Functions
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
@@ -101,6 +104,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.example.toolbox.ui.theme.ToolboxTheme
 import kotlinx.coroutines.launch
 
@@ -109,14 +113,27 @@ import kotlinx.coroutines.launch
 fun CalculatorScreen(
   modifier: Modifier = Modifier,
   bottomPadding: Dp = 0.dp,
+  initialValue: String? = null,
+  onOpenUnitConverter: ((String) -> Unit)? = null,
+  onNavigateBack: (() -> Unit)? = null,
 ) {
-  var expression by rememberSaveable { mutableStateOf("") }
+  var expression by rememberSaveable(initialValue) {
+    mutableStateOf(initialValue?.takeIf { it.isNotBlank() } ?: "")
+  }
   var isDegreeMode by rememberSaveable { mutableStateOf(true) }
   var isScientificExpanded by rememberSaveable { mutableStateOf(false) }
   var showHistorySheet by rememberSaveable { mutableStateOf(false) }
   var isJustEvaluated by rememberSaveable { mutableStateOf(false) }
   var memoryValue by rememberSaveable { mutableDoubleStateOf(0.0) }
   var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
+  var inlineUnitConverterValue by rememberSaveable { mutableStateOf<String?>(null) }
+
+  LaunchedEffect(initialValue) {
+    if (!initialValue.isNullOrBlank()) {
+      expression = initialValue
+      errorMessage = null
+    }
+  }
 
   val historyList = remember { mutableStateListOf<CalculatorHistoryItem>() }
   val haptic = LocalHapticFeedback.current
@@ -272,260 +289,254 @@ fun CalculatorScreen(
     }
   }
 
+  fun openInUnitConverter() {
+    val parseableValue = CalculatorEngine.extractParseableValue(expression, isDegreeMode)
+    if (onOpenUnitConverter != null) {
+      onOpenUnitConverter(parseableValue)
+    } else {
+      inlineUnitConverterValue = parseableValue
+    }
+  }
+
+  val activeInlineConverterValue = inlineUnitConverterValue
+  if (activeInlineConverterValue != null) {
+    BackHandler {
+      inlineUnitConverterValue = null
+    }
+    UnitConverterScreen(
+      modifier = modifier.padding(bottom = bottomPadding),
+      initialValue = activeInlineConverterValue,
+      onNavigateBack = { inlineUnitConverterValue = null },
+    )
+    return
+  }
+
+  val headerSubtext = remember(isDegreeMode, memoryValue, historyList.size) {
+    buildString {
+      append(if (isDegreeMode) "Degrees (DEG)" else "Radians (RAD)")
+      if (memoryValue != 0.0) {
+        append(" • M: ${CalculatorEngine.formatResult(memoryValue)}")
+      }
+      if (historyList.isNotEmpty()) {
+        append(" • ${historyList.size} in history")
+      } else if (memoryValue == 0.0) {
+        append(" • Standard & scientific")
+      }
+    }
+  }
+
   Box(
     modifier = modifier
       .fillMaxSize()
+      .background(MaterialTheme.colorScheme.background)
       .testTag("calculator_screen"),
   ) {
     Column(
       modifier = Modifier
         .fillMaxSize()
-        .padding(horizontal = 16.dp, vertical = 8.dp)
         .padding(bottom = bottomPadding),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      // Calculator Display Card
-      Card(
+      // 1. Standard 68.dp Top Toolbar
+      ToolboxTopBar(
+        title = "Calculator",
+        subtext = headerSubtext,
+        icon = Icons.Default.Calculate,
+        onNavigateBack = onNavigateBack,
+        titleTestTag = "calculator_toolbar_title",
+        subtextTestTag = "calculator_toolbar_subtext",
+      )
+
+      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+      // 2. Pill Navigation Bar underneath the toolbar (DEG/RAD, f(x) + floating Unit Converter, Copy, History)
+      CalculatorPillNavigationBar(
+        isDegreeMode = isDegreeMode,
+        onToggleDegreeMode = { isDegreeMode = !isDegreeMode },
+        isScientificExpanded = isScientificExpanded,
+        onToggleScientific = { isScientificExpanded = !isScientificExpanded },
+        historyCount = historyList.size,
+        onOpenUnitConverter = {
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          openInUnitConverter()
+        },
+        onCopyResult = ::onCopyResult,
+        onOpenHistory = {
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          showHistorySheet = true
+        },
+      )
+
+      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+      // 3. Calculator Body (Display Card, Collapsible Scientific Keypad, Main Keypad)
+      Column(
         modifier = Modifier
           .fillMaxWidth()
-          .clip(RoundedCornerShape(32.dp))
-          .pointerInput(Unit) {
-            detectTapGestures(onTap = { onCopyResult() })
-          }
-          .testTag("calculator_display_card"),
-        colors = CardDefaults.cardColors(
-          containerColor = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.55f),
-        ),
-        shape = RoundedCornerShape(32.dp),
-        border = BorderStroke(
-          width = 1.dp,
-          color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
-        ),
+          .weight(1f)
+          .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        Column(
+        // Calculator Display Card
+        Card(
           modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 22.dp, vertical = 18.dp),
-          verticalArrangement = Arrangement.spacedBy(6.dp),
-          horizontalAlignment = Alignment.End,
+            .clip(RoundedCornerShape(32.dp))
+            .pointerInput(Unit) {
+              detectTapGestures(onTap = { onCopyResult() })
+            }
+            .testTag("calculator_display_card"),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.55f),
+          ),
+          shape = RoundedCornerShape(32.dp),
+          border = BorderStroke(
+            width = 1.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+          ),
         ) {
-          // Upper Expression String (scrollable horizontally)
-          Row(
+          Column(
             modifier = Modifier
               .fillMaxWidth()
-              .horizontalScroll(exprScrollState),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            val displayText = CalculatorEngine.formatDisplay(expression.ifEmpty { "0" })
-            val fontSize = when {
-              displayText.length <= 7 -> 46.sp
-              displayText.length <= 12 -> 36.sp
-              else -> 28.sp
-            }
-            Text(
-              text = displayText,
-              style = MaterialTheme.typography.displayMedium.copy(
-                fontSize = fontSize,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = (-0.5).sp,
+              .padding(
+                horizontal = 22.dp,
+                vertical = if (isScientificExpanded) 12.dp else 18.dp,
               ),
-              color = if (errorMessage != null) {
-                MaterialTheme.colorScheme.error
-              } else if (isJustEvaluated) {
-                MaterialTheme.colorScheme.primary
-              } else {
-                MaterialTheme.colorScheme.onSurface
-              },
-              maxLines = 1,
-              textAlign = TextAlign.End,
-              modifier = Modifier.testTag("calculator_display_expression"),
-            )
-          }
-
-          // Lower Subtitle: Live preview (= 42) or Error message
-          Box(
-            modifier = Modifier
-              .fillMaxWidth()
-              .height(30.dp),
-            contentAlignment = Alignment.CenterEnd,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalAlignment = Alignment.End,
           ) {
-            AnimatedContent(
-              targetState = errorMessage ?: livePreview?.let { "= $it" } ?: "",
-              transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(150)) },
-              label = "preview_animation",
-            ) { text ->
-              if (text.isNotEmpty()) {
-                Text(
-                  text = text,
-                  style = MaterialTheme.typography.titleLarge.copy(
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Normal,
-                  ),
-                  color = if (errorMessage != null) {
-                    MaterialTheme.colorScheme.error
-                  } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
-                  },
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                  textAlign = TextAlign.End,
-                  modifier = Modifier.testTag("calculator_display_preview"),
-                )
+            // Upper Expression String (scrollable horizontally)
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(exprScrollState),
+              horizontalArrangement = Arrangement.End,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              val displayText = CalculatorEngine.formatDisplay(expression.ifEmpty { "0" })
+              val fontSize = when {
+                displayText.length <= 7 -> if (isScientificExpanded) 38.sp else 46.sp
+                displayText.length <= 12 -> 34.sp
+                else -> 28.sp
               }
-            }
-          }
-        }
-      }
-
-      // Controls Bar (Toolbar): DEG/RAD, Scientific fx toggle, Copy, History
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 2.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Row(
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          // Degree / Radian mode toggle pill
-          AngleModePill(
-            isDegreeMode = isDegreeMode,
-            onToggle = { isDegreeMode = !isDegreeMode },
-          )
-
-          // Scientific fx toggle button
-          ScientificTogglePill(
-            isExpanded = isScientificExpanded,
-            onToggle = { isScientificExpanded = !isScientificExpanded },
-          )
-        }
-
-        // History & Copy buttons
-        Row(
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Surface(
-            modifier = Modifier
-              .size(34.dp)
-              .clip(CircleShape)
-              .clickable(onClick = { onCopyResult() })
-              .testTag("calculator_copy_button"),
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
-          ) {
-            Box(contentAlignment = Alignment.Center) {
-              Icon(
-                imageVector = Icons.Default.ContentCopy,
-                contentDescription = "Copy result",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(17.dp),
+              Text(
+                text = displayText,
+                style = MaterialTheme.typography.displayMedium.copy(
+                  fontSize = fontSize,
+                  fontWeight = FontWeight.Medium,
+                  letterSpacing = (-0.5).sp,
+                ),
+                color = if (errorMessage != null) {
+                  MaterialTheme.colorScheme.error
+                } else if (isJustEvaluated) {
+                  MaterialTheme.colorScheme.primary
+                } else {
+                  MaterialTheme.colorScheme.onSurface
+                },
+                maxLines = 1,
+                textAlign = TextAlign.End,
+                modifier = Modifier.testTag("calculator_display_expression"),
               )
             }
-          }
 
-          Surface(
-            modifier = Modifier
-              .size(34.dp)
-              .clip(CircleShape)
-              .clickable(onClick = { showHistorySheet = true })
-              .testTag("calculator_history_button"),
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
-          ) {
-            Box(contentAlignment = Alignment.Center) {
-              BadgedBox(
-                badge = {
-                  if (historyList.isNotEmpty()) {
-                    Badge(
-                      containerColor = MaterialTheme.colorScheme.primary,
-                      contentColor = MaterialTheme.colorScheme.onPrimary,
-                    ) {
-                      Text(historyList.size.toString(), fontSize = 10.sp)
-                    }
-                  }
-                },
-              ) {
-                Icon(
-                  imageVector = Icons.Default.History,
-                  contentDescription = "Calculation history",
-                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier.size(18.dp),
-                )
+            // Lower Subtitle: Live preview (= 42) or Error message
+            Box(
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(if (isScientificExpanded) 24.dp else 30.dp),
+              contentAlignment = Alignment.CenterEnd,
+            ) {
+              AnimatedContent(
+                targetState = errorMessage ?: livePreview?.let { "= $it" } ?: "",
+                transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(150)) },
+                label = "preview_animation",
+              ) { text ->
+                if (text.isNotEmpty()) {
+                  Text(
+                    text = text,
+                    style = MaterialTheme.typography.titleLarge.copy(
+                      fontSize = 20.sp,
+                      fontWeight = FontWeight.Normal,
+                    ),
+                    color = if (errorMessage != null) {
+                      MaterialTheme.colorScheme.error
+                    } else {
+                      MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.testTag("calculator_display_preview"),
+                  )
+                }
               }
             }
           }
         }
-      }
 
-      // Scientific Keypad Drawer (Collapsible)
-      AnimatedVisibility(
-        visible = isScientificExpanded,
-        enter = expandVertically() + fadeIn(),
-        exit = shrinkVertically() + fadeOut(),
-      ) {
-        ScientificKeypad(
-          onInputChar = ::onInputChar,
-          onInputFunction = { fn -> onInputChar("$fn(") },
-          onMemoryClear = {
-            memoryValue = 0.0
-            Toast.makeText(context, "Memory cleared", Toast.LENGTH_SHORT).show()
+        // Scientific Keypad Drawer (Collapsible)
+        AnimatedVisibility(
+          visible = isScientificExpanded,
+          enter = expandVertically() + fadeIn(),
+          exit = shrinkVertically() + fadeOut(),
+        ) {
+          ScientificKeypad(
+            onInputChar = ::onInputChar,
+            onInputFunction = { fn -> onInputChar("$fn(") },
+            onMemoryClear = {
+              memoryValue = 0.0
+              Toast.makeText(context, "Memory cleared", Toast.LENGTH_SHORT).show()
+            },
+            onMemoryRecall = {
+              onInputChar(CalculatorEngine.formatResult(memoryValue))
+            },
+            onMemoryAdd = {
+              try {
+                val v = CalculatorEngine.evaluate(expression.ifEmpty { "0" }, isDegreeMode)
+                memoryValue += v
+                Toast.makeText(context, "M+ (${CalculatorEngine.formatResult(memoryValue)})", Toast.LENGTH_SHORT).show()
+              } catch (_: Exception) {}
+            },
+            onMemorySubtract = {
+              try {
+                val v = CalculatorEngine.evaluate(expression.ifEmpty { "0" }, isDegreeMode)
+                memoryValue -= v
+                Toast.makeText(context, "M- (${CalculatorEngine.formatResult(memoryValue)})", Toast.LENGTH_SHORT).show()
+              } catch (_: Exception) {}
+            },
+            hasMemory = memoryValue != 0.0,
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(bottom = 2.dp),
+          )
+        }
+
+        // Main 4x5 Calculator Keypad
+        MainCalculatorKeypad(
+          onDigit = { onInputChar(it.toString()) },
+          onOperator = { onInputChar(it) },
+          onDecimal = {
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            errorMessage = null
+            val tokens = expression.split(Regex("[+\\−×÷^()%]"))
+            val lastToken = tokens.lastOrNull() ?: ""
+            if (!lastToken.contains(".")) {
+              if (lastToken.isEmpty()) {
+                expression += "0."
+              } else {
+                expression += "."
+              }
+            }
           },
-          onMemoryRecall = {
-            onInputChar(CalculatorEngine.formatResult(memoryValue))
-          },
-          onMemoryAdd = {
-            try {
-              val v = CalculatorEngine.evaluate(expression.ifEmpty { "0" }, isDegreeMode)
-              memoryValue += v
-              Toast.makeText(context, "M+ (${CalculatorEngine.formatResult(memoryValue)})", Toast.LENGTH_SHORT).show()
-            } catch (_: Exception) {}
-          },
-          onMemorySubtract = {
-            try {
-              val v = CalculatorEngine.evaluate(expression.ifEmpty { "0" }, isDegreeMode)
-              memoryValue -= v
-              Toast.makeText(context, "M- (${CalculatorEngine.formatResult(memoryValue)})", Toast.LENGTH_SHORT).show()
-            } catch (_: Exception) {}
-          },
-          hasMemory = memoryValue != 0.0,
+          onToggleSign = ::onToggleSign,
+          onBackspace = ::onBackspace,
+          onClear = ::onClear,
+          onEquals = ::onEvaluate,
+          onParenthesis = ::onSmartParenthesis,
           modifier = Modifier
             .fillMaxWidth()
-            .padding(bottom = 4.dp),
+            .weight(1f),
         )
       }
-
-      // Main 4x5 Calculator Keypad
-      MainCalculatorKeypad(
-        onDigit = { onInputChar(it.toString()) },
-        onOperator = { onInputChar(it) },
-        onDecimal = {
-          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-          errorMessage = null
-          val tokens = expression.split(Regex("[+\\−×÷^()%]"))
-          val lastToken = tokens.lastOrNull() ?: ""
-          if (!lastToken.contains(".")) {
-            if (lastToken.isEmpty()) {
-              expression += "0."
-            } else {
-              expression += "."
-            }
-          }
-        },
-        onToggleSign = ::onToggleSign,
-        onBackspace = ::onBackspace,
-        onClear = ::onClear,
-        onEquals = ::onEvaluate,
-        onParenthesis = ::onSmartParenthesis,
-        modifier = Modifier
-          .fillMaxWidth()
-          .weight(1f),
-      )
     }
 
     // Scrim overlay behind history panel
@@ -635,6 +646,141 @@ fun CalculatorScreen(
 }
 
 @Composable
+private fun CalculatorPillNavigationBar(
+  isDegreeMode: Boolean,
+  onToggleDegreeMode: () -> Unit,
+  isScientificExpanded: Boolean,
+  onToggleScientific: () -> Unit,
+  historyCount: Int,
+  onOpenUnitConverter: () -> Unit,
+  onCopyResult: () -> Unit,
+  onOpenHistory: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Box(
+    modifier = modifier
+      .fillMaxWidth()
+      .testTag("calculator_pill_bar"),
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .fadingPillRowUnderFloatingControls(
+          hasColumnsButton = false,
+          extraControlButtonsCount = 2,
+        )
+        .horizontalScroll(rememberScrollState())
+        .padding(
+          start = 12.dp,
+          end = 136.dp,
+          top = 6.dp,
+          bottom = 6.dp,
+        ),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      AngleModePill(
+        isDegreeMode = isDegreeMode,
+        onToggle = onToggleDegreeMode,
+      )
+
+      ScientificTogglePill(
+        isExpanded = isScientificExpanded,
+        onToggle = onToggleScientific,
+      )
+    }
+
+    // Pinned floating [Unit Converter], [Copy], and [History] buttons on the right edge of the pill bar
+    Row(
+      modifier = Modifier
+        .align(Alignment.CenterEnd)
+        .pillBarFloatingControlsBackdrop(backgroundColor = MaterialTheme.colorScheme.background)
+        .padding(end = 12.dp)
+        .zIndex(10f)
+        .testTag("calculator_pill_bar_floating_controls"),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Surface(
+        onClick = onOpenUnitConverter,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 3.dp,
+        shadowElevation = 4.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        modifier = Modifier
+          .size(34.dp)
+          .testTag("calculator_unit_converter_button"),
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.Straighten,
+            contentDescription = "Open in Unit Converter",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
+
+      Surface(
+        onClick = onCopyResult,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 3.dp,
+        shadowElevation = 4.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        modifier = Modifier
+          .size(34.dp)
+          .testTag("calculator_copy_button"),
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.ContentCopy,
+            contentDescription = "Copy result",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
+
+      Surface(
+        onClick = onOpenHistory,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 3.dp,
+        shadowElevation = 4.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        modifier = Modifier
+          .size(34.dp)
+          .testTag("calculator_history_button"),
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          BadgedBox(
+            badge = {
+              if (historyCount > 0) {
+                Badge(
+                  containerColor = MaterialTheme.colorScheme.primary,
+                  contentColor = MaterialTheme.colorScheme.onPrimary,
+                ) {
+                  Text(historyCount.toString(), fontSize = 10.sp)
+                }
+              }
+            },
+          ) {
+            Icon(
+              imageVector = Icons.Default.History,
+              contentDescription = "Calculation history",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(18.dp),
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
 private fun AngleModePill(
   isDegreeMode: Boolean,
   onToggle: () -> Unit,
@@ -644,74 +790,70 @@ private fun AngleModePill(
 
   Surface(
     modifier = modifier
-      .height(34.dp)
-      .clip(CircleShape)
+      .height(32.dp)
+      .clip(RoundedCornerShape(20.dp))
       .clickable {
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         onToggle()
       }
       .testTag("calculator_angle_mode_chip"),
-    shape = CircleShape,
-    color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f),
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+    shape = RoundedCornerShape(20.dp),
+    color = MaterialTheme.colorScheme.surface,
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
   ) {
     Row(
-      modifier = Modifier.padding(3.dp),
+      modifier = Modifier.padding(horizontal = 3.dp, vertical = 2.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
       // DEG Segment
       val degBg by animateColorAsState(
-        targetValue = if (isDegreeMode) MaterialTheme.colorScheme.primary else Color.Transparent,
+        targetValue = if (isDegreeMode) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
         animationSpec = tween(200),
         label = "deg_bg",
       )
       val degTextColor by animateColorAsState(
-        targetValue = if (isDegreeMode) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+        targetValue = if (isDegreeMode) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
         animationSpec = tween(200),
         label = "deg_text",
       )
       Box(
         modifier = Modifier
-          .clip(CircleShape)
+          .clip(RoundedCornerShape(16.dp))
           .background(degBg)
           .padding(horizontal = 10.dp, vertical = 4.dp),
         contentAlignment = Alignment.Center,
       ) {
         Text(
           text = "DEG",
-          style = MaterialTheme.typography.labelSmall.copy(
-            fontWeight = if (isDegreeMode) FontWeight.ExtraBold else FontWeight.SemiBold,
-            fontSize = 11.sp,
-          ),
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = if (isDegreeMode) FontWeight.Bold else FontWeight.Medium,
           color = degTextColor,
         )
       }
 
       // RAD Segment
       val radBg by animateColorAsState(
-        targetValue = if (!isDegreeMode) MaterialTheme.colorScheme.primary else Color.Transparent,
+        targetValue = if (!isDegreeMode) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
         animationSpec = tween(200),
         label = "rad_bg",
       )
       val radTextColor by animateColorAsState(
-        targetValue = if (!isDegreeMode) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+        targetValue = if (!isDegreeMode) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
         animationSpec = tween(200),
         label = "rad_text",
       )
       Box(
         modifier = Modifier
-          .clip(CircleShape)
+          .clip(RoundedCornerShape(16.dp))
           .background(radBg)
           .padding(horizontal = 10.dp, vertical = 4.dp),
         contentAlignment = Alignment.Center,
       ) {
         Text(
           text = "RAD",
-          style = MaterialTheme.typography.labelSmall.copy(
-            fontWeight = if (!isDegreeMode) FontWeight.ExtraBold else FontWeight.SemiBold,
-            fontSize = 11.sp,
-          ),
+          style = MaterialTheme.typography.labelMedium,
+          fontWeight = if (!isDegreeMode) FontWeight.Bold else FontWeight.Medium,
           color = radTextColor,
         )
       }
@@ -731,50 +873,29 @@ private fun ScientificTogglePill(
     animationSpec = tween(durationMillis = 250),
     label = "chevron_rot",
   )
-  val containerColor by animateColorAsState(
-    targetValue = if (isExpanded) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f),
-    animationSpec = tween(200),
-    label = "fx_container",
-  )
-  val contentColor by animateColorAsState(
-    targetValue = if (isExpanded) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-    animationSpec = tween(200),
-    label = "fx_content",
-  )
-  val borderColor by animateColorAsState(
-    targetValue = if (isExpanded) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
-    animationSpec = tween(200),
-    label = "fx_border",
-  )
 
-  Surface(
-    modifier = modifier
-      .height(34.dp)
-      .clip(CircleShape)
-      .clickable {
-        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-        onToggle()
-      }
-      .testTag("calculator_scientific_toggle_chip"),
-    shape = CircleShape,
-    color = containerColor,
-    contentColor = contentColor,
-    border = BorderStroke(1.dp, borderColor),
-  ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
+  FilterChip(
+    selected = isExpanded,
+    onClick = {
+      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+      onToggle()
+    },
+    shape = RoundedCornerShape(20.dp),
+    leadingIcon = {
+      Icon(
+        imageVector = Icons.Default.Functions,
+        contentDescription = null,
+        modifier = Modifier.size(16.dp),
+      )
+    },
+    label = {
       Text(
         text = "f(x)",
-        style = MaterialTheme.typography.labelMedium.copy(
-          fontStyle = FontStyle.Italic,
-          fontWeight = FontWeight.Bold,
-          fontSize = 13.sp,
-          fontFamily = FontFamily.Serif,
-        ),
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = if (isExpanded) FontWeight.Bold else FontWeight.Medium,
       )
+    },
+    trailingIcon = {
       Icon(
         imageVector = Icons.Default.KeyboardArrowDown,
         contentDescription = if (isExpanded) "Collapse scientific functions" else "Expand scientific functions",
@@ -782,8 +903,15 @@ private fun ScientificTogglePill(
           .size(16.dp)
           .graphicsLayer { rotationZ = chevronRotation },
       )
-    }
-  }
+    },
+    colors = FilterChipDefaults.filterChipColors(
+      selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+      selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+      selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+      selectedTrailingIconColor = MaterialTheme.colorScheme.primary,
+    ),
+    modifier = modifier.testTag("calculator_scientific_toggle_chip"),
+  )
 }
 
 @Composable

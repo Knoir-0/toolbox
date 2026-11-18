@@ -56,6 +56,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -72,6 +73,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -301,11 +303,23 @@ private fun rememberConverterPalette(): ConverterPalette {
 }
 
 @Composable
-fun UnitConverterScreen(modifier: Modifier = Modifier) {
+fun UnitConverterScreen(
+  modifier: Modifier = Modifier,
+  initialValue: String? = null,
+  onNavigateBack: (() -> Unit)? = null,
+) {
   var selectedCategory by rememberSaveable { mutableStateOf(UnitCategory.LENGTH) }
   var fromIndex by rememberSaveable { mutableIntStateOf(2) } // Default Meter
   var toIndex by rememberSaveable { mutableIntStateOf(5) }   // Default Foot
-  var inputText by rememberSaveable { mutableStateOf("1") }
+  var inputText by rememberSaveable(initialValue) {
+    mutableStateOf(initialValue?.takeIf { it.isNotBlank() } ?: "1")
+  }
+
+  LaunchedEffect(initialValue) {
+    if (!initialValue.isNullOrBlank()) {
+      inputText = initialValue
+    }
+  }
 
   val palette = rememberConverterPalette()
 
@@ -342,12 +356,29 @@ fun UnitConverterScreen(modifier: Modifier = Modifier) {
     }
   }
 
-  LazyColumn(
+  Column(
     modifier = modifier
       .fillMaxSize()
-      .background(palette.screenBackground),
-    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+      .background(palette.screenBackground)
+      .testTag("unit_converter_screen"),
   ) {
+    ToolboxTopBar(
+      title = "Unit Converter",
+      subtext = "${selectedCategory.label} • ${fromUnit.name} → ${toUnit.name}",
+      icon = Icons.Default.Straighten,
+      onNavigateBack = onNavigateBack,
+      titleTestTag = "unit_converter_toolbar_title",
+      subtextTestTag = "unit_converter_toolbar_subtext",
+    )
+
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+    LazyColumn(
+      modifier = Modifier
+        .fillMaxWidth()
+        .weight(1f),
+      contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+    ) {
     // 1. Category Selector Row
     item {
       Row(
@@ -469,6 +500,7 @@ fun UnitConverterScreen(modifier: Modifier = Modifier) {
         onSelectTargetUnit = { index -> toIndex = index },
         palette = palette,
       )
+    }
     }
   }
 }
@@ -806,7 +838,9 @@ private fun ConversionHeroCard(
               BasicTextField(
                 value = inputText,
                 onValueChange = onInputChange,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                  .weight(1f)
+                  .testTag("unit_converter_input"),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 textStyle = MaterialTheme.typography.headlineLarge.copy(

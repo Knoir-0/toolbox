@@ -407,7 +407,7 @@
             android:exported="true"
             android:icon="@mipmap/ic_tool_archive"
             android:roundIcon="@mipmap/ic_tool_archive"
-            android:label="Archives">
+            android:label="Archive">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

@@ -110,9 +110,9 @@ enum class ColorSliderMode(val label: String) {
 }
 
 enum class HarmonyMode(val label: String) {
+  ANALOGOUS("Analogous"),
   SHADES("Tints & Shades"),
   COMPLEMENTARY("Complementary"),
-  ANALOGOUS("Analogous"),
   TRIADIC("Triadic"),
   SPLIT_COMPLEMENTARY("Split-Comp"),
 }
@@ -344,14 +344,21 @@ object ColorMath {
   fun generateHarmony(base: HsvColor, mode: HarmonyMode): List<HsvColor> {
     fun wrapHue(h: Float) = ((h % 360f) + 360f) % 360f
     return when (mode) {
-      HarmonyMode.COMPLEMENTARY -> listOf(
-        base,
-        base.copy(hue = wrapHue(base.hue + 180f)),
-      )
       HarmonyMode.ANALOGOUS -> listOf(
         base.copy(hue = wrapHue(base.hue - 30f)),
         base,
         base.copy(hue = wrapHue(base.hue + 30f)),
+      )
+      HarmonyMode.SHADES -> listOf(
+        base.copy(saturation = (base.saturation * 0.45f).coerceIn(0f, 1f), value = 0.96f),
+        base.copy(saturation = (base.saturation * 0.75f).coerceIn(0f, 1f), value = 0.88f),
+        base,
+        base.copy(value = (base.value * 0.70f).coerceIn(0.12f, 1f)),
+        base.copy(value = (base.value * 0.42f).coerceIn(0.08f, 1f)),
+      )
+      HarmonyMode.COMPLEMENTARY -> listOf(
+        base,
+        base.copy(hue = wrapHue(base.hue + 180f)),
       )
       HarmonyMode.TRIADIC -> listOf(
         base,
@@ -362,13 +369,6 @@ object ColorMath {
         base,
         base.copy(hue = wrapHue(base.hue + 150f)),
         base.copy(hue = wrapHue(base.hue + 210f)),
-      )
-      HarmonyMode.SHADES -> listOf(
-        base.copy(saturation = (base.saturation * 0.45f).coerceIn(0f, 1f), value = 0.96f),
-        base.copy(saturation = (base.saturation * 0.75f).coerceIn(0f, 1f), value = 0.88f),
-        base,
-        base.copy(value = (base.value * 0.70f).coerceIn(0.12f, 1f)),
-        base.copy(value = (base.value * 0.42f).coerceIn(0.08f, 1f)),
       )
     }
   }
@@ -436,7 +436,7 @@ fun ColorPickerScreen(
   var value by rememberSaveable(initialHex) { mutableFloatStateOf(initialHsv.value) }
 
   var sliderMode by rememberSaveable { mutableStateOf(ColorSliderMode.HSV) }
-  var harmonyMode by rememberSaveable { mutableStateOf(HarmonyMode.COMPLEMENTARY) }
+  var harmonyMode by rememberSaveable { mutableStateOf(HarmonyMode.ANALOGOUS) }
   var hexInput by rememberSaveable(initialHex) { mutableStateOf(initialHex) }
   var lastCopiedLabel by rememberSaveable { mutableStateOf<String?>(null) }
 

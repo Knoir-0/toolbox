@@ -268,8 +268,30 @@ class AudioRecorderScreenTest {
 
       composeTestRule.onNodeWithTag("folder_pill_VoiceMemos").assertIsDisplayed()
       composeTestRule.onNodeWithTag("folder_unlocked_icon_VoiceMemos").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("folder_delete_icon_VoiceMemos").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("folder_delete_icon_Audio").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("folder_delete_icon_Recordings").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("folder_delete_icon_Download").assertDoesNotExist()
       composeTestRule.onNodeWithText("No recordings in /VoiceMemos").assertIsDisplayed()
       composeTestRule.onNodeWithTag("audio_recorder_fab").assertIsEnabled()
+
+      val voiceMemosUnlockBounds = composeTestRule.onNodeWithTag("folder_unlocked_icon_VoiceMemos")
+        .fetchSemanticsNode()
+        .boundsInRoot
+      val voiceMemosDeleteBounds = composeTestRule.onNodeWithTag("folder_delete_icon_VoiceMemos")
+        .fetchSemanticsNode()
+        .boundsInRoot
+      assertTrue(
+        "Custom folder delete x icon (${voiceMemosDeleteBounds.left}) should be on the right side of the pill (${voiceMemosUnlockBounds.right})",
+        voiceMemosUnlockBounds.right < voiceMemosDeleteBounds.left,
+      )
+
+      // Tapping the x icon on the right side of the custom folder pill deletes the custom folder pill
+      composeTestRule.onNodeWithTag("folder_delete_icon_VoiceMemos").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("folder_pill_VoiceMemos").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("locked_storage_state").assertIsDisplayed()
 
       // 3. Verify initial pill order (Audio is to the left of Recordings) and drag Recordings to the left of Audio
       val initialAudioBounds = composeTestRule.onNodeWithTag("folder_pill_Audio")

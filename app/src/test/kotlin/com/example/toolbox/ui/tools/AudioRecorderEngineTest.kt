@@ -298,6 +298,10 @@ class AudioRecorderEngineTest {
       displayPath = "/Podcasts",
       customAbsolutePath = "/storage/emulated/0/Podcasts",
     )
+    assertTrue(customPodcasts.isCustom)
+    assertTrue(!customPodcasts.isDefault)
+    assertTrue(DEFAULT_AUDIO_RECORDER_FOLDERS.all { it.isDefault && !it.isCustom })
+
     val withCustom = DEFAULT_AUDIO_RECORDER_FOLDERS + customPodcasts
     val reordered = AudioRecorderEngine.reorderFolders(withCustom, fromIndex = 3, toIndex = 0)
     assertEquals(listOf("Podcasts", "Audio", "Recordings", "Download"), reordered.map { it.folderName })
@@ -305,6 +309,14 @@ class AudioRecorderEngineTest {
     val serializedPills = AudioRecorderEngine.serializeFolderPills(reordered)
     val parsedPills = AudioRecorderEngine.parseFolderPills(serializedPills)
     assertEquals(reordered, parsedPills)
+
+    // Removing a custom folder removes it while preserving default folders
+    val afterRemoveCustom = AudioRecorderEngine.removeCustomFolder(reordered, customPodcasts)
+    assertEquals(listOf("Audio", "Recordings", "Download"), afterRemoveCustom.map { it.folderName })
+    assertEquals(
+      afterRemoveCustom,
+      AudioRecorderEngine.removeCustomFolder(afterRemoveCustom, AudioRecorderDefaultFolder.AUDIO.toAudioRecorderFolder()),
+    )
 
     // findRecordingListIndex accounts for flat and grouped lists
     val sampleItems = (1..3).map { idx ->

@@ -323,7 +323,7 @@ object SearchEngine {
       description = "Browse archive contents, extract files to storage, and compress files or folders into .zip, .tar, .tar.gz (.tgz), and .gz archives.",
       capabilities = listOf("ZIP, TAR, TAR.GZ & GZIP Support", "In-Archive Directory Tree Explorer", "Selective or Full Extraction", "Configurable Compression Level", "Archive Integrity & Compression Ratio Stats"),
       keywords = listOf("archive", "archives", "zip", "unzip", "tar", "gzip", "tgz", "compress", "extract", "bundle"),
-      sampleQueries = listOf("Archives", "ZIP", "TAR.GZ"),
+      sampleQueries = listOf("Archive", "ZIP", "TAR.GZ"),
     ),
     Tool.DECIBEL_METER to ToolSearchMetadata(
       tool = Tool.DECIBEL_METER,

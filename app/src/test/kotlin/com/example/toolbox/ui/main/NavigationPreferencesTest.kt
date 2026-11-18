@@ -349,6 +349,7 @@ class NavigationPreferencesTest {
   @Test
   fun hiddenTools_fileConverterImageEditorVideoEditorAudioEditorAndDecibelMeterAreHiddenByDefault_andCanBeUnhidden() {
     val expectedDefaultHidden = setOf(
+      Tool.UNIT_CONVERTER,
       Tool.FILE_CONVERTER,
       Tool.IMAGE_EDITOR,
       Tool.VIDEO_EDITOR,

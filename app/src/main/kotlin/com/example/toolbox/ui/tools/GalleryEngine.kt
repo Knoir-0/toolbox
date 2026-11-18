@@ -9,6 +9,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.storage.StorageManager
 import android.provider.DocumentsContract
+import androidx.compose.ui.graphics.Color
+import com.example.toolbox.ui.main.NavigationPreferencesBridge
+import com.example.toolbox.ui.main.ThemeMode
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.label.ImageLabeling
 import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
@@ -185,6 +188,9 @@ data class GalleryFolder(
   val isDefault: Boolean
     get() = defaultFolder != null
 
+  val isCustom: Boolean
+    get() = !isDefault
+
   val pillLabel: String
     get() = defaultFolder?.pillLabel ?: folderName
 }
@@ -321,6 +327,7 @@ data class GalleryAlbum(
   val subAlbumCount: Int,
   val lastModifiedMs: Long,
   val directories: List<File> = listOf(directory),
+  val bypassNoMedia: Boolean = false,
 ) {
   val hasNestedAlbums: Boolean get() = subAlbumCount > 0
 
@@ -533,6 +540,24 @@ object GalleryEngine {
    */
   fun coerceAlbumsPerRow(count: Int): Int {
     return count.coerceIn(MIN_ALBUMS_PER_ROW, MAX_ALBUMS_PER_ROW)
+  }
+
+  /**
+   * Resolves the pure black (`Color.Black`) or pure white (`Color.White`) background color behind
+   * albums and photos in the Gallery tool according to the user's [themeMode] setting (and
+   * [systemInDarkTheme] when [themeMode] is [ThemeMode.SYSTEM]), independent of any active Music
+   * Player theme colors.
+   */
+  fun resolveContentBackgroundColor(
+    themeMode: ThemeMode = NavigationPreferencesBridge.themeMode,
+    systemInDarkTheme: Boolean = false,
+  ): Color {
+    val isDark = when (themeMode) {
+      ThemeMode.DARK -> true
+      ThemeMode.LIGHT -> false
+      ThemeMode.SYSTEM -> systemInDarkTheme
+    }
+    return if (isDark) Color.Black else Color.White
   }
 
   /**
@@ -755,8 +780,11 @@ object GalleryEngine {
   /**
    * Checks whether [file] is a visible subdirectory representing a nested album/folder.
    */
-  fun isAlbumDirectory(file: File): Boolean {
-    return file.exists() && file.isDirectory && !file.name.startsWith(".") && !hasNoMediaFile(file)
+  fun isAlbumDirectory(file: File, bypassNoMedia: Boolean = false): Boolean {
+    return file.exists() &&
+      file.isDirectory &&
+      !file.name.startsWith(".") &&
+      (bypassNoMedia || !hasNoMediaFile(file))
   }
 
   /**
@@ -782,6 +810,30 @@ object GalleryEngine {
       current = current.parentFile
     }
     return false
+  }
+
+  /**
+   * Checks whether [directory] (or any ancestor or nested directory within it up to [maxDepth])
+   * contains a `.nomedia` marker file.
+   */
+  fun containsNoMediaFile(directory: File, maxDepth: Int = 8): Boolean {
+    if (isHiddenByNoMedia(directory)) return true
+    fun scan(currentDir: File, depth: Int): Boolean {
+      if (depth > maxDepth) return false
+      if (hasNoMediaFile(currentDir)) return true
+      val children = try {
+        currentDir.listFiles()
+      } catch (_: Throwable) {
+        null
+      } ?: return false
+      for (child in children) {
+        if (child.isDirectory && !child.name.startsWith(".") && depth < maxDepth) {
+          if (scan(child, depth + 1)) return true
+        }
+      }
+      return false
+    }
+    return if (directory.exists() && directory.isDirectory) scan(directory, 0) else false
   }
 
   /**
@@ -1286,6 +1338,42 @@ object GalleryEngine {
   }
 
   /**
+   * Removes [folderToRemove] from [folders] if it is a custom (non-default) folder, returning the
+   * updated list of folder pills while always preserving the default folders (`DCIM`, `Pictures`, `Download`).
+   */
+  fun removeCustomFolder(
+    folders: List<GalleryFolder>,
+    folderToRemove: GalleryFolder,
+  ): List<GalleryFolder> {
+    if (folderToRemove.isDefault) return folders
+    val filtered = folders.filterNot { folder ->
+      !folder.isDefault && (
+        folder.displayPath.equals(folderToRemove.displayPath, ignoreCase = true) ||
+          folder.folderName.equals(folderToRemove.folderName, ignoreCase = true) ||
+          (!folderToRemove.customAbsolutePath.isNullOrBlank() &&
+            folder.customAbsolutePath.equals(folderToRemove.customAbsolutePath, ignoreCase = true))
+        )
+    }
+    return if (filtered.isEmpty()) DEFAULT_GALLERY_FOLDERS else filtered
+  }
+
+  /**
+   * Removes a custom [folderToRemove] from persisted folder pills and revokes its granted folder path
+   * in preferences, returning the updated list of [GalleryFolder] pills.
+   */
+  fun removeCustomFolder(
+    context: Context,
+    folderToRemove: GalleryFolder,
+  ): List<GalleryFolder> {
+    val updatedPills = removeCustomFolder(getFolderPills(context), folderToRemove)
+    setFolderPills(context, updatedPills)
+    if (!folderToRemove.isDefault) {
+      setFolderPathAccessGranted(context, folderToRemove.displayPath, false)
+    }
+    return updatedPills
+  }
+
+  /**
    * Parses a serialized string of granted folder display paths (and/or default folder names) into
    * a canonical set of display paths (e.g. `"/DCIM"`, `"/Pictures"`, `"/Download"`, `"/Vacation"`).
    */
@@ -1368,21 +1456,33 @@ object GalleryEngine {
    * Most recent is determined by `File.lastModified()` descending, with filename descending as a
    * deterministic tie-breaker.
    */
-  fun findMostRecentPhoto(directory: File, maxDepth: Int = 8): File? {
-    return findMostRecentPhoto(listOf(directory), maxDepth = maxDepth)
+  fun findMostRecentPhoto(
+    directory: File,
+    maxDepth: Int = 8,
+    bypassNoMedia: Boolean = false,
+  ): File? {
+    return findMostRecentPhoto(
+      directories = listOf(directory),
+      maxDepth = maxDepth,
+      bypassNoMedia = bypassNoMedia,
+    )
   }
 
   /**
    * Finds the most recent photo across all [directories] (searching both direct photos and nested
    * folders up to [maxDepth]).
    */
-  fun findMostRecentPhoto(directories: List<File>, maxDepth: Int = 8): File? {
+  fun findMostRecentPhoto(
+    directories: List<File>,
+    maxDepth: Int = 8,
+    bypassNoMedia: Boolean = false,
+  ): File? {
     var newestPhoto: File? = null
     var newestTime = Long.MIN_VALUE
 
     fun scan(currentDir: File, depth: Int) {
       if (depth > maxDepth) return
-      if (hasNoMediaFile(currentDir)) return
+      if (!bypassNoMedia && hasNoMediaFile(currentDir)) return
       val children = try {
         currentDir.listFiles()
       } catch (_: Throwable) {
@@ -1418,19 +1518,31 @@ object GalleryEngine {
   /**
    * Counts all photos recursively inside [directory] up to [maxDepth].
    */
-  fun countTotalPhotos(directory: File, maxDepth: Int = 8): Int {
-    return countTotalPhotos(listOf(directory), maxDepth = maxDepth)
+  fun countTotalPhotos(
+    directory: File,
+    maxDepth: Int = 8,
+    bypassNoMedia: Boolean = false,
+  ): Int {
+    return countTotalPhotos(
+      directories = listOf(directory),
+      maxDepth = maxDepth,
+      bypassNoMedia = bypassNoMedia,
+    )
   }
 
   /**
    * Counts all photos recursively across all [directories] up to [maxDepth].
    */
-  fun countTotalPhotos(directories: List<File>, maxDepth: Int = 8): Int {
+  fun countTotalPhotos(
+    directories: List<File>,
+    maxDepth: Int = 8,
+    bypassNoMedia: Boolean = false,
+  ): Int {
     val seenPaths = mutableSetOf<String>()
 
     fun scan(currentDir: File, depth: Int) {
       if (depth > maxDepth) return
-      if (hasNoMediaFile(currentDir)) return
+      if (!bypassNoMedia && hasNoMediaFile(currentDir)) return
       val children = try {
         currentDir.listFiles()
       } catch (_: Throwable) {
@@ -1466,17 +1578,18 @@ object GalleryEngine {
 
   /**
    * Collects all supported photo/video files recursively inside [directories] up to [maxDepth],
-   * skipping dot-prefixed entries and `.nomedia` directories.
+   * skipping dot-prefixed entries and `.nomedia` directories (unless [bypassNoMedia] is `true`).
    */
   private fun collectMediaFilesInDirectories(
     directories: List<File>,
     maxDepth: Int = 8,
+    bypassNoMedia: Boolean = false,
   ): List<File> {
     val result = LinkedHashMap<String, File>()
 
     fun scan(currentDir: File, depth: Int) {
       if (depth > maxDepth) return
-      if (hasNoMediaFile(currentDir)) return
+      if (!bypassNoMedia && hasNoMediaFile(currentDir)) return
       val children = try {
         currentDir.listFiles()
       } catch (_: Throwable) {
@@ -1509,6 +1622,7 @@ object GalleryEngine {
     directories: List<File>,
     maxDepth: Int = 8,
     deferAlbumArt: Boolean = false,
+    bypassNoMedia: Boolean = false,
   ): GalleryAlbum {
     val distinctDirs = mutableListOf<File>()
     for (dir in directories) {
@@ -1517,7 +1631,11 @@ object GalleryEngine {
       }
     }
     val primaryDir = distinctDirs.firstOrNull() ?: File("Download")
-    val mediaFiles = collectMediaFilesInDirectories(distinctDirs, maxDepth = maxDepth)
+    val mediaFiles = collectMediaFilesInDirectories(
+      directories = distinctDirs,
+      maxDepth = maxDepth,
+      bypassNoMedia = bypassNoMedia,
+    )
     val totalPhotos = mediaFiles.size
     val mostRecent = if (deferAlbumArt) {
       null
@@ -1541,6 +1659,7 @@ object GalleryEngine {
       subAlbumCount = 0,
       lastModifiedMs = lastMod,
       directories = distinctDirs,
+      bypassNoMedia = bypassNoMedia,
     )
   }
 
@@ -1556,11 +1675,13 @@ object GalleryEngine {
     directory: File,
     maxDepth: Int = 8,
     deferAlbumArt: Boolean = false,
+    bypassNoMedia: Boolean = false,
   ): GalleryAlbum {
     return buildMergedAlbum(
       directories = listOf(directory),
       maxDepth = maxDepth,
       deferAlbumArt = deferAlbumArt,
+      bypassNoMedia = bypassNoMedia,
     )
   }
 
@@ -1573,6 +1694,7 @@ object GalleryEngine {
     directories: List<File>,
     maxDepth: Int = 8,
     deferAlbumArt: Boolean = false,
+    bypassNoMedia: Boolean = false,
   ): GalleryAlbum {
     val distinctDirs = mutableListOf<File>()
     for (dir in directories) {
@@ -1585,12 +1707,13 @@ object GalleryEngine {
         directories = distinctDirs,
         maxDepth = maxDepth,
         deferAlbumArt = deferAlbumArt,
+        bypassNoMedia = bypassNoMedia,
       )
     }
     val primaryDir = distinctDirs.firstOrNull() ?: File("")
 
     val children = distinctDirs.flatMap { dir ->
-      if (dir.exists() && dir.isDirectory && !hasNoMediaFile(dir)) {
+      if (dir.exists() && dir.isDirectory && (bypassNoMedia || !hasNoMediaFile(dir))) {
         try {
           dir.listFiles()?.toList().orEmpty()
         } catch (_: Throwable) {
@@ -1606,7 +1729,7 @@ object GalleryEngine {
       .distinctBy { it.absolutePath }
     val directPhotos = directPhotoFiles.size
     val subAlbums = children
-      .filter { isAlbumDirectory(it) }
+      .filter { isAlbumDirectory(it, bypassNoMedia = bypassNoMedia) }
       .map { it.name.lowercase(Locale.ROOT) }
       .distinct()
       .size
@@ -1619,13 +1742,13 @@ object GalleryEngine {
             .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
         )
       }
-      else -> findMostRecentPhoto(distinctDirs, maxDepth = maxDepth)
+      else -> findMostRecentPhoto(distinctDirs, maxDepth = maxDepth, bypassNoMedia = bypassNoMedia)
     }
 
     val totalPhotos = if (subAlbums == 0 || deferAlbumArt) {
       directPhotos
     } else {
-      countTotalPhotos(distinctDirs, maxDepth = maxDepth)
+      countTotalPhotos(distinctDirs, maxDepth = maxDepth, bypassNoMedia = bypassNoMedia)
     }
 
     val lastMod = mostRecent?.lastModified()
@@ -1642,6 +1765,7 @@ object GalleryEngine {
       subAlbumCount = subAlbums,
       lastModifiedMs = lastMod,
       directories = distinctDirs,
+      bypassNoMedia = bypassNoMedia,
     )
   }
 
@@ -1655,13 +1779,21 @@ object GalleryEngine {
     reqSizePx: Int = 360,
   ): GalleryAlbum = withContext(Dispatchers.IO) {
     ensureActive()
-    val mostRecent = album.mostRecentPhoto ?: findMostRecentPhoto(album.directories, maxDepth = maxDepth)
+    val mostRecent = album.mostRecentPhoto ?: findMostRecentPhoto(
+      directories = album.directories,
+      maxDepth = maxDepth,
+      bypassNoMedia = album.bypassNoMedia,
+    )
     val totalPhotos = if (album.subAlbumCount == 0) {
       album.directPhotoCount
     } else if (album.totalPhotoCount > album.directPhotoCount) {
       album.totalPhotoCount
     } else {
-      countTotalPhotos(album.directories, maxDepth = maxDepth)
+      countTotalPhotos(
+        directories = album.directories,
+        maxDepth = maxDepth,
+        bypassNoMedia = album.bypassNoMedia,
+      )
     }
     ensureActive()
     if (mostRecent != null) {
@@ -1754,8 +1886,11 @@ object GalleryEngine {
   /**
    * Loads the contents of [album] across all of its backing [GalleryAlbum.directories].
    */
-  fun loadAlbumContents(album: GalleryAlbum): AlbumContents {
-    return loadMergedAlbumContents(album.directories)
+  fun loadAlbumContents(
+    album: GalleryAlbum,
+    bypassNoMedia: Boolean = album.bypassNoMedia,
+  ): AlbumContents {
+    return loadMergedAlbumContents(album.directories, bypassNoMedia = bypassNoMedia)
   }
 
   /**
@@ -1764,8 +1899,38 @@ object GalleryEngine {
    *   most recent photo and label), sorted alphabetically by folder name.
    * - [AlbumContents.photos]: Direct photo files inside [albumDirectory], sorted newest first.
    */
-  fun loadAlbumContents(albumDirectory: File): AlbumContents {
-    return loadMergedAlbumContents(listOf(albumDirectory))
+  fun loadAlbumContents(
+    albumDirectory: File,
+    bypassNoMedia: Boolean = false,
+  ): AlbumContents {
+    return loadMergedAlbumContents(listOf(albumDirectory), bypassNoMedia = bypassNoMedia)
+  }
+
+  /**
+   * Loads the contents of a [GalleryFolder] navigation pill. Custom folders (`folder.isCustom == true`)
+   * bypass `.nomedia` files so their photos and nested albums are visible when viewing the custom folder.
+   */
+  fun loadFolderPillContents(
+    folder: GalleryFolder,
+    rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
+  ): AlbumContents {
+    val dir = resolveDirectoryForFolder(folder, rootDirectory)
+    val dirs = if (folder.defaultFolder == GalleryDefaultFolder.DOWNLOADS) {
+      val pluralDownloads = File(rootDirectory, "Downloads")
+      if (pluralDownloads.exists() && pluralDownloads.isDirectory &&
+        !pluralDownloads.absolutePath.equals(dir.absolutePath, ignoreCase = true)
+      ) {
+        listOf(dir, pluralDownloads)
+      } else {
+        listOf(dir)
+      }
+    } else {
+      listOf(dir)
+    }
+    return loadMergedAlbumContents(
+      directories = dirs,
+      bypassNoMedia = folder.isCustom,
+    )
   }
 
   /**
@@ -1776,7 +1941,10 @@ object GalleryEngine {
    *   subdirectories that share the same name (case-insensitively) into a single [GalleryAlbum],
    *   and direct photo files across [directories] are combined and sorted newest first.
    */
-  fun loadMergedAlbumContents(directories: List<File>): AlbumContents {
+  fun loadMergedAlbumContents(
+    directories: List<File>,
+    bypassNoMedia: Boolean = false,
+  ): AlbumContents {
     val distinctDirs = mutableListOf<File>()
     for (dir in directories) {
       if (distinctDirs.none { it.absolutePath.equals(dir.absolutePath, ignoreCase = true) }) {
@@ -1786,7 +1954,11 @@ object GalleryEngine {
     val primaryDir = distinctDirs.firstOrNull() ?: File("")
 
     if (distinctDirs.isNotEmpty() && distinctDirs.all { isDownloadsDirectory(it) }) {
-      val photos = collectMediaFilesInDirectories(distinctDirs, maxDepth = 8)
+      val photos = collectMediaFilesInDirectories(
+        directories = distinctDirs,
+        maxDepth = 8,
+        bypassNoMedia = bypassNoMedia,
+      )
         .sortedWith(
           compareByDescending<File> { it.lastModified() }
             .thenByDescending(String.CASE_INSENSITIVE_ORDER) { it.name }
@@ -1810,7 +1982,7 @@ object GalleryEngine {
     }
 
     val children = distinctDirs.flatMap { dir ->
-      if (dir.exists() && dir.isDirectory && !hasNoMediaFile(dir)) {
+      if (dir.exists() && dir.isDirectory && (bypassNoMedia || !hasNoMediaFile(dir))) {
         try {
           dir.listFiles()?.toList().orEmpty()
         } catch (_: Throwable) {
@@ -1823,14 +1995,14 @@ object GalleryEngine {
 
     val groupedSubDirs = LinkedHashMap<String, MutableList<File>>()
     for (child in children) {
-      if (isAlbumDirectory(child)) {
+      if (isAlbumDirectory(child, bypassNoMedia = bypassNoMedia)) {
         val key = child.name.lowercase(Locale.ROOT)
         groupedSubDirs.getOrPut(key) { mutableListOf() }.add(child)
       }
     }
 
     val nestedAlbums = groupedSubDirs.values
-      .map { groupDirs -> buildMergedAlbum(groupDirs) }
+      .map { groupDirs -> buildMergedAlbum(groupDirs, bypassNoMedia = bypassNoMedia) }
       .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
 
     val photos = children
@@ -1945,9 +2117,12 @@ object GalleryEngine {
     searchQuery: String = "",
     selectedTag: String? = null,
     indexMap: Map<String, GalleryPhotoIndexEntry> = emptyMap(),
+    bypassNoMedia: Boolean = currentAlbum?.bypassNoMedia ?: false,
   ): List<GalleryFolderGroup> {
     val sourceDirs = if (currentAlbum != null) {
       currentAlbum.directories
+    } else if (bypassNoMedia) {
+      rootDirectories
     } else {
       rootDirectories.filterNot { isHiddenByNoMedia(it) }
     }
@@ -1970,9 +2145,9 @@ object GalleryEngine {
     for ((title, groupDirs) in dirsByGroupTitle) {
       val isRootDownloadsGroup = currentAlbum == null && (title.equals("Download", ignoreCase = true) || title.equals("Downloads", ignoreCase = true))
       val contents = if (isRootDownloadsGroup) {
-        val validDownloadDirs = groupDirs.filter { isAlbumDirectory(it) }
+        val validDownloadDirs = groupDirs.filter { isAlbumDirectory(it, bypassNoMedia = bypassNoMedia) }
         val downloadsAlbum = if (validDownloadDirs.isNotEmpty()) {
-          buildDownloadsAlbum(validDownloadDirs)
+          buildDownloadsAlbum(validDownloadDirs, bypassNoMedia = bypassNoMedia)
         } else {
           null
         }
@@ -1987,7 +2162,7 @@ object GalleryEngine {
           directories = groupDirs,
         )
       } else {
-        loadMergedAlbumContents(groupDirs)
+        loadMergedAlbumContents(groupDirs, bypassNoMedia = bypassNoMedia)
       }
       if (hasSearch) {
         val scopeFiles = collectMediaFiles(contents.nestedAlbums, contents.photos)
@@ -2317,9 +2492,9 @@ object GalleryEngine {
   ): List<File> {
     val result = LinkedHashMap<String, File>()
 
-    fun scan(dir: File, depth: Int) {
+    fun scan(dir: File, depth: Int, bypassNoMedia: Boolean) {
       if (depth > maxDepth) return
-      if (hasNoMediaFile(dir)) return
+      if (!bypassNoMedia && hasNoMediaFile(dir)) return
       val children = try {
         dir.listFiles()
       } catch (_: Throwable) {
@@ -2331,7 +2506,7 @@ object GalleryEngine {
         if (child.isFile && isPhotoFile(child)) {
           result.putIfAbsent(child.absolutePath, child)
         } else if (child.isDirectory && depth < maxDepth) {
-          scan(child, depth + 1)
+          scan(child, depth + 1, bypassNoMedia)
         }
       }
     }
@@ -2339,7 +2514,7 @@ object GalleryEngine {
     for (album in albums) {
       for (dir in album.directories) {
         if (dir.exists() && dir.isDirectory) {
-          scan(dir, 0)
+          scan(dir, 0, album.bypassNoMedia)
         }
       }
     }
