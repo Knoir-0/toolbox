@@ -346,8 +346,6 @@ fun CalculatorScreen(
         subtextTestTag = "calculator_toolbar_subtext",
       )
 
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
       // 2. Pill Navigation Bar underneath the toolbar (DEG/RAD, f(x) + floating Unit Converter, Copy, History)
       CalculatorPillNavigationBar(
         isDegreeMode = isDegreeMode,
@@ -365,8 +363,6 @@ fun CalculatorScreen(
           showHistorySheet = true
         },
       )
-
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
       // 3. Calculator Body (Display Card, Collapsible Scientific Keypad, Main Keypad)
       Column(
@@ -657,28 +653,12 @@ private fun CalculatorPillNavigationBar(
   onOpenHistory: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  Box(
-    modifier = modifier
-      .fillMaxWidth()
-      .testTag("calculator_pill_bar"),
-  ) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .fadingPillRowUnderFloatingControls(
-          hasColumnsButton = false,
-          extraControlButtonsCount = 2,
-        )
-        .horizontalScroll(rememberScrollState())
-        .padding(
-          start = 12.dp,
-          end = 136.dp,
-          top = 6.dp,
-          bottom = 6.dp,
-        ),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
+  ToolboxPillNavigationBar(
+    modifier = modifier,
+    barTestTag = "calculator_pill_bar",
+    floatingControlsTestTag = "calculator_pill_bar_floating_controls",
+    floatingButtonsCount = 3,
+    pills = {
       AngleModePill(
         isDegreeMode = isDegreeMode,
         onToggle = onToggleDegreeMode,
@@ -688,19 +668,8 @@ private fun CalculatorPillNavigationBar(
         isExpanded = isScientificExpanded,
         onToggle = onToggleScientific,
       )
-    }
-
-    // Pinned floating [Unit Converter], [Copy], and [History] buttons on the right edge of the pill bar
-    Row(
-      modifier = Modifier
-        .align(Alignment.CenterEnd)
-        .pillBarFloatingControlsBackdrop(backgroundColor = MaterialTheme.colorScheme.background)
-        .padding(end = 12.dp)
-        .zIndex(10f)
-        .testTag("calculator_pill_bar_floating_controls"),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
+    },
+    floatingControls = {
       Surface(
         onClick = onOpenUnitConverter,
         shape = CircleShape,
@@ -776,8 +745,8 @@ private fun CalculatorPillNavigationBar(
           }
         }
       }
-    }
-  }
+    },
+  )
 }
 
 @Composable

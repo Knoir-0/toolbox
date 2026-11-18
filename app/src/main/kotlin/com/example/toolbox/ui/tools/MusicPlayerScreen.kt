@@ -45,6 +45,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -133,6 +134,7 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BottomSheetScaffold
@@ -165,6 +167,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.material3.rememberStandardBottomSheetState
@@ -234,6 +237,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
@@ -470,12 +474,18 @@ fun MusicPlayerScreen(
     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
   }
 
-  // Sort Order
+  // Sort & Group Order
   val sortOrder = session.sortOrder
+  val groupOption = session.groupOption
   val randomSortSeed = session.randomSortSeed
 
   fun updateSortOrder(order: MusicSortOrder) {
     session.updateSortOrder(order)
+    sectionFocusVersion++
+  }
+
+  fun updateGroupOption(option: MusicGroupOption) {
+    session.updateGroupOption(option)
     sectionFocusVersion++
   }
 
@@ -916,7 +926,7 @@ fun MusicPlayerScreen(
     )
   }
 
-  LaunchedEffect(currentTrack?.id, currentTrack?.album, currentTrack?.artist, isInspection) {
+  LaunchedEffect(currentTrack?.id, currentTrack?.album, currentTrack?.artist, currentTrack?.artworkPrimaryRgb, isInspection) {
     val track = currentTrack ?: return@LaunchedEffect
     val resolved = if (isInspection || track.isSampleTrack) {
       MusicPlayerEngine.resolveTrackPalette(track)
@@ -1518,7 +1528,9 @@ fun MusicPlayerScreen(
         },
       )
 
-      // 2. Category Tabs (Home, Playlists, Songs, Albums, Artists, Genres + custom folders; reorderable on press and hold) + Pinned Floating [Add Folder] & [Sort] Buttons
+      val availableGroupOptions = if (hasDrillDown) emptyList() else session.availableGroupOptions
+
+      // 2. Category Tabs (Home, Playlists, Songs, Albums, Artists, Genres + custom folders; reorderable on press and hold) + Pinned Floating [Add Folder] & [Sort/Group] Buttons
       MusicCategoryAndViewBar(
         tabs = tabOrder,
         selectedTab = selectedTab,
@@ -1529,6 +1541,8 @@ fun MusicPlayerScreen(
         viewMode = viewMode,
         cardsPerRow = cardsPerRow,
         sortOrder = sortOrder,
+        groupOption = groupOption,
+        availableGroupOptions = availableGroupOptions,
         showSortMenu = showSortMenu,
         isSortSavedForCurrentScope = isSortSavedForCurrentScope,
         sortSaveLabel = currentSortSaveLabel,
@@ -1576,6 +1590,10 @@ fun MusicPlayerScreen(
         onDismissSortMenu = { showSortMenu = false },
         onSelectSortOrder = { order ->
           updateSortOrder(order)
+          showSortMenu = false
+        },
+        onSelectGroupOption = { option ->
+          updateGroupOption(option)
           showSortMenu = false
         },
         onToggleSaveSortForCurrentScope = {
@@ -1728,8 +1746,12 @@ fun MusicPlayerScreen(
           }
 
           selectedCustomFolder != null -> {
+            val groupedCustomTracks = remember(customFolderTracks, groupOption) {
+              MusicPlayerEngine.groupTracks(customFolderTracks, groupOption).flatMap { it.tracks }
+            }
             SongsTabContent(
               tracks = customFolderTracks,
+              groupOption = groupOption,
               viewMode = viewMode,
               cardsPerRow = cardsPerRow,
               currentTrackId = currentTrack?.id,
@@ -1742,17 +1764,17 @@ fun MusicPlayerScreen(
                 sectionFocusVersion++
               },
               onPlayAll = {
-                if (customFolderTracks.isNotEmpty()) {
-                  playTrackInContext(customFolderTracks.first(), customFolderTracks)
+                if (groupedCustomTracks.isNotEmpty()) {
+                  playTrackInContext(groupedCustomTracks.first(), groupedCustomTracks)
                 }
               },
               onShuffleAll = {
-                if (customFolderTracks.isNotEmpty()) {
-                  playShuffledContext(customFolderTracks)
+                if (groupedCustomTracks.isNotEmpty()) {
+                  playShuffledContext(groupedCustomTracks)
                 }
               },
               onSelectTrack = { track ->
-                playTrackInContext(track, customFolderTracks)
+                playTrackInContext(track, groupedCustomTracks)
               },
               onToggleFavorite = { toggleFavorite(it.id) },
             )
@@ -1868,8 +1890,12 @@ fun MusicPlayerScreen(
               }
 
               MusicLibraryTab.ALBUMS -> {
+                val groupedAlbumsList = remember(allAlbums, groupOption) {
+                  MusicPlayerEngine.groupAlbums(allAlbums, groupOption).flatMap { it.albums }
+                }
                 AlbumsTabContent(
                   albums = allAlbums,
+                  groupOption = groupOption,
                   viewMode = viewMode,
                   cardsPerRow = cardsPerRow,
                   currentTrack = currentTrack,
@@ -1883,7 +1909,7 @@ fun MusicPlayerScreen(
                     sectionFocusVersion++
                   },
                   onPlayAll = {
-                    val tracks = allAlbums.flatMap { it.tracks }.ifEmpty {
+                    val tracks = groupedAlbumsList.flatMap { it.tracks }.ifEmpty {
                       if (showFavoriteAlbumsOnly) emptyList() else sortedTracks
                     }
                     if (tracks.isNotEmpty()) {
@@ -1891,11 +1917,11 @@ fun MusicPlayerScreen(
                     }
                   },
                   onShuffleAll = {
-                    if (allAlbums.isNotEmpty()) {
-                      val candidates = if (allAlbums.size > 1 && currentTrack != null) {
-                        allAlbums.filter { !it.name.equals(currentTrack.album, ignoreCase = true) }.ifEmpty { allAlbums }
+                    if (groupedAlbumsList.isNotEmpty()) {
+                      val candidates = if (groupedAlbumsList.size > 1 && currentTrack != null) {
+                        groupedAlbumsList.filter { !it.name.equals(currentTrack.album, ignoreCase = true) }.ifEmpty { groupedAlbumsList }
                       } else {
-                        allAlbums
+                        groupedAlbumsList
                       }
                       val randomAlbum = candidates.random()
                       if (randomAlbum.tracks.isNotEmpty()) {
@@ -1919,8 +1945,12 @@ fun MusicPlayerScreen(
               }
 
               MusicLibraryTab.SONGS -> {
+                val groupedSongsTracks = remember(sortedTracks, groupOption) {
+                  MusicPlayerEngine.groupTracks(sortedTracks, groupOption).flatMap { it.tracks }
+                }
                 SongsTabContent(
                   tracks = sortedTracks,
+                  groupOption = groupOption,
                   viewMode = viewMode,
                   cardsPerRow = cardsPerRow,
                   currentTrackId = currentTrack?.id,
@@ -1933,17 +1963,17 @@ fun MusicPlayerScreen(
                     sectionFocusVersion++
                   },
                   onPlayAll = {
-                    if (sortedTracks.isNotEmpty()) {
-                      playTrackInContext(sortedTracks.first(), sortedTracks)
+                    if (groupedSongsTracks.isNotEmpty()) {
+                      playTrackInContext(groupedSongsTracks.first(), groupedSongsTracks)
                     }
                   },
                   onShuffleAll = {
-                    if (sortedTracks.isNotEmpty()) {
-                      playShuffledContext(sortedTracks)
+                    if (groupedSongsTracks.isNotEmpty()) {
+                      playShuffledContext(groupedSongsTracks)
                     }
                   },
                   onSelectTrack = { track ->
-                    playTrackInContext(track, sortedTracks)
+                    playTrackInContext(track, groupedSongsTracks)
                   },
                   onToggleFavorite = { toggleFavorite(it.id) },
                 )
@@ -2218,6 +2248,7 @@ fun MusicPlayerScreen(
           },
           onOpenTrackInfo = { showTrackInfoDialog = true },
           onOpenExternalApp = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             MusicPlayerEngine.openExternalSystemMediaApp(context)
           },
           onNavigateToArtist = {
@@ -2280,9 +2311,16 @@ fun MusicPlayerScreen(
     // 8. Track Details Dialog
     val detailTrack = trackForDetailsDialog ?: if (showTrackInfoDialog) currentTrack else null
     if (detailTrack != null) {
-      val detailPalette = remember(detailTrack.id, activePalette, currentTrack?.id) {
-        if (detailTrack.id == currentTrack?.id) activePalette
-        else MusicPlayerEngine.resolveTrackPalette(detailTrack)
+      var detailPalette by remember(detailTrack.id, detailTrack.artworkPrimaryRgb, activePalette, currentTrack?.id) {
+        mutableStateOf(
+          if (detailTrack.id == currentTrack?.id) activePalette
+          else MusicPlayerEngine.resolveTrackPalette(detailTrack)
+        )
+      }
+      LaunchedEffect(detailTrack.id, detailTrack.album, detailTrack.artist, detailTrack.artworkPrimaryRgb, isInspection) {
+        if (!isInspection && !detailTrack.isSampleTrack) {
+          detailPalette = MusicPlayerEngine.loadTrackPaletteAsync(detailTrack, sizePx = 360)
+        }
       }
       TrackDetailsDialog(
         track = detailTrack,
@@ -2910,6 +2948,8 @@ private fun MusicCategoryAndViewBar(
   viewMode: MusicViewMode = MusicViewMode.LIST,
   cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
   sortOrder: MusicSortOrder = MusicSortOrder.TITLE_ASC,
+  groupOption: MusicGroupOption = MusicGroupOption.NONE,
+  availableGroupOptions: List<MusicGroupOption> = emptyList(),
   showSortMenu: Boolean = false,
   isSortSavedForCurrentScope: Boolean = false,
   sortSaveLabel: String = "Save for home",
@@ -2923,6 +2963,7 @@ private fun MusicCategoryAndViewBar(
   onOpenSortMenu: () -> Unit = {},
   onDismissSortMenu: () -> Unit = {},
   onSelectSortOrder: (MusicSortOrder) -> Unit = {},
+  onSelectGroupOption: (MusicGroupOption) -> Unit = {},
   onToggleSaveSortForCurrentScope: () -> Unit = {},
 ) {
   val density = LocalDensity.current
@@ -2946,10 +2987,13 @@ private fun MusicCategoryAndViewBar(
   val sortButtonExcludeZonePx = with(density) { (if (viewMode == MusicViewMode.CARD) 126.dp else 88.dp).toPx() }
   val edgeScrollStepPx = with(density) { 10.dp.toPx() }
 
-  Box(
+  ToolboxPillNavigationBar(
+    barTestTag = "music_category_bar",
+    scrollState = scrollState,
+    scrollEnabled = draggedTab == null,
+    floatingButtonsCount = if (viewMode == MusicViewMode.CARD) 3 else 2,
+    backgroundColor = Color.Unspecified,
     modifier = Modifier
-      .fillMaxWidth()
-      .testTag("music_category_bar")
       .onGloballyPositioned { coords ->
         barCoordinates = coords
       }
@@ -3050,24 +3094,7 @@ private fun MusicCategoryAndViewBar(
           },
         )
       },
-  ) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .fadingPillRowUnderFloatingControls(
-          hasColumnsButton = viewMode == MusicViewMode.CARD,
-          extraControlButtonsCount = 1,
-        )
-        .horizontalScroll(scrollState, enabled = draggedTab == null)
-        .padding(
-          start = 12.dp,
-          end = if (viewMode == MusicViewMode.CARD) 136.dp else 96.dp,
-          top = 8.dp,
-          bottom = 8.dp,
-        ),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
+    pills = {
       tabs.forEachIndexed { index, tab ->
         val isSelected = if (!isMusicFolderGranted) {
           pendingPermissionFolderPath != null && index == 0
@@ -3075,7 +3102,7 @@ private fun MusicCategoryAndViewBar(
           selectedCustomFolderPath == null && tab == selectedTab
         }
         val isBeingDragged = tab == draggedTab
-        FilterChip(
+        ToolboxPillNavigationItem(
           selected = isSelected,
           onClick = {
             if (draggedTab == null) {
@@ -3086,14 +3113,8 @@ private fun MusicCategoryAndViewBar(
               }
             }
           },
-          label = {
-            Text(
-              text = tab.displayName,
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-            )
-          },
-          leadingIcon = {
+          label = tab.displayName,
+          leadingIconContent = {
             Box(
               contentAlignment = Alignment.Center,
               modifier = Modifier
@@ -3135,7 +3156,7 @@ private fun MusicCategoryAndViewBar(
               )
             }
           },
-          shape = CircleShape,
+          testTag = "music_tab_${tab.name}",
           modifier = Modifier
             .onGloballyPositioned { coords ->
               val barCoords = barCoordinates
@@ -3149,8 +3170,7 @@ private fun MusicCategoryAndViewBar(
                 !isMusicFolderGranted -> 0.72f
                 else -> 1f
               }
-            }
-            .testTag("music_tab_${tab.name}"),
+            },
         )
       }
 
@@ -3162,15 +3182,14 @@ private fun MusicCategoryAndViewBar(
         Box(
           modifier = Modifier.testTag("folder_pill_${folder.folderName}"),
         ) {
-          FilterChip(
+          ToolboxPillNavigationItem(
             selected = isSelectedFolder,
             onClick = {
               if (draggedTab == null) {
                 onSelectCustomFolder(folder)
               }
             },
-            shape = CircleShape,
-            leadingIcon = {
+            leadingIconContent = {
               Icon(
                 imageVector = if (isMusicFolderGranted) Icons.Default.Folder else Icons.Default.Lock,
                 contentDescription = if (isMusicFolderGranted) {
@@ -3183,13 +3202,7 @@ private fun MusicCategoryAndViewBar(
                   .testTag("folder_pill_icon_${folder.folderName}"),
               )
             },
-            label = {
-              Text(
-                text = folder.pillLabel,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (isSelectedFolder) FontWeight.Bold else FontWeight.Medium,
-              )
-            },
+            label = folder.pillLabel,
             trailingIcon = {
               Box(
                 contentAlignment = Alignment.Center,
@@ -3209,31 +3222,16 @@ private fun MusicCategoryAndViewBar(
                 )
               }
             },
-            colors = FilterChipDefaults.filterChipColors(
-              selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-              selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-              selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            ),
+            testTag = "music_folder_pill_${folder.folderName}",
             modifier = Modifier
               .graphicsLayer {
                 alpha = if (!isMusicFolderGranted) 0.72f else 1f
-              }
-              .testTag("music_folder_pill_${folder.folderName}"),
+              },
           )
         }
       }
-    }
-
-    // Pinned floating [# per row] + [Add Folder] + [Sort] buttons on the right edge of the pill bar
-    Row(
-      modifier = Modifier
-        .align(Alignment.CenterEnd)
-        .padding(end = 12.dp)
-        .zIndex(10f),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
+    },
+    floatingControls = {
       if (viewMode == MusicViewMode.CARD) {
         ToolboxFloatingColumnsButton(
           columnsPerRow = cardsPerRow,
@@ -3270,6 +3268,7 @@ private fun MusicCategoryAndViewBar(
         }
       }
 
+      val hasGroupOptions = availableGroupOptions.isNotEmpty()
       Box {
         Surface(
           onClick = onOpenSortMenu,
@@ -3284,8 +3283,8 @@ private fun MusicCategoryAndViewBar(
         ) {
           Box(contentAlignment = Alignment.Center) {
             Icon(
-              imageVector = Icons.AutoMirrored.Filled.Sort,
-              contentDescription = "Sort tracks",
+              imageVector = if (hasGroupOptions) Icons.Default.Tune else Icons.AutoMirrored.Filled.Sort,
+              contentDescription = if (hasGroupOptions) "Sort and group options" else "Sort tracks",
               tint = MaterialTheme.colorScheme.onSurfaceVariant,
               modifier = Modifier.size(18.dp),
             )
@@ -3295,111 +3294,238 @@ private fun MusicCategoryAndViewBar(
         DropdownMenu(
           expanded = showSortMenu,
           onDismissRequest = onDismissSortMenu,
-          modifier = Modifier.testTag("music_sort_menu"),
+          modifier = Modifier
+            .then(if (hasGroupOptions) Modifier.widthIn(min = 320.dp, max = 390.dp) else Modifier)
+            .testTag("music_sort_menu"),
         ) {
-          MusicSortOrder.entries.forEach { option ->
-            DropdownMenuItem(
-              text = {
+          if (hasGroupOptions) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(IntrinsicSize.Min)
+                .padding(vertical = 4.dp),
+            ) {
+              // Left panel: GROUP BY
+              Column(
+                modifier = Modifier
+                  .weight(1f)
+                  .fillMaxHeight(),
+              ) {
                 Text(
-                  text = option.displayName,
-                  fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
+                  text = "GROUP BY",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
                 )
-              },
-              leadingIcon = {
-                if (option == sortOrder) {
-                  Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                availableGroupOptions.forEach { option ->
+                  DropdownMenuItem(
+                    text = {
+                      Text(
+                        text = option.displayName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (option == groupOption) FontWeight.Bold else FontWeight.Normal,
+                        color = if (option == groupOption) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                      )
+                    },
+                    trailingIcon = if (option == groupOption) {
+                      {
+                        Icon(
+                          imageVector = Icons.Default.Check,
+                          contentDescription = null,
+                          tint = MaterialTheme.colorScheme.primary,
+                          modifier = Modifier.size(18.dp),
+                        )
+                      }
+                    } else null,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    onClick = { onSelectGroupOption(option) },
+                    modifier = Modifier.testTag("music_group_option_${option.name.lowercase(Locale.ROOT)}"),
                   )
                 }
-              },
-              onClick = { onSelectSortOrder(option) },
-              modifier = Modifier.testTag("music_sort_option_${option.name.lowercase()}"),
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                HorizontalDivider(
+                  color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+                )
+
+                // Bottom-left checkbox to save sort/group for this specific section or folder
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onToggleSaveSortForCurrentScope() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("music_save_sort_for_section"),
+                ) {
+                  Checkbox(
+                    checked = isSortSavedForCurrentScope,
+                    onCheckedChange = { onToggleSaveSortForCurrentScope() },
+                    colors = CheckboxDefaults.colors(
+                      checkedColor = MaterialTheme.colorScheme.primary,
+                    ),
+                    modifier = Modifier
+                      .size(28.dp)
+                      .testTag("music_save_sort_for_section_checkbox"),
+                  )
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text(
+                    text = sortSaveLabel,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = if (isSortSavedForCurrentScope) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (isSortSavedForCurrentScope) {
+                      MaterialTheme.colorScheme.primary
+                    } else {
+                      MaterialTheme.colorScheme.onSurface
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+              }
+
+              // Vertical divider between Group By and Sort By panels
+              VerticalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                modifier = Modifier.padding(vertical = 6.dp),
+              )
+
+              // Right panel: SORT BY
+              Column(
+                modifier = Modifier
+                  .weight(1f)
+                  .fillMaxHeight(),
+              ) {
+                Text(
+                  text = "SORT BY",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                )
+                MusicSortOrder.entries.forEach { option ->
+                  DropdownMenuItem(
+                    text = {
+                      Text(
+                        text = option.displayName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
+                        color = if (option == sortOrder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                      )
+                    },
+                    trailingIcon = if (option == sortOrder) {
+                      {
+                        Icon(
+                          imageVector = Icons.Default.Check,
+                          contentDescription = null,
+                          tint = MaterialTheme.colorScheme.primary,
+                          modifier = Modifier.size(18.dp),
+                        )
+                      }
+                    } else null,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    onClick = { onSelectSortOrder(option) },
+                    modifier = Modifier.testTag("music_sort_option_${option.name.lowercase(Locale.ROOT)}"),
+                  )
+                }
+              }
+            }
+          } else {
+            MusicSortOrder.entries.forEach { option ->
+              DropdownMenuItem(
+                text = {
+                  Text(
+                    text = option.displayName,
+                    fontWeight = if (option == sortOrder) FontWeight.Bold else FontWeight.Normal,
+                  )
+                },
+                leadingIcon = {
+                  if (option == sortOrder) {
+                    Icon(
+                      imageVector = Icons.Default.Check,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                    )
+                  }
+                },
+                onClick = { onSelectSortOrder(option) },
+                modifier = Modifier.testTag("music_sort_option_${option.name.lowercase(Locale.ROOT)}"),
+              )
+            }
+
+            HorizontalDivider(
+              color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
             )
-          }
 
-          HorizontalDivider(
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-          )
-
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-              .fillMaxWidth()
-              .clip(RoundedCornerShape(8.dp))
-              .clickable { onToggleSaveSortForCurrentScope() }
-              .padding(horizontal = 10.dp, vertical = 6.dp)
-              .testTag("music_save_sort_for_section"),
-          ) {
-            Checkbox(
-              checked = isSortSavedForCurrentScope,
-              onCheckedChange = { onToggleSaveSortForCurrentScope() },
-              colors = CheckboxDefaults.colors(
-                checkedColor = MaterialTheme.colorScheme.primary,
-              ),
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
               modifier = Modifier
-                .size(28.dp)
-                .testTag("music_save_sort_for_section_checkbox"),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-              text = sortSaveLabel,
-              style = MaterialTheme.typography.bodySmall,
-              fontWeight = if (isSortSavedForCurrentScope) FontWeight.SemiBold else FontWeight.Normal,
-              color = if (isSortSavedForCurrentScope) {
-                MaterialTheme.colorScheme.primary
-              } else {
-                MaterialTheme.colorScheme.onSurface
-              },
-            )
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onToggleSaveSortForCurrentScope() }
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+                .testTag("music_save_sort_for_section"),
+            ) {
+              Checkbox(
+                checked = isSortSavedForCurrentScope,
+                onCheckedChange = { onToggleSaveSortForCurrentScope() },
+                colors = CheckboxDefaults.colors(
+                  checkedColor = MaterialTheme.colorScheme.primary,
+                ),
+                modifier = Modifier
+                  .size(28.dp)
+                  .testTag("music_save_sort_for_section_checkbox"),
+              )
+              Spacer(modifier = Modifier.width(8.dp))
+              Text(
+                text = sortSaveLabel,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (isSortSavedForCurrentScope) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (isSortSavedForCurrentScope) {
+                  MaterialTheme.colorScheme.primary
+                } else {
+                  MaterialTheme.colorScheme.onSurface
+                },
+              )
+            }
           }
         }
       }
-    }
+    },
+    overlayContent = {
+      val activeDraggedTab = draggedTab
+      if (activeDraggedTab != null && barCoordinates != null) {
+        val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+        val fallbackWidthPx = with(density) { 96.dp.toPx() }
+        val fallbackHeightPx = with(density) { 32.dp.toPx() }
+        val widthPx = draggedTabSize?.width?.toFloat() ?: fallbackWidthPx
+        val heightPx = draggedTabSize?.height?.toFloat() ?: fallbackHeightPx
+        val isSelected = selectedCustomFolderPath == null && activeDraggedTab == selectedTab
 
-    val activeDraggedTab = draggedTab
-    if (activeDraggedTab != null && barCoordinates != null) {
-      val desiredCenter = dragPointerOffset - grabOffsetFromCenter
-      val fallbackWidthPx = with(density) { 96.dp.toPx() }
-      val fallbackHeightPx = with(density) { 32.dp.toPx() }
-      val widthPx = draggedTabSize?.width?.toFloat() ?: fallbackWidthPx
-      val heightPx = draggedTabSize?.height?.toFloat() ?: fallbackHeightPx
-      val isSelected = selectedCustomFolderPath == null && activeDraggedTab == selectedTab
-
-      Box(
-        modifier = Modifier
-          .graphicsLayer {
-            translationX = desiredCenter.x - widthPx / 2f
-            translationY = desiredCenter.y - heightPx / 2f
-            scaleX = 1.06f
-            scaleY = 1.06f
-          }
-          .zIndex(100f),
-      ) {
-        FilterChip(
-          selected = isSelected,
-          onClick = {},
-          label = {
-            Text(
-              text = activeDraggedTab.displayName,
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-            )
-          },
-          leadingIcon = {
-            Icon(
-              imageVector = activeDraggedTab.iconVector(),
-              contentDescription = null,
-              modifier = Modifier.size(16.dp),
-            )
-          },
-          shape = CircleShape,
-        )
+        Box(
+          modifier = Modifier
+            .graphicsLayer {
+              translationX = desiredCenter.x - widthPx / 2f
+              translationY = desiredCenter.y - heightPx / 2f
+              scaleX = 1.06f
+              scaleY = 1.06f
+            }
+            .zIndex(100f),
+        ) {
+          ToolboxPillNavigationItem(
+            selected = isSelected,
+            onClick = {},
+            leadingIcon = activeDraggedTab.iconVector(),
+            label = activeDraggedTab.displayName,
+          )
+        }
       }
-    }
-  }
+    },
+  )
 }
 
 /**
@@ -4947,10 +5073,79 @@ private fun ArtistsTabContent(
   }
 }
 
+/**
+ * Collapsible section header displaying a group title (Album, Artist, or Genre) with item count badge
+ * and expand/collapse chevron in the Songs and Albums views, styled like the Files tool.
+ */
+@Composable
+private fun MusicGroupHeader(
+  title: String,
+  count: Int,
+  isCollapsed: Boolean = false,
+  onToggleCollapse: () -> Unit = {},
+  modifier: Modifier = Modifier,
+) {
+  val rotationState by animateFloatAsState(
+    targetValue = if (isCollapsed) -90f else 0f,
+    label = "music_group_expand_rotation",
+  )
+
+  Surface(
+    modifier = modifier
+      .fillMaxWidth()
+      .testTag("music_group_header_${title.lowercase(Locale.ROOT).replace(" ", "_")}"),
+    shape = RoundedCornerShape(8.dp),
+    color = Color.Transparent,
+    onClick = onToggleCollapse,
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 4.dp, vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Text(
+          text = title,
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.primary,
+        )
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f),
+        ) {
+          Text(
+            text = count.toString(),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+          )
+        }
+      }
+
+      Icon(
+        imageVector = Icons.Default.ExpandMore,
+        contentDescription = if (isCollapsed) "Expand $title" else "Collapse $title",
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+          .size(20.dp)
+          .rotate(rotationState),
+      )
+    }
+  }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AlbumsTabContent(
   albums: List<MusicAlbum>,
+  groupOption: MusicGroupOption = MusicGroupOption.NONE,
   viewMode: MusicViewMode,
   cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
   currentTrack: MusicTrack? = null,
@@ -4966,11 +5161,28 @@ private fun AlbumsTabContent(
   onPlayAlbum: (MusicAlbum) -> Unit,
   onToggleFavoriteAlbum: (MusicAlbum) -> Unit = {},
 ) {
-  val focusedIndex = remember(albums, currentTrack?.id, currentAlbumName) {
+  val groupedAlbums = remember(albums, groupOption) {
+    MusicPlayerEngine.groupAlbums(albums, groupOption)
+  }
+  val displayedAlbums = remember(groupedAlbums) {
+    groupedAlbums.flatMap { it.albums }
+  }
+  var collapsedGroupTitles by remember(groupOption) {
+    mutableStateOf(setOf<String>())
+  }
+  val focusedAlbumIndex = remember(displayedAlbums, currentTrack?.id, currentAlbumName) {
     MusicPlayerEngine.resolveFocusedAlbumIndex(
-      albums = albums,
+      albums = displayedAlbums,
       currentTrack = currentTrack,
       currentAlbumName = currentAlbumName,
+    )
+  }
+  val focusedAlbumKey = displayedAlbums.getOrNull(focusedAlbumIndex)?.key
+  val focusedLazyIndex = remember(groupedAlbums, focusedAlbumKey, collapsedGroupTitles) {
+    MusicPlayerEngine.resolveFocusedGroupedAlbumLazyIndex(
+      groups = groupedAlbums,
+      focusedAlbumKey = focusedAlbumKey,
+      collapsedGroupTitles = collapsedGroupTitles,
     )
   }
 
@@ -5044,11 +5256,11 @@ private fun AlbumsTabContent(
 
     if (viewMode == MusicViewMode.LIST) {
       val listState = rememberLazyListState(
-        initialFirstVisibleItemIndex = focusedIndex.coerceAtLeast(0),
+        initialFirstVisibleItemIndex = focusedLazyIndex.coerceAtLeast(0),
       )
-      LaunchedEffect(sectionFocusVersion, focusedIndex, albums.size) {
-        if (focusedIndex in albums.indices && !listState.isItemFullyVisible(focusedIndex)) {
-          listState.scrollToItem(focusedIndex)
+      LaunchedEffect(sectionFocusVersion, focusedLazyIndex, displayedAlbums.size, groupOption) {
+        if (focusedLazyIndex >= 0 && !listState.isItemFullyVisible(focusedLazyIndex)) {
+          listState.scrollToItem(focusedLazyIndex)
         }
       }
 
@@ -5060,138 +5272,163 @@ private fun AlbumsTabContent(
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        itemsIndexed(albums, key = { _, it -> "${it.name}|${it.artist}" }) { index, album ->
-          val isActive = index == focusedIndex ||
-            (currentAlbumName != null && currentAlbumName.equals(album.name, ignoreCase = true))
-          val isFavorite = MusicPlayerEngine.isAlbumFavorite(album, favoriteAlbums)
-          val selection = LocalMusicSelectionController.current
-          val selectionKey = "album:${album.name}|${album.artist}"
-          val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
-          Card(
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.cardColors(
-              containerColor = if (isItemSelected || isActive) {
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-              } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-              },
-            ),
-            border = BorderStroke(
-              width = if (isItemSelected) 1.5.dp else 1.dp,
-              color = if (isItemSelected) MaterialTheme.colorScheme.primary
-              else if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-              else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-            ),
-            modifier = Modifier
-              .fillMaxWidth()
-              .combinedClickable(
-                onClick = {
-                  if (selection.isSelectionMode) {
-                    selection.onToggleSelection(selectionKey)
+        groupedAlbums.forEach { group ->
+          val hasHeader = group.title.isNotEmpty()
+          val isCollapsed = hasHeader && group.title in collapsedGroupTitles
+          if (hasHeader) {
+            item(key = "header_${group.title}") {
+              MusicGroupHeader(
+                title = group.title,
+                count = group.albums.size,
+                isCollapsed = isCollapsed,
+                onToggleCollapse = {
+                  collapsedGroupTitles = if (isCollapsed) {
+                    collapsedGroupTitles - group.title
                   } else {
-                    onSelectAlbum(album)
+                    collapsedGroupTitles + group.title
                   }
                 },
-                onLongClick = { selection.onLongPressSelect(selectionKey) },
               )
-              .semantics { selected = isItemSelected || isActive }
-              .testTag("album_item_${album.name}"),
-          ) {
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-              if (selection.isSelectionMode) {
-                Box(
-                  modifier = Modifier.size(56.dp),
-                  contentAlignment = Alignment.Center,
+            }
+          }
+          if (!isCollapsed) {
+            items(
+              items = group.albums,
+              key = { if (group.title.isEmpty()) "${it.name}|${it.artist}" else "${group.title}:${it.name}|${it.artist}" },
+            ) { album ->
+              val isActive = (focusedAlbumKey != null && album.key.equals(focusedAlbumKey, ignoreCase = true)) ||
+                (currentAlbumName != null && currentAlbumName.equals(album.name, ignoreCase = true))
+              val isFavorite = MusicPlayerEngine.isAlbumFavorite(album, favoriteAlbums)
+              val selection = LocalMusicSelectionController.current
+              val selectionKey = "album:${album.name}|${album.artist}"
+              val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
+              Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                  containerColor = if (isItemSelected || isActive) {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                  } else {
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                  },
+                ),
+                border = BorderStroke(
+                  width = if (isItemSelected) 1.5.dp else 1.dp,
+                  color = if (isItemSelected) MaterialTheme.colorScheme.primary
+                  else if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                  else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                ),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .combinedClickable(
+                    onClick = {
+                      if (selection.isSelectionMode) {
+                        selection.onToggleSelection(selectionKey)
+                      } else {
+                        onSelectAlbum(album)
+                      }
+                    },
+                    onLongClick = { selection.onLongPressSelect(selectionKey) },
+                  )
+                  .semantics { selected = isItemSelected || isActive }
+                  .testTag("album_item_${album.name}"),
+              ) {
+                Row(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                  Checkbox(
-                    checked = isItemSelected,
-                    onCheckedChange = { selection.onToggleSelection(selectionKey) },
-                    modifier = Modifier.testTag("select_checkbox_$selectionKey"),
+                  if (selection.isSelectionMode) {
+                    Box(
+                      modifier = Modifier.size(56.dp),
+                      contentAlignment = Alignment.Center,
+                    ) {
+                      Checkbox(
+                        checked = isItemSelected,
+                        onCheckedChange = { selection.onToggleSelection(selectionKey) },
+                        modifier = Modifier.testTag("select_checkbox_$selectionKey"),
+                      )
+                    }
+                  } else {
+                    TrackArtworkThumbnail(
+                      track = album.representativeTrack,
+                      size = 56.dp,
+                      shape = RoundedCornerShape(12.dp),
+                    )
+                  }
+                  Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                      text = album.name,
+                      style = MaterialTheme.typography.bodyLarge,
+                      fontWeight = FontWeight.SemiBold,
+                      color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                      text = "${album.summaryText} • ${album.year}",
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                    )
+                  }
+                  IconButton(
+                    onClick = { onToggleFavoriteAlbum(album) },
+                    modifier = Modifier
+                      .size(34.dp)
+                      .testTag("favorite_album_${album.name}"),
+                  ) {
+                    Icon(
+                      imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                      contentDescription = if (isFavorite) "Remove ${album.name} from favorites" else "Add ${album.name} to favorites",
+                      tint = if (isFavorite) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+                      modifier = Modifier.size(18.dp),
+                    )
+                  }
+                  FilledIconButton(
+                    onClick = { onPlayAlbum(album) },
+                    shape = CircleShape,
+                    modifier = Modifier
+                      .size(36.dp)
+                      .testTag("play_album_${album.name}"),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                      containerColor = MaterialTheme.colorScheme.primaryContainer,
+                      contentColor = MaterialTheme.colorScheme.primary,
+                    ),
+                  ) {
+                    Icon(
+                      imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                      contentDescription = "Play ${album.name}",
+                      modifier = Modifier.size(18.dp),
+                    )
+                  }
+                  val itemActions = LocalMusicItemActions.current
+                  MusicCollectionContextMenuButton(
+                    collectionTitle = album.name,
+                    tracks = album.tracks,
+                    moreButtonTestTag = "album_more_${album.name}",
+                    menuTestTag = "album_menu_${album.name}",
+                    isFavorite = isFavorite,
+                    onToggleFavorite = { onToggleFavoriteAlbum(album) },
+                    onPlay = { onPlayAlbum(album) },
+                    onRenamePlaylist = { itemActions.onRenameAlbum(album) },
+                    onDeletePlaylist = { itemActions.onDeleteAlbum(album) },
                   )
                 }
-              } else {
-                TrackArtworkThumbnail(
-                  track = album.representativeTrack,
-                  size = 56.dp,
-                  shape = RoundedCornerShape(12.dp),
-                )
               }
-              Column(modifier = Modifier.weight(1f)) {
-                Text(
-                  text = album.name,
-                  style = MaterialTheme.typography.bodyLarge,
-                  fontWeight = FontWeight.SemiBold,
-                  color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                  text = "${album.summaryText} • ${album.year}",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                )
-              }
-              IconButton(
-                onClick = { onToggleFavoriteAlbum(album) },
-                modifier = Modifier
-                  .size(34.dp)
-                  .testTag("favorite_album_${album.name}"),
-              ) {
-                Icon(
-                  imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                  contentDescription = if (isFavorite) "Remove ${album.name} from favorites" else "Add ${album.name} to favorites",
-                  tint = if (isFavorite) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier.size(18.dp),
-                )
-              }
-              FilledIconButton(
-                onClick = { onPlayAlbum(album) },
-                shape = CircleShape,
-                modifier = Modifier
-                  .size(36.dp)
-                  .testTag("play_album_${album.name}"),
-                colors = IconButtonDefaults.filledIconButtonColors(
-                  containerColor = MaterialTheme.colorScheme.primaryContainer,
-                  contentColor = MaterialTheme.colorScheme.primary,
-                ),
-              ) {
-                Icon(
-                  imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
-                  contentDescription = "Play ${album.name}",
-                  modifier = Modifier.size(18.dp),
-                )
-              }
-              val itemActions = LocalMusicItemActions.current
-              MusicCollectionContextMenuButton(
-                collectionTitle = album.name,
-                tracks = album.tracks,
-                moreButtonTestTag = "album_more_${album.name}",
-                menuTestTag = "album_menu_${album.name}",
-                isFavorite = isFavorite,
-                onToggleFavorite = { onToggleFavoriteAlbum(album) },
-                onPlay = { onPlayAlbum(album) },
-                onRenamePlaylist = { itemActions.onRenameAlbum(album) },
-                onDeletePlaylist = { itemActions.onDeleteAlbum(album) },
-              )
             }
           }
         }
       }
     } else {
       val gridState = rememberLazyGridState(
-        initialFirstVisibleItemIndex = focusedIndex.coerceAtLeast(0),
+        initialFirstVisibleItemIndex = focusedLazyIndex.coerceAtLeast(0),
       )
-      LaunchedEffect(sectionFocusVersion, focusedIndex, albums.size) {
-        if (focusedIndex in albums.indices && !gridState.isItemFullyVisible(focusedIndex)) {
-          gridState.scrollToItem(focusedIndex)
+      LaunchedEffect(sectionFocusVersion, focusedLazyIndex, displayedAlbums.size, groupOption) {
+        if (focusedLazyIndex >= 0 && !gridState.isItemFullyVisible(focusedLazyIndex)) {
+          gridState.scrollToItem(focusedLazyIndex)
         }
       }
 
@@ -5205,139 +5442,167 @@ private fun AlbumsTabContent(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
-        gridItemsIndexed(albums, key = { _, it -> "${it.name}|${it.artist}" }) { index, album ->
-          val isActive = index == focusedIndex ||
-            (currentAlbumName != null && currentAlbumName.equals(album.name, ignoreCase = true))
-          val isFavorite = MusicPlayerEngine.isAlbumFavorite(album, favoriteAlbums)
-          val selection = LocalMusicSelectionController.current
-          val selectionKey = "album:${album.name}|${album.artist}"
-          val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
-          Card(
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.cardColors(
-              containerColor = if (isItemSelected || isActive) {
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-              } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-              },
-            ),
-            border = BorderStroke(
-              width = if (isItemSelected) 1.5.dp else 1.dp,
-              color = if (isItemSelected) MaterialTheme.colorScheme.primary
-              else if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-              else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-            ),
-            modifier = Modifier
-              .fillMaxWidth()
-              .combinedClickable(
-                onClick = {
-                  if (selection.isSelectionMode) {
-                    selection.onToggleSelection(selectionKey)
+        groupedAlbums.forEach { group ->
+          val hasHeader = group.title.isNotEmpty()
+          val isCollapsed = hasHeader && group.title in collapsedGroupTitles
+          if (hasHeader) {
+            item(
+              key = "header_${group.title}",
+              span = { GridItemSpan(maxLineSpan) },
+            ) {
+              MusicGroupHeader(
+                title = group.title,
+                count = group.albums.size,
+                isCollapsed = isCollapsed,
+                onToggleCollapse = {
+                  collapsedGroupTitles = if (isCollapsed) {
+                    collapsedGroupTitles - group.title
                   } else {
-                    onSelectAlbum(album)
+                    collapsedGroupTitles + group.title
                   }
                 },
-                onLongClick = { selection.onLongPressSelect(selectionKey) },
               )
-              .semantics { selected = isItemSelected || isActive }
-              .testTag("album_item_${album.name}"),
-          ) {
-            Column(
-              modifier = Modifier
-                .fillMaxWidth()
-                .padding(10.dp),
-              verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              Box(
+            }
+          }
+          if (!isCollapsed) {
+            items(
+              items = group.albums,
+              key = { if (group.title.isEmpty()) "${it.name}|${it.artist}" else "${group.title}:${it.name}|${it.artist}" },
+            ) { album ->
+              val isActive = (focusedAlbumKey != null && album.key.equals(focusedAlbumKey, ignoreCase = true)) ||
+                (currentAlbumName != null && currentAlbumName.equals(album.name, ignoreCase = true))
+              val isFavorite = MusicPlayerEngine.isAlbumFavorite(album, favoriteAlbums)
+              val selection = LocalMusicSelectionController.current
+              val selectionKey = "album:${album.name}|${album.artist}"
+              val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
+              Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                  containerColor = if (isItemSelected || isActive) {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                  } else {
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                  },
+                ),
+                border = BorderStroke(
+                  width = if (isItemSelected) 1.5.dp else 1.dp,
+                  color = if (isItemSelected) MaterialTheme.colorScheme.primary
+                  else if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                  else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                ),
                 modifier = Modifier
                   .fillMaxWidth()
-                  .aspectRatio(1f)
-                  .clip(RoundedCornerShape(12.dp)),
+                  .combinedClickable(
+                    onClick = {
+                      if (selection.isSelectionMode) {
+                        selection.onToggleSelection(selectionKey)
+                      } else {
+                        onSelectAlbum(album)
+                      }
+                    },
+                    onLongClick = { selection.onLongPressSelect(selectionKey) },
+                  )
+                  .semantics { selected = isItemSelected || isActive }
+                  .testTag("album_item_${album.name}"),
               ) {
-                TrackArtworkBanner(
-                  track = album.representativeTrack,
-                  modifier = Modifier.fillMaxSize(),
-                )
-                if (selection.isSelectionMode) {
-                  Checkbox(
-                    checked = isItemSelected,
-                    onCheckedChange = { selection.onToggleSelection(selectionKey) },
+                Column(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(10.dp),
+                  verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                  Box(
                     modifier = Modifier
-                      .align(Alignment.TopStart)
-                      .padding(4.dp)
-                      .testTag("select_checkbox_$selectionKey"),
+                      .fillMaxWidth()
+                      .aspectRatio(1f)
+                      .clip(RoundedCornerShape(12.dp)),
+                  ) {
+                    TrackArtworkBanner(
+                      track = album.representativeTrack,
+                      modifier = Modifier.fillMaxSize(),
+                    )
+                    if (selection.isSelectionMode) {
+                      Checkbox(
+                        checked = isItemSelected,
+                        onCheckedChange = { selection.onToggleSelection(selectionKey) },
+                        modifier = Modifier
+                          .align(Alignment.TopStart)
+                          .padding(4.dp)
+                          .testTag("select_checkbox_$selectionKey"),
+                      )
+                    }
+                    IconButton(
+                      onClick = { onToggleFavoriteAlbum(album) },
+                      colors = IconButtonDefaults.iconButtonColors(
+                        containerColor = ArtworkOverlayButtonBackground,
+                      ),
+                      modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(30.dp)
+                        .testTag("favorite_album_${album.name}"),
+                    ) {
+                      Icon(
+                        imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                        contentDescription = if (isFavorite) "Remove ${album.name} from favorites" else "Add ${album.name} to favorites",
+                        tint = if (isFavorite) Color(0xFFFF80AB) else Color.White,
+                        modifier = Modifier.size(16.dp),
+                      )
+                    }
+                    val itemActions = LocalMusicItemActions.current
+                    MusicCollectionContextMenuButton(
+                      collectionTitle = album.name,
+                      tracks = album.tracks,
+                      moreButtonTestTag = "album_more_${album.name}",
+                      menuTestTag = "album_menu_${album.name}",
+                      isFavorite = isFavorite,
+                      onToggleFavorite = { onToggleFavoriteAlbum(album) },
+                      onPlay = { onPlayAlbum(album) },
+                      onRenamePlaylist = { itemActions.onRenameAlbum(album) },
+                      onDeletePlaylist = { itemActions.onDeleteAlbum(album) },
+                      tint = Color.White,
+                      containerColor = ArtworkOverlayButtonBackground,
+                      modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(6.dp),
+                    )
+                    FilledIconButton(
+                      onClick = { onPlayAlbum(album) },
+                      shape = CircleShape,
+                      modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(6.dp)
+                        .size(30.dp)
+                        .testTag("play_album_${album.name}"),
+                      colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = ArtworkOverlayButtonBackground,
+                        contentColor = Color.White,
+                      ),
+                    ) {
+                      Icon(
+                        imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
+                        contentDescription = "Play ${album.name}",
+                        modifier = Modifier.size(16.dp),
+                      )
+                    }
+                  }
+                  Text(
+                    text = album.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                   )
-                }
-                IconButton(
-                  onClick = { onToggleFavoriteAlbum(album) },
-                  colors = IconButtonDefaults.iconButtonColors(
-                    containerColor = ArtworkOverlayButtonBackground,
-                  ),
-                  modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp)
-                    .size(30.dp)
-                    .testTag("favorite_album_${album.name}"),
-                ) {
-                  Icon(
-                    imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                    contentDescription = if (isFavorite) "Remove ${album.name} from favorites" else "Add ${album.name} to favorites",
-                    tint = if (isFavorite) Color(0xFFFF80AB) else Color.White,
-                    modifier = Modifier.size(16.dp),
-                  )
-                }
-                val itemActions = LocalMusicItemActions.current
-                MusicCollectionContextMenuButton(
-                  collectionTitle = album.name,
-                  tracks = album.tracks,
-                  moreButtonTestTag = "album_more_${album.name}",
-                  menuTestTag = "album_menu_${album.name}",
-                  isFavorite = isFavorite,
-                  onToggleFavorite = { onToggleFavoriteAlbum(album) },
-                  onPlay = { onPlayAlbum(album) },
-                  onRenamePlaylist = { itemActions.onRenameAlbum(album) },
-                  onDeletePlaylist = { itemActions.onDeleteAlbum(album) },
-                  tint = Color.White,
-                  containerColor = ArtworkOverlayButtonBackground,
-                  modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(6.dp),
-                )
-                FilledIconButton(
-                  onClick = { onPlayAlbum(album) },
-                  shape = CircleShape,
-                  modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(6.dp)
-                    .size(30.dp)
-                    .testTag("play_album_${album.name}"),
-                  colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = ArtworkOverlayButtonBackground,
-                    contentColor = Color.White,
-                  ),
-                ) {
-                  Icon(
-                    imageVector = if (isActive && isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayArrow,
-                    contentDescription = "Play ${album.name}",
-                    modifier = Modifier.size(16.dp),
+                  Text(
+                    text = album.summaryText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                   )
                 }
               }
-              Text(
-                text = album.name,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-              Text(
-                text = album.summaryText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
             }
           }
         }
@@ -5349,6 +5614,7 @@ private fun AlbumsTabContent(
 @Composable
 private fun SongsTabContent(
   tracks: List<MusicTrack>,
+  groupOption: MusicGroupOption = MusicGroupOption.NONE,
   viewMode: MusicViewMode,
   cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
   currentTrackId: String?,
@@ -5362,8 +5628,18 @@ private fun SongsTabContent(
   onSelectTrack: (MusicTrack) -> Unit,
   onToggleFavorite: (MusicTrack) -> Unit,
 ) {
-  val focusedIndex = remember(tracks, currentTrackId) {
-    MusicPlayerEngine.resolveFocusedTrackIndex(tracks, currentTrackId)
+  val groupedTracks = remember(tracks, groupOption) {
+    MusicPlayerEngine.groupTracks(tracks, groupOption)
+  }
+  var collapsedGroupTitles by remember(groupOption) {
+    mutableStateOf(setOf<String>())
+  }
+  val focusedIndex = remember(groupedTracks, currentTrackId, collapsedGroupTitles) {
+    MusicPlayerEngine.resolveFocusedGroupedTrackLazyIndex(
+      groups = groupedTracks,
+      currentTrackId = currentTrackId,
+      collapsedGroupTitles = collapsedGroupTitles,
+    )
   }
 
   Column(modifier = Modifier.fillMaxSize()) {
@@ -5438,8 +5714,8 @@ private fun SongsTabContent(
       val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = focusedIndex.coerceAtLeast(0),
       )
-      LaunchedEffect(sectionFocusVersion, focusedIndex, tracks.size) {
-        if (focusedIndex in tracks.indices && !listState.isItemFullyVisible(focusedIndex)) {
+      LaunchedEffect(sectionFocusVersion, focusedIndex, tracks.size, groupOption) {
+        if (focusedIndex >= 0 && !listState.isItemFullyVisible(focusedIndex)) {
           listState.scrollToItem(focusedIndex)
         }
       }
@@ -5452,23 +5728,48 @@ private fun SongsTabContent(
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        items(tracks, key = { it.id }) { track ->
-          SongListItemCard(
-            track = track,
-            isCurrent = track.id == currentTrackId,
-            isPlaying = isPlaying && track.id == currentTrackId,
-            isFavorite = track.id in favoriteIds,
-            onClick = { onSelectTrack(track) },
-            onToggleFavorite = { onToggleFavorite(track) },
-          )
+        groupedTracks.forEach { group ->
+          val hasHeader = group.title.isNotEmpty()
+          val isCollapsed = hasHeader && group.title in collapsedGroupTitles
+          if (hasHeader) {
+            item(key = "header_${group.title}") {
+              MusicGroupHeader(
+                title = group.title,
+                count = group.tracks.size,
+                isCollapsed = isCollapsed,
+                onToggleCollapse = {
+                  collapsedGroupTitles = if (isCollapsed) {
+                    collapsedGroupTitles - group.title
+                  } else {
+                    collapsedGroupTitles + group.title
+                  }
+                },
+              )
+            }
+          }
+          if (!isCollapsed) {
+            items(
+              items = group.tracks,
+              key = { if (group.title.isEmpty()) it.id else "${group.title}:${it.id}" },
+            ) { track ->
+              SongListItemCard(
+                track = track,
+                isCurrent = track.id == currentTrackId,
+                isPlaying = isPlaying && track.id == currentTrackId,
+                isFavorite = track.id in favoriteIds,
+                onClick = { onSelectTrack(track) },
+                onToggleFavorite = { onToggleFavorite(track) },
+              )
+            }
+          }
         }
       }
     } else {
       val gridState = rememberLazyGridState(
         initialFirstVisibleItemIndex = focusedIndex.coerceAtLeast(0),
       )
-      LaunchedEffect(sectionFocusVersion, focusedIndex, tracks.size) {
-        if (focusedIndex in tracks.indices && !gridState.isItemFullyVisible(focusedIndex)) {
+      LaunchedEffect(sectionFocusVersion, focusedIndex, tracks.size, groupOption) {
+        if (focusedIndex >= 0 && !gridState.isItemFullyVisible(focusedIndex)) {
           gridState.scrollToItem(focusedIndex)
         }
       }
@@ -5483,15 +5784,43 @@ private fun SongsTabContent(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
-        items(tracks, key = { it.id }) { track ->
-          SongGridItemCard(
-            track = track,
-            isCurrent = track.id == currentTrackId,
-            isPlaying = isPlaying && track.id == currentTrackId,
-            isFavorite = track.id in favoriteIds,
-            onClick = { onSelectTrack(track) },
-            onToggleFavorite = { onToggleFavorite(track) },
-          )
+        groupedTracks.forEach { group ->
+          val hasHeader = group.title.isNotEmpty()
+          val isCollapsed = hasHeader && group.title in collapsedGroupTitles
+          if (hasHeader) {
+            item(
+              key = "header_${group.title}",
+              span = { GridItemSpan(maxLineSpan) },
+            ) {
+              MusicGroupHeader(
+                title = group.title,
+                count = group.tracks.size,
+                isCollapsed = isCollapsed,
+                onToggleCollapse = {
+                  collapsedGroupTitles = if (isCollapsed) {
+                    collapsedGroupTitles - group.title
+                  } else {
+                    collapsedGroupTitles + group.title
+                  }
+                },
+              )
+            }
+          }
+          if (!isCollapsed) {
+            items(
+              items = group.tracks,
+              key = { if (group.title.isEmpty()) it.id else "${group.title}:${it.id}" },
+            ) { track ->
+              SongGridItemCard(
+                track = track,
+                isCurrent = track.id == currentTrackId,
+                isPlaying = isPlaying && track.id == currentTrackId,
+                isFavorite = track.id in favoriteIds,
+                onClick = { onSelectTrack(track) },
+                onToggleFavorite = { onToggleFavorite(track) },
+              )
+            }
+          }
         }
       }
     }
@@ -5763,7 +6092,7 @@ private fun GenresTabContent(
           val selection = LocalMusicSelectionController.current
           val selectionKey = "genre:${genre.name}"
           val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
-          val genrePalette = remember(genre.representativeTrack?.id) {
+          val genrePalette = remember(genre.representativeTrack?.id, genre.representativeTrack?.artworkPrimaryRgb) {
             MusicPlayerEngine.resolveTrackPalette(genre.representativeTrack)
           }
           Card(
@@ -6147,7 +6476,7 @@ private fun PlaylistsTabContent(
           val selection = LocalMusicSelectionController.current
           val selectionKey = "playlist:${playlist.id}"
           val isItemSelected = selection.isSelectionMode && selection.isSelected(selectionKey)
-          val playlistPalette = remember(playlist.representativeTrack?.id) {
+          val playlistPalette = remember(playlist.representativeTrack?.id, playlist.representativeTrack?.artworkPrimaryRgb) {
             MusicPlayerEngine.resolveTrackPalette(playlist.representativeTrack)
           }
           Card(
@@ -8275,9 +8604,17 @@ private fun CollapsedMiniMusicPlayer(
         Column(
           modifier = Modifier
             .weight(1f)
-            .clearAndSetSemantics {
-              contentDescription = "$displayTitle • $displaySubtitle"
-            },
+            .then(
+              if (isExternal) {
+                Modifier.semantics {
+                  contentDescription = "$displayTitle • $displaySubtitle"
+                }
+              } else {
+                Modifier.clearAndSetSemantics {
+                  contentDescription = "$displayTitle • $displaySubtitle"
+                }
+              }
+            ),
         ) {
           Text(
             text = displayTitle,
@@ -8758,13 +9095,18 @@ private fun ExpandedMusicPlayerOverlay(
               color = Color.White.copy(alpha = 0.15f),
               modifier = if (isExternal) {
                 Modifier
+                  .clip(RoundedCornerShape(12.dp))
                   .then(
-                    if (onOpenExternalApp != null && externalMedia?.sourcePackage?.isNotBlank() == true) {
+                    if (onOpenExternalApp != null) {
                       Modifier.clickable(onClick = onOpenExternalApp)
                     } else {
                       Modifier
                     }
                   )
+                  .semantics {
+                    val appLabel = externalMedia.sourceAppName.takeIf { it.isNotBlank() } ?: "Android Media Player"
+                    contentDescription = "Open $appLabel ($badgeText)"
+                  }
                   .testTag("expanded_player_external_source_badge")
               } else {
                 Modifier

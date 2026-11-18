@@ -564,6 +564,7 @@ fun ToolboxScaffold(
   val toolContentBottomPadding = minOf(currentVisibleSheetHeightDp, sheetPeekHeight)
   var selectedColorPickerHex by rememberSaveable { mutableStateOf<String?>(null) }
   var selectedUnitConverterValue by rememberSaveable { mutableStateOf<String?>(null) }
+  var selectedUnitConverterFromUnitId by rememberSaveable { mutableStateOf<String?>(null) }
   var selectedCalculatorValue by rememberSaveable { mutableStateOf<String?>(null) }
   var colorLinkRequestId by rememberSaveable { mutableIntStateOf(0) }
 
@@ -574,6 +575,7 @@ fun ToolboxScaffold(
     linkReturnTool = null
     selectedColorPickerHex = null
     selectedUnitConverterValue = null
+    selectedUnitConverterFromUnitId = null
     selectedCalculatorValue = null
     if (returnTo != null) onSelectTool(returnTo)
   }
@@ -598,10 +600,12 @@ fun ToolboxScaffold(
           initialDirectory = initialDirectory,
           initialColorPickerHex = selectedColorPickerHex,
           initialUnitConverterValue = selectedUnitConverterValue,
+          initialUnitConverterFromUnitId = selectedUnitConverterFromUnitId,
           initialCalculatorValue = selectedCalculatorValue,
           onOpenColorPicker = { hex ->
             selectedColorPickerHex = hex
             selectedUnitConverterValue = null
+            selectedUnitConverterFromUnitId = null
             selectedCalculatorValue = null
             colorLinkRequestId++
             linkReturnTool = selectedTool
@@ -610,8 +614,9 @@ fun ToolboxScaffold(
             preferencesRepository?.setLastOpenedTool(Tool.COLOR_PICKER)
             onSelectTool(Tool.COLOR_PICKER)
           },
-          onOpenUnitConverter = { value ->
+          onOpenUnitConverter = { value, fromUnitId ->
             selectedUnitConverterValue = value
+            selectedUnitConverterFromUnitId = fromUnitId
             selectedColorPickerHex = null
             selectedCalculatorValue = null
             colorLinkRequestId++
@@ -624,6 +629,7 @@ fun ToolboxScaffold(
           onOpenCalculator = { value ->
             selectedCalculatorValue = value
             selectedUnitConverterValue = null
+            selectedUnitConverterFromUnitId = null
             selectedColorPickerHex = null
             colorLinkRequestId++
             linkReturnTool = selectedTool
@@ -635,6 +641,7 @@ fun ToolboxScaffold(
           onSelectTool = { tool ->
             selectedColorPickerHex = null
             selectedUnitConverterValue = null
+            selectedUnitConverterFromUnitId = null
             selectedCalculatorValue = null
             linkReturnTool = selectedTool
             linkedTool = tool
@@ -727,6 +734,7 @@ fun ToolboxScaffold(
           linkReturnTool = null
           selectedColorPickerHex = null
           selectedUnitConverterValue = null
+          selectedUnitConverterFromUnitId = null
           selectedCalculatorValue = null
           preferencesRepository?.incrementToolUsage(tool)
           preferencesRepository?.setLastOpenedTool(tool)
@@ -2511,8 +2519,7 @@ fun StandaloneToolScreen(
       .background(bgColor)
       .statusBarsPadding()
       .navigationBarsPadding()
-      .testTag("standalone_tool_screen")
-      .testTag("standalone_tool_screen_${tool.name}"),
+      .testTag("standalone_tool_screen"),
     contentAlignment = Alignment.Center,
   ) {
     ToolContentView(
@@ -2521,6 +2528,7 @@ fun StandaloneToolScreen(
       initialDirectory = initialDirectory,
       initialExpandMusicPlayer = initialExpandMusicPlayer,
       preferencesRepository = preferencesRepository,
+      modifier = Modifier.testTag("standalone_tool_screen_${tool.name}"),
     )
   }
 }
@@ -2534,9 +2542,10 @@ fun ToolContentView(
   initialExpandMusicPlayer: Boolean = false,
   initialColorPickerHex: String? = null,
   initialUnitConverterValue: String? = null,
+  initialUnitConverterFromUnitId: String? = null,
   initialCalculatorValue: String? = null,
   onOpenColorPicker: ((String) -> Unit)? = null,
-  onOpenUnitConverter: ((String) -> Unit)? = null,
+  onOpenUnitConverter: ((value: String, fromUnitId: String?) -> Unit)? = null,
   onOpenCalculator: ((String) -> Unit)? = null,
   onSelectTool: ((Tool) -> Unit)? = null,
   modifier: Modifier = Modifier,
@@ -2552,6 +2561,7 @@ fun ToolContentView(
       Tool.DICE_ROLLER -> DiceRollerScreen(modifier = Modifier.padding(bottom = bottomPadding))
       Tool.UNIT_CONVERTER -> UnitConverterScreen(
         initialValue = initialUnitConverterValue,
+        initialFromUnitId = initialUnitConverterFromUnitId,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.GUITAR_TUNER -> GuitarTunerScreen(modifier = Modifier.padding(bottom = bottomPadding))
@@ -2569,7 +2579,9 @@ fun ToolContentView(
       Tool.CALCULATOR -> CalculatorScreen(
         bottomPadding = bottomPadding,
         initialValue = initialCalculatorValue,
-        onOpenUnitConverter = onOpenUnitConverter,
+        onOpenUnitConverter = onOpenUnitConverter?.let { openConverter ->
+          { value -> openConverter(value, null) }
+        },
         modifier = Modifier,
       )
       Tool.IMAGE_EDITOR -> ImageEditorScreen(modifier = Modifier.padding(bottom = bottomPadding))
@@ -2577,6 +2589,7 @@ fun ToolContentView(
       Tool.FILES -> {
         FilesScreen(
           initialDirectory = initialDirectory,
+          rootDirectory = initialDirectory,
           onOpenFileConverter = { preferencesRepository?.incrementToolUsage(Tool.FILE_CONVERTER) },
           onOpenImageEditor = { preferencesRepository?.incrementToolUsage(Tool.IMAGE_EDITOR) },
           onOpenVideoEditor = { preferencesRepository?.incrementToolUsage(Tool.VIDEO_EDITOR) },

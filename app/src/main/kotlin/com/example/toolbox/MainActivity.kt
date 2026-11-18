@@ -3,6 +3,7 @@ package com.example.toolbox
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +15,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import com.example.toolbox.ui.main.Tool
+import com.example.toolbox.ui.main.createFolderShortcutIntent
+import com.example.toolbox.ui.main.createStandaloneToolIntent
+import com.example.toolbox.ui.main.findExistingStandaloneAppTask
+import com.example.toolbox.ui.main.isSameStandaloneTarget
 import com.example.toolbox.ui.main.parseExpandMusicPlayer
 import com.example.toolbox.ui.main.parseFolderShortcut
 import com.example.toolbox.ui.main.parseStandaloneTool
@@ -42,6 +47,26 @@ class MainActivity : ComponentActivity() {
       expandMusicPlayer -> parsedTool ?: Tool.MUSIC
       else -> parsedTool
     }
+    if (resolvedTool != null || parsedFolder != null) {
+      val existingTask = findExistingStandaloneAppTask(
+        context = this,
+        targetTool = resolvedTool,
+        targetFolder = parsedFolder,
+        excludeTaskId = taskId,
+      )
+      if (existingTask != null) {
+        if (expandMusicPlayer) {
+          MusicPlayerEngine.requestExpandFullPlayer()
+        }
+        try {
+          existingTask.moveToFront()
+          finishAndRemoveTask()
+          return
+        } catch (_: Exception) {
+          // Fall through if moving existing task fails
+        }
+      }
+    }
     standaloneToolState.value = resolvedTool
     initialFolderState.value = parsedFolder
     expandMusicPlayerState.value = expandMusicPlayer
@@ -52,6 +77,21 @@ class MainActivity : ComponentActivity() {
       activity = this,
       standaloneTool = resolvedTool,
       initialFolder = parsedFolder,
+    )
+
+    onBackPressedDispatcher.addCallback(
+      this,
+      object : OnBackPressedCallback(true) {
+        override fun handleOnBackPressed() {
+          if (standaloneToolState.value != null && isTaskRoot) {
+            moveTaskToBack(true)
+          } else {
+            isEnabled = false
+            onBackPressedDispatcher.onBackPressed()
+            isEnabled = true
+          }
+        }
+      },
     )
 
     enableEdgeToEdge()
@@ -94,10 +134,52 @@ class MainActivity : ComponentActivity() {
 
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
-    setIntent(intent)
     val parsedFolder = parseFolderShortcut(intent)
     val parsedTool = parseStandaloneTool(intent)
     val expandMusicPlayer = parseExpandMusicPlayer(intent)
+    val incomingTool = when {
+      parsedFolder != null -> parsedTool ?: Tool.FILES
+      expandMusicPlayer -> parsedTool ?: Tool.MUSIC
+      else -> parsedTool
+    }
+    if ((incomingTool != null || parsedFolder != null) &&
+      !isSameStandaloneTarget(
+        firstTool = standaloneToolState.value,
+        firstFolder = initialFolderState.value,
+        secondTool = incomingTool,
+        secondFolder = parsedFolder,
+      )
+    ) {
+      if (expandMusicPlayer) {
+        MusicPlayerEngine.requestExpandFullPlayer()
+      }
+      val existingTask = findExistingStandaloneAppTask(
+        context = this,
+        targetTool = incomingTool,
+        targetFolder = parsedFolder,
+        excludeTaskId = taskId,
+      )
+      if (existingTask != null) {
+        try {
+          existingTask.moveToFront()
+          return
+        } catch (_: Exception) {
+          // Fall through to startActivity below
+        }
+      }
+      try {
+        val launchIntent = if (parsedFolder != null) {
+          createFolderShortcutIntent(this, File(parsedFolder))
+        } else {
+          createStandaloneToolIntent(this, incomingTool!!)
+        }
+        startActivity(launchIntent)
+        return
+      } catch (_: Exception) {
+        // Fall through if starting separate task fails
+      }
+    }
+    setIntent(intent)
     if (parsedFolder != null) {
       initialFolderState.value = parsedFolder
       standaloneToolState.value = parsedTool ?: Tool.FILES

@@ -37,23 +37,37 @@ const val EXTRA_FOLDER_PATH = "extra_folder_path"
 const val EXTRA_EXPAND_MUSIC_PLAYER = "extra_expand_music_player"
 
 const val STANDALONE_SHORTCUT_INTENT_FLAGS =
-  Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_SINGLE_TOP
+  Intent.FLAG_ACTIVITY_NEW_TASK or
+    Intent.FLAG_ACTIVITY_NEW_DOCUMENT or
+    Intent.FLAG_ACTIVITY_RETAIN_IN_RECENTS
+
+/**
+ * Normalizes a raw folder path to its canonical absolute normalized form so shortcuts and task
+ * matchers treat equivalent paths (such as trailing slashes or relative segments) as the same
+ * folder location.
+ */
+fun normalizeShortcutFolderPath(folderPath: String?): String? {
+  if (folderPath.isNullOrBlank()) return null
+  return File(folderPath).absoluteFile.normalize().path
+}
 
 /**
  * Builds the canonical `toolbox://standalone/<tool>` [Uri] (including optional `folder` query parameter)
- * used as `Intent.data` so Android's document task matcher reuses an existing standalone instance
- * of the same tool (or folder) instead of spawning duplicate tasks.
+ * used as `Intent.data` so Android's document task matcher opens each distinct tool or folder
+ * location in its own app instance while reusing an existing standalone instance of the same tool
+ * or folder location.
  */
 fun resolveStandaloneDocumentUri(
   tool: Tool,
   folderPath: String? = null,
 ): android.net.Uri {
+  val normalizedFolder = normalizeShortcutFolderPath(folderPath)
   val builder = android.net.Uri.Builder()
     .scheme("toolbox")
     .authority("standalone")
     .appendPath(tool.name)
-  if (!folderPath.isNullOrBlank()) {
-    builder.appendQueryParameter("folder", folderPath)
+  if (!normalizedFolder.isNullOrBlank()) {
+    builder.appendQueryParameter("folder", normalizedFolder)
   }
   return builder.build()
 }
@@ -177,11 +191,70 @@ fun parseStandaloneTool(intent: Intent?): Tool? {
 }
 
 /**
- * Parses the folder path requested in an incoming [Intent] if launched via a folder home screen shortcut.
+ * Parses the normalized folder path requested in an incoming [Intent] if launched via a folder home screen shortcut.
  */
 fun parseFolderShortcut(intent: Intent?): String? {
-  return intent?.getStringExtra(EXTRA_FOLDER_PATH)
+  val raw = intent?.getStringExtra(EXTRA_FOLDER_PATH)
     ?: intent?.data?.getQueryParameter("folder")
+  return normalizeShortcutFolderPath(raw)
+}
+
+/**
+ * Returns `true` if two `(tool, folderPath)` pairs refer to the same standalone app instance target.
+ */
+fun isSameStandaloneTarget(
+  firstTool: Tool?,
+  firstFolder: String?,
+  secondTool: Tool?,
+  secondFolder: String?,
+): Boolean {
+  val normFirstFolder = normalizeShortcutFolderPath(firstFolder)
+  val normSecondFolder = normalizeShortcutFolderPath(secondFolder)
+  val effectiveFirstTool = if (normFirstFolder != null) (firstTool ?: Tool.FILES) else firstTool
+  val effectiveSecondTool = if (normSecondFolder != null) (secondTool ?: Tool.FILES) else secondTool
+  return effectiveFirstTool == effectiveSecondTool && normFirstFolder == normSecondFolder
+}
+
+/**
+ * Searches [ActivityManager.getAppTasks] for an already-open standalone task matching
+ * ([targetTool], [targetFolder]) that is distinct from [excludeTaskId].
+ */
+fun findExistingStandaloneAppTask(
+  context: Context,
+  targetTool: Tool?,
+  targetFolder: String?,
+  excludeTaskId: Int? = null,
+): ActivityManager.AppTask? {
+  val normalizedTargetFolder = normalizeShortcutFolderPath(targetFolder)
+  val effectiveTargetTool = if (normalizedTargetFolder != null) (targetTool ?: Tool.FILES) else targetTool
+  if (effectiveTargetTool == null && normalizedTargetFolder == null) return null
+  return try {
+    val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+      ?: return null
+    activityManager.appTasks.firstOrNull { appTask ->
+      val taskInfo = try {
+        appTask.taskInfo
+      } catch (_: Exception) {
+        null
+      } ?: return@firstOrNull false
+      @Suppress("DEPRECATION")
+      val taskId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) taskInfo.taskId else taskInfo.id
+      if (taskId == -1 || (excludeTaskId != null && taskId == excludeTaskId)) {
+        return@firstOrNull false
+      }
+      @Suppress("DEPRECATION")
+      val isAlive = taskInfo.numActivities > 0 || taskInfo.topActivity != null
+      if (!isAlive) {
+        return@firstOrNull false
+      }
+      val baseIntent = taskInfo.baseIntent
+      val taskFolder = parseFolderShortcut(baseIntent)
+      val taskTool = parseStandaloneTool(baseIntent) ?: if (taskFolder != null) Tool.FILES else null
+      isSameStandaloneTarget(taskTool, taskFolder, effectiveTargetTool, normalizedTargetFolder)
+    }
+  } catch (_: Exception) {
+    null
+  }
 }
 
 /**
@@ -272,12 +345,13 @@ fun createStandaloneToolIntent(context: Context, tool: Tool): Intent {
  * an existing standalone task for [folder] if one is already open.
  */
 fun createFolderShortcutIntent(context: Context, folder: File): Intent {
+  val normalizedPath = normalizeShortcutFolderPath(folder.path) ?: folder.absolutePath
   return Intent(context, MainActivity::class.java).apply {
     component = ComponentName(context, resolveToolShortcutAliasClassName(Tool.FILES))
     action = Intent.ACTION_VIEW
-    data = resolveStandaloneDocumentUri(Tool.FILES, folder.absolutePath)
+    data = resolveStandaloneDocumentUri(Tool.FILES, normalizedPath)
     putExtra(EXTRA_STANDALONE_TOOL, Tool.FILES.name)
-    putExtra(EXTRA_FOLDER_PATH, folder.absolutePath)
+    putExtra(EXTRA_FOLDER_PATH, normalizedPath)
     addFlags(STANDALONE_SHORTCUT_INTENT_FLAGS)
   }
 }
@@ -532,12 +606,13 @@ fun addFolderToHomeScreen(
   context: Context,
   folder: File,
 ): Boolean {
-  val folderName = folder.name.ifBlank { "Files" }
-  val intent = createFolderShortcutIntent(context, folder)
+  val normalizedFolder = folder.absoluteFile.normalize()
+  val folderName = normalizedFolder.name.ifBlank { "Files" }
+  val intent = createFolderShortcutIntent(context, normalizedFolder)
 
   return try {
     if (ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
-      val shortcutId = "shortcut_folder_${folder.absolutePath.hashCode()}"
+      val shortcutId = "shortcut_folder_${normalizedFolder.path.hashCode()}"
       val pinShortcutInfo = ShortcutInfoCompat.Builder(context, shortcutId)
         .setShortLabel(folderName)
         .setLongLabel(folderName)

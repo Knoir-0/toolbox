@@ -1048,6 +1048,17 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("expanded_player_prev_button").performClick()
     composeTestRule.waitForIdle()
     assertEquals("PREVIOUS", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
+
+    // 5. Tapping the badge underneath the Artist information opens the external app currently playing media
+    var interceptedOpenPkg: String? = null
+    MusicPlayerEngine.openExternalMediaAppOverrideForTest = { pkg ->
+      interceptedOpenPkg = pkg
+      true
+    }
+    composeTestRule.onNodeWithTag("expanded_player_external_source_badge").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("com.spotify.music", MusicPlayerEngine.lastOpenedExternalMediaPackage)
+    assertEquals("com.spotify.music", interceptedOpenPkg)
   }
 
   @Test
@@ -1218,5 +1229,91 @@ class MusicPlayerScreenTest {
     } finally {
       customDir.deleteRecursively()
     }
+  }
+
+  @Test
+  fun musicPlayer_groupAndSortFilter_groupsSongsByAlbumArtistGenre_andAlbumsByArtistGenre() {
+    composeTestRule.setContent {
+      ToolboxTheme {
+        MusicPlayerScreen(
+          initialTracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS,
+          initialTab = MusicLibraryTab.HOME,
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    val session = MusicPlayerEngine.getActivePlaybackSession()
+    assertNotNull(session)
+
+    // 1. On Home tab (non-grouping section), the menu is a Sort-only menu (no GROUP BY header)
+    composeTestRule.onNodeWithTag("music_sort_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_sort_menu").assertIsDisplayed()
+    composeTestRule.onNodeWithText("GROUP BY").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("music_sort_option_random").performClick()
+    composeTestRule.waitForIdle()
+
+    // 2. Switch to Songs view: sort filter changes into Group & Sort filter with Album, Artist, Genre, None
+    composeTestRule.onNodeWithTag("music_tab_SONGS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_sort_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithText("GROUP BY").assertIsDisplayed()
+    composeTestRule.onNodeWithText("SORT BY").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_group_option_album").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_group_option_artist").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_group_option_genre").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_group_option_none").assertIsDisplayed()
+
+    // Select grouping by Album in Songs view
+    composeTestRule.onNodeWithTag("music_group_option_album").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(MusicGroupOption.ALBUM, session!!.groupOption)
+    composeTestRule.onNodeWithTag("music_group_header_blue_note_sessions").assertIsDisplayed()
+
+    // Select grouping by Artist in Songs view
+    composeTestRule.onNodeWithTag("music_sort_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_group_option_artist").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(MusicGroupOption.ARTIST, session.groupOption)
+    composeTestRule.onNodeWithTag("music_group_header_aurora_synth").assertIsDisplayed()
+
+    // Select grouping by Genre in Songs view
+    composeTestRule.onNodeWithTag("music_sort_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_group_option_genre").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(MusicGroupOption.GENRE, session.groupOption)
+    composeTestRule.onNodeWithTag("music_group_header_jazz").assertIsDisplayed()
+
+    // 3. Switch to Albums view: Group & Sort filter allows grouping by Artist or Genre (not Album)
+    composeTestRule.onNodeWithTag("music_tab_ALBUMS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_sort_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithText("GROUP BY").assertIsDisplayed()
+    composeTestRule.onNodeWithText("SORT BY").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_group_option_album").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("music_group_option_artist").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_group_option_genre").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_group_option_none").assertIsDisplayed()
+
+    // Select grouping by Artist in Albums view
+    composeTestRule.onNodeWithTag("music_group_option_artist").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(MusicGroupOption.ARTIST, session.groupOption)
+    composeTestRule.onNodeWithTag("music_group_header_aurora_synth").assertIsDisplayed()
+
+    // Select grouping by Genre in Albums view
+    composeTestRule.onNodeWithTag("music_sort_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_group_option_genre").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(MusicGroupOption.GENRE, session.groupOption)
+    composeTestRule.onNodeWithTag("music_group_header_jazz").assertIsDisplayed()
   }
 }

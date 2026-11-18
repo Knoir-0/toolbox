@@ -941,10 +941,6 @@ fun AudioRecorderScreen(
       },
     )
 
-    HorizontalDivider(
-      color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-    )
-
     // Optional Microphone Permission Banner (shown once folder storage access is granted)
     if (isRecorderEnabled && !hasMicPermission) {
       Card(
@@ -1849,235 +1845,196 @@ private fun AudioRecorderFolderPillBar(
     }
   }
 
-  Surface(
-    color = MaterialTheme.colorScheme.surface,
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    Box(
-      modifier = Modifier
-        .fillMaxWidth()
-        .testTag("audio_recorder_pill_bar")
-        .onGloballyPositioned { coords ->
-          barCoordinates = coords
+  ToolboxPillNavigationBar(
+    barTestTag = "audio_recorder_pill_bar",
+    scrollState = scrollState,
+    scrollEnabled = draggedFolder == null,
+    floatingButtonsCount = 2,
+    backgroundColor = MaterialTheme.colorScheme.background,
+    modifier = Modifier
+      .onGloballyPositioned { coords ->
+        barCoordinates = coords
+      }
+      .pointerInput(enabled) {
+        if (!enabled) return@pointerInput
+        detectDragGesturesAfterLongPress(
+          onDragStart = { startOffset ->
+            val barWidth = (barCoordinates?.size?.width ?: 0).toFloat()
+            if (barWidth > 0f && startOffset.x >= barWidth - floatingButtonsExcludeZonePx) {
+              return@detectDragGesturesAfterLongPress
+            }
+            val directHit = currentFolders.firstOrNull { folder ->
+              pillBounds[folder.displayPath]?.contains(startOffset) == true
+            }
+            val hitFolder = directHit ?: currentFolders.minByOrNull { folder ->
+              val rect = pillBounds[folder.displayPath] ?: return@minByOrNull Float.MAX_VALUE
+              val dx = when {
+                startOffset.x < rect.left -> rect.left - startOffset.x
+                startOffset.x > rect.right -> startOffset.x - rect.right
+                else -> 0f
+              }
+              val dy = when {
+                startOffset.y < rect.top -> rect.top - startOffset.y
+                startOffset.y > rect.bottom -> startOffset.y - rect.bottom
+                else -> 0f
+              }
+              dx + dy
+            }?.takeIf { folder ->
+              val rect = pillBounds[folder.displayPath] ?: return@takeIf false
+              val dx = when {
+                startOffset.x < rect.left -> rect.left - startOffset.x
+                startOffset.x > rect.right -> startOffset.x - rect.right
+                else -> 0f
+              }
+              dx <= maxHitSlopPx
+            }
+
+            if (hitFolder != null) {
+              val rect = pillBounds[hitFolder.displayPath]
+              draggedFolder = hitFolder
+              dragPointerOffset = startOffset
+              grabOffsetFromCenter = if (rect != null) {
+                startOffset - rect.center
+              } else {
+                Offset.Zero
+              }
+              draggedPillSize = rect?.let { IntSize(it.width.roundToInt(), it.height.roundToInt()) }
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            }
+          },
+          onDrag = { change, dragAmount ->
+            val activeFolder = draggedFolder ?: return@detectDragGesturesAfterLongPress
+            change.consume()
+            dragPointerOffset += dragAmount
+            val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+
+            val barWidth = (barCoordinates?.size?.width ?: 0).toFloat()
+            if (barWidth > 0f && scrollState.maxValue > 0) {
+              if (dragPointerOffset.x < leftEdgeScrollZonePx && scrollState.value > 0) {
+                scrollState.dispatchRawDelta(-edgeScrollStepPx)
+              } else if (dragPointerOffset.x > barWidth - rightEdgeScrollZonePx && scrollState.value < scrollState.maxValue) {
+                scrollState.dispatchRawDelta(edgeScrollStepPx)
+              }
+            }
+
+            val fromIndex = currentFolders.indexOfFirst {
+              it.displayPath.equals(activeFolder.displayPath, ignoreCase = true)
+            }
+            if (fromIndex >= 0 && currentFolders.size > 1) {
+              val targetIndex = currentFolders.indices.minByOrNull { idx ->
+                val rect = pillBounds[currentFolders[idx].displayPath]
+                if (rect != null) abs(desiredCenter.x - rect.center.x) else Float.MAX_VALUE
+              }
+              if (targetIndex != null && targetIndex != fromIndex) {
+                currentOnMoveFolder(fromIndex, targetIndex)
+              }
+            }
+          },
+          onDragEnd = {
+            draggedFolder = null
+            dragPointerOffset = Offset.Zero
+            grabOffsetFromCenter = Offset.Zero
+            draggedPillSize = null
+          },
+          onDragCancel = {
+            draggedFolder = null
+            dragPointerOffset = Offset.Zero
+            grabOffsetFromCenter = Offset.Zero
+            draggedPillSize = null
+          },
+        )
+      },
+    pills = {
+      folders.forEach { folder ->
+        val isGranted = isGrantedFolder(folder)
+        val isSelected = if (pendingPermissionFolder != null) {
+          pendingPermissionFolder.displayPath.equals(folder.displayPath, ignoreCase = true)
+        } else {
+          isGranted && selectedFolder.displayPath.equals(folder.displayPath, ignoreCase = true)
         }
-        .pointerInput(enabled) {
-          if (!enabled) return@pointerInput
-          detectDragGesturesAfterLongPress(
-            onDragStart = { startOffset ->
-              val barWidth = (barCoordinates?.size?.width ?: 0).toFloat()
-              if (barWidth > 0f && startOffset.x >= barWidth - floatingButtonsExcludeZonePx) {
-                return@detectDragGesturesAfterLongPress
-              }
-              val directHit = currentFolders.firstOrNull { folder ->
-                pillBounds[folder.displayPath]?.contains(startOffset) == true
-              }
-              val hitFolder = directHit ?: currentFolders.minByOrNull { folder ->
-                val rect = pillBounds[folder.displayPath] ?: return@minByOrNull Float.MAX_VALUE
-                val dx = when {
-                  startOffset.x < rect.left -> rect.left - startOffset.x
-                  startOffset.x > rect.right -> startOffset.x - rect.right
-                  else -> 0f
+        val isBeingDragged = draggedFolder?.displayPath?.equals(folder.displayPath, ignoreCase = true) == true
+        ToolboxPillNavigationItem(
+          selected = isSelected,
+          onClick = {
+            if (enabled && draggedFolder == null) {
+              onSelectFolder(folder)
+            }
+          },
+          enabled = enabled,
+          leadingIconContent = {
+            Box(
+              contentAlignment = Alignment.Center,
+              modifier = Modifier
+                .semantics(mergeDescendants = true) {
+                  if (enabled && draggedFolder == null) {
+                    onClick {
+                      onTapFolderIcon(folder)
+                      true
+                    }
+                  }
                 }
-                val dy = when {
-                  startOffset.y < rect.top -> rect.top - startOffset.y
-                  startOffset.y > rect.bottom -> startOffset.y - rect.bottom
-                  else -> 0f
-                }
-                dx + dy
-              }?.takeIf { folder ->
-                val rect = pillBounds[folder.displayPath] ?: return@takeIf false
-                val dx = when {
-                  startOffset.x < rect.left -> rect.left - startOffset.x
-                  startOffset.x > rect.right -> startOffset.x - rect.right
-                  else -> 0f
-                }
-                dx <= maxHitSlopPx
-              }
-
-              if (hitFolder != null) {
-                val rect = pillBounds[hitFolder.displayPath]
-                draggedFolder = hitFolder
-                dragPointerOffset = startOffset
-                grabOffsetFromCenter = if (rect != null) {
-                  startOffset - rect.center
+                .testTag(
+                  if (isGranted) {
+                    "folder_unlocked_icon_${folder.folderName}"
+                  } else {
+                    "folder_lock_icon_${folder.folderName}"
+                  }
+                ),
+            ) {
+              Icon(
+                imageVector = if (isGranted) Icons.Default.Folder else Icons.Default.Lock,
+                contentDescription = if (isGranted) {
+                  "${folder.folderName} folder unlocked"
                 } else {
-                  Offset.Zero
-                }
-                draggedPillSize = rect?.let { IntSize(it.width.roundToInt(), it.height.roundToInt()) }
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-              }
-            },
-            onDrag = { change, dragAmount ->
-              val activeFolder = draggedFolder ?: return@detectDragGesturesAfterLongPress
-              change.consume()
-              dragPointerOffset += dragAmount
-              val desiredCenter = dragPointerOffset - grabOffsetFromCenter
-
-              val barWidth = (barCoordinates?.size?.width ?: 0).toFloat()
-              if (barWidth > 0f && scrollState.maxValue > 0) {
-                if (dragPointerOffset.x < leftEdgeScrollZonePx && scrollState.value > 0) {
-                  scrollState.dispatchRawDelta(-edgeScrollStepPx)
-                } else if (dragPointerOffset.x > barWidth - rightEdgeScrollZonePx && scrollState.value < scrollState.maxValue) {
-                  scrollState.dispatchRawDelta(edgeScrollStepPx)
-                }
-              }
-
-              val fromIndex = currentFolders.indexOfFirst {
-                it.displayPath.equals(activeFolder.displayPath, ignoreCase = true)
-              }
-              if (fromIndex >= 0 && currentFolders.size > 1) {
-                val targetIndex = currentFolders.indices.minByOrNull { idx ->
-                  val rect = pillBounds[currentFolders[idx].displayPath]
-                  if (rect != null) abs(desiredCenter.x - rect.center.x) else Float.MAX_VALUE
-                }
-                if (targetIndex != null && targetIndex != fromIndex) {
-                  currentOnMoveFolder(fromIndex, targetIndex)
-                }
-              }
-            },
-            onDragEnd = {
-              draggedFolder = null
-              dragPointerOffset = Offset.Zero
-              grabOffsetFromCenter = Offset.Zero
-              draggedPillSize = null
-            },
-            onDragCancel = {
-              draggedFolder = null
-              dragPointerOffset = Offset.Zero
-              grabOffsetFromCenter = Offset.Zero
-              draggedPillSize = null
-            },
-          )
-        },
-      contentAlignment = Alignment.CenterStart,
-    ) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .fadingPillRowUnderFloatingControls(hasColumnsButton = true)
-          .horizontalScroll(scrollState, enabled = draggedFolder == null)
-          .padding(
-            start = 12.dp,
-            end = 96.dp,
-            top = 6.dp,
-            bottom = 6.dp,
-          ),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        folders.forEach { folder ->
-          val isGranted = isGrantedFolder(folder)
-          val isSelected = if (pendingPermissionFolder != null) {
-            pendingPermissionFolder.displayPath.equals(folder.displayPath, ignoreCase = true)
-          } else {
-            isGranted && selectedFolder.displayPath.equals(folder.displayPath, ignoreCase = true)
-          }
-          val isBeingDragged = draggedFolder?.displayPath?.equals(folder.displayPath, ignoreCase = true) == true
-          FilterChip(
-            selected = isSelected,
-            onClick = {
-              if (enabled && draggedFolder == null) {
-                onSelectFolder(folder)
-              }
-            },
-            enabled = enabled,
-            shape = RoundedCornerShape(20.dp),
-            leadingIcon = {
+                  "Unlock ${folder.folderName} folder"
+                },
+                modifier = Modifier
+                  .size(16.dp)
+                  .testTag("folder_pill_icon_${folder.folderName}"),
+              )
+            }
+          },
+          label = folder.folderName,
+          trailingIcon = if (folder.isCustom) {
+            {
               Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                  .semantics(mergeDescendants = true) {
-                    if (enabled && draggedFolder == null) {
-                      onClick {
-                        onTapFolderIcon(folder)
-                        true
-                      }
-                    }
+                  .clip(CircleShape)
+                  .clickable(enabled = enabled && draggedFolder == null) {
+                    onDeleteCustomFolder(folder)
                   }
-                  .testTag(
-                    if (isGranted) {
-                      "folder_unlocked_icon_${folder.folderName}"
-                    } else {
-                      "folder_lock_icon_${folder.folderName}"
-                    }
-                  ),
+                  .testTag("folder_delete_icon_${folder.folderName}"),
               ) {
                 Icon(
-                  imageVector = if (isGranted) Icons.Default.Folder else Icons.Default.Lock,
-                  contentDescription = if (isGranted) {
-                    "${folder.folderName} folder unlocked"
-                  } else {
-                    "Unlock ${folder.folderName} folder"
-                  },
+                  imageVector = Icons.Default.Close,
+                  contentDescription = "Delete ${folder.folderName} folder",
                   modifier = Modifier
                     .size(16.dp)
-                    .testTag("folder_pill_icon_${folder.folderName}"),
+                    .testTag("folder_pill_delete_icon_${folder.folderName}"),
                 )
               }
-            },
-            label = {
-              Text(
-                text = folder.folderName,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-              )
-            },
-            trailingIcon = if (folder.isCustom) {
-              {
-                Box(
-                  contentAlignment = Alignment.Center,
-                  modifier = Modifier
-                    .clip(CircleShape)
-                    .clickable(enabled = enabled && draggedFolder == null) {
-                      onDeleteCustomFolder(folder)
-                    }
-                    .testTag("folder_delete_icon_${folder.folderName}"),
-                ) {
-                  Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Delete ${folder.folderName} folder",
-                    modifier = Modifier
-                      .size(16.dp)
-                      .testTag("folder_pill_delete_icon_${folder.folderName}"),
-                  )
-                }
+            }
+          } else {
+            null
+          },
+          testTag = "folder_pill_${folder.folderName}",
+          modifier = Modifier
+            .onGloballyPositioned { coords ->
+              val barCoords = barCoordinates
+              if (barCoords != null && barCoords.isAttached && coords.isAttached) {
+                pillBounds[folder.displayPath] = barCoords.localBoundingBoxOf(coords, clipBounds = false)
               }
-            } else {
-              null
+            }
+            .graphicsLayer {
+              alpha = if (isBeingDragged) 0.3f else 1f
             },
-            colors = FilterChipDefaults.filterChipColors(
-              selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-              selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-              selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            ),
-            modifier = Modifier
-              .onGloballyPositioned { coords ->
-                val barCoords = barCoordinates
-                if (barCoords != null && barCoords.isAttached && coords.isAttached) {
-                  pillBounds[folder.displayPath] = barCoords.localBoundingBoxOf(coords, clipBounds = false)
-                }
-              }
-              .graphicsLayer {
-                alpha = if (isBeingDragged) 0.3f else 1f
-              }
-              .testTag("folder_pill_${folder.folderName}"),
-          )
-        }
+        )
       }
-
-      // Pinned floating [Add Folder] + [Filter / Sort] buttons on the right edge of the pill bar
-      Row(
-        modifier = Modifier
-          .align(Alignment.CenterEnd)
-          .pillBarFloatingControlsBackdrop(backgroundColor = MaterialTheme.colorScheme.surface)
-          .padding(end = 12.dp)
-          .zIndex(10f),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Surface(
-          onClick = onAddCustomFolder,
+    },
+    floatingControls = {
+      Surface(
+        onClick = onAddCustomFolder,
           enabled = enabled,
           shape = CircleShape,
           color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -2274,72 +2231,53 @@ private fun AudioRecorderFolderPillBar(
             }
           }
         }
-      }
+      },
+      overlayContent = {
+        val activeDraggedFolder = draggedFolder
+        if (activeDraggedFolder != null && barCoordinates != null) {
+          val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+          val fallbackWidthPx = with(density) { 96.dp.toPx() }
+          val fallbackHeightPx = with(density) { 32.dp.toPx() }
+          val widthPx = draggedPillSize?.width?.toFloat() ?: fallbackWidthPx
+          val heightPx = draggedPillSize?.height?.toFloat() ?: fallbackHeightPx
+          val isGranted = isGrantedFolder(activeDraggedFolder)
+          val isSelected = if (pendingPermissionFolder != null) {
+            pendingPermissionFolder.displayPath.equals(activeDraggedFolder.displayPath, ignoreCase = true)
+          } else {
+            isGranted && selectedFolder.displayPath.equals(activeDraggedFolder.displayPath, ignoreCase = true)
+          }
 
-      val activeDraggedFolder = draggedFolder
-      if (activeDraggedFolder != null && barCoordinates != null) {
-        val desiredCenter = dragPointerOffset - grabOffsetFromCenter
-        val fallbackWidthPx = with(density) { 96.dp.toPx() }
-        val fallbackHeightPx = with(density) { 32.dp.toPx() }
-        val widthPx = draggedPillSize?.width?.toFloat() ?: fallbackWidthPx
-        val heightPx = draggedPillSize?.height?.toFloat() ?: fallbackHeightPx
-        val isGranted = isGrantedFolder(activeDraggedFolder)
-        val isSelected = if (pendingPermissionFolder != null) {
-          pendingPermissionFolder.displayPath.equals(activeDraggedFolder.displayPath, ignoreCase = true)
-        } else {
-          isGranted && selectedFolder.displayPath.equals(activeDraggedFolder.displayPath, ignoreCase = true)
-        }
-
-        Box(
-          modifier = Modifier
-            .graphicsLayer {
-              translationX = desiredCenter.x - widthPx / 2f
-              translationY = desiredCenter.y - heightPx / 2f
-              scaleX = 1.06f
-              scaleY = 1.06f
-            }
-            .zIndex(100f),
-        ) {
-          FilterChip(
-            selected = isSelected,
-            onClick = {},
-            shape = RoundedCornerShape(20.dp),
-            leadingIcon = {
-              Icon(
-                imageVector = if (isGranted) Icons.Default.Folder else Icons.Default.Lock,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-              )
-            },
-            label = {
-              Text(
-                text = activeDraggedFolder.folderName,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-              )
-            },
-            trailingIcon = if (activeDraggedFolder.isCustom) {
-              {
-                Icon(
-                  imageVector = Icons.Default.Close,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
+          Box(
+            modifier = Modifier
+              .graphicsLayer {
+                translationX = desiredCenter.x - widthPx / 2f
+                translationY = desiredCenter.y - heightPx / 2f
+                scaleX = 1.06f
+                scaleY = 1.06f
               }
-            } else {
-              null
-            },
-            colors = FilterChipDefaults.filterChipColors(
-              selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-              selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-              selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            ),
-          )
+              .zIndex(100f),
+          ) {
+            ToolboxPillNavigationItem(
+              selected = isSelected,
+              onClick = {},
+              leadingIcon = if (isGranted) Icons.Default.Folder else Icons.Default.Lock,
+              label = activeDraggedFolder.folderName,
+              trailingIcon = if (activeDraggedFolder.isCustom) {
+                {
+                  Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                  )
+                }
+              } else {
+                null
+              },
+            )
+          }
         }
-      }
-    }
-  }
+      },
+    )
 }
 
 @Composable

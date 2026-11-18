@@ -8,6 +8,7 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import com.example.toolbox.ui.theme.ToolboxTheme
@@ -111,7 +112,7 @@ class PlantScheduleScreenTest {
     }
 
     composeTestRule.onNodeWithTag("scheduled_plant_item_tomato")
-      .performTouchInput { longClick() }
+      .performTouchInput { longClick(topLeft + androidx.compose.ui.geometry.Offset(48f, 36f)) }
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("multi_select_toolbar").assertIsDisplayed()
@@ -176,21 +177,20 @@ class PlantScheduleScreenTest {
     composeTestRule.onNodeWithTag("catalog_category_pills").assertIsDisplayed()
     composeTestRule.onNodeWithTag("category_chip_ALL").assertIsDisplayed()
     composeTestRule.onNodeWithTag("category_chip_VEGETABLES").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("category_chip_HERBS").assertIsDisplayed()
 
     // Both plants are initially shown
     composeTestRule.onNodeWithTag("scheduled_plant_item_tomato").assertIsDisplayed()
     composeTestRule.onNodeWithTag("scheduled_plant_item_basil").assertIsDisplayed()
 
-    // Tap Herbs filter pill -> only Basil is shown
-    composeTestRule.onNodeWithTag("category_chip_HERBS").performClick()
+    // Scroll to and tap Herbs filter pill -> only Basil is shown
+    composeTestRule.onNodeWithTag("category_chip_HERBS").performScrollTo().assertIsDisplayed().performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("scheduled_plant_item_basil").assertIsDisplayed()
     composeTestRule.onNodeWithTag("scheduled_plant_item_tomato").assertDoesNotExist()
 
-    // Tap All filter pill -> both Tomato and Basil are shown again
-    composeTestRule.onNodeWithTag("category_chip_ALL").performClick()
+    // Scroll back to and tap All filter pill -> both Tomato and Basil are shown again
+    composeTestRule.onNodeWithTag("category_chip_ALL").performScrollTo().performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("scheduled_plant_item_tomato").assertIsDisplayed()

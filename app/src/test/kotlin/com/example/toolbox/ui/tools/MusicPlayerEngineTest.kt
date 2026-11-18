@@ -1611,6 +1611,22 @@ class MusicPlayerEngineTest {
 
       assertTrue(MusicPlayerEngine.skipExternalSystemMediaToPrevious())
       assertEquals("PREVIOUS", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
+
+      // 7. Resolving external media source package (directly from sourcePackage or fallback from sourceAppName)
+      assertEquals("com.spotify.music", MusicPlayerEngine.resolveExternalSystemMediaPackage())
+      MusicPlayerEngine.updateExternalSystemMediaFromMetadata(
+        title = "Veridis Quo",
+        artist = "Daft Punk",
+        album = "Discovery",
+        genre = "French House",
+        sourcePackage = "",
+        sourceAppName = "YouTube Music",
+        isPlaying = true,
+      )
+      assertEquals(
+        "com.google.android.apps.youtube.music",
+        MusicPlayerEngine.resolveExternalSystemMediaPackage(),
+      )
     } finally {
       MusicPlayerEngine.updateExternalSystemMediaSession(null)
       session.release()
@@ -1788,6 +1804,525 @@ class MusicPlayerEngineTest {
       assertEquals(MusicSortOrder.DURATION_DESC, session.sortOrder)
     } finally {
       session.release()
+    }
+  }
+
+  @Test
+  fun groupAndSort_supportsSongsGroupingByAlbumArtistGenre_andAlbumsGroupingByArtistGenre() {
+    val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+    val albums = MusicPlayerEngine.buildAlbums(tracks)
+
+    // 1. Available group options per section
+    assertTrue(MusicPlayerEngine.availableGroupOptions(MusicLibraryTab.HOME).isEmpty())
+    assertTrue(MusicPlayerEngine.availableGroupOptions(MusicLibraryTab.PLAYLISTS).isEmpty())
+    assertTrue(MusicPlayerEngine.availableGroupOptions(MusicLibraryTab.ARTISTS).isEmpty())
+    assertTrue(MusicPlayerEngine.availableGroupOptions(MusicLibraryTab.GENRES).isEmpty())
+
+    assertEquals(
+      listOf(
+        MusicGroupOption.ALBUM,
+        MusicGroupOption.ARTIST,
+        MusicGroupOption.GENRE,
+        MusicGroupOption.NONE,
+      ),
+      MusicPlayerEngine.availableGroupOptions(MusicLibraryTab.SONGS),
+    )
+    assertEquals(
+      listOf(
+        MusicGroupOption.ALBUM,
+        MusicGroupOption.ARTIST,
+        MusicGroupOption.GENRE,
+        MusicGroupOption.NONE,
+      ),
+      MusicPlayerEngine.availableGroupOptions(
+        selectedTab = MusicLibraryTab.HOME,
+        selectedCustomFolderPath = "/Music/SynthwaveVault",
+      ),
+    )
+    assertEquals(
+      listOf(
+        MusicGroupOption.ARTIST,
+        MusicGroupOption.GENRE,
+        MusicGroupOption.NONE,
+      ),
+      MusicPlayerEngine.availableGroupOptions(MusicLibraryTab.ALBUMS),
+    )
+
+    // 2. Grouping songs by None, Album, Artist, and Genre
+    val songsNone = MusicPlayerEngine.groupAndSortTracks(
+      tracks = tracks,
+      groupOption = MusicGroupOption.NONE,
+      sortOrder = MusicSortOrder.TITLE_ASC,
+    )
+    assertEquals(1, songsNone.size)
+    assertEquals("", songsNone.first().title)
+    assertEquals(tracks.size, songsNone.first().tracks.size)
+
+    val songsByAlbum = MusicPlayerEngine.groupAndSortTracks(
+      tracks = tracks,
+      groupOption = MusicGroupOption.ALBUM,
+      sortOrder = MusicSortOrder.TITLE_ASC,
+    )
+    assertTrue(songsByAlbum.size > 1)
+    assertEquals(
+      songsByAlbum.map { it.title },
+      songsByAlbum.map { it.title }.sortedWith(String.CASE_INSENSITIVE_ORDER),
+    )
+    assertEquals(tracks.size, songsByAlbum.sumOf { it.tracks.size })
+    assertTrue(songsByAlbum.all { group -> group.tracks.all { it.album == group.title } })
+
+    val songsByArtist = MusicPlayerEngine.groupAndSortTracks(
+      tracks = tracks,
+      groupOption = MusicGroupOption.ARTIST,
+      sortOrder = MusicSortOrder.TITLE_ASC,
+    )
+    assertTrue(songsByArtist.size > 1)
+    assertEquals(tracks.size, songsByArtist.sumOf { it.tracks.size })
+    assertTrue(songsByArtist.all { group -> group.tracks.all { it.artist == group.title } })
+
+    val songsByGenre = MusicPlayerEngine.groupAndSortTracks(
+      tracks = tracks,
+      groupOption = MusicGroupOption.GENRE,
+      sortOrder = MusicSortOrder.TITLE_ASC,
+    )
+    assertTrue(songsByGenre.size > 1)
+    assertEquals(tracks.size, songsByGenre.sumOf { it.tracks.size })
+    assertTrue(songsByGenre.all { group -> group.tracks.all { it.genre == group.title } })
+
+    // 3. Grouping albums by None, Artist, and Genre
+    val albumsNone = MusicPlayerEngine.groupAndSortAlbums(
+      albums = albums,
+      groupOption = MusicGroupOption.NONE,
+      sortOrder = MusicSortOrder.TITLE_ASC,
+    )
+    assertEquals(1, albumsNone.size)
+    assertEquals("", albumsNone.first().title)
+    assertEquals(albums.size, albumsNone.first().albums.size)
+
+    val albumsByArtist = MusicPlayerEngine.groupAndSortAlbums(
+      albums = albums,
+      groupOption = MusicGroupOption.ARTIST,
+      sortOrder = MusicSortOrder.TITLE_ASC,
+    )
+    assertTrue(albumsByArtist.size > 1)
+    assertEquals(albums.size, albumsByArtist.sumOf { it.albums.size })
+    assertTrue(albumsByArtist.all { group -> group.albums.all { it.artist == group.title } })
+
+    val albumsByGenre = MusicPlayerEngine.groupAndSortAlbums(
+      albums = albums,
+      groupOption = MusicGroupOption.GENRE,
+      sortOrder = MusicSortOrder.TITLE_ASC,
+    )
+    assertTrue(albumsByGenre.size > 1)
+    assertEquals(albums.size, albumsByGenre.sumOf { it.albums.size })
+    assertTrue(albumsByGenre.all { group -> group.albums.all { it.genre == group.title } })
+
+    // 4. Session per-section group & sort persistence and coercion across sections
+    val session = MusicPlaybackSession(
+      context = null,
+      isInspection = true,
+      initialTracks = tracks,
+      initialTab = MusicLibraryTab.SONGS,
+      initialGrantedFolderPaths = setOf("/Music"),
+    )
+    try {
+      assertEquals(MusicGroupOption.NONE, session.groupOption)
+      session.setSaveSortForCurrentScope(true)
+      session.updateGroupOption(MusicGroupOption.ALBUM)
+      session.updateSortOrder(MusicSortOrder.DURATION_DESC)
+      assertEquals(MusicGroupOption.ALBUM, session.groupOption)
+      assertEquals(MusicSortOrder.DURATION_DESC, session.sortOrder)
+
+      // Switching to Albums tab resets group to NONE (or default) and allows grouping by Artist or Genre
+      session.updateTab(MusicLibraryTab.ALBUMS)
+      assertEquals(MusicGroupOption.NONE, session.groupOption)
+      // Attempt to group by ALBUM in Albums view coerces to NONE
+      session.updateGroupOption(MusicGroupOption.ALBUM)
+      assertEquals(MusicGroupOption.NONE, session.groupOption)
+      // Group by GENRE in Albums view succeeds
+      session.setSaveSortForCurrentScope(true)
+      session.updateGroupOption(MusicGroupOption.GENRE)
+      assertEquals(MusicGroupOption.GENRE, session.groupOption)
+
+      // Switching back to Songs restores saved ALBUM group option and DURATION_DESC sort
+      session.updateTab(MusicLibraryTab.SONGS)
+      assertEquals(MusicGroupOption.ALBUM, session.groupOption)
+      assertEquals(MusicSortOrder.DURATION_DESC, session.sortOrder)
+
+      // Switching back to Albums restores saved GENRE group option
+      session.updateTab(MusicLibraryTab.ALBUMS)
+      assertEquals(MusicGroupOption.GENRE, session.groupOption)
+    } finally {
+      session.release()
+    }
+  }
+
+  @Test
+  fun renameTrackArtistAlbumAndGenre_adjustsEmbeddedFileMetadataInBackgroundTask() = kotlinx.coroutines.runBlocking {
+    val tempDir = java.nio.file.Files.createTempDirectory("music_rename_meta_test").toFile()
+    try {
+      // Create a WAV file and an MP3 file with initial metadata
+      val wavBuffer = AudioEditorEngine.createSampleAudioBuffer(sampleRate = 8000, durationMs = 500L)
+      val wavFile = File(tempDir, "Original Song.wav")
+      assertTrue(
+        AudioEditorEngine.writeWavFile(
+          buffer = wavBuffer,
+          outputFile = wavFile,
+          metadata = AudioMetadataTags(
+            title = "Original Song",
+            artist = "Aurora Synth",
+            album = "Midnight Odyssey",
+            genre = "Synthwave",
+            year = "2026",
+            trackNumber = "1",
+            comment = "Initial WAV tag",
+          ),
+        )
+      )
+
+      val mp3File = File(tempDir, "Second Track.mp3")
+      mp3File.writeBytes(ByteArray(256) { (it and 0xFF).toByte() })
+      assertTrue(
+        AudioEditorEngine.writeAudioMetadata(
+          file = mp3File,
+          metadata = AudioMetadataTags(
+            title = "Second Track",
+            artist = "Aurora Synth",
+            album = "Midnight Odyssey",
+            genre = "Synthwave",
+            year = "2026",
+            trackNumber = "2",
+            comment = "Initial MP3 tag",
+          ),
+        )
+      )
+
+      val track1 = MusicPlayerEngine.buildTrackFromFile(wavFile, inspectMetadataRetriever = false)
+      val track2 = MusicPlayerEngine.buildTrackFromFile(mp3File, inspectMetadataRetriever = false)
+      assertEquals("Original Song", track1.title)
+      assertEquals("Aurora Synth", track1.artist)
+      assertEquals("Midnight Odyssey", track1.album)
+      assertEquals("Synthwave", track1.genre)
+      assertEquals("Second Track", track2.title)
+      assertEquals("Aurora Synth", track2.artist)
+      assertEquals("Midnight Odyssey", track2.album)
+      assertEquals("Synthwave", track2.genre)
+
+      val session = MusicPlaybackSession(
+        context = null,
+        isInspection = true,
+        initialTracks = listOf(track1, track2),
+      )
+      try {
+        // 1. Rename track1 ("Original Song" -> "Crystal Horizon")
+        val renamedTrack = session.renameTrack(track1, "Crystal Horizon")
+        assertNotNull(renamedTrack)
+        session.awaitPendingMetadataUpdates()
+
+        val renamedWavFile = renamedTrack!!.file
+        assertNotNull(renamedWavFile)
+        assertTrue(renamedWavFile!!.exists())
+        assertEquals("Crystal Horizon.wav", renamedWavFile.name)
+
+        val wavMetaAfterTrackRename = AudioEditorEngine.readAudioMetadata(renamedWavFile)
+        assertEquals("Crystal Horizon", wavMetaAfterTrackRename.title)
+        assertEquals("Aurora Synth", wavMetaAfterTrackRename.artist)
+        assertEquals("Midnight Odyssey", wavMetaAfterTrackRename.album)
+        assertEquals("Synthwave", wavMetaAfterTrackRename.genre)
+        assertEquals("Initial WAV tag", wavMetaAfterTrackRename.comment)
+
+        // 2. Rename Artist ("Aurora Synth" -> "Aurora Prime") across both WAV and MP3 files
+        val artistUpdatedCount = session.renameArtist("Aurora Synth", "Aurora Prime")
+        assertEquals(2, artistUpdatedCount)
+        session.awaitPendingMetadataUpdates()
+
+        assertEquals("Aurora Prime", AudioEditorEngine.readAudioMetadata(renamedWavFile).artist)
+        assertEquals("Aurora Prime", AudioEditorEngine.readAudioMetadata(mp3File).artist)
+
+        // 3. Rename Album ("Midnight Odyssey" -> "Solaris") across both files
+        val albumUpdatedCount = session.renameAlbum("Midnight Odyssey", "Aurora Prime", "Solaris")
+        assertEquals(2, albumUpdatedCount)
+        session.awaitPendingMetadataUpdates()
+
+        assertEquals("Solaris", AudioEditorEngine.readAudioMetadata(renamedWavFile).album)
+        assertEquals("Solaris", AudioEditorEngine.readAudioMetadata(mp3File).album)
+
+        // 4. Rename Genre ("Synthwave" -> "Outrun") across both files
+        val genreUpdatedCount = session.renameGenre("Synthwave", "Outrun")
+        assertEquals(2, genreUpdatedCount)
+        session.awaitPendingMetadataUpdates()
+
+        val finalWavTags = AudioEditorEngine.readAudioMetadata(renamedWavFile)
+        assertEquals("Crystal Horizon", finalWavTags.title)
+        assertEquals("Aurora Prime", finalWavTags.artist)
+        assertEquals("Solaris", finalWavTags.album)
+        assertEquals("Outrun", finalWavTags.genre)
+
+        val finalMp3Tags = AudioEditorEngine.readAudioMetadata(mp3File)
+        assertEquals("Second Track", finalMp3Tags.title)
+        assertEquals("Aurora Prime", finalMp3Tags.artist)
+        assertEquals("Solaris", finalMp3Tags.album)
+        assertEquals("Outrun", finalMp3Tags.genre)
+        assertEquals("Initial MP3 tag", finalMp3Tags.comment)
+
+        // Re-scanning files from disk reflects all updated metadata tags
+        MusicPlayerEngine.clearTrackMetadataCache()
+        val rescanned1 = MusicPlayerEngine.buildTrackFromFile(renamedWavFile, inspectMetadataRetriever = false)
+        val rescanned2 = MusicPlayerEngine.buildTrackFromFile(mp3File, inspectMetadataRetriever = false)
+        assertEquals("Crystal Horizon", rescanned1.title)
+        assertEquals("Aurora Prime", rescanned1.artist)
+        assertEquals("Solaris", rescanned1.album)
+        assertEquals("Outrun", rescanned1.genre)
+        assertEquals("Second Track", rescanned2.title)
+        assertEquals("Aurora Prime", rescanned2.artist)
+        assertEquals("Solaris", rescanned2.album)
+        assertEquals("Outrun", rescanned2.genre)
+      } finally {
+        session.release()
+      }
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun extractPaletteFromPixels_preservesDominantHueOnComplementarySplitAndDarkCovers() {
+    // 1. Complementary split cover (60% warm crimson red #DC2626, 40% emerald green #16A34A):
+    // Linear RGB averaging would blend red + green into muddy yellow/olive, whereas perceptual
+    // OKLab clustering must select the true dominant crimson red and secondary emerald green.
+    val width = 24
+    val height = 24
+    val pixels = IntArray(width * height)
+    val crimsonArgb = (0xFF shl 24) or 0xDC2626
+    val emeraldArgb = (0xFF shl 24) or 0x16A34A
+    for (y in 0 until height) {
+      for (x in 0 until width) {
+        pixels[y * width + x] = if (y < 15) crimsonArgb else emeraldArgb
+      }
+    }
+
+    val splitPalette = MusicPlayerEngine.extractPaletteFromPixels(pixels, width, height)
+    assertTrue(
+      "Dominant color should remain warm red (${splitPalette.dominantHex})",
+      splitPalette.dominantColor.red > 0.75f &&
+        splitPalette.dominantColor.green < 0.25f &&
+        splitPalette.dominantColor.blue < 0.25f,
+    )
+    assertTrue(
+      "Secondary color should remain emerald green (${splitPalette.secondaryHex})",
+      splitPalette.secondaryColor.green > 0.55f &&
+        splitPalette.secondaryColor.red < 0.20f,
+    )
+
+    // 2. Deep navy cover (#0F2547) with a vibrant gold logo (#F59E0B) occupying 10% of pixels:
+    // Must not fall back to the old hardcoded purple (#5E35B1).
+    val darkCoverPixels = IntArray(width * height) { (0xFF shl 24) or 0x0F2547 }
+    for (i in 0 until 60) {
+      darkCoverPixels[i] = (0xFF shl 24) or 0xF59E0B
+    }
+    val darkPalette = MusicPlayerEngine.extractPaletteFromPixels(darkCoverPixels, width, height)
+    assertTrue(
+      "Dominant color on deep navy cover should stay blue-dominant (${darkPalette.dominantHex})",
+      darkPalette.dominantColor.blue > darkPalette.dominantColor.red,
+    )
+    assertTrue(
+      "Accent color on deep navy cover with gold logo should pick gold (${darkPalette.accentHex})",
+      darkPalette.accentColor.red > 0.80f &&
+        darkPalette.accentColor.green > 0.50f &&
+        darkPalette.accentColor.blue < 0.20f,
+    )
+  }
+
+  @Test
+  fun extractEmbeddedArtworkBytes_parsesId3v2ApicAndFlacMetadataBlockPicture() {
+    val tempDir = java.nio.file.Files.createTempDirectory("music_embedded_art_parse_test").toFile()
+    try {
+      val fakeJpegBytes = byteArrayOf(
+        0xFF.toByte(),
+        0xD8.toByte(),
+        0xFF.toByte(),
+        0xE0.toByte(),
+        0x00,
+        0x10,
+        'J'.code.toByte(),
+        'F'.code.toByte(),
+        'I'.code.toByte(),
+        'F'.code.toByte(),
+        0x00,
+        0x01,
+        0x02,
+        0x03,
+        0xFF.toByte(),
+        0xD9.toByte(),
+      )
+
+      // 1. Build an MP3 file with an ID3v2.3 APIC frame
+      val mp3File = File(tempDir, "tagged_cover.mp3")
+      val mimeBytes = "image/jpeg".toByteArray(Charsets.US_ASCII)
+      val apicPayload = java.io.ByteArrayOutputStream().apply {
+        write(0) // ISO-8859-1 encoding
+        write(mimeBytes)
+        write(0) // null-terminated MIME
+        write(3) // front cover picture type
+        write(0) // empty description null-terminator
+        write(fakeJpegBytes)
+      }.toByteArray()
+      val apicSize = apicPayload.size
+      val id3TagBytes = java.io.ByteArrayOutputStream().apply {
+        val totalTagSize = 10 + apicSize
+        write(
+          byteArrayOf(
+            'I'.code.toByte(),
+            'D'.code.toByte(),
+            '3'.code.toByte(),
+            3,
+            0,
+            0,
+            ((totalTagSize shr 21) and 0x7F).toByte(),
+            ((totalTagSize shr 14) and 0x7F).toByte(),
+            ((totalTagSize shr 7) and 0x7F).toByte(),
+            (totalTagSize and 0x7F).toByte(),
+          ),
+        )
+        write("APIC".toByteArray(Charsets.US_ASCII))
+        write(
+          byteArrayOf(
+            ((apicSize shr 24) and 0xFF).toByte(),
+            ((apicSize shr 16) and 0xFF).toByte(),
+            ((apicSize shr 8) and 0xFF).toByte(),
+            (apicSize and 0xFF).toByte(),
+            0,
+            0,
+          ),
+        )
+        write(apicPayload)
+        write(ByteArray(32) { 0x55 })
+      }.toByteArray()
+      mp3File.writeBytes(id3TagBytes)
+
+      val extractedId3Art = MusicPlayerEngine.extractEmbeddedArtworkBytes(mp3File)
+      assertNotNull(extractedId3Art)
+      assertTrue(fakeJpegBytes.contentEquals(extractedId3Art))
+
+      // 2. Build a FLAC file with a METADATA_BLOCK_PICTURE (type 6)
+      val flacFile = File(tempDir, "tagged_cover.flac")
+      val flacPicBlock = java.nio.ByteBuffer.allocate(32 + mimeBytes.size + fakeJpegBytes.size)
+        .order(java.nio.ByteOrder.BIG_ENDIAN)
+        .apply {
+          putInt(3) // front cover
+          putInt(mimeBytes.size)
+          put(mimeBytes)
+          putInt(0) // empty description
+          putInt(300) // width
+          putInt(300) // height
+          putInt(24) // depth
+          putInt(0) // colors
+          putInt(fakeJpegBytes.size)
+          put(fakeJpegBytes)
+        }.array()
+      val flacBytes = java.io.ByteArrayOutputStream().apply {
+        write("fLaC".toByteArray(Charsets.US_ASCII))
+        val blockLen = flacPicBlock.size
+        write(0x80 or 6) // isLast=true, blockType=6 (PICTURE)
+        write((blockLen shr 16) and 0xFF)
+        write((blockLen shr 8) and 0xFF)
+        write(blockLen and 0xFF)
+        write(flacPicBlock)
+      }.toByteArray()
+      flacFile.writeBytes(flacBytes)
+
+      val extractedFlacArt = MusicPlayerEngine.extractEmbeddedArtworkBytes(flacFile)
+      assertNotNull(extractedFlacArt)
+      assertTrue(fakeJpegBytes.contentEquals(extractedFlacArt))
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun resolveTrackPalette_doesNotPoisonExtractedPaletteCacheWithDeterministicFallbackColors() {
+    val tempDir = java.nio.file.Files.createTempDirectory("music_palette_cache_isolation_test").toFile()
+    MusicPlayerEngine.clearArtworkCache()
+    MusicPlayerEngine.clearTrackMetadataCache()
+    try {
+      val albumDir = File(tempDir, "Music/WarmSunsetAlbum").apply { mkdirs() }
+      val trackFile1 = File(albumDir, "01 - Warm Track.mp3").apply { writeBytes(ByteArray(128) { 1 }) }
+      val trackFile2 = File(albumDir, "02 - Second Warm Track.mp3").apply { writeBytes(ByteArray(128) { 2 }) }
+
+      // Track initially scanned with deferAlbumArt=true gets a deterministic preset color (e.g. Cyan #00B4D8),
+      // which is completely opposite the actual warm crimson/orange album cover (#E63946).
+      val track1 = MusicTrack(
+        id = "file_${trackFile1.absolutePath}",
+        title = "Warm Track",
+        artist = "Solar Artist",
+        album = "WarmSunsetAlbum",
+        genre = "Indie",
+        durationMs = 180_000L,
+        file = trackFile1,
+        sizeBytes = trackFile1.length(),
+        lastModifiedMs = trackFile1.lastModified(),
+        artworkPrimaryRgb = 0x00B4D8, // Deterministic cyan fallback (opposite of warm red cover)
+        artworkSecondaryRgb = 0x7209B7,
+        artworkAccentRgb = 0x4CC9F0,
+        isSampleTrack = false,
+      )
+      val track2 = track1.copy(
+        id = "file_${trackFile2.absolutePath}",
+        title = "Second Warm Track",
+        file = trackFile2,
+        sizeBytes = trackFile2.length(),
+        lastModifiedMs = trackFile2.lastModified(),
+      )
+
+      // 1. Synchronous resolveTrackPalette before bitmap decoding returns the temporary fallback
+      //    without polluting the extracted paletteCache.
+      val initialFallback = MusicPlayerEngine.resolveTrackPalette(track1)
+      assertEquals("#00B4D8", initialFallback.dominantHex)
+
+      // 2. Simulate album art extraction from a warm crimson/orange cover (#E63946 / #9D0208 / #FFB703)
+      val warmPixels = IntArray(32 * 32) { idx ->
+        when {
+          idx < 700 -> (0xFF shl 24) or 0xE63946
+          idx < 920 -> (0xFF shl 24) or 0x9D0208
+          else -> (0xFF shl 24) or 0xFFB703
+        }
+      }
+      val extractedWarmPalette = MusicPlayerEngine.extractPaletteFromPixels(warmPixels, 32, 32)
+      assertTrue(
+        "Extracted palette must be warm red, not cyan (${extractedWarmPalette.dominantHex})",
+        extractedWarmPalette.dominantColor.red > 0.75f && extractedWarmPalette.dominantColor.blue < 0.35f,
+      )
+
+      // Record extracted palette into cache via reflection or package-visible flow by caching it for track1
+      val recordMethod = MusicPlayerEngine::class.java.getDeclaredMethod(
+        "recordExtractedPaletteForTrack",
+        MusicTrack::class.java,
+        AlbumArtPalette::class.java,
+      ).apply { isAccessible = true }
+      recordMethod.invoke(MusicPlayerEngine, track1, extractedWarmPalette)
+
+      // 3. Subsequent resolveTrackPalette calls for both track1 and sibling track2 on the same album
+      //    now return the extracted warm red album art palette rather than the opposite cyan fallback!
+      val resolved1 = MusicPlayerEngine.resolveTrackPalette(track1)
+      val resolved2 = MusicPlayerEngine.resolveTrackPalette(track2)
+      assertEquals(extractedWarmPalette.dominantHex, resolved1.dominantHex)
+      assertEquals(extractedWarmPalette.dominantHex, resolved2.dominantHex)
+
+      // 4. Re-building track metadata from file with deferAlbumArt=true also picks up the extracted warm colors
+      val rebuiltTrack1 = MusicPlayerEngine.buildTrackFromFile(
+        file = trackFile1,
+        inspectMetadataRetriever = false,
+        deferAlbumArt = true,
+      )
+      // Even if buildTrackFromFile derives a different album/artist in fast pass, filePaletteKey preserves the file's extracted palette!
+      assertEquals(
+        extractedWarmPalette.dominantHex,
+        MusicPlayerEngine.formatRgbHex(rebuiltTrack1.artworkPrimaryRgb),
+      )
+    } finally {
+      MusicPlayerEngine.clearArtworkCache()
+      MusicPlayerEngine.clearTrackMetadataCache()
+      tempDir.deleteRecursively()
     }
   }
 }

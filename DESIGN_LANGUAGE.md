@@ -69,7 +69,7 @@ Consistent rounding gives Toolbox its signature modern, friendly, and cohesive a
 
 - **Dialogs**: `RoundedCornerShape(28.dp)` (`MaterialTheme.shapes.extraLarge`)
 - **Bottom Sheets / Drawers**: `RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)`
-- **Device & Category Pills / Filter Chips**: `RoundedCornerShape(20.dp)` or `CircleShape`
+- **Device & Category Pills / Filter Chips**: `RoundedCornerShape(20.dp)` (enforced via `ToolboxPillNavigationItem`)
 - **Item Cards (Lists & Grids)**: `RoundedCornerShape(12.dp)` to `RoundedCornerShape(14.dp)`
 - **Text Input Fields (`OutlinedTextField`)**: `RoundedCornerShape(14.dp)` or `RoundedCornerShape(16.dp)`
 - **Buttons (Dialog Confirm / Dismiss & Action Buttons)**: `CircleShape` (fully rounded pill shape, matching the rest of the app's buttons)
@@ -241,12 +241,17 @@ AlertDialog(
 
 ---
 
-### 5.4 Lists, Grid Cards & Pill Bar Floating Controls (`ToolboxFloatingColumnsButton` & `pinchToChangeColumns`)
+### 5.4 Lists, Grid Cards, Shared Pill Navigation Bar (`ToolboxPillNavigationBar` & `ToolboxPillNavigationItem`) & Floating Controls (`ToolboxFloatingColumnsButton` & `pinchToChangeColumns`)
 - **Card Styling**: Use `CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))` with `RoundedCornerShape(12.dp)` to `14.dp`.
 - **Metadata**: Separate secondary metadata items using bullet points (`•` with `colorScheme.outline`).
-- **Pill Bar & Floating Right-Edge Controls**:
-  - Tools with a horizontal pill/filter bar immediately below `ToolboxTopBar` (**Calculator**, **Gallery**, **Files**, **Archive**, **Music Player**, **Notes**, and **To Do**) pin their secondary controls as floating `34.dp` circular buttons (`CircleShape`, `surfaceContainerHigh`, `tonalElevation = 3.dp`, `shadowElevation = 4.dp`, `1.dp` `outlineVariant.copy(alpha = 0.6f)` border) at `Alignment.CenterEnd` (`padding(end = 12.dp)`, `zIndex(10f)`, `6.dp` horizontal spacing).
-  - **Faded Edge into Background (`Modifier.fadingPillRowUnderFloatingControls` & `Modifier.pillBarFloatingControlsBackdrop`)**: Never allow scrolling pills/chips to be visible directly underneath or between the floating buttons. Apply `.fadingPillRowUnderFloatingControls(hasColumnsButton = ...)` (offscreen `BlendMode.DstIn` horizontal alpha mask) before `.horizontalScroll(...)` on the pill `Row` and `.pillBarFloatingControlsBackdrop(backgroundColor = ...)` on the floating controls `Row` so pills smoothly dissolve into the background color across a `32.dp` feather zone right before the floating controls.
+- **Unified Pill Navigation Bar (`ToolboxPillNavigationBar` & `ToolboxPillNavigationItem`)**:
+  - Every tool with a horizontal pill/filter bar immediately below `ToolboxTopBar` or inside a catalog search overlay (**Files**, **Archive**, **Notes**, **To Do**, **Calculator**, **Unit Converter**, **Gallery**, **Audio Recorder**, **Music Player**, **Planting & Harvest**, **Recipes**, **Chord Book**, **Guitar Tuner**, **OBD2 Scanner**, and **Search**) must use the shared `ToolboxPillNavigationBar` and `ToolboxPillNavigationItem` composables (`com.example.toolbox.ui.tools.ToolboxPillNavigationBar` / `ToolboxPillNavigationItem`):
+    - **Borderless & Seamless**: Never wrap the pill navigation bar in an extra `Surface(tonalElevation = 1.dp)` or sandwich it between top/bottom `HorizontalDivider` lines. It sits directly on the screen background immediately below `ToolboxTopBar`.
+    - **Consistent Padding & Spacing**: `12.dp` start padding, `6.dp` top/bottom vertical padding, `8.dp` spacing between pills, and automatic right-edge padding (`12.dp` when no floating controls are present, or `(16 + floatingButtonsCount * 40).dp` when floating controls are pinned).
+    - **Standardized Pill Styling (`ToolboxPillNavigationItem`)**: Every pill uses `FilterChip` with `RoundedCornerShape(20.dp)`, `16.dp` leading/trailing icons, `MaterialTheme.typography.labelMedium` (`FontWeight.Bold` when selected, `FontWeight.Medium` when unselected), and `FilterChipDefaults.filterChipColors(selectedContainerColor = colorScheme.primaryContainer, selectedLabelColor = colorScheme.onPrimaryContainer, selectedLeadingIconColor = colorScheme.primary, selectedTrailingIconColor = colorScheme.onPrimaryContainer)`.
+- **Floating Right-Edge Controls**:
+  - Tools with secondary pill-bar controls (**Calculator**, **Gallery**, **Files**, **Archive**, **Music Player**, **Audio Recorder**, **Notes**, and **To Do**) pass them via the `floatingControls` slot (with `floatingButtonsCount` set to the number of `34.dp` circular buttons). `ToolboxPillNavigationBar` pins them at `Alignment.CenterEnd` (`padding(end = 12.dp)`, `zIndex(10f)`, `6.dp` horizontal spacing).
+  - **Faded Edge into Background (`Modifier.fadingPillRowUnderFloatingControls` & `Modifier.pillBarFloatingControlsBackdrop`)**: Never allow scrolling pills/chips to be visible directly underneath or between the floating buttons. `ToolboxPillNavigationBar` automatically applies `.fadingPillRowUnderFloatingControls(...)` (offscreen `BlendMode.DstIn` horizontal alpha mask) before `.horizontalScroll(...)` on the pill `Row` and `.pillBarFloatingControlsBackdrop(backgroundColor = ...)` on the floating controls `Row` so pills smoothly dissolve into the background color across a `32.dp` feather zone right before the floating controls.
   - **Changeable `# per row` Control (`ToolboxFloatingColumnsButton`)**: Whenever a tool is displaying a tile/grid/card layout, place `ToolboxFloatingColumnsButton` immediately to the left of the floating filter/sort/labels button (`[#] [Filter/Sort]`). It displays only the current column count in bold (`typography.labelLarge`, `FontWeight.Bold`, `colorScheme.onSurfaceVariant`); tapping cycles `columnsPerRow` from `minColumns` to `maxColumns` and wraps around.
   - **Pinch-to-Zoom (`Modifier.pinchToChangeColumns`)**: Attach `.pinchToChangeColumns(...)` to the grid content container so two-finger pinch-out (fewer columns, larger tiles) and pinch-in (more columns, smaller tiles) smoothly adjust `columnsPerRow` within the same range:
     - **Gallery**, **Files** (Grid view), **Archive** (Grid view): `3..6` per row (default `3`).
@@ -331,8 +336,8 @@ Tools with searchable catalogs, presets, or collections (such as **Files**, **Mu
    - Borderless `TextField` (`Color.Transparent` containers and indicators) that auto-focuses via `FocusRequester` and opens the software keyboard on entry.
    - Trailing clear button (`Icons.Default.Clear`) visible when the query is non-empty, plus optional `trailingContent` before the clear button (e.g. Archive's `Selected` filter chip).
    - `BackHandler(enabled = isSearchActive)` to dismiss search cleanly on system back navigation.
-3. **Top-Expanding Search Overlay & Filter Pills**: Below the header `HorizontalDivider`, layer an `AnimatedVisibility` overlay (`expandVertically(expandFrom = Alignment.Top) + fadeIn()`) over the main content `Box`:
-   - **Category & Favorites Filter Row**: A `Surface(tonalElevation = 1.dp)` containing a `LazyRow` of `RoundedCornerShape(20.dp)` `FilterChip` pills (`All`, `Favorites`, and domain categories).
+3. **Top-Expanding Search Overlay & Filter Pills**: Below the header `ToolboxTopBar` (or `ToolboxPillNavigationBar`), layer an `AnimatedVisibility` overlay (`expandVertically(expandFrom = Alignment.Top) + fadeIn()`) over the main content `Box`:
+   - **Category & Favorites Filter Row**: Use `ToolboxPillNavigationBar` and `ToolboxPillNavigationItem` (`RoundedCornerShape(20.dp)` `FilterChip` pills for `All`, `Favorites`, and domain categories).
    - **Search Results List**: A `LazyColumn` of `RoundedCornerShape(14.dp)` cards (`surfaceVariant.copy(alpha = 0.45f)`) showing matching items, result counts, and an empty-state card when no items match.
 4. **Favoriting & Quick-Switch Lists**:
    - Provide a trailing star toggle (`Icons.Default.Star` tinted with `colorScheme.primary` when favorited; `Icons.Default.StarBorder` tinted with `colorScheme.onSurfaceVariant` when unfavorited) on both catalog search cards and in-tool item/preset lists.
@@ -349,8 +354,9 @@ Tools with searchable catalogs, presets, or collections (such as **Files**, **Mu
 - [x] **DO** place the toolbar search icon (`Icons.Default.Search`) at the **very far right** of the top bar (after all other trailing action buttons, toggles, or pills) via `ToolboxTopBarSearchState`.
 - [x] **DO** render header back/up navigation buttons (`Icons.AutoMirrored.Filled.ArrowBack`) as plain `36.dp` `IconButton`s with `MaterialTheme.colorScheme.onSurface` tint and no circular background container.
 - [x] **DO** use `ToolboxTopBarSelectionState` (`ToolboxMultiSelectBarRow`) for all multi-selection toolbars so they share the `FilesScreen` layout (Close button, clickable Select All checkbox + count, `36.dp` action icons, red Delete, and `MoreVert` overflow menu).
+- [x] **DO** use `ToolboxPillNavigationBar` and `ToolboxPillNavigationItem` (`Section 5.4`) for all horizontal pill navigation/filter bars beneath `ToolboxTopBar` or inside catalog search overlays so padding (`12.dp` horizontal, `6.dp` vertical), spacing (`8.dp`), `RoundedCornerShape(20.dp)` geometry, typography (`labelMedium`, `Bold` when selected), and icon tints (`primary` leading icon when selected) remain identical across every tool.
 - [x] **DO** use `SlimDotSlider` (slim `4.dp`–`6.dp` track with `16.dp`–`20.dp` circular dot thumb) for all sliders and trackbars.
-- [x] **DO** use the integrated expanding toolbar search & catalog overlay pattern (`Section 5.7`) with `RoundedCornerShape(20.dp)` filter chips and star favoriting for searchable tool catalogs and presets.
+- [x] **DO** use the integrated expanding toolbar search & catalog overlay pattern (`Section 5.7`) with `ToolboxPillNavigationBar` / `ToolboxPillNavigationItem` filter chips and star favoriting for searchable tool catalogs and presets.
 - [x] **DO** provide immediate haptic feedback (`LocalHapticFeedback`) on meaningful actions (duplicate/copy, create, delete, favorite, quick-switch).
 - [x] **DO** support autofocus with `FocusRequester` and pre-select meaningful text in editing dialogs and expanding search bars.
 - [x] **DO** provide clear inline error messages and disable confirm buttons when inputs are invalid or unchanged.

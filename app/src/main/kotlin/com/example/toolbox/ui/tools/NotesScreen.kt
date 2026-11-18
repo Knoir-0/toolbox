@@ -1269,6 +1269,7 @@ fun NotesScreen(
                 NotesQuickCaptureBar(
                   isAddNoteOpen = isAddNoteOpen,
                   isChecklistMode = isAddNoteOpen && addingNoteDraft.isChecklist,
+                  isPinned = if (isAddNoteOpen) addingNoteDraft.isPinned else defaultPinned,
                   onTakeTextNote = {
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     if (!isAddNoteOpen) {
@@ -1283,6 +1284,24 @@ fun NotesScreen(
                       addingNoteDraft = NotesEngine.toggleChecklistMode(addingNoteDraft)
                     } else {
                       saveAndCloseAddingNote()
+                    }
+                  },
+                  onTakePinnedNote = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    if (!isAddNoteOpen) {
+                      addingNoteNewLabels = emptyList()
+                      addingNoteDraft = NoteItem(
+                        isChecklist = false,
+                        isPinned = true,
+                        labels = preselectedLabels,
+                      )
+                      isAddNoteOpen = true
+                    } else {
+                      val newPinned = !addingNoteDraft.isPinned
+                      addingNoteDraft = addingNoteDraft.copy(
+                        isPinned = newPinned,
+                        isArchived = if (newPinned) false else addingNoteDraft.isArchived,
+                      )
                     }
                   },
                   onTakeChecklistNote = {
@@ -1840,38 +1859,24 @@ private fun NotesFilterChipsRow(
   onDeleteLabel: (String) -> Unit = {},
   onManageLabels: () -> Unit,
 ) {
-  Box(
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .fadingPillRowUnderFloatingControls(hasColumnsButton = isGridView)
-        .horizontalScroll(rememberScrollState())
-        .padding(start = 12.dp, end = if (isGridView) 96.dp else 56.dp, top = 6.dp, bottom = 6.dp)
-        .testTag("notes_filter_chips_row"),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      FilterChip(
+  ToolboxPillNavigationBar(
+    rowTestTag = "notes_filter_chips_row",
+    floatingButtonsCount = if (isGridView) 2 else 1,
+    pills = {
+      ToolboxPillNavigationItem(
         selected = activeFilter == NotesFilter.All,
         onClick = { onSelectFilter(NotesFilter.All) },
-        label = { Text("All") },
-        shape = RoundedCornerShape(20.dp),
-        colors = FilterChipDefaults.filterChipColors(
-          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        ),
-        modifier = Modifier.testTag("notes_filter_all"),
+        label = "All",
+        testTag = "notes_filter_all",
       )
 
       labels.forEach { label ->
         val isSelected = activeFilter is NotesFilter.Label &&
           activeFilter.name.equals(label, ignoreCase = true)
-        FilterChip(
+        ToolboxPillNavigationItem(
           selected = isSelected,
           onClick = { onSelectFilter(NotesFilter.Label(label)) },
-          label = { Text(label) },
+          label = label,
           trailingIcon = {
             Box(
               contentAlignment = Alignment.Center,
@@ -1889,107 +1894,43 @@ private fun NotesFilterChipsRow(
               )
             }
           },
-          shape = RoundedCornerShape(20.dp),
-          colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-          ),
-          modifier = Modifier.testTag("notes_filter_label_$label"),
+          testTag = "notes_filter_label_$label",
         )
       }
 
-      FilterChip(
+      ToolboxPillNavigationItem(
         selected = activeFilter == NotesFilter.Pinned,
         onClick = { onSelectFilter(NotesFilter.Pinned) },
-        label = { Text("Pinned") },
-        leadingIcon = {
-          Icon(
-            imageVector = Icons.Default.PushPin,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-        },
-        shape = RoundedCornerShape(20.dp),
-        colors = FilterChipDefaults.filterChipColors(
-          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        ),
-        modifier = Modifier.testTag("notes_filter_pinned"),
+        leadingIcon = Icons.Default.PushPin,
+        label = "Pinned",
+        testTag = "notes_filter_pinned",
       )
 
-      FilterChip(
+      ToolboxPillNavigationItem(
         selected = activeFilter == NotesFilter.Checklists,
         onClick = { onSelectFilter(NotesFilter.Checklists) },
-        label = { Text("Checklists") },
-        leadingIcon = {
-          Icon(
-            imageVector = Icons.Default.CheckBox,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-        },
-        shape = RoundedCornerShape(20.dp),
-        colors = FilterChipDefaults.filterChipColors(
-          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        ),
-        modifier = Modifier.testTag("notes_filter_checklists"),
+        leadingIcon = Icons.Default.CheckBox,
+        label = "Checklists",
+        testTag = "notes_filter_checklists",
       )
 
-      FilterChip(
+      ToolboxPillNavigationItem(
         selected = activeFilter == NotesFilter.Archived,
         onClick = { onSelectFilter(NotesFilter.Archived) },
-        label = {
-          Text(if (archivedCount > 0) "Archive ($archivedCount)" else "Archive")
-        },
-        leadingIcon = {
-          Icon(
-            imageVector = Icons.Default.Archive,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-        },
-        shape = RoundedCornerShape(20.dp),
-        colors = FilterChipDefaults.filterChipColors(
-          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        ),
-        modifier = Modifier.testTag("notes_filter_archived"),
+        leadingIcon = Icons.Default.Archive,
+        label = if (archivedCount > 0) "Archive ($archivedCount)" else "Archive",
+        testTag = "notes_filter_archived",
       )
 
-      FilterChip(
+      ToolboxPillNavigationItem(
         selected = activeFilter == NotesFilter.Trash,
         onClick = { onSelectFilter(NotesFilter.Trash) },
-        label = {
-          Text(if (trashedCount > 0) "Trash ($trashedCount)" else "Trash")
-        },
-        leadingIcon = {
-          Icon(
-            imageVector = Icons.Default.Delete,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-        },
-        shape = RoundedCornerShape(20.dp),
-        colors = FilterChipDefaults.filterChipColors(
-          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        ),
-        modifier = Modifier.testTag("notes_filter_trash"),
+        leadingIcon = Icons.Default.Delete,
+        label = if (trashedCount > 0) "Trash ($trashedCount)" else "Trash",
+        testTag = "notes_filter_trash",
       )
-    }
-
-    // Pinned floating [# per row] + [Manage Labels] buttons on the right edge of the pill bar
-    Row(
-      modifier = Modifier
-        .align(Alignment.CenterEnd)
-        .pillBarFloatingControlsBackdrop(backgroundColor = MaterialTheme.colorScheme.background)
-        .padding(end = 12.dp)
-        .zIndex(10f),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
+    },
+    floatingControls = {
       if (isGridView) {
         ToolboxFloatingColumnsButton(
           columnsPerRow = gridColumnsPerRow,
@@ -2022,8 +1963,8 @@ private fun NotesFilterChipsRow(
           )
         }
       }
-    }
-  }
+    },
+  )
 }
 
 @Composable
@@ -2539,7 +2480,9 @@ fun NoteCard(
 private fun NotesQuickCaptureBar(
   isAddNoteOpen: Boolean = false,
   isChecklistMode: Boolean = false,
+  isPinned: Boolean = false,
   onTakeTextNote: () -> Unit,
+  onTakePinnedNote: () -> Unit = {},
   onTakeChecklistNote: () -> Unit,
   onDragDownDelta: (Float) -> Unit = {},
   onDragDownEnd: () -> Unit = {},
@@ -2629,30 +2572,61 @@ private fun NotesQuickCaptureBar(
         )
       }
 
-      IconButton(
-        onClick = onTakeChecklistNote,
-        modifier = Modifier
-          .size(28.dp)
-          .clip(CircleShape)
-          .background(
-            if (isChecklistMode) {
-              MaterialTheme.colorScheme.primaryContainer
-            } else {
-              Color.Transparent
-            },
-          )
-          .testTag("new_checklist_button"),
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        Icon(
-          imageVector = Icons.Default.CheckBox,
-          contentDescription = "New checklist note",
-          tint = if (isChecklistMode) {
-            MaterialTheme.colorScheme.onPrimaryContainer
-          } else {
-            MaterialTheme.colorScheme.primary
-          },
-          modifier = Modifier.size(18.dp),
-        )
+        IconButton(
+          onClick = onTakePinnedNote,
+          modifier = Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .background(
+              if (isPinned) {
+                MaterialTheme.colorScheme.primaryContainer
+              } else {
+                Color.Transparent
+              },
+            )
+            .testTag("new_pin_note_button"),
+        ) {
+          Icon(
+            imageVector = if (isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+            contentDescription = if (isPinned) "Unpin note" else "Pin note",
+            tint = if (isPinned) {
+              MaterialTheme.colorScheme.onPrimaryContainer
+            } else {
+              MaterialTheme.colorScheme.primary
+            },
+            modifier = Modifier.size(18.dp),
+          )
+        }
+
+        IconButton(
+          onClick = onTakeChecklistNote,
+          modifier = Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .background(
+              if (isChecklistMode) {
+                MaterialTheme.colorScheme.primaryContainer
+              } else {
+                Color.Transparent
+              },
+            )
+            .testTag("new_checklist_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.CheckBox,
+            contentDescription = "New checklist note",
+            tint = if (isChecklistMode) {
+              MaterialTheme.colorScheme.onPrimaryContainer
+            } else {
+              MaterialTheme.colorScheme.primary
+            },
+            modifier = Modifier.size(18.dp),
+          )
+        }
       }
     }
   }
@@ -2824,23 +2798,43 @@ private fun AddNoteSlideUpPanel(
         .heightIn(max = 440.dp)
         .verticalScroll(scrollState)
         .padding(horizontal = 16.dp, vertical = 12.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       NoteEditorContent(
+        draft = draft,
+        onDraftChange = onDraftChange,
+        autoFocusTitle = autoFocusTitle,
+        minContentLines = 3,
+        showInlineChecklistInput = true,
+        showEditedTimestampBeforeInlineChecklistInput = true,
+        onChecklistDragActiveChange = { isChecklistDragActive = it },
+      )
+
+      if (!draft.isChecklist) {
+        Box(
+          modifier = Modifier.fillMaxWidth(),
+          contentAlignment = Alignment.CenterEnd,
+        ) {
+          Text(
+            text = "Edited ${NotesEngine.formatTimestamp(draft.updatedAt)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("editor_timestamp"),
+          )
+        }
+      }
+
+      NoteColorPickerSection(
+        selectedColor = draft.color,
+        onSelectColor = { onDraftChange(draft.copy(color = it)) },
+      )
+
+      NoteLabelsSection(
         draft = draft,
         onDraftChange = onDraftChange,
         availableLabels = availableLabels,
         newlyCreatedLabels = newlyCreatedLabels,
         onNewlyCreatedLabelsChange = onNewlyCreatedLabelsChange,
-        autoFocusTitle = autoFocusTitle,
-        minContentLines = 3,
-        showArchiveAndCopyButtons = false,
-        showTimestampFooter = false,
-        onChecklistDragActiveChange = { isChecklistDragActive = it },
-        onSaveAndDismiss = onSaveAndDismiss,
-        onMoveToTrash = { onDiscard() },
-        onDeletePermanently = { onDiscard() },
-        onRestoreFromTrash = {},
-        onCopyToClipboard = onCopyToClipboard,
       )
     }
 
@@ -2848,15 +2842,9 @@ private fun AddNoteSlideUpPanel(
       modifier = Modifier
         .fillMaxWidth()
         .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp),
-      horizontalArrangement = Arrangement.SpaceBetween,
+      horizontalArrangement = Arrangement.End,
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      Text(
-        text = "Edited ${NotesEngine.formatTimestamp(draft.updatedAt)}",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-
       FilledIconButton(
         onClick = onSaveAndDismiss,
         shape = CircleShape,
@@ -2910,15 +2898,141 @@ private fun SingleNoteView(
       .testTag("single_note_view"),
   ) {
     ToolboxTopBar(
-      title = draft.title.ifBlank { if (draft.isChecklist) "Checklist Note" else "Edit Note" },
-      subtext = "Edited ${NotesEngine.formatTimestamp(draft.updatedAt)}",
+      title = "",
+      subtext = null,
       icon = Icons.AutoMirrored.Filled.StickyNote2,
       containerColor = topBarColor,
       onNavigateBack = { onSaveAndDismiss(draft, newlyCreatedLabels) },
       backContentDescription = "Back to notes",
       backButtonTestTag = "single_note_back_button",
-      titleTestTag = "single_note_title",
-      subtextTestTag = "single_note_subtext",
+      actions = {
+        if (draft.isTrashed) {
+          IconButton(
+            onClick = { onRestoreFromTrash(draft.id) },
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("editor_restore_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.RestoreFromTrash,
+              contentDescription = "Restore note",
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+          IconButton(
+            onClick = { onDeletePermanently(draft.id) },
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("editor_delete_forever_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.DeleteForever,
+              contentDescription = "Delete forever",
+              tint = MaterialTheme.colorScheme.error,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+        } else {
+          IconButton(
+            onClick = {
+              val newPinned = !draft.isPinned
+              draft = draft.copy(
+                isPinned = newPinned,
+                isArchived = if (newPinned) false else draft.isArchived,
+              )
+            },
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("editor_pin_button"),
+          ) {
+            Icon(
+              imageVector = if (draft.isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+              contentDescription = if (draft.isPinned) "Unpin note" else "Pin note",
+              tint = if (draft.isPinned) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+              },
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          IconButton(
+            onClick = { draft = NotesEngine.toggleChecklistMode(draft) },
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("editor_checklist_toggle"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.CheckBox,
+              contentDescription = if (draft.isChecklist) {
+                "Hide checkboxes"
+              } else {
+                "Show checkboxes"
+              },
+              tint = if (draft.isChecklist) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+              },
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          IconButton(
+            onClick = {
+              val newArchived = !draft.isArchived
+              draft = draft.copy(
+                isArchived = newArchived,
+                isPinned = if (newArchived) false else draft.isPinned,
+              )
+            },
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("editor_archive_button"),
+          ) {
+            Icon(
+              imageVector = if (draft.isArchived) Icons.Default.Unarchive else Icons.Default.Archive,
+              contentDescription = if (draft.isArchived) "Unarchive" else "Archive",
+              tint = if (draft.isArchived) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+              },
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          IconButton(
+            onClick = { onCopyToClipboard(draft) },
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("editor_copy_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.ContentCopy,
+              contentDescription = "Copy note text",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          IconButton(
+            onClick = { onMoveToTrash(draft.id) },
+            modifier = Modifier
+              .size(36.dp)
+              .testTag("editor_delete_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Delete,
+              contentDescription = "Move to trash",
+              tint = MaterialTheme.colorScheme.error,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+        }
+      },
     )
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
@@ -2932,18 +3046,24 @@ private fun SingleNoteView(
       NoteEditorContent(
         draft = draft,
         onDraftChange = { draft = it },
-        availableLabels = availableLabels,
-        newlyCreatedLabels = newlyCreatedLabels,
-        onNewlyCreatedLabelsChange = { newlyCreatedLabels = it },
         autoFocusTitle = false,
         minContentLines = 5,
         showInlineChecklistInput = false,
-        showColorPicker = false,
-        onSaveAndDismiss = { onSaveAndDismiss(draft, newlyCreatedLabels) },
-        onMoveToTrash = onMoveToTrash,
-        onDeletePermanently = onDeletePermanently,
-        onRestoreFromTrash = onRestoreFromTrash,
-        onCopyToClipboard = onCopyToClipboard,
+        showEditedTimestampBeforeInlineChecklistInput = false,
+      )
+    }
+
+    Box(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 16.dp, vertical = 6.dp),
+      contentAlignment = Alignment.CenterEnd,
+    ) {
+      Text(
+        text = "Edited ${NotesEngine.formatTimestamp(draft.updatedAt)}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.testTag("single_note_timestamp"),
       )
     }
 
@@ -2979,13 +3099,26 @@ private fun SingleNoteView(
         .fillMaxWidth()
         .testTag("single_note_bottom_color_bar"),
     ) {
-      NoteColorPickerSection(
-        selectedColor = draft.color,
-        onSelectColor = { draft = draft.copy(color = it) },
+      Column(
         modifier = Modifier
           .fillMaxWidth()
           .padding(horizontal = 16.dp, vertical = 12.dp),
-      )
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        NoteColorPickerSection(
+          selectedColor = draft.color,
+          onSelectColor = { draft = draft.copy(color = it) },
+          modifier = Modifier.fillMaxWidth(),
+        )
+        NoteLabelsSection(
+          draft = draft,
+          onDraftChange = { draft = it },
+          availableLabels = availableLabels,
+          newlyCreatedLabels = newlyCreatedLabels,
+          onNewlyCreatedLabelsChange = { newlyCreatedLabels = it },
+          modifier = Modifier.fillMaxWidth(),
+        )
+      }
     }
   }
 }
@@ -3124,30 +3257,17 @@ private fun NoteColorPickerSection(
   }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun NoteEditorContent(
   draft: NoteItem,
   onDraftChange: (NoteItem) -> Unit,
-  availableLabels: List<String>,
-  newlyCreatedLabels: List<String>,
-  onNewlyCreatedLabelsChange: (List<String>) -> Unit,
   autoFocusTitle: Boolean,
   minContentLines: Int = 5,
-  showArchiveAndCopyButtons: Boolean = true,
   showInlineChecklistInput: Boolean = true,
-  showColorPicker: Boolean = true,
-  showTimestampFooter: Boolean = true,
+  showEditedTimestampBeforeInlineChecklistInput: Boolean = false,
   onChecklistDragActiveChange: (Boolean) -> Unit = {},
-  onSaveAndDismiss: () -> Unit,
-  onMoveToTrash: (String) -> Unit,
-  onDeletePermanently: (String) -> Unit,
-  onRestoreFromTrash: (String) -> Unit,
-  onCopyToClipboard: (NoteItem) -> Unit,
 ) {
   var newChecklistItemText by remember(draft.id) { mutableStateOf("") }
-  var newLabelInput by remember(draft.id) { mutableStateOf("") }
-  var showLabelPicker by remember(draft.id) { mutableStateOf(false) }
   var isCheckedSectionExpanded by remember(draft.id) { mutableStateOf(true) }
 
   // Drag-and-drop reorder state for checklist items
@@ -3222,184 +3342,35 @@ private fun NoteEditorContent(
 
   Column(
     modifier = Modifier.fillMaxWidth(),
-    verticalArrangement = Arrangement.spacedBy(if (draft.isChecklist) 8.dp else 12.dp),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
-    // Editor Top Toolbar
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      IconButton(
-        onClick = onSaveAndDismiss,
-        modifier = Modifier
-          .size(28.dp)
-          .testTag("editor_save_button"),
-      ) {
-        Icon(
-          imageVector = Icons.Default.Check,
-          contentDescription = "Done",
-          tint = MaterialTheme.colorScheme.primary,
-          modifier = Modifier.size(18.dp),
-        )
-      }
-
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        if (draft.isTrashed) {
-          IconButton(
-            onClick = { onRestoreFromTrash(draft.id) },
-            modifier = Modifier
-              .size(28.dp)
-              .testTag("editor_restore_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.RestoreFromTrash,
-              contentDescription = "Restore note",
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(18.dp),
-            )
-          }
-          IconButton(
-            onClick = { onDeletePermanently(draft.id) },
-            modifier = Modifier
-              .size(28.dp)
-              .testTag("editor_delete_forever_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.DeleteForever,
-              contentDescription = "Delete forever",
-              tint = MaterialTheme.colorScheme.error,
-              modifier = Modifier.size(18.dp),
-            )
-          }
-        } else {
-          IconButton(
-            onClick = {
-              val newPinned = !draft.isPinned
-              onDraftChange(
-                draft.copy(
-                  isPinned = newPinned,
-                  isArchived = if (newPinned) false else draft.isArchived,
-                ),
-              )
-            },
-            modifier = Modifier
-              .size(28.dp)
-              .testTag("editor_pin_button"),
-          ) {
-            Icon(
-              imageVector = if (draft.isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
-              contentDescription = if (draft.isPinned) "Unpin note" else "Pin note",
-              tint = if (draft.isPinned) {
-                MaterialTheme.colorScheme.primary
-              } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-              },
-              modifier = Modifier.size(18.dp),
-            )
-          }
-
-          IconButton(
-            onClick = { onDraftChange(NotesEngine.toggleChecklistMode(draft)) },
-            modifier = Modifier
-              .size(28.dp)
-              .testTag("editor_checklist_toggle"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.CheckBox,
-              contentDescription = if (draft.isChecklist) {
-                "Hide checkboxes"
-              } else {
-                "Show checkboxes"
-              },
-              tint = if (draft.isChecklist) {
-                MaterialTheme.colorScheme.primary
-              } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-              },
-              modifier = Modifier.size(18.dp),
-            )
-          }
-
-          if (showArchiveAndCopyButtons) {
-            IconButton(
-              onClick = {
-                val newArchived = !draft.isArchived
-                onDraftChange(
-                  draft.copy(
-                    isArchived = newArchived,
-                    isPinned = if (newArchived) false else draft.isPinned,
-                  ),
-                )
-              },
-              modifier = Modifier
-                .size(28.dp)
-                .testTag("editor_archive_button"),
-            ) {
-              Icon(
-                imageVector = if (draft.isArchived) Icons.Default.Unarchive else Icons.Default.Archive,
-                contentDescription = if (draft.isArchived) "Unarchive" else "Archive",
-                tint = if (draft.isArchived) {
-                  MaterialTheme.colorScheme.primary
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                modifier = Modifier.size(18.dp),
-              )
-            }
-
-            IconButton(
-              onClick = { onCopyToClipboard(draft) },
-              modifier = Modifier
-                .size(28.dp)
-                .testTag("editor_copy_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.ContentCopy,
-                contentDescription = "Copy note text",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-              )
-            }
-          }
-
-          IconButton(
-            onClick = { onMoveToTrash(draft.id) },
-            modifier = Modifier
-              .size(28.dp)
-              .testTag("editor_delete_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Delete,
-              contentDescription = "Move to trash",
-              tint = MaterialTheme.colorScheme.error,
-              modifier = Modifier.size(18.dp),
-            )
-          }
-        }
-      }
-    }
-
-    // Title Field
-    OutlinedTextField(
+    // Title Field (borderless / no outline)
+    BasicTextField(
       value = draft.title,
       onValueChange = { onDraftChange(draft.copy(title = it)) },
-      placeholder = {
-        Text(
-          text = "Title",
-          style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold,
-        )
-      },
       textStyle = MaterialTheme.typography.titleLarge.copy(
         fontWeight = FontWeight.Bold,
         color = MaterialTheme.colorScheme.onSurface,
       ),
       singleLine = true,
-      shape = RoundedCornerShape(14.dp),
+      cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+      decorationBox = { innerTextField ->
+        Box(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        ) {
+          if (draft.title.isEmpty()) {
+            Text(
+              text = "Title",
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            )
+          }
+          innerTextField()
+        }
+      },
       modifier = Modifier
         .fillMaxWidth()
         .focusRequester(titleFocusRequester)
@@ -3456,6 +3427,22 @@ private fun NoteEditorContent(
                   ),
                 )
               },
+            )
+          }
+        }
+
+        if (showEditedTimestampBeforeInlineChecklistInput && showInlineChecklistInput) {
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(top = 4.dp, bottom = 2.dp),
+            contentAlignment = Alignment.CenterEnd,
+          ) {
+            Text(
+              text = "Edited ${NotesEngine.formatTimestamp(draft.updatedAt)}",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.testTag("editor_timestamp"),
             )
           }
         }
@@ -3591,185 +3578,200 @@ private fun NoteEditorContent(
         }
       }
     } else {
-      OutlinedTextField(
+      BasicTextField(
         value = draft.content,
         onValueChange = { onDraftChange(draft.copy(content = it)) },
-        placeholder = { Text("Take a note...") },
+        textStyle = MaterialTheme.typography.bodyLarge.copy(
+          color = MaterialTheme.colorScheme.onSurface,
+        ),
         minLines = minContentLines,
-        shape = RoundedCornerShape(14.dp),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        decorationBox = { innerTextField ->
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(vertical = 4.dp),
+          ) {
+            if (draft.content.isEmpty()) {
+              Text(
+                text = "Take a note...",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+              )
+            }
+            innerTextField()
+          }
+        },
         modifier = Modifier
           .fillMaxWidth()
           .testTag("editor_content_input"),
       )
     }
+  }
+}
 
-    // Color Picker Strip
-    if (showColorPicker) {
-      NoteColorPickerSection(
-        selectedColor = draft.color,
-        onSelectColor = { onDraftChange(draft.copy(color = it)) },
-      )
-    }
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun NoteLabelsSection(
+  draft: NoteItem,
+  onDraftChange: (NoteItem) -> Unit,
+  availableLabels: List<String>,
+  newlyCreatedLabels: List<String>,
+  onNewlyCreatedLabelsChange: (List<String>) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  var newLabelInput by remember(draft.id) { mutableStateOf("") }
+  var showLabelPicker by remember(draft.id) { mutableStateOf(false) }
+  val keyboardController = LocalSoftwareKeyboardController.current
 
-    // Labels assignment section
-    Column(
+  Column(
+    modifier = modifier.fillMaxWidth(),
+    verticalArrangement = Arrangement.spacedBy(6.dp),
+  ) {
+    Row(
       modifier = Modifier.fillMaxWidth(),
-      verticalArrangement = Arrangement.spacedBy(6.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
     ) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Text(
-          text = "Labels",
-          style = MaterialTheme.typography.labelMedium,
-          fontWeight = FontWeight.SemiBold,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        TextButton(
-          onClick = { showLabelPicker = !showLabelPicker },
-          shape = CircleShape,
-          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-          modifier = Modifier
-            .height(28.dp)
-            .testTag("editor_toggle_label_picker"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.NewLabel,
-            contentDescription = null,
-            modifier = Modifier.size(15.dp),
-          )
-          Spacer(modifier = Modifier.width(4.dp))
-          Text(
-            text = if (showLabelPicker) "Hide label input" else "Add label",
-            style = MaterialTheme.typography.labelMedium,
-          )
-        }
-      }
-
-      val combinedLabels = (availableLabels + newlyCreatedLabels + draft.labels)
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
-        .distinct()
-
-      if (combinedLabels.isNotEmpty()) {
-        FlowRow(
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-          verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-          combinedLabels.forEach { label ->
-            val isAttached = draft.labels.any { it.equals(label, ignoreCase = true) }
-            FilterChip(
-              selected = isAttached,
-              onClick = {
-                onDraftChange(
-                  if (isAttached) {
-                    draft.copy(labels = draft.labels.filterNot { it.equals(label, ignoreCase = true) })
-                  } else {
-                    draft.copy(labels = draft.labels + label)
-                  },
-                )
-              },
-              label = { Text(label) },
-              shape = RoundedCornerShape(20.dp),
-              modifier = Modifier.testTag("editor_label_chip_$label"),
-            )
-          }
-        }
-      }
-
-      AnimatedVisibility(visible = showLabelPicker) {
-        val newLabelFocusRequester = remember { FocusRequester() }
-        val trimmedInlineLabel = newLabelInput.trim()
-        val canAttachInlineLabel = trimmedInlineLabel.isNotEmpty()
-        val attachInlineLabel = {
-          if (canAttachInlineLabel) {
-            if (draft.labels.none { it.equals(trimmedInlineLabel, ignoreCase = true) }) {
-              onDraftChange(draft.copy(labels = draft.labels + trimmedInlineLabel))
-            }
-            if (newlyCreatedLabels.none { it.equals(trimmedInlineLabel, ignoreCase = true) }) {
-              onNewlyCreatedLabelsChange(newlyCreatedLabels + trimmedInlineLabel)
-            }
-            newLabelInput = ""
-          }
-        }
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          OutlinedTextField(
-            value = newLabelInput,
-            onValueChange = { newLabelInput = it },
-            placeholder = { Text("New label name...") },
-            singleLine = true,
-            shape = CircleShape,
-            leadingIcon = {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.Label,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-              )
-            },
-            trailingIcon = {
-              if (newLabelInput.isNotEmpty()) {
-                IconButton(
-                  onClick = { newLabelInput = "" },
-                  modifier = Modifier.size(28.dp),
-                ) {
-                  Icon(
-                    imageVector = Icons.Default.Clear,
-                    contentDescription = "Clear label input",
-                    modifier = Modifier.size(16.dp),
-                  )
-                }
-              }
-            },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { attachInlineLabel() }),
-            modifier = Modifier
-              .weight(1f)
-              .focusRequester(newLabelFocusRequester)
-              .testTag("editor_new_label_input"),
-          )
-          FilledIconButton(
-            onClick = attachInlineLabel,
-            enabled = canAttachInlineLabel,
-            shape = CircleShape,
-            colors = IconButtonDefaults.filledIconButtonColors(
-              containerColor = MaterialTheme.colorScheme.primary,
-              contentColor = MaterialTheme.colorScheme.onPrimary,
-              disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-              disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-            ),
-            modifier = Modifier
-              .size(28.dp)
-              .testTag("editor_add_label_confirm"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Add,
-              contentDescription = "Attach label",
-              modifier = Modifier.size(18.dp),
-            )
-          }
-        }
-        LaunchedEffect(Unit) {
-          try {
-            newLabelFocusRequester.requestFocus()
-            keyboardController?.show()
-          } catch (_: Exception) {}
-        }
-      }
-    }
-
-    // Edited timestamp footer
-    if (showTimestampFooter) {
       Text(
-        text = "Edited ${NotesEngine.formatTimestamp(draft.updatedAt)}",
-        style = MaterialTheme.typography.bodySmall,
+        text = "Labels",
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
+      TextButton(
+        onClick = { showLabelPicker = !showLabelPicker },
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+        modifier = Modifier
+          .height(28.dp)
+          .testTag("editor_toggle_label_picker"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.NewLabel,
+          contentDescription = null,
+          modifier = Modifier.size(15.dp),
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+          text = if (showLabelPicker) "Hide label input" else "Add label",
+          style = MaterialTheme.typography.labelMedium,
+        )
+      }
+    }
+
+    val combinedLabels = (availableLabels + newlyCreatedLabels + draft.labels)
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .distinct()
+
+    if (combinedLabels.isNotEmpty()) {
+      FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        combinedLabels.forEach { label ->
+          val isAttached = draft.labels.any { it.equals(label, ignoreCase = true) }
+          FilterChip(
+            selected = isAttached,
+            onClick = {
+              onDraftChange(
+                if (isAttached) {
+                  draft.copy(labels = draft.labels.filterNot { it.equals(label, ignoreCase = true) })
+                } else {
+                  draft.copy(labels = draft.labels + label)
+                },
+              )
+            },
+            label = { Text(label) },
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.testTag("editor_label_chip_$label"),
+          )
+        }
+      }
+    }
+
+    AnimatedVisibility(visible = showLabelPicker) {
+      val newLabelFocusRequester = remember { FocusRequester() }
+      val trimmedInlineLabel = newLabelInput.trim()
+      val canAttachInlineLabel = trimmedInlineLabel.isNotEmpty()
+      val attachInlineLabel = {
+        if (canAttachInlineLabel) {
+          if (draft.labels.none { it.equals(trimmedInlineLabel, ignoreCase = true) }) {
+            onDraftChange(draft.copy(labels = draft.labels + trimmedInlineLabel))
+          }
+          if (newlyCreatedLabels.none { it.equals(trimmedInlineLabel, ignoreCase = true) }) {
+            onNewlyCreatedLabelsChange(newlyCreatedLabels + trimmedInlineLabel)
+          }
+          newLabelInput = ""
+        }
+      }
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(
+          value = newLabelInput,
+          onValueChange = { newLabelInput = it },
+          placeholder = { Text("New label name...") },
+          singleLine = true,
+          shape = CircleShape,
+          leadingIcon = {
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.Label,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+            )
+          },
+          trailingIcon = {
+            if (newLabelInput.isNotEmpty()) {
+              IconButton(
+                onClick = { newLabelInput = "" },
+                modifier = Modifier.size(28.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Clear,
+                  contentDescription = "Clear label input",
+                  modifier = Modifier.size(16.dp),
+                )
+              }
+            }
+          },
+          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+          keyboardActions = KeyboardActions(onDone = { attachInlineLabel() }),
+          modifier = Modifier
+            .weight(1f)
+            .focusRequester(newLabelFocusRequester)
+            .testTag("editor_new_label_input"),
+        )
+        FilledIconButton(
+          onClick = attachInlineLabel,
+          enabled = canAttachInlineLabel,
+          shape = CircleShape,
+          colors = IconButtonDefaults.filledIconButtonColors(
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+          ),
+          modifier = Modifier
+            .size(28.dp)
+            .testTag("editor_add_label_confirm"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = "Attach label",
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
+      LaunchedEffect(Unit) {
+        try {
+          newLabelFocusRequester.requestFocus()
+          keyboardController?.show()
+        } catch (_: Exception) {}
+      }
     }
   }
 }

@@ -3,6 +3,8 @@ package com.example.toolbox
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.entryProvider
@@ -19,6 +21,9 @@ fun MainNavigation(
   initialExpandMusicPlayer: Boolean = false,
 ) {
   val backStack = rememberNavBackStack(Main)
+  val currentStandaloneTool by rememberUpdatedState(standaloneTool)
+  val currentInitialDirectory by rememberUpdatedState(initialDirectory)
+  val currentInitialExpandMusicPlayer by rememberUpdatedState(initialExpandMusicPlayer)
 
   NavDisplay(
     backStack = backStack,
@@ -27,9 +32,9 @@ fun MainNavigation(
       entryProvider {
         entry<Main> {
           MainScreen(
-            standaloneTool = standaloneTool,
-            initialDirectory = initialDirectory,
-            initialExpandMusicPlayer = initialExpandMusicPlayer,
+            standaloneTool = currentStandaloneTool,
+            initialDirectory = currentInitialDirectory,
+            initialExpandMusicPlayer = currentInitialExpandMusicPlayer,
             onItemClick = { navKey -> backStack.add(navKey) },
           )
         }

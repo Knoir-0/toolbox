@@ -1342,8 +1342,6 @@ fun TodoListScreen(
             }
           },
         )
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
         // 2. Pill Filter Row (Tasks, Scheduled, Completed) + Pinned Floating [Saved Tasks] Control
         TodoFilterPillRow(
           selectedTab = selectedTab,
@@ -1360,8 +1358,6 @@ fun TodoListScreen(
             selectedTaskIds = emptySet()
           },
         )
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
         // 3. In-app Notification Popup Banner when a scheduled note's date/time is reached
         AnimatedVisibility(
@@ -3067,114 +3063,35 @@ private fun TodoFilterPillRow(
   onOpenSavedTasks: () -> Unit = {},
   onSelectTab: (TodoFilterTab) -> Unit,
 ) {
-  Box(modifier = Modifier.fillMaxWidth()) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .fadingPillRowUnderFloatingControls(hasColumnsButton = false)
-        .horizontalScroll(rememberScrollState())
-        .padding(
-          start = 12.dp,
-          end = 56.dp,
-          top = 6.dp,
-          bottom = 6.dp,
-        )
-        .testTag("todo_pill_bar"),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      val isTasksSelected = selectedTab == TodoFilterTab.TASKS
-      FilterChip(
-        selected = isTasksSelected,
+  ToolboxPillNavigationBar(
+    rowTestTag = "todo_pill_bar",
+    floatingButtonsCount = 1,
+    pills = {
+      ToolboxPillNavigationItem(
+        selected = selectedTab == TodoFilterTab.TASKS,
         onClick = { onSelectTab(TodoFilterTab.TASKS) },
-        shape = RoundedCornerShape(20.dp),
-        leadingIcon = {
-          Icon(
-            imageVector = Icons.Default.TaskAlt,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-        },
-        label = {
-          Text(
-            text = if (tasksCount == 1) "1 task" else "$tasksCount tasks",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (isTasksSelected) FontWeight.Bold else FontWeight.Medium,
-          )
-        },
-        colors = FilterChipDefaults.filterChipColors(
-          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-          selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-        ),
-        modifier = Modifier.testTag("todo_task_count_label"),
+        leadingIcon = Icons.Default.TaskAlt,
+        label = if (tasksCount == 1) "1 task" else "$tasksCount tasks",
+        testTag = "todo_task_count_label",
       )
 
-      val isScheduledSelected = selectedTab == TodoFilterTab.SCHEDULED
-      FilterChip(
-        selected = isScheduledSelected,
+      ToolboxPillNavigationItem(
+        selected = selectedTab == TodoFilterTab.SCHEDULED,
         onClick = { onSelectTab(TodoFilterTab.SCHEDULED) },
-        shape = RoundedCornerShape(20.dp),
-        leadingIcon = {
-          Icon(
-            imageVector = Icons.Default.Schedule,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-        },
-        label = {
-          Text(
-            text = "$scheduledCount scheduled",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (isScheduledSelected) FontWeight.Bold else FontWeight.Medium,
-          )
-        },
-        colors = FilterChipDefaults.filterChipColors(
-          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-          selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-        ),
-        modifier = Modifier.testTag("todo_scheduled_count_label"),
+        leadingIcon = Icons.Default.Schedule,
+        label = "$scheduledCount scheduled",
+        testTag = "todo_scheduled_count_label",
       )
 
-      val isCompletedSelected = selectedTab == TodoFilterTab.COMPLETED
-      FilterChip(
-        selected = isCompletedSelected,
+      ToolboxPillNavigationItem(
+        selected = selectedTab == TodoFilterTab.COMPLETED,
         onClick = { onSelectTab(TodoFilterTab.COMPLETED) },
-        shape = RoundedCornerShape(20.dp),
-        leadingIcon = {
-          Icon(
-            imageVector = Icons.Default.CheckCircle,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-        },
-        label = {
-          Text(
-            text = "$completedCount completed",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (isCompletedSelected) FontWeight.Bold else FontWeight.Medium,
-          )
-        },
-        colors = FilterChipDefaults.filterChipColors(
-          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-          selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-        ),
-        modifier = Modifier.testTag("todo_completed_today_counter"),
+        leadingIcon = Icons.Default.CheckCircle,
+        label = "$completedCount completed",
+        testTag = "todo_completed_today_counter",
       )
-    }
-
-    // Pinned floating [Saved Tasks] button on the right edge of the pill bar
-    Row(
-      modifier = Modifier
-        .align(Alignment.CenterEnd)
-        .pillBarFloatingControlsBackdrop(backgroundColor = MaterialTheme.colorScheme.background)
-        .padding(end = 12.dp)
-        .zIndex(10f),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
+    },
+    floatingControls = {
       Surface(
         onClick = onOpenSavedTasks,
         shape = CircleShape,
@@ -3195,8 +3112,8 @@ private fun TodoFilterPillRow(
           )
         }
       }
-    }
-  }
+    },
+  )
 }
 
 /**

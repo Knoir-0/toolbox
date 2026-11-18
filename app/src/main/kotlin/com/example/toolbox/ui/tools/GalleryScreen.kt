@@ -1783,10 +1783,6 @@ fun GalleryScreen(
         },
       )
 
-      HorizontalDivider(
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-      )
-
       val folderAwaitingPermission = (
         pendingPermissionFolder ?: selectedDefaultFolder?.let { sel ->
           folderPills.find {
@@ -2682,419 +2678,324 @@ private fun GalleryNavigationAndDensityBar(
     }
   }
 
-  Surface(
-    color = MaterialTheme.colorScheme.surface,
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    Box(
-      modifier = Modifier
-        .fillMaxWidth()
-        .testTag("gallery_pill_bar")
-        .onGloballyPositioned { coords ->
-          barCoordinates = coords
-        }
-        .pointerInput(isSearchView, viewMode) {
-          if (isSearchView) return@pointerInput
-          detectDragGesturesAfterLongPress(
-            onDragStart = { startOffset ->
-              val barWidth = (barCoordinates?.size?.width ?: 0).toFloat()
-              if (barWidth > 0f && startOffset.x >= barWidth - floatingButtonsExcludeZonePx) {
-                return@detectDragGesturesAfterLongPress
-              }
-              // The "Albums" pill is fixed to the front of the list and cannot be dragged
-              if (albumsPillBounds?.contains(startOffset) == true) {
-                return@detectDragGesturesAfterLongPress
-              }
-              val directHit = currentFolders.firstOrNull { folder ->
-                pillBounds[folder.displayPath]?.contains(startOffset) == true
-              }
-              val hitFolder = directHit ?: currentFolders.minByOrNull { folder ->
-                val rect = pillBounds[folder.displayPath] ?: return@minByOrNull Float.MAX_VALUE
-                val dx = when {
-                  startOffset.x < rect.left -> rect.left - startOffset.x
-                  startOffset.x > rect.right -> startOffset.x - rect.right
-                  else -> 0f
-                }
-                val dy = when {
-                  startOffset.y < rect.top -> rect.top - startOffset.y
-                  startOffset.y > rect.bottom -> startOffset.y - rect.bottom
-                  else -> 0f
-                }
-                dx + dy
-              }?.takeIf { folder ->
-                val rect = pillBounds[folder.displayPath] ?: return@takeIf false
-                val dx = when {
-                  startOffset.x < rect.left -> rect.left - startOffset.x
-                  startOffset.x > rect.right -> startOffset.x - rect.right
-                  else -> 0f
-                }
-                val albumsRect = albumsPillBounds
-                val closerToAlbums = albumsRect != null &&
-                  abs(startOffset.x - albumsRect.center.x) < abs(startOffset.x - rect.center.x)
-                dx <= maxHitSlopPx && !closerToAlbums
-              }
+  val floatingCount = when {
+    isSearchView -> 1
+    viewMode == GalleryViewMode.TILE -> 3
+    else -> 2
+  }
 
-              if (hitFolder != null) {
-                val rect = pillBounds[hitFolder.displayPath]
-                draggedFolder = hitFolder
-                dragPointerOffset = startOffset
-                grabOffsetFromCenter = if (rect != null) {
-                  startOffset - rect.center
-                } else {
-                  Offset.Zero
-                }
-                draggedPillSize = rect?.let { IntSize(it.width.roundToInt(), it.height.roundToInt()) }
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+  ToolboxPillNavigationBar(
+    barTestTag = "gallery_pill_bar",
+    scrollState = scrollState,
+    scrollEnabled = draggedFolder == null,
+    floatingButtonsCount = floatingCount,
+    backgroundColor = MaterialTheme.colorScheme.background,
+    modifier = Modifier
+      .onGloballyPositioned { coords ->
+        barCoordinates = coords
+      }
+      .pointerInput(isSearchView, viewMode) {
+        if (isSearchView) return@pointerInput
+        detectDragGesturesAfterLongPress(
+          onDragStart = { startOffset ->
+            val barWidth = (barCoordinates?.size?.width ?: 0).toFloat()
+            if (barWidth > 0f && startOffset.x >= barWidth - floatingButtonsExcludeZonePx) {
+              return@detectDragGesturesAfterLongPress
+            }
+            // The "Albums" pill is fixed to the front of the list and cannot be dragged
+            if (albumsPillBounds?.contains(startOffset) == true) {
+              return@detectDragGesturesAfterLongPress
+            }
+            val directHit = currentFolders.firstOrNull { folder ->
+              pillBounds[folder.displayPath]?.contains(startOffset) == true
+            }
+            val hitFolder = directHit ?: currentFolders.minByOrNull { folder ->
+              val rect = pillBounds[folder.displayPath] ?: return@minByOrNull Float.MAX_VALUE
+              val dx = when {
+                startOffset.x < rect.left -> rect.left - startOffset.x
+                startOffset.x > rect.right -> startOffset.x - rect.right
+                else -> 0f
               }
-            },
-            onDrag = { change, dragAmount ->
-              val activeFolder = draggedFolder ?: return@detectDragGesturesAfterLongPress
-              change.consume()
-              dragPointerOffset += dragAmount
-              val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+              val dy = when {
+                startOffset.y < rect.top -> rect.top - startOffset.y
+                startOffset.y > rect.bottom -> startOffset.y - rect.bottom
+                else -> 0f
+              }
+              dx + dy
+            }?.takeIf { folder ->
+              val rect = pillBounds[folder.displayPath] ?: return@takeIf false
+              val dx = when {
+                startOffset.x < rect.left -> rect.left - startOffset.x
+                startOffset.x > rect.right -> startOffset.x - rect.right
+                else -> 0f
+              }
+              val albumsRect = albumsPillBounds
+              val closerToAlbums = albumsRect != null &&
+                abs(startOffset.x - albumsRect.center.x) < abs(startOffset.x - rect.center.x)
+              dx <= maxHitSlopPx && !closerToAlbums
+            }
 
-              val barWidth = (barCoordinates?.size?.width ?: 0).toFloat()
-              if (barWidth > 0f && scrollState.maxValue > 0) {
-                if (dragPointerOffset.x < leftEdgeScrollZonePx && scrollState.value > 0) {
-                  scrollState.dispatchRawDelta(-edgeScrollStepPx)
-                } else if (dragPointerOffset.x > barWidth - rightEdgeScrollZonePx && scrollState.value < scrollState.maxValue) {
-                  scrollState.dispatchRawDelta(edgeScrollStepPx)
-                }
+            if (hitFolder != null) {
+              val rect = pillBounds[hitFolder.displayPath]
+              draggedFolder = hitFolder
+              dragPointerOffset = startOffset
+              grabOffsetFromCenter = if (rect != null) {
+                startOffset - rect.center
+              } else {
+                Offset.Zero
               }
+              draggedPillSize = rect?.let { IntSize(it.width.roundToInt(), it.height.roundToInt()) }
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            }
+          },
+          onDrag = { change, dragAmount ->
+            val activeFolder = draggedFolder ?: return@detectDragGesturesAfterLongPress
+            change.consume()
+            dragPointerOffset += dragAmount
+            val desiredCenter = dragPointerOffset - grabOffsetFromCenter
 
-              val fromIndex = currentFolders.indexOfFirst {
-                it.displayPath.equals(activeFolder.displayPath, ignoreCase = true)
-              }
-              if (fromIndex >= 0 && currentFolders.size > 1) {
-                // Target index is constrained within currentFolders (after the fixed "Albums" pill at the front)
-                val targetIndex = currentFolders.indices.minByOrNull { idx ->
-                  val rect = pillBounds[currentFolders[idx].displayPath]
-                  if (rect != null) abs(desiredCenter.x - rect.center.x) else Float.MAX_VALUE
-                }
-                if (targetIndex != null && targetIndex != fromIndex) {
-                  currentOnMoveFolder(fromIndex, targetIndex)
-                }
-              }
-            },
-            onDragEnd = {
-              draggedFolder = null
-              dragPointerOffset = Offset.Zero
-              grabOffsetFromCenter = Offset.Zero
-              draggedPillSize = null
-            },
-            onDragCancel = {
-              draggedFolder = null
-              dragPointerOffset = Offset.Zero
-              grabOffsetFromCenter = Offset.Zero
-              draggedPillSize = null
-            },
-          )
-        },
-      contentAlignment = Alignment.CenterStart,
-    ) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .fadingPillRowUnderFloatingControls(
-            hasColumnsButton = !isSearchView && viewMode == GalleryViewMode.TILE,
-            extraControlButtonsCount = if (isSearchView) 0 else 1,
-          )
-          .horizontalScroll(scrollState, enabled = draggedFolder == null)
-          .padding(
-            start = 12.dp,
-            end = when {
-              isSearchView -> 56.dp
-              viewMode == GalleryViewMode.TILE -> 136.dp
-              else -> 96.dp
-            },
-            top = 6.dp,
-            bottom = 6.dp,
-          ),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        if (isSearchView) {
-          Row(
-            modifier = Modifier
-              .testTag("gallery_search_tag_filter_bar")
-              .testTag("gallery_search_tag_chips_row"),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Icon(
-              imageVector = Icons.Default.AutoAwesome,
-              contentDescription = "Smart tags",
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier
-                .size(16.dp)
-                .testTag("gallery_search_tags_icon"),
-            )
-
-            if (availableTags.isEmpty()) {
-              Text(
-                text = if (isIndexing && totalCount > 0) {
-                  "Scanning photos ($indexedCount/$totalCount)…"
-                } else {
-                  "No tags detected yet"
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.testTag("gallery_search_tags_empty_label"),
-              )
-            } else {
-              availableTags.forEach { (tag, count) ->
-                val isSelected = selectedTag != null && selectedTag.equals(tag, ignoreCase = true)
-                FilterChip(
-                  selected = isSelected,
-                  onClick = { onSelectTag(tag) },
-                  label = {
-                    Text(
-                      text = "$tag ($count)",
-                      style = MaterialTheme.typography.labelMedium,
-                      fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                    )
-                  },
-                  leadingIcon = {
-                    Icon(
-                      imageVector = when {
-                        tag.equals("QR Code", ignoreCase = true) || tag.equals("Barcode", ignoreCase = true) ->
-                          Icons.Default.QrCode2
-                        tag.equals("Text", ignoreCase = true) ||
-                          tag.equals("Document", ignoreCase = true) ||
-                          tag.equals("Receipt", ignoreCase = true) ||
-                          tag.equals("Notes", ignoreCase = true) ->
-                          Icons.Default.DocumentScanner
-                        else -> Icons.AutoMirrored.Filled.Label
-                      },
-                      contentDescription = null,
-                      modifier = Modifier.size(16.dp),
-                    )
-                  },
-                  shape = RoundedCornerShape(20.dp),
-                  colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-                  ),
-                  modifier = Modifier.testTag("gallery_tag_filter_$tag"),
-                )
+            val barWidth = (barCoordinates?.size?.width ?: 0).toFloat()
+            if (barWidth > 0f && scrollState.maxValue > 0) {
+              if (dragPointerOffset.x < leftEdgeScrollZonePx && scrollState.value > 0) {
+                scrollState.dispatchRawDelta(-edgeScrollStepPx)
+              } else if (dragPointerOffset.x > barWidth - rightEdgeScrollZonePx && scrollState.value < scrollState.maxValue) {
+                scrollState.dispatchRawDelta(edgeScrollStepPx)
               }
             }
+
+            val fromIndex = currentFolders.indexOfFirst {
+              it.displayPath.equals(activeFolder.displayPath, ignoreCase = true)
+            }
+            if (fromIndex >= 0 && currentFolders.size > 1) {
+              // Target index is constrained within currentFolders (after the fixed "Albums" pill at the front)
+              val targetIndex = currentFolders.indices.minByOrNull { idx ->
+                val rect = pillBounds[currentFolders[idx].displayPath]
+                if (rect != null) abs(desiredCenter.x - rect.center.x) else Float.MAX_VALUE
+              }
+              if (targetIndex != null && targetIndex != fromIndex) {
+                currentOnMoveFolder(fromIndex, targetIndex)
+              }
+            }
+          },
+          onDragEnd = {
+            draggedFolder = null
+            dragPointerOffset = Offset.Zero
+            grabOffsetFromCenter = Offset.Zero
+            draggedPillSize = null
+          },
+          onDragCancel = {
+            draggedFolder = null
+            dragPointerOffset = Offset.Zero
+            grabOffsetFromCenter = Offset.Zero
+            draggedPillSize = null
+          },
+        )
+      },
+    pills = {
+      if (isSearchView) {
+        Row(
+          modifier = Modifier
+            .testTag("gallery_search_tag_filter_bar")
+            .testTag("gallery_search_tag_chips_row"),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Icon(
+            imageVector = Icons.Default.AutoAwesome,
+            contentDescription = "Smart tags",
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+              .size(16.dp)
+              .testTag("gallery_search_tags_icon"),
+          )
+
+          if (availableTags.isEmpty()) {
+            Text(
+              text = if (isIndexing && totalCount > 0) {
+                "Scanning photos ($indexedCount/$totalCount)…"
+              } else {
+                "No tags detected yet"
+              },
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.testTag("gallery_search_tags_empty_label"),
+            )
+          } else {
+            availableTags.forEach { (tag, count) ->
+              val isSelected = selectedTag != null && selectedTag.equals(tag, ignoreCase = true)
+              ToolboxPillNavigationItem(
+                selected = isSelected,
+                onClick = { onSelectTag(tag) },
+                leadingIcon = when {
+                  tag.equals("QR Code", ignoreCase = true) || tag.equals("Barcode", ignoreCase = true) ->
+                    Icons.Default.QrCode2
+                  tag.equals("Text", ignoreCase = true) ||
+                    tag.equals("Document", ignoreCase = true) ||
+                    tag.equals("Receipt", ignoreCase = true) ||
+                    tag.equals("Notes", ignoreCase = true) ->
+                    Icons.Default.DocumentScanner
+                  else -> Icons.AutoMirrored.Filled.Label
+                },
+                label = "$tag ($count)",
+                testTag = "gallery_tag_filter_$tag",
+              )
+            }
           }
-        } else {
-          // Navigation pills sized identically to navigation pills in other tools (FilterChip with 20.dp shape);
-          // "Albums" is always fixed to the front of the list, followed by reorderable folder pills.
+        }
+      } else {
+        // Navigation pills sized identically to navigation pills in other tools (FilterChip with 20.dp shape);
+        // "Albums" is always fixed to the front of the list, followed by reorderable folder pills.
+        Row(
+          modifier = Modifier.testTag("gallery_breadcrumbs"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
           Row(
-            modifier = Modifier.testTag("gallery_breadcrumbs"),
+            modifier = Modifier.testTag("gallery_breadcrumb_chain"),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(1.dp),
           ) {
-            Row(
-              modifier = Modifier.testTag("gallery_breadcrumb_chain"),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(1.dp),
-            ) {
-              val isAtRootAll = albumStack.isEmpty() && selectedDefaultFolder.isNullOrBlank() && pendingPermissionFolder == null
-              FilterChip(
-                selected = isAtRootAll,
+            val isAtRootAll = albumStack.isEmpty() && selectedDefaultFolder.isNullOrBlank() && pendingPermissionFolder == null
+            ToolboxPillNavigationItem(
+              selected = isAtRootAll,
+              onClick = {
+                if (draggedFolder == null) {
+                  onNavigateToRoot()
+                }
+              },
+              leadingIcon = Icons.Default.PhotoLibrary,
+              label = GALLERY_ALBUMS_PILL_NAME,
+              testTag = "gallery_breadcrumb_root",
+              modifier = Modifier.onGloballyPositioned { coords ->
+                val barCoords = barCoordinates
+                if (barCoords != null && barCoords.isAttached && coords.isAttached) {
+                  albumsPillBounds = barCoords.localBoundingBoxOf(coords, clipBounds = false)
+                }
+              },
+            )
+
+            albumStack.forEachIndexed { index, album ->
+              Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                  .size(16.dp)
+                  .testTag("gallery_breadcrumb_chevron_${album.name}"),
+              )
+              val isCurrent = index == albumStack.lastIndex
+              ToolboxPillNavigationItem(
+                selected = isCurrent,
                 onClick = {
                   if (draggedFolder == null) {
-                    onNavigateToRoot()
+                    onNavigateToIndex(index)
                   }
                 },
-                shape = RoundedCornerShape(20.dp),
-                leadingIcon = {
-                  Icon(
-                    imageVector = Icons.Default.PhotoLibrary,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                  )
+                leadingIcon = Icons.Default.Folder,
+                label = album.name,
+                testTag = "gallery_breadcrumb_${album.name}",
+              )
+            }
+          }
+
+          folders.forEach { folder ->
+            val isGranted = isGrantedFolder(folder)
+            val isSelectedFolder = if (pendingPermissionFolder != null) {
+              pendingPermissionFolder.displayPath.equals(folder.displayPath, ignoreCase = true)
+            } else {
+              albumStack.isEmpty() && (
+                selectedDefaultFolder.equals(folder.folderName, ignoreCase = true) ||
+                  selectedDefaultFolder.equals(folder.displayPath, ignoreCase = true)
+              )
+            }
+            val isBeingDragged = draggedFolder?.displayPath?.equals(folder.displayPath, ignoreCase = true) == true
+            Box(
+              modifier = Modifier.testTag("folder_pill_${folder.folderName}"),
+            ) {
+              ToolboxPillNavigationItem(
+                selected = isSelectedFolder,
+                onClick = {
+                  if (draggedFolder == null) {
+                    onSelectFolder(folder)
+                  }
                 },
-                label = {
-                  Text(
-                    text = GALLERY_ALBUMS_PILL_NAME,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (isAtRootAll) FontWeight.Bold else FontWeight.Medium,
-                  )
+                leadingIconContent = {
+                  Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                      .semantics(mergeDescendants = true) {
+                        if (draggedFolder == null) {
+                          onClick {
+                            onTapFolderIcon(folder)
+                            true
+                          }
+                        }
+                      }
+                      .testTag(
+                        if (isGranted) {
+                          "folder_unlocked_icon_${folder.folderName}"
+                        } else {
+                          "folder_lock_icon_${folder.folderName}"
+                        }
+                      ),
+                  ) {
+                    Icon(
+                      imageVector = if (isGranted) Icons.Default.Folder else Icons.Default.Lock,
+                      contentDescription = if (isGranted) {
+                        "${folder.pillLabel} folder unlocked"
+                      } else {
+                        "Unlock ${folder.pillLabel} folder"
+                      },
+                      modifier = Modifier
+                        .size(16.dp)
+                        .testTag("folder_pill_icon_${folder.folderName}"),
+                    )
+                  }
                 },
-                colors = FilterChipDefaults.filterChipColors(
-                  selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                  selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                  selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-                ),
+                label = folder.pillLabel,
+                trailingIcon = if (folder.isCustom) {
+                  {
+                    Box(
+                      contentAlignment = Alignment.Center,
+                      modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable(enabled = draggedFolder == null) {
+                          onDeleteCustomFolder(folder)
+                        }
+                        .testTag("folder_delete_icon_${folder.folderName}"),
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Delete ${folder.pillLabel} folder",
+                        modifier = Modifier
+                          .size(16.dp)
+                          .testTag("folder_pill_delete_icon_${folder.folderName}"),
+                      )
+                    }
+                  }
+                } else {
+                  null
+                },
+                testTag = "gallery_folder_pill_${folder.folderName}",
                 modifier = Modifier
                   .onGloballyPositioned { coords ->
                     val barCoords = barCoordinates
                     if (barCoords != null && barCoords.isAttached && coords.isAttached) {
-                      albumsPillBounds = barCoords.localBoundingBoxOf(coords, clipBounds = false)
+                      pillBounds[folder.displayPath] = barCoords.localBoundingBoxOf(coords, clipBounds = false)
                     }
                   }
-                  .testTag("gallery_breadcrumb_root"),
+                  .graphicsLayer {
+                    alpha = if (isBeingDragged) 0.3f else 1f
+                  },
               )
-
-              albumStack.forEachIndexed { index, album ->
-                Icon(
-                  imageVector = Icons.Default.ChevronRight,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier
-                    .size(16.dp)
-                    .testTag("gallery_breadcrumb_chevron_${album.name}"),
-                )
-                val isCurrent = index == albumStack.lastIndex
-                FilterChip(
-                  selected = isCurrent,
-                  onClick = {
-                    if (draggedFolder == null) {
-                      onNavigateToIndex(index)
-                    }
-                  },
-                  shape = RoundedCornerShape(20.dp),
-                  leadingIcon = {
-                    Icon(
-                      imageVector = Icons.Default.Folder,
-                      contentDescription = null,
-                      modifier = Modifier.size(16.dp),
-                    )
-                  },
-                  label = {
-                    Text(
-                      text = album.name,
-                      style = MaterialTheme.typography.labelMedium,
-                      fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                    )
-                  },
-                  colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-                  ),
-                  modifier = Modifier.testTag("gallery_breadcrumb_${album.name}"),
-                )
-              }
-            }
-
-            folders.forEach { folder ->
-              val isGranted = isGrantedFolder(folder)
-              val isSelectedFolder = if (pendingPermissionFolder != null) {
-                pendingPermissionFolder.displayPath.equals(folder.displayPath, ignoreCase = true)
-              } else {
-                albumStack.isEmpty() && (
-                  selectedDefaultFolder.equals(folder.folderName, ignoreCase = true) ||
-                    selectedDefaultFolder.equals(folder.displayPath, ignoreCase = true)
-                )
-              }
-              val isBeingDragged = draggedFolder?.displayPath?.equals(folder.displayPath, ignoreCase = true) == true
-              Box(
-                modifier = Modifier.testTag("folder_pill_${folder.folderName}"),
-              ) {
-                FilterChip(
-                  selected = isSelectedFolder,
-                  onClick = {
-                    if (draggedFolder == null) {
-                      onSelectFolder(folder)
-                    }
-                  },
-                  shape = RoundedCornerShape(20.dp),
-                  leadingIcon = {
-                    Box(
-                      contentAlignment = Alignment.Center,
-                      modifier = Modifier
-                        .semantics(mergeDescendants = true) {
-                          if (draggedFolder == null) {
-                            onClick {
-                              onTapFolderIcon(folder)
-                              true
-                            }
-                          }
-                        }
-                        .testTag(
-                          if (isGranted) {
-                            "folder_unlocked_icon_${folder.folderName}"
-                          } else {
-                            "folder_lock_icon_${folder.folderName}"
-                          }
-                        ),
-                    ) {
-                      Icon(
-                        imageVector = if (isGranted) Icons.Default.Folder else Icons.Default.Lock,
-                        contentDescription = if (isGranted) {
-                          "${folder.pillLabel} folder unlocked"
-                        } else {
-                          "Unlock ${folder.pillLabel} folder"
-                        },
-                        modifier = Modifier
-                          .size(16.dp)
-                          .testTag("folder_pill_icon_${folder.folderName}"),
-                      )
-                    }
-                  },
-                  label = {
-                    Text(
-                      text = folder.pillLabel,
-                      style = MaterialTheme.typography.labelMedium,
-                      fontWeight = if (isSelectedFolder) FontWeight.Bold else FontWeight.Medium,
-                    )
-                  },
-                  trailingIcon = if (folder.isCustom) {
-                    {
-                      Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                          .clip(CircleShape)
-                          .clickable(enabled = draggedFolder == null) {
-                            onDeleteCustomFolder(folder)
-                          }
-                          .testTag("folder_delete_icon_${folder.folderName}"),
-                      ) {
-                        Icon(
-                          imageVector = Icons.Default.Close,
-                          contentDescription = "Delete ${folder.pillLabel} folder",
-                          modifier = Modifier
-                            .size(16.dp)
-                            .testTag("folder_pill_delete_icon_${folder.folderName}"),
-                        )
-                      }
-                    }
-                  } else {
-                    null
-                  },
-                  colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-                    selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                  ),
-                  modifier = Modifier
-                    .onGloballyPositioned { coords ->
-                      val barCoords = barCoordinates
-                      if (barCoords != null && barCoords.isAttached && coords.isAttached) {
-                        pillBounds[folder.displayPath] = barCoords.localBoundingBoxOf(coords, clipBounds = false)
-                      }
-                    }
-                    .graphicsLayer {
-                      alpha = if (isBeingDragged) 0.3f else 1f
-                    }
-                    .testTag("gallery_folder_pill_${folder.folderName}"),
-                )
-              }
             }
           }
         }
       }
-
-      // Pinned floating [# per row], [Add Storage Location], and [Sort/Filter] buttons on the right edge of the pill bar
-      Row(
-        modifier = Modifier
-          .align(Alignment.CenterEnd)
-          .pillBarFloatingControlsBackdrop(backgroundColor = MaterialTheme.colorScheme.surface)
-          .padding(end = 12.dp)
-          .zIndex(10f),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        if (!isSearchView) {
-          if (viewMode == GalleryViewMode.TILE) {
+    },
+    floatingControls = {
+      if (!isSearchView) {
+        if (viewMode == GalleryViewMode.TILE) {
             ToolboxFloatingColumnsButton(
               columnsPerRow = albumsPerRow,
               minColumns = MIN_ALBUMS_PER_ROW,
@@ -3304,75 +3205,56 @@ private fun GalleryNavigationAndDensityBar(
             }
           }
         }
-      }
+      },
+      overlayContent = {
+        val activeDraggedFolder = draggedFolder
+        if (activeDraggedFolder != null && barCoordinates != null) {
+          val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+          val fallbackWidthPx = with(density) { 96.dp.toPx() }
+          val fallbackHeightPx = with(density) { 32.dp.toPx() }
+          val widthPx = draggedPillSize?.width?.toFloat() ?: fallbackWidthPx
+          val heightPx = draggedPillSize?.height?.toFloat() ?: fallbackHeightPx
+          val isGranted = isGrantedFolder(activeDraggedFolder)
+          val isSelected = if (pendingPermissionFolder != null) {
+            pendingPermissionFolder.displayPath.equals(activeDraggedFolder.displayPath, ignoreCase = true)
+          } else {
+            albumStack.isEmpty() && (
+              selectedDefaultFolder.equals(activeDraggedFolder.folderName, ignoreCase = true) ||
+                selectedDefaultFolder.equals(activeDraggedFolder.displayPath, ignoreCase = true)
+            )
+          }
 
-      val activeDraggedFolder = draggedFolder
-      if (activeDraggedFolder != null && barCoordinates != null) {
-        val desiredCenter = dragPointerOffset - grabOffsetFromCenter
-        val fallbackWidthPx = with(density) { 96.dp.toPx() }
-        val fallbackHeightPx = with(density) { 32.dp.toPx() }
-        val widthPx = draggedPillSize?.width?.toFloat() ?: fallbackWidthPx
-        val heightPx = draggedPillSize?.height?.toFloat() ?: fallbackHeightPx
-        val isGranted = isGrantedFolder(activeDraggedFolder)
-        val isSelected = if (pendingPermissionFolder != null) {
-          pendingPermissionFolder.displayPath.equals(activeDraggedFolder.displayPath, ignoreCase = true)
-        } else {
-          albumStack.isEmpty() && (
-            selectedDefaultFolder.equals(activeDraggedFolder.folderName, ignoreCase = true) ||
-              selectedDefaultFolder.equals(activeDraggedFolder.displayPath, ignoreCase = true)
-          )
-        }
-
-        Box(
-          modifier = Modifier
-            .graphicsLayer {
-              translationX = desiredCenter.x - widthPx / 2f
-              translationY = desiredCenter.y - heightPx / 2f
-              scaleX = 1.06f
-              scaleY = 1.06f
-            }
-            .zIndex(100f),
-        ) {
-          FilterChip(
-            selected = isSelected,
-            onClick = {},
-            shape = RoundedCornerShape(20.dp),
-            leadingIcon = {
-              Icon(
-                imageVector = if (isGranted) Icons.Default.Folder else Icons.Default.Lock,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-              )
-            },
-            label = {
-              Text(
-                text = activeDraggedFolder.pillLabel,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-              )
-            },
-            trailingIcon = if (activeDraggedFolder.isCustom) {
-              {
-                Icon(
-                  imageVector = Icons.Default.Close,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
+          Box(
+            modifier = Modifier
+              .graphicsLayer {
+                translationX = desiredCenter.x - widthPx / 2f
+                translationY = desiredCenter.y - heightPx / 2f
+                scaleX = 1.06f
+                scaleY = 1.06f
               }
-            } else {
-              null
-            },
-            colors = FilterChipDefaults.filterChipColors(
-              selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-              selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-              selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            ),
-          )
+              .zIndex(100f),
+          ) {
+            ToolboxPillNavigationItem(
+              selected = isSelected,
+              onClick = {},
+              leadingIcon = if (isGranted) Icons.Default.Folder else Icons.Default.Lock,
+              label = activeDraggedFolder.pillLabel,
+              trailingIcon = if (activeDraggedFolder.isCustom) {
+                {
+                  Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                  )
+                }
+              } else {
+                null
+              },
+            )
+          }
         }
-      }
-    }
-  }
+      },
+    )
 }
 
 /**
@@ -6019,7 +5901,7 @@ internal fun GalleryPhotoViewerDialog(
                   Icon(
                     imageVector = Icons.Default.Delete,
                     contentDescription = "Delete",
-                    tint = Color.White,
+                    tint = MaterialTheme.colorScheme.error,
                   )
                 }
               }

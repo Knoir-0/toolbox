@@ -265,6 +265,14 @@ object RulerMath {
   }
 
   /**
+   * Returns the Unit Converter measurement unit ID (`"cm"` for metric or `"in"` for imperial)
+   * corresponding to the primary ruler measurement label.
+   */
+  fun measurementUnitId(unitSystem: RulerUnitSystem): String {
+    return if (unitSystem == RulerUnitSystem.METRIC) "cm" else "in"
+  }
+
+  /**
    * Formats the primary ruler measurement label (`"%.2f cm"` in metric or `"%.2f in"` in imperial).
    */
   fun formatMeasurementLabel(measuredMm: Float, unitSystem: RulerUnitSystem): String {
@@ -281,7 +289,7 @@ object RulerMath {
 fun RulerScreen(
   modifier: Modifier = Modifier,
   onOpenCalculator: ((String) -> Unit)? = null,
-  onOpenUnitConverter: ((String) -> Unit)? = null,
+  onOpenUnitConverter: ((value: String, fromUnitId: String?) -> Unit)? = null,
 ) {
   var rulerMode by rememberSaveable { mutableStateOf(RulerMode.SINGLE) }
   var primaryUnit by rememberSaveable { mutableStateOf(RulerUnitSystem.METRIC) }
@@ -295,6 +303,7 @@ fun RulerScreen(
 
   var inlineCalculatorValue by rememberSaveable { mutableStateOf<String?>(null) }
   var inlineUnitConverterValue by rememberSaveable { mutableStateOf<String?>(null) }
+  var inlineUnitConverterFromUnitId by rememberSaveable { mutableStateOf<String?>(null) }
 
   val context = LocalContext.current
   val density = LocalDensity.current
@@ -311,9 +320,10 @@ fun RulerScreen(
       onOpenUnitConverter = { valFromCalc ->
         inlineCalculatorValue = null
         if (onOpenUnitConverter != null) {
-          onOpenUnitConverter(valFromCalc)
+          onOpenUnitConverter(valFromCalc, null)
         } else {
           inlineUnitConverterValue = valFromCalc
+          inlineUnitConverterFromUnitId = null
         }
       },
       onNavigateBack = { inlineCalculatorValue = null },
@@ -325,11 +335,16 @@ fun RulerScreen(
   if (activeInlineConverter != null) {
     BackHandler {
       inlineUnitConverterValue = null
+      inlineUnitConverterFromUnitId = null
     }
     UnitConverterScreen(
       modifier = modifier,
       initialValue = activeInlineConverter,
-      onNavigateBack = { inlineUnitConverterValue = null },
+      initialFromUnitId = inlineUnitConverterFromUnitId,
+      onNavigateBack = {
+        inlineUnitConverterValue = null
+        inlineUnitConverterFromUnitId = null
+      },
     )
     return
   }
@@ -415,6 +430,9 @@ fun RulerScreen(
         val currentMeasurementValue = remember(measuredMm, primaryUnit) {
           RulerMath.formatMeasurementValue(measuredMm, primaryUnit)
         }
+        val currentMeasurementUnitId = remember(primaryUnit) {
+          RulerMath.measurementUnitId(primaryUnit)
+        }
 
         RulerHeroCard(
           rulerMode = rulerMode,
@@ -451,9 +469,10 @@ fun RulerScreen(
           onOpenUnitConverter = {
             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
             if (onOpenUnitConverter != null) {
-              onOpenUnitConverter(currentMeasurementValue)
+              onOpenUnitConverter(currentMeasurementValue, currentMeasurementUnitId)
             } else {
               inlineUnitConverterValue = currentMeasurementValue
+              inlineUnitConverterFromUnitId = currentMeasurementUnitId
             }
           },
         )

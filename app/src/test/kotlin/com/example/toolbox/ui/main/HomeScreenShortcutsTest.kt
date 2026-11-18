@@ -33,8 +33,53 @@ class HomeScreenShortcutsTest {
     assertEquals("extra_folder_path", EXTRA_FOLDER_PATH)
     assertTrue((STANDALONE_SHORTCUT_INTENT_FLAGS and android.content.Intent.FLAG_ACTIVITY_NEW_TASK) != 0)
     assertTrue((STANDALONE_SHORTCUT_INTENT_FLAGS and android.content.Intent.FLAG_ACTIVITY_NEW_DOCUMENT) != 0)
-    assertTrue((STANDALONE_SHORTCUT_INTENT_FLAGS and android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP) != 0)
+    assertTrue((STANDALONE_SHORTCUT_INTENT_FLAGS and android.content.Intent.FLAG_ACTIVITY_RETAIN_IN_RECENTS) != 0)
+    assertEquals(0, STANDALONE_SHORTCUT_INTENT_FLAGS and android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
     assertEquals(0, STANDALONE_SHORTCUT_INTENT_FLAGS and android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+  }
+
+  @Test
+  fun normalizeShortcutFolderPath_andIsSameStandaloneTarget_distinguishesAndMatchesFolderLocations() {
+    assertNull(normalizeShortcutFolderPath(null))
+    assertNull(normalizeShortcutFolderPath("   "))
+    assertEquals(
+      "/storage/emulated/0/Download",
+      normalizeShortcutFolderPath("/storage/emulated/0/Download/"),
+    )
+    assertEquals(
+      "/storage/emulated/0/Download",
+      normalizeShortcutFolderPath("/storage/emulated/0/Pictures/../Download"),
+    )
+
+    // Same folder location matches even with trailing slash or missing explicit Tool.FILES
+    assertTrue(
+      isSameStandaloneTarget(
+        firstTool = Tool.FILES,
+        firstFolder = "/storage/emulated/0/Download",
+        secondTool = null,
+        secondFolder = "/storage/emulated/0/Download/",
+      )
+    )
+
+    // Different folder locations are distinct app instance targets
+    junit.framework.TestCase.assertFalse(
+      isSameStandaloneTarget(
+        firstTool = Tool.FILES,
+        firstFolder = "/storage/emulated/0/Download",
+        secondTool = Tool.FILES,
+        secondFolder = "/storage/emulated/0/Pictures",
+      )
+    )
+
+    // Folder shortcut is distinct from standalone Files tool without a folder
+    junit.framework.TestCase.assertFalse(
+      isSameStandaloneTarget(
+        firstTool = Tool.FILES,
+        firstFolder = "/storage/emulated/0/Download",
+        secondTool = Tool.FILES,
+        secondFolder = null,
+      )
+    )
   }
 
   @Test

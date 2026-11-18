@@ -9,13 +9,16 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -26,6 +29,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -37,6 +41,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -75,6 +81,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import kotlinx.coroutines.delay
 
 /**
@@ -662,4 +669,154 @@ fun Modifier.pillBarFloatingControlsBackdrop(
       size = Size(width = totalWidth, height = size.height + verticalBleedPx * 2f),
     )
   }
+}
+
+/**
+ * Shared horizontal pill navigation / filter bar component (`Section 5.4` of `DESIGN_LANGUAGE.md`).
+ *
+ * Enforces consistent pill bar styling across all tools that display a horizontal row of navigation
+ * or filter pills beneath [ToolboxTopBar] (or inside a search catalog overlay):
+ * - Horizontally scrollable [Row] with `12.dp` horizontal padding (`6.dp` top/bottom padding) and `8.dp` pill spacing.
+ * - Optional pinned floating right-edge control slot ([floatingControls]) with automatic offscreen alpha-fade
+ *   masking ([fadingPillRowUnderFloatingControls]) and background backdrop scrim ([pillBarFloatingControlsBackdrop])
+ *   so scrolling pills never bleed underneath or between floating buttons.
+ * - Optional [overlayContent] slot inside the outer [Box] for drag-and-drop ghost pills.
+ */
+@Composable
+fun ToolboxPillNavigationBar(
+  modifier: Modifier = Modifier,
+  barTestTag: String? = null,
+  rowTestTag: String? = null,
+  floatingControlsTestTag: String? = null,
+  scrollState: ScrollState = rememberScrollState(),
+  scrollEnabled: Boolean = true,
+  floatingButtonsCount: Int = 0,
+  backgroundColor: Color = MaterialTheme.colorScheme.background,
+  startPadding: Dp = 12.dp,
+  endPadding: Dp = when {
+    floatingButtonsCount <= 0 -> 12.dp
+    else -> (16 + floatingButtonsCount * 40).dp
+  },
+  verticalPadding: Dp = 6.dp,
+  pillSpacing: Dp = 8.dp,
+  floatingControls: (@Composable RowScope.() -> Unit)? = null,
+  overlayContent: (@Composable BoxScope.() -> Unit)? = null,
+  pills: @Composable RowScope.() -> Unit,
+) {
+  val hasFloatingControls = floatingControls != null && floatingButtonsCount > 0
+  Box(
+    modifier = modifier
+      .fillMaxWidth()
+      .then(if (barTestTag != null) Modifier.testTag(barTestTag) else Modifier),
+    contentAlignment = Alignment.CenterStart,
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .then(
+          if (hasFloatingControls) {
+            Modifier.fadingPillRowUnderFloatingControls(
+              hasColumnsButton = floatingButtonsCount >= 2,
+              extraControlButtonsCount = (floatingButtonsCount - 2).coerceAtLeast(0),
+            )
+          } else {
+            Modifier
+          }
+        )
+        .horizontalScroll(scrollState, enabled = scrollEnabled)
+        .padding(
+          start = startPadding,
+          end = endPadding,
+          top = verticalPadding,
+          bottom = verticalPadding,
+        )
+        .then(if (rowTestTag != null) Modifier.testTag(rowTestTag) else Modifier),
+      horizontalArrangement = Arrangement.spacedBy(pillSpacing),
+      verticalAlignment = Alignment.CenterVertically,
+      content = pills,
+    )
+
+    if (floatingControls != null) {
+      Row(
+        modifier = Modifier
+          .align(Alignment.CenterEnd)
+          .pillBarFloatingControlsBackdrop(backgroundColor = backgroundColor)
+          .padding(end = 12.dp)
+          .zIndex(10f)
+          .then(
+            if (floatingControlsTestTag != null) {
+              Modifier.testTag(floatingControlsTestTag)
+            } else {
+              Modifier
+            }
+          ),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = floatingControls,
+      )
+    }
+
+    if (overlayContent != null) {
+      overlayContent()
+    }
+  }
+}
+
+/**
+ * Standard pill item inside [ToolboxPillNavigationBar].
+ *
+ * Enforces the unified `RoundedCornerShape(20.dp)` geometry, `labelMedium` typography
+ * (`FontWeight.Bold` when selected, `FontWeight.Medium` when unselected), `16.dp` leading icon size,
+ * and `primaryContainer` / `onPrimaryContainer` / `primary` color tokens across all tools.
+ */
+@Composable
+fun ToolboxPillNavigationItem(
+  selected: Boolean,
+  onClick: () -> Unit,
+  label: String,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  leadingIcon: ImageVector? = null,
+  leadingIconContent: (@Composable () -> Unit)? = null,
+  trailingIcon: (@Composable () -> Unit)? = null,
+  testTag: String? = null,
+) {
+  FilterChip(
+    selected = selected,
+    onClick = onClick,
+    enabled = enabled,
+    shape = RoundedCornerShape(20.dp),
+    leadingIcon = when {
+      leadingIconContent != null -> leadingIconContent
+      leadingIcon != null -> {
+        {
+          Icon(
+            imageVector = leadingIcon,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+        }
+      }
+      else -> null
+    },
+    trailingIcon = trailingIcon,
+    label = {
+      Text(
+        text = label,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    },
+    colors = FilterChipDefaults.filterChipColors(
+      selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+      selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+      selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+      selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+    ),
+    modifier = modifier.then(
+      if (testTag != null) Modifier.testTag(testTag) else Modifier
+    ),
+  )
 }

@@ -181,8 +181,18 @@ class ToolsUnitTest {
 
     assertEquals("5.40", RulerMath.formatMeasurementValue(53.98f, RulerUnitSystem.METRIC))
     assertEquals("5.40 cm", RulerMath.formatMeasurementLabel(53.98f, RulerUnitSystem.METRIC))
+    assertEquals("cm", RulerMath.measurementUnitId(RulerUnitSystem.METRIC))
     assertEquals("2.13", RulerMath.formatMeasurementValue(53.98f, RulerUnitSystem.IMPERIAL))
     assertEquals("2.13 in", RulerMath.formatMeasurementLabel(53.98f, RulerUnitSystem.IMPERIAL))
+    assertEquals("in", RulerMath.measurementUnitId(RulerUnitSystem.IMPERIAL))
+
+    val lengthUnits = UnitCatalog.unitsFor(UnitCategory.LENGTH)
+    val (cmFrom, cmTo) = UnitCatalog.resolveInitialIndicesFor(UnitCategory.LENGTH, "cm")
+    assertEquals("cm", lengthUnits[cmFrom].id)
+    assertEquals("in", lengthUnits[cmTo].id)
+    val (inFrom, inTo) = UnitCatalog.resolveInitialIndicesFor(UnitCategory.LENGTH, "in")
+    assertEquals("in", lengthUnits[inFrom].id)
+    assertEquals("cm", lengthUnits[inTo].id)
   }
 
   @Test

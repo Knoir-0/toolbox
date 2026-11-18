@@ -540,8 +540,6 @@ fun PlantScheduleScreen(
         ),
       )
 
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-
       // Plant Type Filter Pill Bar underneath the toolbar
       PlantTypeFilterPillBar(
         selectedCategory = selectedCategory,
@@ -550,8 +548,6 @@ fun PlantScheduleScreen(
           selectedCategoryName = category?.name
         },
       )
-
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
       // Tool Content Area + Search Catalog Overlay
       Box(
@@ -884,69 +880,27 @@ private fun PlantTypeFilterPillBar(
   selectedCategory: PlantCategory?,
   onSelectCategory: (PlantCategory?) -> Unit,
 ) {
-  Surface(
-    color = MaterialTheme.colorScheme.surface,
-    tonalElevation = 1.dp,
-    modifier = Modifier
-      .fillMaxWidth()
-      .testTag("plant_type_filter_bar"),
+  ToolboxPillNavigationBar(
+    barTestTag = "plant_type_filter_bar",
+    rowTestTag = "catalog_category_pills",
   ) {
-    LazyRow(
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-      modifier = Modifier
-        .fillMaxWidth()
-        .testTag("catalog_category_pills"),
-    ) {
-      item {
-        FilterChip(
-          selected = selectedCategory == null,
-          onClick = { onSelectCategory(null) },
-          label = {
-            Text(
-              text = "All",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.Medium,
-            )
-          },
-          shape = RoundedCornerShape(20.dp),
-          colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-          ),
-          modifier = Modifier.testTag("category_chip_ALL"),
-        )
-      }
-      items(PlantCategory.entries) { category ->
-        val isSelected = selectedCategory == category
-        FilterChip(
-          selected = isSelected,
-          onClick = {
-            onSelectCategory(if (isSelected) null else category)
-          },
-          leadingIcon = {
-            Icon(
-              imageVector = category.iconVector(),
-              contentDescription = null,
-              modifier = Modifier.size(16.dp),
-            )
-          },
-          label = {
-            Text(
-              text = category.displayName,
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.Medium,
-            )
-          },
-          shape = RoundedCornerShape(20.dp),
-          colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-          ),
-          modifier = Modifier.testTag("category_chip_${category.name}"),
-        )
-      }
+    ToolboxPillNavigationItem(
+      selected = selectedCategory == null,
+      onClick = { onSelectCategory(null) },
+      label = "All",
+      testTag = "category_chip_ALL",
+    )
+    PlantCategory.entries.forEach { category ->
+      val isSelected = selectedCategory == category
+      ToolboxPillNavigationItem(
+        selected = isSelected,
+        onClick = {
+          onSelectCategory(if (isSelected) null else category)
+        },
+        leadingIcon = category.iconVector(),
+        label = category.displayName,
+        testTag = "category_chip_${category.name}",
+      )
     }
   }
 }

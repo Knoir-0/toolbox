@@ -211,6 +211,36 @@ object UnitCatalog {
     UnitCategory.DATA -> Pair(4, 3) // GB -> MB
   }
 
+  fun findUnit(unitId: String): MeasurementUnit? {
+    for (category in UnitCategory.entries) {
+      val found = unitsFor(category).firstOrNull {
+        it.id.equals(unitId, ignoreCase = true) || it.symbol.equals(unitId, ignoreCase = true)
+      }
+      if (found != null) return found
+    }
+    return null
+  }
+
+  fun resolveInitialIndicesFor(category: UnitCategory, initialFromUnitId: String?): Pair<Int, Int> {
+    val (defFrom, defTo) = defaultIndicesFor(category)
+    if (initialFromUnitId.isNullOrBlank()) return Pair(defFrom, defTo)
+    val units = unitsFor(category)
+    val matchIndex = units.indexOfFirst {
+      it.id.equals(initialFromUnitId, ignoreCase = true) || it.symbol.equals(initialFromUnitId, ignoreCase = true)
+    }
+    if (matchIndex < 0) return Pair(defFrom, defTo)
+    val toIdx = when {
+      category == UnitCategory.LENGTH && units[matchIndex].id == "cm" ->
+        units.indexOfFirst { it.id == "in" }.takeIf { it >= 0 } ?: defTo
+      category == UnitCategory.LENGTH && units[matchIndex].id == "in" ->
+        units.indexOfFirst { it.id == "cm" }.takeIf { it >= 0 } ?: defTo
+      defTo != matchIndex -> defTo
+      defFrom != matchIndex -> defFrom
+      else -> (matchIndex + 1) % units.size
+    }
+    return Pair(matchIndex, toIdx)
+  }
+
   fun convert(value: Double, from: MeasurementUnit, to: MeasurementUnit): Double {
     if (from.id == to.id) return value
     val baseValue = from.toBase(value)
@@ -307,11 +337,26 @@ private fun rememberConverterPalette(): ConverterPalette {
 fun UnitConverterScreen(
   modifier: Modifier = Modifier,
   initialValue: String? = null,
+  initialFromUnitId: String? = null,
   onNavigateBack: (() -> Unit)? = null,
 ) {
-  var selectedCategory by rememberSaveable { mutableStateOf(UnitCategory.LENGTH) }
-  var fromIndex by rememberSaveable { mutableIntStateOf(2) } // Default Meter
-  var toIndex by rememberSaveable { mutableIntStateOf(5) }   // Default Foot
+  val initialMatchedUnit = remember(initialFromUnitId) {
+    initialFromUnitId?.takeIf { it.isNotBlank() }?.let { UnitCatalog.findUnit(it) }
+  }
+  val resolvedInitialCategory = initialMatchedUnit?.category ?: UnitCategory.LENGTH
+  val (resolvedInitialFromIndex, resolvedInitialToIndex) = remember(resolvedInitialCategory, initialFromUnitId) {
+    UnitCatalog.resolveInitialIndicesFor(resolvedInitialCategory, initialFromUnitId)
+  }
+
+  var selectedCategory by rememberSaveable(initialFromUnitId) {
+    mutableStateOf(resolvedInitialCategory)
+  }
+  var fromIndex by rememberSaveable(initialFromUnitId) {
+    mutableIntStateOf(resolvedInitialFromIndex)
+  }
+  var toIndex by rememberSaveable(initialFromUnitId) {
+    mutableIntStateOf(resolvedInitialToIndex)
+  }
   var inputText by rememberSaveable(initialValue) {
     mutableStateOf(initialValue?.takeIf { it.isNotBlank() } ?: "1")
   }
@@ -319,6 +364,18 @@ fun UnitConverterScreen(
   LaunchedEffect(initialValue) {
     if (!initialValue.isNullOrBlank()) {
       inputText = initialValue
+    }
+  }
+
+  LaunchedEffect(initialFromUnitId) {
+    if (!initialFromUnitId.isNullOrBlank()) {
+      val matched = UnitCatalog.findUnit(initialFromUnitId)
+      if (matched != null) {
+        selectedCategory = matched.category
+        val (newFrom, newTo) = UnitCatalog.resolveInitialIndicesFor(matched.category, initialFromUnitId)
+        fromIndex = newFrom
+        toIndex = newTo
+      }
     }
   }
 
@@ -372,8 +429,6 @@ fun UnitConverterScreen(
       subtextTestTag = "unit_converter_toolbar_subtext",
     )
 
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
     // Category Pill Navigation Bar underneath the toolbar
     UnitConverterPillNavigationBar(
       selectedCategory = selectedCategory,
@@ -384,8 +439,6 @@ fun UnitConverterScreen(
         toIndex = defTo
       },
     )
-
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
     LazyColumn(
       modifier = Modifier
@@ -452,46 +505,21 @@ private fun UnitConverterPillNavigationBar(
 ) {
   val haptic = LocalHapticFeedback.current
 
-  Row(
-    modifier = modifier
-      .fillMaxWidth()
-      .horizontalScroll(rememberScrollState())
-      .padding(horizontal = 12.dp, vertical = 6.dp)
-      .testTag("unit_converter_pill_bar"),
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-    verticalAlignment = Alignment.CenterVertically,
+  ToolboxPillNavigationBar(
+    modifier = modifier,
+    rowTestTag = "unit_converter_pill_bar",
   ) {
     UnitCategory.entries.forEach { category ->
       val isSelected = category == selectedCategory
-      FilterChip(
+      ToolboxPillNavigationItem(
         selected = isSelected,
         onClick = {
           haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
           onSelectCategory(category)
         },
-        shape = RoundedCornerShape(20.dp),
-        leadingIcon = {
-          Icon(
-            imageVector = category.icon,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-        },
-        label = {
-          Text(
-            text = category.label,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        },
-        colors = FilterChipDefaults.filterChipColors(
-          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-          selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-        ),
-        modifier = Modifier.testTag("unit_converter_category_chip_${category.name}"),
+        leadingIcon = category.icon,
+        label = category.label,
+        testTag = "unit_converter_category_chip_${category.name}",
       )
     }
   }

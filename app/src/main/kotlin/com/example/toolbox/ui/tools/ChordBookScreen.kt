@@ -544,51 +544,23 @@ fun ChordBookScreen(
     ) {
       Column(modifier = Modifier.fillMaxSize()) {
         // 2. Mode Switcher Pill Bar (styled in line with Files & Music pill selectors)
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .testTag("chord_book_pill_bar"),
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-          verticalAlignment = Alignment.CenterVertically,
+        ToolboxPillNavigationBar(
+          rowTestTag = "chord_book_pill_bar",
         ) {
           ChordBookTab.entries.forEach { tab ->
             val isSelected = activeTab == tab
-            FilterChip(
+            ToolboxPillNavigationItem(
               selected = isSelected,
               onClick = {
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 activeTab = tab
               },
-              shape = RoundedCornerShape(20.dp),
-              leadingIcon = {
-                Icon(
-                  imageVector = tab.iconVector(),
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
-              },
-              label = {
-                Text(
-                  text = tab.title,
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                )
-              },
-              colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-              ),
-              modifier = Modifier.testTag("chord_book_tab_${tab.name}"),
+              leadingIcon = tab.iconVector(),
+              label = tab.title,
+              testTag = "chord_book_tab_${tab.name}",
             )
           }
         }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
         // 3. Active Tab Content
         when (activeTab) {
@@ -3988,133 +3960,52 @@ private fun ChordTuningCatalogSearchOverlay(
       .testTag("catalog_search_overlay"),
   ) {
     Column(modifier = Modifier.fillMaxSize()) {
-      // Category, Favorites & Instrument Filter Chips Bar (Section 4 & 5.7: RoundedCornerShape(20.dp))
-      Surface(
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp,
-        modifier = Modifier.fillMaxWidth(),
+      // Category, Favorites & Instrument Filter Chips Bar (Section 4, 5.4 & 5.7)
+      ToolboxPillNavigationBar(
+        rowTestTag = "catalog_category_pills",
       ) {
-        LazyRow(
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-          modifier = Modifier
-            .fillMaxWidth()
-            .testTag("catalog_category_pills"),
-        ) {
-          item {
-            FilterChip(
-              selected = selectedCategory == null && selectedInstrument == null && !favoritesOnly,
-              onClick = {
-                if (favoritesOnly) onToggleFavoritesOnly()
-                onSelectCategory(null)
-                onSelectInstrument(null)
-              },
-              label = {
-                Text(
-                  text = "All (${allTunings.size})",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Medium,
-                )
-              },
-              shape = RoundedCornerShape(20.dp),
-              colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              ),
-              modifier = Modifier.testTag("category_chip_ALL"),
-            )
-          }
-          item {
-            FilterChip(
-              selected = favoritesOnly,
-              onClick = onToggleFavoritesOnly,
-              leadingIcon = {
-                Icon(
-                  imageVector = if (favoritesOnly) Icons.Default.Star else Icons.Default.StarBorder,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
-              },
-              label = {
-                Text(
-                  text = "Favorites ($favoriteCount)",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Medium,
-                )
-              },
-              shape = RoundedCornerShape(20.dp),
-              colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              ),
-              modifier = Modifier.testTag("category_chip_FAVORITES"),
-            )
-          }
-          items(GuitarTuningCategory.entries) { category ->
-            val isSelected = selectedCategory == category
-            FilterChip(
-              selected = isSelected,
-              onClick = {
-                onSelectCategory(if (isSelected) null else category)
-              },
-              leadingIcon = {
-                Icon(
-                  imageVector = Icons.Default.MusicNote,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
-              },
-              label = {
-                Text(
-                  text = category.displayName,
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Medium,
-                )
-              },
-              shape = RoundedCornerShape(20.dp),
-              colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              ),
-              modifier = Modifier.testTag("category_chip_${category.name}"),
-            )
-          }
-          items(InstrumentFamily.entries) { family ->
-            val isSelected = selectedInstrument == family
-            FilterChip(
-              selected = isSelected,
-              onClick = {
-                onSelectInstrument(if (isSelected) null else family)
-              },
-              leadingIcon = {
-                Icon(
-                  imageVector = Icons.Default.Tune,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
-              },
-              label = {
-                Text(
-                  text = family.shortName,
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Medium,
-                )
-              },
-              shape = RoundedCornerShape(20.dp),
-              colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              ),
-              modifier = Modifier.testTag("instrument_family_${family.name}"),
-            )
-          }
+        ToolboxPillNavigationItem(
+          selected = selectedCategory == null && selectedInstrument == null && !favoritesOnly,
+          onClick = {
+            if (favoritesOnly) onToggleFavoritesOnly()
+            onSelectCategory(null)
+            onSelectInstrument(null)
+          },
+          label = "All (${allTunings.size})",
+          testTag = "category_chip_ALL",
+        )
+        ToolboxPillNavigationItem(
+          selected = favoritesOnly,
+          onClick = onToggleFavoritesOnly,
+          leadingIcon = if (favoritesOnly) Icons.Default.Star else Icons.Default.StarBorder,
+          label = "Favorites ($favoriteCount)",
+          testTag = "category_chip_FAVORITES",
+        )
+        GuitarTuningCategory.entries.forEach { category ->
+          val isSelected = selectedCategory == category
+          ToolboxPillNavigationItem(
+            selected = isSelected,
+            onClick = {
+              onSelectCategory(if (isSelected) null else category)
+            },
+            leadingIcon = Icons.Default.MusicNote,
+            label = category.displayName,
+            testTag = "category_chip_${category.name}",
+          )
+        }
+        InstrumentFamily.entries.forEach { family ->
+          val isSelected = selectedInstrument == family
+          ToolboxPillNavigationItem(
+            selected = isSelected,
+            onClick = {
+              onSelectInstrument(if (isSelected) null else family)
+            },
+            leadingIcon = Icons.Default.Tune,
+            label = family.shortName,
+            testTag = "instrument_family_${family.name}",
+          )
         }
       }
-
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
       LazyColumn(
         modifier = Modifier

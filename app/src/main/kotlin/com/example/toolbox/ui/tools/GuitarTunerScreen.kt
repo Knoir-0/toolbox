@@ -1738,102 +1738,39 @@ private fun TuningCatalogSearchOverlay(
       .testTag("catalog_search_overlay"),
   ) {
     Column(modifier = Modifier.fillMaxSize()) {
-      // Category & Favorites Filter Chips Bar (Section 4 & 5.7: RoundedCornerShape(20.dp))
-      Surface(
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp,
-        modifier = Modifier.fillMaxWidth(),
+      // Category & Favorites Filter Chips Bar (Section 4, 5.4 & 5.7)
+      ToolboxPillNavigationBar(
+        rowTestTag = "catalog_category_pills",
       ) {
-        LazyRow(
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-          modifier = Modifier
-            .fillMaxWidth()
-            .testTag("catalog_category_pills"),
-        ) {
-          item {
-            FilterChip(
-              selected = selectedCategory == null && !favoritesOnly,
-              onClick = {
-                if (favoritesOnly) onToggleFavoritesOnly()
-                onSelectCategory(null)
-              },
-              label = {
-                Text(
-                  text = "All ($allCatalogCount)",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Medium,
-                )
-              },
-              shape = RoundedCornerShape(20.dp),
-              colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              ),
-              modifier = Modifier.testTag("category_chip_ALL"),
-            )
-          }
-          item {
-            FilterChip(
-              selected = favoritesOnly,
-              onClick = onToggleFavoritesOnly,
-              leadingIcon = {
-                Icon(
-                  imageVector = if (favoritesOnly) Icons.Default.Star else Icons.Default.StarBorder,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
-              },
-              label = {
-                Text(
-                  text = "Favorites (${favoritePresets.size})",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Medium,
-                )
-              },
-              shape = RoundedCornerShape(20.dp),
-              colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              ),
-              modifier = Modifier.testTag("category_chip_FAVORITES"),
-            )
-          }
-          items(GuitarTuningCategory.entries) { category ->
-            val isSelected = selectedCategory == category
-            FilterChip(
-              selected = isSelected,
-              onClick = {
-                onSelectCategory(if (isSelected) null else category)
-              },
-              leadingIcon = {
-                Icon(
-                  imageVector = Icons.Default.MusicNote,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
-              },
-              label = {
-                Text(
-                  text = category.displayName,
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Medium,
-                )
-              },
-              shape = RoundedCornerShape(20.dp),
-              colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              ),
-              modifier = Modifier.testTag("category_chip_${category.name}"),
-            )
-          }
+        ToolboxPillNavigationItem(
+          selected = selectedCategory == null && !favoritesOnly,
+          onClick = {
+            if (favoritesOnly) onToggleFavoritesOnly()
+            onSelectCategory(null)
+          },
+          label = "All ($allCatalogCount)",
+          testTag = "category_chip_ALL",
+        )
+        ToolboxPillNavigationItem(
+          selected = favoritesOnly,
+          onClick = onToggleFavoritesOnly,
+          leadingIcon = if (favoritesOnly) Icons.Default.Star else Icons.Default.StarBorder,
+          label = "Favorites (${favoritePresets.size})",
+          testTag = "category_chip_FAVORITES",
+        )
+        GuitarTuningCategory.entries.forEach { category ->
+          val isSelected = selectedCategory == category
+          ToolboxPillNavigationItem(
+            selected = isSelected,
+            onClick = {
+              onSelectCategory(if (isSelected) null else category)
+            },
+            leadingIcon = Icons.Default.MusicNote,
+            label = category.displayName,
+            testTag = "category_chip_${category.name}",
+          )
         }
       }
-
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
       // Matching Tunings List
       LazyColumn(

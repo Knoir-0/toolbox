@@ -60,6 +60,14 @@
             <action android:name="android.intent.action.MAIN" />
         </intent>
         <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_MUSIC" />
+        </intent>
+        <intent>
             <action android:name="android.intent.action.MEDIA_BUTTON" />
         </intent>
         <intent>

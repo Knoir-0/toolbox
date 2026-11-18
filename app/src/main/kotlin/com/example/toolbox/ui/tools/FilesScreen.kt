@@ -209,30 +209,47 @@ fun FilesScreen(
   val isInspection = LocalInspectionMode.current
   val haptic = LocalHapticFeedback.current
 
+  val defaultUserRoot = remember(isInspection) {
+    if (isInspection) File("/storage/emulated/0") else FileManagerEngine.getUserRootDirectory()
+  }
+
+  val hasCustomRoot = remember(rootDirectory, defaultUserRoot) {
+    rootDirectory != null &&
+      rootDirectory.absoluteFile.normalize().path != defaultUserRoot.absoluteFile.normalize().path
+  }
+
   // User's default root folder: storage/emulated/0 (or custom rootDirectory if provided)
-  val userRoot = remember(rootDirectory, initialDirectory, isInspection) {
+  val userRoot = remember(rootDirectory, initialDirectory, isInspection, defaultUserRoot) {
     when {
-      rootDirectory != null -> rootDirectory
-      isInspection -> File("/storage/emulated/0")
+      rootDirectory != null -> rootDirectory.absoluteFile.normalize()
+      isInspection -> defaultUserRoot
       else -> {
-        val defaultRoot = FileManagerEngine.getUserRootDirectory()
-        val initDir = initialDirectory
-        if (initDir != null && !FileManagerEngine.isSameOrDescendant(initDir, defaultRoot)) {
+        val initDir = initialDirectory?.absoluteFile?.normalize()
+        if (initDir != null && !FileManagerEngine.isSameOrDescendant(initDir, defaultUserRoot)) {
           val volumes = FileManagerEngine.getStorageVolumes(context)
           val matchingVolume = volumes.firstOrNull { vol ->
             FileManagerEngine.isSameOrDescendant(initDir, vol.file)
           }
           matchingVolume?.file ?: initDir
         } else {
-          defaultRoot
+          defaultUserRoot
         }
       }
     }
   }
 
-  // Active directory defaults to storage/emulated/0
-  var currentDirectory by rememberSaveable(initialDirectory?.absolutePath, rootDirectory?.absolutePath) {
-    mutableStateOf(initialDirectory ?: userRoot)
+  // Active directory defaults to storage/emulated/0 (or custom rootDirectory)
+  var currentDirectory by rememberSaveable(
+    initialDirectory?.absoluteFile?.normalize()?.path,
+    rootDirectory?.absoluteFile?.normalize()?.path,
+  ) {
+    mutableStateOf(initialDirectory?.absoluteFile?.normalize() ?: userRoot)
+  }
+
+  LaunchedEffect(userRoot, hasCustomRoot) {
+    if (hasCustomRoot && !FileManagerEngine.isSameOrDescendant(currentDirectory, userRoot)) {
+      currentDirectory = userRoot
+    }
   }
 
   // Hot-plug storage revision token
@@ -242,9 +259,20 @@ fun FilesScreen(
     if (isInspection) File("/storage/emulated/0/Samples") else FileManagerEngine.getSamplesDirectory(context)
   }
 
-  // Discovered storage volumes (Primary root + Samples folder + any connected external storage devices)
-  val storageVolumes = remember(storageRevision, isInspection, userRoot, samplesRoot) {
-    if (isInspection) {
+  // Discovered storage volumes (Primary root + Samples folder + any connected external storage devices,
+  // or the scoped root folder when opened with a custom rootDirectory such as a home screen folder shortcut)
+  val storageVolumes = remember(storageRevision, isInspection, userRoot, samplesRoot, hasCustomRoot) {
+    if (hasCustomRoot) {
+      listOf(
+        StorageVolumeInfo(
+          id = "primary_root",
+          name = userRoot.name.ifBlank { "Home" },
+          file = userRoot,
+          isPrimary = true,
+          isRemovable = false,
+        ),
+      )
+    } else if (isInspection) {
       listOf(
         StorageVolumeInfo(
           id = "primary_root",
@@ -817,7 +845,7 @@ fun FilesScreen(
         .background(MaterialTheme.colorScheme.background),
     ) {
       // 1. Top Bar / Header
-      val headerSubtext = if (canNavigateUp()) {
+      val headerSubtext = if (canNavigateUp() || hasCustomRoot) {
         val folderSize = storageSummary?.first
         if (folderSize != null) {
           val folderSizeFormatted = FileManagerEngine.formatFileSize(folderSize)
@@ -829,8 +857,11 @@ fun FilesScreen(
         storageInfoSubtext
       }
 
+      val rootHeaderTitle = if (hasCustomRoot) userRoot.name.ifBlank { "Files" } else "Files"
+
       FilesHeader(
         currentDirectory = currentDirectory,
+        rootTitle = rootHeaderTitle,
         isSearchActive = isSearchActive,
         searchQuery = searchQuery,
         storageInfoSubtext = headerSubtext,
@@ -992,6 +1023,8 @@ fun FilesScreen(
       StorageDevicePillRow(
         storageVolumes = storageVolumes,
         activeVolume = activeVolume,
+        currentDirectory = currentDirectory,
+        hasCustomRoot = hasCustomRoot,
         viewMode = viewMode,
         gridColumnsPerRow = gridColumnsPerRow,
         onGridColumnsChange = { updateGridColumnsPerRow(it) },
@@ -1058,7 +1091,8 @@ fun FilesScreen(
         },
       )
 
-      val isBrowsingSamples = activeVolume?.id == FileManagerEngine.SAMPLES_VOLUME_ID
+      val isBrowsingSamples = activeVolume?.id == FileManagerEngine.SAMPLES_VOLUME_ID ||
+        FileManagerEngine.isSameOrDescendant(currentDirectory, samplesRoot)
 
       // Permission Request Banner (if access to storage/emulated/0 is restricted)
       if (!hasPermission && !isBrowsingSamples && !isInspection) {
@@ -1865,6 +1899,7 @@ fun FilesScreen(
 @Composable
 private fun FilesHeader(
   currentDirectory: File,
+  rootTitle: String = "Files",
   isSearchActive: Boolean,
   searchQuery: String,
   storageInfoSubtext: String,
@@ -1903,7 +1938,7 @@ private fun FilesHeader(
   onAddFolderToHomeScreen: ((File) -> Unit)? = null,
 ) {
   ToolboxTopBar(
-    title = if (canNavigateUp) currentDirectory.name else "Files",
+    title = if (canNavigateUp) currentDirectory.name else rootTitle,
     subtext = storageInfoSubtext,
     icon = Icons.Default.FolderOpen,
     onNavigateBack = if (canNavigateUp) onNavigateUp else null,
@@ -2277,6 +2312,8 @@ private fun FilesHeader(
 private fun StorageDevicePillRow(
   storageVolumes: List<StorageVolumeInfo>,
   activeVolume: StorageVolumeInfo?,
+  currentDirectory: File? = null,
+  hasCustomRoot: Boolean = false,
   viewMode: FileViewMode = FileViewMode.LIST,
   gridColumnsPerRow: Int = DEFAULT_FILES_GRID_COLUMNS,
   onGridColumnsChange: (Int) -> Unit = {},
@@ -2291,28 +2328,18 @@ private fun StorageDevicePillRow(
   onSelectGroupOption: (FileGroupOption) -> Unit = {},
   onToggleSaveSortGroupForFolder: () -> Unit = {},
 ) {
-  Box(
-    modifier = Modifier
-      .fillMaxWidth()
-      .testTag("files_pill_bar"),
-  ) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .fadingPillRowUnderFloatingControls(hasColumnsButton = viewMode == FileViewMode.GRID)
-        .horizontalScroll(rememberScrollState())
-        .padding(
-          start = 12.dp,
-          end = if (viewMode == FileViewMode.GRID) 96.dp else 56.dp,
-          top = 6.dp,
-          bottom = 6.dp,
-        ),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
+  ToolboxPillNavigationBar(
+    barTestTag = "files_pill_bar",
+    floatingButtonsCount = if (viewMode == FileViewMode.GRID) 2 else 1,
+    pills = {
       storageVolumes.forEach { volume ->
-        val isSelected = activeVolume?.id == volume.id
+        val isSelected = if (hasCustomRoot && currentDirectory != null) {
+          FileManagerEngine.isAtRootDirectory(currentDirectory, volume.file)
+        } else {
+          activeVolume?.id == volume.id
+        }
         val icon = when {
+          volume.isPrimary && hasCustomRoot -> Icons.Default.Folder
           volume.isPrimary -> Icons.Default.Home
           volume.id == FileManagerEngine.SAMPLES_VOLUME_ID ||
             volume.name.equals(FileManagerEngine.SAMPLES_FOLDER_NAME, ignoreCase = true) -> Icons.Default.Folder
@@ -2320,44 +2347,16 @@ private fun StorageDevicePillRow(
           else -> Icons.Default.SdCard
         }
 
-        FilterChip(
+        ToolboxPillNavigationItem(
           selected = isSelected,
           onClick = { onSelectVolume(volume) },
-          shape = RoundedCornerShape(20.dp),
-          modifier = Modifier.testTag("storage_pill_${volume.id}"),
-          leadingIcon = {
-            Icon(
-              imageVector = icon,
-              contentDescription = null,
-              modifier = Modifier.size(16.dp),
-            )
-          },
-          label = {
-            Text(
-              text = volume.name,
-              fontSize = 13.sp,
-              fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-            )
-          },
-          colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-          ),
+          leadingIcon = icon,
+          label = volume.name,
+          testTag = "storage_pill_${volume.id}",
         )
       }
-    }
-
-    // Pinned floating [# per row] and [Sort/Group] buttons on the right edge of the pill bar
-    Row(
-      modifier = Modifier
-        .align(Alignment.CenterEnd)
-        .pillBarFloatingControlsBackdrop(backgroundColor = MaterialTheme.colorScheme.background)
-        .padding(end = 12.dp)
-        .zIndex(10f),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
+    },
+    floatingControls = {
       if (viewMode == FileViewMode.GRID) {
         ToolboxFloatingColumnsButton(
           columnsPerRow = gridColumnsPerRow,
@@ -2531,8 +2530,8 @@ private fun StorageDevicePillRow(
           }
         }
       }
-    }
-  }
+    },
+  )
 }
 
 @Composable

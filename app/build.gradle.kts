@@ -105,6 +105,32 @@ dependencies {
   implementation(libs.mlkit.image.labeling)
 }
 
+abstract class SyncRootApkTask : DefaultTask() {
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.NONE)
+  abstract val sourceApk: RegularFileProperty
+
+  @get:OutputFile
+  abstract val destinationApk: RegularFileProperty
+
+  @TaskAction
+  fun sync() {
+    sourceApk.get().asFile.copyTo(destinationApk.get().asFile, overwrite = true)
+  }
+}
+
+val syncRootDebugApk = tasks.register<SyncRootApkTask>("syncRootDebugApk") {
+  group = "build"
+  description = "Copies the built debug APK to the workspace root app-debug.apk."
+  dependsOn("packageDebug")
+  sourceApk.set(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk"))
+  destinationApk.set(rootProject.layout.projectDirectory.file("app-debug.apk"))
+}
+
+tasks.matching { it.name == "assembleDebug" || it.name == "packageDebug" }.configureEach {
+  finalizedBy(syncRootDebugApk)
+}
+
 tasks.register<Exec>("runDebug") {
   group = "application"
   description = "Builds, delta-installs, and launches the debug APK on the connected emulator or device."

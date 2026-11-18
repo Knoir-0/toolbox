@@ -30,13 +30,24 @@ class MainScreenTest {
 
   @get:Rule val composeTestRule = createAndroidComposeRule<ComponentActivity>()
 
+  private val testContentState =
+    androidx.compose.runtime.mutableStateOf<@androidx.compose.runtime.Composable () -> Unit>({ MainScreen() })
+
+  private fun setTestContent(content: @androidx.compose.runtime.Composable () -> Unit) {
+    composeTestRule.runOnUiThread {
+      testContentState.value = content
+    }
+    composeTestRule.waitForIdle()
+  }
+
   @Before
   fun setup() {
     composeTestRule.activity.getSharedPreferences(NAVIGATION_PREFERENCES_NAME, Context.MODE_PRIVATE)
       .edit()
       .clear()
       .commit()
-    composeTestRule.setContent { MainScreen() }
+    testContentState.value = { MainScreen() }
+    composeTestRule.setContent { testContentState.value.invoke() }
   }
 
   @Test
@@ -841,7 +852,7 @@ class MainScreenTest {
 
   @Test
   fun standaloneTool_launchesWithoutNavigationBar() {
-    composeTestRule.setContent {
+    setTestContent {
       MainScreen(standaloneTool = Tool.CALCULATOR)
     }
     composeTestRule.waitForIdle()
@@ -853,23 +864,38 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("tools_pull_up_panel").assertDoesNotExist()
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").assertDoesNotExist()
 
-    // Verify standalone shortcut intents reuse existing standalone instances (NEW_DOCUMENT + SINGLE_TOP without MULTIPLE_TASK)
+    // Verify standalone shortcut intents open each tool/folder as its own app instance and reuse existing instances
     for (tool in Tool.entries) {
       val toolIntent = createStandaloneToolIntent(composeTestRule.activity, tool)
       assertEquals(tool, parseStandaloneTool(toolIntent))
       assertEquals(resolveStandaloneDocumentUri(tool), toolIntent.data)
       assertTrue((toolIntent.flags and android.content.Intent.FLAG_ACTIVITY_NEW_TASK) != 0)
       assertTrue((toolIntent.flags and android.content.Intent.FLAG_ACTIVITY_NEW_DOCUMENT) != 0)
-      assertTrue((toolIntent.flags and android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP) != 0)
+      assertTrue((toolIntent.flags and android.content.Intent.FLAG_ACTIVITY_RETAIN_IN_RECENTS) != 0)
+      assertEquals(0, toolIntent.flags and android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
       assertEquals(0, toolIntent.flags and android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
     }
 
-    val sampleFolder = java.io.File("/storage/emulated/0/Download")
-    val folderIntent = createFolderShortcutIntent(composeTestRule.activity, sampleFolder)
-    assertEquals(Tool.FILES, parseStandaloneTool(folderIntent))
-    assertEquals(sampleFolder.absolutePath, parseFolderShortcut(folderIntent))
-    assertEquals(resolveStandaloneDocumentUri(Tool.FILES, sampleFolder.absolutePath), folderIntent.data)
-    assertEquals(0, folderIntent.flags and android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+    val sampleFolderA = java.io.File("/storage/emulated/0/Download")
+    val sampleFolderB = java.io.File("/storage/emulated/0/Pictures")
+    val folderIntentA = createFolderShortcutIntent(composeTestRule.activity, sampleFolderA)
+    val folderIntentB = createFolderShortcutIntent(composeTestRule.activity, sampleFolderB)
+    val filesToolIntent = createStandaloneToolIntent(composeTestRule.activity, Tool.FILES)
+
+    assertEquals(Tool.FILES, parseStandaloneTool(folderIntentA))
+    assertEquals(sampleFolderA.absolutePath, parseFolderShortcut(folderIntentA))
+    assertEquals(resolveStandaloneDocumentUri(Tool.FILES, sampleFolderA.absolutePath), folderIntentA.data)
+    assertEquals(0, folderIntentA.flags and android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    assertEquals(0, folderIntentA.flags and android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+
+    // Distinct folder locations and standalone Files tool have distinct document URIs so each opens as its own app instance,
+    // while identical folder locations match the same canonical document URI so existing instances are reused
+    org.junit.Assert.assertNotEquals(folderIntentA.data, folderIntentB.data)
+    org.junit.Assert.assertNotEquals(folderIntentA.data, filesToolIntent.data)
+    assertEquals(
+      folderIntentA.data,
+      createFolderShortcutIntent(composeTestRule.activity, java.io.File("/storage/emulated/0/Download/")).data,
+    )
   }
 
   @Test
@@ -881,7 +907,7 @@ class MainScreenTest {
       java.io.File(tempDir, "sample.png").writeBytes(byteArrayOf(1, 2, 3, 4))
       java.io.File(tempDir, "unknown.unrecognizedext").writeBytes(byteArrayOf(5, 6, 7, 8))
 
-      composeTestRule.setContent {
+      setTestContent {
         com.example.toolbox.ui.tools.FilesScreen(initialDirectory = tempDir)
       }
       composeTestRule.waitForIdle()
@@ -939,7 +965,7 @@ class MainScreenTest {
       )
 
       // 1. Test FilesScreen Edit button for Image, Video & Audio
-      composeTestRule.setContent {
+      setTestContent {
         com.example.toolbox.ui.tools.FilesScreen(initialDirectory = dcimDir)
       }
       composeTestRule.waitForIdle()
@@ -989,7 +1015,7 @@ class MainScreenTest {
 
       // Archive file menu shows Archive button (action_open_archive) and opens ArchiveScreen
       com.example.toolbox.ui.tools.ArchiveEngine.generateSampleArchive(dcimDir, "bundle.zip")
-      composeTestRule.setContent {
+      setTestContent {
         com.example.toolbox.ui.tools.FilesScreen(initialDirectory = dcimDir)
       }
       composeTestRule.waitForIdle()
@@ -1011,7 +1037,7 @@ class MainScreenTest {
 
       // PDF file menu shows PDF Viewer button (action_open_pdf) and opens PdfViewerScreen
       com.example.toolbox.ui.tools.PdfViewerEngine.generateSamplePdfFile(java.io.File(dcimDir, "doc.pdf"))
-      composeTestRule.setContent {
+      setTestContent {
         com.example.toolbox.ui.tools.FilesScreen(initialDirectory = dcimDir)
       }
       composeTestRule.waitForIdle()
@@ -1031,7 +1057,7 @@ class MainScreenTest {
       composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()
 
       // 2. Test GalleryScreen Edit button for Image & Video
-      composeTestRule.setContent {
+      setTestContent {
         com.example.toolbox.ui.tools.GalleryScreen(
           rootDirectory = tempDir,
           initialGrantedFolders = com.example.toolbox.ui.tools.GalleryDefaultFolder.entries.toSet(),
@@ -1078,40 +1104,41 @@ class MainScreenTest {
 
       var outerBackTriggered = false
 
-      composeTestRule.setContent {
+      setTestContent {
         androidx.activity.compose.BackHandler {
           outerBackTriggered = true
         }
-        com.example.toolbox.ui.tools.FilesScreen(
-          initialDirectory = folderB,
-          rootDirectory = rootDir,
+        MainScreen(
+          standaloneTool = Tool.FILES,
+          initialDirectory = folderA,
         )
       }
       composeTestRule.waitForIdle()
 
-      // Started at nested FolderB -> header shows FolderB and Up button is displayed
-      composeTestRule.onNodeWithText("FolderB").assertIsDisplayed()
-      composeTestRule.onNodeWithTag("action_navigate_up").assertIsDisplayed()
-
-      // 1st Back press -> goes up a folder to FolderA
-      composeTestRule.runOnUiThread {
-        composeTestRule.activity.onBackPressedDispatcher.onBackPressed()
-      }
-      composeTestRule.waitForIdle()
-      org.junit.Assert.assertFalse(outerBackTriggered)
-      composeTestRule.onNodeWithText("FolderA").assertIsDisplayed()
-      composeTestRule.onNodeWithTag("action_navigate_up").assertIsDisplayed()
-
-      // 2nd Back press -> goes up a folder to rootDir
-      composeTestRule.runOnUiThread {
-        composeTestRule.activity.onBackPressedDispatcher.onBackPressed()
-      }
-      composeTestRule.waitForIdle()
-      org.junit.Assert.assertFalse(outerBackTriggered)
+      // FolderA opened from a homescreen shortcut acts as the root folder:
+      // Header and root pill show FolderA, no Up button exists at root, and subfolder FolderB is listed
+      composeTestRule.onAllNodesWithText("FolderA").onFirst().assertIsDisplayed()
+      composeTestRule.onNodeWithTag("storage_pill_primary_root").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_navigate_up").assertDoesNotExist()
-      composeTestRule.onNodeWithTag("file_item_FolderA").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("file_item_FolderB").assertIsDisplayed()
 
-      // 3rd Back press (once at root) -> BackHandler in FilesScreen is disabled so back acts as normal
+      // Navigate into subfolder FolderB -> Up button appears
+      composeTestRule.onNodeWithTag("file_item_FolderB").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onAllNodesWithText("FolderB").onFirst().assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_navigate_up").assertIsDisplayed()
+
+      // 1st Back press -> goes up a folder to shortcut root FolderA
+      composeTestRule.runOnUiThread {
+        composeTestRule.activity.onBackPressedDispatcher.onBackPressed()
+      }
+      composeTestRule.waitForIdle()
+      org.junit.Assert.assertFalse(outerBackTriggered)
+      composeTestRule.onAllNodesWithText("FolderA").onFirst().assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_navigate_up").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("file_item_FolderB").assertIsDisplayed()
+
+      // 2nd Back press (once at shortcut root FolderA) -> cannot navigate up to parent rootDir; Back acts as normal at root
       composeTestRule.runOnUiThread {
         composeTestRule.activity.onBackPressedDispatcher.onBackPressed()
       }
@@ -1226,7 +1253,7 @@ class MainScreenTest {
       )
       java.io.File(tempDir, "checklist.md").writeText("# Tasks\n- [x] First item\n- [ ] Second item")
 
-      composeTestRule.setContent {
+      setTestContent {
         com.example.toolbox.ui.tools.FilesScreen(initialDirectory = tempDir)
       }
       composeTestRule.waitForIdle()
@@ -1316,12 +1343,25 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("calculator_screen").assertIsDisplayed()
     composeTestRule.onNodeWithTag("calculator_display_expression").assertTextEquals("5.40")
 
-    // Return to Ruler and tap Unit Converter link -> opens Unit Converter prefilled with "5.40"
+    // Return to Ruler and tap Unit Converter link -> opens Unit Converter prefilled with "5.40" and From Unit (Centimeter)
     composeTestRule.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("ruler_unit_converter_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("unit_converter_screen").assertIsDisplayed()
     composeTestRule.onNodeWithTag("unit_converter_input").assertTextEquals("5.40")
+    composeTestRule.onNodeWithText("From Unit (Centimeter)").assertIsDisplayed()
+
+    // Return to Ruler, toggle to Imperial (in), and tap Unit Converter link -> opens Unit Converter with "2.13" and From Unit (Inch)
+    composeTestRule.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("ruler_unit_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("ruler_measurement_label").assertTextEquals("2.13 in")
+    composeTestRule.onNodeWithTag("ruler_unit_converter_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("unit_converter_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("unit_converter_input").assertTextEquals("2.13")
+    composeTestRule.onNodeWithText("From Unit (Inch)").assertIsDisplayed()
   }
 }

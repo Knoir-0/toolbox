@@ -785,13 +785,373 @@ object AudioEditorEngine {
   }
 
   /**
-   * Reads audio metadata tags from [file] using RIFF `LIST` `INFO` parsing for WAV files,
+   * Reads ID3v2 (`ID3v2.3` / `ID3v2.4`) text metadata frames (`TIT2`, `TPE1`, `TALB`, `TCON`,
+   * `TYER`/`TDRC`, `TRCK`, `COMM`) from [file] if an ID3v2 header is present at offset 0.
+   */
+  fun readId3v2Metadata(file: File): AudioMetadataTags {
+    if (!file.exists() || !file.isFile || file.length() < 10L) return AudioMetadataTags()
+    return try {
+      RandomAccessFile(file, "r").use { raf ->
+        val header = ByteArray(10)
+        raf.readFully(header)
+        if (header[0] != 'I'.code.toByte() ||
+          header[1] != 'D'.code.toByte() ||
+          header[2] != '3'.code.toByte()
+        ) {
+          return AudioMetadataTags()
+        }
+        val majorVersion = header[3].toInt() and 0xFF
+        val tagSize = ((header[6].toInt() and 0x7F) shl 21) or
+          ((header[7].toInt() and 0x7F) shl 14) or
+          ((header[8].toInt() and 0x7F) shl 7) or
+          (header[9].toInt() and 0x7F)
+        if (tagSize <= 0) return AudioMetadataTags()
+
+        val tagEnd = (10L + tagSize).coerceAtMost(raf.length())
+        var title = ""
+        var artist = ""
+        var album = ""
+        var genre = ""
+        var year = ""
+        var trackNumber = ""
+        var comment = ""
+
+        while (raf.filePointer + 10L <= tagEnd) {
+          val frameHeader = ByteArray(10)
+          raf.readFully(frameHeader)
+          if (frameHeader[0].toInt() == 0) break
+          val frameId = String(frameHeader, 0, 4, Charsets.US_ASCII)
+          val frameSize = if (majorVersion == 4) {
+            ((frameHeader[4].toInt() and 0x7F) shl 21) or
+              ((frameHeader[5].toInt() and 0x7F) shl 14) or
+              ((frameHeader[6].toInt() and 0x7F) shl 7) or
+              (frameHeader[7].toInt() and 0x7F)
+          } else {
+            ByteBuffer.wrap(frameHeader, 4, 4).order(ByteOrder.BIG_ENDIAN).int
+          }
+          val frameStart = raf.filePointer
+          if (frameSize <= 0 || frameStart + frameSize > tagEnd) break
+
+          if (frameSize in 1..65536) {
+            val payload = ByteArray(frameSize)
+            raf.readFully(payload)
+            val encoding = payload[0].toInt() and 0xFF
+            val charset = when (encoding) {
+              1 -> Charsets.UTF_16
+              2 -> Charsets.UTF_16BE
+              3 -> Charsets.UTF_8
+              else -> Charsets.ISO_8859_1
+            }
+            if (frameId == "COMM") {
+              if (payload.size > 4) {
+                // Skip 1 encoding byte + 3 language bytes + null-terminated short description
+                var textStart = 4
+                while (textStart < payload.size && payload[textStart].toInt() != 0) {
+                  textStart++
+                }
+                while (textStart < payload.size && payload[textStart].toInt() == 0) {
+                  textStart++
+                }
+                if (textStart < payload.size) {
+                  comment = String(payload, textStart, payload.size - textStart, charset)
+                    .trim('\u0000')
+                    .trim()
+                }
+              }
+            } else if (payload.size > 1) {
+              val value = String(payload, 1, payload.size - 1, charset)
+                .trim('\u0000')
+                .trim()
+              when (frameId) {
+                "TIT2" -> if (value.isNotEmpty()) title = value
+                "TPE1" -> if (value.isNotEmpty()) artist = value
+                "TPE2" -> if (artist.isEmpty() && value.isNotEmpty()) artist = value
+                "TALB" -> if (value.isNotEmpty()) album = value
+                "TCON" -> if (value.isNotEmpty()) genre = value
+                "TYER", "TDRC" -> if (value.isNotEmpty()) year = value
+                "TRCK" -> if (value.isNotEmpty()) trackNumber = value
+              }
+            }
+          }
+          raf.seek(frameStart + frameSize)
+        }
+
+        AudioMetadataTags(
+          title = title,
+          artist = artist,
+          album = album,
+          genre = genre,
+          year = year,
+          trackNumber = trackNumber,
+          comment = comment,
+        ).sanitized()
+      }
+    } catch (_: Throwable) {
+      AudioMetadataTags()
+    }
+  }
+
+  /**
+   * Writes or updates an `ID3v2.3` metadata header at the beginning of [file], preserving any
+   * non-text frames (such as `APIC` album art) and all following audio payload bytes.
+   */
+  fun writeId3v2Metadata(file: File, metadata: AudioMetadataTags): Boolean {
+    if (!file.exists() || !file.isFile) return false
+    val clean = metadata.sanitized()
+    val editableFrameIds = setOf("TIT2", "TPE1", "TALB", "TCON", "TYER", "TDRC", "TRCK", "COMM")
+    return try {
+      val preservedFrames = ByteArrayOutputStream()
+      var audioPayloadOffset = 0L
+
+      RandomAccessFile(file, "r").use { raf ->
+        if (raf.length() >= 10L) {
+          val header = ByteArray(10)
+          raf.readFully(header)
+          if (header[0] == 'I'.code.toByte() &&
+            header[1] == 'D'.code.toByte() &&
+            header[2] == '3'.code.toByte()
+          ) {
+            val majorVersion = header[3].toInt() and 0xFF
+            val tagSize = ((header[6].toInt() and 0x7F) shl 21) or
+              ((header[7].toInt() and 0x7F) shl 14) or
+              ((header[8].toInt() and 0x7F) shl 7) or
+              (header[9].toInt() and 0x7F)
+            val tagEnd = (10L + tagSize).coerceAtMost(raf.length())
+            audioPayloadOffset = tagEnd
+
+            while (raf.filePointer + 10L <= tagEnd) {
+              val frameHeader = ByteArray(10)
+              raf.readFully(frameHeader)
+              if (frameHeader[0].toInt() == 0) break
+              val frameId = String(frameHeader, 0, 4, Charsets.US_ASCII)
+              val frameSize = if (majorVersion == 4) {
+                ((frameHeader[4].toInt() and 0x7F) shl 21) or
+                  ((frameHeader[5].toInt() and 0x7F) shl 14) or
+                  ((frameHeader[6].toInt() and 0x7F) shl 7) or
+                  (frameHeader[7].toInt() and 0x7F)
+              } else {
+                ByteBuffer.wrap(frameHeader, 4, 4).order(ByteOrder.BIG_ENDIAN).int
+              }
+              val frameStart = raf.filePointer
+              if (frameSize <= 0 || frameStart + frameSize > tagEnd) break
+              if (frameId !in editableFrameIds && frameSize <= 16 * 1024 * 1024) {
+                val framePayload = ByteArray(frameSize)
+                raf.readFully(framePayload)
+                val v23FrameHeader = ByteBuffer.allocate(10).order(ByteOrder.BIG_ENDIAN).apply {
+                  put(frameId.toByteArray(Charsets.US_ASCII), 0, 4)
+                  putInt(framePayload.size)
+                  putShort(0)
+                }.array()
+                preservedFrames.write(v23FrameHeader)
+                preservedFrames.write(framePayload)
+              }
+              raf.seek(frameStart + frameSize)
+            }
+          }
+        }
+      }
+
+      val framesOut = ByteArrayOutputStream()
+      fun writeTextFrame(frameId: String, value: String) {
+        if (value.isEmpty()) return
+        val textBytes = value.toByteArray(Charsets.UTF_8)
+        val payloadSize = 1 + textBytes.size
+        val header = ByteBuffer.allocate(10).order(ByteOrder.BIG_ENDIAN).apply {
+          put(frameId.toByteArray(Charsets.US_ASCII), 0, 4)
+          putInt(payloadSize)
+          putShort(0)
+        }.array()
+        framesOut.write(header)
+        framesOut.write(3) // UTF-8 encoding
+        framesOut.write(textBytes)
+      }
+
+      writeTextFrame("TIT2", clean.title)
+      writeTextFrame("TPE1", clean.artist)
+      writeTextFrame("TALB", clean.album)
+      writeTextFrame("TCON", clean.genre)
+      writeTextFrame("TYER", clean.year)
+      writeTextFrame("TRCK", clean.trackNumber)
+
+      if (clean.comment.isNotEmpty()) {
+        val commentBytes = clean.comment.toByteArray(Charsets.UTF_8)
+        val payloadSize = 1 + 3 + 1 + commentBytes.size
+        val header = ByteBuffer.allocate(10).order(ByteOrder.BIG_ENDIAN).apply {
+          put("COMM".toByteArray(Charsets.US_ASCII), 0, 4)
+          putInt(payloadSize)
+          putShort(0)
+        }.array()
+        framesOut.write(header)
+        framesOut.write(3) // UTF-8 encoding
+        framesOut.write("eng".toByteArray(Charsets.US_ASCII))
+        framesOut.write(0) // empty description terminator
+        framesOut.write(commentBytes)
+      }
+
+      val preservedBytes = preservedFrames.toByteArray()
+      if (preservedBytes.isNotEmpty()) {
+        framesOut.write(preservedBytes)
+      }
+
+      val allFrames = framesOut.toByteArray()
+      val tempOut = File(file.parentFile ?: File("."), ".id3meta_${System.nanoTime()}_${file.name}")
+      try {
+        BufferedOutputStream(FileOutputStream(tempOut)).use { out ->
+          if (allFrames.isNotEmpty()) {
+            val tagSize = allFrames.size
+            val id3Header = byteArrayOf(
+              'I'.code.toByte(),
+              'D'.code.toByte(),
+              '3'.code.toByte(),
+              3, // ID3v2.3
+              0,
+              0,
+              ((tagSize shr 21) and 0x7F).toByte(),
+              ((tagSize shr 14) and 0x7F).toByte(),
+              ((tagSize shr 7) and 0x7F).toByte(),
+              (tagSize and 0x7F).toByte(),
+            )
+            out.write(id3Header)
+            out.write(allFrames)
+          }
+          RandomAccessFile(file, "r").use { raf ->
+            raf.seek(audioPayloadOffset)
+            val buf = ByteArray(8192)
+            while (true) {
+              val read = raf.read(buf)
+              if (read <= 0) break
+              out.write(buf, 0, read)
+            }
+          }
+          out.flush()
+        }
+        tempOut.copyTo(file, overwrite = true)
+        true
+      } finally {
+        tempOut.delete()
+      }
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  /**
+   * Stream-copies a RIFF WAVE [file] and replaces or appends its `LIST` `INFO` metadata chunk
+   * without decoding PCM samples into memory.
+   */
+  fun updateWavMetadataInPlace(file: File, metadata: AudioMetadataTags): Boolean {
+    if (!file.exists() || !file.isFile || file.length() < 44L) return false
+    return try {
+      val keptChunks = mutableListOf<Pair<Long, Long>>()
+      var hasFmt = false
+      var hasData = false
+      RandomAccessFile(file, "r").use { raf ->
+        val fileLen = raf.length()
+        val riffHeader = ByteArray(12)
+        raf.readFully(riffHeader)
+        val riff = String(riffHeader, 0, 4, Charsets.US_ASCII)
+        val wave = String(riffHeader, 8, 4, Charsets.US_ASCII)
+        if (riff != "RIFF" || wave != "WAVE") return false
+
+        while (raf.filePointer + 8L <= fileLen) {
+          val chunkStart = raf.filePointer
+          val chunkHeader = ByteArray(8)
+          raf.readFully(chunkHeader)
+          val chunkId = String(chunkHeader, 0, 4, Charsets.US_ASCII)
+          val chunkSize = ByteBuffer.wrap(chunkHeader, 4, 4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .int
+            .toLong() and 0xFFFFFFFFL
+          val dataStart = raf.filePointer
+          if (dataStart + chunkSize > fileLen) break
+
+          var isInfoList = false
+          if (chunkId == "LIST" && chunkSize >= 4L) {
+            val typeBytes = ByteArray(4)
+            raf.readFully(typeBytes)
+            if (String(typeBytes, 0, 4, Charsets.US_ASCII) == "INFO") {
+              isInfoList = true
+            }
+          }
+          if (chunkId == "fmt ") hasFmt = true
+          if (chunkId == "data") hasData = true
+
+          val paddedDataSize = chunkSize + (if (chunkSize % 2L == 1L) 1L else 0L)
+          if (!isInfoList) {
+            keptChunks.add(chunkStart to (8L + chunkSize))
+          }
+          val nextPos = dataStart + paddedDataSize
+          if (nextPos <= chunkStart || nextPos > fileLen) break
+          raf.seek(nextPos)
+        }
+      }
+
+      if (!hasFmt || !hasData) return false
+
+      val listChunk = createListInfoChunk(metadata.sanitized())
+      val keptTotalPadded = keptChunks.sumOf { (_, len) -> len + (if (len % 2L == 1L) 1L else 0L) }
+      val riffPayloadSize = (4L + keptTotalPadded + listChunk.size).toInt()
+
+      val tempOut = File(file.parentFile ?: File("."), ".wavmeta_${System.nanoTime()}_${file.name}")
+      try {
+        BufferedOutputStream(FileOutputStream(tempOut)).use { out ->
+          val header = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).apply {
+            put("RIFF".toByteArray(Charsets.US_ASCII))
+            putInt(riffPayloadSize)
+            put("WAVE".toByteArray(Charsets.US_ASCII))
+          }.array()
+          out.write(header)
+
+          RandomAccessFile(file, "r").use { raf ->
+            val buf = ByteArray(8192)
+            for ((offset, length) in keptChunks) {
+              raf.seek(offset)
+              var remaining = length
+              while (remaining > 0L) {
+                val toRead = min(buf.size.toLong(), remaining).toInt()
+                val read = raf.read(buf, 0, toRead)
+                if (read <= 0) break
+                out.write(buf, 0, read)
+                remaining -= read
+              }
+              if (length % 2L == 1L) {
+                out.write(0)
+              }
+            }
+          }
+          if (listChunk.isNotEmpty()) {
+            out.write(listChunk)
+          }
+          out.flush()
+        }
+        tempOut.copyTo(file, overwrite = true)
+        true
+      } finally {
+        tempOut.delete()
+      }
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  /**
+   * Fast pure-Kotlin reader for embedded RIFF `LIST` `INFO` (WAV) or `ID3v2` (MP3) metadata tags.
+   */
+  fun readEmbeddedFileMetadata(file: File): AudioMetadataTags {
+    if (!file.exists() || !file.isFile || file.length() < 10L) return AudioMetadataTags()
+    val wavTags = readWavMetadata(file)
+    if (!wavTags.isEmpty) return wavTags
+    return readId3v2Metadata(file)
+  }
+
+  /**
+   * Reads audio metadata tags from [file] using RIFF `LIST` `INFO` and `ID3v2` parsing,
    * supplemented by Android [MediaMetadataRetriever] and [FFprobeKit] for all audio formats.
    */
   fun readAudioMetadata(file: File): AudioMetadataTags {
     if (!file.exists() || !file.isFile || file.length() <= 0L) return AudioMetadataTags()
 
-    var tags = readWavMetadata(file)
+    var tags = readEmbeddedFileMetadata(file)
 
     // Supplement via MediaMetadataRetriever when available
     val retriever = try {
@@ -865,16 +1225,19 @@ object AudioEditorEngine {
 
   /**
    * Writes [metadata] tags into an existing audio [file] in place.
-   * Supports direct lossless RIFF `LIST` `INFO` chunk updates for WAV files and FFmpeg stream-copy
-   * metadata tagging for compressed formats.
+   * Supports direct lossless RIFF `LIST` `INFO` chunk updates for WAV files, FFmpeg stream-copy
+   * metadata tagging for compressed formats, and pure-Kotlin `ID3v2.3` tagging fallback.
    */
   fun writeAudioMetadata(file: File, metadata: AudioMetadataTags): Boolean {
     if (!file.exists() || !file.isFile) return false
     val clean = metadata.sanitized()
+    if (updateWavMetadataInPlace(file, clean)) {
+      return true
+    }
     readWavFile(file)?.let { wavBuffer ->
       return writeWavFile(wavBuffer, file, clean)
     }
-    return try {
+    val ffmpegWritten = try {
       val tempOut = File(file.parentFile ?: File("."), ".meta_${System.nanoTime()}_${file.name}")
       try {
         val args = mutableListOf(
@@ -901,6 +1264,8 @@ object AudioEditorEngine {
     } catch (_: Throwable) {
       false
     }
+    if (ffmpegWritten) return true
+    return writeId3v2Metadata(file, clean)
   }
 
   /**

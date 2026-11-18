@@ -536,8 +536,6 @@ fun RecipeBookScreen(
                 )
             )
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
             // ==================== CONTENT AREA + SEARCH OVERLAY ====================
             Box(
                 modifier = Modifier
@@ -994,57 +992,26 @@ private fun RecipeCatalogSearchOverlay(
             .background(MaterialTheme.colorScheme.background)
             .testTag("catalog_search_overlay")
     ) {
-        // Category Filter Chips Bar (Matches PlantScheduleScreen)
-        Surface(
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 1.dp,
-            modifier = Modifier.fillMaxWidth()
+        // Category Filter Chips Bar (Section 5.4 & 5.7)
+        ToolboxPillNavigationBar(
+            rowTestTag = "catalog_category_pills",
         ) {
-            LazyRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("catalog_category_pills"),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                item {
-                    FilterChip(
-                        selected = selectedCategory == null,
-                        onClick = { onSelectCategory(null) },
-                        label = { Text("All ($allCatalogCount)") },
-                        shape = RoundedCornerShape(20.dp),
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        modifier = Modifier.testTag("category_chip_ALL")
-                    )
-                }
-                items(RecipeCategory.entries) { category ->
-                    FilterChip(
-                        selected = selectedCategory == category,
-                        onClick = { onSelectCategory(category) },
-                        label = { Text(category.displayName) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = category.icon(),
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        },
-                        shape = RoundedCornerShape(20.dp),
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        modifier = Modifier.testTag("category_chip_${category.name}")
-                    )
-                }
+            ToolboxPillNavigationItem(
+                selected = selectedCategory == null,
+                onClick = { onSelectCategory(null) },
+                label = "All ($allCatalogCount)",
+                testTag = "category_chip_ALL",
+            )
+            RecipeCategory.entries.forEach { category ->
+                ToolboxPillNavigationItem(
+                    selected = selectedCategory == category,
+                    onClick = { onSelectCategory(category) },
+                    leadingIcon = category.icon(),
+                    label = category.displayName,
+                    testTag = "category_chip_${category.name}",
+                )
             }
         }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
         LazyColumn(
             modifier = Modifier
@@ -1463,84 +1430,42 @@ private fun MainRecipeBookContent(
     } else {
         Column(modifier = Modifier.fillMaxSize()) {
             // Book Filter Bar
-            Surface(
-                color = MaterialTheme.colorScheme.surface,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                val presentCategories = remember(savedRecipes) {
-                    RecipeCategory.entries.filter { cat ->
-                        savedRecipes.any { it.category == cat }
-                    }
+            val presentCategories = remember(savedRecipes) {
+                RecipeCategory.entries.filter { cat ->
+                    savedRecipes.any { it.category == cat }
                 }
-                LazyRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("book_filter_row"),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    item {
-                        FilterChip(
-                            selected = !filterFavoritesOnly && selectedBookCategory == null,
-                            onClick = {
-                                if (filterFavoritesOnly) onToggleFavoritesFilter()
-                                onSelectBookCategory(null)
-                            },
-                            label = { Text("All (${savedRecipes.size})") },
-                            shape = RoundedCornerShape(20.dp),
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                            ),
-                            modifier = Modifier.testTag("book_filter_all")
-                        )
-                    }
-                    item {
-                        FilterChip(
-                            selected = filterFavoritesOnly,
-                            onClick = onToggleFavoritesFilter,
-                            label = { Text("Favorites ($favoriteCount)") },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = if (filterFavoritesOnly) {
-                                        Icons.Default.Star
-                                    } else {
-                                        Icons.Default.StarBorder
-                                    },
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            },
-                            shape = RoundedCornerShape(20.dp),
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer
-                            ),
-                            modifier = Modifier.testTag("book_filter_favorites")
-                        )
-                    }
-                    items(presentCategories) { cat ->
-                        FilterChip(
-                            selected = selectedBookCategory == cat,
-                            onClick = { onSelectBookCategory(cat) },
-                            label = { Text(cat.displayName) },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = cat.icon(),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            },
-                            shape = RoundedCornerShape(20.dp),
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer
-                            ),
-                            modifier = Modifier.testTag("book_filter_category_${cat.name}")
-                        )
-                    }
+            }
+            ToolboxPillNavigationBar(
+                rowTestTag = "book_filter_row",
+            ) {
+                ToolboxPillNavigationItem(
+                    selected = !filterFavoritesOnly && selectedBookCategory == null,
+                    onClick = {
+                        if (filterFavoritesOnly) onToggleFavoritesFilter()
+                        onSelectBookCategory(null)
+                    },
+                    label = "All (${savedRecipes.size})",
+                    testTag = "book_filter_all",
+                )
+                ToolboxPillNavigationItem(
+                    selected = filterFavoritesOnly,
+                    onClick = onToggleFavoritesFilter,
+                    leadingIcon = if (filterFavoritesOnly) {
+                        Icons.Default.Star
+                    } else {
+                        Icons.Default.StarBorder
+                    },
+                    label = "Favorites ($favoriteCount)",
+                    testTag = "book_filter_favorites",
+                )
+                presentCategories.forEach { cat ->
+                    ToolboxPillNavigationItem(
+                        selected = selectedBookCategory == cat,
+                        onClick = { onSelectBookCategory(cat) },
+                        leadingIcon = cat.icon(),
+                        label = cat.displayName,
+                        testTag = "book_filter_category_${cat.name}",
+                    )
                 }
             }
 

@@ -155,6 +155,9 @@ You can build and test the application directly using the Gradle wrapper:
 # Build the debug APK
 ./gradlew assembleDebug
 
+# Build the debug apk when shit's fucked
+./gradlew assembleDebug --rerun-tasks --no-build-cache --no-configuration-cache
+
 # Run local unit tests
 ./gradlew test
 

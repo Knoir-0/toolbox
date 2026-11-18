@@ -284,26 +284,19 @@ fun SearchScreen(
       ),
     )
 
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
-
     // Category Pills Bar (aligned with ToolCategory) + Per-Tool Filter Chips
     Column(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(horizontal = 12.dp, vertical = 6.dp),
-      verticalArrangement = Arrangement.spacedBy(6.dp),
+        .padding(bottom = 4.dp),
+      verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .horizontalScroll(rememberScrollState())
-          .testTag("search_category_pills_row"),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+      ToolboxPillNavigationBar(
+        rowTestTag = "search_category_pills_row",
       ) {
         SearchCategoryFilter.entries.forEach { filter ->
           val isSelected = selectedCategoryFilter == filter
-          FilterChip(
+          ToolboxPillNavigationItem(
             selected = isSelected,
             onClick = {
               selectedCategoryFilter = if (isSelected && filter != SearchCategoryFilter.ALL) {
@@ -312,20 +305,8 @@ fun SearchScreen(
                 filter
               }
             },
-            label = {
-              Text(
-                text = filter.label,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                maxLines = 1,
-              )
-            },
-            shape = RoundedCornerShape(20.dp),
-            colors = FilterChipDefaults.filterChipColors(
-              selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-              selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            ),
-            modifier = Modifier.testTag("search_category_chip_${filter.name}"),
+            label = filter.label,
+            testTag = "search_category_chip_${filter.name}",
           )
         }
       }
@@ -339,7 +320,8 @@ fun SearchScreen(
         Row(
           modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 2.dp),
           horizontalArrangement = Arrangement.spacedBy(6.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {

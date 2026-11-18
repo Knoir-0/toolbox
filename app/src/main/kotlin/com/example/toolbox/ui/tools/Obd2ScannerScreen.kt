@@ -1324,26 +1324,21 @@ private fun Obd2DtcSearchOverlay(
   ) {
     Column(modifier = Modifier.fillMaxSize()) {
       // Category Filter Chips Row (matching Plants & Recipes)
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .horizontalScroll(rememberScrollState())
-          .padding(horizontal = 16.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+      ToolboxPillNavigationBar(
+        rowTestTag = "catalog_category_pills",
       ) {
-        FilterChip(
+        ToolboxPillNavigationItem(
           selected = selectedCategory == null,
           onClick = { onSelectCategory(null) },
-          label = { Text("All ($allCatalogCount)") },
-          shape = RoundedCornerShape(20.dp),
+          label = "All ($allCatalogCount)",
+          testTag = "category_chip_ALL",
         )
         DtcSystemFilter.entries.forEach { category ->
-          FilterChip(
+          ToolboxPillNavigationItem(
             selected = selectedCategory == category,
             onClick = { onSelectCategory(category) },
-            label = { Text(category.label) },
-            shape = RoundedCornerShape(20.dp),
+            label = category.label,
+            testTag = "category_chip_${category.name}",
           )
         }
       }

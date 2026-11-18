@@ -1733,126 +1733,53 @@ private fun ArchiveActionPillRow(
   onNewZip: () -> Unit,
   onShowArchiveInfo: () -> Unit,
 ) {
-  Box(
-    modifier = Modifier
-      .fillMaxWidth()
-      .testTag("archive_pill_bar"),
-  ) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .fadingPillRowUnderFloatingControls(hasColumnsButton = viewMode == FileViewMode.GRID)
-        .horizontalScroll(rememberScrollState())
-        .padding(
-          start = 12.dp,
-          end = if (viewMode == FileViewMode.GRID) 96.dp else 56.dp,
-          top = 6.dp,
-          bottom = 6.dp,
-        ),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      FilterChip(
+  ToolboxPillNavigationBar(
+    barTestTag = "archive_pill_bar",
+    floatingButtonsCount = if (viewMode == FileViewMode.GRID) 2 else 1,
+    pills = {
+      ToolboxPillNavigationItem(
         selected = isAtRoot,
         onClick = onNavigateRoot,
-        shape = RoundedCornerShape(20.dp),
-        leadingIcon = {
-          Icon(
-            imageVector = Icons.Default.FolderZip,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-        },
-        label = {
-          Text(
-            text = archiveName,
-            fontSize = 13.sp,
-            fontWeight = if (isAtRoot) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        },
-        colors = FilterChipDefaults.filterChipColors(
-          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-          selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
-        ),
-        modifier = Modifier.testTag("chip_archive_root"),
+        leadingIcon = Icons.Default.FolderZip,
+        label = archiveName,
+        testTag = "chip_archive_root",
       )
 
-      FilterChip(
+      ToolboxPillNavigationItem(
         selected = false,
         onClick = onExtractAll,
-        shape = RoundedCornerShape(20.dp),
-        leadingIcon = {
-          Icon(
-            imageVector = Icons.Default.Unarchive,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-        },
-        label = { Text("Extract All", fontSize = 13.sp) },
-        modifier = Modifier.testTag("chip_extract_all"),
+        leadingIcon = Icons.Default.Unarchive,
+        label = "Extract All",
+        testTag = "chip_extract_all",
       )
 
       if (supportsModify) {
-        FilterChip(
+        ToolboxPillNavigationItem(
           selected = false,
           onClick = onAddFiles,
-          shape = RoundedCornerShape(20.dp),
-          leadingIcon = {
-            Icon(
-              imageVector = Icons.Default.Add,
-              contentDescription = null,
-              modifier = Modifier.size(16.dp),
-            )
-          },
-          label = { Text("Add Files", fontSize = 13.sp) },
-          modifier = Modifier.testTag("chip_add_to_archive"),
+          leadingIcon = Icons.Default.Add,
+          label = "Add Files",
+          testTag = "chip_add_to_archive",
         )
       }
 
-      FilterChip(
+      ToolboxPillNavigationItem(
         selected = false,
         onClick = onNewZip,
-        shape = RoundedCornerShape(20.dp),
-        leadingIcon = {
-          Icon(
-            imageVector = Icons.Default.CreateNewFolder,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-        },
-        label = { Text("New Zip", fontSize = 13.sp) },
-        modifier = Modifier.testTag("chip_new_zip"),
+        leadingIcon = Icons.Default.CreateNewFolder,
+        label = "New Zip",
+        testTag = "chip_new_zip",
       )
 
-      FilterChip(
+      ToolboxPillNavigationItem(
         selected = false,
         onClick = onShowArchiveInfo,
-        shape = RoundedCornerShape(20.dp),
-        leadingIcon = {
-          Icon(
-            imageVector = Icons.Default.Info,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-          )
-        },
-        label = { Text("Info", fontSize = 13.sp) },
-        modifier = Modifier.testTag("chip_archive_info"),
+        leadingIcon = Icons.Default.Info,
+        label = "Info",
+        testTag = "chip_archive_info",
       )
-    }
-
-    // Pinned floating [# per row] and [Sort/Group] buttons on the right edge of the pill bar
-    Row(
-      modifier = Modifier
-        .align(Alignment.CenterEnd)
-        .pillBarFloatingControlsBackdrop(backgroundColor = MaterialTheme.colorScheme.background)
-        .padding(end = 12.dp)
-        .zIndex(10f),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
+    },
+    floatingControls = {
       if (viewMode == FileViewMode.GRID) {
         ToolboxFloatingColumnsButton(
           columnsPerRow = gridColumnsPerRow,
@@ -1987,8 +1914,8 @@ private fun ArchiveActionPillRow(
           }
         }
       }
-    }
-  }
+    },
+  )
 }
 
 @Composable
