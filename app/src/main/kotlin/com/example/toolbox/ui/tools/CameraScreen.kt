@@ -171,6 +171,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -213,6 +214,7 @@ fun CameraScreen(
   notesRepository: NotesRepository? = null,
   onOpenGallery: ((File) -> Unit)? = null,
   onOpenNotes: (() -> Unit)? = null,
+  onOpenColorPicker: ((String) -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
@@ -463,13 +465,25 @@ fun CameraScreen(
   var showAdjustmentsPanel by rememberSaveable { mutableStateOf(false) }
   var showFiltersBar by rememberSaveable { mutableStateOf(false) }
 
-  // Tap-to-focus indicator state (normalized 0f..1f coordinates)
+  // Tap-to-focus indicator state (normalized 0f..1f coordinates) & center-radius sampled hex color
   var focusPointNormalized by remember { mutableStateOf<Offset?>(null) }
+  var focusSampledColorHex by remember { mutableStateOf<String?>(null) }
   var focusTriggerCounter by remember { mutableIntStateOf(0) }
+  var inlineColorPickerHex by rememberSaveable { mutableStateOf<String?>(null) }
+
+  fun openColorInColorsTool(hex: String) {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    focusPointNormalized = null
+    if (onOpenColorPicker != null) {
+      onOpenColorPicker(hex)
+    } else {
+      inlineColorPickerHex = hex
+    }
+  }
 
   LaunchedEffect(focusTriggerCounter) {
     if (focusPointNormalized != null) {
-      delay(1400L)
+      delay(2800L)
       focusPointNormalized = null
     }
   }
@@ -998,6 +1012,30 @@ fun CameraScreen(
     return
   }
 
+  val activeInlineColorHex = inlineColorPickerHex
+  if (activeInlineColorHex != null) {
+    BackHandler {
+      inlineColorPickerHex = null
+    }
+    ColorPickerScreen(
+      modifier = modifier,
+      initialHexColor = activeInlineColorHex,
+      onNavigateBack = {
+        inlineColorPickerHex = null
+      },
+    )
+    return
+  }
+
+  // Keep the display awake while the camera is in use.
+  if (!isInspection) {
+    val view = LocalView.current
+    DisposableEffect(view) {
+      view.keepScreenOn = true
+      onDispose { view.keepScreenOn = false }
+    }
+  }
+
   // Measured height of the top controls overlay, used to pin the scanner box just beneath it.
   var topOverlayHeightPx by remember { mutableStateOf(0) }
   val density = LocalDensity.current
@@ -1040,11 +1078,35 @@ fun CameraScreen(
               }
             }
           }
-          .pointerInput(Unit) {
+          .pointerInput(colorFilter, exposureEv, lensFacing) {
             detectTapGestures { tapOffset ->
               val normX = (tapOffset.x / size.width.toFloat()).coerceIn(0.08f, 0.92f)
               val normY = (tapOffset.y / size.height.toFloat()).coerceIn(0.08f, 0.92f)
               focusPointNormalized = Offset(normX, normY)
+              val tv = activeTextureView
+              val rawFrame = try {
+                if (tv != null && tv.isAvailable) tv.getBitmap(320, 320) else null
+              } catch (_: Throwable) {
+                null
+              }
+              focusSampledColorHex = if (rawFrame != null && rawFrame.width > 8 && rawFrame.height > 8) {
+                CameraEngine.sampleCenterRadiusColorHexFromBitmap(
+                  bitmap = rawFrame,
+                  normX = normX,
+                  normY = normY,
+                  radiusPx = 6,
+                  filter = colorFilter,
+                  exposureEv = exposureEv,
+                )
+              } else {
+                CameraEngine.sampleSyntheticFocusColorHex(
+                  normX = normX,
+                  normY = normY,
+                  lensFacing = lensFacing,
+                  filter = colorFilter,
+                  exposureEv = exposureEv,
+                )
+              }
               focusTriggerCounter++
               haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
             }
@@ -1120,30 +1182,105 @@ fun CameraScreen(
           )
         }
 
-        // Tap-to-Focus Reticle Indicator
+        // Tap-to-Focus Reticle Indicator & Sampled Center-Radius Hex Color Pill
         val activeFocusPoint = focusPointNormalized
         if (activeFocusPoint != null) {
           val focusRingColor = MaterialTheme.colorScheme.tertiary
-          Box(
+          val activeHex = focusSampledColorHex ?: CameraEngine.sampleSyntheticFocusColorHex(
+            normX = activeFocusPoint.x,
+            normY = activeFocusPoint.y,
+            lensFacing = lensFacing,
+            filter = colorFilter,
+            exposureEv = exposureEv,
+          )
+          val swatchColor = remember(activeHex) {
+            val rgb = ColorMath.parseHex(activeHex)
+            if (rgb != null) {
+              Color(red = rgb.first, green = rgb.second, blue = rgb.third)
+            } else {
+              focusRingColor
+            }
+          }
+          var measuredPillWidthPx by remember { mutableIntStateOf(0) }
+
+          BoxWithConstraints(
             modifier = Modifier
               .fillMaxSize()
               .testTag("camera_focus_indicator"),
           ) {
+            val boxW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+            val boxH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+            val cx = boxW * activeFocusPoint.x
+            val cy = boxH * activeFocusPoint.y
+            val radiusPx = with(density) { 32.dp.toPx() }
+            val gapPx = with(density) { 6.dp.toPx() }
+            val edgeMarginPx = with(density) { 8.dp.toPx() }
+            val fallbackPillWidthPx = with(density) { 86.dp.toPx() }
+            val effectivePillW = if (measuredPillWidthPx > 0) measuredPillWidthPx.toFloat() else fallbackPillWidthPx
+            val pillLeftPx = (cx - effectivePillW / 2f).coerceIn(
+              edgeMarginPx,
+              (boxW - effectivePillW - edgeMarginPx).coerceAtLeast(edgeMarginPx),
+            )
+            val pillTopPx = (cy + radiusPx + gapPx).coerceIn(
+              edgeMarginPx,
+              (boxH - with(density) { 36.dp.toPx() }).coerceAtLeast(edgeMarginPx),
+            )
+
             Canvas(modifier = Modifier.fillMaxSize()) {
-              val cx = size.width * activeFocusPoint.x
-              val cy = size.height * activeFocusPoint.y
-              val radius = 32.dp.toPx()
               drawCircle(
                 color = focusRingColor,
-                radius = radius,
+                radius = radiusPx,
                 center = Offset(cx, cy),
                 style = Stroke(width = 2.dp.toPx()),
               )
               drawCircle(
-                color = focusRingColor.copy(alpha = 0.7f),
+                color = swatchColor,
                 radius = 4.dp.toPx(),
                 center = Offset(cx, cy),
               )
+            }
+
+            // Hex Color Pill below the auto-focus circle (styled like Music Player track details color pills)
+            Surface(
+              shape = CircleShape,
+              color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.82f),
+              border = BorderStroke(1.dp, swatchColor.copy(alpha = 0.65f)),
+              modifier = Modifier
+                .onSizeChanged { measuredPillWidthPx = it.width }
+                .offset {
+                  IntOffset(
+                    x = pillLeftPx.roundToInt(),
+                    y = pillTopPx.roundToInt(),
+                  )
+                }
+                .clip(CircleShape)
+                .clickable { openColorInColorsTool(activeHex) }
+                .testTag("camera_focus_color_pill"),
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+              ) {
+                Box(
+                  modifier = Modifier
+                    .size(12.dp)
+                    .clip(CircleShape)
+                    .background(swatchColor)
+                    .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), CircleShape)
+                    .testTag("camera_focus_color_swatch"),
+                )
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(
+                  text = activeHex,
+                  style = MaterialTheme.typography.labelSmall,
+                  fontFamily = FontFamily.Monospace,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  maxLines = 1,
+                  modifier = Modifier.testTag("camera_focus_color_hex_text"),
+                )
+              }
             }
           }
         }
@@ -3128,7 +3265,7 @@ private fun CameraFolderAndFormatDialog(
       Button(
         onClick = { onConfirm(trimmedInput, selectedFormat, mirrorFrontEnabled) },
         enabled = isValid,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("confirm_camera_settings_button"),
       ) {
         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -3139,7 +3276,7 @@ private fun CameraFolderAndFormatDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }
@@ -4198,7 +4335,7 @@ private fun CreateCodeDialog(
             generatorFormat,
           )
         },
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("generator_save_png_button"),
       ) {
         Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -4209,7 +4346,7 @@ private fun CreateCodeDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("close_create_code_button"),
       ) {
         Text("Cancel")
@@ -4349,7 +4486,7 @@ private fun ScannedCodeDetailsDialog(
         ) {
           TextButton(
             onClick = onSaveBarcodeImage,
-            shape = RoundedCornerShape(12.dp),
+            shape = CircleShape,
             modifier = Modifier
               .weight(1f)
               .testTag("details_save_barcode_button"),
@@ -4360,7 +4497,7 @@ private fun ScannedCodeDetailsDialog(
           }
           TextButton(
             onClick = onShare,
-            shape = RoundedCornerShape(12.dp),
+            shape = CircleShape,
             modifier = Modifier
               .weight(1f)
               .testTag("details_share_code_button"),
@@ -4375,7 +4512,7 @@ private fun ScannedCodeDetailsDialog(
     confirmButton = {
       Button(
         onClick = { onCopyField(code.format.displayName, code.primaryCopyValue) },
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("details_copy_code_button"),
       ) {
         Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -4392,14 +4529,14 @@ private fun ScannedCodeDetailsDialog(
         ) {
           TextButton(
             onClick = onPrimaryAction,
-            shape = RoundedCornerShape(12.dp),
+            shape = CircleShape,
           ) {
             Text(code.payloadType.primaryActionLabel)
           }
         }
         TextButton(
           onClick = onDismiss,
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
           modifier = Modifier.testTag("close_scanned_details_button"),
         ) {
           Text("Close")

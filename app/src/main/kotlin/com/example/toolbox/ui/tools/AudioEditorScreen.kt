@@ -1006,28 +1006,35 @@ fun AudioEditorScreen(
       shape = RoundedCornerShape(28.dp),
       containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
       tonalElevation = 6.dp,
-      icon = {
-        Surface(
-          shape = CircleShape,
-          color = MaterialTheme.colorScheme.errorContainer,
-          modifier = Modifier.size(44.dp),
+      title = {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(14.dp),
+          modifier = Modifier.fillMaxWidth(),
         ) {
-          Box(contentAlignment = Alignment.Center) {
+          Box(
+            modifier = Modifier
+              .size(44.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.errorContainer),
+            contentAlignment = Alignment.Center,
+          ) {
             Icon(
               imageVector = Icons.Default.Warning,
               contentDescription = null,
-              tint = MaterialTheme.colorScheme.onErrorContainer,
-              modifier = Modifier.size(22.dp),
+              tint = MaterialTheme.colorScheme.error,
+              modifier = Modifier.size(24.dp),
+            )
+          }
+          Column {
+            Text(
+              text = "Discard Audio Edits?",
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
             )
           }
         }
-      },
-      title = {
-        Text(
-          text = "Discard Audio Edits?",
-          style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold,
-        )
       },
       text = {
         Text(
@@ -1043,7 +1050,7 @@ fun AudioEditorScreen(
             pendingDiscardAction?.invoke()
             pendingDiscardAction = null
           },
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
           modifier = Modifier.testTag("confirm_discard_button"),
         ) {
           Text("Discard")
@@ -1055,7 +1062,7 @@ fun AudioEditorScreen(
             showDiscardDialog = false
             pendingDiscardAction = null
           },
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
         ) {
           Text("Keep Editing")
         }
@@ -2891,7 +2898,7 @@ private fun AudioExportDialog(
       Button(
         onClick = { onConfirmExport(textFieldValue.text.trim(), activeFormat, overwriteOriginal) },
         enabled = validationError == null && !isExporting,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("audio_editor_export_confirm_button"),
       ) {
         if (isExporting) {
@@ -2916,7 +2923,7 @@ private fun AudioExportDialog(
       TextButton(
         onClick = onDismiss,
         enabled = !isExporting,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }

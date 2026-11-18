@@ -4961,7 +4961,7 @@ private fun ScheduleTaskPanel(
             }
             showStartDatePicker = false
           },
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
         ) {
           Text("OK")
         }
@@ -4969,7 +4969,7 @@ private fun ScheduleTaskPanel(
       dismissButton = {
         TextButton(
           onClick = { showStartDatePicker = false },
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
         ) {
           Text("Cancel")
         }
@@ -5036,7 +5036,7 @@ private fun ScheduleTaskPanel(
             onStartMillisChange(applyHourMinuteToLocalMillis(timePickerState.hour, timePickerState.minute, startMillis))
             showStartTimePicker = false
           },
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
         ) {
           Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
           Spacer(modifier = Modifier.width(6.dp))
@@ -5046,7 +5046,7 @@ private fun ScheduleTaskPanel(
       dismissButton = {
         TextButton(
           onClick = { showStartTimePicker = false },
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
         ) {
           Text("Cancel")
         }
@@ -5231,7 +5231,7 @@ private fun ScheduleTaskPanel(
             }
           },
           enabled = canConfirmCustom,
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
           modifier = Modifier.testTag("todo_custom_recurrence_confirm"),
         ) {
           Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -5242,7 +5242,7 @@ private fun ScheduleTaskPanel(
       dismissButton = {
         TextButton(
           onClick = { showCustomRecurrenceDialog = false },
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
         ) {
           Text("Cancel")
         }

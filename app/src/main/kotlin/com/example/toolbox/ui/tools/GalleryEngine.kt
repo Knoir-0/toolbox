@@ -17,7 +17,9 @@ import java.util.Date
 import java.util.Locale
 import java.util.zip.CRC32
 import java.util.zip.Deflater
+import java.util.zip.Inflater
 import kotlin.coroutines.resume
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -72,7 +74,7 @@ data class GalleryVideoPreviewState(
   val playSessionToken: Int = 0,
 )
 
-val DEFAULT_GALLERY_FOLDER_NAMES: List<String> = listOf("DCIM", "Pictures", "Photos", "Downloads")
+val DEFAULT_GALLERY_FOLDER_NAMES: List<String> = listOf("DCIM", "Pictures", "Photos", "Download")
 const val DEFAULT_NEW_ALBUM_FOLDER_NAME: String = "Pictures"
 
 /**
@@ -185,6 +187,8 @@ data class GalleryPhoto(
   val sizeFormatted: String get() = FileManagerEngine.formatFileSize(sizeBytes)
   val timestampFormatted: String get() = FileManagerEngine.formatTimestamp(lastModifiedMs)
   val isVideo: Boolean get() = VideoEditorEngine.isVideoFile(file)
+  val isAnimatedImage: Boolean get() = GalleryEngine.isAnimatedImageFile(file)
+  val supportsInlinePreview: Boolean get() = isVideo || isAnimatedImage
 }
 
 /**
@@ -587,6 +591,53 @@ object GalleryEngine {
   }
 
   /**
+   * Checks whether [file] is an animated image file (such as a `.gif` or an animated `.webp`).
+   */
+  fun isAnimatedImageFile(file: File): Boolean {
+    if (!file.exists() || !file.isFile) return false
+    if (file.name.startsWith(".")) return false
+    val ext = file.extension.lowercase(Locale.ROOT)
+    if (ext == "gif") return true
+    if (ext == "webp") {
+      return try {
+        val header = ByteArray(64)
+        val readCount = file.inputStream().use { it.read(header) }
+        if (readCount >= 21 &&
+          header[0] == 'R'.code.toByte() &&
+          header[1] == 'I'.code.toByte() &&
+          header[2] == 'F'.code.toByte() &&
+          header[3] == 'F'.code.toByte() &&
+          header[8] == 'W'.code.toByte() &&
+          header[9] == 'E'.code.toByte() &&
+          header[10] == 'B'.code.toByte() &&
+          header[11] == 'P'.code.toByte()
+        ) {
+          val isVp8x = header[12] == 'V'.code.toByte() &&
+            header[13] == 'P'.code.toByte() &&
+            header[14] == '8'.code.toByte() &&
+            header[15] == 'X'.code.toByte()
+          val hasAnimFlag = isVp8x && ((header[20].toInt() and 0x02) != 0)
+          val headerStr = String(header, 0, readCount, Charsets.US_ASCII)
+          hasAnimFlag || headerStr.contains("ANIM")
+        } else {
+          false
+        }
+      } catch (_: Throwable) {
+        false
+      }
+    }
+    return false
+  }
+
+  /**
+   * Checks whether [file] supports inline auto-playing previews while browsing the Gallery
+   * (either a video file or an animated image file).
+   */
+  fun isInlinePreviewMediaFile(file: File): Boolean {
+    return isVideoFile(file) || isAnimatedImageFile(file)
+  }
+
+  /**
    * Checks whether [file] is a visible subdirectory representing a nested album/folder.
    */
   fun isAlbumDirectory(file: File): Boolean {
@@ -640,17 +691,17 @@ object GalleryEngine {
 
   /**
    * Resolves the list of folders loaded into the gallery, starting with the default `DCIM`, `Pictures`,
-   * `Photos`, and `Downloads` folders and appending any user-added folder paths.
+   * `Photos`, and `Download` folders and appending any user-added folder paths.
    */
   fun resolveGalleryFolders(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
     additionalPaths: List<String> = emptyList(),
   ): List<File> {
     val defaults = getDefaultGalleryFolders(rootDirectory).toMutableList()
-    // Also include Android's singular "Download" folder when present on storage
-    val androidDownloadDir = File(rootDirectory, "Download")
-    if (androidDownloadDir.exists() && androidDownloadDir.isDirectory) {
-      defaults.add(androidDownloadDir)
+    // Also include plural "Downloads" folder when present on storage
+    val downloadsDir = File(rootDirectory, "Downloads")
+    if (downloadsDir.exists() && downloadsDir.isDirectory) {
+      defaults.add(downloadsDir)
     }
     val extras = additionalPaths.mapNotNull { raw ->
       val trimmed = raw.trim()
@@ -817,8 +868,8 @@ object GalleryEngine {
   }
 
   /**
-   * Builds a single unified `"Downloads"` [GalleryAlbum] across [directories], flattening all media
-   * inside `Downloads` into a single album (`subAlbumCount = 0`).
+   * Builds a single unified `"Download"` [GalleryAlbum] across [directories], flattening all media
+   * inside `Download` into a single album (`subAlbumCount = 0`).
    */
   fun buildDownloadsAlbum(
     directories: List<File>,
@@ -831,7 +882,7 @@ object GalleryEngine {
         distinctDirs.add(dir)
       }
     }
-    val primaryDir = distinctDirs.firstOrNull() ?: File("Downloads")
+    val primaryDir = distinctDirs.firstOrNull() ?: File("Download")
     val mediaFiles = collectMediaFilesInDirectories(distinctDirs, maxDepth = maxDepth)
     val totalPhotos = mediaFiles.size
     val mostRecent = if (deferAlbumArt) {
@@ -848,7 +899,7 @@ object GalleryEngine {
 
     return GalleryAlbum(
       directory = primaryDir,
-      name = "Downloads",
+      name = "Download",
       path = primaryDir.absolutePath,
       mostRecentPhoto = mostRecent,
       directPhotoCount = totalPhotos,
@@ -1233,7 +1284,7 @@ object GalleryEngine {
   }
 
   /**
-   * Resolves the root folder group title (`"DCIM"`, `"Pictures"`, `"Photos"`, `"Downloads"`, etc.) for [file].
+   * Resolves the root folder group title (`"DCIM"`, `"Pictures"`, `"Photos"`, `"Download"`, etc.) for [file].
    */
   fun resolveDefaultFolderGroupTitle(file: File): String {
     var current: File? = file.absoluteFile
@@ -1243,7 +1294,7 @@ object GalleryEngine {
       if (name.equals("Pictures", ignoreCase = true)) return "Pictures"
       if (name.equals("Photos", ignoreCase = true)) return "Photos"
       if (name.equals("Downloads", ignoreCase = true) || name.equals("Download", ignoreCase = true)) {
-        return "Downloads"
+        return "Download"
       }
       current = current.parentFile
     }
@@ -1251,7 +1302,7 @@ object GalleryEngine {
   }
 
   /**
-   * Groups albums and photos by their root folders (`"DCIM"`, `"Pictures"`, `"Photos"`, and `"Downloads"`,
+   * Groups albums and photos by their root folders (`"DCIM"`, `"Pictures"`, `"Photos"`, and `"Download"`,
    * plus any custom loaded root folders) when [GalleryGroupOption.FOLDERS] is selected.
    */
   fun groupByDefaultFolders(
@@ -1274,7 +1325,7 @@ object GalleryEngine {
         dir.name.equals("DCIM", ignoreCase = true) -> "DCIM"
         dir.name.equals("Pictures", ignoreCase = true) -> "Pictures"
         dir.name.equals("Photos", ignoreCase = true) -> "Photos"
-        dir.name.equals("Downloads", ignoreCase = true) || dir.name.equals("Download", ignoreCase = true) -> "Downloads"
+        dir.name.equals("Downloads", ignoreCase = true) || dir.name.equals("Download", ignoreCase = true) -> "Download"
         currentAlbum == null && dir.name.isNotBlank() -> dir.name
         else -> resolveDefaultFolderGroupTitle(dir)
       }
@@ -1285,7 +1336,7 @@ object GalleryEngine {
     val groups = mutableListOf<GalleryFolderGroup>()
 
     for ((title, groupDirs) in dirsByGroupTitle) {
-      val isRootDownloadsGroup = currentAlbum == null && title.equals("Downloads", ignoreCase = true)
+      val isRootDownloadsGroup = currentAlbum == null && (title.equals("Download", ignoreCase = true) || title.equals("Downloads", ignoreCase = true))
       val contents = if (isRootDownloadsGroup) {
         val validDownloadDirs = groupDirs.filter { isAlbumDirectory(it) }
         val downloadsAlbum = if (validDownloadDirs.isNotEmpty()) {
@@ -1294,7 +1345,7 @@ object GalleryEngine {
           null
         }
         AlbumContents(
-          directory = groupDirs.firstOrNull() ?: File("Downloads"),
+          directory = groupDirs.firstOrNull() ?: File("Download"),
           nestedAlbums = if (downloadsAlbum != null && downloadsAlbum.totalPhotoCount > 0) {
             listOf(downloadsAlbum)
           } else {
@@ -1351,8 +1402,8 @@ object GalleryEngine {
       }
     }
 
-    // Order standard default folders ("DCIM", "Pictures", "Photos", "Downloads") consistently
-    val folderPriority = listOf("DCIM", "Pictures", "Photos", "Downloads")
+    // Order standard default folders ("DCIM", "Pictures", "Photos", "Download") consistently
+    val folderPriority = listOf("DCIM", "Pictures", "Photos", "Download")
     return groups.sortedWith(
       compareBy<GalleryFolderGroup> { group ->
         val idx = folderPriority.indexOfFirst { it.equals(group.title, ignoreCase = true) }
@@ -1884,6 +1935,46 @@ object GalleryEngine {
     } catch (_: Throwable) {
       null
     }
+  }
+
+  /**
+   * Writes a valid 2-frame looping GIF89a animated image file to [outputFile] for deterministic
+   * unit and instrumented testing.
+   */
+  fun writeSampleAnimatedGif(
+    outputFile: File,
+    lastModifiedMs: Long? = null,
+  ): File {
+    outputFile.parentFile?.mkdirs()
+    // Valid 1x1 2-frame looping GIF89a (frame 1 = red, frame 2 = blue, 200ms delay per frame)
+    val gifBytes = byteArrayOf(
+      0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // GIF89a
+      0x01, 0x00, 0x01, 0x00,             // Logical screen 1x1
+      0x80.toByte(), 0x00, 0x00,          // Global color table (2 colors)
+      0xFF.toByte(), 0x00, 0x00,          // Color 0: Red
+      0x00, 0x00, 0xFF.toByte(),          // Color 1: Blue
+      // Netscape looping application extension
+      0x21, 0xFF.toByte(), 0x0B,
+      0x4E, 0x45, 0x54, 0x53, 0x43, 0x41, 0x50, 0x45, 0x32, 0x2E, 0x30,
+      0x03, 0x01, 0x00, 0x00, 0x00,
+      // Frame 1 GCE (200ms) + Image Descriptor + LZW data
+      0x21, 0xF9.toByte(), 0x04, 0x00, 0x14, 0x00, 0x00, 0x00,
+      0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+      0x02, 0x02, 0x44, 0x01, 0x00,
+      // Frame 2 GCE (200ms) + Image Descriptor + LZW data
+      0x21, 0xF9.toByte(), 0x04, 0x00, 0x14, 0x00, 0x00, 0x00,
+      0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+      0x02, 0x02, 0x4C, 0x01, 0x00,
+      0x3B, // Trailer
+    )
+    FileOutputStream(outputFile).use { fos ->
+      fos.write(gifBytes)
+      fos.flush()
+    }
+    if (lastModifiedMs != null) {
+      outputFile.setLastModified(lastModifiedMs)
+    }
+    return outputFile
   }
 
   /**
@@ -2761,6 +2852,180 @@ object GalleryEngine {
         if (firstLine.isNotEmpty()) "OCR: ${firstLine.take(60)}" else "Tag: $tag"
       }
       else -> "Tag: $tag"
+    }
+  }
+
+  /**
+   * Maps a viewport touch position ([viewportX], [viewportY]) inside a container of size
+   * ([containerWidth] x [containerHeight]) to normalized `(0f..1f, 0f..1f)` coordinates within
+   * an image of size ([imageWidth] x [imageHeight]) rendered with `ContentScale.Fit`,
+   * [zoomScale], and translation ([panOffsetX], [panOffsetY]).
+   */
+  fun mapViewportPointToImageNormalized(
+    viewportX: Float,
+    viewportY: Float,
+    containerWidth: Float,
+    containerHeight: Float,
+    imageWidth: Int,
+    imageHeight: Int,
+    zoomScale: Float = 1f,
+    panOffsetX: Float = 0f,
+    panOffsetY: Float = 0f,
+  ): Pair<Float, Float> {
+    val cw = containerWidth.coerceAtLeast(1f)
+    val ch = containerHeight.coerceAtLeast(1f)
+    val safeZoom = zoomScale.coerceAtLeast(0.1f)
+    val centerX = cw / 2f
+    val centerY = ch / 2f
+    val unzoomedX = centerX + (viewportX - centerX - panOffsetX) / safeZoom
+    val unzoomedY = centerY + (viewportY - centerY - panOffsetY) / safeZoom
+
+    if (imageWidth <= 0 || imageHeight <= 0) {
+      return (unzoomedX / cw).coerceIn(0f, 1f) to (unzoomedY / ch).coerceIn(0f, 1f)
+    }
+
+    val imgAspect = imageWidth.toFloat() / imageHeight.toFloat()
+    val containerAspect = cw / ch
+    val (fitW, fitH) = if (containerAspect > imgAspect) {
+      (ch * imgAspect) to ch
+    } else {
+      cw to (cw / imgAspect)
+    }
+    val imgLeft = (cw - fitW) / 2f
+    val imgTop = (ch - fitH) / 2f
+    val normX = ((unzoomedX - imgLeft) / fitW.coerceAtLeast(1f)).coerceIn(0f, 1f)
+    val normY = ((unzoomedY - imgTop) / fitH.coerceAtLeast(1f)).coerceIn(0f, 1f)
+    return normX to normY
+  }
+
+  /**
+   * Samples the RGB color at normalized image coordinates ([normX], [normY]) in `0f..1f` from
+   * [bitmap] (or directly from a PNG [file] when [bitmap] is unavailable, such as in JVM unit tests)
+   * and returns an uppercase `#RRGGBB` hex string.
+   */
+  fun samplePhotoColorHex(
+    file: File? = null,
+    bitmap: Bitmap? = null,
+    normX: Float = 0.5f,
+    normY: Float = 0.5f,
+    radiusPx: Int = 4,
+  ): String {
+    if (bitmap != null && bitmap.width > 0 && bitmap.height > 0) {
+      return CameraEngine.sampleCenterRadiusColorHexFromBitmap(
+        bitmap = bitmap,
+        normX = normX,
+        normY = normY,
+        radiusPx = radiusPx,
+      )
+    }
+    if (file != null && file.exists() && file.isFile) {
+      val pngHex = samplePngFileColorHex(file, normX, normY, radiusPx)
+      if (pngHex != null) return pngHex
+      val decoded = try {
+        BitmapFactory.decodeFile(file.absolutePath)
+      } catch (_: Throwable) {
+        null
+      }
+      if (decoded != null && decoded.width > 0 && decoded.height > 0) {
+        return CameraEngine.sampleCenterRadiusColorHexFromBitmap(
+          bitmap = decoded,
+          normX = normX,
+          normY = normY,
+          radiusPx = radiusPx,
+        )
+      }
+    }
+    return CameraEngine.sampleSyntheticFocusColorHex(normX, normY)
+  }
+
+  private fun samplePngFileColorHex(
+    file: File,
+    normX: Float,
+    normY: Float,
+    radiusPx: Int,
+  ): String? {
+    return try {
+      val bytes = file.readBytes()
+      if (bytes.size < 33) return null
+      val pngSig = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+      for (i in pngSig.indices) {
+        if (bytes[i] != pngSig[i]) return null
+      }
+      var offset = 8
+      var width = 0
+      var height = 0
+      var bitDepth = 0
+      var colorType = 0
+      val idatOut = ByteArrayOutputStream()
+
+      while (offset + 8 <= bytes.size) {
+        val length = ByteBuffer.wrap(bytes, offset, 4).int
+        val type = String(bytes, offset + 4, 4, Charsets.US_ASCII)
+        val dataStart = offset + 8
+        if (length < 0 || dataStart + length > bytes.size) break
+        when (type) {
+          "IHDR" -> {
+            if (length >= 13) {
+              val buf = ByteBuffer.wrap(bytes, dataStart, 13)
+              width = buf.int
+              height = buf.int
+              bitDepth = buf.get().toInt() and 0xFF
+              colorType = buf.get().toInt() and 0xFF
+            }
+          }
+          "IDAT" -> {
+            idatOut.write(bytes, dataStart, length)
+          }
+          "IEND" -> break
+        }
+        offset = dataStart + length + 4
+      }
+
+      if (width <= 0 || height <= 0 || bitDepth != 8 || (colorType != 2 && colorType != 6)) {
+        return null
+      }
+      val channels = if (colorType == 6) 4 else 3
+      val rowBytes = 1 + width * channels
+      val expectedRawSize = rowBytes * height
+      val inflater = Inflater()
+      inflater.setInput(idatOut.toByteArray())
+      val raw = ByteArray(expectedRawSize)
+      var totalInflated = 0
+      while (!inflater.finished() && totalInflated < expectedRawSize) {
+        val count = inflater.inflate(raw, totalInflated, expectedRawSize - totalInflated)
+        if (count <= 0) break
+        totalInflated += count
+      }
+      inflater.end()
+      if (totalInflated < expectedRawSize) return null
+
+      // Only handle filter type 0 (None) directly here; other filter types fall back to BitmapFactory on Android
+      for (y in 0 until height) {
+        if ((raw[y * rowBytes].toInt() and 0xFF) != 0) return null
+      }
+
+      val pixels = IntArray(width * height)
+      for (y in 0 until height) {
+        val rowStart = y * rowBytes + 1
+        val pixRow = y * width
+        for (x in 0 until width) {
+          val pOff = rowStart + x * channels
+          val r = raw[pOff].toInt() and 0xFF
+          val g = raw[pOff + 1].toInt() and 0xFF
+          val b = raw[pOff + 2].toInt() and 0xFF
+          pixels[pixRow + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+        }
+      }
+      CameraEngine.sampleCenterRadiusColorHexFromArgbPixels(
+        pixels = pixels,
+        width = width,
+        height = height,
+        normX = normX,
+        normY = normY,
+        radiusPx = radiusPx,
+      )
+    } catch (_: Throwable) {
+      null
     }
   }
 }

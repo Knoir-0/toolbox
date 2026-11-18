@@ -199,7 +199,7 @@ fun AudioRecorderScreen(
     }
   }
 
-  // Currently selected default folder (Audio, Recordings, Downloads; defaults to Audio)
+  // Currently selected default folder (Audio, Recordings, Download; defaults to Audio)
   var selectedFolder by rememberSaveable {
     val savedPath = prefs?.getString(PREF_KEY_AUDIO_DIRECTORY, null)
     val initialFolder = when {
@@ -212,7 +212,7 @@ fun AudioRecorderScreen(
     mutableStateOf(initialFolder)
   }
 
-  // User-facing folder display string (e.g. "/Audio", "/Recordings", "/Downloads")
+  // User-facing folder display string (e.g. "/Audio", "/Recordings", "/Download")
   val directoryDisplayPath = selectedFolder.displayPath
 
   // Save & list location always defaults to the currently selected folder
@@ -560,7 +560,7 @@ fun AudioRecorderScreen(
       ),
     )
 
-    // 2. Folder Pill Selectors (Audio, Recordings, Downloads) + Floating Filter Button (DESIGN_LANGUAGE.md 5.4)
+    // 2. Folder Pill Selectors (Audio, Recordings, Download) + Floating Filter Button (DESIGN_LANGUAGE.md 5.4)
     AudioRecorderFolderPillBar(
       selectedFolder = selectedFolder,
       enabled = !isRecording,
@@ -1270,7 +1270,7 @@ fun AudioRecorderScreen(
 }
 
 /**
- * Horizontal folder pill selector bar (`Audio`, `Recordings`, `Downloads`) with a pinned floating
+ * Horizontal folder pill selector bar (`Audio`, `Recordings`, `Download`) with a pinned floating
  * filter/sort button on the right edge, matching the pill navigation pattern across Toolbox tools
  * (DESIGN_LANGUAGE.md Section 5.4).
  */
@@ -1996,11 +1996,11 @@ fun MiniAudioPlayerModal(
           Row(
             modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
           ) {
             Box(
               modifier = Modifier
-                .size(40.dp)
+                .size(44.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.primaryContainer),
               contentAlignment = Alignment.Center,
@@ -2009,13 +2009,13 @@ fun MiniAudioPlayerModal(
                 imageVector = Icons.Default.AudioFile,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(22.dp),
+                modifier = Modifier.size(24.dp),
               )
             }
             Column(modifier = Modifier.weight(1f)) {
               Text(
                 text = recording.name,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
@@ -2280,7 +2280,7 @@ private fun RenameRecordingDialog(
       Button(
         onClick = { onConfirmRename(trimmed) },
         enabled = !isUnchanged && trimmed.isNotEmpty() && validationError == null,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(6.dp))
@@ -2290,7 +2290,7 @@ private fun RenameRecordingDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }
@@ -2388,7 +2388,7 @@ private fun DeleteRecordingDialog(
           containerColor = MaterialTheme.colorScheme.error,
           contentColor = MaterialTheme.colorScheme.onError,
         ),
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(6.dp))
@@ -2398,7 +2398,7 @@ private fun DeleteRecordingDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }

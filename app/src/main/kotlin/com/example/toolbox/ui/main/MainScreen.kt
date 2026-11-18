@@ -2556,6 +2556,7 @@ fun ToolContentView(
         rootDirectory = initialDirectory,
         onOpenImageEditor = { preferencesRepository?.incrementToolUsage(Tool.IMAGE_EDITOR) },
         onOpenVideoEditor = { preferencesRepository?.incrementToolUsage(Tool.VIDEO_EDITOR) },
+        onOpenColorPicker = onOpenColorPicker,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.NOTES -> NotesScreen(
@@ -2568,6 +2569,7 @@ fun ToolContentView(
         initialDirectory = initialDirectory,
         onOpenGallery = { preferencesRepository?.incrementToolUsage(Tool.GALLERY) },
         onOpenNotes = { preferencesRepository?.incrementToolUsage(Tool.NOTES) },
+        onOpenColorPicker = onOpenColorPicker,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.AUDIO_EDITOR -> AudioEditorScreen(

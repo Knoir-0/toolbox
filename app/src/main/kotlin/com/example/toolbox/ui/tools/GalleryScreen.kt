@@ -4,14 +4,20 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.graphics.SurfaceTexture
+import android.graphics.drawable.Animatable
+import android.graphics.drawable.AnimatedImageDrawable
+import android.graphics.drawable.Drawable
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.view.Surface as AndroidSurface
 import android.view.TextureView
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -28,6 +34,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -61,6 +68,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -101,6 +109,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Colorize
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
@@ -115,6 +124,7 @@ import androidx.compose.material.icons.filled.FileCopy
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
@@ -185,12 +195,14 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -201,12 +213,15 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -279,6 +294,7 @@ fun GalleryScreen(
   onNavigateBack: (() -> Unit)? = null,
   onOpenImageEditor: ((File) -> Unit)? = null,
   onOpenVideoEditor: ((File) -> Unit)? = null,
+  onOpenColorPicker: ((String) -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
@@ -434,7 +450,7 @@ fun GalleryScreen(
           File("/storage/emulated/0/DCIM"),
           File("/storage/emulated/0/Pictures"),
           File("/storage/emulated/0/Photos"),
-          File("/storage/emulated/0/Downloads"),
+          File("/storage/emulated/0/Download"),
         ),
         nestedAlbums = listOf(
           GalleryAlbum(
@@ -448,9 +464,9 @@ fun GalleryScreen(
             lastModifiedMs = System.currentTimeMillis() - 60_000L,
           ),
           GalleryAlbum(
-            directory = File("/storage/emulated/0/Downloads"),
-            name = "Downloads",
-            path = "/storage/emulated/0/Downloads",
+            directory = File("/storage/emulated/0/Download"),
+            name = "Download",
+            path = "/storage/emulated/0/Download",
             mostRecentPhoto = null,
             directPhotoCount = 4,
             totalPhotoCount = 4,
@@ -541,10 +557,11 @@ fun GalleryScreen(
     }
   }
 
-  // Navigation stack for nested albums/folders
+  // Navigation stack for nested albums/folders and optional default root folder filter pill
   var navigatedToRootFromInitial by remember(initialAlbumDirectory?.absolutePath) {
     mutableStateOf(false)
   }
+  var selectedDefaultFolder by rememberSaveable { mutableStateOf<String?>(null) }
   val albumStack = remember(initialAlbumDirectory?.absolutePath) {
     mutableStateListOf<GalleryAlbum>().apply {
       if (resolvedInitialAlbum != null) {
@@ -708,13 +725,16 @@ fun GalleryScreen(
           albumStack.removeAt(albumStack.lastIndex)
         }
       }
+      selectedDefaultFolder != null -> {
+        selectedDefaultFolder = null
+      }
       else -> {
         onNavigateBack?.invoke()
       }
     }
   }
 
-  BackHandler(enabled = isFabExpanded || isSelectionMode || isSearchActive || albumStack.isNotEmpty() || onNavigateBack != null) {
+  BackHandler(enabled = isFabExpanded || isSelectionMode || isSearchActive || albumStack.isNotEmpty() || selectedDefaultFolder != null || onNavigateBack != null) {
     when {
       isFabExpanded -> {
         isFabExpanded = false
@@ -731,6 +751,36 @@ fun GalleryScreen(
     }
   }
 
+  val activeRootContents: AlbumContents = remember(
+    rootContents,
+    selectedDefaultFolder,
+    effectiveRootDir,
+    refreshTrigger,
+    isInspection,
+  ) {
+    val folderName = selectedDefaultFolder
+    if (folderName.isNullOrBlank()) {
+      rootContents
+    } else if (isInspection && rootDirectory == null && initialFolders == null) {
+      rootContents.copy(
+        nestedAlbums = rootContents.nestedAlbums.filter {
+          it.path.contains("/$folderName", ignoreCase = true) || it.name.equals(folderName, ignoreCase = true)
+        }
+      )
+    } else {
+      val matchingDirs = rootContents.directories.filter { dir ->
+        if (folderName.equals("Download", ignoreCase = true) || folderName.equals("Downloads", ignoreCase = true)) {
+          GalleryEngine.isDownloadsDirectory(dir)
+        } else {
+          dir.name.equals(folderName, ignoreCase = true)
+        }
+      }.ifEmpty {
+        listOf(File(effectiveRootDir, folderName))
+      }
+      GalleryEngine.loadMergedAlbumContents(matchingDirs)
+    }
+  }
+
   val currentAlbumContents = remember(currentAlbum, refreshTrigger) {
     currentAlbum?.let { album ->
       GalleryEngine.loadAlbumContents(album)
@@ -738,13 +788,13 @@ fun GalleryScreen(
   }
 
   val rawAlbums: List<GalleryAlbum> = if (currentAlbum == null) {
-    rootContents.nestedAlbums
+    activeRootContents.nestedAlbums
   } else {
     currentAlbumContents?.nestedAlbums.orEmpty()
   }
 
   val rawPhotos: List<GalleryPhoto> = if (currentAlbum == null) {
-    rootContents.photos
+    activeRootContents.photos
   } else {
     currentAlbumContents?.photos.orEmpty()
   }
@@ -754,9 +804,11 @@ fun GalleryScreen(
     GalleryEngine.collectAllGalleryPhotos(rootContents)
   }
 
-  val allScopePhotos: List<GalleryPhoto> = remember(currentAlbum, rootContents, currentAlbumContents, allGalleryPhotos, refreshTrigger) {
-    if (currentAlbum == null) {
+  val allScopePhotos: List<GalleryPhoto> = remember(currentAlbum, selectedDefaultFolder, activeRootContents, currentAlbumContents, allGalleryPhotos, refreshTrigger) {
+    if (currentAlbum == null && selectedDefaultFolder.isNullOrBlank()) {
       allGalleryPhotos
+    } else if (currentAlbum == null) {
+      GalleryEngine.collectAllGalleryPhotos(activeRootContents)
     } else {
       val subtreeFiles = GalleryEngine.collectMediaFiles(listOf(currentAlbum), emptyList())
       subtreeFiles.map { file ->
@@ -840,7 +892,7 @@ fun GalleryScreen(
   val folderGroups: List<GalleryFolderGroup> = remember(
     groupOption,
     sortOrder,
-    rootContents,
+    activeRootContents,
     currentAlbum,
     hasActiveSearchQueryOrTag,
     searchQuery,
@@ -849,7 +901,7 @@ fun GalleryScreen(
   ) {
     if (groupOption == GalleryGroupOption.FOLDERS) {
       GalleryEngine.groupByDefaultFolders(
-        rootDirectories = rootContents.directories,
+        rootDirectories = activeRootContents.directories,
         currentAlbum = currentAlbum,
         sortOrder = sortOrder,
         searchQuery = if (hasActiveSearchQueryOrTag) searchQuery else "",
@@ -942,6 +994,33 @@ fun GalleryScreen(
   var addAlbumDialogTarget by remember { mutableStateOf<AddAlbumTarget?>(null) }
   var fileForImageEditor by remember { mutableStateOf<File?>(null) }
   var fileForVideoEditor by remember { mutableStateOf<File?>(null) }
+  var inlineColorPickerHex by rememberSaveable { mutableStateOf<String?>(null) }
+
+  fun openColorInColorsTool(hex: String) {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    selectedPhotoForViewer = null
+    exitSelectionMode()
+    if (onOpenColorPicker != null) {
+      onOpenColorPicker(hex)
+    } else {
+      inlineColorPickerHex = hex
+    }
+  }
+
+  val activeInlineColorHex = inlineColorPickerHex
+  if (activeInlineColorHex != null) {
+    BackHandler {
+      inlineColorPickerHex = null
+    }
+    ColorPickerScreen(
+      modifier = modifier,
+      initialHexColor = activeInlineColorHex,
+      onNavigateBack = {
+        inlineColorPickerHex = null
+      },
+    )
+    return
+  }
 
   fun openMediaInEditor(photo: GalleryPhoto) {
     selectedPhotoForViewer = null
@@ -1257,6 +1336,8 @@ fun GalleryScreen(
       // Pill & Filter Controls Bar underneath the toolbar (shows Smart Tags when in search view, otherwise navigation pills)
       GalleryNavigationAndDensityBar(
         albumStack = albumStack.toList(),
+        defaultFolderNames = DEFAULT_GALLERY_FOLDER_NAMES,
+        selectedDefaultFolder = selectedDefaultFolder,
         viewMode = viewMode,
         albumsPerRow = albumsPerRow,
         groupOption = groupOption,
@@ -1277,7 +1358,20 @@ fun GalleryScreen(
           isFabExpanded = false
           exitSelectionMode()
           navigatedToRootFromInitial = true
+          selectedDefaultFolder = null
           albumStack.clear()
+        },
+        onSelectDefaultFolder = { folderName ->
+          isFabExpanded = false
+          exitSelectionMode()
+          navigatedToRootFromInitial = true
+          if (albumStack.isEmpty() && selectedDefaultFolder.equals(folderName, ignoreCase = true)) {
+            selectedDefaultFolder = null
+          } else {
+            selectedDefaultFolder = folderName
+            albumStack.clear()
+          }
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         },
         onNavigateToIndex = { index ->
           isFabExpanded = false
@@ -1698,6 +1792,9 @@ fun GalleryScreen(
       onShare = { sharedPhoto ->
         sharePhotoFile(context, sharedPhoto.file)
       },
+      onOpenColorPicker = { hex ->
+        openColorInColorsTool(hex)
+      },
     )
   }
 
@@ -2096,6 +2193,8 @@ private fun GalleryTopBar(
 @Composable
 private fun GalleryNavigationAndDensityBar(
   albumStack: List<GalleryAlbum>,
+  defaultFolderNames: List<String> = DEFAULT_GALLERY_FOLDER_NAMES,
+  selectedDefaultFolder: String? = null,
   viewMode: GalleryViewMode,
   albumsPerRow: Int,
   groupOption: GalleryGroupOption = GalleryGroupOption.DEFAULT,
@@ -2110,6 +2209,7 @@ private fun GalleryNavigationAndDensityBar(
   totalCount: Int = 0,
   onSelectTag: (String) -> Unit = {},
   onNavigateToRoot: () -> Unit,
+  onSelectDefaultFolder: (String) -> Unit = {},
   onNavigateToIndex: (Int) -> Unit,
   onAlbumsPerRowChange: (Int) -> Unit,
   onOpenSortMenu: () -> Unit,
@@ -2211,15 +2311,15 @@ private fun GalleryNavigationAndDensityBar(
             }
           }
         } else {
-          // Breadcrumb path pills sized identically to navigation pills in other tools (FilterChip with 20.dp shape)
+          // Navigation pills sized identically to navigation pills in other tools (FilterChip with 20.dp shape)
           Row(
             modifier = Modifier.testTag("gallery_breadcrumbs"),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
           ) {
-            val isAtRoot = albumStack.isEmpty()
+            val isAtRootAll = albumStack.isEmpty() && selectedDefaultFolder.isNullOrBlank()
             FilterChip(
-              selected = isAtRoot,
+              selected = isAtRootAll,
               onClick = onNavigateToRoot,
               shape = RoundedCornerShape(20.dp),
               leadingIcon = {
@@ -2233,7 +2333,7 @@ private fun GalleryNavigationAndDensityBar(
                 Text(
                   text = "Albums",
                   style = MaterialTheme.typography.labelMedium,
-                  fontWeight = if (isAtRoot) FontWeight.Bold else FontWeight.Medium,
+                  fontWeight = if (isAtRootAll) FontWeight.Bold else FontWeight.Medium,
                 )
               },
               colors = FilterChipDefaults.filterChipColors(
@@ -2276,6 +2376,35 @@ private fun GalleryNavigationAndDensityBar(
                   selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
                 ),
                 modifier = Modifier.testTag("gallery_breadcrumb_${album.name}"),
+              )
+            }
+
+            defaultFolderNames.forEach { folderName ->
+              val isSelectedFolder = albumStack.isEmpty() && selectedDefaultFolder.equals(folderName, ignoreCase = true)
+              FilterChip(
+                selected = isSelectedFolder,
+                onClick = { onSelectDefaultFolder(folderName) },
+                shape = RoundedCornerShape(20.dp),
+                leadingIcon = {
+                  Icon(
+                    imageVector = Icons.Default.Folder,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                  )
+                },
+                label = {
+                  Text(
+                    text = folderName,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (isSelectedFolder) FontWeight.Bold else FontWeight.Medium,
+                  )
+                },
+                colors = FilterChipDefaults.filterChipColors(
+                  selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                  selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                  selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+                ),
+                modifier = Modifier.testTag("gallery_folder_pill_$folderName"),
               )
             }
           }
@@ -2770,7 +2899,7 @@ private fun GalleryTileGridView(
   val gridState = rememberLazyGridState()
 
   val videoPathsSet = remember(photos) {
-    photos.filter { it.isVideo }.map { it.path }.toSet()
+    photos.filter { it.supportsInlinePreview }.map { it.path }.toSet()
   }
   val visibleVideoPaths by remember(gridState, videoPathsSet) {
     derivedStateOf {
@@ -2873,7 +3002,7 @@ private fun GalleryTileGridView(
               isCompact = isCompactTile,
               isSelectionMode = isSelectionMode,
               isSelected = photo.path in selectedPhotoPaths,
-              isPlayingVideoPreview = photo.isVideo && photo.path == activePreviewVideoPath,
+              isPlayingVideoPreview = photo.supportsInlinePreview && photo.path == activePreviewVideoPath,
               indexEntry = photoIndexMap[photo.path],
               matchSnippet = matchSnippetsByPath[photo.path],
               onToggleSelect = { onTogglePhotoSelect(photo) },
@@ -2912,7 +3041,7 @@ private fun GalleryTileGridView(
               isCompact = isCompactTile,
               isSelectionMode = isSelectionMode,
               isSelected = photo.path in selectedPhotoPaths,
-              isPlayingVideoPreview = photo.isVideo && photo.path == activePreviewVideoPath,
+              isPlayingVideoPreview = photo.supportsInlinePreview && photo.path == activePreviewVideoPath,
               indexEntry = photoIndexMap[photo.path],
               matchSnippet = matchSnippetsByPath[photo.path],
               onToggleSelect = { onTogglePhotoSelect(photo) },
@@ -2963,7 +3092,7 @@ private fun GalleryTileGridView(
           isCompact = isCompactTile,
           isSelectionMode = isSelectionMode,
           isSelected = photo.path in selectedPhotoPaths,
-          isPlayingVideoPreview = photo.isVideo && photo.path == activePreviewVideoPath,
+          isPlayingVideoPreview = photo.supportsInlinePreview && photo.path == activePreviewVideoPath,
           indexEntry = photoIndexMap[photo.path],
           matchSnippet = matchSnippetsByPath[photo.path],
           onToggleSelect = { onTogglePhotoSelect(photo) },
@@ -3190,7 +3319,7 @@ private fun PhotoTileCard(
         modifier = Modifier.fillMaxSize(),
       )
 
-      if (photo.isVideo && !isCompact) {
+      if ((photo.isVideo || photo.isAnimatedImage) && !isCompact) {
         Surface(
           shape = CircleShape,
           color = Color.Black.copy(alpha = 0.62f),
@@ -3199,24 +3328,26 @@ private fun PhotoTileCard(
             .padding(4.dp)
             .size(22.dp)
             .testTag(
-              if (isPlayingVideoPreview) {
-                "video_preview_playing_badge_${photo.name}"
-              } else {
-                "video_tile_badge_${photo.name}"
+              when {
+                isPlayingVideoPreview -> "video_preview_playing_badge_${photo.name}"
+                photo.isVideo -> "video_tile_badge_${photo.name}"
+                else -> "gif_tile_badge_${photo.name}"
               }
             ),
         ) {
           Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
             Icon(
-              imageVector = if (isPlayingVideoPreview) {
-                Icons.AutoMirrored.Filled.VolumeOff
-              } else {
-                Icons.Default.PlayArrow
+              imageVector = when {
+                isPlayingVideoPreview && photo.isVideo -> Icons.AutoMirrored.Filled.VolumeOff
+                isPlayingVideoPreview -> Icons.Default.PlayArrow
+                photo.isVideo -> Icons.Default.PlayArrow
+                else -> Icons.Default.Gif
               },
-              contentDescription = if (isPlayingVideoPreview) {
-                "Playing muted video preview"
-              } else {
-                "Video"
+              contentDescription = when {
+                isPlayingVideoPreview && photo.isVideo -> "Playing muted video preview"
+                isPlayingVideoPreview -> "Playing animated image preview"
+                photo.isVideo -> "Video"
+                else -> "Animated image"
               },
               tint = Color.White,
               modifier = Modifier.size(13.dp),
@@ -3361,7 +3492,7 @@ private fun GalleryListView(
 ) {
   val listState = rememberLazyListState()
   val videoPathsSet = remember(photos) {
-    photos.filter { it.isVideo }.map { it.path }.toSet()
+    photos.filter { it.supportsInlinePreview }.map { it.path }.toSet()
   }
   val visibleVideoPaths by remember(listState, videoPathsSet) {
     derivedStateOf {
@@ -3442,7 +3573,7 @@ private fun GalleryListView(
               photo = photo,
               isSelectionMode = isSelectionMode,
               isSelected = photo.path in selectedPhotoPaths,
-              isPlayingVideoPreview = photo.isVideo && photo.path == activePreviewVideoPath,
+              isPlayingVideoPreview = photo.supportsInlinePreview && photo.path == activePreviewVideoPath,
               indexEntry = photoIndexMap[photo.path],
               matchSnippet = matchSnippetsByPath[photo.path],
               onToggleSelect = { onTogglePhotoSelect(photo) },
@@ -3477,7 +3608,7 @@ private fun GalleryListView(
               photo = photo,
               isSelectionMode = isSelectionMode,
               isSelected = photo.path in selectedPhotoPaths,
-              isPlayingVideoPreview = photo.isVideo && photo.path == activePreviewVideoPath,
+              isPlayingVideoPreview = photo.supportsInlinePreview && photo.path == activePreviewVideoPath,
               indexEntry = photoIndexMap[photo.path],
               matchSnippet = matchSnippetsByPath[photo.path],
               onToggleSelect = { onTogglePhotoSelect(photo) },
@@ -3526,7 +3657,7 @@ private fun GalleryListView(
           photo = photo,
           isSelectionMode = isSelectionMode,
           isSelected = photo.path in selectedPhotoPaths,
-          isPlayingVideoPreview = photo.isVideo && photo.path == activePreviewVideoPath,
+          isPlayingVideoPreview = photo.supportsInlinePreview && photo.path == activePreviewVideoPath,
           indexEntry = photoIndexMap[photo.path],
           matchSnippet = matchSnippetsByPath[photo.path],
           onToggleSelect = { onTogglePhotoSelect(photo) },
@@ -4166,6 +4297,9 @@ private fun PhotoThumbnailBox(
   val filePath = photoFile.absolutePath
   val fileLastMod = photoFile.lastModified()
   val isVideoFile = remember(filePath) { VideoEditorEngine.isVideoFile(photoFile) }
+  val isAnimatedImageFile = remember(filePath, fileLastMod) {
+    !isVideoFile && GalleryEngine.isAnimatedImageFile(photoFile)
+  }
   var bitmap by remember(filePath, fileLastMod) {
     mutableStateOf(GalleryEngine.getCachedThumbnailBitmap(photoFile))
   }
@@ -4342,6 +4476,153 @@ private fun PhotoThumbnailBox(
           }
         }
       }
+    } else if (isPlayingVideoPreview && isAnimatedImageFile) {
+      AnimatedImagePlayerSurface(
+        file = photoFile,
+        fallbackBitmap = bitmap,
+        contentDescription = "Playing animated preview: ${photoFile.name}",
+        isPlaying = true,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag("video_preview_playing_${photoFile.name}")
+          .testTag("animated_preview_playing_${photoFile.name}"),
+      )
+    }
+  }
+}
+
+/**
+ * Renders and auto-plays an animated image file (such as an animated `.gif` or animated `.webp`)
+ * using [AnimatedImageDrawable] via [ImageDecoder] on API 28+, with a fallback to [fallbackBitmap]
+ * while loading or when paused.
+ */
+@Composable
+private fun AnimatedImagePlayerSurface(
+  file: File,
+  fallbackBitmap: Bitmap? = null,
+  contentDescription: String,
+  isPlaying: Boolean = true,
+  contentScale: ContentScale = ContentScale.Fit,
+  modifier: Modifier = Modifier,
+) {
+  val isInspectionMode = LocalInspectionMode.current
+  val filePath = file.absolutePath
+  val fileLastMod = file.lastModified()
+  var animatedDrawable by remember(filePath, fileLastMod) { mutableStateOf<Drawable?>(null) }
+
+  LaunchedEffect(filePath, fileLastMod, isInspectionMode) {
+    if (isInspectionMode || !file.exists()) return@LaunchedEffect
+    val decoded = withContext(Dispatchers.IO) {
+      try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+          val source = ImageDecoder.createSource(file)
+          ImageDecoder.decodeDrawable(source)
+        } else {
+          null
+        }
+      } catch (_: Throwable) {
+        null
+      }
+    }
+    if (decoded != null) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && decoded is AnimatedImageDrawable) {
+        decoded.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
+      }
+      animatedDrawable = decoded
+    }
+  }
+
+  LaunchedEffect(animatedDrawable, isPlaying) {
+    val anim = animatedDrawable as? Animatable ?: return@LaunchedEffect
+    try {
+      if (isPlaying) {
+        if (!anim.isRunning) {
+          anim.start()
+        }
+      } else {
+        if (anim.isRunning) {
+          anim.stop()
+        }
+      }
+    } catch (_: Throwable) {}
+  }
+
+  DisposableEffect(animatedDrawable) {
+    onDispose {
+      val anim = animatedDrawable as? Animatable
+      try {
+        if (anim?.isRunning == true) {
+          anim.stop()
+        }
+      } catch (_: Throwable) {}
+    }
+  }
+
+  Box(
+    modifier = modifier
+      .semantics {
+        this.contentDescription = contentDescription
+      },
+    contentAlignment = Alignment.Center,
+  ) {
+    if (fallbackBitmap != null && animatedDrawable == null) {
+      Image(
+        bitmap = fallbackBitmap.asImageBitmap(),
+        contentDescription = contentDescription,
+        contentScale = contentScale,
+        modifier = Modifier.fillMaxSize(),
+      )
+    } else if (animatedDrawable == null) {
+      Icon(
+        imageVector = Icons.Default.Gif,
+        contentDescription = contentDescription,
+        tint = Color.White,
+        modifier = Modifier.size(48.dp),
+      )
+    }
+
+    val drawable = animatedDrawable
+    if (!isInspectionMode && drawable != null) {
+      key(filePath, fileLastMod) {
+        AndroidView(
+          factory = { ctx ->
+            ImageView(ctx).apply {
+              scaleType = if (contentScale == ContentScale.Crop) {
+                ImageView.ScaleType.CENTER_CROP
+              } else {
+                ImageView.ScaleType.FIT_CENTER
+              }
+              setImageDrawable(drawable)
+              val anim = drawable as? Animatable
+              try {
+                if (isPlaying && anim?.isRunning == false) {
+                  anim.start()
+                }
+              } catch (_: Throwable) {}
+            }
+          },
+          update = { imageView ->
+            imageView.scaleType = if (contentScale == ContentScale.Crop) {
+              ImageView.ScaleType.CENTER_CROP
+            } else {
+              ImageView.ScaleType.FIT_CENTER
+            }
+            if (imageView.drawable !== drawable) {
+              imageView.setImageDrawable(drawable)
+            }
+            val anim = drawable as? Animatable
+            try {
+              if (isPlaying) {
+                if (anim?.isRunning == false) anim.start()
+              } else {
+                if (anim?.isRunning == true) anim.stop()
+              }
+            } catch (_: Throwable) {}
+          },
+          modifier = Modifier.fillMaxSize(),
+        )
+      }
     }
   }
 }
@@ -4413,8 +4694,10 @@ internal fun GalleryPhotoViewerDialog(
   onDismiss: () -> Unit,
   onEdit: (GalleryPhoto) -> Unit = {},
   onShare: (GalleryPhoto) -> Unit,
+  onOpenColorPicker: (String) -> Unit = {},
 ) {
   val context = LocalContext.current
+  val haptic = LocalHapticFeedback.current
   val activityView = LocalView.current
   val density = LocalDensity.current
   val layoutDirection = LocalLayoutDirection.current
@@ -4474,6 +4757,7 @@ internal fun GalleryPhotoViewerDialog(
   // Controls whether the bottom preview scroll bar is visible (dismissed/restored with a tap on the image)
   var showPreviewBar by rememberSaveable { mutableStateOf(true) }
   var showRecognitionInfoSheet by rememberSaveable { mutableStateOf(false) }
+  var isColorPickerActive by rememberSaveable { mutableStateOf(false) }
 
   // Videos play automatically and muted by default in the viewer
   var isVideoPlaying by rememberSaveable(initialPhoto.path) { mutableStateOf(true) }
@@ -4488,6 +4772,9 @@ internal fun GalleryPhotoViewerDialog(
     isVideoPlaying = true
     isVideoMuted = true
     if (viewerPhotos.isNotEmpty() && pagerState.currentPage in viewerPhotos.indices) {
+      if (viewerPhotos[pagerState.currentPage].isVideo) {
+        isColorPickerActive = false
+      }
       previewListState.animateScrollToItem(pagerState.currentPage)
     }
   }
@@ -4563,7 +4850,7 @@ internal fun GalleryPhotoViewerDialog(
       // Swipeable horizontal pager over all photos/videos in the album
       HorizontalPager(
         state = pagerState,
-        userScrollEnabled = currentZoomScale <= 1.02f,
+        userScrollEnabled = currentZoomScale <= 1.02f && !isColorPickerActive,
         modifier = Modifier
           .fillMaxSize()
           .testTag("photo_viewer_pager"),
@@ -4575,6 +4862,7 @@ internal fun GalleryPhotoViewerDialog(
           isCurrentPage = isCurrentPage,
           isVideoPlaying = isCurrentPage && isVideoPlaying,
           isVideoMuted = isVideoMuted,
+          isColorPickerActive = isCurrentPage && isColorPickerActive && !pagePhoto.isVideo,
           zoomScale = if (isCurrentPage) currentZoomScale else MIN_PHOTO_ZOOM,
           onZoomScaleChange = { updatedZoom ->
             if (isCurrentPage) {
@@ -4584,6 +4872,7 @@ internal fun GalleryPhotoViewerDialog(
           onTapImage = {
             showPreviewBar = !showPreviewBar
           },
+          onOpenColorPicker = onOpenColorPicker,
         )
       }
 
@@ -4654,6 +4943,32 @@ internal fun GalleryPhotoViewerDialog(
 
         Spacer(modifier = Modifier.width(4.dp))
 
+        if (!currentPhoto.isVideo) {
+          IconButton(
+            onClick = {
+              isColorPickerActive = !isColorPickerActive
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            },
+            modifier = Modifier
+              .then(
+                if (isColorPickerActive) {
+                  Modifier
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.28f))
+                } else {
+                  Modifier
+                }
+              )
+              .testTag("photo_viewer_color_picker_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Colorize,
+              contentDescription = if (isColorPickerActive) "Close color picker" else "Color picker",
+              tint = if (isColorPickerActive) MaterialTheme.colorScheme.tertiary else Color.White,
+            )
+          }
+        }
+
         IconButton(
           onClick = { showRecognitionInfoSheet = true },
           modifier = Modifier.testTag("photo_viewer_info_button"),
@@ -4705,7 +5020,7 @@ internal fun GalleryPhotoViewerDialog(
         Column(
           modifier = Modifier.fillMaxWidth(),
         ) {
-          if (currentPhoto.isVideo) {
+          if (currentPhoto.isVideo || currentPhoto.isAnimatedImage) {
             Row(
               modifier = Modifier
                 .fillMaxWidth()
@@ -4730,7 +5045,7 @@ internal fun GalleryPhotoViewerDialog(
                 ) {
                   Icon(
                     imageVector = if (isVideoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isVideoPlaying) "Pause video" else "Play video",
+                    contentDescription = if (isVideoPlaying) "Pause" else "Play",
                     tint = Color.White,
                     modifier = Modifier.size(18.dp),
                   )
@@ -4744,37 +5059,39 @@ internal fun GalleryPhotoViewerDialog(
                 }
               }
 
-              Surface(
-                shape = CircleShape,
-                color = Color.Black.copy(alpha = 0.72f),
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.24f)),
-                modifier = Modifier
-                  .clip(CircleShape)
-                  .clickable { isVideoMuted = !isVideoMuted }
-                  .testTag("photo_viewer_mute_button"),
-              ) {
-                Row(
-                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+              if (currentPhoto.isVideo) {
+                Surface(
+                  shape = CircleShape,
+                  color = Color.Black.copy(alpha = 0.72f),
+                  border = BorderStroke(1.dp, Color.White.copy(alpha = 0.24f)),
+                  modifier = Modifier
+                    .clip(CircleShape)
+                    .clickable { isVideoMuted = !isVideoMuted }
+                    .testTag("photo_viewer_mute_button"),
                 ) {
-                  Icon(
-                    imageVector = if (isVideoMuted) {
-                      Icons.AutoMirrored.Filled.VolumeOff
-                    } else {
-                      Icons.AutoMirrored.Filled.VolumeUp
-                    },
-                    contentDescription = if (isVideoMuted) "Unmute video" else "Mute video",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp),
-                  )
-                  Text(
-                    text = if (isVideoMuted) "Muted" else "Sound on",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White,
-                    modifier = Modifier.testTag("photo_viewer_video_mute_state_label"),
-                  )
+                  Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                  ) {
+                    Icon(
+                      imageVector = if (isVideoMuted) {
+                        Icons.AutoMirrored.Filled.VolumeOff
+                      } else {
+                        Icons.AutoMirrored.Filled.VolumeUp
+                      },
+                      contentDescription = if (isVideoMuted) "Unmute video" else "Mute video",
+                      tint = Color.White,
+                      modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                      text = if (isVideoMuted) "Muted" else "Sound on",
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = FontWeight.SemiBold,
+                      color = Color.White,
+                      modifier = Modifier.testTag("photo_viewer_video_mute_state_label"),
+                    )
+                  }
                 }
               }
             }
@@ -5134,7 +5451,7 @@ private fun GalleryPhotoRecognitionInfoDialog(
               ) {
                 OutlinedButton(
                   onClick = { onCopyText("OCR text", indexEntry.ocrText) },
-                  shape = RoundedCornerShape(10.dp),
+                  shape = CircleShape,
                   contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                   modifier = Modifier.testTag("photo_info_copy_ocr_button"),
                 ) {
@@ -5145,7 +5462,7 @@ private fun GalleryPhotoRecognitionInfoDialog(
 
                 Button(
                   onClick = { onSaveOcrToNotes(indexEntry.ocrText) },
-                  shape = RoundedCornerShape(10.dp),
+                  shape = CircleShape,
                   contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                   modifier = Modifier.testTag("photo_info_save_to_notes_button"),
                 ) {
@@ -5215,7 +5532,7 @@ private fun GalleryPhotoRecognitionInfoDialog(
                 ) {
                   OutlinedButton(
                     onClick = { onCopyText("Barcode", payload) },
-                    shape = RoundedCornerShape(10.dp),
+                    shape = CircleShape,
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                     modifier = Modifier.testTag("photo_info_copy_barcode_button"),
                   ) {
@@ -5228,7 +5545,7 @@ private fun GalleryPhotoRecognitionInfoDialog(
                   ) {
                     Button(
                       onClick = { onOpenUrl(payload) },
-                      shape = RoundedCornerShape(10.dp),
+                      shape = CircleShape,
                       contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                       modifier = Modifier.testTag("photo_info_open_url_button"),
                     ) {
@@ -5247,7 +5564,7 @@ private fun GalleryPhotoRecognitionInfoDialog(
     confirmButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("photo_info_close_button"),
       ) {
         Text("Done")
@@ -5262,13 +5579,19 @@ private fun PhotoViewerPageContent(
   isCurrentPage: Boolean,
   isVideoPlaying: Boolean = isCurrentPage,
   isVideoMuted: Boolean = true,
+  isColorPickerActive: Boolean = false,
   zoomScale: Float,
   onZoomScaleChange: (Float) -> Unit,
   onTapImage: () -> Unit,
+  onOpenColorPicker: (String) -> Unit = {},
 ) {
   val isInspectionMode = LocalInspectionMode.current
   val density = LocalDensity.current
+  val haptic = LocalHapticFeedback.current
   val isVideo = photo.isVideo
+  val isAnimatedImage = remember(photo.path, photo.lastModifiedMs) {
+    !isVideo && photo.isAnimatedImage
+  }
 
   var bitmap by remember(photo.path, photo.lastModifiedMs) {
     mutableStateOf(GalleryEngine.getCachedThumbnailBitmap(photo.file))
@@ -5298,6 +5621,8 @@ private fun PhotoViewerPageContent(
 
   var panOffsetX by remember(photo.path) { mutableFloatStateOf(0f) }
   var panOffsetY by remember(photo.path) { mutableFloatStateOf(0f) }
+  var containerSizePx by remember { mutableStateOf(IntSize.Zero) }
+  var colorFocusPointNormalized by remember(photo.path) { mutableStateOf(Offset(0.5f, 0.5f)) }
 
   LaunchedEffect(zoomScale, isCurrentPage) {
     if (zoomScale <= 1.02f || !isCurrentPage) {
@@ -5312,78 +5637,137 @@ private fun PhotoViewerPageContent(
   val currentIsCurrentPage by rememberUpdatedState(isCurrentPage)
   val currentIsVideoPlaying by rememberUpdatedState(isVideoPlaying)
   val currentIsVideoMuted by rememberUpdatedState(isVideoMuted)
+  val currentIsColorPickerActive by rememberUpdatedState(isColorPickerActive)
 
   val currentBitmap = bitmap
+
+  val sampledColorHex = remember(
+    photo.path,
+    photo.lastModifiedMs,
+    currentBitmap,
+    colorFocusPointNormalized,
+    zoomScale,
+    panOffsetX,
+    panOffsetY,
+    containerSizePx,
+    isColorPickerActive,
+  ) {
+    if (!isColorPickerActive || isVideo) {
+      null
+    } else {
+      val cw = containerSizePx.width.toFloat().coerceAtLeast(1f)
+      val ch = containerSizePx.height.toFloat().coerceAtLeast(1f)
+      val viewportX = colorFocusPointNormalized.x * cw
+      val viewportY = colorFocusPointNormalized.y * ch
+      val (imgNormX, imgNormY) = GalleryEngine.mapViewportPointToImageNormalized(
+        viewportX = viewportX,
+        viewportY = viewportY,
+        containerWidth = cw,
+        containerHeight = ch,
+        imageWidth = currentBitmap?.width ?: 0,
+        imageHeight = currentBitmap?.height ?: 0,
+        zoomScale = zoomScale,
+        panOffsetX = panOffsetX,
+        panOffsetY = panOffsetY,
+      )
+      GalleryEngine.samplePhotoColorHex(
+        file = photo.file,
+        bitmap = currentBitmap,
+        normX = imgNormX,
+        normY = imgNormY,
+      )
+    }
+  }
 
   Box(
     modifier = Modifier
       .fillMaxSize()
       .background(Color.Black)
-      .then(
-        if (isCurrentPage) {
-          Modifier.testTag("photo_viewer_active_page")
-        } else {
-          Modifier
-        }
-      )
-      .testTag("photo_viewer_page_${photo.name}")
-      .pointerInput(photo.path) {
-        awaitEachGesture {
-          var downPosition: Offset? = null
-          var maxPointers = 0
-          var movedBeyondSlop = false
-          var liveZoom = currentZoomState
-
-          do {
-            val event = awaitPointerEvent(PointerEventPass.Initial)
-            val pressedChanges = event.changes.filter { it.pressed }
-            val pressedCount = pressedChanges.size
-            if (pressedCount > maxPointers) {
-              maxPointers = pressedCount
-            }
-
-            if (pressedCount >= 2) {
-              movedBeyondSlop = true
-              val zoomChange = event.calculateZoom()
-              val panChange = event.calculatePan()
-              if (zoomChange != 1f && zoomChange > 0f && !zoomChange.isNaN()) {
-                liveZoom = GalleryEngine.calculatePhotoZoom(liveZoom, zoomChange)
-                currentOnZoomChange(liveZoom)
-              }
-              if (liveZoom > 1.02f) {
-                panOffsetX += panChange.x
-                panOffsetY += panChange.y
-              } else {
-                panOffsetX = 0f
-                panOffsetY = 0f
-              }
-              event.changes.forEach { it.consume() }
-            } else if (pressedCount == 1) {
-              val change = pressedChanges.first()
-              if (downPosition == null) {
-                downPosition = change.position
-              } else if ((change.position - downPosition).getDistance() > viewConfiguration.touchSlop) {
-                movedBeyondSlop = true
-              }
-
-              if (liveZoom > 1.02f && maxPointers == 1) {
-                val panChange = event.calculatePan()
-                if (panChange != Offset.Zero) {
-                  panOffsetX += panChange.x
-                  panOffsetY += panChange.y
-                  event.changes.forEach { it.consume() }
-                }
-              }
-            }
-          } while (event.changes.any { it.pressed })
-
-          if (maxPointers == 1 && !movedBeyondSlop) {
-            currentOnTapImage()
-          }
-        }
-      },
+      .onSizeChanged { containerSizePx = it },
     contentAlignment = Alignment.Center,
   ) {
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .then(
+          if (isCurrentPage) {
+            Modifier.testTag("photo_viewer_active_page")
+          } else {
+            Modifier
+          }
+        )
+        .testTag("photo_viewer_page_${photo.name}")
+        .pointerInput(photo.path) {
+          awaitEachGesture {
+            var downPosition: Offset? = null
+            var maxPointers = 0
+            var movedBeyondSlop = false
+            var liveZoom = currentZoomState
+            var handledByColorPicker = false
+
+            do {
+              val event = awaitPointerEvent(PointerEventPass.Initial)
+              val pressedChanges = event.changes.filter { it.pressed }
+              val pressedCount = pressedChanges.size
+              if (pressedCount > maxPointers) {
+                maxPointers = pressedCount
+              }
+
+              if (pressedCount >= 2) {
+                movedBeyondSlop = true
+                val zoomChange = event.calculateZoom()
+                val panChange = event.calculatePan()
+                if (zoomChange != 1f && zoomChange > 0f && !zoomChange.isNaN()) {
+                  liveZoom = GalleryEngine.calculatePhotoZoom(liveZoom, zoomChange)
+                  currentOnZoomChange(liveZoom)
+                }
+                if (liveZoom > 1.02f) {
+                  panOffsetX += panChange.x
+                  panOffsetY += panChange.y
+                } else {
+                  panOffsetX = 0f
+                  panOffsetY = 0f
+                }
+                event.changes.forEach { it.consume() }
+              } else if (pressedCount == 1) {
+                val change = pressedChanges.first()
+                if (downPosition == null) {
+                  downPosition = change.position
+                } else if ((change.position - downPosition).getDistance() > viewConfiguration.touchSlop) {
+                  movedBeyondSlop = true
+                }
+
+                if (currentIsColorPickerActive && maxPointers == 1) {
+                  handledByColorPicker = true
+                  val w = size.width.toFloat().coerceAtLeast(1f)
+                  val h = size.height.toFloat().coerceAtLeast(1f)
+                  val normX = (change.position.x / w).coerceIn(0.08f, 0.92f)
+                  val normY = (change.position.y / h).coerceIn(0.08f, 0.92f)
+                  val updatedFocus = Offset(normX, normY)
+                  if (colorFocusPointNormalized != updatedFocus) {
+                    colorFocusPointNormalized = updatedFocus
+                  }
+                  event.changes.forEach { it.consume() }
+                } else if (liveZoom > 1.02f && maxPointers == 1) {
+                  val panChange = event.calculatePan()
+                  if (panChange != Offset.Zero) {
+                    panOffsetX += panChange.x
+                    panOffsetY += panChange.y
+                    event.changes.forEach { it.consume() }
+                  }
+                }
+              }
+            } while (event.changes.any { it.pressed })
+
+            if (handledByColorPicker) {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            } else if (maxPointers == 1 && !movedBeyondSlop) {
+              currentOnTapImage()
+            }
+          }
+        },
+      contentAlignment = Alignment.Center,
+    ) {
     if (isVideo) {
       var mediaPlayerRef by remember(photo.path, photo.lastModifiedMs) { mutableStateOf<MediaPlayer?>(null) }
       var isPlayerPrepared by remember(photo.path, photo.lastModifiedMs) { mutableStateOf(false) }
@@ -5575,6 +5959,24 @@ private fun PhotoViewerPageContent(
           }
         }
       }
+    } else if (isAnimatedImage) {
+      AnimatedImagePlayerSurface(
+        file = photo.file,
+        fallbackBitmap = currentBitmap,
+        contentDescription = photo.name,
+        isPlaying = isCurrentPage && isVideoPlaying,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier
+          .fillMaxSize()
+          .graphicsLayer {
+            scaleX = zoomScale
+            scaleY = zoomScale
+            translationX = panOffsetX
+            translationY = panOffsetY
+          }
+          .testTag("photo_viewer_image_${photo.name}")
+          .testTag("photo_viewer_animated_${photo.name}"),
+      )
     } else if (currentBitmap != null) {
       Image(
         bitmap = currentBitmap.asImageBitmap(),
@@ -5614,6 +6016,108 @@ private fun PhotoViewerPageContent(
           style = MaterialTheme.typography.bodyMedium,
           color = Color.White,
         )
+      }
+    }
+    }
+
+    // Camera auto-focus style color picker reticle & Music Player-styled hex color pill
+    if (isColorPickerActive && !isVideo) {
+      val focusRingColor = MaterialTheme.colorScheme.tertiary
+      val activeHex = sampledColorHex ?: GalleryEngine.samplePhotoColorHex(
+        file = photo.file,
+        bitmap = currentBitmap,
+        normX = colorFocusPointNormalized.x,
+        normY = colorFocusPointNormalized.y,
+      )
+      val swatchColor = remember(activeHex) {
+        val rgb = ColorMath.parseHex(activeHex)
+        if (rgb != null) {
+          Color(red = rgb.first, green = rgb.second, blue = rgb.third)
+        } else {
+          focusRingColor
+        }
+      }
+      var measuredPillWidthPx by remember { mutableIntStateOf(0) }
+
+      BoxWithConstraints(
+        modifier = Modifier
+          .fillMaxSize()
+          .testTag("photo_viewer_color_focus_indicator"),
+      ) {
+        val boxW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+        val boxH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+        val cx = boxW * colorFocusPointNormalized.x
+        val cy = boxH * colorFocusPointNormalized.y
+        val radiusPx = with(density) { 32.dp.toPx() }
+        val gapPx = with(density) { 6.dp.toPx() }
+        val edgeMarginPx = with(density) { 8.dp.toPx() }
+        val fallbackPillWidthPx = with(density) { 86.dp.toPx() }
+        val effectivePillW = if (measuredPillWidthPx > 0) measuredPillWidthPx.toFloat() else fallbackPillWidthPx
+        val pillLeftPx = (cx - effectivePillW / 2f).coerceIn(
+          edgeMarginPx,
+          (boxW - effectivePillW - edgeMarginPx).coerceAtLeast(edgeMarginPx),
+        )
+        val pillTopPx = (cy + radiusPx + gapPx).coerceIn(
+          edgeMarginPx,
+          (boxH - with(density) { 36.dp.toPx() }).coerceAtLeast(edgeMarginPx),
+        )
+
+        Canvas(modifier = Modifier.fillMaxSize()) {
+          drawCircle(
+            color = focusRingColor,
+            radius = radiusPx,
+            center = Offset(cx, cy),
+            style = Stroke(width = 2.dp.toPx()),
+          )
+          drawCircle(
+            color = swatchColor,
+            radius = 4.dp.toPx(),
+            center = Offset(cx, cy),
+          )
+        }
+
+        // Hex Color Pill below the auto-focus circle (styled like Music Player color pills)
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.88f),
+          border = BorderStroke(1.dp, swatchColor.copy(alpha = 0.65f)),
+          modifier = Modifier
+            .onSizeChanged { measuredPillWidthPx = it.width }
+            .offset {
+              IntOffset(
+                x = pillLeftPx.roundToInt(),
+                y = pillTopPx.roundToInt(),
+              )
+            }
+            .clip(CircleShape)
+            .clickable { onOpenColorPicker(activeHex) }
+            .testTag("photo_viewer_color_pill"),
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+          ) {
+            Box(
+              modifier = Modifier
+                .size(12.dp)
+                .clip(CircleShape)
+                .background(swatchColor)
+                .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), CircleShape)
+                .testTag("photo_viewer_color_swatch"),
+            )
+            Spacer(modifier = Modifier.width(5.dp))
+            Text(
+              text = activeHex,
+              style = MaterialTheme.typography.labelSmall,
+              fontFamily = FontFamily.Monospace,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
+              maxLines = 1,
+              modifier = Modifier.testTag("photo_viewer_color_hex_text"),
+            )
+          }
+        }
       }
     }
   }
@@ -5755,7 +6259,7 @@ private fun AddGalleryFolderDialog(
       Button(
         onClick = { onConfirm(folderName.trim()) },
         enabled = canConfirm,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("gallery_confirm_add_folder"),
       ) {
         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -5766,7 +6270,7 @@ private fun AddGalleryFolderDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }
@@ -5939,7 +6443,7 @@ private fun GalleryBulkInfoDialog(
     confirmButton = {
       Button(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("gallery_close_bulk_info"),
       ) {
         Text("Close")
@@ -6050,7 +6554,7 @@ private fun GalleryBulkDeleteConfirmDialog(
     confirmButton = {
       Button(
         onClick = onConfirm,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         colors = ButtonDefaults.buttonColors(
           containerColor = MaterialTheme.colorScheme.error,
           contentColor = MaterialTheme.colorScheme.onError,
@@ -6065,7 +6569,7 @@ private fun GalleryBulkDeleteConfirmDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }

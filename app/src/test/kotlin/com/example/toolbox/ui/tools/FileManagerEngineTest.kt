@@ -517,7 +517,7 @@ class FileManagerEngineTest {
   fun folderSortGroupConfig_savesAndResolvesPerFolderAndDefaultConfigs() {
     FileManagerEngine.clearAllSortGroupConfigs()
 
-    val folderA = File("/storage/emulated/0/Downloads")
+    val folderA = File("/storage/emulated/0/Download")
     val folderB = File("/storage/emulated/0/Pictures")
 
     // Initially uses default (TYPE, NAME_ASC) and is not saved for specific folder

@@ -860,14 +860,16 @@ fun RecipeBookScreen(
             onDismissRequest = { pendingDeleteRecipes = null },
             shape = RoundedCornerShape(28.dp),
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 6.dp,
             title = {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(44.dp)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.errorContainer),
                         contentAlignment = Alignment.Center
@@ -875,15 +877,18 @@ fun RecipeBookScreen(
                         Icon(
                             imageVector = Icons.Default.Delete,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.size(20.dp)
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(24.dp)
                         )
                     }
-                    Text(
-                        text = if (isSingle) "Remove Recipe" else "Remove ${targets.size} Recipes",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Column {
+                        Text(
+                            text = if (isSingle) "Remove Recipe" else "Remove ${targets.size} Recipes",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
             },
             text = {
@@ -906,7 +911,7 @@ fun RecipeBookScreen(
                         pendingDeleteRecipes = null
                         exitSelectionMode()
                     },
-                    shape = RoundedCornerShape(12.dp),
+                    shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError
@@ -917,7 +922,10 @@ fun RecipeBookScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDeleteRecipes = null }) {
+                TextButton(
+                    onClick = { pendingDeleteRecipes = null },
+                    shape = CircleShape
+                ) {
                     Text("Cancel")
                 }
             }
@@ -1942,16 +1950,17 @@ private fun RecipeDetailDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 6.dp,
         modifier = Modifier.testTag("recipe_detail_dialog"),
         title = {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center
@@ -1959,19 +1968,20 @@ private fun RecipeDetailDialog(
                     Icon(
                         imageVector = recipe.category.icon(),
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(22.dp)
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = recipe.name,
                         style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
                         text = "${recipe.subtitle} • ${recipe.category.displayName}",
-                        style = MaterialTheme.typography.labelMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -2344,7 +2354,7 @@ private fun RecipeDetailDialog(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = onEditRecipe,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = CircleShape,
                     modifier = Modifier.testTag("detail_edit_recipe_button")
                 ) {
                     Icon(
@@ -2358,7 +2368,7 @@ private fun RecipeDetailDialog(
 
                 Button(
                     onClick = onToggleSaved,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = CircleShape,
                     modifier = Modifier.testTag("detail_toggle_saved_button")
                 ) {
                     Icon(
@@ -2377,6 +2387,7 @@ private fun RecipeDetailDialog(
         dismissButton = {
             TextButton(
                 onClick = onDismiss,
+                shape = CircleShape,
                 modifier = Modifier.testTag("close_recipe_detail_button")
             ) {
                 Text("Close")
@@ -2462,15 +2473,17 @@ private fun RecipeEditorDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 6.dp,
         modifier = Modifier.testTag("recipe_editor_dialog"),
         title = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Box(
                     modifier = Modifier
-                        .size(36.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center
@@ -2478,15 +2491,18 @@ private fun RecipeEditorDialog(
                     Icon(
                         imageVector = if (isEditing) Icons.Default.Edit else Icons.Default.Add,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(20.dp)
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
-                Text(
-                    text = if (isEditing) "Edit Recipe" else "Add Recipe",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
+                Column {
+                    Text(
+                        text = if (isEditing) "Edit Recipe" else "Add Recipe",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
         },
         text = {
@@ -2699,14 +2715,17 @@ private fun RecipeEditorDialog(
                     onConfirm(result)
                 },
                 enabled = isValid,
-                shape = RoundedCornerShape(12.dp),
+                shape = CircleShape,
                 modifier = Modifier.testTag("save_custom_recipe_button")
             ) {
                 Text(if (isEditing) "Save Changes" else "Add Recipe", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                onClick = onDismiss,
+                shape = CircleShape
+            ) {
                 Text("Cancel")
             }
         }

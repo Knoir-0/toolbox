@@ -107,10 +107,15 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // 1. Default view is Tile View with 3 albums per row
+    // 1. Default view is Tile View with 3 albums per row, and pill bar includes all default folders
     composeTestRule.onNodeWithTag("gallery_tile_grid").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("3")
     composeTestRule.onNodeWithTag("gallery_density_indicator").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_breadcrumb_root").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_folder_pill_DCIM").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Pictures").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Photos").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Download").assertIsDisplayed()
 
     // 2. Contents of Pictures and DCIM are un-nested at the root level as if they were the same folder
     val cameraTile = composeTestRule.onNodeWithTag("album_tile_Camera", useUnmergedTree = true)
@@ -466,6 +471,22 @@ class GalleryScreenTest {
       .text
     val zoomPercent = zoomLabelText.removeSuffix("%").toInt()
     assertTrue("Expected zoom percent > 100% after pinch-out, got $zoomPercent%", zoomPercent > 100)
+
+    // 6. Activate Color Picker tool in image viewer -> shows auto-focus circle & hex color pill for photo_1.png (RGB 200, 60, 60 = #C83C3C)
+    composeTestRule.onNodeWithTag("photo_viewer_color_picker_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_color_picker_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("photo_viewer_color_focus_indicator").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_color_pill").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_color_swatch", useUnmergedTree = true).assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_color_hex_text", useUnmergedTree = true)
+      .assertTextEquals("#C83C3C")
+
+    // Tap hex color pill -> opens Color Picker tool with #C83C3C pre-selected
+    composeTestRule.onNodeWithTag("photo_viewer_color_pill").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("#C83C3C").assertIsDisplayed()
   }
 
   @Test
@@ -878,10 +899,10 @@ class GalleryScreenTest {
       writeBytes(byteArrayOf(0, 0, 0, 24))
       setLastModified(3_000_000L)
     }
-    File(cameraDir, "clip_2.mp4").apply {
-      writeBytes(byteArrayOf(0, 0, 0, 24))
-      setLastModified(2_000_000L)
-    }
+    GalleryEngine.writeSampleAnimatedGif(
+      outputFile = File(cameraDir, "anim_2.gif"),
+      lastModifiedMs = 2_000_000L,
+    )
 
     composeTestRule.mainClock.autoAdvance = false
     composeTestRule.setContent {
@@ -897,23 +918,32 @@ class GalleryScreenTest {
     }
     composeTestRule.mainClock.advanceTimeBy(100L)
 
-    // 1. First video in view (clip_1.mp4, newest first) starts playing muted preview
+    // 1. First item in view (clip_1.mp4, newest first) starts playing muted preview
     composeTestRule.onNodeWithTag("video_preview_playing_clip_1.mp4", useUnmergedTree = true).assertIsDisplayed()
-    composeTestRule.onNodeWithTag("video_preview_playing_clip_2.mp4", useUnmergedTree = true).assertDoesNotExist()
+    composeTestRule.onNodeWithTag("video_preview_playing_anim_2.gif", useUnmergedTree = true).assertDoesNotExist()
 
-    // 2. After clip_1.mp4 plays for its preview duration, moves on to clip_2.mp4
+    // 2. After clip_1.mp4 plays for its preview duration, moves on to the animated image anim_2.gif
     composeTestRule.mainClock.advanceTimeBy(1_050L)
     composeTestRule.onNodeWithTag("video_preview_playing_clip_1.mp4", useUnmergedTree = true).assertDoesNotExist()
-    composeTestRule.onNodeWithTag("video_preview_playing_clip_2.mp4", useUnmergedTree = true).assertIsDisplayed()
+    composeTestRule.onNodeWithTag("video_preview_playing_anim_2.gif", useUnmergedTree = true).assertIsDisplayed()
+    composeTestRule.onNodeWithTag("animated_preview_playing_anim_2.gif", useUnmergedTree = true).assertIsDisplayed()
 
-    // 3. After all videos in view have played, pauses with no video playing
+    // 3. After all videos and animated images in view have played, pauses with none playing
     composeTestRule.mainClock.advanceTimeBy(1_050L)
     composeTestRule.onNodeWithTag("video_preview_playing_clip_1.mp4", useUnmergedTree = true).assertDoesNotExist()
-    composeTestRule.onNodeWithTag("video_preview_playing_clip_2.mp4", useUnmergedTree = true).assertDoesNotExist()
+    composeTestRule.onNodeWithTag("video_preview_playing_anim_2.gif", useUnmergedTree = true).assertDoesNotExist()
 
-    // 4. After the cycle pause completes, begins again with the first video in view (clip_1.mp4)
+    // 4. After the cycle pause completes, begins again with the first item in view (clip_1.mp4)
     composeTestRule.mainClock.advanceTimeBy(2_050L)
     composeTestRule.onNodeWithTag("video_preview_playing_clip_1.mp4", useUnmergedTree = true).assertIsDisplayed()
     composeTestRule.mainClock.autoAdvance = true
+
+    // 5. Tapping the animated image (anim_2.gif) opens the viewer and auto-plays it with Play/Pause controls
+    composeTestRule.onNodeWithTag("photo_tile_item_anim_2.gif").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_animated_anim_2.gif", useUnmergedTree = true).assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_video_controls").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_video_play_state_label", useUnmergedTree = true)
+      .assertTextEquals("Playing")
   }
 }

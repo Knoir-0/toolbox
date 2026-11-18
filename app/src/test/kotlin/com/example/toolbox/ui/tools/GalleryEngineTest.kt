@@ -29,12 +29,12 @@ class GalleryEngineTest {
 
   @Test
   fun defaultFolders_areDcimPicturesPhotosAndDownloads_andContentsAreUnNestedAsSameFolder_andDefaultNewAlbumIsPictures() {
-    assertEquals(listOf("DCIM", "Pictures", "Photos", "Downloads"), DEFAULT_GALLERY_FOLDER_NAMES)
+    assertEquals(listOf("DCIM", "Pictures", "Photos", "Download"), DEFAULT_GALLERY_FOLDER_NAMES)
     assertEquals("Pictures", DEFAULT_NEW_ALBUM_FOLDER_NAME)
 
     val folders = GalleryEngine.getDefaultGalleryFolders(tempRootDir)
     assertEquals(4, folders.size)
-    assertEquals(listOf("DCIM", "Pictures", "Photos", "Downloads"), folders.map { it.name })
+    assertEquals(listOf("DCIM", "Pictures", "Photos", "Download"), folders.map { it.name })
 
     val defaultNewAlbumFolder = GalleryEngine.getDefaultNewAlbumFolder(tempRootDir)
     assertEquals(File(tempRootDir, "Pictures").absolutePath, defaultNewAlbumFolder.absolutePath)
@@ -85,8 +85,8 @@ class GalleryEngineTest {
     val rootAlbums = GalleryEngine.loadRootAlbums(rootDirectory = tempRootDir)
     assertEquals(listOf("Camera", "Screenshots", "Vacation"), rootAlbums.map { it.name })
 
-    // When Downloads exists, it is treated as a single "Downloads" album rather than un-nested
-    val downloadsDir = File(tempRootDir, "Downloads").apply { mkdirs() }
+    // When Download exists, it is treated as a single "Download" album rather than un-nested
+    val downloadsDir = File(tempRootDir, "Download").apply { mkdirs() }
     val downloadsSubDir = File(downloadsDir, "ExtractedZip").apply { mkdirs() }
     GalleryEngine.writeSolidColorPng(
       outputFile = File(downloadsDir, "dl_direct.png"),
@@ -99,16 +99,16 @@ class GalleryEngineTest {
 
     val rootWithDownloads = GalleryEngine.loadRootContents(rootDirectory = tempRootDir)
     assertEquals(
-      listOf("Camera", "Downloads", "Screenshots", "Vacation"),
+      listOf("Camera", "Download", "Screenshots", "Vacation"),
       rootWithDownloads.nestedAlbums.map { it.name },
     )
-    // Direct photos in Downloads do not spill into root loose photos
+    // Direct photos in Download do not spill into root loose photos
     assertEquals(
       listOf("pictures_direct.png", "dcim_direct.png"),
       rootWithDownloads.photos.map { it.name },
     )
 
-    val downloadsAlbum = rootWithDownloads.nestedAlbums.first { it.name == "Downloads" }
+    val downloadsAlbum = rootWithDownloads.nestedAlbums.first { it.name == "Download" }
     assertEquals(2, downloadsAlbum.totalPhotoCount)
     assertEquals(2, downloadsAlbum.directPhotoCount)
     assertEquals(0, downloadsAlbum.subAlbumCount)
@@ -790,7 +790,7 @@ class GalleryEngineTest {
     val dcimDir = File(tempRootDir, "DCIM").apply { mkdirs() }
     val picturesDir = File(tempRootDir, "Pictures").apply { mkdirs() }
     val photosDir = File(tempRootDir, "Photos").apply { mkdirs() }
-    val downloadsDir = File(tempRootDir, "Downloads").apply { mkdirs() }
+    val downloadsDir = File(tempRootDir, "Download").apply { mkdirs() }
 
     val photoFile = File(dcimDir, "Camera/portrait.jpg").apply {
       parentFile?.mkdirs()
@@ -814,17 +814,17 @@ class GalleryEngineTest {
       writeBytes(byteArrayOf(1, 2, 3))
     }
 
-    // 0. FOLDERS groups by the default root folders ("DCIM", "Pictures", "Photos", and "Downloads")
+    // 0. FOLDERS groups by the default root folders ("DCIM", "Pictures", "Photos", and "Download")
     val folderGroups = GalleryEngine.groupByDefaultFolders(
       rootDirectories = listOf(dcimDir, picturesDir, photosDir, downloadsDir),
       sortOrder = GallerySortOrder.NAME_ASC,
     )
-    assertEquals(listOf("DCIM", "Pictures", "Photos", "Downloads"), folderGroups.map { it.title })
+    assertEquals(listOf("DCIM", "Pictures", "Photos", "Download"), folderGroups.map { it.title })
     assertEquals(listOf("Camera"), folderGroups[0].albums.map { it.name })
     assertEquals(listOf("Screenshots"), folderGroups[1].albums.map { it.name })
     assertEquals(listOf("meme.gif"), folderGroups[1].photos.map { it.name })
     assertEquals(listOf("exported.png"), folderGroups[2].photos.map { it.name })
-    assertEquals(listOf("Downloads"), folderGroups[3].albums.map { it.name })
+    assertEquals(listOf("Download"), folderGroups[3].albums.map { it.name })
     assertEquals(1, folderGroups[3].albums.single().totalPhotoCount)
     assertTrue(folderGroups[3].photos.isEmpty())
 
@@ -911,5 +911,72 @@ class GalleryEngineTest {
       listOf("Receipt", "Screenshot", "Nature", "Untagged"),
       smartTagGroups.map { it.title },
     )
+  }
+
+  @Test
+  fun samplePhotoColorHex_andMapViewportPointToImageNormalized_extractExactHexColorFromPhoto() {
+    val dcimDir = File(tempRootDir, "DCIM").apply { mkdirs() }
+    val coralPng = GalleryEngine.writeSolidColorPng(
+      outputFile = File(dcimDir, "coral.png"),
+      red = 0xFF,
+      green = 0x6B,
+      blue = 0x57,
+      width = 48,
+      height = 48,
+    )
+    val tealPng = GalleryEngine.writeSolidColorPng(
+      outputFile = File(dcimDir, "teal.png"),
+      red = 0x0D,
+      green = 0x94,
+      blue = 0x88,
+      width = 48,
+      height = 48,
+    )
+
+    assertEquals("#FF6B57", GalleryEngine.samplePhotoColorHex(file = coralPng, normX = 0.5f, normY = 0.5f))
+    assertEquals("#0D9488", GalleryEngine.samplePhotoColorHex(file = tealPng, normX = 0.25f, normY = 0.75f))
+
+    // Center of viewport maps to (0.5f, 0.5f) of fitted image
+    val (normX, normY) = GalleryEngine.mapViewportPointToImageNormalized(
+      viewportX = 200f,
+      viewportY = 400f,
+      containerWidth = 400f,
+      containerHeight = 800f,
+      imageWidth = 100,
+      imageHeight = 100,
+    )
+    assertEquals(0.5f, normX, 0.001f)
+    assertEquals(0.5f, normY, 0.001f)
+  }
+
+  @Test
+  fun isAnimatedImageFile_andSupportsInlinePreview_detectAnimatedGifsAndVideos() {
+    val dcimDir = File(tempRootDir, "DCIM").apply { mkdirs() }
+    val gifFile = GalleryEngine.writeSampleAnimatedGif(
+      outputFile = File(dcimDir, "dance.gif"),
+      lastModifiedMs = 4_000_000L,
+    )
+    val pngFile = GalleryEngine.writeSolidColorPng(
+      outputFile = File(dcimDir, "still.png"),
+      lastModifiedMs = 3_000_000L,
+    )
+    val mp4File = File(dcimDir, "clip.mp4").apply {
+      writeBytes(byteArrayOf(0, 0, 0, 24))
+      setLastModified(5_000_000L)
+    }
+
+    assertTrue(GalleryEngine.isAnimatedImageFile(gifFile))
+    assertTrue(!GalleryEngine.isAnimatedImageFile(pngFile))
+    assertTrue(!GalleryEngine.isAnimatedImageFile(mp4File))
+    assertTrue(GalleryEngine.isInlinePreviewMediaFile(gifFile))
+    assertTrue(GalleryEngine.isInlinePreviewMediaFile(mp4File))
+    assertTrue(!GalleryEngine.isInlinePreviewMediaFile(pngFile))
+
+    val contents = GalleryEngine.loadAlbumContents(dcimDir)
+    val photosByName = contents.photos.associateBy { it.name }
+    assertTrue(photosByName.getValue("dance.gif").isAnimatedImage)
+    assertTrue(photosByName.getValue("dance.gif").supportsInlinePreview)
+    assertTrue(photosByName.getValue("clip.mp4").supportsInlinePreview)
+    assertTrue(!photosByName.getValue("still.png").supportsInlinePreview)
   }
 }

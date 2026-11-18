@@ -376,9 +376,9 @@ class MusicPlayerEngineTest {
       assertEquals("Daft Punk", parsedCustom!!.artist)
       assertEquals("Digital Love", parsedCustom.title)
 
-      // Default library loading scans Music, Audio, Recordings, and Downloads (plus Android's Download folder)
+      // Default library loading scans Music, Audio, Recordings, and Download (plus plural Downloads folder)
       assertEquals(
-        listOf("Music", "Audio", "Recordings", "Downloads"),
+        listOf("Music", "Audio", "Recordings", "Download"),
         DEFAULT_MUSIC_FOLDER_NAMES,
       )
       val musicDir = File(tempDir, "Music").apply { mkdirs() }
@@ -386,7 +386,7 @@ class MusicPlayerEngineTest {
       val audioSubDir = File(audioDir, "Subfolder").apply { mkdirs() }
       val recordingsDir = File(tempDir, "Recordings").apply { mkdirs() }
       val recordingsSubDir = File(recordingsDir, "Meetings").apply { mkdirs() }
-      val downloadsDir = File(tempDir, "Downloads").apply { mkdirs() }
+      val downloadsDir = File(tempDir, "Download").apply { mkdirs() }
       val ignoredDir = File(tempDir, "Documents").apply { mkdirs() }
       wavFile.copyTo(File(musicDir, "MusicSong.wav"), overwrite = true)
       wavFile.copyTo(File(audioDir, "Artist One - AudioRecording.wav"), overwrite = true)

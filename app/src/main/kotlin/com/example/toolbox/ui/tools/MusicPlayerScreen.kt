@@ -2096,33 +2096,41 @@ fun MusicPlayerScreen(
         onDismissRequest = { showMultiSelectDeleteDialog = false },
         shape = RoundedCornerShape(28.dp),
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 6.dp,
         modifier = Modifier.testTag("multi_select_delete_music_dialog"),
-        icon = {
-          Box(
-            modifier = Modifier
-              .size(44.dp)
-              .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.errorContainer),
-            contentAlignment = Alignment.Center,
-          ) {
-            Icon(
-              imageVector = Icons.Default.Delete,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.onErrorContainer,
-              modifier = Modifier.size(22.dp),
-            )
-          }
-        },
         title = {
-          Text(
-            text = if (playlistIdsToDelete.isNotEmpty() && tracksToDelete.isEmpty()) {
-              "Delete ${playlistIdsToDelete.size} Selected Playlist${if (playlistIdsToDelete.size == 1) "" else "s"}?"
-            } else {
-              "Delete $selectedItemCount Selected Item${if (selectedItemCount == 1) "" else "s"}?"
-            },
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-          )
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Box(
+              modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.errorContainer),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Default.Delete,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(24.dp),
+              )
+            }
+            Column {
+              Text(
+                text = if (playlistIdsToDelete.isNotEmpty() && tracksToDelete.isEmpty()) {
+                  "Delete ${playlistIdsToDelete.size} Selected Playlist${if (playlistIdsToDelete.size == 1) "" else "s"}?"
+                } else {
+                  "Delete $selectedItemCount Selected Item${if (selectedItemCount == 1) "" else "s"}?"
+                },
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+            }
+          }
         },
         text = {
           Text(
@@ -2145,7 +2153,7 @@ fun MusicPlayerScreen(
               haptic.performHapticFeedback(HapticFeedbackType.LongPress)
               clearSelection()
             },
-            shape = RoundedCornerShape(14.dp),
+            shape = CircleShape,
             colors = ButtonDefaults.buttonColors(
               containerColor = MaterialTheme.colorScheme.error,
               contentColor = MaterialTheme.colorScheme.onError,
@@ -2160,7 +2168,7 @@ fun MusicPlayerScreen(
         dismissButton = {
           TextButton(
             onClick = { showMultiSelectDeleteDialog = false },
-            shape = RoundedCornerShape(14.dp),
+            shape = CircleShape,
           ) {
             Text("Cancel")
           }

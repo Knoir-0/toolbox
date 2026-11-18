@@ -141,9 +141,9 @@ class AudioRecorderEngineTest {
   }
 
   @Test
-  fun formatDirectoryDisplayPath_andResolveDirectoryInput_defaultToAudioRecordingsAndDownloadsFolders() {
-    assertEquals(listOf("Audio", "Recordings", "Downloads"), DEFAULT_AUDIO_RECORDER_FOLDER_NAMES)
-    assertEquals(listOf("/Audio", "/Recordings", "/Downloads"), DEFAULT_AUDIO_RECORDER_FOLDER_DISPLAY_PATHS)
+  fun formatDirectoryDisplayPath_andResolveDirectoryInput_defaultToAudioRecordingsAndDownloadFolders() {
+    assertEquals(listOf("Audio", "Recordings", "Download"), DEFAULT_AUDIO_RECORDER_FOLDER_NAMES)
+    assertEquals(listOf("/Audio", "/Recordings", "/Download"), DEFAULT_AUDIO_RECORDER_FOLDER_DISPLAY_PATHS)
     assertEquals(
       listOf(
         AudioRecorderDefaultFolder.AUDIO,
@@ -157,7 +157,7 @@ class AudioRecorderEngineTest {
     val defaultAudio = File(fakeRoot, "Audio")
     assertEquals("/Audio", AudioRecorderEngine.formatDirectoryDisplayPath(defaultAudio, fakeRoot))
     assertEquals("/Recordings", AudioRecorderEngine.formatDirectoryDisplayPath(File(fakeRoot, "Recordings"), fakeRoot))
-    assertEquals("/Downloads", AudioRecorderEngine.formatDirectoryDisplayPath(File(fakeRoot, "Downloads"), fakeRoot))
+    assertEquals("/Download", AudioRecorderEngine.formatDirectoryDisplayPath(File(fakeRoot, "Download"), fakeRoot))
 
     val nested = File(fakeRoot, "Music/VoiceMemos")
     assertEquals("/Music/VoiceMemos", AudioRecorderEngine.formatDirectoryDisplayPath(nested, fakeRoot))
@@ -168,7 +168,7 @@ class AudioRecorderEngineTest {
         userRoot = File("/non_existent_unwritable_root_path"),
         fallbackBaseDir = tempFallback,
       )
-      assertEquals(listOf("Audio", "Recordings", "Downloads"), resolvedDefaults.map { it.name })
+      assertEquals(listOf("Audio", "Recordings", "Download"), resolvedDefaults.map { it.name })
       assertTrue(resolvedDefaults.all { it.exists() && it.isDirectory })
 
       val resolvedDefault = AudioRecorderEngine.resolveDirectoryInput(
@@ -188,11 +188,11 @@ class AudioRecorderEngineTest {
       assertTrue(resolvedCustom.exists())
 
       val resolvedDownloads = AudioRecorderEngine.resolveDirectoryInput(
-        inputPath = "/Downloads",
+        inputPath = "/Download",
         userRoot = File("/non_existent_unwritable_root_path"),
         fallbackBaseDir = tempFallback,
       )
-      assertEquals("Downloads", resolvedDownloads.name)
+      assertEquals("Download", resolvedDownloads.name)
       assertTrue(resolvedDownloads.exists())
     } finally {
       tempFallback.deleteRecursively()

@@ -1209,18 +1209,18 @@ class MainScreenTest {
       }
       composeTestRule.waitForIdle()
 
-      // 1. Image file menu shows Gallery & Inspect Color, and Inspect Color opens ColorPickerScreen
+      // 1. Image file menu shows Gallery (without Inspect Color) and opens GalleryScreen
       composeTestRule.onNodeWithTag("file_options_swatch.png").performClick()
       composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("action_open_gallery").assertIsDisplayed()
-      composeTestRule.onNodeWithTag("action_inspect_color").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_inspect_color").assertDoesNotExist()
       composeTestRule.onNodeWithTag("action_cut").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_copy").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_duplicate").assertDoesNotExist()
-      composeTestRule.onNodeWithTag("action_inspect_color").performClick()
+      composeTestRule.onNodeWithTag("action_open_gallery").performClick()
       composeTestRule.waitForIdle()
 
-      composeTestRule.onNodeWithTag("color_picker_screen").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("gallery_screen").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_navigate_back").performClick()
       composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()

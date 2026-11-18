@@ -3080,7 +3080,7 @@ private fun ExtractArchiveDialog(
         onClick = {
           onConfirmExtract(targetDirectory, preserveStructure, overwriteExisting)
         },
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("confirm_extract_button"),
       ) {
         Icon(Icons.Default.Unarchive, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -3091,7 +3091,7 @@ private fun ExtractArchiveDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }
@@ -3402,7 +3402,7 @@ internal fun CreateZipArchiveDialog(
           onCreateArchive(selectedFiles, outputFile, selectedFormat, compressionLevel)
         },
         enabled = selectedFiles.isNotEmpty() && sanitizedStem.isNotEmpty(),
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("confirm_create_zip_button"),
       ) {
         Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -3413,7 +3413,7 @@ internal fun CreateZipArchiveDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }
@@ -3603,13 +3603,13 @@ private fun AddFilesToArchiveDialog(
       Button(
         onClick = { onConfirmAdd(selectedFiles, ArchiveCompressionLevel.BALANCED) },
         enabled = selectedFiles.isNotEmpty(),
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Add (${selectedFiles.size})")
       }
     },
     dismissButton = {
-      TextButton(onClick = onDismiss, shape = RoundedCornerShape(12.dp)) {
+      TextButton(onClick = onDismiss, shape = CircleShape) {
         Text("Cancel")
       }
     },
@@ -3630,7 +3630,37 @@ private fun CreateArchiveFolderDialog(
     onDismissRequest = onDismiss,
     shape = RoundedCornerShape(28.dp),
     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-    title = { Text("New Folder in Archive", fontWeight = FontWeight.Bold) },
+    tonalElevation = 6.dp,
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.CreateNewFolder,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "New Folder in Archive",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+        }
+      }
+    },
     text = {
       OutlinedTextField(
         value = folderName,
@@ -3649,13 +3679,13 @@ private fun CreateArchiveFolderDialog(
       Button(
         onClick = { onCreate(folderName.trim()) },
         enabled = folderName.isNotBlank() && error == null,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Create")
       }
     },
     dismissButton = {
-      TextButton(onClick = onDismiss, shape = RoundedCornerShape(12.dp)) {
+      TextButton(onClick = onDismiss, shape = CircleShape) {
         Text("Cancel")
       }
     },
@@ -3677,7 +3707,44 @@ private fun RenameArchiveEntryDialog(
     onDismissRequest = onDismiss,
     shape = RoundedCornerShape(28.dp),
     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-    title = { Text("Rename Entry", fontWeight = FontWeight.Bold) },
+    tonalElevation = 6.dp,
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Edit,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "Rename Entry",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = item.name,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+    },
     text = {
       OutlinedTextField(
         value = nameInput,
@@ -3696,13 +3763,13 @@ private fun RenameArchiveEntryDialog(
       Button(
         onClick = { onRename(nameInput.trim()) },
         enabled = nameInput.isNotBlank() && error == null,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Rename")
       }
     },
     dismissButton = {
-      TextButton(onClick = onDismiss, shape = RoundedCornerShape(12.dp)) {
+      TextButton(onClick = onDismiss, shape = CircleShape) {
         Text("Cancel")
       }
     },
@@ -3719,11 +3786,36 @@ private fun DeleteArchiveEntriesDialog(
     onDismissRequest = onDismiss,
     shape = RoundedCornerShape(28.dp),
     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
     title = {
-      Text(
-        text = if (itemNames.size == 1) "Delete Entry?" else "Delete ${itemNames.size} Entries?",
-        fontWeight = FontWeight.Bold,
-      )
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.errorContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Delete,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = if (itemNames.size == 1) "Delete Entry?" else "Delete ${itemNames.size} Entries?",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+        }
+      }
     },
     text = {
       Text(
@@ -3740,14 +3832,14 @@ private fun DeleteArchiveEntriesDialog(
         colors = ButtonDefaults.buttonColors(
           containerColor = MaterialTheme.colorScheme.error,
         ),
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("confirm_delete_archive_entry"),
       ) {
         Text("Delete")
       }
     },
     dismissButton = {
-      TextButton(onClick = onDismiss, shape = RoundedCornerShape(12.dp)) {
+      TextButton(onClick = onDismiss, shape = CircleShape) {
         Text("Cancel")
       }
     },
@@ -3824,7 +3916,7 @@ private fun ArchiveEntryDetailsDialog(
           Spacer(modifier = Modifier.height(4.dp))
           OutlinedButton(
             onClick = { onPreviewText?.invoke() ?: onPreviewImage?.invoke() },
-            shape = RoundedCornerShape(12.dp),
+            shape = CircleShape,
             modifier = Modifier.fillMaxWidth(),
           ) {
             Icon(
@@ -3841,7 +3933,7 @@ private fun ArchiveEntryDetailsDialog(
     confirmButton = {
       Button(
         onClick = onExtract,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Icon(Icons.Default.Unarchive, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(6.dp))
@@ -3849,7 +3941,7 @@ private fun ArchiveEntryDetailsDialog(
       }
     },
     dismissButton = {
-      TextButton(onClick = onDismiss, shape = RoundedCornerShape(12.dp)) {
+      TextButton(onClick = onDismiss, shape = CircleShape) {
         Text("Close")
       }
     },
@@ -3867,7 +3959,42 @@ private fun ArchiveBulkInfoDialog(
     onDismissRequest = onDismiss,
     shape = RoundedCornerShape(28.dp),
     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-    title = { Text("Selection Info (${info.totalItems} items)", fontWeight = FontWeight.Bold) },
+    tonalElevation = 6.dp,
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Info,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "Selection Info (${info.totalItems} items)",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "${info.fileCount} files • ${info.folderCount} folders",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    },
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ArchiveDetailRow("Files", "${info.fileCount}")
@@ -3877,7 +4004,7 @@ private fun ArchiveBulkInfoDialog(
       }
     },
     confirmButton = {
-      Button(onClick = onDismiss, shape = RoundedCornerShape(12.dp)) {
+      Button(onClick = onDismiss, shape = CircleShape) {
         Text("Done")
       }
     },
@@ -3894,10 +4021,11 @@ private fun ArchiveContainerInfoDialog(
     onDismissRequest = onDismiss,
     shape = RoundedCornerShape(28.dp),
     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
     title = {
       Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
       ) {
         Box(
           modifier = Modifier
@@ -3947,14 +4075,14 @@ private fun ArchiveContainerInfoDialog(
       }
     },
     confirmButton = {
-      Button(onClick = onShareArchive, shape = RoundedCornerShape(12.dp)) {
+      Button(onClick = onShareArchive, shape = CircleShape) {
         Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(6.dp))
         Text("Share")
       }
     },
     dismissButton = {
-      TextButton(onClick = onDismiss, shape = RoundedCornerShape(12.dp)) {
+      TextButton(onClick = onDismiss, shape = CircleShape) {
         Text("Close")
       }
     },
@@ -4048,7 +4176,7 @@ private fun ArchiveTextPreviewDialog(
           }
           Button(
             onClick = onExtract,
-            shape = RoundedCornerShape(12.dp),
+            shape = CircleShape,
             modifier = Modifier.padding(start = 4.dp),
           ) {
             Icon(Icons.Default.Unarchive, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -4136,7 +4264,7 @@ private fun ArchiveImagePreviewDialog(
           }
           Button(
             onClick = onExtract,
-            shape = RoundedCornerShape(12.dp),
+            shape = CircleShape,
           ) {
             Icon(Icons.Default.Unarchive, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(modifier = Modifier.width(4.dp))

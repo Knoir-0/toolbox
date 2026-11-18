@@ -603,7 +603,7 @@ fun Obd2ScannerScreen(
             containerColor = MaterialTheme.colorScheme.error,
             contentColor = MaterialTheme.colorScheme.onError,
           ),
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
           modifier = Modifier.testTag("obd2_confirm_clear_codes"),
         ) {
           Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -614,7 +614,7 @@ fun Obd2ScannerScreen(
       dismissButton = {
         TextButton(
           onClick = { showClearCodesDialog = false },
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
         ) {
           Text("Cancel")
         }
@@ -905,7 +905,9 @@ private fun ScanObdDeviceModal(
   ModalBottomSheet(
     onDismissRequest = onDismiss,
     sheetState = sheetState,
-    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
     dragHandle = {
       Box(
         modifier = Modifier.fillMaxWidth(),
@@ -926,7 +928,22 @@ private fun ScanObdDeviceModal(
         Row(
           modifier = Modifier.fillMaxWidth(),
           verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+          Box(
+            modifier = Modifier
+              .size(44.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Bluetooth,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(24.dp),
+            )
+          }
           Column(modifier = Modifier.weight(1f)) {
             Text(
               text = "Add new device",

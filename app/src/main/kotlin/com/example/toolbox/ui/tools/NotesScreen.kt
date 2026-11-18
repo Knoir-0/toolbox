@@ -3444,7 +3444,7 @@ private fun ManageLabelsDialog(
           onDismiss()
         },
         enabled = trimmed.isEmpty() || canAdd,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("manage_labels_done_button"),
       ) {
         Icon(
@@ -3459,7 +3459,7 @@ private fun ManageLabelsDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("manage_labels_cancel_button"),
       ) {
         Text("Cancel")
@@ -3567,7 +3567,7 @@ private fun BulkNoteColorDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }
@@ -3641,7 +3641,7 @@ private fun EmptyTrashConfirmDialog(
     confirmButton = {
       Button(
         onClick = onConfirmEmpty,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         colors = ButtonDefaults.buttonColors(
           containerColor = MaterialTheme.colorScheme.error,
           contentColor = MaterialTheme.colorScheme.onError,
@@ -3656,7 +3656,7 @@ private fun EmptyTrashConfirmDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }

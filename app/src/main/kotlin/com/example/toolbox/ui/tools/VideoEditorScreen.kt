@@ -891,28 +891,35 @@ fun VideoEditorScreen(
       shape = RoundedCornerShape(28.dp),
       containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
       tonalElevation = 6.dp,
-      icon = {
-        Surface(
-          shape = CircleShape,
-          color = MaterialTheme.colorScheme.errorContainer,
-          modifier = Modifier.size(44.dp),
+      title = {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(14.dp),
+          modifier = Modifier.fillMaxWidth(),
         ) {
-          Box(contentAlignment = Alignment.Center) {
+          Box(
+            modifier = Modifier
+              .size(44.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.errorContainer),
+            contentAlignment = Alignment.Center,
+          ) {
             Icon(
               imageVector = Icons.Default.Warning,
               contentDescription = null,
-              tint = MaterialTheme.colorScheme.onErrorContainer,
-              modifier = Modifier.size(22.dp),
+              tint = MaterialTheme.colorScheme.error,
+              modifier = Modifier.size(24.dp),
+            )
+          }
+          Column {
+            Text(
+              text = "Discard Video Edits?",
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
             )
           }
         }
-      },
-      title = {
-        Text(
-          text = "Discard Video Edits?",
-          style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold,
-        )
       },
       text = {
         Text(
@@ -928,7 +935,7 @@ fun VideoEditorScreen(
             pendingDiscardAction?.invoke()
             pendingDiscardAction = null
           },
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
           modifier = Modifier.testTag("confirm_discard_button"),
         ) {
           Text("Discard")
@@ -940,7 +947,7 @@ fun VideoEditorScreen(
             showDiscardDialog = false
             pendingDiscardAction = null
           },
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
         ) {
           Text("Keep Editing")
         }
@@ -2713,28 +2720,42 @@ private fun ExportVideoDialog(
     shape = RoundedCornerShape(28.dp),
     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     tonalElevation = 6.dp,
-    icon = {
-      Surface(
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.primaryContainer,
-        modifier = Modifier.size(44.dp),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
       ) {
-        Box(contentAlignment = Alignment.Center) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
           Icon(
             imageVector = Icons.Default.SaveAlt,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = Modifier.size(22.dp),
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = "Export Edited Media",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = metadata.file.name,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
           )
         }
       }
-    },
-    title = {
-      Text(
-        text = "Export Edited Media",
-        style = MaterialTheme.typography.titleLarge,
-        fontWeight = FontWeight.Bold,
-      )
     },
     text = {
       Column(
@@ -2893,7 +2914,7 @@ private fun ExportVideoDialog(
           onConfirmExport(fileNameField.text.ifBlank { "edited_video" }, options)
         },
         enabled = !audioExportBlocked && fileNameField.text.isNotBlank(),
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("confirm_export_button"),
       ) {
         Text("Export ${options.format.shortLabel}")
@@ -2902,7 +2923,7 @@ private fun ExportVideoDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }
@@ -2922,39 +2943,46 @@ private fun VideoExportProgressDialog(
     shape = RoundedCornerShape(28.dp),
     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     tonalElevation = 6.dp,
-    icon = {
-      Surface(
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.primaryContainer,
-        modifier = Modifier.size(44.dp),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
       ) {
-        Box(contentAlignment = Alignment.Center) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
           Icon(
             imageVector = Icons.Default.Movie,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = Modifier.size(22.dp),
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "Exporting ${format.shortLabel}...",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = strategy.badgeLabel,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
       }
-    },
-    title = {
-      Text(
-        text = "Exporting ${format.shortLabel}...",
-        style = MaterialTheme.typography.titleLarge,
-        fontWeight = FontWeight.Bold,
-      )
     },
     text = {
       Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
-        Text(
-          text = strategy.badgeLabel,
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         LinearProgressIndicator(
           progress = { progress.coerceIn(0f, 1f) },
           modifier = Modifier
@@ -2974,7 +3002,7 @@ private fun VideoExportProgressDialog(
     confirmButton = {
       OutlinedButton(
         onClick = onCancel,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("cancel_export_button"),
       ) {
         Text("Cancel")

@@ -68,6 +68,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -867,6 +868,44 @@ private fun AddCustomTimeSignatureDialog(
 
   AlertDialog(
     onDismissRequest = onDismiss,
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "Custom Time Signature",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "Set beats per measure and beat unit",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    },
     text = {
       CustomTimeSignatureDialogContent(
         beatsInput = beatsInput,
@@ -889,12 +928,16 @@ private fun AddCustomTimeSignatureDialog(
             onAdd(TimeSignature.fromBeatsAndNote(beats, selectedNoteValue, isCustom = true))
           }
         },
+        shape = CircleShape,
       ) {
         Text("Add")
       }
     },
     dismissButton = {
-      TextButton(onClick = onDismiss) {
+      TextButton(
+        onClick = onDismiss,
+        shape = CircleShape,
+      ) {
         Text("Cancel")
       }
     },

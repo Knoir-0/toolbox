@@ -54,6 +54,22 @@ class CameraScreenTest {
 
     // Verify main camera screen, full-viewport viewfinder, and translucent overlay controls exist
     composeTestRule.onNodeWithTag("camera_screen").assertIsDisplayed()
+    composeTestRule.activityRule.scenario.onActivity { activity ->
+      assertTrue(activity.window.decorView.findViewById<android.view.View>(android.R.id.content).rootView.keepScreenOn ||
+        activity.findViewById<android.view.View>(android.R.id.content).let { content ->
+          fun hasKeepScreenOn(v: android.view.View): Boolean {
+            if (v.keepScreenOn) return true
+            if (v is android.view.ViewGroup) {
+              for (i in 0 until v.childCount) {
+                if (hasKeepScreenOn(v.getChildAt(i))) return true
+              }
+            }
+            return false
+          }
+          hasKeepScreenOn(content)
+        }
+      )
+    }
     composeTestRule.onNodeWithTag("camera_viewfinder_stage").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_viewfinder_box").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_top_overlay").assertIsDisplayed()
@@ -221,6 +237,22 @@ class CameraScreenTest {
     // Switch back to Note mode and open Notes directly from the scanned note card
     composeTestRule.onNodeWithTag("mode_tab_NOTE").performClick()
     composeTestRule.waitForIdle()
+
+    // Tap the viewfinder to auto-focus and verify the focus indicator & hex color pill appear below the focus circle
+    composeTestRule.onNodeWithTag("camera_viewfinder_box").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_focus_indicator").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_focus_color_pill").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_focus_color_hex_text", useUnmergedTree = true).assertIsDisplayed()
+
+    // Tap the focus hex color pill to open the Color Picker tool with the color preselected, then navigate back
+    composeTestRule.onNodeWithTag("camera_focus_color_pill").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("color_picker_screen").assertIsDisplayed()
+    composeTestRule.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_screen").assertIsDisplayed()
+
     composeTestRule.onNodeWithTag("note_scanner_open_notes_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("notes_screen").assertIsDisplayed()

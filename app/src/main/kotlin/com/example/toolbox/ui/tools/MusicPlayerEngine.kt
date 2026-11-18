@@ -121,7 +121,7 @@ const val PREF_KEY_MUSIC_PLAYLISTS = "music_player_playlists"
 const val PREF_KEY_MUSIC_PLAY_STATS = "music_player_play_stats"
 const val PREF_KEY_MUSIC_INCLUDE_SAMPLES = "music_player_include_samples"
 
-val DEFAULT_MUSIC_FOLDER_NAMES: List<String> = listOf("Music", "Audio", "Recordings", "Downloads")
+val DEFAULT_MUSIC_FOLDER_NAMES: List<String> = listOf("Music", "Audio", "Recordings", "Download")
 val SINGLE_ALBUM_FOLDER_NAMES: Set<String> = setOf("Audio", "Recordings")
 
 /**
@@ -1442,7 +1442,7 @@ object MusicPlayerEngine {
         name.equals("Recordings", ignoreCase = true) -> matchedTopFolder = "Recordings"
         name.equals("Music", ignoreCase = true) -> matchedTopFolder = "Music"
         name.equals("Downloads", ignoreCase = true) || name.equals("Download", ignoreCase = true) ->
-          matchedTopFolder = "Downloads"
+          matchedTopFolder = "Download"
       }
       current = current.parentFile
     }
@@ -1464,15 +1464,15 @@ object MusicPlayerEngine {
 
   /**
    * Resolves the default music directories under [rootDirectory] (`Music`, `Audio`, `Recordings`,
-   * `Downloads`), also including Android's singular `Download` folder when present on storage.
+   * `Download`), also including plural `Downloads` folder when present on storage.
    */
   fun resolveDefaultMusicDirectories(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
   ): List<File> {
     val defaults = DEFAULT_MUSIC_FOLDER_NAMES.map { File(rootDirectory, it) }.toMutableList()
-    val androidDownloadDir = File(rootDirectory, "Download")
-    if (androidDownloadDir.exists() && androidDownloadDir.isDirectory) {
-      defaults.add(androidDownloadDir)
+    val downloadsDir = File(rootDirectory, "Downloads")
+    if (downloadsDir.exists() && downloadsDir.isDirectory) {
+      defaults.add(downloadsDir)
     }
     return defaults
   }
@@ -1996,7 +1996,7 @@ object MusicPlayerEngine {
 
     val parentName = file.parentFile?.name?.trim().orEmpty()
     val isParentTopDefaultFolder = DEFAULT_MUSIC_FOLDER_NAMES.any { it.equals(parentName, ignoreCase = true) } ||
-      parentName.equals("Download", ignoreCase = true)
+      parentName.equals("Downloads", ignoreCase = true)
     val stem = file.nameWithoutExtension.trim()
     val fallbackArtist: String
     val fallbackTitle: String
@@ -2022,7 +2022,7 @@ object MusicPlayerEngine {
 
     val fallbackAlbum = when {
       singleFolderAlbum != null -> singleFolderAlbum
-      parentName.equals("Downloads", ignoreCase = true) || parentName.equals("Download", ignoreCase = true) -> "Downloads"
+      parentName.equals("Downloads", ignoreCase = true) || parentName.equals("Download", ignoreCase = true) -> "Download"
       parentName.isNotEmpty() &&
         !parentName.equals("Music", ignoreCase = true) &&
         !parentName.equals("0", ignoreCase = true) -> parentName
@@ -2224,7 +2224,7 @@ object MusicPlayerEngine {
 
   /**
    * Resolves the full library of tracks from [initialDirectory] (if provided) or the default
-   * `/Music`, `/Audio`, `/Recordings`, and `/Downloads` folders under [rootDirectory], combining
+   * `/Music`, `/Audio`, `/Recordings`, and `/Download` folders under [rootDirectory], combining
    * or falling back to [DEFAULT_SAMPLE_TRACKS] when [includeSamples] is enabled or when no local
    * audio files exist.
    */

@@ -533,4 +533,36 @@ class CameraEngineTest {
     assertTrue(report.contains("ML Kit Vision Tagging Report (Indoor Monstera Plant)"))
     assertTrue(report.contains("Plant: 96.2%"))
   }
+
+  @Test
+  fun sampleCenterRadiusColorHex_samplesCircularRadiusAroundFocusPoint() {
+    val w = 32
+    val h = 32
+    // Fill background with dark navy (#102030) and a 9x9 center patch around (16, 16) with coral (#E65A46)
+    val pixels = IntArray(w * h) { 0xFF102030.toInt() }
+    for (y in 12..20) {
+      for (x in 12..20) {
+        pixels[y * w + x] = 0xFFE65A46.toInt()
+      }
+    }
+    val sampledCenterHex = CameraEngine.sampleCenterRadiusColorHexFromArgbPixels(
+      pixels = pixels,
+      width = w,
+      height = h,
+      normX = 16f / 31f,
+      normY = 16f / 31f,
+      radiusPx = 3,
+    )
+    assertEquals("#E65A46", sampledCenterHex)
+
+    val sampledCornerHex = CameraEngine.sampleCenterRadiusColorHexFromArgbPixels(
+      pixels = pixels,
+      width = w,
+      height = h,
+      normX = 0.05f,
+      normY = 0.05f,
+      radiusPx = 2,
+    )
+    assertEquals("#102030", sampledCornerHex)
+  }
 }

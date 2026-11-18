@@ -893,7 +893,7 @@ private fun SaveRollDialog(
       Button(
         onClick = { onSave(rollName.trim()) },
         enabled = rollName.trim().isNotEmpty(),
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("save_roll_confirm_button"),
       ) {
         Icon(
@@ -908,7 +908,7 @@ private fun SaveRollDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("save_roll_dismiss_button"),
       ) {
         Text("Cancel")
@@ -930,7 +930,8 @@ private fun SavedRollsSheet(
   ModalBottomSheet(
     onDismissRequest = onDismiss,
     sheetState = sheetState,
-    containerColor = MaterialTheme.colorScheme.surface,
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
     shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
     dragHandle = {
       Box(
@@ -957,7 +958,7 @@ private fun SavedRollsSheet(
       ) {
         Box(
           modifier = Modifier
-            .size(40.dp)
+            .size(44.dp)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.primaryContainer),
           contentAlignment = Alignment.Center,
@@ -966,14 +967,14 @@ private fun SavedRollsSheet(
             imageVector = Icons.Default.FolderOpen,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(24.dp),
           )
         }
-        Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
           Text(
             text = "Saved Rolls",
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
           )

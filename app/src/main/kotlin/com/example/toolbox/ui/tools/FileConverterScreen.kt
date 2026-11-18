@@ -1074,7 +1074,7 @@ internal fun StorageFilePickerDialog(
     confirmButton = {
       TextButton(
         onClick = onLaunchSystemPicker,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("system_file_picker_button"),
       ) {
         Icon(
@@ -1089,7 +1089,7 @@ internal fun StorageFilePickerDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Close")
       }
@@ -1257,7 +1257,7 @@ private fun ConversionCapabilityMapDialog(
     confirmButton = {
       Button(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Done")
       }

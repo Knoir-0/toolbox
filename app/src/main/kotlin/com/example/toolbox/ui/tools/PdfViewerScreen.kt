@@ -1414,27 +1414,28 @@ private fun PdfTextEditDialog(
       ) {
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(12.dp),
+          horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-          Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.size(40.dp),
+          Box(
+            modifier = Modifier
+              .size(44.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
           ) {
-            Box(contentAlignment = Alignment.Center) {
-              Icon(
-                Icons.Default.TextFields,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(20.dp),
-              )
-            }
+            Icon(
+              Icons.Default.TextFields,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(24.dp),
+            )
           }
           Column {
             Text(
               text = if (initialItem == null) "Add Text Annotation" else "Edit Text Annotation",
-              style = MaterialTheme.typography.titleMedium,
+              style = MaterialTheme.typography.titleLarge,
               fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
               text = "Customize text, size, and color",
@@ -1535,7 +1536,7 @@ private fun PdfTextEditDialog(
         ) {
           FilledTonalButton(
             onClick = onDismiss,
-            shape = RoundedCornerShape(12.dp),
+            shape = CircleShape,
             modifier = Modifier.weight(1f),
           ) {
             Text("Cancel")
@@ -1547,7 +1548,7 @@ private fun PdfTextEditDialog(
               }
             },
             enabled = textValue.isNotBlank(),
-            shape = RoundedCornerShape(12.dp),
+            shape = CircleShape,
             modifier = Modifier.weight(1f).testTag("pdf_text_confirm_button"),
           ) {
             Text(if (initialItem == null) "Add" else "Update", fontWeight = FontWeight.SemiBold)
@@ -1587,27 +1588,28 @@ private fun PdfSaveDialog(
       ) {
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(12.dp),
+          horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-          Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.size(40.dp),
+          Box(
+            modifier = Modifier
+              .size(44.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
           ) {
-            Box(contentAlignment = Alignment.Center) {
-              Icon(
-                Icons.Default.Save,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(20.dp),
-              )
-            }
+            Icon(
+              Icons.Default.Save,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(24.dp),
+            )
           }
           Column {
             Text(
               text = "Save PDF Document",
-              style = MaterialTheme.typography.titleMedium,
+              style = MaterialTheme.typography.titleLarge,
               fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
               text =
@@ -1660,7 +1662,7 @@ private fun PdfSaveDialog(
           FilledTonalButton(
             onClick = onDismiss,
             enabled = !isSaving,
-            shape = RoundedCornerShape(12.dp),
+            shape = CircleShape,
             modifier = Modifier.weight(1f),
           ) {
             Text("Cancel")
@@ -1668,7 +1670,7 @@ private fun PdfSaveDialog(
           Button(
             onClick = { onSave(fileName.trim().ifBlank { defaultNewName }, overwriteOriginal) },
             enabled = !isSaving && (overwriteOriginal || fileName.isNotBlank()),
-            shape = RoundedCornerShape(12.dp),
+            shape = CircleShape,
             colors = ButtonDefaults.buttonColors(),
             modifier = Modifier.weight(1f).testTag("pdf_confirm_save_button"),
           ) {

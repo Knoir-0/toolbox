@@ -76,6 +76,7 @@ import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Checklist
@@ -88,6 +89,7 @@ import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
@@ -505,6 +507,7 @@ fun FilesScreen(
   var selectedPaths by remember { mutableStateOf(setOf<String>()) }
   var showBulkInfoDialog by remember { mutableStateOf(false) }
   var showBulkDeleteDialog by remember { mutableStateOf(false) }
+  var itemsToMove by remember { mutableStateOf<List<FileItem>?>(null) }
   var clipboardState by remember { mutableStateOf<ClipboardState?>(null) }
 
   val selectedItems = remember(processedItems, selectedPaths) {
@@ -859,6 +862,11 @@ fun FilesScreen(
             selectedPaths = emptySet()
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             Toast.makeText(context, "${selectedItems.size} items cut", Toast.LENGTH_SHORT).show()
+          }
+        },
+        onBulkMove = {
+          if (selectedItems.isNotEmpty()) {
+            itemsToMove = selectedItems
           }
         },
         onBulkCopy = {
@@ -1216,6 +1224,7 @@ fun FilesScreen(
                           haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                           Toast.makeText(context, "\"${item.name}\" cut", Toast.LENGTH_SHORT).show()
                         },
+                        onMove = { itemsToMove = listOf(item) },
                         onCopy = {
                           clipboardState = ClipboardState(ClipboardOperation.COPY, listOf(item))
                           haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1370,6 +1379,7 @@ fun FilesScreen(
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         Toast.makeText(context, "\"${item.name}\" cut", Toast.LENGTH_SHORT).show()
                       },
+                      onMove = { itemsToMove = listOf(item) },
                       onCopy = {
                         clipboardState = ClipboardState(ClipboardOperation.COPY, listOf(item))
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1552,17 +1562,26 @@ fun FilesScreen(
     // Floating Paste Bar (shown when items are in clipboard to copy/cut)
     clipboardState?.let { clip ->
       Surface(
-        shape = RoundedCornerShape(20.dp),
+        shape = CircleShape,
         tonalElevation = 6.dp,
+        shadowElevation = 6.dp,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
         modifier = Modifier
-          .align(Alignment.BottomCenter)
-          .padding(bottom = if (isSelectionMode) 16.dp else 76.dp, start = 16.dp, end = 16.dp)
+          .align(Alignment.BottomStart)
+          .fillMaxWidth()
+          .padding(
+            start = 16.dp,
+            end = if (isSelectionMode) 16.dp else 84.dp,
+            bottom = 16.dp,
+          )
+          .height(56.dp)
           .testTag("files_paste_bar"),
       ) {
         Row(
-          modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+          modifier = Modifier
+            .fillMaxSize()
+            .padding(start = 16.dp, end = 8.dp),
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -1576,6 +1595,9 @@ fun FilesScreen(
             text = "${clip.items.size} ${if (clip.operation == ClipboardOperation.CUT) "cut" else "copied"}",
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
           )
           Button(
             onClick = {
@@ -1589,8 +1611,8 @@ fun FilesScreen(
               haptic.performHapticFeedback(HapticFeedbackType.LongPress)
               Toast.makeText(context, "Pasted $count items", Toast.LENGTH_SHORT).show()
             },
-            shape = RoundedCornerShape(12.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            shape = CircleShape,
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
             modifier = Modifier.testTag("action_paste_here"),
           ) {
             Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -1773,6 +1795,25 @@ fun FilesScreen(
         },
       )
     }
+
+    itemsToMove?.let { moveList ->
+      MoveDestinationDialog(
+        itemsToMove = moveList,
+        initialDirectory = currentDirectory,
+        storageVolumes = storageVolumes,
+        onDismiss = { itemsToMove = null },
+        onConfirmMove = { destinationDir ->
+          val count = FileManagerEngine.moveMultipleFiles(moveList.map { it.file }, destinationDir)
+          itemsToMove = null
+          isSelectionMode = false
+          selectedPaths = emptySet()
+          refreshTrigger++
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          val label = if (count == 1) "1 item" else "$count items"
+          Toast.makeText(context, "Moved $label to ${destinationDir.name.ifEmpty { destinationDir.absolutePath }}", Toast.LENGTH_SHORT).show()
+        },
+      )
+    }
   }
 }
 
@@ -1795,6 +1836,7 @@ private fun FilesHeader(
   onCloseSelection: () -> Unit = {},
   onBulkInfo: () -> Unit = {},
   onBulkCut: () -> Unit = {},
+  onBulkMove: () -> Unit = {},
   onBulkCopy: () -> Unit = {},
   onBulkDelete: () -> Unit = {},
   onToggleSearch: () -> Unit,
@@ -1951,6 +1993,16 @@ private fun FilesHeader(
                 },
               )
               DropdownMenuItem(
+                text = { Text("Move") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null) },
+                enabled = hasSelection,
+                onClick = {
+                  showOverflowMenu = false
+                  onBulkMove()
+                },
+                modifier = Modifier.testTag("action_selection_move"),
+              )
+              DropdownMenuItem(
                 text = { Text("Copy") },
                 leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                 enabled = hasSelection,
@@ -2048,17 +2100,6 @@ private fun FilesHeader(
                     onOpenSelectedGallery(singleSelectedFile)
                   },
                   modifier = Modifier.testTag("action_selection_open_gallery"),
-                )
-              }
-              if (singleSelectedFile != null && onInspectSelectedColor != null && FileManagerEngine.isImageFile(singleSelectedFile)) {
-                DropdownMenuItem(
-                  text = { Text("Inspect Color") },
-                  leadingIcon = { Icon(Icons.Default.Palette, contentDescription = null) },
-                  onClick = {
-                    showOverflowMenu = false
-                    onInspectSelectedColor(singleSelectedFile)
-                  },
-                  modifier = Modifier.testTag("action_selection_inspect_color"),
                 )
               }
               if (singleSelectedFile != null && FileManagerEngine.isTextFile(singleSelectedFile)) {
@@ -2665,6 +2706,7 @@ private fun FileListItem(
   onOpenImage: () -> Unit,
   onShare: () -> Unit,
   onCut: () -> Unit = {},
+  onMove: () -> Unit = {},
   onCopy: () -> Unit = {},
   onDuplicate: () -> Unit,
   onRename: () -> Unit,
@@ -2836,6 +2878,10 @@ private fun FileListItem(
               showMenu = false
               onCut()
             },
+            onMove = {
+              showMenu = false
+              onMove()
+            },
             onCopy = {
               showMenu = false
               onCopy()
@@ -2893,6 +2939,7 @@ private fun FileGridItem(
   onOpenImage: () -> Unit = {},
   onShare: () -> Unit,
   onCut: () -> Unit = {},
+  onMove: () -> Unit = {},
   onCopy: () -> Unit = {},
   onDuplicate: () -> Unit,
   onRename: () -> Unit,
@@ -3062,6 +3109,10 @@ private fun FileGridItem(
               showMenu = false
               onCut()
             },
+            onMove = {
+              showMenu = false
+              onMove()
+            },
             onCopy = {
               showMenu = false
               onCopy()
@@ -3143,6 +3194,7 @@ private fun FileActionMenu(
   onOpenImage: () -> Unit,
   onShare: () -> Unit,
   onCut: () -> Unit = {},
+  onMove: () -> Unit = {},
   onCopy: () -> Unit = {},
   onDuplicate: () -> Unit,
   onRename: () -> Unit,
@@ -3203,12 +3255,6 @@ private fun FileActionMenu(
           leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
           onClick = onOpenGallery,
           modifier = Modifier.testTag("action_open_gallery"),
-        )
-        DropdownMenuItem(
-          text = { Text("Inspect Color") },
-          leadingIcon = { Icon(Icons.Default.Palette, contentDescription = null) },
-          onClick = onInspectColor,
-          modifier = Modifier.testTag("action_inspect_color"),
         )
       } else if (AudioEditorEngine.isSupportedAudioFile(item.file) && !VideoEditorEngine.isVideoFile(item.file)) {
         DropdownMenuItem(
@@ -3304,6 +3350,12 @@ private fun FileActionMenu(
       leadingIcon = { Icon(Icons.Default.ContentCut, contentDescription = null) },
       onClick = onCut,
       modifier = Modifier.testTag("action_cut"),
+    )
+    DropdownMenuItem(
+      text = { Text("Move") },
+      leadingIcon = { Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null) },
+      onClick = onMove,
+      modifier = Modifier.testTag("action_move"),
     )
     DropdownMenuItem(
       text = { Text("Copy") },
@@ -3429,7 +3481,46 @@ private fun CreateFolderDialog(
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text("New Folder") },
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.CreateNewFolder,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "New Folder",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "Create in ${parentDir.name.ifEmpty { parentDir.absolutePath }}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+    },
     text = {
       Column {
         OutlinedTextField(
@@ -3437,6 +3528,7 @@ private fun CreateFolderDialog(
           onValueChange = { name = it },
           label = { Text("Folder Name") },
           singleLine = true,
+          shape = RoundedCornerShape(14.dp),
           isError = validationError != null,
           supportingText = {
             if (validationError != null) {
@@ -3451,12 +3543,16 @@ private fun CreateFolderDialog(
       Button(
         onClick = { onConfirm(name.trim()) },
         enabled = name.trim().isNotEmpty() && validationError == null,
+        shape = CircleShape,
       ) {
         Text("Create")
       }
     },
     dismissButton = {
-      TextButton(onClick = onDismiss) {
+      TextButton(
+        onClick = onDismiss,
+        shape = CircleShape,
+      ) {
         Text("Cancel")
       }
     },
@@ -3477,7 +3573,46 @@ private fun CreateFileDialog(
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text("New File") },
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.NoteAdd,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "New File",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "Create in ${parentDir.name.ifEmpty { parentDir.absolutePath }}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+    },
     text = {
       Column(modifier = Modifier.fillMaxWidth()) {
         OutlinedTextField(
@@ -3485,6 +3620,7 @@ private fun CreateFileDialog(
           onValueChange = { name = it },
           label = { Text("File Name (e.g. notes.txt)") },
           singleLine = true,
+          shape = RoundedCornerShape(14.dp),
           isError = validationError != null,
           supportingText = {
             if (validationError != null) {
@@ -3519,6 +3655,7 @@ private fun CreateFileDialog(
           value = initialContent,
           onValueChange = { initialContent = it },
           label = { Text("Initial Content (Optional)") },
+          shape = RoundedCornerShape(14.dp),
           modifier = Modifier
             .fillMaxWidth()
             .height(100.dp),
@@ -3530,12 +3667,16 @@ private fun CreateFileDialog(
       Button(
         onClick = { onConfirm(name.trim(), initialContent) },
         enabled = name.trim().isNotEmpty() && validationError == null,
+        shape = CircleShape,
       ) {
         Text("Create")
       }
     },
     dismissButton = {
-      TextButton(onClick = onDismiss) {
+      TextButton(
+        onClick = onDismiss,
+        shape = CircleShape,
+      ) {
         Text("Cancel")
       }
     },
@@ -3771,7 +3912,7 @@ internal fun RenameFileDialog(
       Button(
         onClick = { onConfirm(currentText.trim()) },
         enabled = canConfirm,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         colors = ButtonDefaults.buttonColors(
           containerColor = MaterialTheme.colorScheme.primary,
           contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -3785,7 +3926,7 @@ internal fun RenameFileDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }
@@ -3804,14 +3945,50 @@ internal fun DeleteConfirmDialog(
     shape = RoundedCornerShape(28.dp),
     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     tonalElevation = 6.dp,
-    title = { Text("Delete ${if (item.isDirectory) "Folder" else "File"}?") },
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.errorContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Delete,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "Delete ${if (item.isDirectory) "Folder" else "File"}?",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = item.name,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+    },
     text = {
       Text("Are you sure you want to delete \"${item.name}\"? This action cannot be undone.")
     },
     confirmButton = {
       Button(
         onClick = onConfirm,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         colors = ButtonDefaults.buttonColors(
           containerColor = MaterialTheme.colorScheme.error,
           contentColor = MaterialTheme.colorScheme.onError,
@@ -3823,7 +4000,7 @@ internal fun DeleteConfirmDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }
@@ -3940,7 +4117,7 @@ internal fun BulkInfoDialog(
     confirmButton = {
       Button(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Close")
       }
@@ -4043,7 +4220,7 @@ internal fun BulkDeleteConfirmDialog(
     confirmButton = {
       Button(
         onClick = onConfirm,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         colors = ButtonDefaults.buttonColors(
           containerColor = MaterialTheme.colorScheme.error,
           contentColor = MaterialTheme.colorScheme.onError,
@@ -4057,7 +4234,254 @@ internal fun BulkDeleteConfirmDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
+      ) {
+        Text("Cancel")
+      }
+    },
+  )
+}
+
+@Composable
+internal fun MoveDestinationDialog(
+  itemsToMove: List<FileItem>,
+  initialDirectory: File,
+  storageVolumes: List<StorageVolumeInfo>,
+  onDismiss: () -> Unit,
+  onConfirmMove: (File) -> Unit,
+) {
+  val rootDir = remember { FileManagerEngine.getUserRootDirectory() }
+  var currentDir by remember {
+    mutableStateOf(
+      if (initialDirectory.exists() && initialDirectory.isDirectory) {
+        initialDirectory
+      } else {
+        rootDir
+      }
+    )
+  }
+  var searchQuery by remember { mutableStateOf("") }
+
+  val movingDirectories = remember(itemsToMove) {
+    itemsToMove.filter { it.isDirectory }.map { it.file }
+  }
+
+  val subfolders = remember(currentDir, searchQuery, movingDirectories) {
+    val rawList = currentDir.listFiles()?.toList() ?: emptyList()
+    rawList
+      .filter { it.isDirectory && !it.name.startsWith(".") }
+      .filter { dir ->
+        movingDirectories.none { movingDir ->
+          FileManagerEngine.isSameOrDescendant(dir, movingDir)
+        }
+      }
+      .filter {
+        searchQuery.isBlank() || it.name.contains(searchQuery.trim(), ignoreCase = true)
+      }
+      .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+  }
+
+  val quickFolders = remember(rootDir, storageVolumes) {
+    buildList {
+      for (vol in storageVolumes) {
+        add(vol.name to vol.file)
+      }
+      add("Download" to File(rootDir, "Download"))
+      add("Documents" to File(rootDir, "Documents"))
+      add("Pictures" to File(rootDir, "Pictures"))
+    }.distinctBy { it.second.absolutePath }
+  }
+
+  val canMoveHere = remember(currentDir, movingDirectories) {
+    currentDir.exists() &&
+      currentDir.isDirectory &&
+      movingDirectories.none { movingDir ->
+        FileManagerEngine.isSameOrDescendant(currentDir, movingDir)
+      }
+  }
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    modifier = Modifier.testTag("move_destination_dialog"),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.DriveFileMove,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = if (itemsToMove.size == 1) "Move \"${itemsToMove.first().name}\"" else "Move ${itemsToMove.size} Items",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          Text(
+            text = currentDir.absolutePath,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .heightIn(max = 420.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          for ((label, folder) in quickFolders) {
+            FilterChip(
+              selected = currentDir.absolutePath == folder.absolutePath,
+              onClick = {
+                if (folder.exists() || folder.mkdirs()) {
+                  currentDir = folder
+                }
+              },
+              label = { Text(label) },
+              shape = RoundedCornerShape(20.dp),
+            )
+          }
+        }
+
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          val parent = currentDir.parentFile
+          IconButton(
+            onClick = { if (parent != null && parent.canRead()) currentDir = parent },
+            enabled = parent != null && parent.canRead(),
+            modifier = Modifier.testTag("move_dialog_navigate_up"),
+          ) {
+            Icon(Icons.Default.ArrowUpward, contentDescription = "Parent folder")
+          }
+
+          OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Filter folders...") },
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            trailingIcon = if (searchQuery.isNotEmpty()) {
+              {
+                IconButton(onClick = { searchQuery = "" }) {
+                  Icon(Icons.Default.Clear, contentDescription = "Clear search")
+                }
+              }
+            } else null,
+            modifier = Modifier.weight(1f),
+          )
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        if (subfolders.isEmpty()) {
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .height(140.dp),
+            contentAlignment = Alignment.Center,
+          ) {
+            Text(
+              text = "No subfolders in this directory",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        } else {
+          LazyColumn(
+            modifier = Modifier
+              .fillMaxWidth()
+              .weight(1f, fill = false),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            items(subfolders, key = { it.absolutePath }) { folder ->
+              Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                  containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                ),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .clip(RoundedCornerShape(12.dp))
+                  .clickable { currentDir = folder }
+                  .testTag("move_folder_item_${folder.name}"),
+              ) {
+                Row(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Folder,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp),
+                  )
+                  Text(
+                    text = folder.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                  )
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = { onConfirmMove(currentDir) },
+        enabled = canMoveHere,
+        shape = CircleShape,
+        modifier = Modifier.testTag("confirm_move_here_button"),
+      ) {
+        Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Move here")
+      }
+    },
+    dismissButton = {
+      TextButton(
+        onClick = onDismiss,
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }
@@ -4088,15 +4512,33 @@ internal fun FileDetailsDialog(
 
   AlertDialog(
     onDismissRequest = onDismiss,
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
     title = {
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        FileIconBox(item = item, size = 32.dp)
-        Spacer(modifier = Modifier.width(10.dp))
-        Text(
-          text = item.name,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        FileIconBox(item = item, size = 44.dp)
+        Column(modifier = Modifier.weight(1f)) {
+          Text(
+            text = item.name,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          Text(
+            text = if (details.isDirectory) "Folder • ${details.sizeFormatted}" else "${details.mimeType} • ${details.sizeFormatted}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
       }
     },
     text = {
@@ -4133,7 +4575,10 @@ internal fun FileDetailsDialog(
       }
     },
     confirmButton = {
-      Button(onClick = onDismiss) {
+      Button(
+        onClick = onDismiss,
+        shape = CircleShape,
+      ) {
         Text("Close")
       }
     },
@@ -4145,13 +4590,17 @@ internal fun FileDetailsDialog(
               onDismiss()
               onOpenWith()
             },
+            shape = CircleShape,
             modifier = Modifier.testTag("details_action_open_with"),
           ) {
             Icon(Icons.Default.Apps, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(modifier = Modifier.width(6.dp))
             Text("Open with")
           }
-          OutlinedButton(onClick = onShare) {
+          OutlinedButton(
+            onClick = onShare,
+            shape = CircleShape,
+          ) {
             Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(modifier = Modifier.width(6.dp))
             Text("Share")
@@ -4234,8 +4683,8 @@ internal fun TextEditorDialog(
       modifier = Modifier
         .fillMaxSize()
         .padding(12.dp),
-      shape = RoundedCornerShape(16.dp),
-      color = MaterialTheme.colorScheme.surface,
+      shape = RoundedCornerShape(28.dp),
+      color = MaterialTheme.colorScheme.surfaceContainerHigh,
       tonalElevation = 6.dp,
     ) {
       Column(modifier = Modifier.fillMaxSize()) {
@@ -4245,21 +4694,33 @@ internal fun TextEditorDialog(
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 10.dp),
           verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-          IconButton(onClick = onDismiss) {
-            Icon(Icons.Default.Close, contentDescription = "Close")
+          Box(
+            modifier = Modifier
+              .size(44.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Description,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(24.dp),
+            )
           }
           Column(modifier = Modifier.weight(1f)) {
             Text(
               text = file.name,
-              style = MaterialTheme.typography.titleMedium,
+              style = MaterialTheme.typography.titleLarge,
               fontWeight = FontWeight.Bold,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
             )
             Text(
               text = if (hasChanges) "Unsaved changes*" else "Saved",
-              style = MaterialTheme.typography.labelSmall,
+              style = MaterialTheme.typography.bodySmall,
               color = if (hasChanges) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
@@ -4277,10 +4738,15 @@ internal fun TextEditorDialog(
               isSaving = false
             },
             enabled = hasChanges && !isSaving,
+            shape = CircleShape,
           ) {
             Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(6.dp))
             Text("Save")
+          }
+
+          IconButton(onClick = onDismiss) {
+            Icon(Icons.Default.Close, contentDescription = "Close")
           }
         }
 

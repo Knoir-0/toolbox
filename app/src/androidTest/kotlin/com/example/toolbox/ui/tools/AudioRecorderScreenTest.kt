@@ -152,10 +152,10 @@ class AudioRecorderScreenTest {
       formatSelectorBounds.bottom <= instructionTextBounds.top + 4f,
     )
 
-    // Verify default folder pills (Audio, Recordings, Downloads) and filter button are displayed
+    // Verify default folder pills (Audio, Recordings, Download) and filter button are displayed
     composeTestRule.onNodeWithTag("folder_pill_Audio").assertIsDisplayed()
     composeTestRule.onNodeWithTag("folder_pill_Recordings").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("folder_pill_Downloads").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_pill_Download").assertIsDisplayed()
     composeTestRule.onNodeWithTag("audio_recorder_filter_button").assertIsDisplayed()
 
     // Default format is M4A; open format dropdown and swap to WAV
@@ -188,9 +188,9 @@ class AudioRecorderScreenTest {
     assertTrue("Expected recording to be saved into the selected Recordings folder", recordingsFolderFiles.isNotEmpty())
     File(testAudioDir.parentFile, "Recordings").deleteRecursively()
 
-    composeTestRule.onNodeWithTag("folder_pill_Downloads").performClick()
+    composeTestRule.onNodeWithTag("folder_pill_Download").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithText("No recordings in /Downloads").assertIsDisplayed()
+    composeTestRule.onNodeWithText("No recordings in /Download").assertIsDisplayed()
 
     composeTestRule.onNodeWithTag("folder_pill_Audio").performClick()
     composeTestRule.waitForIdle()

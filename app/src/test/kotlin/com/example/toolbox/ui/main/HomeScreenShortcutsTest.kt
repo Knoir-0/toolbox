@@ -139,12 +139,12 @@ class HomeScreenShortcutsTest {
 
     // Folder shortcut uses the folder name and folder icon vector
     assertEquals(
-      "Downloads",
-      resolveStandaloneTaskLabel(standaloneTool = Tool.FILES, initialFolder = "/storage/emulated/0/Downloads"),
+      "Download",
+      resolveStandaloneTaskLabel(standaloneTool = Tool.FILES, initialFolder = "/storage/emulated/0/Download"),
     )
     assertEquals(
       FOLDER_SHORTCUT_ICON,
-      resolveStandaloneTaskIconVector(standaloneTool = Tool.FILES, initialFolder = "/storage/emulated/0/Downloads"),
+      resolveStandaloneTaskIconVector(standaloneTool = Tool.FILES, initialFolder = "/storage/emulated/0/Download"),
     )
   }
 }

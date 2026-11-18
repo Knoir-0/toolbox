@@ -1261,12 +1261,12 @@ private fun SearchResultInspectionDialog(
         Row(
           modifier = Modifier.fillMaxWidth(),
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(12.dp),
+          horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
           if (parsedSwatchColor != null) {
             Box(
               modifier = Modifier
-                .size(42.dp)
+                .size(44.dp)
                 .clip(CircleShape)
                 .background(parsedSwatchColor)
                 .border(1.5.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
@@ -1274,7 +1274,7 @@ private fun SearchResultInspectionDialog(
           } else {
             Box(
               modifier = Modifier
-                .size(42.dp)
+                .size(44.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.primaryContainer),
               contentAlignment = Alignment.Center,
@@ -1282,8 +1282,8 @@ private fun SearchResultInspectionDialog(
               Icon(
                 imageVector = item.tool.icon,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(22.dp),
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp),
               )
             }
           }
@@ -1291,15 +1291,14 @@ private fun SearchResultInspectionDialog(
           Column(modifier = Modifier.weight(1f)) {
             Text(
               text = item.title,
-              style = MaterialTheme.typography.titleMedium,
+              style = MaterialTheme.typography.titleLarge,
               fontWeight = FontWeight.Bold,
               color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
               text = "${item.tool.title} • ${item.badgeLabel}",
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.primary,
-              fontWeight = FontWeight.SemiBold,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
 
@@ -1385,6 +1384,7 @@ private fun SearchResultInspectionDialog(
           if (item.copyableValue != null) {
             OutlinedButton(
               onClick = { onCopyValue(item.copyableValue) },
+              shape = CircleShape,
               modifier = Modifier.testTag("search_dialog_copy_button"),
             ) {
               Icon(
@@ -1396,13 +1396,17 @@ private fun SearchResultInspectionDialog(
               Text(if (isCopied) "Copied" else "Copy")
             }
           } else {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+              onClick = onDismiss,
+              shape = CircleShape,
+            ) {
               Text("Close")
             }
           }
 
           Button(
             onClick = onOpenTool,
+            shape = CircleShape,
             modifier = Modifier
               .semantics { contentDescription = "Open ${item.tool.title}" }
               .testTag("search_dialog_open_tool_button"),

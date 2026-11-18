@@ -72,7 +72,7 @@ Consistent rounding gives Toolbox its signature modern, friendly, and cohesive a
 - **Device & Category Pills / Filter Chips**: `RoundedCornerShape(20.dp)` or `CircleShape`
 - **Item Cards (Lists & Grids)**: `RoundedCornerShape(12.dp)` to `RoundedCornerShape(14.dp)`
 - **Text Input Fields (`OutlinedTextField`)**: `RoundedCornerShape(14.dp)` or `RoundedCornerShape(16.dp)`
-- **Buttons (Dialog Confirm / Dismiss)**: `RoundedCornerShape(12.dp)` to `RoundedCornerShape(14.dp)`
+- **Buttons (Dialog Confirm / Dismiss & Action Buttons)**: `CircleShape` (fully rounded pill shape, matching the rest of the app's buttons)
 - **Floating Action Buttons (FAB & Mini-FAB)**: `CircleShape`
 - **Header Icon Badges**: `CircleShape` (fixed `40.dp` container in `colorScheme.primaryContainer` with a `20.dp` icon tinted `colorScheme.primary`)
 - **Sliders & Trackbars (`SlimDotSlider`)**: Slim track (`4.dp` to `6.dp` height) with a circular dot drag handle (`CircleShape`, `16.dp` to `20.dp`). Never use the default thick Material 3 vertical bar thumb.
@@ -132,15 +132,15 @@ ToolboxTopBar(
 
 ---
 
-### 5.2 Dialog Design Pattern (e.g. Rename, Create, Inspect)
+### 5.2 Dialog Design Pattern (e.g. Rename, Create, Inspect, Confirm)
 Dialogs must not be bare or plain. They must feature:
-1. **28.dp rounded corners** and `surfaceContainerHigh` background.
-2. **Circular icon badge** in the header (`primaryContainer` with primary tint).
-3. **Context / Preview Card** showing the item being acted on so the user never loses context.
+1. **28.dp rounded corners** and `surfaceContainerHigh` background (`tonalElevation = 6.dp`).
+2. **Circular icon badge, title, and optional subtext** in the header (`44.dp` `CircleShape` in `primaryContainer` with `24.dp` `primary` tint, or `errorContainer` with `error` tint for destructive confirmations; `titleLarge` Bold title and optional `bodySmall` `onSurfaceVariant` subtext in a horizontal `Row` — never use `AlertDialog`'s centered `icon` slot).
+3. **Context / Preview Card** showing the item being acted on when relevant so the user never loses context.
 4. **Rounded text field** (`14.dp` shape) with leading icon, clear button (`Icons.Default.Clear`), auto-focus, and keyboard action support.
 5. **Intelligent Selection**: When editing file names, pre-select the filename stem excluding the extension (`TextRange(0, stem.length)`).
 6. **Helper Badges**: Warnings for missing file extensions with one-tap restore pills.
-7. **Rounded Buttons**: Confirm button with icon (`Icons.Default.Check`) and label, enabled only when valid and modified.
+7. **Rounded Action Buttons**: Confirm and dismiss buttons using `CircleShape` (matching the rest of the app's buttons), enabled only when valid and modified.
 
 ```kotlin
 AlertDialog(
@@ -214,7 +214,7 @@ AlertDialog(
     Button(
       onClick = { onConfirm(...) },
       enabled = canConfirm,
-      shape = RoundedCornerShape(12.dp),
+      shape = CircleShape,
     ) {
       Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
       Spacer(modifier = Modifier.width(6.dp))
@@ -224,7 +224,7 @@ AlertDialog(
   dismissButton = {
     TextButton(
       onClick = onDismiss,
-      shape = RoundedCornerShape(12.dp),
+      shape = CircleShape,
     ) {
       Text("Cancel")
     }

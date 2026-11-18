@@ -1110,18 +1110,28 @@ private fun HistorySheetContent(
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Row(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Icon(
-          imageVector = Icons.Default.History,
-          contentDescription = null,
-          tint = MaterialTheme.colorScheme.primary,
-        )
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.History,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
         Text(
           text = "Calculation History",
           style = MaterialTheme.typography.titleLarge,
           fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onSurface,
         )
       }
 

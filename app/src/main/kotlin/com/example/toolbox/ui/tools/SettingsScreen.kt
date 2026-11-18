@@ -2923,12 +2923,44 @@ fun SettingsScreen(
     if (showResetConfirmDialog) {
       AlertDialog(
         onDismissRequest = { showResetConfirmDialog = false },
+        shape = RoundedCornerShape(28.dp),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 6.dp,
         modifier = Modifier.testTag("reset_settings_confirm_dialog"),
         title = {
-          Text(
-            text = "Reset All Settings?",
-            fontWeight = FontWeight.Bold,
-          )
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Box(
+              modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.errorContainer),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Default.RestartAlt,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(24.dp),
+              )
+            }
+            Column {
+              Text(
+                text = "Reset All Settings?",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Text(
+                text = "Restore defaults across all tools",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
         },
         text = {
           Text(
@@ -2949,6 +2981,7 @@ fun SettingsScreen(
               backupRestoreStatus = null
               showResetConfirmDialog = false
             },
+            shape = CircleShape,
             colors = ButtonDefaults.buttonColors(
               containerColor = MaterialTheme.colorScheme.error,
               contentColor = MaterialTheme.colorScheme.onError,
@@ -2961,6 +2994,7 @@ fun SettingsScreen(
         dismissButton = {
           TextButton(
             onClick = { showResetConfirmDialog = false },
+            shape = CircleShape,
             modifier = Modifier.testTag("cancel_reset_settings_button"),
           ) {
             Text("Cancel")

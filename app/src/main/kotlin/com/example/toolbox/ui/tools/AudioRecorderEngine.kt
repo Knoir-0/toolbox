@@ -23,11 +23,11 @@ const val PREF_PREFIX_AUDIO_FOLDER_SORT_GROUP = "audio_folder_sort_group_"
 
 const val DEFAULT_AUDIO_FOLDER_NAME = "Audio"
 const val DEFAULT_RECORDINGS_FOLDER_NAME = "Recordings"
-const val DEFAULT_DOWNLOADS_FOLDER_NAME = "Downloads"
+const val DEFAULT_DOWNLOADS_FOLDER_NAME = "Download"
 
 const val DEFAULT_AUDIO_FOLDER_DISPLAY = "/Audio"
 const val DEFAULT_RECORDINGS_FOLDER_DISPLAY = "/Recordings"
-const val DEFAULT_DOWNLOADS_FOLDER_DISPLAY = "/Downloads"
+const val DEFAULT_DOWNLOADS_FOLDER_DISPLAY = "/Download"
 
 val DEFAULT_AUDIO_RECORDER_FOLDER_NAMES: List<String> = listOf(
   DEFAULT_AUDIO_FOLDER_NAME,
@@ -42,7 +42,7 @@ val DEFAULT_AUDIO_RECORDER_FOLDER_DISPLAY_PATHS: List<String> = listOf(
 )
 
 /**
- * Default folders accessed by the Audio Recorder tool (`Audio`, `Recordings`, `Downloads`).
+ * Default folders accessed by the Audio Recorder tool (`Audio`, `Recordings`, `Download`).
  */
 enum class AudioRecorderDefaultFolder(
   val folderName: String,
@@ -72,7 +72,7 @@ enum class AudioRecorderDefaultFolder(
         cleaned.equals(DEFAULT_AUDIO_FOLDER_NAME, ignoreCase = true) -> AUDIO
         cleaned.equals(DEFAULT_RECORDINGS_FOLDER_NAME, ignoreCase = true) -> RECORDINGS
         cleaned.equals(DEFAULT_DOWNLOADS_FOLDER_NAME, ignoreCase = true) ||
-          cleaned.equals("Download", ignoreCase = true) -> DOWNLOADS
+          cleaned.equals("Downloads", ignoreCase = true) -> DOWNLOADS
         else -> null
       }
     }
@@ -397,7 +397,7 @@ object AudioRecorderEngine {
   }
 
   /**
-   * Resolves the default directories accessed by the Audio Recorder tool (`Audio`, `Recordings`, `Downloads`).
+   * Resolves the default directories accessed by the Audio Recorder tool (`Audio`, `Recordings`, `Download`).
    */
   fun resolveDefaultDirectories(
     userRoot: File = FileManagerEngine.getUserRootDirectory(),
@@ -413,7 +413,7 @@ object AudioRecorderEngine {
   }
 
   /**
-   * Resolves a folder input string (such as `/Audio`, `Audio`, `/Recordings`, `/Downloads`, `/Music/Clips`, or an absolute path)
+   * Resolves a folder input string (such as `/Audio`, `Audio`, `/Recordings`, `/Download`, `/Music/Clips`, or an absolute path)
    * into a concrete [File] directory.
    */
   fun resolveDirectoryInput(
@@ -442,7 +442,7 @@ object AudioRecorderEngine {
       return directFile
     }
 
-    // Treat "/Audio" or "Audio" or "/Recordings" or "/Downloads" as relative to userRoot (/storage/emulated/0)
+    // Treat "/Audio" or "Audio" or "/Recordings" or "/Download" as relative to userRoot (/storage/emulated/0)
     val relativeSubpath = trimmed.trimStart('/')
     val candidateInRoot = File(userRoot, relativeSubpath)
     if ((candidateInRoot.exists() && candidateInRoot.canWrite()) || candidateInRoot.mkdirs()) {

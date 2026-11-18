@@ -73,6 +73,7 @@ import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.ZoomInMap
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -246,7 +247,39 @@ fun ImageEditorScreen(
   if (showDiscardDialog) {
     AlertDialog(
       onDismissRequest = { showDiscardDialog = false },
-      title = { Text("Discard Unsaved Changes?") },
+      shape = RoundedCornerShape(28.dp),
+      containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+      tonalElevation = 6.dp,
+      title = {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(14.dp),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Box(
+            modifier = Modifier
+              .size(44.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.errorContainer),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Warning,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.error,
+              modifier = Modifier.size(24.dp),
+            )
+          }
+          Column {
+            Text(
+              text = "Discard Unsaved Changes?",
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+          }
+        }
+      },
       text = { Text("You have uncommitted modifications that will be lost.") },
       confirmButton = {
         Button(
@@ -255,12 +288,16 @@ fun ImageEditorScreen(
             pendingDiscardAction?.invoke()
             pendingDiscardAction = null
           },
+          shape = CircleShape,
         ) {
           Text("Discard")
         }
       },
       dismissButton = {
-        OutlinedButton(onClick = { showDiscardDialog = false }) {
+        OutlinedButton(
+          onClick = { showDiscardDialog = false },
+          shape = CircleShape,
+        ) {
           Text("Keep Editing")
         }
       },
@@ -1046,7 +1083,44 @@ fun ImageEditorContent(
   if (showAddTextDialog) {
     AlertDialog(
       onDismissRequest = { showAddTextDialog = false },
-      title = { Text("Add Text Caption") },
+      shape = RoundedCornerShape(28.dp),
+      containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+      tonalElevation = 6.dp,
+      title = {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(14.dp),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Box(
+            modifier = Modifier
+              .size(44.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Default.TextFields,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(24.dp),
+            )
+          }
+          Column {
+            Text(
+              text = "Add Text Caption",
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+              text = "Place a text overlay onto the canvas",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+      },
       text = {
         Column {
           OutlinedTextField(
@@ -1055,6 +1129,7 @@ fun ImageEditorContent(
             label = { Text("Text") },
             placeholder = { Text("Enter caption...") },
             singleLine = true,
+            shape = RoundedCornerShape(14.dp),
             modifier = Modifier.fillMaxWidth(),
           )
         }
@@ -1075,12 +1150,16 @@ fun ImageEditorContent(
             }
             showAddTextDialog = false
           },
+          shape = CircleShape,
         ) {
           Text("Add")
         }
       },
       dismissButton = {
-        OutlinedButton(onClick = { showAddTextDialog = false }) {
+        OutlinedButton(
+          onClick = { showAddTextDialog = false },
+          shape = CircleShape,
+        ) {
           Text("Cancel")
         }
       },

@@ -4697,7 +4697,7 @@ private fun VoicingInspectorDialog(
     confirmButton = {
       Button(
         onClick = onPinVoicing,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("inspector_pin_voicing_button"),
       ) {
         Icon(Icons.Default.BookmarkAdd, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -4708,7 +4708,7 @@ private fun VoicingInspectorDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Close")
       }
@@ -4829,7 +4829,7 @@ private fun ProgressionNameDialog(
       Button(
         onClick = { onConfirm(textFieldValue.text.trim()) },
         enabled = canConfirm,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(6.dp))
@@ -4839,7 +4839,7 @@ private fun ProgressionNameDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }

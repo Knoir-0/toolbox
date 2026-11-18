@@ -1464,6 +1464,186 @@ object CameraEngine {
   }
 
   /**
+   * Computes a deterministic `#RRGGBB` hex color for normalized focus coordinates ([normX], [normY])
+   * in `0.0f..1.0f` when a live hardware camera bitmap is unavailable.
+   */
+  fun sampleSyntheticFocusColorHex(
+    normX: Float,
+    normY: Float,
+    lensFacing: CameraLensFacing = CameraLensFacing.BACK,
+    filter: CameraColorFilter = CameraColorFilter.NONE,
+    exposureEv: Float = 0f,
+  ): String {
+    val clampedX = normX.coerceIn(0f, 1f)
+    val clampedY = normY.coerceIn(0f, 1f)
+    val baseR: Int
+    val baseG: Int
+    val baseB: Int
+    if (clampedY >= 0.65f) {
+      baseR = 42
+      baseG = 68
+      baseB = 64
+    } else {
+      val t = (clampedY / 0.65f).coerceIn(0f, 1f)
+      val topR = if (lensFacing == CameraLensFacing.BACK) 34 else 72
+      val topG = if (lensFacing == CameraLensFacing.BACK) 56 else 48
+      val topB = if (lensFacing == CameraLensFacing.BACK) 112 else 118
+      val botR = if (lensFacing == CameraLensFacing.BACK) 218 else 186
+      val botG = if (lensFacing == CameraLensFacing.BACK) 132 else 120
+      val botB = if (lensFacing == CameraLensFacing.BACK) 110 else 168
+      val horizShift = ((clampedX - 0.5f) * 24f).roundToInt()
+      baseR = (topR + (botR - topR) * t + horizShift).roundToInt().coerceIn(0, 255)
+      baseG = (topG + (botG - topG) * t).roundToInt().coerceIn(0, 255)
+      baseB = (topB + (botB - topB) * t - horizShift).roundToInt().coerceIn(0, 255)
+    }
+    val (r, g, b) = applyFilterAndExposureToRgb(
+      red = baseR,
+      green = baseG,
+      blue = baseB,
+      filter = filter,
+      exposureEv = exposureEv,
+    )
+    return String.format(Locale.US, "#%02X%02X%02X", r, g, b)
+  }
+
+  /**
+   * Samples the average RGB color of the pixels within a small circular [radiusPx] around
+   * normalized coordinates ([normX], [normY]) in `0.0f..1.0f` of an ARGB [pixels] buffer
+   * (`width` × `height`), applying [filter] and [exposureEv], and returns its uppercase `#RRGGBB` hex string.
+   */
+  fun sampleCenterRadiusColorHexFromArgbPixels(
+    pixels: IntArray,
+    width: Int,
+    height: Int,
+    normX: Float,
+    normY: Float,
+    radiusPx: Int = 6,
+    filter: CameraColorFilter = CameraColorFilter.NONE,
+    exposureEv: Float = 0f,
+  ): String {
+    if (width <= 0 || height <= 0 || pixels.size < width * height) {
+      return sampleSyntheticFocusColorHex(normX, normY, filter = filter, exposureEv = exposureEv)
+    }
+    val clampedX = normX.coerceIn(0f, 1f)
+    val clampedY = normY.coerceIn(0f, 1f)
+    val cx = (clampedX * (width - 1)).roundToInt().coerceIn(0, width - 1)
+    val cy = (clampedY * (height - 1)).roundToInt().coerceIn(0, height - 1)
+    val rPx = radiusPx.coerceIn(0, 32)
+    val rSq = rPx * rPx
+
+    val minX = (cx - rPx).coerceAtLeast(0)
+    val maxX = (cx + rPx).coerceAtMost(width - 1)
+    val minY = (cy - rPx).coerceAtLeast(0)
+    val maxY = (cy + rPx).coerceAtMost(height - 1)
+
+    var sumR = 0L
+    var sumG = 0L
+    var sumB = 0L
+    var count = 0
+
+    for (y in minY..maxY) {
+      val dy = y - cy
+      val rowOffset = y * width
+      for (x in minX..maxX) {
+        val dx = x - cx
+        if (dx * dx + dy * dy <= rSq) {
+          val argb = pixels[rowOffset + x]
+          sumR += (argb shr 16) and 0xFF
+          sumG += (argb shr 8) and 0xFF
+          sumB += argb and 0xFF
+          count++
+        }
+      }
+    }
+
+    if (count <= 0) {
+      return sampleSyntheticFocusColorHex(normX, normY, filter = filter, exposureEv = exposureEv)
+    }
+
+    val avgR = (sumR.toFloat() / count).roundToInt().coerceIn(0, 255)
+    val avgG = (sumG.toFloat() / count).roundToInt().coerceIn(0, 255)
+    val avgB = (sumB.toFloat() / count).roundToInt().coerceIn(0, 255)
+    val (finalR, finalG, finalB) = if (filter != CameraColorFilter.NONE || exposureEv != 0f) {
+      applyFilterAndExposureToRgb(avgR, avgG, avgB, filter, exposureEv)
+    } else {
+      Triple(avgR, avgG, avgB)
+    }
+    return String.format(Locale.US, "#%02X%02X%02X", finalR, finalG, finalB)
+  }
+
+  /**
+   * Samples the average RGB color of the pixels within a small circular [radiusPx] around
+   * normalized coordinates ([normX], [normY]) of [bitmap] and returns its uppercase `#RRGGBB` hex string.
+   */
+  fun sampleCenterRadiusColorHexFromBitmap(
+    bitmap: Bitmap,
+    normX: Float,
+    normY: Float,
+    radiusPx: Int = 6,
+    filter: CameraColorFilter = CameraColorFilter.NONE,
+    exposureEv: Float = 0f,
+  ): String {
+    return try {
+      val bw = bitmap.width
+      val bh = bitmap.height
+      if (bw <= 0 || bh <= 0) {
+        return sampleSyntheticFocusColorHex(normX, normY, filter = filter, exposureEv = exposureEv)
+      }
+      val clampedX = normX.coerceIn(0f, 1f)
+      val clampedY = normY.coerceIn(0f, 1f)
+      val cx = (clampedX * (bw - 1)).roundToInt().coerceIn(0, bw - 1)
+      val cy = (clampedY * (bh - 1)).roundToInt().coerceIn(0, bh - 1)
+      val rPx = radiusPx.coerceIn(0, 32)
+      val rSq = rPx * rPx
+
+      val minX = (cx - rPx).coerceAtLeast(0)
+      val maxX = (cx + rPx).coerceAtMost(bw - 1)
+      val minY = (cy - rPx).coerceAtLeast(0)
+      val maxY = (cy + rPx).coerceAtMost(bh - 1)
+      val patchW = maxX - minX + 1
+      val patchH = maxY - minY + 1
+      val patchPixels = IntArray(patchW * patchH)
+      bitmap.getPixels(patchPixels, 0, patchW, minX, minY, patchW, patchH)
+
+      var sumR = 0L
+      var sumG = 0L
+      var sumB = 0L
+      var count = 0
+
+      for (py in 0 until patchH) {
+        val dy = (minY + py) - cy
+        val rowOffset = py * patchW
+        for (px in 0 until patchW) {
+          val dx = (minX + px) - cx
+          if (dx * dx + dy * dy <= rSq) {
+            val argb = patchPixels[rowOffset + px]
+            sumR += (argb shr 16) and 0xFF
+            sumG += (argb shr 8) and 0xFF
+            sumB += argb and 0xFF
+            count++
+          }
+        }
+      }
+
+      if (count <= 0) {
+        return sampleSyntheticFocusColorHex(normX, normY, filter = filter, exposureEv = exposureEv)
+      }
+
+      val avgR = (sumR.toFloat() / count).roundToInt().coerceIn(0, 255)
+      val avgG = (sumG.toFloat() / count).roundToInt().coerceIn(0, 255)
+      val avgB = (sumB.toFloat() / count).roundToInt().coerceIn(0, 255)
+      val (finalR, finalG, finalB) = if (filter != CameraColorFilter.NONE || exposureEv != 0f) {
+        applyFilterAndExposureToRgb(avgR, avgG, avgB, filter, exposureEv)
+      } else {
+        Triple(avgR, avgG, avgB)
+      }
+      String.format(Locale.US, "#%02X%02X%02X", finalR, finalG, finalB)
+    } catch (_: Throwable) {
+      sampleSyntheticFocusColorHex(normX, normY, filter = filter, exposureEv = exposureEv)
+    }
+  }
+
+  /**
    * Captures and writes a rich procedural scene photo to [outputFile] reflecting the active camera
    * parameters ([lensFacing], [aspectRatio], [filter], [zoom], [exposureEv], [mirrorFront], [flashMode]).
    *

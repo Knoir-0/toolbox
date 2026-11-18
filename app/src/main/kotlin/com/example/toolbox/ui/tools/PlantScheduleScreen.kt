@@ -2586,7 +2586,7 @@ private fun PlantEditorDialog(
           )
         },
         enabled = canConfirm,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         modifier = Modifier.testTag("confirm_custom_plant_button"),
       ) {
         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -2597,7 +2597,7 @@ private fun PlantEditorDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }
@@ -2771,7 +2771,7 @@ private fun PlantDetailsDialog(
       if (singlePlant != null) {
         Button(
           onClick = { onCustomize(singlePlant) },
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
         ) {
           Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
           Spacer(modifier = Modifier.width(6.dp))
@@ -2780,7 +2780,7 @@ private fun PlantDetailsDialog(
       } else {
         Button(
           onClick = onDismiss,
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
         ) {
           Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
           Spacer(modifier = Modifier.width(6.dp))
@@ -2792,7 +2792,7 @@ private fun PlantDetailsDialog(
       if (singlePlant != null) {
         TextButton(
           onClick = onDismiss,
-          shape = RoundedCornerShape(12.dp),
+          shape = CircleShape,
         ) {
           Text("Close")
         }
@@ -2881,7 +2881,7 @@ private fun DeletePlantsConfirmDialog(
     confirmButton = {
       Button(
         onClick = onConfirmDelete,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
         colors = ButtonDefaults.buttonColors(
           containerColor = MaterialTheme.colorScheme.error,
           contentColor = MaterialTheme.colorScheme.onError,
@@ -2896,7 +2896,7 @@ private fun DeletePlantsConfirmDialog(
     dismissButton = {
       TextButton(
         onClick = onDismiss,
-        shape = RoundedCornerShape(12.dp),
+        shape = CircleShape,
       ) {
         Text("Cancel")
       }
