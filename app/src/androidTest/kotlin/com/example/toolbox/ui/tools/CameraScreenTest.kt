@@ -13,6 +13,7 @@ import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.File
 import java.nio.file.Files
 import junit.framework.TestCase.assertEquals
+import junit.framework.TestCase.assertFalse
 import junit.framework.TestCase.assertTrue
 import org.junit.After
 import org.junit.Before
@@ -95,13 +96,32 @@ class CameraScreenTest {
         shrunkBoxBounds.width < stageBounds.width - 1f
     )
 
-    // Take a photo
+    // Take a photo in Standard mode and verify the Photo Mode slide-up navigation pill bar is displayed
+    composeTestRule.onNodeWithTag("photo_controls_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_sub_mode_STANDARD").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_sub_mode_PANORAMA").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_sub_mode_HDR").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_shutter_button").performClick()
     composeTestRule.waitForIdle()
 
     val mediaAfterPhoto = CameraEngine.listCapturedMedia(tempCameraDir)
     assertEquals(1, mediaAfterPhoto.size)
     assertTrue(mediaAfterPhoto.first().name.startsWith("IMG_"))
+
+    // Select Panorama from the Photo navigation pill bar and capture a panoramic photo
+    composeTestRule.onNodeWithTag("photo_sub_mode_PANORAMA").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_panorama_reticle_overlay").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_shutter_button").performClick()
+    composeTestRule.waitForIdle()
+
+    val mediaAfterPanorama = CameraEngine.listCapturedMedia(tempCameraDir)
+    assertEquals(2, mediaAfterPanorama.size)
+    assertTrue(mediaAfterPanorama.any { it.name.startsWith("PANO_") })
+
+    // Switch back to Standard photo sub-mode
+    composeTestRule.onNodeWithTag("photo_sub_mode_STANDARD").performClick()
+    composeTestRule.waitForIdle()
 
     // Switch to 2x zoom preset
     composeTestRule.onNodeWithTag("zoom_preset_2x").performClick()
@@ -137,7 +157,7 @@ class CameraScreenTest {
     composeTestRule.waitForIdle()
 
     val mediaAfterVideo = CameraEngine.listCapturedMedia(tempCameraDir)
-    assertEquals(2, mediaAfterVideo.size)
+    assertEquals(3, mediaAfterVideo.size)
     assertTrue(mediaAfterVideo.any { it.isVideo && it.name.startsWith("VID_") })
 
     // Open Gallery tool directly at the Camera folder via the thumbnail link button
@@ -230,9 +250,15 @@ class CameraScreenTest {
     composeTestRule.onNodeWithTag("vision_detected_card").assertIsDisplayed()
     composeTestRule.onNodeWithTag("vision_box_badge_Plant").assertIsDisplayed()
     composeTestRule.onNodeWithTag("vision_box_badge_Flowerpot").assertIsDisplayed()
-    // Houseplant (91.4%) and Leaf (75.8%) fully overlap with Plant (96.2%), so only Plant renders and the lower-confidence ones are hidden
+    composeTestRule.onNodeWithTag("vision_box_badge_Leaf").assertIsDisplayed()
+    // Houseplant (91.4%) has an identical duplicate box to Plant (96.2%) and is suppressed, while Leaf (75.8%) is allowed to overlap and its label does not overlap Plant's label
     composeTestRule.onNodeWithTag("vision_box_badge_Houseplant").assertDoesNotExist()
-    composeTestRule.onNodeWithTag("vision_box_badge_Leaf").assertDoesNotExist()
+    val plantBadgeBounds = composeTestRule.onNodeWithTag("vision_box_badge_Plant").fetchSemanticsNode().boundsInRoot
+    val leafBadgeBounds = composeTestRule.onNodeWithTag("vision_box_badge_Leaf").fetchSemanticsNode().boundsInRoot
+    val flowerpotBadgeBounds = composeTestRule.onNodeWithTag("vision_box_badge_Flowerpot").fetchSemanticsNode().boundsInRoot
+    assertFalse(plantBadgeBounds.overlaps(leafBadgeBounds))
+    assertFalse(plantBadgeBounds.overlaps(flowerpotBadgeBounds))
+    assertFalse(leafBadgeBounds.overlaps(flowerpotBadgeBounds))
     // Room (58.2%) and Furniture (39.4%) are below 65% confidence and must be hidden
     composeTestRule.onNodeWithTag("vision_box_badge_Room").assertDoesNotExist()
     composeTestRule.onNodeWithTag("vision_box_badge_Furniture").assertDoesNotExist()

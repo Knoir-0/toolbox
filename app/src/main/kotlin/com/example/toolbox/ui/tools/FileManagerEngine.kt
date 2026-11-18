@@ -141,7 +141,7 @@ data class BulkStorageInfo(
 )
 
 enum class ClipboardOperation {
-  COPY, CUT
+  COPY, CUT, MOVE
 }
 
 data class ClipboardState(
@@ -685,6 +685,7 @@ object FileManagerEngine {
     var count = 0
     for (src in sources) {
       try {
+        if (src.isDirectory && isSameOrDescendant(destinationDir, src)) continue
         var dest = File(destinationDir, src.name)
         if (dest.exists()) {
           val base = if (src.isDirectory) src.name else src.nameWithoutExtension
@@ -714,6 +715,7 @@ object FileManagerEngine {
     var count = 0
     for (src in sources) {
       try {
+        if (src.isDirectory && isSameOrDescendant(destinationDir, src)) continue
         var dest = File(destinationDir, src.name)
         if (dest.exists()) {
           val base = if (src.isDirectory) src.name else src.nameWithoutExtension

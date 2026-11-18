@@ -18,6 +18,7 @@ import com.example.toolbox.ui.main.parseExpandMusicPlayer
 import com.example.toolbox.ui.main.parseFolderShortcut
 import com.example.toolbox.ui.main.parseStandaloneTool
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
+import com.example.toolbox.ui.main.syncPinnedHomeScreenShortcuts
 import com.example.toolbox.ui.main.syncStandaloneTaskDescription
 import com.example.toolbox.ui.theme.ToolboxTheme
 import com.example.toolbox.ui.tools.MusicPlayerEngine
@@ -30,6 +31,7 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    syncPinnedHomeScreenShortcuts(this)
     MusicPlayerEngine.ensureSystemMediaMonitoring(this)
     MusicPlayerEngine.syncExternalSystemMediaSessions(this)
     val parsedTool = parseStandaloneTool(intent)
@@ -100,10 +102,12 @@ class MainActivity : ComponentActivity() {
       initialFolderState.value = parsedFolder
       standaloneToolState.value = parsedTool ?: Tool.FILES
     } else if (expandMusicPlayer) {
+      initialFolderState.value = null
       standaloneToolState.value = parsedTool ?: Tool.MUSIC
       expandMusicPlayerState.value = true
       MusicPlayerEngine.requestExpandFullPlayer()
     } else if (parsedTool != null) {
+      initialFolderState.value = null
       standaloneToolState.value = parsedTool
     }
     syncStandaloneTaskDescription(

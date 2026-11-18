@@ -40,6 +40,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -75,6 +77,7 @@ import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.BurstMode
 import androidx.compose.material.icons.filled.Camera
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
@@ -93,9 +96,13 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GridOff
 import androidx.compose.material.icons.filled.GridOn
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.HdrOn
 import androidx.compose.material.icons.filled.Highlight
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.NightsStay
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.PanoramaHorizontal
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -324,6 +331,17 @@ fun CameraScreen(
   fun updateMirrorFrontCamera(mirror: Boolean) {
     mirrorFrontCamera = mirror
     prefs?.edit()?.putBoolean(PREF_KEY_CAMERA_MIRROR_FRONT, mirror)?.apply()
+  }
+
+  // Photo Sub-Mode / Tools Navigation Pill Bar state (Standard, Panorama, HDR, Night, Burst, 2×2 Booth)
+  var photoSubMode by rememberSaveable {
+    val saved = prefs?.getString(PREF_KEY_CAMERA_PHOTO_SUB_MODE, null)
+    mutableStateOf(CameraPhotoSubMode.fromNameOrDefault(saved))
+  }
+
+  fun updatePhotoSubMode(newSubMode: CameraPhotoSubMode) {
+    photoSubMode = newSubMode
+    prefs?.edit()?.putString(PREF_KEY_CAMERA_PHOTO_SUB_MODE, newSubMode.name)?.apply()
   }
 
   // QR Code Reader & Barcode Scanner states
@@ -828,9 +846,50 @@ fun CameraScreen(
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     showShutterFlash = true
 
+    val activeSubMode = if (captureMode == CameraCaptureMode.PHOTO) {
+      photoSubMode
+    } else {
+      CameraPhotoSubMode.STANDARD
+    }
+
+    // 1. Burst sub-mode: capture a rapid 3-frame continuous burst sequence
+    if (activeSubMode == CameraPhotoSubMode.BURST) {
+      val burstFiles = CameraEngine.createTimestampedBurstPhotoFiles(
+        directory = cameraDirectory,
+        format = photoFormat,
+        burstCount = 3,
+      )
+      val evSteps = listOf(-0.2f, 0.0f, 0.25f)
+      burstFiles.forEachIndexed { idx, file ->
+        val frameEv = (exposureEv + evSteps.getOrElse(idx) { 0f })
+          .coerceIn(MIN_CAMERA_EXPOSURE_EV, MAX_CAMERA_EXPOSURE_EV)
+        CameraEngine.captureSyntheticPhotoFile(
+          outputFile = file,
+          lensFacing = lensFacing,
+          aspectRatio = aspectRatio,
+          filter = colorFilter,
+          zoom = zoomLevel,
+          exposureEv = frameEv,
+          mirrorFront = mirrorFrontCamera,
+          flashMode = flashMode,
+          subMode = CameraPhotoSubMode.BURST,
+        )
+      }
+      refreshTrigger++
+      if (!isInspection && burstFiles.isNotEmpty()) {
+        Toast.makeText(
+          context,
+          "Saved ${burstFiles.size}-shot burst (${burstFiles.first().name})",
+          Toast.LENGTH_SHORT,
+        ).show()
+      }
+      return
+    }
+
     val outputFile = CameraEngine.createTimestampedPhotoFile(
       directory = cameraDirectory,
       format = photoFormat,
+      subMode = activeSubMode,
     )
 
     // Try capturing from live hardware TextureView if available and rendering frames
@@ -838,13 +897,20 @@ fun CameraScreen(
       val tv = activeTextureView
       val raw = if (tv != null && tv.isAvailable) tv.bitmap else null
       if (raw != null && tv != null) {
-        CameraEngine.transformCapturedPreviewBitmap(
+        val baseFrame = CameraEngine.transformCapturedPreviewBitmap(
           rawBitmap = raw,
           textureTransformMatrix = tv.getTransform(null),
           zoom = zoomLevel,
           lensFacing = lensFacing,
           mirrorFront = mirrorFrontCamera,
         )
+        when (activeSubMode) {
+          CameraPhotoSubMode.PANORAMA -> {
+            CameraEngine.stitchPanoramaBitmaps(listOf(baseFrame, baseFrame, baseFrame)) ?: baseFrame
+          }
+          CameraPhotoSubMode.COLLAGE -> null // Uses 2x2 collage generator with baseFrame quadrants
+          else -> baseFrame
+        }
       } else {
         null
       }
@@ -884,6 +950,7 @@ fun CameraScreen(
         exposureEv = exposureEv,
         mirrorFront = mirrorFrontCamera,
         flashMode = flashMode,
+        subMode = activeSubMode,
       )
     }
 
@@ -1168,6 +1235,29 @@ fun CameraScreen(
             modifier = Modifier
               .fillMaxSize()
               .testTag("camera_vision_reticle_overlay"),
+          )
+        }
+
+        // Photo Mode Panorama & Tool Reticle Overlays
+        if (captureMode == CameraCaptureMode.PHOTO && photoSubMode == CameraPhotoSubMode.PANORAMA) {
+          val frameTopInScreen = (containerH - frameH) / 2
+          val topOverlayHeight = with(density) { topOverlayHeightPx.toDp() }
+          val reticleTopInset = (topOverlayHeight + 24.dp - frameTopInScreen).coerceAtLeast(24.dp)
+          PanoramaReticleOverlayCanvas(
+            topInset = reticleTopInset,
+            modifier = Modifier
+              .fillMaxSize()
+              .testTag("camera_panorama_reticle_overlay"),
+          )
+        } else if (captureMode == CameraCaptureMode.PHOTO && photoSubMode == CameraPhotoSubMode.COLLAGE) {
+          val frameTopInScreen = (containerH - frameH) / 2
+          val topOverlayHeight = with(density) { topOverlayHeightPx.toDp() }
+          val reticleTopInset = (topOverlayHeight + 24.dp - frameTopInScreen).coerceAtLeast(24.dp)
+          CollageBoothReticleOverlayCanvas(
+            topInset = reticleTopInset,
+            modifier = Modifier
+              .fillMaxSize()
+              .testTag("camera_collage_reticle_overlay"),
           )
         }
 
@@ -1569,6 +1659,10 @@ fun CameraScreen(
               Text(
                 text = buildString {
                   append(lensFacing.shortLabel)
+                  if (captureMode == CameraCaptureMode.PHOTO && photoSubMode != CameraPhotoSubMode.STANDARD) {
+                    append(" • ")
+                    append(photoSubMode.shortLabel)
+                  }
                   if (colorFilter != CameraColorFilter.NONE) {
                     append(" • ")
                     append(colorFilter.displayName)
@@ -2046,6 +2140,56 @@ fun CameraScreen(
             }
           }
 
+          // Photo Mode Slide-Up Navigation Pill Bar (Standard / Panorama / HDR / Night / Burst / 2×2 Booth)
+          AnimatedVisibility(
+            visible = captureMode == CameraCaptureMode.PHOTO,
+            enter = slideInVertically(initialOffsetY = { it / 2 }) + expandVertically() + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it / 2 }) + shrinkVertically() + fadeOut(),
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .testTag("photo_controls_bar"),
+              horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              CameraPhotoSubMode.entries.forEach { subModeOption ->
+                val selected = subModeOption == photoSubMode
+                FilterChip(
+                  selected = selected,
+                  onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    updatePhotoSubMode(subModeOption)
+                  },
+                  label = {
+                    Text(
+                      text = subModeOption.shortLabel,
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    )
+                  },
+                  leadingIcon = {
+                    Icon(
+                      imageVector = when (subModeOption) {
+                        CameraPhotoSubMode.STANDARD -> Icons.Default.PhotoCamera
+                        CameraPhotoSubMode.PANORAMA -> Icons.Default.PanoramaHorizontal
+                        CameraPhotoSubMode.HDR -> Icons.Default.HdrOn
+                        CameraPhotoSubMode.NIGHT -> Icons.Default.NightsStay
+                        CameraPhotoSubMode.BURST -> Icons.Default.BurstMode
+                        CameraPhotoSubMode.COLLAGE -> Icons.Default.GridView
+                      },
+                      contentDescription = null,
+                      modifier = Modifier.size(16.dp),
+                    )
+                  },
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("photo_sub_mode_${subModeOption.name}"),
+                )
+              }
+            }
+          }
+
           // Mode Selector Row: Photo / Video / Scan / Note / Vision Mode Switcher Pill
           Row(
             modifier = Modifier
@@ -2291,10 +2435,11 @@ fun CameraScreen(
               ) {
                 Box(contentAlignment = Alignment.Center) {
                   AnimatedContent(
-                    targetState = Triple(captureMode, isRecordingVideo, isCountingDown),
+                    targetState = Pair(Triple(captureMode, isRecordingVideo, isCountingDown), photoSubMode),
                     transitionSpec = { (fadeIn() + scaleIn()).togetherWith(fadeOut() + scaleOut()) },
                     label = "ShutterIconAnim",
-                  ) { (mode, recording, counting) ->
+                  ) { (stateTriple, activePhotoSubMode) ->
+                    val (mode, recording, counting) = stateTriple
                     when {
                       counting -> Icon(
                         imageVector = Icons.Default.Close,
@@ -2337,7 +2482,14 @@ fun CameraScreen(
                           .testTag("camera_shutter_vision_icon"),
                       )
                       else -> Icon(
-                        imageVector = Icons.Default.Camera,
+                        imageVector = when (activePhotoSubMode) {
+                          CameraPhotoSubMode.PANORAMA -> Icons.Default.PanoramaHorizontal
+                          CameraPhotoSubMode.HDR -> Icons.Default.HdrOn
+                          CameraPhotoSubMode.NIGHT -> Icons.Default.NightsStay
+                          CameraPhotoSubMode.BURST -> Icons.Default.BurstMode
+                          CameraPhotoSubMode.COLLAGE -> Icons.Default.GridView
+                          CameraPhotoSubMode.STANDARD -> Icons.Default.Camera
+                        },
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier
@@ -3578,6 +3730,130 @@ private fun DocumentNoteReticleOverlayCanvas(
 }
 
 /**
+ * Viewfinder panoramic horizon track overlay rendered when [CameraCaptureMode.PHOTO] and
+ * [CameraPhotoSubMode.PANORAMA] are active.
+ */
+@Composable
+private fun PanoramaReticleOverlayCanvas(
+  modifier: Modifier = Modifier,
+  topInset: Dp = 24.dp,
+) {
+  val bracketColor = MaterialTheme.colorScheme.tertiary
+  val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.28f)
+  val guideLineColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+
+  Box(modifier = modifier) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+      val panoW = (size.width * 0.86f).coerceAtLeast(180.dp.toPx())
+      val panoH = (panoW * 0.36f).coerceIn(88.dp.toPx(), 140.dp.toPx())
+      val left = (size.width - panoW) / 2f
+      val top = (topInset.toPx() + (size.height - topInset.toPx() - panoH) * 0.35f)
+        .coerceAtMost((size.height - panoH).coerceAtLeast(0f))
+      val right = left + panoW
+      val bottom = top + panoH
+      val cy = (top + bottom) / 2f
+      val armLen = minOf(panoW, panoH) * 0.22f
+      val strokePx = 3.5.dp.toPx()
+
+      // Wide panoramic sweep track container
+      drawRoundRect(
+        color = trackColor,
+        topLeft = Offset(left, top),
+        size = Size(panoW, panoH),
+        cornerRadius = CornerRadius(16.dp.toPx(), 16.dp.toPx()),
+        style = Stroke(width = 1.5.dp.toPx()),
+      )
+
+      // Dashed horizontal horizon alignment line
+      drawLine(
+        color = guideLineColor,
+        start = Offset(left + 16.dp.toPx(), cy),
+        end = Offset(right - 16.dp.toPx(), cy),
+        strokeWidth = 1.5.dp.toPx(),
+        pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f),
+      )
+
+      // 3 segment vertical dividers & alignment target dots
+      for (i in 1..2) {
+        val segX = left + (panoW * i) / 3f
+        drawLine(
+          color = trackColor,
+          start = Offset(segX, top + 10.dp.toPx()),
+          end = Offset(segX, bottom - 10.dp.toPx()),
+          strokeWidth = 1.dp.toPx(),
+        )
+      }
+      for (i in 0..2) {
+        val dotX = left + panoW * (0.167f + i * 0.333f)
+        drawCircle(
+          color = if (i == 1) bracketColor else guideLineColor,
+          radius = if (i == 1) 5.dp.toPx() else 3.5.dp.toPx(),
+          center = Offset(dotX, cy),
+        )
+      }
+
+      // Corner brackets
+      drawLine(bracketColor, Offset(left, top + armLen), Offset(left, top), strokePx, StrokeCap.Round)
+      drawLine(bracketColor, Offset(left, top), Offset(left + armLen, top), strokePx, StrokeCap.Round)
+      drawLine(bracketColor, Offset(right - armLen, top), Offset(right, top), strokePx, StrokeCap.Round)
+      drawLine(bracketColor, Offset(right, top), Offset(right, top + armLen), strokePx, StrokeCap.Round)
+      drawLine(bracketColor, Offset(left, bottom - armLen), Offset(left, bottom), strokePx, StrokeCap.Round)
+      drawLine(bracketColor, Offset(left, bottom), Offset(left + armLen, bottom), strokePx, StrokeCap.Round)
+      drawLine(bracketColor, Offset(right - armLen, bottom), Offset(right, bottom), strokePx, StrokeCap.Round)
+      drawLine(bracketColor, Offset(right, bottom - armLen), Offset(right, bottom), strokePx, StrokeCap.Round)
+    }
+  }
+}
+
+/**
+ * Viewfinder 2×2 Photo Booth Collage quadrant guide overlay rendered when [CameraCaptureMode.PHOTO] and
+ * [CameraPhotoSubMode.COLLAGE] are active.
+ */
+@Composable
+private fun CollageBoothReticleOverlayCanvas(
+  modifier: Modifier = Modifier,
+  topInset: Dp = 24.dp,
+) {
+  val bracketColor = MaterialTheme.colorScheme.tertiary
+  val dividerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
+
+  Box(modifier = modifier) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+      val minDim = size.minDimension
+      val gridW = (minDim * 0.72f).coerceAtMost(280.dp.toPx())
+      val gridH = (gridW * 1.15f).coerceAtMost(size.height * 0.72f)
+      val left = (size.width - gridW) / 2f
+      val top = topInset.toPx().coerceAtMost((size.height - gridH).coerceAtLeast(0f))
+      val right = left + gridW
+      val bottom = top + gridH
+      val midX = (left + right) / 2f
+      val midY = (top + bottom) / 2f
+      val armLen = minOf(gridW, gridH) * 0.14f
+      val strokePx = 3.5.dp.toPx()
+
+      drawRoundRect(
+        color = dividerColor,
+        topLeft = Offset(left, top),
+        size = Size(gridW, gridH),
+        cornerRadius = CornerRadius(14.dp.toPx(), 14.dp.toPx()),
+        style = Stroke(width = 1.5.dp.toPx()),
+      )
+      drawLine(dividerColor, Offset(midX, top), Offset(midX, bottom), 1.5.dp.toPx())
+      drawLine(dividerColor, Offset(left, midY), Offset(right, midY), 1.5.dp.toPx())
+
+      drawLine(bracketColor, Offset(left, top + armLen), Offset(left, top), strokePx, StrokeCap.Round)
+      drawLine(bracketColor, Offset(left, top), Offset(left + armLen, top), strokePx, StrokeCap.Round)
+      drawLine(bracketColor, Offset(right - armLen, top), Offset(right, top), strokePx, StrokeCap.Round)
+      drawLine(bracketColor, Offset(right, top), Offset(right, top + armLen), strokePx, StrokeCap.Round)
+      drawLine(bracketColor, Offset(left, bottom - armLen), Offset(left, bottom), strokePx, StrokeCap.Round)
+      drawLine(bracketColor, Offset(left, bottom), Offset(left + armLen, bottom), strokePx, StrokeCap.Round)
+      drawLine(bracketColor, Offset(right - armLen, bottom), Offset(right, bottom), strokePx, StrokeCap.Round)
+      drawLine(bracketColor, Offset(right, bottom - armLen), Offset(right, bottom), strokePx, StrokeCap.Round)
+    }
+  }
+}
+
+/**
  * Dynamically drawn colored bounding boxes over detected visual elements in [CameraCaptureMode.VISION] mode,
  * displaying each element's label and confidence percentage (only for tags >= 50% confidence).
  */
@@ -3727,24 +4003,30 @@ private fun VisionReticleOverlayCanvas(
 
     // Attached Label + Confidence Percentage Pills on each colored bounding box
     if (visibleTags.isNotEmpty()) {
+      val labelPlacements = remember(visibleTags, stageW, usableTop, usableBottom, density) {
+        CameraEngine.computeNonOverlappingVisionLabelPlacements(
+          tags = visibleTags,
+          stageWidthPx = stageW,
+          usableTopPx = usableTop,
+          usableBottomPx = usableBottom,
+          charWidthPx = with(density) { 7.5.dp.toPx() },
+          baseBadgePaddingPx = with(density) { 38.dp.toPx() },
+          badgeHeightPx = with(density) { 26.dp.toPx() },
+          insetPx = with(density) { 6.dp.toPx() },
+          collisionPaddingPx = with(density) { 4.dp.toPx() },
+          edgeMarginPx = with(density) { 12.dp.toPx() },
+        )
+      }
       Box(
         modifier = Modifier
           .fillMaxSize()
           .testTag("vision_detected_card"),
       ) {
-        visibleTags.forEachIndexed { idx, tag ->
-          val normBox = (tag.boundingBox ?: CameraEngine.defaultVisionBoundingBoxForRank(idx)).coerceNormalized()
+        labelPlacements.forEachIndexed { idx, placement ->
+          val tag = placement.tag
           val borderColor = boxStrokeColors[idx % boxStrokeColors.size]
           val containerColor = badgeContainerColors[idx % badgeContainerColors.size]
           val contentColor = badgeContentColors[idx % badgeContentColors.size]
-
-          val minX = with(density) { 12.dp.toPx() }
-          val maxX = (stageW - with(density) { 140.dp.toPx() }).coerceAtLeast(minX)
-          val leftPx = (normBox.left * stageW).coerceIn(minX, maxX)
-          val topPx = (usableTop + normBox.top * usableHeight).coerceIn(
-            usableTop,
-            (usableBottom - with(density) { 44.dp.toPx() }).coerceAtLeast(usableTop),
-          )
 
           Surface(
             shape = RoundedCornerShape(8.dp),
@@ -3754,8 +4036,8 @@ private fun VisionReticleOverlayCanvas(
             modifier = Modifier
               .offset {
                 IntOffset(
-                  x = leftPx.roundToInt(),
-                  y = (topPx + with(density) { 6.dp.toPx() }).roundToInt(),
+                  x = placement.leftPx.roundToInt(),
+                  y = placement.topPx.roundToInt(),
                 )
               }
               .testTag("vision_box_badge_${tag.label}"),

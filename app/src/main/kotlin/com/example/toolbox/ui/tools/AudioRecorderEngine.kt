@@ -41,21 +41,32 @@ const val DEFAULT_DOWNLOADS_FOLDER_DISPLAY = "/Download"
 val DEFAULT_AUDIO_RECORDER_FOLDER_NAMES: List<String> = listOf(
   DEFAULT_AUDIO_FOLDER_NAME,
   DEFAULT_RECORDINGS_FOLDER_NAME,
+)
+
+val FULL_FILES_DEFAULT_AUDIO_RECORDER_FOLDER_NAMES: List<String> = listOf(
+  DEFAULT_AUDIO_FOLDER_NAME,
+  DEFAULT_RECORDINGS_FOLDER_NAME,
   DEFAULT_DOWNLOADS_FOLDER_NAME,
 )
 
 val DEFAULT_AUDIO_RECORDER_FOLDER_DISPLAY_PATHS: List<String> = listOf(
   DEFAULT_AUDIO_FOLDER_DISPLAY,
   DEFAULT_RECORDINGS_FOLDER_DISPLAY,
+)
+
+val FULL_FILES_DEFAULT_AUDIO_RECORDER_FOLDER_DISPLAY_PATHS: List<String> = listOf(
+  DEFAULT_AUDIO_FOLDER_DISPLAY,
+  DEFAULT_RECORDINGS_FOLDER_DISPLAY,
   DEFAULT_DOWNLOADS_FOLDER_DISPLAY,
 )
 
 /**
- * Default folders accessed by the Audio Recorder tool (`Audio`, `Recordings`, `Download`).
+ * Default folders accessed by the Audio Recorder tool (`Audio`, `Recordings`, and `Download` when full files permission is granted).
  */
 enum class AudioRecorderDefaultFolder(
   val folderName: String,
   val displayPath: String,
+  val requiresFullFilesPermission: Boolean = false,
 ) {
   AUDIO(
     folderName = DEFAULT_AUDIO_FOLDER_NAME,
@@ -68,11 +79,20 @@ enum class AudioRecorderDefaultFolder(
   DOWNLOADS(
     folderName = DEFAULT_DOWNLOADS_FOLDER_NAME,
     displayPath = DEFAULT_DOWNLOADS_FOLDER_DISPLAY,
+    requiresFullFilesPermission = true,
   ),
   ;
 
   companion object {
     val DEFAULT: AudioRecorderDefaultFolder = AUDIO
+
+    fun defaultEntries(hasFullFilesPermission: Boolean = false): List<AudioRecorderDefaultFolder> {
+      return if (hasFullFilesPermission) {
+        entries
+      } else {
+        entries.filterNot { it.requiresFullFilesPermission }
+      }
+    }
 
     fun fromPathOrName(pathOrName: String?): AudioRecorderDefaultFolder? {
       if (pathOrName.isNullOrBlank()) return null
@@ -131,7 +151,10 @@ data class AudioRecorderFolder(
 }
 
 val DEFAULT_AUDIO_RECORDER_FOLDERS: List<AudioRecorderFolder> =
-  AudioRecorderDefaultFolder.entries.map { it.toAudioRecorderFolder() }
+  AudioRecorderDefaultFolder.defaultEntries(hasFullFilesPermission = false).map { it.toAudioRecorderFolder() }
+
+val FULL_FILES_DEFAULT_AUDIO_RECORDER_FOLDERS: List<AudioRecorderFolder> =
+  AudioRecorderDefaultFolder.defaultEntries(hasFullFilesPermission = true).map { it.toAudioRecorderFolder() }
 
 /**
  * Sorting options for recordings in the Audio Recorder tool.
@@ -451,13 +474,46 @@ object AudioRecorderEngine {
   }
 
   /**
-   * Resolves the default directories accessed by the Audio Recorder tool (`Audio`, `Recordings`, `Download`).
+   * Checks whether the app currently has the full files access permission (`MANAGE_EXTERNAL_STORAGE`
+   * on Android 11+ / `READ_EXTERNAL_STORAGE` on older versions) and [AppPermission.STORAGE] is enabled.
+   */
+  fun hasFullFilesPermission(context: Context): Boolean {
+    return com.example.toolbox.ui.main.NavigationPreferencesBridge.isPermissionGranted(
+      com.example.toolbox.ui.main.AppPermission.STORAGE
+    ) && FileManagerEngine.hasStoragePermission(context)
+  }
+
+  /**
+   * Filters or augments [folders] based on whether [hasFullFilesPermission] is granted:
+   * - When `false` (scoped storage only), hides the `Download` default folder since Android scoped
+   *   storage (`ACTION_OPEN_DOCUMENT_TREE`) does not allow granting access to the `Download` root.
+   * - When `true` (full files permission granted), ensures `Download` re-appears in the folder pills.
+   */
+  fun filterFolderPillsForPermission(
+    folders: List<AudioRecorderFolder>,
+    hasFullFilesPermission: Boolean,
+  ): List<AudioRecorderFolder> {
+    return if (hasFullFilesPermission) {
+      val existingPaths = folders.map { it.displayPath.lowercase(Locale.ROOT) }.toSet()
+      val missingDefaults = FULL_FILES_DEFAULT_AUDIO_RECORDER_FOLDERS.filter {
+        it.displayPath.lowercase(Locale.ROOT) !in existingPaths
+      }
+      folders + missingDefaults
+    } else {
+      folders.filterNot { it.defaultFolder?.requiresFullFilesPermission == true }
+    }
+  }
+
+  /**
+   * Resolves the default directories accessed by the Audio Recorder tool (`Audio` and `Recordings`
+   * under scoped storage, plus `Download` when [hasFullFilesPermission] is `true`).
    */
   fun resolveDefaultDirectories(
     userRoot: File = FileManagerEngine.getUserRootDirectory(),
     fallbackBaseDir: File? = null,
+    hasFullFilesPermission: Boolean = false,
   ): List<File> {
-    return AudioRecorderDefaultFolder.entries.map { folder ->
+    return AudioRecorderDefaultFolder.defaultEntries(hasFullFilesPermission).map { folder ->
       resolveDirectoryInput(
         inputPath = folder.displayPath,
         userRoot = userRoot,
@@ -950,7 +1006,11 @@ object AudioRecorderEngine {
   /**
    * Serializes an ordered list of [AudioRecorderFolder] pills into a persistent string.
    */
-  fun serializeFolderPills(folders: List<AudioRecorderFolder>): String {
+  fun serializeFolderPills(
+    folders: List<AudioRecorderFolder>,
+    hasFullFilesPermission: Boolean = false,
+  ): String {
+    val defaultPills = if (hasFullFilesPermission) FULL_FILES_DEFAULT_AUDIO_RECORDER_FOLDERS else DEFAULT_AUDIO_RECORDER_FOLDERS
     val seenPaths = mutableSetOf<String>()
     val deduplicated = mutableListOf<AudioRecorderFolder>()
     for (folder in folders) {
@@ -959,7 +1019,7 @@ object AudioRecorderEngine {
         deduplicated.add(folder)
       }
     }
-    for (defaultFolder in DEFAULT_AUDIO_RECORDER_FOLDERS) {
+    for (defaultFolder in defaultPills) {
       val normKey = defaultFolder.displayPath.lowercase(Locale.ROOT)
       if (seenPaths.add(normKey)) {
         deduplicated.add(defaultFolder)
@@ -977,10 +1037,15 @@ object AudioRecorderEngine {
 
   /**
    * Parses a serialized folder pills string into an ordered list of [AudioRecorderFolder]s,
-   * preserving the saved order and ensuring all default folders (`Audio`, `Recordings`, `Download`) are included.
+   * preserving the saved order and ensuring all default folders (`Audio`, `Recordings`, and `Download`
+   * when [hasFullFilesPermission] is `true`) are included.
    */
-  fun parseFolderPills(rawString: String?): List<AudioRecorderFolder> {
-    if (rawString.isNullOrBlank()) return DEFAULT_AUDIO_RECORDER_FOLDERS
+  fun parseFolderPills(
+    rawString: String?,
+    hasFullFilesPermission: Boolean = false,
+  ): List<AudioRecorderFolder> {
+    val defaultPills = if (hasFullFilesPermission) FULL_FILES_DEFAULT_AUDIO_RECORDER_FOLDERS else DEFAULT_AUDIO_RECORDER_FOLDERS
+    if (rawString.isNullOrBlank()) return defaultPills
     val seenPaths = mutableSetOf<String>()
     val parsed = mutableListOf<AudioRecorderFolder>()
     val lines = if (rawString.contains("\n") || rawString.contains("\t")) {
@@ -1015,29 +1080,45 @@ object AudioRecorderEngine {
         }
       }
       if (folder != null) {
+        if (!hasFullFilesPermission && folder.defaultFolder?.requiresFullFilesPermission == true) {
+          continue
+        }
         val normKey = folder.displayPath.lowercase(Locale.ROOT)
         if (seenPaths.add(normKey)) {
           parsed.add(folder)
         }
       }
     }
-    for (defaultFolder in DEFAULT_AUDIO_RECORDER_FOLDERS) {
+    for (defaultFolder in defaultPills) {
       val normKey = defaultFolder.displayPath.lowercase(Locale.ROOT)
       if (seenPaths.add(normKey)) {
         parsed.add(defaultFolder)
       }
     }
-    return if (parsed.isEmpty()) DEFAULT_AUDIO_RECORDER_FOLDERS else parsed
+    return if (parsed.isEmpty()) defaultPills else parsed
   }
 
-  fun getFolderPills(context: Context): List<AudioRecorderFolder> {
+  fun getFolderPills(
+    context: Context,
+    hasFullFilesPermission: Boolean = hasFullFilesPermission(context),
+  ): List<AudioRecorderFolder> {
     val prefs = context.getSharedPreferences(AUDIO_RECORDER_PREFS_NAME, Context.MODE_PRIVATE)
-    return parseFolderPills(prefs.getString(PREF_KEY_AUDIO_FOLDER_PILLS, null))
+    return parseFolderPills(
+      rawString = prefs.getString(PREF_KEY_AUDIO_FOLDER_PILLS, null),
+      hasFullFilesPermission = hasFullFilesPermission,
+    )
   }
 
-  fun setFolderPills(context: Context, folders: List<AudioRecorderFolder>) {
+  fun setFolderPills(
+    context: Context,
+    folders: List<AudioRecorderFolder>,
+    hasFullFilesPermission: Boolean = hasFullFilesPermission(context),
+  ) {
     val prefs = context.getSharedPreferences(AUDIO_RECORDER_PREFS_NAME, Context.MODE_PRIVATE)
-    prefs.edit().putString(PREF_KEY_AUDIO_FOLDER_PILLS, serializeFolderPills(folders)).apply()
+    prefs.edit().putString(
+      PREF_KEY_AUDIO_FOLDER_PILLS,
+      serializeFolderPills(folders, hasFullFilesPermission = hasFullFilesPermission),
+    ).apply()
   }
 
   /**

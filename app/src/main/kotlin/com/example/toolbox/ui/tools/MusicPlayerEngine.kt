@@ -46,6 +46,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
@@ -73,6 +74,7 @@ import com.example.toolbox.R
 import com.example.toolbox.ui.main.EXTRA_EXPAND_MUSIC_PLAYER
 import com.example.toolbox.ui.main.EXTRA_STANDALONE_TOOL
 import com.example.toolbox.ui.main.Tool
+import com.example.toolbox.ui.main.resolveStandaloneDocumentUri
 import com.example.toolbox.ui.main.resolveToolShortcutAliasClassName
 import java.io.File
 import java.io.FileOutputStream
@@ -122,6 +124,58 @@ const val PREF_KEY_MUSIC_FAVORITE_GENRES = "music_player_favorite_genres"
 const val PREF_KEY_MUSIC_PLAYLISTS = "music_player_playlists"
 const val PREF_KEY_MUSIC_PLAY_STATS = "music_player_play_stats"
 const val PREF_KEY_MUSIC_INCLUDE_SAMPLES = "music_player_include_samples"
+const val PREF_KEY_MUSIC_PREFERRED_APPS = "music_player_preferred_apps"
+const val PREF_KEY_MUSIC_GRANTED_FOLDER_PATHS = "music_player_granted_folder_paths"
+const val PREF_KEY_MUSIC_CUSTOM_FOLDERS = "music_player_custom_folders"
+const val PREF_KEY_MUSIC_SAVED_SECTION_SORTS = "music_player_saved_section_sorts"
+
+/**
+ * Represents a storage folder in the Music Player tool (either the default `/Music` folder or a
+ * user-added custom folder via Android's scoped storage access).
+ */
+@Immutable
+data class MusicFolder(
+  val folderName: String,
+  val displayPath: String,
+  val treeUri: String? = null,
+  val customAbsolutePath: String? = null,
+  val isCustom: Boolean = customAbsolutePath != null ||
+    !(displayPath.equals("/Music", ignoreCase = true) || folderName.equals("Music", ignoreCase = true)),
+) {
+  val isDefaultMusicFolder: Boolean
+    get() = !isCustom &&
+      customAbsolutePath == null &&
+      (displayPath.equals("/Music", ignoreCase = true) || folderName.equals("Music", ignoreCase = true))
+
+  val pillLabel: String
+    get() = folderName.ifBlank { displayPath.trim('/').substringAfterLast('/').ifBlank { "Music" } }
+
+  val folderPath: String
+    get() = displayPath
+
+  val absolutePath: String?
+    get() = customAbsolutePath
+}
+
+val DEFAULT_MUSIC_SCOPED_FOLDER = MusicFolder(
+  folderName = "Music",
+  displayPath = "/Music",
+)
+
+/**
+ * Link to a preferred music or audio streaming app displayed in the floating bottom pill bar
+ * on the Music Player Home view.
+ */
+@Immutable
+data class PreferredMusicAppLink(
+  val id: String,
+  val label: String,
+  val packageName: String,
+  val webUrl: String = "",
+  val accentRgb: Int = 0x1DB954,
+  val isCustom: Boolean = false,
+  val isInstalled: Boolean = false,
+)
 
 val DEFAULT_MUSIC_FOLDER_NAMES: List<String> = listOf("Music", "Audio", "Recordings", "Download")
 val SINGLE_ALBUM_FOLDER_NAMES: Set<String> = setOf("Audio", "Recordings")
@@ -239,8 +293,10 @@ enum class MusicSortOrder(
   ALBUM_ASC("Album (A to Z)"),
   DURATION_DESC("Duration (Longest)"),
   DURATION_ASC("Duration (Shortest)"),
+  YEAR_DESC("Year (Newest)"),
   MOST_PLAYED("Most Played"),
   RECENTLY_PLAYED("Recently Played"),
+  RANDOM("Random"),
   ;
 
   companion object {
@@ -679,6 +735,7 @@ object MusicPlayerEngine {
     return Intent(context, MainActivity::class.java).apply {
       component = ComponentName(context.packageName, resolveToolShortcutAliasClassName(Tool.MUSIC))
       action = Intent.ACTION_VIEW
+      data = resolveStandaloneDocumentUri(Tool.MUSIC)
       putExtra(EXTRA_STANDALONE_TOOL, Tool.MUSIC.name)
       putExtra(EXTRA_EXPAND_MUSIC_PLAYER, true)
       addFlags(
@@ -743,6 +800,8 @@ object MusicPlayerEngine {
   private const val MAX_ARTWORK_CACHE_ENTRIES = 256
   private const val MAX_TRACK_METADATA_CACHE_ENTRIES = 2048
   private const val MAX_NO_ARTWORK_CACHE_ENTRIES = 1024
+
+  val DEFAULT_MUSIC_SCOPED_FOLDER: MusicFolder = com.example.toolbox.ui.tools.DEFAULT_MUSIC_SCOPED_FOLDER
 
   private val artworkDispatcher = Dispatchers.IO.limitedParallelism(4)
   private val artworkDecodeLocks = Array(16) { Any() }
@@ -1485,9 +1544,560 @@ object MusicPlayerEngine {
   }
 
   /**
-   * Resolves the default music directories under [rootDirectory] (`Music`, `Audio`, `Recordings`,
-   * `Download`), also including plural `Downloads` folder when present on storage.
+   * Resolves the concrete [File] directory on disk for a [MusicFolder] pill.
    */
+  fun resolveDirectoryForFolder(
+    folder: MusicFolder,
+    rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
+  ): File {
+    if (!folder.customAbsolutePath.isNullOrBlank()) {
+      return File(folder.customAbsolutePath)
+    }
+    if (folder.isDefaultMusicFolder) {
+      return File(rootDirectory, "Music")
+    }
+    val subPath = folder.displayPath.trim().trimStart('/')
+    return if (subPath.isEmpty()) rootDirectory else File(rootDirectory, subPath)
+  }
+
+  fun parseGrantedFolderPaths(rawString: String?): Set<String> {
+    if (rawString.isNullOrBlank()) return emptySet()
+    return rawString
+      .split(",", "|", "\n")
+      .mapNotNull { token ->
+        val trimmed = token.trim()
+        if (trimmed.isEmpty()) {
+          null
+        } else if (trimmed.equals("Music", ignoreCase = true) || trimmed.equals("/Music", ignoreCase = true)) {
+          "/Music"
+        } else {
+          "/" + trimmed.trim('/')
+        }
+      }
+      .toSet()
+  }
+
+  fun serializeGrantedFolderPaths(paths: Set<String>): String {
+    return paths
+      .mapNotNull { path ->
+        val trimmed = path.trim()
+        if (trimmed.isEmpty()) {
+          null
+        } else if (trimmed.equals("Music", ignoreCase = true) || trimmed.equals("/Music", ignoreCase = true)) {
+          "/Music"
+        } else {
+          "/" + trimmed.trim('/')
+        }
+      }
+      .distinct()
+      .joinToString("|")
+  }
+
+  fun getGrantedFolderPaths(context: Context): Set<String> {
+    val prefs = context.getSharedPreferences(MUSIC_PLAYER_PREFS_NAME, Context.MODE_PRIVATE)
+    return parseGrantedFolderPaths(prefs.getString(PREF_KEY_MUSIC_GRANTED_FOLDER_PATHS, null))
+  }
+
+  fun setGrantedFolderPaths(context: Context, paths: Set<String>) {
+    val prefs = context.getSharedPreferences(MUSIC_PLAYER_PREFS_NAME, Context.MODE_PRIVATE)
+    prefs.edit()
+      .putString(PREF_KEY_MUSIC_GRANTED_FOLDER_PATHS, serializeGrantedFolderPaths(paths))
+      .apply()
+  }
+
+  fun setFolderPathAccessGranted(
+    context: Context,
+    displayPath: String,
+    granted: Boolean = true,
+  ): Set<String> {
+    val normalized = if (displayPath.trim().trim('/').equals("Music", ignoreCase = true)) {
+      "/Music"
+    } else {
+      "/" + displayPath.trim().trim('/')
+    }
+    val current = getGrantedFolderPaths(context).toMutableSet()
+    if (granted) {
+      current.add(normalized)
+    } else {
+      current.removeAll { it.equals(normalized, ignoreCase = true) }
+    }
+    setGrantedFolderPaths(context, current)
+    return current.toSet()
+  }
+
+  fun isMusicFolderAccessGranted(grantedPaths: Set<String>): Boolean {
+    return grantedPaths.any {
+      it.equals("/Music", ignoreCase = true) || it.equals("Music", ignoreCase = true)
+    }
+  }
+
+  fun serializeCustomFolders(folders: List<MusicFolder>): String {
+    val seenPaths = mutableSetOf<String>()
+    val deduplicated = mutableListOf<MusicFolder>()
+    for (folder in folders) {
+      if (folder.isDefaultMusicFolder) continue
+      val normKey = folder.displayPath.trim().lowercase(Locale.ROOT)
+      if (normKey.isNotEmpty() && seenPaths.add(normKey)) {
+        deduplicated.add(folder)
+      }
+    }
+    return deduplicated.joinToString("\n") { folder ->
+      listOf(
+        folder.folderName.replace("\t", " ").replace("\n", " "),
+        folder.displayPath.replace("\t", " ").replace("\n", " "),
+        (folder.treeUri ?: "").replace("\t", " ").replace("\n", " "),
+        (folder.customAbsolutePath ?: "").replace("\t", " ").replace("\n", " "),
+      ).joinToString("\t")
+    }
+  }
+
+  fun parseCustomFolders(rawString: String?): List<MusicFolder> {
+    if (rawString.isNullOrBlank()) return emptyList()
+    val seenPaths = mutableSetOf<String>()
+    val parsed = mutableListOf<MusicFolder>()
+    for (line in rawString.lines()) {
+      val trimmed = line.trim()
+      if (trimmed.isEmpty()) continue
+      val folder = if (trimmed.contains("\t")) {
+        val parts = trimmed.split("\t")
+        val name = parts.getOrNull(0)?.trim().orEmpty()
+        val display = parts.getOrNull(1)?.trim().orEmpty()
+        val uri = parts.getOrNull(2)?.trim()?.takeIf { it.isNotEmpty() }
+        val absPath = parts.getOrNull(3)?.trim()?.takeIf { it.isNotEmpty() }
+        if (name.isNotEmpty() && display.isNotEmpty()) {
+          MusicFolder(
+            folderName = name,
+            displayPath = if (display.startsWith("/")) display else "/$display",
+            treeUri = uri,
+            customAbsolutePath = absPath,
+          )
+        } else {
+          null
+        }
+      } else {
+        val cleanPath = "/" + trimmed.trim('/')
+        val name = cleanPath.substringAfterLast('/')
+        if (name.isNotEmpty()) MusicFolder(folderName = name, displayPath = cleanPath) else null
+      }
+      if (folder != null && !folder.isDefaultMusicFolder) {
+        val normKey = folder.displayPath.lowercase(Locale.ROOT)
+        if (seenPaths.add(normKey)) {
+          parsed.add(folder)
+        }
+      }
+    }
+    return parsed
+  }
+
+  fun getCustomFolders(context: Context): List<MusicFolder> {
+    val prefs = context.getSharedPreferences(MUSIC_PLAYER_PREFS_NAME, Context.MODE_PRIVATE)
+    return parseCustomFolders(prefs.getString(PREF_KEY_MUSIC_CUSTOM_FOLDERS, null))
+  }
+
+  fun setCustomFolders(context: Context, folders: List<MusicFolder>) {
+    val prefs = context.getSharedPreferences(MUSIC_PLAYER_PREFS_NAME, Context.MODE_PRIVATE)
+    prefs.edit().putString(PREF_KEY_MUSIC_CUSTOM_FOLDERS, serializeCustomFolders(folders)).apply()
+  }
+
+  fun removeCustomFolder(
+    folders: List<MusicFolder>,
+    folderToRemove: MusicFolder,
+  ): List<MusicFolder> {
+    return folders.filterNot { folder ->
+      folder.displayPath.equals(folderToRemove.displayPath, ignoreCase = true) ||
+        folder.folderName.equals(folderToRemove.folderName, ignoreCase = true) ||
+        (!folderToRemove.customAbsolutePath.isNullOrBlank() &&
+          folder.customAbsolutePath.equals(folderToRemove.customAbsolutePath, ignoreCase = true))
+    }
+  }
+
+  fun removeCustomFolder(
+    context: Context,
+    folderToRemove: MusicFolder,
+  ): List<MusicFolder> {
+    val updated = removeCustomFolder(getCustomFolders(context), folderToRemove)
+    setCustomFolders(context, updated)
+    setFolderPathAccessGranted(context, folderToRemove.displayPath, false)
+    return updated
+  }
+
+  fun createFolderAccessIntent(
+    folder: MusicFolder,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): Intent = createFolderAccessIntent(context = null, folder = folder, userRoot = userRoot)
+
+  fun createFolderAccessIntent(
+    context: Context? = null,
+    folder: MusicFolder = DEFAULT_MUSIC_SCOPED_FOLDER,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): Intent {
+    val relativePath = folder.displayPath.trim().trim('/').ifEmpty { "Music" }
+    try {
+      val targetDir = if (!folder.customAbsolutePath.isNullOrBlank()) {
+        File(folder.customAbsolutePath)
+      } else {
+        File(userRoot, relativePath)
+      }
+      if (!targetDir.exists()) {
+        targetDir.mkdirs()
+      }
+    } catch (_: Throwable) {}
+
+    val docId = "primary:$relativePath"
+    val initialUri = try {
+      android.provider.DocumentsContract.buildDocumentUri(
+        "com.android.externalstorage.documents",
+        docId,
+      )
+    } catch (_: Throwable) {
+      Uri.parse("content://com.android.externalstorage.documents/document/primary%3A$relativePath")
+    }
+    val baseIntent = if (context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      try {
+        val storageManager = context.getSystemService(Context.STORAGE_SERVICE) as? android.os.storage.StorageManager
+        storageManager?.primaryStorageVolume?.createOpenDocumentTreeIntent()
+      } catch (_: Throwable) {
+        null
+      }
+    } else {
+      null
+    } ?: Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+
+    return baseIntent.apply {
+      action = Intent.ACTION_OPEN_DOCUMENT_TREE
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, initialUri)
+      }
+      addFlags(
+        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+          Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+          Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+          Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+      )
+    }
+  }
+
+  fun createAddCustomFolderIntent(
+    context: Context? = null,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): Intent {
+    return AudioRecorderEngine.createAddCustomFolderIntent(context = context, userRoot = userRoot)
+  }
+
+  fun resolveCustomFolderFromTreeUri(
+    uri: Uri?,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): MusicFolder? {
+    if (uri == null) return null
+    val resolved = GalleryEngine.resolveCustomFolderFromTreeUri(uri, userRoot) ?: return null
+    val cleanDisplay = if (resolved.displayPath.startsWith("/")) resolved.displayPath else "/${resolved.displayPath}"
+    if (cleanDisplay.equals("/Music", ignoreCase = true) && resolved.customAbsolutePath == null) {
+      return DEFAULT_MUSIC_SCOPED_FOLDER.copy(treeUri = uri.toString())
+    }
+    return MusicFolder(
+      folderName = resolved.folderName,
+      displayPath = cleanDisplay,
+      treeUri = resolved.treeUri ?: uri.toString(),
+      customAbsolutePath = resolved.customAbsolutePath,
+    )
+  }
+
+  /**
+   * Scope key for saving a section-specific sort order (`"tab:HOME"`, `"tab:PLAYLISTS"`, etc.)
+   * or a custom folder-specific sort order (`"folder:/path"`).
+   */
+  fun sortScopeKeyForTab(tab: MusicLibraryTab): String = "tab:${tab.name}"
+
+  fun sortScopeKeyForFolder(displayPath: String): String =
+    "folder:/${displayPath.trim().trim('/').lowercase(Locale.ROOT)}"
+
+  fun resolveSortScopeKey(
+    selectedTab: MusicLibraryTab,
+    selectedCustomFolderPath: String? = null,
+  ): String {
+    return if (!selectedCustomFolderPath.isNullOrBlank()) {
+      sortScopeKeyForFolder(selectedCustomFolderPath)
+    } else {
+      sortScopeKeyForTab(selectedTab)
+    }
+  }
+
+  /**
+   * Returns the "Save for ..." checkbox label in the Sort menu for the active view
+   * (`"Save for home"`, `"Save for playlists"`, `"Save for songs"`, `"Save for albums"`,
+   * `"Save for artists"`, `"Save for genre"`, or `"Save for folder"`).
+   */
+  fun resolveSortSaveLabel(
+    selectedTab: MusicLibraryTab,
+    selectedCustomFolderPath: String? = null,
+  ): String {
+    if (!selectedCustomFolderPath.isNullOrBlank()) {
+      return "Save for folder"
+    }
+    return when (selectedTab) {
+      MusicLibraryTab.HOME -> "Save for home"
+      MusicLibraryTab.PLAYLISTS -> "Save for playlists"
+      MusicLibraryTab.SONGS -> "Save for songs"
+      MusicLibraryTab.ALBUMS -> "Save for albums"
+      MusicLibraryTab.ARTISTS -> "Save for artists"
+      MusicLibraryTab.GENRES -> "Save for genre"
+    }
+  }
+
+  val DEFAULT_SAVED_SECTION_SORTS: Map<String, MusicSortOrder> = mapOf(
+    sortScopeKeyForTab(MusicLibraryTab.HOME) to MusicSortOrder.RANDOM,
+  )
+
+  fun parseSavedSectionSorts(rawString: String?): Map<String, MusicSortOrder> {
+    // By default (when never customized), Home has "Save for home" pre-checked with RANDOM sort
+    if (rawString == null) return DEFAULT_SAVED_SECTION_SORTS
+    val trimmed = rawString.trim()
+    if (trimmed.isEmpty() || trimmed == "__none__") return emptyMap()
+    val result = LinkedHashMap<String, MusicSortOrder>()
+    for (line in trimmed.lines()) {
+      val entry = line.trim()
+      if (entry.isEmpty() || entry == "__none__") continue
+      val sep = entry.lastIndexOf('=')
+      if (sep <= 0) continue
+      val key = entry.substring(0, sep).trim()
+      val valueName = entry.substring(sep + 1).trim()
+      if (key.isNotEmpty() && valueName.isNotEmpty()) {
+        result[key] = MusicSortOrder.fromNameOrDefault(valueName)
+      }
+    }
+    return result
+  }
+
+  fun serializeSavedSectionSorts(saved: Map<String, MusicSortOrder>): String {
+    if (saved.isEmpty()) return "__none__"
+    return saved.entries.joinToString("\n") { (key, order) -> "$key=${order.name}" }
+  }
+
+  /**
+   * Sorts a list of [MusicPlaylist]s according to [sortOrder].
+   * When [preserveOriginalOnRandom] is `true` (such as on the Home view where mixes are already
+   * randomly generated), `MusicSortOrder.RANDOM` preserves the generated mix order.
+   */
+  fun sortPlaylists(
+    playlists: List<MusicPlaylist>,
+    sortOrder: MusicSortOrder,
+    playStats: Map<String, TrackPlayStats> = emptyMap(),
+    randomSeed: Long = 0L,
+    preserveOriginalOnRandom: Boolean = false,
+  ): List<MusicPlaylist> {
+    if (playlists.size <= 1) return playlists
+    return when (sortOrder) {
+      MusicSortOrder.RANDOM -> {
+        if (preserveOriginalOnRandom) {
+          playlists
+        } else {
+          val rng = kotlin.random.Random(if (randomSeed != 0L) randomSeed else 1L)
+          playlists.shuffled(rng)
+        }
+      }
+      MusicSortOrder.TITLE_ASC, MusicSortOrder.ARTIST_ASC, MusicSortOrder.ALBUM_ASC ->
+        playlists.sortedBy { it.name.lowercase(Locale.ROOT) }
+      MusicSortOrder.TITLE_DESC ->
+        playlists.sortedByDescending { it.name.lowercase(Locale.ROOT) }
+      MusicSortOrder.DURATION_DESC ->
+        playlists.sortedWith(
+          compareByDescending<MusicPlaylist> { it.totalDurationMs }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.DURATION_ASC ->
+        playlists.sortedWith(
+          compareBy<MusicPlaylist> { it.totalDurationMs }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.YEAR_DESC ->
+        playlists.sortedWith(
+          compareByDescending<MusicPlaylist> { pl -> pl.tracks.maxOfOrNull { it.year } ?: 0 }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.MOST_PLAYED ->
+        playlists.sortedWith(
+          compareByDescending<MusicPlaylist> { pl ->
+            pl.tracks.sumOf { t -> playStats[t.id]?.engagementScoreForTrack(t.durationMs) ?: 0L }
+          }.thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.RECENTLY_PLAYED ->
+        playlists.sortedWith(
+          compareByDescending<MusicPlaylist> { pl ->
+            pl.tracks.maxOfOrNull { t -> playStats[t.id]?.lastPlayedAtMs ?: 0L } ?: 0L
+          }.thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+    }
+  }
+
+  /**
+   * Sorts a list of [MusicArtist]s according to [sortOrder].
+   */
+  fun sortArtists(
+    artists: List<MusicArtist>,
+    sortOrder: MusicSortOrder,
+    playStats: Map<String, TrackPlayStats> = emptyMap(),
+    randomSeed: Long = 0L,
+  ): List<MusicArtist> {
+    if (artists.size <= 1) return artists
+    return when (sortOrder) {
+      MusicSortOrder.RANDOM -> {
+        val rng = kotlin.random.Random(if (randomSeed != 0L) randomSeed else 1L)
+        artists.shuffled(rng)
+      }
+      MusicSortOrder.TITLE_ASC, MusicSortOrder.ARTIST_ASC, MusicSortOrder.ALBUM_ASC ->
+        artists.sortedBy { it.name.lowercase(Locale.ROOT) }
+      MusicSortOrder.TITLE_DESC ->
+        artists.sortedByDescending { it.name.lowercase(Locale.ROOT) }
+      MusicSortOrder.DURATION_DESC ->
+        artists.sortedWith(
+          compareByDescending<MusicArtist> { it.totalDurationMs }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.DURATION_ASC ->
+        artists.sortedWith(
+          compareBy<MusicArtist> { it.totalDurationMs }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.YEAR_DESC ->
+        artists.sortedWith(
+          compareByDescending<MusicArtist> { a -> a.tracks.maxOfOrNull { it.year } ?: 0 }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.MOST_PLAYED ->
+        artists.sortedWith(
+          compareByDescending<MusicArtist> { a ->
+            a.tracks.sumOf { t -> playStats[t.id]?.engagementScoreForTrack(t.durationMs) ?: 0L }
+          }.thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.RECENTLY_PLAYED ->
+        artists.sortedWith(
+          compareByDescending<MusicArtist> { a ->
+            a.tracks.maxOfOrNull { t -> playStats[t.id]?.lastPlayedAtMs ?: 0L } ?: 0L
+          }.thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+    }
+  }
+
+  /**
+   * Sorts a list of [MusicAlbum]s according to [sortOrder].
+   */
+  fun sortAlbums(
+    albums: List<MusicAlbum>,
+    sortOrder: MusicSortOrder,
+    playStats: Map<String, TrackPlayStats> = emptyMap(),
+    randomSeed: Long = 0L,
+  ): List<MusicAlbum> {
+    if (albums.size <= 1) return albums
+    return when (sortOrder) {
+      MusicSortOrder.RANDOM -> {
+        val rng = kotlin.random.Random(if (randomSeed != 0L) randomSeed else 1L)
+        albums.shuffled(rng)
+      }
+      MusicSortOrder.TITLE_ASC, MusicSortOrder.ALBUM_ASC ->
+        albums.sortedBy { it.name.lowercase(Locale.ROOT) }
+      MusicSortOrder.TITLE_DESC ->
+        albums.sortedByDescending { it.name.lowercase(Locale.ROOT) }
+      MusicSortOrder.ARTIST_ASC ->
+        albums.sortedWith(
+          compareBy<MusicAlbum> { it.artist.lowercase(Locale.ROOT) }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.DURATION_DESC ->
+        albums.sortedWith(
+          compareByDescending<MusicAlbum> { it.totalDurationMs }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.DURATION_ASC ->
+        albums.sortedWith(
+          compareBy<MusicAlbum> { it.totalDurationMs }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.YEAR_DESC ->
+        albums.sortedWith(
+          compareByDescending<MusicAlbum> { it.year }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.MOST_PLAYED ->
+        albums.sortedWith(
+          compareByDescending<MusicAlbum> { al ->
+            al.tracks.sumOf { t -> playStats[t.id]?.engagementScoreForTrack(t.durationMs) ?: 0L }
+          }.thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.RECENTLY_PLAYED ->
+        albums.sortedWith(
+          compareByDescending<MusicAlbum> { al ->
+            al.tracks.maxOfOrNull { t -> playStats[t.id]?.lastPlayedAtMs ?: 0L } ?: 0L
+          }.thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+    }
+  }
+
+  /**
+   * Sorts a list of [MusicGenre]s according to [sortOrder].
+   */
+  fun sortGenres(
+    genres: List<MusicGenre>,
+    sortOrder: MusicSortOrder,
+    playStats: Map<String, TrackPlayStats> = emptyMap(),
+    randomSeed: Long = 0L,
+  ): List<MusicGenre> {
+    if (genres.size <= 1) return genres
+    return when (sortOrder) {
+      MusicSortOrder.RANDOM -> {
+        val rng = kotlin.random.Random(if (randomSeed != 0L) randomSeed else 1L)
+        genres.shuffled(rng)
+      }
+      MusicSortOrder.TITLE_ASC, MusicSortOrder.ARTIST_ASC, MusicSortOrder.ALBUM_ASC ->
+        genres.sortedBy { it.name.lowercase(Locale.ROOT) }
+      MusicSortOrder.TITLE_DESC ->
+        genres.sortedByDescending { it.name.lowercase(Locale.ROOT) }
+      MusicSortOrder.DURATION_DESC ->
+        genres.sortedWith(
+          compareByDescending<MusicGenre> { it.totalDurationMs }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.DURATION_ASC ->
+        genres.sortedWith(
+          compareBy<MusicGenre> { it.totalDurationMs }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.YEAR_DESC ->
+        genres.sortedWith(
+          compareByDescending<MusicGenre> { g -> g.tracks.maxOfOrNull { it.year } ?: 0 }
+            .thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.MOST_PLAYED ->
+        genres.sortedWith(
+          compareByDescending<MusicGenre> { g ->
+            g.tracks.sumOf { t -> playStats[t.id]?.engagementScoreForTrack(t.durationMs) ?: 0L }
+          }.thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+      MusicSortOrder.RECENTLY_PLAYED ->
+        genres.sortedWith(
+          compareByDescending<MusicGenre> { g ->
+            g.tracks.maxOfOrNull { t -> playStats[t.id]?.lastPlayedAtMs ?: 0L } ?: 0L
+          }.thenBy { it.name.lowercase(Locale.ROOT) }
+        )
+    }
+  }
+
+  /**
+   * Checks whether [track] belongs to [folder] (matching either its [MusicFolder.customAbsolutePath]
+   * or its relative [MusicFolder.displayPath] under [rootDirectory]).
+   */
+  fun isTrackInFolder(
+    track: MusicTrack,
+    folder: MusicFolder,
+    rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
+  ): Boolean {
+    val file = track.file ?: return false
+    val folderDir = resolveDirectoryForFolder(folder, rootDirectory)
+    val trackPath = file.absolutePath
+    val folderPath = folderDir.absolutePath.trimEnd('/')
+    return trackPath.equals(folderPath, ignoreCase = true) ||
+      trackPath.startsWith("$folderPath/", ignoreCase = true) ||
+      file.parentFile?.name?.equals(folder.folderName, ignoreCase = true) == true
+  }
   fun resolveDefaultMusicDirectories(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
   ): List<File> {
@@ -2216,12 +2826,13 @@ object MusicPlayerEngine {
     rootDirectory: File,
     initialDirectory: File?,
     includeSamples: Boolean,
+    additionalDirectories: List<File> = emptyList(),
   ): String {
     val targetDirs = if (initialDirectory != null) {
-      listOf(initialDirectory)
+      listOf(initialDirectory) + additionalDirectories
     } else {
-      resolveDefaultMusicDirectories(rootDirectory)
-    }
+      resolveDefaultMusicDirectories(rootDirectory) + additionalDirectories
+    }.distinctBy { it.absolutePath }
     val dirStamp = targetDirs.joinToString("|") { dir ->
       val mod = if (dir.exists()) dir.lastModified() else -1L
       "${dir.absolutePath}@$mod"
@@ -2237,8 +2848,9 @@ object MusicPlayerEngine {
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
     initialDirectory: File? = null,
     includeSamples: Boolean = false,
+    additionalDirectories: List<File> = emptyList(),
   ): List<MusicTrack>? {
-    val key = libraryCacheKey(rootDirectory, initialDirectory, includeSamples)
+    val key = libraryCacheKey(rootDirectory, initialDirectory, includeSamples, additionalDirectories)
     synchronized(metadataCacheLock) {
       return libraryTracksCache[key]
     }
@@ -2246,9 +2858,9 @@ object MusicPlayerEngine {
 
   /**
    * Resolves the full library of tracks from [initialDirectory] (if provided) or the default
-   * `/Music`, `/Audio`, `/Recordings`, and `/Download` folders under [rootDirectory], combining
-   * or falling back to [DEFAULT_SAMPLE_TRACKS] when [includeSamples] is enabled or when no local
-   * audio files exist.
+   * `/Music`, `/Audio`, `/Recordings`, and `/Download` folders under [rootDirectory] plus any
+   * [additionalDirectories] (user-added custom folders), combining or falling back to
+   * [DEFAULT_SAMPLE_TRACKS] when [includeSamples] is enabled.
    */
   fun loadLibraryTracks(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
@@ -2256,15 +2868,16 @@ object MusicPlayerEngine {
     includeSamples: Boolean = false,
     inspectMetadataRetriever: Boolean = true,
     deferAlbumArt: Boolean = true,
+    additionalDirectories: List<File> = emptyList(),
   ): List<MusicTrack> {
     if (trackIndexDiskCacheFile != null) {
       loadTrackIndexCacheFromDisk(trackIndexDiskCacheFile)
     }
     val targetDirs = if (initialDirectory != null) {
-      listOf(initialDirectory)
+      listOf(initialDirectory) + additionalDirectories
     } else {
-      resolveDefaultMusicDirectories(rootDirectory)
-    }
+      resolveDefaultMusicDirectories(rootDirectory) + additionalDirectories
+    }.distinctBy { it.absolutePath }
     val localTracks = scanMusicDirectories(
       directories = targetDirs,
       inspectMetadataRetriever = inspectMetadataRetriever,
@@ -2276,7 +2889,7 @@ object MusicPlayerEngine {
       includeSamples -> DEFAULT_SAMPLE_TRACKS
       else -> emptyList()
     }
-    val key = libraryCacheKey(rootDirectory, initialDirectory, includeSamples)
+    val key = libraryCacheKey(rootDirectory, initialDirectory, includeSamples, additionalDirectories)
     synchronized(metadataCacheLock) {
       if (inspectMetadataRetriever || libraryTracksCache[key] == null) {
         libraryTracksCache[key] = result
@@ -2298,6 +2911,7 @@ object MusicPlayerEngine {
     includeSamples: Boolean = false,
     inspectMetadataRetriever: Boolean = true,
     deferAlbumArt: Boolean = true,
+    additionalDirectories: List<File> = emptyList(),
   ): List<MusicTrack> = withContext(Dispatchers.IO) {
     ensureActive()
     loadLibraryTracks(
@@ -2306,6 +2920,7 @@ object MusicPlayerEngine {
       includeSamples = includeSamples,
       inspectMetadataRetriever = inspectMetadataRetriever,
       deferAlbumArt = deferAlbumArt,
+      additionalDirectories = additionalDirectories,
     )
   }
 
@@ -3136,7 +3751,9 @@ object MusicPlayerEngine {
     favoriteArtists: Set<String> = activeSessionState?.favoriteArtists ?: emptySet(),
     favoriteAlbums: Set<String> = activeSessionState?.favoriteAlbums ?: emptySet(),
     favoriteGenres: Set<String> = activeSessionState?.favoriteGenres ?: emptySet(),
+    randomSeed: Long = 0L,
   ): List<MusicTrack> {
+    if (tracks.size <= 1) return tracks.toList()
     return when (sortOrder) {
       MusicSortOrder.TITLE_ASC -> tracks.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
       MusicSortOrder.TITLE_DESC -> tracks.sortedWith(compareByDescending(String.CASE_INSENSITIVE_ORDER) { it.title })
@@ -3158,6 +3775,10 @@ object MusicPlayerEngine {
         compareBy<MusicTrack> { it.durationMs }
           .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
       )
+      MusicSortOrder.YEAR_DESC -> tracks.sortedWith(
+        compareByDescending<MusicTrack> { it.year }
+          .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
+      )
       MusicSortOrder.MOST_PLAYED -> sortTracksByPlayStats(
         tracks = tracks,
         playStats = playStats,
@@ -3167,6 +3788,14 @@ object MusicPlayerEngine {
         favoriteGenres = favoriteGenres,
       )
       MusicSortOrder.RECENTLY_PLAYED -> sortTracksByRecentlyPlayed(tracks, playStats)
+      MusicSortOrder.RANDOM -> {
+        val rng = if (randomSeed != 0L) kotlin.random.Random(randomSeed) else kotlin.random.Random.Default
+        var shuffled = tracks.shuffled(rng)
+        if (tracks.size > 1 && shuffled.map { it.id } == tracks.map { it.id }) {
+          shuffled = tracks.drop(1) + tracks.first()
+        }
+        shuffled
+      }
     }
   }
 
@@ -3592,8 +4221,9 @@ object MusicPlayerEngine {
   /**
    * Generates [HOME_PLAYLIST_COUNT] (6) curated Home playlists targeting approximately
    * [targetDurationMs] (~1 hour each, not strict):
-   * 1. **Genre Mashup #1**: Mashes similar genres together (e.g., Synthwave × Electronic).
-   * 2. **Genre Mashup #2**: Mashes a second pair of similar/complementary genres together (e.g., Jazz × Acoustic).
+   * 1. **Genre Mashup**: Mashes similar genres together (e.g., Synthwave × Electronic).
+   * 2. **Old Favorites**: Songs by favorite artists/albums/songs/genres that have been played a lot
+   *    but not listened to in a good while.
    * 3. **Play Stats Powerhouse**: Uses play counts, full plays, total listen time, and low skips.
    * 4. **Favorites Spotlight**: Uses favorite songs, favorite artists, favorite albums, and favorite genres.
    * 5. **Stats & Favorites Rediscovery**: Mixes lesser-played hidden gems with favorite/top-played anchors.
@@ -3618,7 +4248,7 @@ object MusicPlayerEngine {
     if (allTracks.isEmpty()) {
       return listOf(
         MusicPlaylist(id = "home_mix_1", name = "Genre Fusion #1", tracks = emptyList(), subtitle = "Genre Mashup • ~1 hr target", isGeneratedHomeMix = true),
-        MusicPlaylist(id = "home_mix_2", name = "Genre Fusion #2", tracks = emptyList(), subtitle = "Genre Mashup • ~1 hr target", isGeneratedHomeMix = true),
+        MusicPlaylist(id = "home_mix_2", name = "Old Favorites", tracks = emptyList(), subtitle = "Old Favorites • Played A Lot, Not Recently", isGeneratedHomeMix = true),
         MusicPlaylist(id = "home_mix_3", name = "Heavy Rotation Hour", tracks = emptyList(), subtitle = "Play Stats • Heavy Rotation", isGeneratedHomeMix = true),
         MusicPlaylist(id = "home_mix_4", name = "VIP Favorites Mix", tracks = emptyList(), subtitle = "Favorites • Artists, Albums & Songs", isGeneratedHomeMix = true),
         MusicPlaylist(id = "home_mix_5", name = "Rediscovery Radar", tracks = emptyList(), subtitle = "Play Stats & Favorites • Deep Cuts", isGeneratedHomeMix = true),
@@ -3629,7 +4259,7 @@ object MusicPlayerEngine {
     val totalLibraryDurationMs = allTracks.sumOf { it.durationMs.coerceAtLeast(1_000L) }
     val fillTowardOneHour = totalLibraryDurationMs >= targetDurationMs / 2L
     val genres = precomputedGenres ?: buildGenres(allTracks)
-    val (clusterA, clusterB) = buildGenreMashupClusters(genres, gen, random)
+    val (clusterA, _) = buildGenreMashupClusters(genres, gen, random)
     val favLookup = NormalizedFavoriteLookup(
       favoriteIds = favoriteIds,
       favoriteArtists = favoriteArtists,
@@ -3672,38 +4302,70 @@ object MusicPlayerEngine {
       isGeneratedHomeMix = true,
     )
 
-    // 2. Genre Mashup #2 (Second distinct similar/complementary genre mashup)
-    val clusterBNames = clusterB.map { it.name }
-    val clusterBLowerSet = clusterBNames.mapTo(HashSet(clusterBNames.size)) { it.lowercase(Locale.ROOT) }
-    val mash2Primary = interleaveTrackLists(
-      clusterB.map { g -> g.tracks.shuffled(random) }
-    )
-    val mash2Fallback = allTracks
-      .filterNot { t -> t.genre.lowercase(Locale.ROOT) in clusterBLowerSet }
-      .shuffled(random)
-    val mash2Tracks = selectTracksTowardTargetDuration(
-      primaryTracks = mash2Primary,
-      fallbackTracks = mash2Fallback,
+    // 2. Old Favorites (Songs by favorite artists/albums/songs/genres played a lot but not listened to in a good while)
+    val playedTimestamps = playStats.values.mapNotNull { stat ->
+      stat.lastPlayedAtMs.takeIf { stat.hasBeenPlayed && it > 0L }
+    }
+    val maxLastPlayedAtMs = playedTimestamps.maxOrNull() ?: 0L
+    val minLastPlayedAtMs = playedTimestamps.minOrNull() ?: 0L
+    val timestampSpanMs = (maxLastPlayedAtMs - minLastPlayedAtMs).coerceAtLeast(1L)
+
+    fun computeOldFavoriteScore(track: MusicTrack): Long {
+      val stat = playStats[track.id] ?: return 0L
+      if (!stat.hasBeenPlayed) return 0L
+      val fullPlaysPoints = (stat.calculatedFullPlays(track.durationMs) * 60_000.0).roundToLong()
+      val baseVolume = (stat.playCount.toLong() * 60_000L + fullPlaysPoints + stat.totalPlayTimeMs - stat.skipCount.toLong() * 25L)
+        .coerceAtLeast(1_000L)
+      val stalenessFraction = when {
+        maxLastPlayedAtMs <= minLastPlayedAtMs -> 0.5
+        stat.lastPlayedAtMs <= 0L -> 1.0
+        else -> ((maxLastPlayedAtMs - stat.lastPlayedAtMs).coerceAtLeast(0L).toDouble() / timestampSpanMs.toDouble())
+          .coerceIn(0.0, 1.0)
+      }
+      return (baseVolume.toDouble() * (0.35 + 1.65 * stalenessFraction)).roundToLong()
+    }
+
+    fun isNotListenedToRecently(track: MusicTrack): Boolean {
+      val stat = playStats[track.id] ?: return false
+      if (!stat.hasBeenPlayed) return false
+      return maxLastPlayedAtMs <= minLastPlayedAtMs || stat.lastPlayedAtMs < maxLastPlayedAtMs
+    }
+
+    val shuffledForOldFavTieBreak = allTracks.shuffled(random)
+    val trueOldFavorites = shuffledForOldFavTieBreak
+      .filter { favLookup.isTrackOrCategoryFav(it) && playStats[it.id]?.hasBeenPlayed == true && isNotListenedToRecently(it) }
+      .sortedByDescending { computeOldFavoriteScore(it) }
+    val recentPlayedFavorites = shuffledForOldFavTieBreak
+      .filter { favLookup.isTrackOrCategoryFav(it) && playStats[it.id]?.hasBeenPlayed == true && !isNotListenedToRecently(it) }
+      .sortedByDescending { computeOldFavoriteScore(it) }
+    val nonFavOldHeavyPlays = shuffledForOldFavTieBreak
+      .filter { !favLookup.isTrackOrCategoryFav(it) && playStats[it.id]?.hasBeenPlayed == true && isNotListenedToRecently(it) }
+      .sortedByDescending { computeOldFavoriteScore(it) }
+    val unplayedFavorites = shuffledForOldFavTieBreak
+      .filter { favLookup.isTrackOrCategoryFav(it) && playStats[it.id]?.hasBeenPlayed != true }
+
+    val oldFavoritesPrimary = (trueOldFavorites + recentPlayedFavorites + nonFavOldHeavyPlays + unplayedFavorites)
+      .distinctBy { it.id }
+    val oldFavoritesFallback = shuffledForOldFavTieBreak
+      .sortedByDescending { computeOldFavoriteScore(it) }
+    val oldFavTracks = selectTracksTowardTargetDuration(
+      primaryTracks = oldFavoritesPrimary.ifEmpty { oldFavoritesFallback.take(minOf(6, allTracks.size)) },
+      fallbackTracks = oldFavoritesFallback,
       targetDurationMs = targetDurationMs,
       minTracks = minOf(4, allTracks.size),
       fillWithFallbackTowardTarget = fillTowardOneHour,
     )
-    val mash2Label = if (clusterBNames.size >= 2) {
-      "${clusterBNames[0]} × ${clusterBNames[1]}"
-    } else {
-      clusterBNames.firstOrNull() ?: "Cross-Genre"
-    }
-    val mash2Titles = listOf(
-      "Crossfade: $mash2Label",
-      "$mash2Label Sessions",
-      "Velvet & Voltage: $mash2Label",
-      "After Hours: $mash2Label",
+    val oldFavTitles = listOf(
+      "Old Favorites",
+      "Time Capsule: Old Favorites",
+      "Forgotten Favorites & Classics",
+      "Long-Lost Favorites Replay",
     )
     val playlist2 = MusicPlaylist(
       id = "home_mix_2",
-      name = mash2Titles[gen % mash2Titles.size],
-      tracks = mash2Tracks,
-      subtitle = "Genre Mashup • ${clusterBNames.joinToString(" & ").ifEmpty { "Mixed Vibes" }}",
+      name = oldFavTitles[gen % oldFavTitles.size],
+      tracks = oldFavTracks,
+      subtitle = "Old Favorites • Played A Lot, Not Recently",
       isGeneratedHomeMix = true,
     )
 
@@ -4293,6 +4955,14 @@ object MusicPlayerEngine {
     return buildPaletteFromRgb(pRgb, sRgb, aRgb)
   }
 
+  internal fun safeElapsedRealtimeMs(): Long {
+    return try {
+      SystemClock.elapsedRealtime()
+    } catch (_: Throwable) {
+      0L
+    }
+  }
+
   /**
    * Updates the observable external system media player state (from another app's [MediaSession]
    * or media notification).
@@ -4314,6 +4984,13 @@ object MusicPlayerEngine {
     isPlaying: Boolean = true,
     artworkBitmap: Bitmap? = null,
     notificationColorRgb: Int? = null,
+    durationMs: Long = 0L,
+    positionMs: Long = 0L,
+    positionUpdateElapsedRealtimeMs: Long = safeElapsedRealtimeMs(),
+    playbackSpeed: Float = 1.0f,
+    canSeek: Boolean = durationMs > 0L,
+    canSkipNext: Boolean = true,
+    canSkipPrevious: Boolean = true,
   ): SystemMediaPlayingInfo {
     val palette = resolveSystemMediaPalette(
       artworkBitmap = artworkBitmap,
@@ -4323,6 +5000,12 @@ object MusicPlayerEngine {
       album = album,
       genre = genre,
     )
+    val safeDuration = durationMs.coerceAtLeast(0L)
+    val safePosition = if (safeDuration > 0L) {
+      positionMs.coerceIn(0L, safeDuration)
+    } else {
+      positionMs.coerceAtLeast(0L)
+    }
     val info = SystemMediaPlayingInfo(
       title = title.ifBlank { "External Media" },
       artist = artist,
@@ -4333,6 +5016,14 @@ object MusicPlayerEngine {
       isExternalApp = true,
       isPlaying = isPlaying,
       palette = palette,
+      artworkBitmap = artworkBitmap,
+      durationMs = safeDuration,
+      positionMs = safePosition,
+      positionUpdateElapsedRealtimeMs = positionUpdateElapsedRealtimeMs,
+      playbackSpeed = playbackSpeed.takeIf { it > 0f } ?: 1.0f,
+      canSeek = canSeek && safeDuration > 0L,
+      canSkipNext = canSkipNext,
+      canSkipPrevious = canSkipPrevious,
     )
     externalSystemMediaInfo = info
     return info
@@ -4366,6 +5057,16 @@ object MusicPlayerEngine {
   private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
   private val engineTrackedControllers = mutableMapOf<MediaController, MediaController.Callback>()
+
+  @Volatile
+  private var activeExternalMediaController: MediaController? = null
+
+  /**
+   * Last transport command dispatched to an external Android system media session
+   * (`"PLAY"`, `"PAUSE"`, `"NEXT"`, `"PREVIOUS"`, `"SEEK:<ms>"`), useful for verification and diagnostics.
+   */
+  var externalSystemMediaLastDispatchedAction by mutableStateOf<String?>(null)
+    internal set
 
   private val engineActiveSessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
     val ctx = monitoredAppContext ?: return@OnActiveSessionsChangedListener
@@ -4447,9 +5148,9 @@ object MusicPlayerEngine {
 
   /**
    * Converts a [Drawable] (such as a notification large icon or app launcher icon) into a
-   * software [Bitmap] suitable for palette extraction.
+   * software [Bitmap] suitable for preview rendering and palette extraction.
    */
-  internal fun drawableToBitmap(drawable: Drawable?, targetSizePx: Int = 96): Bitmap? {
+  internal fun drawableToBitmap(drawable: Drawable?, targetSizePx: Int = 360): Bitmap? {
     if (drawable == null) return null
     return try {
       if (drawable is BitmapDrawable && drawable.bitmap != null) {
@@ -4523,7 +5224,7 @@ object MusicPlayerEngine {
       val scheme = uri.scheme?.lowercase(Locale.ROOT)
       val opts = BitmapFactory.Options().apply {
         inPreferredConfig = Bitmap.Config.ARGB_8888
-        inSampleSize = 2
+        inSampleSize = 1
       }
       when (scheme) {
         "content", "android.resource" -> {
@@ -4979,11 +5680,13 @@ object MusicPlayerEngine {
 
       val chosen = externalControllers.firstOrNull { isControllerPlaying(it) }
         ?: externalControllers.first()
+      activeExternalMediaController = chosen
 
       val playing = isControllerPlaying(chosen) ||
         (systemMusicStreamActive && externalControllers.size == 1 && chosen.playbackState?.state != PlaybackState.STATE_STOPPED)
       val meta = try { chosen.metadata } catch (_: Throwable) { null }
       val desc = try { meta?.description } catch (_: Throwable) { null }
+      val pbState = try { chosen.playbackState } catch (_: Throwable) { null }
       val cachedNotif = activeMediaNotifications[chosen.packageName]
 
       val title = meta?.getString(MediaMetadata.METADATA_KEY_TITLE)
@@ -5003,6 +5706,34 @@ object MusicPlayerEngine {
         ?: cachedNotif?.album
         ?: ""
       val genre = meta?.getString(MediaMetadata.METADATA_KEY_GENRE) ?: ""
+      val durationMs = try {
+        meta?.getLong(MediaMetadata.METADATA_KEY_DURATION)?.coerceAtLeast(0L) ?: 0L
+      } catch (_: Throwable) {
+        0L
+      }
+      val positionMs = try {
+        pbState?.position?.takeIf { it >= 0L } ?: 0L
+      } catch (_: Throwable) {
+        0L
+      }
+      val posUpdateTime = try {
+        pbState?.lastPositionUpdateTime?.takeIf { it > 0L } ?: safeElapsedRealtimeMs()
+      } catch (_: Throwable) {
+        safeElapsedRealtimeMs()
+      }
+      val speed = try {
+        pbState?.playbackSpeed?.takeIf { it > 0f } ?: 1.0f
+      } catch (_: Throwable) {
+        1.0f
+      }
+      val actions = try {
+        pbState?.actions ?: 0L
+      } catch (_: Throwable) {
+        0L
+      }
+      val canSeek = durationMs > 0L && (actions == 0L || (actions and PlaybackState.ACTION_SEEK_TO) != 0L)
+      val canSkipNext = actions == 0L || (actions and PlaybackState.ACTION_SKIP_TO_NEXT) != 0L
+      val canSkipPrevious = actions == 0L || (actions and PlaybackState.ACTION_SKIP_TO_PREVIOUS) != 0L
 
       val artUri = meta?.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
         ?: meta?.getString(MediaMetadata.METADATA_KEY_ART_URI)
@@ -5030,8 +5761,642 @@ object MusicPlayerEngine {
         isPlaying = playing,
         artworkBitmap = artBitmap,
         notificationColorRgb = cachedNotif?.colorRgb,
+        durationMs = durationMs,
+        positionMs = positionMs,
+        positionUpdateElapsedRealtimeMs = posUpdateTime,
+        playbackSpeed = speed,
+        canSeek = canSeek,
+        canSkipNext = canSkipNext,
+        canSkipPrevious = canSkipPrevious,
       )
     } catch (_: Throwable) {}
+  }
+
+  private fun resolveActiveExternalController(context: Context? = monitoredAppContext): MediaController? {
+    val current = activeExternalMediaController
+    val targetPkg = externalSystemMediaInfo?.sourcePackage.orEmpty()
+    if (current != null) {
+      val matches = try {
+        targetPkg.isBlank() || current.packageName == targetPkg
+      } catch (_: Throwable) {
+        false
+      }
+      if (matches) return current
+    }
+    synchronized(systemMediaMonitorLock) {
+      val tracked = engineTrackedControllers.keys.firstOrNull { ctrl ->
+        try {
+          targetPkg.isBlank() || ctrl.packageName == targetPkg
+        } catch (_: Throwable) {
+          false
+        }
+      } ?: engineTrackedControllers.keys.firstOrNull()
+      if (tracked != null) {
+        activeExternalMediaController = tracked
+        return tracked
+      }
+    }
+    val appCtx = context?.applicationContext ?: context ?: monitoredAppContext
+    if (appCtx != null) {
+      val notifToken = (if (targetPkg.isNotBlank()) activeMediaNotifications[targetPkg]?.sessionToken else null)
+        ?: activeMediaNotifications.values.firstNotNullOfOrNull { it.sessionToken }
+      if (notifToken != null) {
+        return try {
+          MediaController(appCtx, notifToken).also { activeExternalMediaController = it }
+        } catch (_: Throwable) {
+          null
+        }
+      }
+    }
+    return null
+  }
+
+  private fun dispatchExternalMediaKeyEvent(context: Context?, keyCode: Int): Boolean {
+    val appCtx = context?.applicationContext ?: context ?: monitoredAppContext ?: return false
+    return try {
+      val audioManager = appCtx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+      val now = safeElapsedRealtimeMs()
+      val downEvent = KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0)
+      val upEvent = KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0)
+      audioManager.dispatchMediaKeyEvent(downEvent)
+      audioManager.dispatchMediaKeyEvent(upEvent)
+      true
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  /**
+   * Computes the live interpolated playback position (in milliseconds) of the currently active
+   * external Android system media session.
+   */
+  fun currentExternalSystemMediaPositionMs(
+    nowElapsedRealtimeMs: Long = safeElapsedRealtimeMs(),
+  ): Long {
+    val info = externalSystemMediaInfo ?: return 0L
+    val basePos = info.positionMs.coerceAtLeast(0L)
+    val rawPos = if (info.isPlaying && info.positionUpdateElapsedRealtimeMs > 0L && nowElapsedRealtimeMs > info.positionUpdateElapsedRealtimeMs) {
+      val deltaMs = ((nowElapsedRealtimeMs - info.positionUpdateElapsedRealtimeMs) * info.playbackSpeed.coerceAtLeast(0f)).toLong()
+      basePos + deltaMs
+    } else {
+      basePos
+    }
+    return if (info.durationMs > 0L) {
+      rawPos.coerceIn(0L, info.durationMs)
+    } else {
+      rawPos.coerceAtLeast(0L)
+    }
+  }
+
+  /**
+   * Toggles Play / Pause on the active external Android system media player session.
+   */
+  fun toggleExternalSystemMediaPlayPause(context: Context? = monitoredAppContext): Boolean {
+    val current = externalSystemMediaInfo
+    val targetPlaying = !(current?.isPlaying ?: false)
+    externalSystemMediaLastDispatchedAction = if (targetPlaying) "PLAY" else "PAUSE"
+    val nowElapsed = safeElapsedRealtimeMs()
+    val frozenPos = currentExternalSystemMediaPositionMs(nowElapsed)
+
+    val controller = resolveActiveExternalController(context)
+    var dispatched = false
+    if (controller != null) {
+      try {
+        if (targetPlaying) {
+          controller.transportControls.play()
+        } else {
+          controller.transportControls.pause()
+        }
+        dispatched = true
+      } catch (_: Throwable) {}
+    }
+    if (!dispatched) {
+      dispatched = dispatchExternalMediaKeyEvent(context, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+    }
+
+    if (current != null) {
+      externalSystemMediaInfo = current.copy(
+        isPlaying = targetPlaying,
+        positionMs = frozenPos,
+        positionUpdateElapsedRealtimeMs = nowElapsed,
+      )
+      return true
+    }
+    return dispatched
+  }
+
+  /**
+   * Pauses the active external Android system media session if it is currently playing.
+   */
+  fun pauseExternalSystemMediaIfPlaying(context: Context? = monitoredAppContext): Boolean {
+    val current = externalSystemMediaInfo ?: return false
+    if (!current.isPlaying) return false
+    return toggleExternalSystemMediaPlayPause(context)
+  }
+
+  /**
+   * Skips to the next track in the active external Android system media player session.
+   */
+  fun skipExternalSystemMediaToNext(context: Context? = monitoredAppContext): Boolean {
+    val current = externalSystemMediaInfo
+    externalSystemMediaLastDispatchedAction = "NEXT"
+    val nowElapsed = safeElapsedRealtimeMs()
+
+    val controller = resolveActiveExternalController(context)
+    var dispatched = false
+    if (controller != null) {
+      try {
+        controller.transportControls.skipToNext()
+        dispatched = true
+      } catch (_: Throwable) {}
+    }
+    if (!dispatched) {
+      dispatched = dispatchExternalMediaKeyEvent(context, KeyEvent.KEYCODE_MEDIA_NEXT)
+    }
+
+    if (current != null) {
+      externalSystemMediaInfo = current.copy(
+        positionMs = 0L,
+        positionUpdateElapsedRealtimeMs = nowElapsed,
+      )
+    }
+    val appCtx = context?.applicationContext ?: context ?: monitoredAppContext
+    if (appCtx != null) {
+      try {
+        mainHandler.postDelayed({ syncExternalSystemMediaSessions(appCtx) }, 180L)
+      } catch (_: Throwable) {}
+    }
+    return current != null || dispatched
+  }
+
+  /**
+   * Skips to the previous track in the active external Android system media player session.
+   */
+  fun skipExternalSystemMediaToPrevious(context: Context? = monitoredAppContext): Boolean {
+    val current = externalSystemMediaInfo
+    externalSystemMediaLastDispatchedAction = "PREVIOUS"
+    val nowElapsed = safeElapsedRealtimeMs()
+
+    val controller = resolveActiveExternalController(context)
+    var dispatched = false
+    if (controller != null) {
+      try {
+        controller.transportControls.skipToPrevious()
+        dispatched = true
+      } catch (_: Throwable) {}
+    }
+    if (!dispatched) {
+      dispatched = dispatchExternalMediaKeyEvent(context, KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+    }
+
+    if (current != null) {
+      externalSystemMediaInfo = current.copy(
+        positionMs = 0L,
+        positionUpdateElapsedRealtimeMs = nowElapsed,
+      )
+    }
+    val appCtx = context?.applicationContext ?: context ?: monitoredAppContext
+    if (appCtx != null) {
+      try {
+        mainHandler.postDelayed({ syncExternalSystemMediaSessions(appCtx) }, 180L)
+      } catch (_: Throwable) {}
+    }
+    return current != null || dispatched
+  }
+
+  /**
+   * Seeks to [positionMs] in the active external Android system media player session.
+   */
+  fun seekExternalSystemMediaTo(
+    positionMs: Long,
+    context: Context? = monitoredAppContext,
+  ): Boolean {
+    val current = externalSystemMediaInfo
+    val clamped = if (current != null && current.durationMs > 0L) {
+      positionMs.coerceIn(0L, current.durationMs)
+    } else {
+      positionMs.coerceAtLeast(0L)
+    }
+    externalSystemMediaLastDispatchedAction = "SEEK:$clamped"
+    val nowElapsed = safeElapsedRealtimeMs()
+
+    val controller = resolveActiveExternalController(context)
+    var dispatched = false
+    if (controller != null) {
+      try {
+        controller.transportControls.seekTo(clamped)
+        dispatched = true
+      } catch (_: Throwable) {}
+    }
+
+    if (current != null) {
+      externalSystemMediaInfo = current.copy(
+        positionMs = clamped,
+        positionUpdateElapsedRealtimeMs = nowElapsed,
+      )
+      return true
+    }
+    return dispatched
+  }
+
+  /**
+   * Curated catalog of popular music & audio streaming apps shown in the Home view's
+   * preferred music app picker before the custom picker option at the end.
+   */
+  val POPULAR_STREAMING_MUSIC_APPS: List<PreferredMusicAppLink> = listOf(
+    PreferredMusicAppLink(
+      id = "spotify",
+      label = "Spotify",
+      packageName = "com.spotify.music",
+      webUrl = "https://open.spotify.com",
+      accentRgb = 0x1DB954,
+    ),
+    PreferredMusicAppLink(
+      id = "youtube_music",
+      label = "YouTube Music",
+      packageName = "com.google.android.apps.youtube.music",
+      webUrl = "https://music.youtube.com",
+      accentRgb = 0xFF0033,
+    ),
+    PreferredMusicAppLink(
+      id = "apple_music",
+      label = "Apple Music",
+      packageName = "com.apple.android.music",
+      webUrl = "https://music.apple.com",
+      accentRgb = 0xFA243C,
+    ),
+    PreferredMusicAppLink(
+      id = "soundcloud",
+      label = "SoundCloud",
+      packageName = "com.soundcloud.android",
+      webUrl = "https://soundcloud.com",
+      accentRgb = 0xFF5500,
+    ),
+    PreferredMusicAppLink(
+      id = "amazon_music",
+      label = "Amazon Music",
+      packageName = "com.amazon.mp3",
+      webUrl = "https://music.amazon.com",
+      accentRgb = 0x00A8E1,
+    ),
+    PreferredMusicAppLink(
+      id = "tidal",
+      label = "TIDAL",
+      packageName = "com.aspiro.tidal",
+      webUrl = "https://listen.tidal.com",
+      accentRgb = 0x00E5FF,
+    ),
+    PreferredMusicAppLink(
+      id = "pandora",
+      label = "Pandora",
+      packageName = "com.pandora.android",
+      webUrl = "https://www.pandora.com",
+      accentRgb = 0x224099,
+    ),
+    PreferredMusicAppLink(
+      id = "deezer",
+      label = "Deezer",
+      packageName = "deezer.android.app",
+      webUrl = "https://www.deezer.com",
+      accentRgb = 0xA238FF,
+    ),
+    PreferredMusicAppLink(
+      id = "bandcamp",
+      label = "Bandcamp",
+      packageName = "com.bandcamp.android",
+      webUrl = "https://bandcamp.com",
+      accentRgb = 0x629AA9,
+    ),
+    PreferredMusicAppLink(
+      id = "pocket_casts",
+      label = "Pocket Casts",
+      packageName = "au.com.shiftyjelly.pocketcasts",
+      webUrl = "https://play.pocketcasts.com",
+      accentRgb = 0xF43E37,
+    ),
+    PreferredMusicAppLink(
+      id = "audible",
+      label = "Audible",
+      packageName = "com.audible.application",
+      webUrl = "https://www.audible.com",
+      accentRgb = 0xF8991D,
+    ),
+    PreferredMusicAppLink(
+      id = "iheartradio",
+      label = "iHeartRadio",
+      packageName = "com.clearchannel.iheartradio.controller",
+      webUrl = "https://www.iheart.com",
+      accentRgb = 0xC6002B,
+    ),
+    PreferredMusicAppLink(
+      id = "tunein",
+      label = "TuneIn Radio",
+      packageName = "tunein.player",
+      webUrl = "https://tunein.com",
+      accentRgb = 0x14D8CC,
+    ),
+    PreferredMusicAppLink(
+      id = "qobuz",
+      label = "Qobuz",
+      packageName = "com.qobuz.music",
+      webUrl = "https://play.qobuz.com",
+      accentRgb = 0x2196F3,
+    ),
+  )
+
+  /**
+   * Last preferred music app link launched from the Home view's floating pill bar.
+   */
+  var lastLaunchedPreferredMusicApp by mutableStateOf<PreferredMusicAppLink?>(null)
+    internal set
+
+  /**
+   * Optional test override for installed streaming apps returned by [discoverPopularStreamingApps].
+   */
+  var installedStreamingAppsOverrideForTest: List<PreferredMusicAppLink>? = null
+
+  /**
+   * Optional test override for installed device apps returned by [discoverCustomPickerInstalledApps].
+   */
+  var customPickerInstalledAppsOverrideForTest: List<PreferredMusicAppLink>? = null
+
+  fun serializePreferredMusicApps(apps: List<PreferredMusicAppLink>): String {
+    return apps.joinToString("\n") { app ->
+      val safeId = app.id.replace("\t", " ").replace("\n", " ").trim()
+      val safeLabel = app.label.replace("\t", " ").replace("\n", " ").trim()
+      val safePkg = app.packageName.replace("\t", " ").replace("\n", " ").trim()
+      val safeUrl = app.webUrl.replace("\t", " ").replace("\n", " ").trim()
+      val hexRgb = (app.accentRgb and 0xFFFFFF).toString(16)
+      val customFlag = if (app.isCustom) "1" else "0"
+      "$safeId\t$safeLabel\t$safePkg\t$safeUrl\t$hexRgb\t$customFlag"
+    }
+  }
+
+  fun deserializePreferredMusicApps(raw: String?): List<PreferredMusicAppLink> {
+    if (raw.isNullOrBlank()) return emptyList()
+    val result = mutableListOf<PreferredMusicAppLink>()
+    val seenIds = mutableSetOf<String>()
+    for (line in raw.lines()) {
+      val trimmed = line.trim()
+      if (trimmed.isEmpty()) continue
+      val parts = trimmed.split("\t")
+      if (parts.size < 3) continue
+      val id = parts[0].trim().ifEmpty { continue }
+      if (!seenIds.add(id)) continue
+      val label = parts[1].trim().ifEmpty { id }
+      val pkg = parts[2].trim()
+      val webUrl = parts.getOrNull(3)?.trim().orEmpty()
+      val rgb = parts.getOrNull(4)?.trim()?.toIntOrNull(16)
+        ?: POPULAR_STREAMING_MUSIC_APPS.firstOrNull { it.id == id || it.packageName == pkg }?.accentRgb
+        ?: 0x1DB954
+      val isCustom = parts.getOrNull(5)?.trim() == "1"
+      result.add(
+        PreferredMusicAppLink(
+          id = id,
+          label = label,
+          packageName = pkg,
+          webUrl = webUrl,
+          accentRgb = rgb and 0xFFFFFF,
+          isCustom = isCustom,
+        )
+      )
+    }
+    return result
+  }
+
+  fun createCustomPreferredMusicAppLink(
+    label: String,
+    packageOrUrl: String,
+  ): PreferredMusicAppLink {
+    val cleanLabel = label.trim().ifEmpty {
+      packageOrUrl.trim().substringAfterLast('.').substringAfterLast('/').ifEmpty { "Custom Music App" }
+    }
+    val cleanTarget = packageOrUrl.trim()
+    val isUrl = cleanTarget.startsWith("http://", ignoreCase = true) ||
+      cleanTarget.startsWith("https://", ignoreCase = true)
+    val slug = cleanLabel.lowercase(Locale.ROOT)
+      .replace(Regex("[^a-z0-9]+"), "_")
+      .trim('_')
+      .ifEmpty { "custom_app" }
+    val (primaryRgb, _, _) = computeDeterministicArtworkColors(
+      album = cleanLabel,
+      artist = cleanTarget,
+      genre = "Streaming",
+    )
+    return PreferredMusicAppLink(
+      id = "custom_${slug}_${(cleanTarget.hashCode() and 0x7FFFFFFF) % 10000}",
+      label = cleanLabel,
+      packageName = if (isUrl) "" else cleanTarget,
+      webUrl = if (isUrl) cleanTarget else "",
+      accentRgb = primaryRgb,
+      isCustom = true,
+    )
+  }
+
+  /**
+   * Returns only the installed streaming music apps on [context] (filtering [POPULAR_STREAMING_MUSIC_APPS]
+   * to installed packages and including any additional installed audio/media apps on the device).
+   */
+  fun discoverPopularStreamingApps(
+    context: Context?,
+    searchQuery: String = "",
+  ): List<PreferredMusicAppLink> {
+    val overrideList = installedStreamingAppsOverrideForTest
+    val pm = context?.packageManager
+    val ownPkg = context?.packageName.orEmpty()
+    val installedPresets = mutableListOf<PreferredMusicAppLink>()
+    val extraAudioApps = mutableListOf<PreferredMusicAppLink>()
+
+    if (overrideList != null) {
+      installedPresets.addAll(overrideList.map { it.copy(isInstalled = true) })
+    } else if (pm != null) {
+      for (preset in POPULAR_STREAMING_MUSIC_APPS) {
+        try {
+          if (pm.getLaunchIntentForPackage(preset.packageName) != null) {
+            installedPresets.add(preset.copy(isInstalled = true))
+          }
+        } catch (_: Throwable) {}
+      }
+
+      // Also check installed audio category / media browser apps not already in POPULAR_STREAMING_MUSIC_APPS
+      try {
+        val knownPkgs = POPULAR_STREAMING_MUSIC_APPS.map { it.packageName }.toSet()
+        val mediaActions = listOf(
+          "android.media.browse.MediaBrowserService",
+          "androidx.media3.session.MediaSessionService",
+          "androidx.media3.session.MediaLibraryService",
+        )
+        val discoveredPkgs = mutableSetOf<String>()
+        for (action in mediaActions) {
+          val services = try {
+            pm.queryIntentServices(Intent(action), 0)
+          } catch (_: Throwable) {
+            emptyList()
+          }
+          for (ri in services) {
+            val pkg = ri.serviceInfo?.packageName ?: continue
+            if (pkg != ownPkg && pkg !in knownPkgs) {
+              discoveredPkgs.add(pkg)
+            }
+          }
+        }
+        for (pkg in discoveredPkgs) {
+          if (pm.getLaunchIntentForPackage(pkg) == null) continue
+          val appLabel = resolveAppLabel(context, pkg).ifBlank { continue }
+          val (primaryRgb, _, _) = computeDeterministicArtworkColors(appLabel, pkg, "Audio")
+          extraAudioApps.add(
+            PreferredMusicAppLink(
+              id = "audio_${pkg.replace('.', '_')}",
+              label = appLabel,
+              packageName = pkg,
+              accentRgb = primaryRgb,
+              isInstalled = true,
+            )
+          )
+        }
+      } catch (_: Throwable) {}
+    }
+
+    val combined = installedPresets + extraAudioApps
+    val q = searchQuery.trim()
+    val filtered = if (q.isEmpty()) {
+      combined
+    } else {
+      combined.filter { app ->
+        app.label.contains(q, ignoreCase = true) ||
+          app.packageName.contains(q, ignoreCase = true)
+      }
+    }
+    return filtered.sortedWith(
+      compareBy<PreferredMusicAppLink> {
+        POPULAR_STREAMING_MUSIC_APPS.indexOfFirst { p -> p.id == it.id }.let { idx -> if (idx >= 0) idx else Int.MAX_VALUE }
+      }.thenBy { it.label.lowercase(Locale.ROOT) }
+    )
+  }
+
+  /**
+   * Returns all launchable apps installed on the device for the Custom App Picker option at the
+   * end of the preferred music app dialog.
+   */
+  fun discoverCustomPickerInstalledApps(
+    context: Context?,
+    searchQuery: String = "",
+  ): List<PreferredMusicAppLink> {
+    val overrideList = customPickerInstalledAppsOverrideForTest
+    if (overrideList != null) {
+      val q = searchQuery.trim()
+      return if (q.isEmpty()) {
+        overrideList
+      } else {
+        overrideList.filter { it.label.contains(q, ignoreCase = true) || it.packageName.contains(q, ignoreCase = true) }
+      }
+    }
+    val pm = context?.packageManager ?: return emptyList()
+    val ownPkg = context.packageName
+    val results = mutableListOf<PreferredMusicAppLink>()
+    val seenPkgs = mutableSetOf<String>()
+    try {
+      val mainIntent = Intent(Intent.ACTION_MAIN).apply {
+        addCategory(Intent.CATEGORY_LAUNCHER)
+      }
+      val resolved = pm.queryIntentActivities(mainIntent, 0)
+      for (ri in resolved) {
+        val pkg = ri.activityInfo?.packageName ?: continue
+        if (pkg == ownPkg || !seenPkgs.add(pkg)) continue
+        val label = try {
+          ri.loadLabel(pm)?.toString()?.trim().orEmpty()
+        } catch (_: Throwable) {
+          ""
+        }.ifEmpty { resolveAppLabel(context, pkg) }
+        if (label.isBlank()) continue
+        val presetMatch = POPULAR_STREAMING_MUSIC_APPS.firstOrNull { it.packageName == pkg }
+        val rgb = presetMatch?.accentRgb ?: computeDeterministicArtworkColors(label, pkg, "Custom").first
+        results.add(
+          PreferredMusicAppLink(
+            id = presetMatch?.id ?: "custom_${pkg.replace('.', '_')}",
+            label = label,
+            packageName = pkg,
+            webUrl = presetMatch?.webUrl.orEmpty(),
+            accentRgb = rgb,
+            isCustom = presetMatch == null,
+            isInstalled = true,
+          )
+        )
+      }
+    } catch (_: Throwable) {}
+
+    val q = searchQuery.trim()
+    val filtered = if (q.isEmpty()) {
+      results
+    } else {
+      results.filter {
+        it.label.contains(q, ignoreCase = true) || it.packageName.contains(q, ignoreCase = true)
+      }
+    }
+    return filtered.sortedBy { it.label.lowercase(Locale.ROOT) }
+  }
+
+  /**
+   * Launches [app] from the Home view's floating preferred music app bar, falling back to its web
+   * player URL when the native Android package is not installed on the device.
+   */
+  fun launchPreferredMusicApp(
+    context: Context,
+    app: PreferredMusicAppLink,
+  ): Boolean {
+    lastLaunchedPreferredMusicApp = app
+    val pkg = app.packageName.trim()
+    if (pkg.isNotEmpty() && !pkg.startsWith("http://", ignoreCase = true) && !pkg.startsWith("https://", ignoreCase = true)) {
+      try {
+        val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)?.apply {
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (launchIntent != null) {
+          context.startActivity(launchIntent)
+          return true
+        }
+      } catch (_: Throwable) {}
+    }
+
+    val targetUrl = when {
+      app.webUrl.isNotBlank() -> app.webUrl.trim()
+      pkg.startsWith("http://", ignoreCase = true) || pkg.startsWith("https://", ignoreCase = true) -> pkg
+      pkg.isNotBlank() -> "https://play.google.com/store/apps/details?id=$pkg"
+      else -> ""
+    }
+    if (targetUrl.isNotEmpty()) {
+      try {
+        val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(viewIntent)
+        return true
+      } catch (_: Throwable) {}
+    }
+    return false
+  }
+  fun openExternalSystemMediaApp(context: Context): Boolean {
+    val controller = resolveActiveExternalController(context)
+    if (controller != null) {
+      try {
+        val pendingIntent = controller.sessionActivity
+        if (pendingIntent != null) {
+          pendingIntent.send()
+          return true
+        }
+      } catch (_: Throwable) {}
+    }
+    val pkg = externalSystemMediaInfo?.sourcePackage.orEmpty()
+    if (pkg.isBlank() || pkg == context.packageName) return false
+    return try {
+      val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)?.apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      } ?: return false
+      context.startActivity(launchIntent)
+      true
+    } catch (_: Throwable) {
+      false
+    }
   }
 
   /**
@@ -5081,6 +6446,11 @@ object MusicPlayerEngine {
     activeSessionState = null
     isMusicPlayingOverride = null
     externalSystemMediaInfo = null
+    activeExternalMediaController = null
+    externalSystemMediaLastDispatchedAction = null
+    lastLaunchedPreferredMusicApp = null
+    installedStreamingAppsOverrideForTest = null
+    customPickerInstalledAppsOverrideForTest = null
     lastBroadcastMediaInfo = null
     activeMediaNotifications.clear()
     if (activity is LifecycleOwner && observer != null) {
@@ -5108,6 +6478,7 @@ object MusicPlayerEngine {
     initialViewMode: MusicViewMode? = null,
     initialPlayerExpanded: Boolean = false,
     initialQueueExpanded: Boolean = false,
+    initialGrantedFolderPaths: Set<String>? = null,
     isInspection: Boolean = false,
   ): MusicPlaybackSession {
     if (isInspection) {
@@ -5119,6 +6490,7 @@ object MusicPlayerEngine {
         initialViewMode = initialViewMode,
         initialPlayerExpanded = initialPlayerExpanded,
         initialQueueExpanded = initialQueueExpanded,
+        initialGrantedFolderPaths = initialGrantedFolderPaths,
         isInspection = true,
       )
       activeSessionState = createdInspection
@@ -5135,6 +6507,7 @@ object MusicPlayerEngine {
       val currentActivity = activeActivityRef?.get()
       val canReuseAcrossActivities = currentSession != null &&
         !currentSession.isReleased &&
+        initialGrantedFolderPaths == null &&
         (
           activity == null ||
             currentActivity === activity ||
@@ -5184,6 +6557,7 @@ object MusicPlayerEngine {
         initialViewMode = initialViewMode,
         initialPlayerExpanded = shouldExpand,
         initialQueueExpanded = initialQueueExpanded,
+        initialGrantedFolderPaths = initialGrantedFolderPaths,
         isInspection = false,
       )
       if (shouldExpand) {
@@ -5284,6 +6658,7 @@ class MusicPlaybackSession(
   initialViewMode: MusicViewMode? = null,
   initialPlayerExpanded: Boolean = false,
   initialQueueExpanded: Boolean = false,
+  initialGrantedFolderPaths: Set<String>? = null,
   val isInspection: Boolean = false,
   coroutineContext: CoroutineContext = defaultPlaybackDispatcher(),
   private val backgroundCoroutineContext: CoroutineContext = defaultBackgroundDispatcher(coroutineContext),
@@ -5330,6 +6705,7 @@ class MusicPlaybackSession(
   private var lastNotifiedIsPlaying: Boolean? = null
   private var lastNotifiedShuffleIconRes: Int = 0
   private var lastNotifiedRepeatIconRes: Int = 0
+  private var lastNotifiedFavoriteIconRes: Int = 0
   private var lastNotifiedArtworkBitmap: Bitmap? = null
   private var audioDisconnectReceiver: BroadcastReceiver? = null
   private var mediaControlReceiver: BroadcastReceiver? = null
@@ -5414,12 +6790,145 @@ class MusicPlaybackSession(
     }
   )
 
+  // Scoped Storage & Custom Folders State
+  var grantedFolderPaths by mutableStateOf<Set<String>>(
+    when {
+      initialGrantedFolderPaths != null -> initialGrantedFolderPaths
+      initialTracks != null || initialDirectory != null || isInspection ->
+        setOf(MusicPlayerEngine.DEFAULT_MUSIC_SCOPED_FOLDER.folderPath)
+      else -> MusicPlayerEngine.parseGrantedFolderPaths(
+        prefs?.getString(PREF_KEY_MUSIC_GRANTED_FOLDER_PATHS, null)
+      )
+    }
+  )
+    internal set
+
+  val isMusicFolderGranted: Boolean
+    get() = MusicPlayerEngine.isMusicFolderAccessGranted(grantedFolderPaths)
+
+  var pendingPermissionFolderPath by mutableStateOf<String?>(null)
+
+  var customFolders by mutableStateOf<List<MusicFolder>>(
+    MusicPlayerEngine.parseCustomFolders(prefs?.getString(PREF_KEY_MUSIC_CUSTOM_FOLDERS, null))
+  )
+    internal set
+
+  var selectedCustomFolderPath by mutableStateOf<String?>(null)
+    internal set
+
+  val selectedCustomFolder: MusicFolder?
+    get() = customFolders.firstOrNull { it.folderPath == selectedCustomFolderPath }
+
+  fun requestMusicFolderPermissionPrompt(
+    folderPath: String = MusicPlayerEngine.DEFAULT_MUSIC_SCOPED_FOLDER.folderPath,
+  ) {
+    pendingPermissionFolderPath = folderPath
+  }
+
+  fun grantFolderAccess(
+    folder: MusicFolder = MusicPlayerEngine.DEFAULT_MUSIC_SCOPED_FOLDER,
+  ) {
+    val updated = buildSet {
+      addAll(grantedFolderPaths)
+      add(folder.folderPath)
+      if (
+        folder.folderPath.equals(MusicPlayerEngine.DEFAULT_MUSIC_SCOPED_FOLDER.folderPath, ignoreCase = true) ||
+          folder.folderName.equals("Music", ignoreCase = true)
+      ) {
+        add(MusicPlayerEngine.DEFAULT_MUSIC_SCOPED_FOLDER.folderPath)
+      }
+    }
+    val wasGranted = isMusicFolderGranted
+    grantedFolderPaths = updated
+    if (pendingPermissionFolderPath == folder.folderPath || isMusicFolderGranted) {
+      pendingPermissionFolderPath = null
+    }
+    persistStringPrefInBackground(
+      PREF_KEY_MUSIC_GRANTED_FOLDER_PATHS,
+      MusicPlayerEngine.serializeGrantedFolderPaths(updated),
+    )
+    if (!wasGranted && isMusicFolderGranted) {
+      reloadLibraryTracksForGrantedFolders()
+    }
+  }
+
+  fun addCustomFolder(folder: MusicFolder) {
+    val existing = customFolders.firstOrNull {
+      it.folderPath.equals(folder.folderPath, ignoreCase = true) ||
+        (it.absolutePath != null && folder.absolutePath != null && it.absolutePath == folder.absolutePath)
+    }
+    val targetFolder = existing ?: folder
+    if (existing == null) {
+      val nextFolders = customFolders + targetFolder
+      customFolders = nextFolders
+      persistStringPrefInBackground(
+        PREF_KEY_MUSIC_CUSTOM_FOLDERS,
+        MusicPlayerEngine.serializeCustomFolders(nextFolders),
+      )
+    }
+    val nextGranted = grantedFolderPaths + targetFolder.folderPath + MusicPlayerEngine.DEFAULT_MUSIC_SCOPED_FOLDER.folderPath
+    grantedFolderPaths = nextGranted
+    pendingPermissionFolderPath = null
+    persistStringPrefInBackground(
+      PREF_KEY_MUSIC_GRANTED_FOLDER_PATHS,
+      MusicPlayerEngine.serializeGrantedFolderPaths(nextGranted),
+    )
+    selectCustomFolder(targetFolder)
+    reloadLibraryTracksForGrantedFolders()
+  }
+
+  fun removeCustomFolder(folder: MusicFolder) {
+    val nextFolders = customFolders.filterNot {
+      it.folderPath.equals(folder.folderPath, ignoreCase = true) ||
+        it.folderName.equals(folder.folderName, ignoreCase = true)
+    }
+    if (nextFolders.size != customFolders.size) {
+      customFolders = nextFolders
+      persistStringPrefInBackground(
+        PREF_KEY_MUSIC_CUSTOM_FOLDERS,
+        MusicPlayerEngine.serializeCustomFolders(nextFolders),
+      )
+    }
+    if (
+      selectedCustomFolderPath != null &&
+        (
+          selectedCustomFolderPath.equals(folder.folderPath, ignoreCase = true) ||
+            nextFolders.none { it.folderPath == selectedCustomFolderPath }
+          )
+    ) {
+      selectedCustomFolderPath = null
+      syncSortOrderWithCurrentScope()
+    }
+  }
+
+  fun selectCustomFolder(folder: MusicFolder?) {
+    if (!isMusicFolderGranted) {
+      pendingPermissionFolderPath = MusicPlayerEngine.DEFAULT_MUSIC_SCOPED_FOLDER.folderPath
+      return
+    }
+    val nextPath = folder?.folderPath
+    if (selectedCustomFolderPath != nextPath) {
+      clearDrillDown()
+      selectedCustomFolderPath = nextPath
+      syncSortOrderWithCurrentScope()
+    }
+  }
+
   fun updateTab(tab: MusicLibraryTab) {
-    if (selectedTab != tab) {
+    if (!isMusicFolderGranted) {
+      pendingPermissionFolderPath = MusicPlayerEngine.DEFAULT_MUSIC_SCOPED_FOLDER.folderPath
+      return
+    }
+    val tabChanged = selectedTab != tab || selectedCustomFolderPath != null
+    if (tabChanged) {
       syncViewPlayStatsSnapshot()
     }
+    selectedCustomFolderPath = null
     selectedTab = tab
     persistStringPrefInBackground(PREF_KEY_MUSIC_TAB, tab.name)
+    if (tabChanged) {
+      syncSortOrderWithCurrentScope()
+    }
   }
 
   // View Mode: List vs Card
@@ -5446,23 +6955,56 @@ class MusicPlaybackSession(
     }
   }
 
-  // Sort Order
-  var sortOrder by mutableStateOf(
+  // Per-Section / Per-Folder Sort Order & Global Default Sort Order
+  var defaultSortOrder by mutableStateOf(
     MusicSortOrder.fromNameOrDefault(prefs?.getString(PREF_KEY_MUSIC_SORT_ORDER, null))
   )
+    internal set
 
-  fun updateSortOrder(order: MusicSortOrder) {
-    val statsChanged = viewPlayStats !== playStats
-    if (statsChanged) {
-      viewPlayStats = playStats
+  var savedSectionSortOrders by mutableStateOf<Map<String, MusicSortOrder>>(
+    MusicPlayerEngine.parseSavedSectionSorts(prefs?.getString(PREF_KEY_MUSIC_SAVED_SECTION_SORTS, null))
+  )
+    internal set
+
+  val currentSortScopeKey: String
+    get() = MusicPlayerEngine.resolveSortScopeKey(selectedTab, selectedCustomFolderPath)
+
+  val isSortSavedForCurrentScope: Boolean
+    get() = currentSortScopeKey in savedSectionSortOrders
+
+  val currentSortSaveLabel: String
+    get() = MusicPlayerEngine.resolveSortSaveLabel(selectedTab, selectedCustomFolderPath)
+
+  // Active Sort Order for current section/folder
+  var sortOrder by mutableStateOf(
+    savedSectionSortOrders[MusicPlayerEngine.resolveSortScopeKey(selectedTab, selectedCustomFolderPath)]
+      ?: defaultSortOrder
+  )
+
+  var randomSortSeed by mutableLongStateOf(
+    if (sortOrder == MusicSortOrder.RANDOM) {
+      System.currentTimeMillis().takeIf { it != 0L } ?: 1L
+    } else {
+      0L
     }
-    val orderChanged = sortOrder != order
-    sortOrder = order
-    persistStringPrefInBackground(PREF_KEY_MUSIC_SORT_ORDER, order.name)
+  )
+    internal set
+
+  private fun syncSortOrderWithCurrentScope() {
+    val targetOrder = savedSectionSortOrders[currentSortScopeKey] ?: defaultSortOrder
+    if (sortOrder != targetOrder) {
+      if (targetOrder == MusicSortOrder.RANDOM && randomSortSeed == 0L) {
+        randomSortSeed = System.currentTimeMillis().takeIf { it != 0L } ?: 1L
+      }
+      sortOrder = targetOrder
+      applySortOrderToLibraryTracks(targetOrder, statsChanged = false)
+    }
+  }
+
+  private fun applySortOrderToLibraryTracks(order: MusicSortOrder, statsChanged: Boolean) {
     if (statsChanged) {
       scheduleStatsAndSortRecalculation(statsChanged = true)
-    } else if (orderChanged) {
-      // Reuse already-sorted Most Played or Recently Played track lists immediately when possible
+    } else {
       when (order) {
         MusicSortOrder.MOST_PLAYED -> {
           if (mostPlayedPlaylist.tracks.size == allTracks.size) {
@@ -5481,6 +7023,71 @@ class MusicPlaybackSession(
         else -> scheduleStatsAndSortRecalculation(statsChanged = false)
       }
     }
+  }
+
+  fun updateSortOrder(order: MusicSortOrder) {
+    val statsChanged = viewPlayStats !== playStats
+    if (statsChanged) {
+      viewPlayStats = playStats
+    }
+    if (order == MusicSortOrder.RANDOM) {
+      val nextSeed = System.currentTimeMillis() + randomSortSeed + 1L
+      randomSortSeed = if (nextSeed != 0L) nextSeed else 1L
+    }
+    val orderChanged = sortOrder != order || order == MusicSortOrder.RANDOM
+    sortOrder = order
+    val scopeKey = currentSortScopeKey
+    if (scopeKey in savedSectionSortOrders) {
+      val nextSaved = savedSectionSortOrders.toMutableMap().apply {
+        put(scopeKey, order)
+      }
+      savedSectionSortOrders = nextSaved
+      persistStringPrefInBackground(
+        PREF_KEY_MUSIC_SAVED_SECTION_SORTS,
+        MusicPlayerEngine.serializeSavedSectionSorts(nextSaved),
+      )
+    } else {
+      defaultSortOrder = order
+      persistStringPrefInBackground(PREF_KEY_MUSIC_SORT_ORDER, order.name)
+    }
+    if (statsChanged || orderChanged) {
+      applySortOrderToLibraryTracks(order, statsChanged = statsChanged)
+    }
+  }
+
+  fun setSaveSortForCurrentScope(saved: Boolean) {
+    val scopeKey = currentSortScopeKey
+    if (saved) {
+      val nextSaved = savedSectionSortOrders.toMutableMap().apply {
+        put(scopeKey, sortOrder)
+      }
+      savedSectionSortOrders = nextSaved
+      persistStringPrefInBackground(
+        PREF_KEY_MUSIC_SAVED_SECTION_SORTS,
+        MusicPlayerEngine.serializeSavedSectionSorts(nextSaved),
+      )
+    } else {
+      if (scopeKey in savedSectionSortOrders) {
+        val nextSaved = savedSectionSortOrders.toMutableMap().apply {
+          remove(scopeKey)
+        }
+        savedSectionSortOrders = nextSaved
+        persistStringPrefInBackground(
+          PREF_KEY_MUSIC_SAVED_SECTION_SORTS,
+          MusicPlayerEngine.serializeSavedSectionSorts(nextSaved),
+        )
+      }
+      if (sortOrder != defaultSortOrder) {
+        sortOrder = defaultSortOrder
+        applySortOrderToLibraryTracks(defaultSortOrder, statsChanged = false)
+      }
+    }
+  }
+
+  fun toggleSaveSortForCurrentScope(): Boolean {
+    val nextSaved = !isSortSavedForCurrentScope
+    setSaveSortForCurrentScope(nextSaved)
+    return nextSaved
   }
 
   // Shuffle & Repeat
@@ -5563,7 +7170,7 @@ class MusicPlaybackSession(
     favoriteIds = next
     persistFavoritesInBackground(PREF_KEY_MUSIC_FAVORITES, next, separator = "|")
     if (currentTrack?.id == trackId) {
-      syncSystemMediaControls(forceMetadataUpdate = false, notifyPlatformInBackground = true)
+      syncSystemMediaControls(forceMetadataUpdate = false)
     }
     val trackSkipCount = max(
       viewPlayStats[trackId]?.skipCount ?: 0,
@@ -5678,6 +7285,50 @@ class MusicPlaybackSession(
   var showFavoriteGenresOnly: Boolean
     get() = isFavoritesOnlyEnabled(MusicLibraryTab.GENRES)
     set(value) = setFavoritesOnly(MusicLibraryTab.GENRES, value)
+
+  // Preferred Music Apps displayed in the Home view's bottom floating pill bar
+  var preferredMusicApps by mutableStateOf(
+    MusicPlayerEngine.deserializePreferredMusicApps(prefs?.getString(PREF_KEY_MUSIC_PREFERRED_APPS, ""))
+  )
+    internal set
+
+  fun addPreferredMusicApp(app: PreferredMusicAppLink) {
+    if (preferredMusicApps.any { it.id == app.id || (app.packageName.isNotBlank() && it.packageName == app.packageName) }) {
+      return
+    }
+    val updated = preferredMusicApps + app
+    preferredMusicApps = updated
+    persistStringPrefInBackground(
+      PREF_KEY_MUSIC_PREFERRED_APPS,
+      MusicPlayerEngine.serializePreferredMusicApps(updated),
+    )
+  }
+
+  fun removePreferredMusicApp(appIdOrPackage: String) {
+    val updated = preferredMusicApps.filterNot {
+      it.id == appIdOrPackage || (it.packageName.isNotBlank() && it.packageName == appIdOrPackage)
+    }
+    if (updated.size != preferredMusicApps.size) {
+      preferredMusicApps = updated
+      persistStringPrefInBackground(
+        PREF_KEY_MUSIC_PREFERRED_APPS,
+        MusicPlayerEngine.serializePreferredMusicApps(updated),
+      )
+    }
+  }
+
+  fun togglePreferredMusicApp(app: PreferredMusicAppLink): Boolean {
+    val exists = preferredMusicApps.any {
+      it.id == app.id || (app.packageName.isNotBlank() && it.packageName == app.packageName)
+    }
+    return if (exists) {
+      removePreferredMusicApp(app.id)
+      false
+    } else {
+      addPreferredMusicApp(app)
+      true
+    }
+  }
 
   var showFavoritesOnly: Boolean
     get() = isFavoritesOnlyEnabled(selectedTab)
@@ -6041,6 +7692,7 @@ class MusicPlaybackSession(
     val tracksSnapshot = allTracks
     val viewStatsSnapshot = viewPlayStats
     val sortOrderSnapshot = sortOrder
+    val randomSeedSnapshot = randomSortSeed
     val favIdsSnapshot = favoriteIds
     val favArtistsSnapshot = favoriteArtists
     val favAlbumsSnapshot = favoriteAlbums
@@ -6105,6 +7757,7 @@ class MusicPlaybackSession(
             favoriteArtists = favArtistsSnapshot,
             favoriteAlbums = favAlbumsSnapshot,
             favoriteGenres = favGenresSnapshot,
+            randomSeed = randomSeedSnapshot,
           )
         }
         ensureActive()
@@ -6156,6 +7809,7 @@ class MusicPlaybackSession(
     savedEntries: List<SavedPlaylistEntry> = savedPlaylistEntries,
     order: MusicSortOrder = sortOrder,
     homeGen: Int = homeRefreshGeneration,
+    randomSeed: Long = randomSortSeed,
   ): ComputedLibraryState {
     val artists = MusicPlayerEngine.buildArtists(tracks)
     val albums = MusicPlayerEngine.buildAlbums(tracks)
@@ -6182,6 +7836,7 @@ class MusicPlaybackSession(
         favoriteArtists = favArtists,
         favoriteAlbums = favAlbums,
         favoriteGenres = favGenres,
+        randomSeed = randomSeed,
       )
     }
     val homeMixes = MusicPlayerEngine.generateHomePlaylists(
@@ -6238,6 +7893,7 @@ class MusicPlaybackSession(
       val savedSnapshot = savedPlaylistEntries
       val orderSnapshot = sortOrder
       val homeGenSnapshot = homeRefreshGeneration
+      val randomSeedSnapshot = randomSortSeed
       libraryRebuildJob?.cancel()
       isRecalculatingInBackground = true
       libraryRebuildJob = scope.launch(backgroundCoroutineContext) {
@@ -6253,6 +7909,7 @@ class MusicPlaybackSession(
             savedEntries = savedSnapshot,
             order = orderSnapshot,
             homeGen = homeGenSnapshot,
+            randomSeed = randomSeedSnapshot,
           )
           ensureActive()
           if (!isReleased && allTracks === tracksSnapshot) {
@@ -6457,27 +8114,35 @@ class MusicPlaybackSession(
   var isLoadingLibrary by mutableStateOf(false)
     internal set
 
+  private fun resolveAdditionalCustomFolderDirectories(): List<File> =
+    customFolders.map { MusicPlayerEngine.resolveDirectoryForFolder(it) }
+
   init {
     if (!isInspection && cacheDir != null) {
       val indexFile = appContext?.let { MusicPlayerEngine.getDefaultIndexCacheFile(it) }
       MusicPlayerEngine.configureDiskCache(cacheDir, indexFile)
     }
     val includeSamples = prefs?.getBoolean(PREF_KEY_MUSIC_INCLUDE_SAMPLES, false) ?: false
+    val additionalDirs = resolveAdditionalCustomFolderDirectories()
     val initialLoaded = when {
       initialTracks != null -> initialTracks
       isInspection -> MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+      !isMusicFolderGranted -> emptyList()
       appContext != null -> MusicPlayerEngine.getCachedLibraryTracks(
         initialDirectory = initialDirectory,
         includeSamples = includeSamples,
+        additionalDirectories = additionalDirs,
       ) ?: emptyList()
       else -> MusicPlayerEngine.getCachedLibraryTracks(
         initialDirectory = initialDirectory,
         includeSamples = includeSamples,
+        additionalDirectories = additionalDirs,
       ) ?: MusicPlayerEngine.loadLibraryTracks(
         initialDirectory = initialDirectory,
         includeSamples = includeSamples,
         inspectMetadataRetriever = false,
         deferAlbumArt = true,
+        additionalDirectories = additionalDirs,
       )
     }
     allTracks = initialLoaded
@@ -6495,7 +8160,42 @@ class MusicPlaybackSession(
     MusicPlayerEngine.activeSessionState = this
     initSystemAudioAndMediaControls()
     prepareAndSyncMediaPlayer(forceRestart = false)
-    startAsyncLibraryLoadAndArtworkPrefetch()
+    if (isMusicFolderGranted) {
+      startAsyncLibraryLoadAndArtworkPrefetch()
+    }
+  }
+
+  private fun reloadLibraryTracksForGrantedFolders() {
+    if (!isMusicFolderGranted) return
+    val includeSamples = prefs?.getBoolean(PREF_KEY_MUSIC_INCLUDE_SAMPLES, false) ?: false
+    val additionalDirs = resolveAdditionalCustomFolderDirectories()
+    val explicitTracks = configuredInitialTracks
+    if (explicitTracks != null) {
+      val extraTracks = if (additionalDirs.isNotEmpty()) {
+        MusicPlayerEngine.scanMusicDirectories(
+          directories = additionalDirs,
+          inspectMetadataRetriever = false,
+          deferAlbumArt = true,
+        )
+      } else {
+        emptyList()
+      }
+      val combined = (explicitTracks + extraTracks).distinctBy { it.id }
+      applyLoadedLibraryTracks(combined)
+      return
+    }
+    if (appContext == null) {
+      val loaded = MusicPlayerEngine.loadLibraryTracks(
+        initialDirectory = configuredInitialDirectory,
+        includeSamples = includeSamples,
+        inspectMetadataRetriever = false,
+        deferAlbumArt = true,
+        additionalDirectories = additionalDirs,
+      )
+      applyLoadedLibraryTracks(loaded)
+    } else {
+      startAsyncLibraryLoadAndArtworkPrefetch()
+    }
   }
 
   /**
@@ -6524,6 +8224,7 @@ class MusicPlaybackSession(
     if (initialTab != null && initialTab != configuredInitialTab) {
       configuredInitialTab = initialTab
       selectedTab = initialTab
+      syncSortOrderWithCurrentScope()
     }
     if (initialViewMode != null && initialViewMode != configuredInitialViewMode) {
       configuredInitialViewMode = initialViewMode
@@ -6546,20 +8247,25 @@ class MusicPlaybackSession(
       configuredInitialTracks = initialTracks ?: configuredInitialTracks
       configuredInitialDirectory = initialDirectory
       val includeSamples = prefs?.getBoolean(PREF_KEY_MUSIC_INCLUDE_SAMPLES, false) ?: false
+      val additionalDirs = resolveAdditionalCustomFolderDirectories()
       val reloaded = when {
         initialTracks != null -> initialTracks
+        !isMusicFolderGranted -> emptyList()
         appContext != null -> MusicPlayerEngine.getCachedLibraryTracks(
           initialDirectory = initialDirectory,
           includeSamples = includeSamples,
+          additionalDirectories = additionalDirs,
         ) ?: allTracks
         else -> MusicPlayerEngine.getCachedLibraryTracks(
           initialDirectory = initialDirectory,
           includeSamples = includeSamples,
+          additionalDirectories = additionalDirs,
         ) ?: MusicPlayerEngine.loadLibraryTracks(
           initialDirectory = initialDirectory,
           includeSamples = includeSamples,
           inspectMetadataRetriever = false,
           deferAlbumArt = true,
+          additionalDirectories = additionalDirs,
         )
       }
       val activeId = currentTrack?.id
@@ -6575,7 +8281,9 @@ class MusicPlaybackSession(
         currentQueueIndex = idx.coerceAtLeast(0)
         prepareAndSyncMediaPlayer(forceRestart = false)
       }
-      startAsyncLibraryLoadAndArtworkPrefetch()
+      if (isMusicFolderGranted) {
+        startAsyncLibraryLoadAndArtworkPrefetch()
+      }
     }
   }
 
@@ -6618,10 +8326,11 @@ class MusicPlaybackSession(
   }
 
   private fun startAsyncLibraryLoadAndArtworkPrefetch() {
-    if (isInspection || appContext == null) return
+    if (isInspection || appContext == null || !isMusicFolderGranted) return
     libraryLoadJob?.cancel()
     libraryLoadJob = scope.launch {
       val explicitTracks = configuredInitialTracks
+      val additionalDirs = resolveAdditionalCustomFolderDirectories()
       if (explicitTracks == null) {
         isLoadingLibrary = allTracks.isEmpty()
         try {
@@ -6637,6 +8346,7 @@ class MusicPlaybackSession(
               includeSamples = includeSamples,
               inspectMetadataRetriever = false,
               deferAlbumArt = true,
+              additionalDirectories = additionalDirs,
             )
             if (fastLoaded.isNotEmpty()) {
               val fastComputed = withContext(backgroundCoroutineContext) {
@@ -6652,6 +8362,7 @@ class MusicPlaybackSession(
             includeSamples = includeSamples,
             inspectMetadataRetriever = true,
             deferAlbumArt = true,
+            additionalDirectories = additionalDirs,
           )
           val fullComputed = withContext(backgroundCoroutineContext) {
             computeFullLibraryState(loaded)
@@ -7876,7 +9587,6 @@ class MusicPlaybackSession(
         favoriteIconRes = favIconRes,
         customActionIds = listOf(
           MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE,
-          MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT,
           MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE,
         ),
         hasArtworkBitmap = cachedArt != null,
@@ -7902,19 +9612,18 @@ class MusicPlaybackSession(
           lastNotifiedIsPlaying = null
           lastNotifiedShuffleIconRes = 0
           lastNotifiedRepeatIconRes = 0
+          lastNotifiedFavoriteIconRes = 0
           lastNotifiedArtworkBitmap = null
         } else {
           session.isActive = true
 
           // 1. Update PlaybackState:
-          //    - CustomAction 0 (left of playback controls): Shuffle (reflects OFF / SHUFFLE / SMART_SHUFFLE)
+          //    - CustomAction 0 (left of playback controls): Shuffle (cycles OFF -> SHUFFLE -> SMART_SHUFFLE)
           //    - Transport controls: Previous / Play-Pause / Next
-          //    - CustomAction 1 (right of playback controls): Repeat/Replay (reflects OFF / REPEAT_ALL / REPEAT_ONE)
-          //    - CustomAction 2: Favorite for the individual song (reflects track.id in favoriteIds)
+          //    - CustomAction 1 (right of playback controls): Star / Favorite for the individual song (reflects track.id in favoriteIds)
           val stateInt = if (snapshotIsPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
           val effectiveSpeed = if (snapshotIsPlaying) snapshotSpeed else 0f
           val shuffleLabel = MusicPlayerEngine.resolveSystemMediaShuffleLabel(snapshotShuffleMode)
-          val repeatLabel = MusicPlayerEngine.resolveSystemMediaRepeatLabel(snapshotRepeatMode)
           val favLabel = MusicPlayerEngine.resolveSystemMediaFavoriteLabel(isFav)
           val playbackState = PlaybackState.Builder()
             .setState(stateInt, snapshotPositionMs.coerceAtLeast(0L), effectiveSpeed)
@@ -7924,13 +9633,6 @@ class MusicPlaybackSession(
                 MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE,
                 shuffleLabel,
                 shuffleIconRes,
-              ).build()
-            )
-            .addCustomAction(
-              PlaybackState.CustomAction.Builder(
-                MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT,
-                repeatLabel,
-                repeatIconRes,
               ).build()
             )
             .addCustomAction(
@@ -7986,24 +9688,24 @@ class MusicPlaybackSession(
           }
 
           // 4. Only post/update the MediaStyle Notification when notification-visible fields change
-          //    (skipping expensive NotificationManager IPC when only favorite status or seek position changed)
           val notificationNeedsUpdate = forceMetadataUpdate ||
             lastNotifiedTrackId != track.id ||
             lastNotifiedIsPlaying != snapshotIsPlaying ||
             lastNotifiedShuffleIconRes != shuffleIconRes ||
+            lastNotifiedFavoriteIconRes != favIconRes ||
             lastNotifiedRepeatIconRes != repeatIconRes ||
             lastNotifiedArtworkBitmap !== cachedArt
           if (notificationNeedsUpdate) {
             lastNotifiedTrackId = track.id
             lastNotifiedIsPlaying = snapshotIsPlaying
             lastNotifiedShuffleIconRes = shuffleIconRes
+            lastNotifiedFavoriteIconRes = favIconRes
             lastNotifiedRepeatIconRes = repeatIconRes
             lastNotifiedArtworkBitmap = cachedArt
             postSystemMediaNotification(
               track = track,
               isFavorite = isFav,
               shuffleIconRes = shuffleIconRes,
-              repeatIconRes = repeatIconRes,
               favIconRes = favIconRes,
               artworkBitmap = cachedArt,
               session = session,
@@ -8039,7 +9741,6 @@ class MusicPlaybackSession(
     track: MusicTrack,
     isFavorite: Boolean,
     shuffleIconRes: Int,
-    repeatIconRes: Int,
     favIconRes: Int,
     artworkBitmap: Bitmap?,
     session: MediaSession,
@@ -8063,15 +9764,15 @@ class MusicPlaybackSession(
     ).build()
 
     val prevAction = Notification.Action.Builder(
-      Icon.createWithResource(ctx, android.R.drawable.ic_media_previous),
+      Icon.createWithResource(ctx, R.drawable.ic_media_skip_previous),
       "Previous",
       buildMediaActionPendingIntent(MusicPlayerEngine.ACTION_MEDIA_PREVIOUS, 101),
     ).build()
 
     val playPauseIcon = if (isPlaying) {
-      android.R.drawable.ic_media_pause
+      R.drawable.ic_media_pause
     } else {
-      android.R.drawable.ic_media_play
+      R.drawable.ic_media_play
     }
     val playPauseTitle = if (isPlaying) "Pause" else "Play"
     val playPauseAction = Notification.Action.Builder(
@@ -8081,15 +9782,15 @@ class MusicPlaybackSession(
     ).build()
 
     val nextAction = Notification.Action.Builder(
-      Icon.createWithResource(ctx, android.R.drawable.ic_media_next),
+      Icon.createWithResource(ctx, R.drawable.ic_media_skip_next),
       "Next",
       buildMediaActionPendingIntent(MusicPlayerEngine.ACTION_MEDIA_NEXT, 103),
     ).build()
 
-    val repeatAction = Notification.Action.Builder(
-      Icon.createWithResource(ctx, repeatIconRes),
-      MusicPlayerEngine.resolveSystemMediaRepeatLabel(repeatMode),
-      buildMediaActionPendingIntent(MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT, 104),
+    val favoriteAction = Notification.Action.Builder(
+      Icon.createWithResource(ctx, favIconRes),
+      MusicPlayerEngine.resolveSystemMediaFavoriteLabel(isFavorite),
+      buildMediaActionPendingIntent(MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE, 104),
     ).build()
 
     val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -8120,7 +9821,7 @@ class MusicPlaybackSession(
       .addAction(prevAction)
       .addAction(playPauseAction)
       .addAction(nextAction)
-      .addAction(repeatAction)
+      .addAction(favoriteAction)
 
     if (artworkBitmap != null) {
       builder.setLargeIcon(artworkBitmap)
@@ -8255,6 +9956,14 @@ data class SystemMediaPlayingInfo(
   val isExternalApp: Boolean = false,
   val isPlaying: Boolean = false,
   val palette: AlbumArtPalette,
+  val artworkBitmap: Bitmap? = null,
+  val durationMs: Long = 0L,
+  val positionMs: Long = 0L,
+  val positionUpdateElapsedRealtimeMs: Long = 0L,
+  val playbackSpeed: Float = 1.0f,
+  val canSeek: Boolean = false,
+  val canSkipNext: Boolean = true,
+  val canSkipPrevious: Boolean = true,
 )
 
 /**

@@ -31,6 +31,10 @@ class HomeScreenShortcutsTest {
   fun constants_haveExpectedValues() {
     assertEquals("extra_standalone_tool", EXTRA_STANDALONE_TOOL)
     assertEquals("extra_folder_path", EXTRA_FOLDER_PATH)
+    assertTrue((STANDALONE_SHORTCUT_INTENT_FLAGS and android.content.Intent.FLAG_ACTIVITY_NEW_TASK) != 0)
+    assertTrue((STANDALONE_SHORTCUT_INTENT_FLAGS and android.content.Intent.FLAG_ACTIVITY_NEW_DOCUMENT) != 0)
+    assertTrue((STANDALONE_SHORTCUT_INTENT_FLAGS and android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP) != 0)
+    assertEquals(0, STANDALONE_SHORTCUT_INTENT_FLAGS and android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
   }
 
   @Test

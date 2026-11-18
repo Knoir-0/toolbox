@@ -106,25 +106,34 @@ class GalleryScreenTest {
       lastModifiedMs = 9_000_000L,
     )
 
+    val hasFullFiles = androidx.compose.runtime.mutableStateOf(false)
+
     composeTestRule.setContent {
       ToolboxTheme {
         GalleryScreen(
           rootDirectory = testRootDir,
           initialGrantedFolders = GalleryDefaultFolder.entries.toSet(),
+          initialHasFullFilesPermission = hasFullFiles.value,
         )
       }
     }
     composeTestRule.waitForIdle()
 
-    // 1. Default view is Tile View with 3 albums per row, and pill bar includes all default folders
+    // 1. Default view is Tile View with 3 albums per row, and pill bar hides Download under scoped storage and re-appears with full files permission
     composeTestRule.onNodeWithTag("gallery_tile_grid").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("3")
     composeTestRule.onNodeWithTag("gallery_density_indicator").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_breadcrumb_root").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_folder_pill_DCIM").assertIsDisplayed().assertTextEquals("Camera")
     composeTestRule.onNodeWithTag("gallery_folder_pill_Pictures").assertIsDisplayed().assertTextEquals("Pictures")
-    composeTestRule.onNodeWithTag("gallery_folder_pill_Download").assertIsDisplayed().assertTextEquals("Download")
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Download").assertDoesNotExist()
     composeTestRule.onNodeWithTag("gallery_folder_pill_Photos").assertDoesNotExist()
+
+    composeTestRule.runOnUiThread {
+      hasFullFiles.value = true
+    }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Download").assertIsDisplayed().assertTextEquals("Download")
 
     // 2. Contents of Pictures and DCIM are un-nested at the root level as if they were the same folder
     val cameraTile = composeTestRule.onNodeWithTag("album_tile_Camera", useUnmergedTree = true)
@@ -792,6 +801,7 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("gallery_group_option_none").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_save_sort_group_for_folder").assertIsDisplayed()
     composeTestRule.onNodeWithText("Save for album").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_sort_option_random").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_sort_option_name_asc").performClick()
     composeTestRule.waitForIdle()
 
@@ -1077,6 +1087,7 @@ class GalleryScreenTest {
       ToolboxTheme {
         GalleryScreen(
           rootDirectory = testRootDir,
+          initialHasFullFilesPermission = false,
           onRequestFolderSystemAccess = { folder, onResult ->
             systemPromptFolder = folder
             pendingSystemGrantCallback = onResult
@@ -1086,11 +1097,11 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // 1. Initially all folder navigation pills show a lock icon and the Album view informs the user that storage access is locked
+    // 1. Initially default folder navigation pills (DCIM and Pictures; Download is hidden under scoped storage) show a lock icon and the Album view informs the user that storage access is locked
     composeTestRule.onNodeWithTag("gallery_breadcrumb_root").assertIsDisplayed()
     composeTestRule.onNodeWithTag("folder_lock_icon_DCIM").assertIsDisplayed()
     composeTestRule.onNodeWithTag("folder_lock_icon_Pictures").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("folder_lock_icon_Download").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Download").assertDoesNotExist()
 
     composeTestRule.onNodeWithTag("locked_storage_state").assertIsDisplayed()
     composeTestRule.onNodeWithText("Storage access is locked").assertIsDisplayed()
@@ -1141,7 +1152,7 @@ class GalleryScreenTest {
     assertNotNull(initialUri)
     assertTrue(initialUri.toString().contains("DCIM"))
 
-    // 6. Completing system prompt grant unlocks DCIM and shows its albums, while Pictures & Download remain locked
+    // 6. Completing system prompt grant unlocks DCIM and shows its albums, while Pictures remains locked
     composeTestRule.runOnUiThread {
       pendingSystemGrantCallback?.invoke(true)
     }
@@ -1149,7 +1160,7 @@ class GalleryScreenTest {
 
     composeTestRule.onNodeWithTag("folder_unlocked_icon_DCIM").assertIsDisplayed()
     composeTestRule.onNodeWithTag("folder_lock_icon_Pictures").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("folder_lock_icon_Download").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Download").assertDoesNotExist()
     composeTestRule.onNodeWithTag("album_tile_item_Camera").assertIsDisplayed()
     composeTestRule.onNodeWithTag("album_tile_item_Vacation").assertDoesNotExist()
 

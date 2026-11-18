@@ -6,10 +6,12 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
 import com.example.toolbox.ui.theme.ToolboxTheme
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -83,5 +85,41 @@ class DiceRollerScreenTest {
 
     // Sheet should be dismissed
     composeTestRule.onNodeWithTag("saved_rolls_sheet").assertDoesNotExist()
+  }
+
+  @OptIn(ExperimentalMaterial3Api::class)
+  @Test
+  fun testHoldToRepeatAndModifierMax40() {
+    composeTestRule.setContent {
+      ToolboxTheme {
+        DiceRollerScreen(
+          initialSheetValue = SheetValue.PartiallyExpanded,
+          initialHistory = emptyList(),
+          initialSavedRolls = emptyList(),
+        )
+      }
+    }
+
+    // Press and hold "Increase Modifier" to reach the maximum of +40
+    val increaseModButton = composeTestRule.onNodeWithContentDescription("Increase Modifier")
+    increaseModButton.performTouchInput {
+      down(center)
+      advanceEventTime(4000L)
+      up()
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithText("+40").assertIsDisplayed()
+
+    // Press and hold "Increase Dice Count" to increase count via hold
+    val increaseCountButton = composeTestRule.onNodeWithContentDescription("Increase Dice Count")
+    increaseCountButton.performTouchInput {
+      down(center)
+      advanceEventTime(2000L)
+      up()
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithText("20d20").assertIsDisplayed()
   }
 }

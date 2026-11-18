@@ -231,6 +231,13 @@ fun PlantScheduleScreen(
     )
   }
 
+  val filteredScheduledPlants = remember(scheduledPlants, selectedCategory) {
+    PlantScheduleEngine.filterScheduleByCategory(
+      schedule = scheduledPlants,
+      category = selectedCategory,
+    )
+  }
+
   val scheduledPlantIds = remember(scheduledPlants) {
     scheduledPlants.map { it.id }.toSet()
   }
@@ -535,6 +542,17 @@ fun PlantScheduleScreen(
 
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
+      // Plant Type Filter Pill Bar underneath the toolbar
+      PlantTypeFilterPillBar(
+        selectedCategory = selectedCategory,
+        onSelectCategory = { category ->
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          selectedCategoryName = category?.name
+        },
+      )
+
+      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
       // Tool Content Area + Search Catalog Overlay
       Box(
         modifier = Modifier
@@ -556,7 +574,7 @@ fun PlantScheduleScreen(
           item {
             MonthActivitySummaryCard(
               monthNumber = selectedMonth,
-              scheduledPlants = scheduledPlants,
+              scheduledPlants = filteredScheduledPlants,
               onSelectMonth = { selectedMonth = it },
             )
           }
@@ -564,7 +582,9 @@ fun PlantScheduleScreen(
           // 2. Year View Card (12-Month Matrix with Theme & Accent Colors)
           item {
             YearViewScheduleCard(
-              scheduledPlants = scheduledPlants,
+              scheduledPlants = filteredScheduledPlants,
+              totalScheduledCount = scheduledPlants.size,
+              selectedCategory = selectedCategory,
               selectedMonth = selectedMonth,
               isSelectionMode = isSelectionMode,
               selectedPlantIds = selectedPlantIds,
@@ -596,7 +616,7 @@ fun PlantScheduleScreen(
           }
         }
 
-        // Plant List & Pill Filters Overlay shown over the tool when search is active
+        // Plant List Overlay shown over the tool when search is active
         androidx.compose.animation.AnimatedVisibility(
           visible = isSearchActive && !isSelectionMode,
           enter = fadeIn(animationSpec = tween(200)) + expandVertically(expandFrom = Alignment.Top),
@@ -604,12 +624,8 @@ fun PlantScheduleScreen(
           modifier = Modifier.fillMaxSize(),
         ) {
           CatalogSearchOverlay(
-            allCatalogCount = allCatalogPlants.size,
             query = searchQuery,
             selectedCategory = selectedCategory,
-            onSelectCategory = { category ->
-              selectedCategoryName = category?.name
-            },
             matchingPlants = matchingCatalogPlants,
             scheduledPlantIds = scheduledPlantIds,
             onAddPlant = ::addPlant,
@@ -864,11 +880,81 @@ fun PlantScheduleScreen(
 }
 
 @Composable
-private fun CatalogSearchOverlay(
-  allCatalogCount: Int,
-  query: String,
+private fun PlantTypeFilterPillBar(
   selectedCategory: PlantCategory?,
   onSelectCategory: (PlantCategory?) -> Unit,
+) {
+  Surface(
+    color = MaterialTheme.colorScheme.surface,
+    tonalElevation = 1.dp,
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("plant_type_filter_bar"),
+  ) {
+    LazyRow(
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+      modifier = Modifier
+        .fillMaxWidth()
+        .testTag("catalog_category_pills"),
+    ) {
+      item {
+        FilterChip(
+          selected = selectedCategory == null,
+          onClick = { onSelectCategory(null) },
+          label = {
+            Text(
+              text = "All",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.Medium,
+            )
+          },
+          shape = RoundedCornerShape(20.dp),
+          colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+          ),
+          modifier = Modifier.testTag("category_chip_ALL"),
+        )
+      }
+      items(PlantCategory.entries) { category ->
+        val isSelected = selectedCategory == category
+        FilterChip(
+          selected = isSelected,
+          onClick = {
+            onSelectCategory(if (isSelected) null else category)
+          },
+          leadingIcon = {
+            Icon(
+              imageVector = category.iconVector(),
+              contentDescription = null,
+              modifier = Modifier.size(16.dp),
+            )
+          },
+          label = {
+            Text(
+              text = category.displayName,
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.Medium,
+            )
+          },
+          shape = RoundedCornerShape(20.dp),
+          colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+          ),
+          modifier = Modifier.testTag("category_chip_${category.name}"),
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun CatalogSearchOverlay(
+  query: String,
+  selectedCategory: PlantCategory?,
   matchingPlants: List<PlantItem>,
   scheduledPlantIds: Set<String>,
   onAddPlant: (PlantItem) -> Unit,
@@ -889,73 +975,6 @@ private fun CatalogSearchOverlay(
       .testTag("catalog_search_overlay"),
   ) {
     Column(modifier = Modifier.fillMaxSize()) {
-      // Category Filter Chips Bar (Section 4: RoundedCornerShape(20.dp))
-      Surface(
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp,
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        LazyRow(
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-          modifier = Modifier
-            .fillMaxWidth()
-            .testTag("catalog_category_pills"),
-        ) {
-          item {
-            FilterChip(
-              selected = selectedCategory == null,
-              onClick = { onSelectCategory(null) },
-              label = {
-                Text(
-                  text = "All ($allCatalogCount)",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Medium,
-                )
-              },
-              shape = RoundedCornerShape(20.dp),
-              colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              ),
-              modifier = Modifier.testTag("category_chip_ALL"),
-            )
-          }
-          items(PlantCategory.entries) { category ->
-            val isSelected = selectedCategory == category
-            FilterChip(
-              selected = isSelected,
-              onClick = {
-                onSelectCategory(if (isSelected) null else category)
-              },
-              leadingIcon = {
-                Icon(
-                  imageVector = category.iconVector(),
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
-              },
-              label = {
-                Text(
-                  text = category.displayName,
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Medium,
-                )
-              },
-              shape = RoundedCornerShape(20.dp),
-              colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              ),
-              modifier = Modifier.testTag("category_chip_${category.name}"),
-            )
-          }
-        }
-      }
-
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-
       // Plant List
       LazyColumn(
         modifier = Modifier
@@ -1357,6 +1376,8 @@ private fun ScheduleRangeBadge(
 @Composable
 private fun YearViewScheduleCard(
   scheduledPlants: List<PlantItem>,
+  totalScheduledCount: Int,
+  selectedCategory: PlantCategory?,
   selectedMonth: Int,
   isSelectionMode: Boolean,
   selectedPlantIds: Set<String>,
@@ -1459,20 +1480,28 @@ private fun YearViewScheduleCard(
               contentAlignment = Alignment.Center,
             ) {
               Icon(
-                imageVector = Icons.Default.Yard,
+                imageVector = selectedCategory?.iconVector() ?: Icons.Default.Yard,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(24.dp),
               )
             }
             Text(
-              text = "Your schedule is empty",
+              text = if (selectedCategory != null && totalScheduledCount > 0) {
+                "No ${selectedCategory.displayName.lowercase()} scheduled"
+              } else {
+                "Your schedule is empty"
+              },
               style = MaterialTheme.typography.titleMedium,
               fontWeight = FontWeight.SemiBold,
               color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-              text = "Search for plants above or browse the catalog to add crops and see their planting and harvest windows across the year.",
+              text = if (selectedCategory != null && totalScheduledCount > 0) {
+                "You have no ${selectedCategory.displayName.lowercase()} in your schedule yet. Browse the catalog to add some or select another plant type above."
+              } else {
+                "Search for plants above or browse the catalog to add crops and see their planting and harvest windows across the year."
+              },
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               textAlign = TextAlign.Center,

@@ -852,6 +852,24 @@ class MainScreenTest {
     // Navigation pull-up panel and drawer are completely hidden
     composeTestRule.onNodeWithTag("tools_pull_up_panel").assertDoesNotExist()
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").assertDoesNotExist()
+
+    // Verify standalone shortcut intents reuse existing standalone instances (NEW_DOCUMENT + SINGLE_TOP without MULTIPLE_TASK)
+    for (tool in Tool.entries) {
+      val toolIntent = createStandaloneToolIntent(composeTestRule.activity, tool)
+      assertEquals(tool, parseStandaloneTool(toolIntent))
+      assertEquals(resolveStandaloneDocumentUri(tool), toolIntent.data)
+      assertTrue((toolIntent.flags and android.content.Intent.FLAG_ACTIVITY_NEW_TASK) != 0)
+      assertTrue((toolIntent.flags and android.content.Intent.FLAG_ACTIVITY_NEW_DOCUMENT) != 0)
+      assertTrue((toolIntent.flags and android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP) != 0)
+      assertEquals(0, toolIntent.flags and android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+    }
+
+    val sampleFolder = java.io.File("/storage/emulated/0/Download")
+    val folderIntent = createFolderShortcutIntent(composeTestRule.activity, sampleFolder)
+    assertEquals(Tool.FILES, parseStandaloneTool(folderIntent))
+    assertEquals(sampleFolder.absolutePath, parseFolderShortcut(folderIntent))
+    assertEquals(resolveStandaloneDocumentUri(Tool.FILES, sampleFolder.absolutePath), folderIntent.data)
+    assertEquals(0, folderIntent.flags and android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
   }
 
   @Test
@@ -1250,6 +1268,18 @@ class MainScreenTest {
       composeTestRule.waitForIdle()
 
       composeTestRule.onNodeWithTag("files_paste_bar").assertIsDisplayed()
+
+      // 4. Context menu Move action populates the floating move/paste pill bar (instead of a dialog)
+      composeTestRule.onNodeWithTag("file_options_checklist.md").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("action_move").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("action_move").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("move_destination_dialog").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("files_paste_bar").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("files_move_bar").assertIsDisplayed()
+      composeTestRule.onNodeWithText("Move here").assertIsDisplayed()
     } finally {
       tempDir.deleteRecursively()
     }

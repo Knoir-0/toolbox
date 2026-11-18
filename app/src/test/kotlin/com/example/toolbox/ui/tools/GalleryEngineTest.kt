@@ -30,13 +30,18 @@ class GalleryEngineTest {
   }
 
   @Test
-  fun defaultFolders_areDcimPicturesAndDownloads_andContentsAreUnNestedAsSameFolder_andDefaultNewAlbumIsPictures() {
-    assertEquals(listOf("DCIM", "Pictures", "Download"), DEFAULT_GALLERY_FOLDER_NAMES)
+  fun defaultFolders_hideDownloadsByDefaultForScopedStorage_andReappearWithFullFilesPermission() {
+    assertEquals(listOf("DCIM", "Pictures"), DEFAULT_GALLERY_FOLDER_NAMES)
+    assertEquals(listOf("DCIM", "Pictures", "Download"), FULL_FILES_DEFAULT_GALLERY_FOLDER_NAMES)
     assertEquals("Pictures", DEFAULT_NEW_ALBUM_FOLDER_NAME)
 
-    val folders = GalleryEngine.getDefaultGalleryFolders(tempRootDir)
-    assertEquals(3, folders.size)
-    assertEquals(listOf("DCIM", "Pictures", "Download"), folders.map { it.name })
+    val scopedFolders = GalleryEngine.getDefaultGalleryFolders(tempRootDir, hasFullFilesPermission = false)
+    assertEquals(2, scopedFolders.size)
+    assertEquals(listOf("DCIM", "Pictures"), scopedFolders.map { it.name })
+
+    val fullFilesFolders = GalleryEngine.getDefaultGalleryFolders(tempRootDir, hasFullFilesPermission = true)
+    assertEquals(3, fullFilesFolders.size)
+    assertEquals(listOf("DCIM", "Pictures", "Download"), fullFilesFolders.map { it.name })
 
     val defaultNewAlbumFolder = GalleryEngine.getDefaultNewAlbumFolder(tempRootDir)
     assertEquals(File(tempRootDir, "Pictures").absolutePath, defaultNewAlbumFolder.absolutePath)
@@ -87,7 +92,7 @@ class GalleryEngineTest {
     val rootAlbums = GalleryEngine.loadRootAlbums(rootDirectory = tempRootDir)
     assertEquals(listOf("Camera", "Screenshots", "Vacation"), rootAlbums.map { it.name })
 
-    // When Download exists, it is treated as a single "Download" album rather than un-nested
+    // When Download exists, it is hidden by default under scoped storage and re-appears as a single "Download" album when full files permission is granted
     val downloadsDir = File(tempRootDir, "Download").apply { mkdirs() }
     val downloadsSubDir = File(downloadsDir, "ExtractedZip").apply { mkdirs() }
     GalleryEngine.writeSolidColorPng(
@@ -99,7 +104,13 @@ class GalleryEngineTest {
       lastModifiedMs = 8_000_000L,
     )
 
-    val rootWithDownloads = GalleryEngine.loadRootContents(rootDirectory = tempRootDir)
+    val rootScopedOnly = GalleryEngine.loadRootContents(rootDirectory = tempRootDir, hasFullFilesPermission = false)
+    assertEquals(
+      listOf("Camera", "Screenshots", "Vacation"),
+      rootScopedOnly.nestedAlbums.map { it.name },
+    )
+
+    val rootWithDownloads = GalleryEngine.loadRootContents(rootDirectory = tempRootDir, hasFullFilesPermission = true)
     assertEquals(
       listOf("Camera", "Download", "Screenshots", "Vacation"),
       rootWithDownloads.nestedAlbums.map { it.name },
@@ -405,6 +416,8 @@ class GalleryEngineTest {
     assertEquals(GallerySortOrder.DATE_DESC, GallerySortOrder.DEFAULT)
     assertEquals(GallerySortOrder.DATE_DESC, GallerySortOrder.fromNameOrDefault(null))
     assertEquals(GallerySortOrder.NAME_ASC, GallerySortOrder.fromNameOrDefault("NAME_ASC"))
+    assertEquals(GallerySortOrder.RANDOM, GallerySortOrder.fromNameOrDefault("RANDOM"))
+    assertEquals("Random", GallerySortOrder.RANDOM.displayName)
 
     val albums = listOf(
       GalleryAlbum(
@@ -515,6 +528,17 @@ class GalleryEngineTest {
       listOf("c.png", "b.png", "a.png"),
       GalleryEngine.sortPhotos(photos, GallerySortOrder.SIZE_ASC).map { it.name },
     )
+
+    // Random sort preserves all albums and photos while shuffling order
+    val randomAlbums = GalleryEngine.sortAlbums(albums, GallerySortOrder.RANDOM, randomSeed = 42L)
+    assertEquals(albums.map { it.name }.toSet(), randomAlbums.map { it.name }.toSet())
+    assertEquals(albums.size, randomAlbums.size)
+    assertTrue(randomAlbums.map { it.name } != albums.map { it.name })
+
+    val randomPhotos = GalleryEngine.sortPhotos(photos, GallerySortOrder.RANDOM, randomSeed = 42L)
+    assertEquals(photos.map { it.name }.toSet(), randomPhotos.map { it.name }.toSet())
+    assertEquals(photos.size, randomPhotos.size)
+    assertTrue(randomPhotos.map { it.name } != photos.map { it.name })
   }
 
   @Test
@@ -1004,9 +1028,27 @@ class GalleryEngineTest {
 
   @Test
   fun parseAndSerializeGrantedFolders_folderDocumentId_andReorderPillsWithAlbumsFixedAtFront() {
-    assertEquals(listOf("DCIM", "Pictures", "Download"), DEFAULT_GALLERY_FOLDER_NAMES)
-    assertEquals(listOf("/DCIM", "/Pictures", "/Download"), DEFAULT_GALLERY_FOLDER_DISPLAY_PATHS)
-    assertEquals(listOf("Camera", "Pictures", "Download"), DEFAULT_GALLERY_FOLDERS.map { it.pillLabel })
+    assertEquals(listOf("DCIM", "Pictures"), DEFAULT_GALLERY_FOLDER_NAMES)
+    assertEquals(listOf("DCIM", "Pictures", "Download"), FULL_FILES_DEFAULT_GALLERY_FOLDER_NAMES)
+    assertEquals(listOf("/DCIM", "/Pictures"), DEFAULT_GALLERY_FOLDER_DISPLAY_PATHS)
+    assertEquals(listOf("/DCIM", "/Pictures", "/Download"), FULL_FILES_DEFAULT_GALLERY_FOLDER_DISPLAY_PATHS)
+    assertEquals(listOf("Camera", "Pictures"), DEFAULT_GALLERY_FOLDERS.map { it.pillLabel })
+    assertEquals(listOf("Camera", "Pictures", "Download"), FULL_FILES_DEFAULT_GALLERY_FOLDERS.map { it.pillLabel })
+    assertEquals(
+      listOf(
+        GalleryDefaultFolder.DCIM,
+        GalleryDefaultFolder.PICTURES,
+      ),
+      GalleryDefaultFolder.defaultEntries(hasFullFilesPermission = false),
+    )
+    assertEquals(
+      listOf(
+        GalleryDefaultFolder.DCIM,
+        GalleryDefaultFolder.PICTURES,
+        GalleryDefaultFolder.DOWNLOADS,
+      ),
+      GalleryDefaultFolder.defaultEntries(hasFullFilesPermission = true),
+    )
     assertEquals(
       listOf(
         GalleryDefaultFolder.DCIM,
@@ -1056,7 +1098,7 @@ class GalleryEngineTest {
       GalleryDefaultFolder.fromPathOrName("primary:Download"),
     )
 
-    // Reordering and persisting custom + default folder pills
+    // Reordering and persisting custom + default folder pills (scoped storage vs full files permission)
     val customScreenshots = GalleryFolder(
       folderName = "Screenshots",
       displayPath = "/Screenshots",
@@ -1067,16 +1109,28 @@ class GalleryEngineTest {
     assertTrue(DEFAULT_GALLERY_FOLDERS.all { it.isDefault && !it.isCustom })
 
     val withCustom = DEFAULT_GALLERY_FOLDERS + customScreenshots
-    val reordered = GalleryEngine.reorderFolders(withCustom, fromIndex = 3, toIndex = 0)
-    assertEquals(listOf("Screenshots", "DCIM", "Pictures", "Download"), reordered.map { it.folderName })
+    val reordered = GalleryEngine.reorderFolders(withCustom, fromIndex = 2, toIndex = 0)
+    assertEquals(listOf("Screenshots", "DCIM", "Pictures"), reordered.map { it.folderName })
 
-    val serializedPills = GalleryEngine.serializeFolderPills(reordered)
-    val parsedPills = GalleryEngine.parseFolderPills(serializedPills)
+    val serializedPills = GalleryEngine.serializeFolderPills(reordered, hasFullFilesPermission = false)
+    val parsedPills = GalleryEngine.parseFolderPills(serializedPills, hasFullFilesPermission = false)
     assertEquals(reordered, parsedPills)
+
+    // When full files permission is granted, Download re-appears in the folder pills
+    val parsedWithFullFiles = GalleryEngine.parseFolderPills(serializedPills, hasFullFilesPermission = true)
+    assertEquals(listOf("Screenshots", "DCIM", "Pictures", "Download"), parsedWithFullFiles.map { it.folderName })
+    assertEquals(
+      listOf("Screenshots", "DCIM", "Pictures"),
+      GalleryEngine.filterFolderPillsForPermission(parsedWithFullFiles, hasFullFilesPermission = false).map { it.folderName },
+    )
+    assertEquals(
+      listOf("Screenshots", "DCIM", "Pictures", "Download"),
+      GalleryEngine.filterFolderPillsForPermission(reordered, hasFullFilesPermission = true).map { it.folderName },
+    )
 
     // Removing a custom folder removes it while preserving default folders
     val afterRemoveCustom = GalleryEngine.removeCustomFolder(reordered, customScreenshots)
-    assertEquals(listOf("DCIM", "Pictures", "Download"), afterRemoveCustom.map { it.folderName })
+    assertEquals(listOf("DCIM", "Pictures"), afterRemoveCustom.map { it.folderName })
     assertEquals(
       afterRemoveCustom,
       GalleryEngine.removeCustomFolder(afterRemoveCustom, GalleryDefaultFolder.DCIM.toGalleryFolder()),

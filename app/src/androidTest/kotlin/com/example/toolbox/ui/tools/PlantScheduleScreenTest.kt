@@ -156,4 +156,44 @@ class PlantScheduleScreenTest {
 
     composeTestRule.onNodeWithText("Cherry Tomato").assertIsDisplayed()
   }
+
+  @Test
+  fun plantTypeFilterPillBar_isDisplayedUnderToolbarAndFiltersScheduledPlants() {
+    val tomato = PlantScheduleEngine.BUILT_IN_PLANTS.first { it.id == "tomato" }
+    val basil = PlantScheduleEngine.BUILT_IN_PLANTS.first { it.id == "basil" }
+    val repository = InMemoryPlantScheduleRepository(
+      initialScheduledPlants = listOf(tomato, basil),
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        PlantScheduleScreen(repository = repository)
+      }
+    }
+
+    // Filter pill bar is visible underneath the toolbar on the main screen
+    composeTestRule.onNodeWithTag("plant_type_filter_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("catalog_category_pills").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("category_chip_ALL").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("category_chip_VEGETABLES").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("category_chip_HERBS").assertIsDisplayed()
+
+    // Both plants are initially shown
+    composeTestRule.onNodeWithTag("scheduled_plant_item_tomato").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("scheduled_plant_item_basil").assertIsDisplayed()
+
+    // Tap Herbs filter pill -> only Basil is shown
+    composeTestRule.onNodeWithTag("category_chip_HERBS").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("scheduled_plant_item_basil").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("scheduled_plant_item_tomato").assertDoesNotExist()
+
+    // Tap All filter pill -> both Tomato and Basil are shown again
+    composeTestRule.onNodeWithTag("category_chip_ALL").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("scheduled_plant_item_tomato").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("scheduled_plant_item_basil").assertIsDisplayed()
+  }
 }

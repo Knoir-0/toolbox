@@ -141,9 +141,26 @@ class AudioRecorderEngineTest {
   }
 
   @Test
-  fun formatDirectoryDisplayPath_andResolveDirectoryInput_defaultToAudioRecordingsAndDownloadFolders() {
-    assertEquals(listOf("Audio", "Recordings", "Download"), DEFAULT_AUDIO_RECORDER_FOLDER_NAMES)
-    assertEquals(listOf("/Audio", "/Recordings", "/Download"), DEFAULT_AUDIO_RECORDER_FOLDER_DISPLAY_PATHS)
+  fun formatDirectoryDisplayPath_andResolveDirectoryInput_hideDownloadByDefault_andReappearWithFullFilesPermission() {
+    assertEquals(listOf("Audio", "Recordings"), DEFAULT_AUDIO_RECORDER_FOLDER_NAMES)
+    assertEquals(listOf("Audio", "Recordings", "Download"), FULL_FILES_DEFAULT_AUDIO_RECORDER_FOLDER_NAMES)
+    assertEquals(listOf("/Audio", "/Recordings"), DEFAULT_AUDIO_RECORDER_FOLDER_DISPLAY_PATHS)
+    assertEquals(listOf("/Audio", "/Recordings", "/Download"), FULL_FILES_DEFAULT_AUDIO_RECORDER_FOLDER_DISPLAY_PATHS)
+    assertEquals(
+      listOf(
+        AudioRecorderDefaultFolder.AUDIO,
+        AudioRecorderDefaultFolder.RECORDINGS,
+      ),
+      AudioRecorderDefaultFolder.defaultEntries(hasFullFilesPermission = false),
+    )
+    assertEquals(
+      listOf(
+        AudioRecorderDefaultFolder.AUDIO,
+        AudioRecorderDefaultFolder.RECORDINGS,
+        AudioRecorderDefaultFolder.DOWNLOADS,
+      ),
+      AudioRecorderDefaultFolder.defaultEntries(hasFullFilesPermission = true),
+    )
     assertEquals(
       listOf(
         AudioRecorderDefaultFolder.AUDIO,
@@ -164,12 +181,21 @@ class AudioRecorderEngineTest {
 
     val tempFallback = Files.createTempDirectory("fallback_root").toFile()
     try {
-      val resolvedDefaults = AudioRecorderEngine.resolveDefaultDirectories(
+      val resolvedScopedDefaults = AudioRecorderEngine.resolveDefaultDirectories(
         userRoot = File("/non_existent_unwritable_root_path"),
         fallbackBaseDir = tempFallback,
+        hasFullFilesPermission = false,
       )
-      assertEquals(listOf("Audio", "Recordings", "Download"), resolvedDefaults.map { it.name })
-      assertTrue(resolvedDefaults.all { it.exists() && it.isDirectory })
+      assertEquals(listOf("Audio", "Recordings"), resolvedScopedDefaults.map { it.name })
+      assertTrue(resolvedScopedDefaults.all { it.exists() && it.isDirectory })
+
+      val resolvedFullFilesDefaults = AudioRecorderEngine.resolveDefaultDirectories(
+        userRoot = File("/non_existent_unwritable_root_path"),
+        fallbackBaseDir = tempFallback,
+        hasFullFilesPermission = true,
+      )
+      assertEquals(listOf("Audio", "Recordings", "Download"), resolvedFullFilesDefaults.map { it.name })
+      assertTrue(resolvedFullFilesDefaults.all { it.exists() && it.isDirectory })
 
       val resolvedDefault = AudioRecorderEngine.resolveDirectoryInput(
         inputPath = "/Audio",
@@ -292,7 +318,7 @@ class AudioRecorderEngineTest {
       AudioRecorderDefaultFolder.fromPathOrName("primary:Download"),
     )
 
-    // Reordering and persisting custom + default folder pills
+    // Reordering and persisting custom + default folder pills (scoped storage vs full files permission)
     val customPodcasts = AudioRecorderFolder(
       folderName = "Podcasts",
       displayPath = "/Podcasts",
@@ -303,16 +329,28 @@ class AudioRecorderEngineTest {
     assertTrue(DEFAULT_AUDIO_RECORDER_FOLDERS.all { it.isDefault && !it.isCustom })
 
     val withCustom = DEFAULT_AUDIO_RECORDER_FOLDERS + customPodcasts
-    val reordered = AudioRecorderEngine.reorderFolders(withCustom, fromIndex = 3, toIndex = 0)
-    assertEquals(listOf("Podcasts", "Audio", "Recordings", "Download"), reordered.map { it.folderName })
+    val reordered = AudioRecorderEngine.reorderFolders(withCustom, fromIndex = 2, toIndex = 0)
+    assertEquals(listOf("Podcasts", "Audio", "Recordings"), reordered.map { it.folderName })
 
-    val serializedPills = AudioRecorderEngine.serializeFolderPills(reordered)
-    val parsedPills = AudioRecorderEngine.parseFolderPills(serializedPills)
+    val serializedPills = AudioRecorderEngine.serializeFolderPills(reordered, hasFullFilesPermission = false)
+    val parsedPills = AudioRecorderEngine.parseFolderPills(serializedPills, hasFullFilesPermission = false)
     assertEquals(reordered, parsedPills)
+
+    // When full files permission is granted, Download re-appears in the folder pills
+    val parsedWithFullFiles = AudioRecorderEngine.parseFolderPills(serializedPills, hasFullFilesPermission = true)
+    assertEquals(listOf("Podcasts", "Audio", "Recordings", "Download"), parsedWithFullFiles.map { it.folderName })
+    assertEquals(
+      listOf("Podcasts", "Audio", "Recordings"),
+      AudioRecorderEngine.filterFolderPillsForPermission(parsedWithFullFiles, hasFullFilesPermission = false).map { it.folderName },
+    )
+    assertEquals(
+      listOf("Podcasts", "Audio", "Recordings", "Download"),
+      AudioRecorderEngine.filterFolderPillsForPermission(reordered, hasFullFilesPermission = true).map { it.folderName },
+    )
 
     // Removing a custom folder removes it while preserving default folders
     val afterRemoveCustom = AudioRecorderEngine.removeCustomFolder(reordered, customPodcasts)
-    assertEquals(listOf("Audio", "Recordings", "Download"), afterRemoveCustom.map { it.folderName })
+    assertEquals(listOf("Audio", "Recordings"), afterRemoveCustom.map { it.folderName })
     assertEquals(
       afterRemoveCustom,
       AudioRecorderEngine.removeCustomFolder(afterRemoveCustom, AudioRecorderDefaultFolder.AUDIO.toAudioRecorderFolder()),

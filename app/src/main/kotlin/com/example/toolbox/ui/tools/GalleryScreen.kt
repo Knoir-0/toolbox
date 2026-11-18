@@ -180,6 +180,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -299,6 +300,7 @@ fun GalleryScreen(
   initialSortOrder: GallerySortOrder? = null,
   initialGroupOption: GalleryGroupOption? = null,
   initialGrantedFolders: Set<GalleryDefaultFolder>? = null,
+  initialHasFullFilesPermission: Boolean? = null,
   onRequestFolderSystemAccess: ((GalleryDefaultFolder, (Boolean) -> Unit) -> Unit)? = null,
   onRequestFolderPathSystemAccess: ((GalleryFolder, (Boolean) -> Unit) -> Unit)? = null,
   onRequestAddCustomFolder: (((GalleryFolder?) -> Unit) -> Unit)? = null,
@@ -313,6 +315,7 @@ fun GalleryScreen(
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
   val haptic = LocalHapticFeedback.current
+  val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
   val prefs = remember(context, isInspection) {
     if (isInspection) null
@@ -329,15 +332,42 @@ fun GalleryScreen(
 
   var refreshTrigger by remember { mutableIntStateOf(0) }
 
+  val storagePermissionSettingGranted = NavigationPreferencesBridge.isPermissionGranted(
+    com.example.toolbox.ui.main.AppPermission.STORAGE
+  )
+  var systemHasFullFilesPermission by remember(context, isInspection) {
+    mutableStateOf(if (isInspection) false else FileManagerEngine.hasStoragePermission(context))
+  }
+  DisposableEffect(lifecycleOwner, context, isInspection) {
+    val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+      if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME && !isInspection) {
+        systemHasFullFilesPermission = FileManagerEngine.hasStoragePermission(context)
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+    }
+  }
+  val hasFullFilesPermission: Boolean = initialHasFullFilesPermission
+    ?: (!isInspection && storagePermissionSettingGranted && systemHasFullFilesPermission)
+
   // Ordered list of navigation folder pills (defaults + any custom folders added via scoped storage; "Albums" is always fixed to the front)
-  var folderPills by remember(isInspection) {
+  // Downloads is hidden under scoped storage and re-appears when full files permission is granted.
+  var rawFolderPills by remember(isInspection) {
     mutableStateOf(
-      if (isInspection) DEFAULT_GALLERY_FOLDERS
-      else GalleryEngine.getFolderPills(context)
+      if (isInspection) FULL_FILES_DEFAULT_GALLERY_FOLDERS
+      else GalleryEngine.getFolderPills(context, hasFullFilesPermission = true)
+    )
+  }
+  val folderPills: List<GalleryFolder> = remember(rawFolderPills, hasFullFilesPermission) {
+    GalleryEngine.filterFolderPillsForPermission(
+      folders = rawFolderPills,
+      hasFullFilesPermission = hasFullFilesPermission,
     )
   }
 
-  // Scoped folder access states (initially empty until at least one folder is granted access)
+  // Scoped folder access states (initially empty until at least one folder is granted access, or unlocked when full files permission is granted)
   var grantedFolderPaths by remember(initialGrantedFolders, isInspection) {
     mutableStateOf(
       when {
@@ -348,11 +378,23 @@ fun GalleryScreen(
     )
   }
 
-  fun isFolderGranted(folder: GalleryFolder): Boolean {
-    return grantedFolderPaths.any { it.equals(folder.displayPath, ignoreCase = true) }
+  val effectiveGrantedFolderPaths: Set<String> = remember(
+    grantedFolderPaths,
+    hasFullFilesPermission,
+    initialGrantedFolders,
+  ) {
+    if (hasFullFilesPermission && initialGrantedFolders == null) {
+      grantedFolderPaths + GalleryDefaultFolder.DOWNLOADS.displayPath
+    } else {
+      grantedFolderPaths
+    }
   }
 
-  val grantedFolders: List<GalleryFolder> = remember(folderPills, grantedFolderPaths) {
+  fun isFolderGranted(folder: GalleryFolder): Boolean {
+    return effectiveGrantedFolderPaths.any { it.equals(folder.displayPath, ignoreCase = true) }
+  }
+
+  val grantedFolders: List<GalleryFolder> = remember(folderPills, effectiveGrantedFolderPaths) {
     folderPills.filter { isFolderGranted(it) }
   }
   val hasAnyGrantedFolder = grantedFolders.isNotEmpty() || initialFolders != null
@@ -414,6 +456,16 @@ fun GalleryScreen(
   // Sort order: defaults to DATE_DESC (Newest first)
   var sortOrder by rememberSaveable {
     mutableStateOf(initialResolvedSortGroup.first.sortOrder)
+  }
+
+  var randomSortSeed by rememberSaveable {
+    mutableLongStateOf(
+      if (initialResolvedSortGroup.first.sortOrder == GallerySortOrder.RANDOM) {
+        System.currentTimeMillis().takeIf { it != 0L } ?: 1L
+      } else {
+        0L
+      }
+    )
   }
 
   // Group option: defaults to NONE (un-nested root view; FOLDERS groups by DCIM and Pictures)
@@ -659,6 +711,10 @@ fun GalleryScreen(
   }
 
   fun updateSortOrder(newOrder: GallerySortOrder) {
+    if (newOrder == GallerySortOrder.RANDOM) {
+      val nextSeed = System.currentTimeMillis() + randomSortSeed + 1L
+      randomSortSeed = if (nextSeed != 0L) nextSeed else 1L
+    }
     sortOrder = newOrder
     val updated = GallerySortGroupConfig(groupOption = groupOption, sortOrder = newOrder)
     if (isSortGroupSavedForFolder) {
@@ -768,15 +824,15 @@ fun GalleryScreen(
   }
 
   fun grantFolderAccess(folder: GalleryFolder) {
-    if (folderPills.none { it.displayPath.equals(folder.displayPath, ignoreCase = true) }) {
+    if (rawFolderPills.none { it.displayPath.equals(folder.displayPath, ignoreCase = true) }) {
       val updatedPills = if (folder.isCustom) {
-        listOf(folder) + folderPills
+        listOf(folder) + rawFolderPills
       } else {
-        folderPills + folder
+        rawFolderPills + folder
       }
-      folderPills = updatedPills
+      rawFolderPills = updatedPills
       if (!isInspection) {
-        GalleryEngine.setFolderPills(context, updatedPills)
+        GalleryEngine.setFolderPills(context, updatedPills, hasFullFilesPermission = true)
       }
     }
     grantedFolderPaths = if (isInspection) {
@@ -791,11 +847,15 @@ fun GalleryScreen(
   }
 
   fun moveFolderPill(fromIndex: Int, toIndex: Int) {
-    val updated = GalleryEngine.reorderFolders(folderPills, fromIndex, toIndex)
-    if (updated != folderPills) {
-      folderPills = updated
+    val updatedVisible = GalleryEngine.reorderFolders(folderPills, fromIndex, toIndex)
+    if (updatedVisible != folderPills) {
+      val hiddenPills = rawFolderPills.filter { raw ->
+        updatedVisible.none { it.displayPath.equals(raw.displayPath, ignoreCase = true) }
+      }
+      val updatedRaw = updatedVisible + hiddenPills
+      rawFolderPills = updatedRaw
       if (!isInspection) {
-        GalleryEngine.setFolderPills(context, updated)
+        GalleryEngine.setFolderPills(context, updatedRaw, hasFullFilesPermission = true)
       }
     }
   }
@@ -805,8 +865,8 @@ fun GalleryScreen(
     isFabExpanded = false
     exitSelectionMode()
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-    val updatedPills = GalleryEngine.removeCustomFolder(folderPills, folder)
-    folderPills = updatedPills
+    val updatedPills = GalleryEngine.removeCustomFolder(rawFolderPills, folder)
+    rawFolderPills = updatedPills
     if (!isInspection) {
       GalleryEngine.removeCustomFolder(context, folder)
     }
@@ -1021,7 +1081,7 @@ fun GalleryScreen(
     rootContents,
     selectedDefaultFolder,
     folderPills,
-    grantedFolderPaths,
+    effectiveGrantedFolderPaths,
     effectiveRootDir,
     refreshTrigger,
     isInspection,
@@ -1034,7 +1094,9 @@ fun GalleryScreen(
         it.folderName.equals(folderName, ignoreCase = true) ||
           it.displayPath.equals(folderName, ignoreCase = true)
       }
-      if (matchingPill != null && !isFolderGranted(matchingPill)) {
+      if (matchingPill == null) {
+        rootContents
+      } else if (!isFolderGranted(matchingPill)) {
         AlbumContents(
           directory = GalleryEngine.resolveDirectoryForFolder(matchingPill, effectiveRootDir),
           nestedAlbums = emptyList(),
@@ -1047,13 +1109,13 @@ fun GalleryScreen(
             it.path.contains("/$folderName", ignoreCase = true) || it.name.equals(folderName, ignoreCase = true)
           }
         )
-      } else if (matchingPill != null && matchingPill.isCustom) {
+      } else if (matchingPill.isCustom) {
         GalleryEngine.loadFolderPillContents(
           folder = matchingPill,
           rootDirectory = effectiveRootDir,
         )
       } else {
-        val matchingDirs = if (matchingPill != null && !matchingPill.customAbsolutePath.isNullOrBlank()) {
+        val matchingDirs = if (!matchingPill.customAbsolutePath.isNullOrBlank()) {
           listOf(File(matchingPill.customAbsolutePath))
         } else {
           rootContents.directories.filter { dir ->
@@ -1063,11 +1125,7 @@ fun GalleryScreen(
               dir.name.equals(folderName, ignoreCase = true)
             }
           }.ifEmpty {
-            if (matchingPill != null) {
-              listOf(GalleryEngine.resolveDirectoryForFolder(matchingPill, effectiveRootDir))
-            } else {
-              listOf(File(effectiveRootDir, folderName))
-            }
+            listOf(GalleryEngine.resolveDirectoryForFolder(matchingPill, effectiveRootDir))
           }
         }
         GalleryEngine.loadMergedAlbumContents(matchingDirs)
@@ -1164,6 +1222,7 @@ fun GalleryScreen(
     searchQuery,
     selectedTagFilter,
     sortOrder,
+    randomSortSeed,
   ) {
     if (hasActiveSearchQueryOrTag) {
       GalleryEngine.searchGallery(
@@ -1174,11 +1233,12 @@ fun GalleryScreen(
         searchQuery = searchQuery,
         selectedTag = selectedTagFilter,
         sortOrder = sortOrder,
+        randomSeed = randomSortSeed,
       )
     } else {
       GallerySearchResult(
-        matchingAlbums = GalleryEngine.sortAlbums(rawAlbums, sortOrder),
-        matchingPhotos = GalleryEngine.sortPhotos(rawPhotos, sortOrder),
+        matchingAlbums = GalleryEngine.sortAlbums(rawAlbums, sortOrder, randomSortSeed),
+        matchingPhotos = GalleryEngine.sortPhotos(rawPhotos, sortOrder, randomSortSeed),
         matchSnippetsByPath = emptyMap(),
       )
     }
@@ -1206,6 +1266,7 @@ fun GalleryScreen(
   val folderGroups: List<GalleryFolderGroup> = remember(
     groupOption,
     sortOrder,
+    randomSortSeed,
     activeRootContents,
     currentAlbum,
     hasActiveSearchQueryOrTag,
@@ -1223,6 +1284,7 @@ fun GalleryScreen(
         selectedTag = if (hasActiveSearchQueryOrTag) selectedTagFilter else null,
         indexMap = photoIndexMap,
         bypassNoMedia = isViewingCustomFolder,
+        randomSeed = randomSortSeed,
       )
     } else {
       emptyList()
@@ -1232,6 +1294,7 @@ fun GalleryScreen(
   val photoGroups: List<GalleryPhotoGroup> = remember(
     groupOption,
     sortOrder,
+    randomSortSeed,
     hasActiveSearchQueryOrTag,
     searchMatchingPhotos,
     allScopePhotos,
@@ -1246,6 +1309,7 @@ fun GalleryScreen(
         groupOption = groupOption,
         sortOrder = sortOrder,
         indexMap = photoIndexMap,
+        randomSeed = randomSortSeed,
       )
     }
   }
@@ -1653,7 +1717,7 @@ fun GalleryScreen(
       GalleryNavigationAndDensityBar(
         albumStack = albumStack.toList(),
         folders = folderPills,
-        grantedFolderPaths = grantedFolderPaths,
+        grantedFolderPaths = effectiveGrantedFolderPaths,
         pendingPermissionFolder = pendingPermissionFolder,
         selectedDefaultFolder = selectedDefaultFolder,
         viewMode = viewMode,

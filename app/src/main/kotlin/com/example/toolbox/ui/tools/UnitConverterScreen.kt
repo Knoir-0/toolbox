@@ -2,11 +2,9 @@ package com.example.toolbox.ui.tools
 
 import android.content.res.Configuration
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -49,6 +47,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -71,8 +71,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -373,88 +374,26 @@ fun UnitConverterScreen(
 
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
+    // Category Pill Navigation Bar underneath the toolbar
+    UnitConverterPillNavigationBar(
+      selectedCategory = selectedCategory,
+      onSelectCategory = { category ->
+        selectedCategory = category
+        val (defFrom, defTo) = UnitCatalog.defaultIndicesFor(category)
+        fromIndex = defFrom
+        toIndex = defTo
+      },
+    )
+
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
     LazyColumn(
       modifier = Modifier
         .fillMaxWidth()
         .weight(1f),
       contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
     ) {
-    // 1. Category Selector Row
-    item {
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        UnitCategory.entries.forEach { category ->
-          val isSelected = category == selectedCategory
-          val containerColor by animateColorAsState(
-            targetValue = if (isSelected) palette.accentPrimary else palette.rowSurface,
-            animationSpec = tween(180),
-            label = "CategoryBg",
-          )
-          val contentColor by animateColorAsState(
-            targetValue = if (isSelected) palette.onAccentPrimary else palette.textSecondary,
-            animationSpec = tween(180),
-            label = "CategoryContent",
-          )
-
-          Surface(
-            selected = isSelected,
-            onClick = {
-              selectedCategory = category
-              val (defFrom, defTo) = UnitCatalog.defaultIndicesFor(category)
-              fromIndex = defFrom
-              toIndex = defTo
-            },
-            shape = RoundedCornerShape(50),
-            color = containerColor,
-            border = BorderStroke(
-              width = 1.dp,
-              color = if (isSelected) palette.accentPrimary else palette.rowBorder,
-            ),
-            shadowElevation = if (isSelected) 3.dp else 0.dp,
-          ) {
-            Row(
-              modifier = Modifier.padding(start = 10.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(7.dp),
-            ) {
-              Box(
-                modifier = Modifier
-                  .size(24.dp)
-                  .clip(CircleShape)
-                  .background(
-                    if (isSelected) {
-                      palette.onAccentPrimary.copy(alpha = 0.18f)
-                    } else {
-                      palette.symbolTileSurface
-                    },
-                  ),
-                contentAlignment = Alignment.Center,
-              ) {
-                Icon(
-                  imageVector = category.icon,
-                  contentDescription = null,
-                  tint = if (isSelected) palette.onAccentPrimary else palette.symbolTileContent,
-                  modifier = Modifier.size(14.dp),
-                )
-              }
-              Text(
-                text = category.label,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
-                color = contentColor,
-              )
-            }
-          }
-        }
-      }
-      Spacer(modifier = Modifier.height(14.dp))
-    }
-
-    // 2. Hero Conversion Card
+    // 1. Hero Conversion Card
     item {
       ConversionHeroCard(
         category = selectedCategory,
@@ -478,7 +417,7 @@ fun UnitConverterScreen(
       Spacer(modifier = Modifier.height(6.dp))
     }
 
-    // 3. Quick Value Presets
+    // 2. Quick Value Presets
     item {
       QuickValuePresetsRow(
         category = selectedCategory,
@@ -489,7 +428,7 @@ fun UnitConverterScreen(
       Spacer(modifier = Modifier.height(6.dp))
     }
 
-    // 4. Unified All-Units Comparison Card
+    // 3. Unified All-Units Comparison Card
     item {
       AllUnitsComparisonCard(
         category = selectedCategory,
@@ -501,6 +440,59 @@ fun UnitConverterScreen(
         palette = palette,
       )
     }
+    }
+  }
+}
+
+@Composable
+private fun UnitConverterPillNavigationBar(
+  selectedCategory: UnitCategory,
+  onSelectCategory: (UnitCategory) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val haptic = LocalHapticFeedback.current
+
+  Row(
+    modifier = modifier
+      .fillMaxWidth()
+      .horizontalScroll(rememberScrollState())
+      .padding(horizontal = 12.dp, vertical = 6.dp)
+      .testTag("unit_converter_pill_bar"),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    UnitCategory.entries.forEach { category ->
+      val isSelected = category == selectedCategory
+      FilterChip(
+        selected = isSelected,
+        onClick = {
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          onSelectCategory(category)
+        },
+        shape = RoundedCornerShape(20.dp),
+        leadingIcon = {
+          Icon(
+            imageVector = category.icon,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+        },
+        label = {
+          Text(
+            text = category.label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        },
+        colors = FilterChipDefaults.filterChipColors(
+          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+          selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+        ),
+        modifier = Modifier.testTag("unit_converter_category_chip_${category.name}"),
+      )
     }
   }
 }

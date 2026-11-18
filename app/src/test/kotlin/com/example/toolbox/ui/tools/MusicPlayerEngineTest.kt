@@ -303,6 +303,13 @@ class MusicPlayerEngineTest {
 
     val sortedLongest = MusicPlayerEngine.sortTracks(tracks, MusicSortOrder.DURATION_DESC)
     assertTrue(sortedLongest.first().durationMs >= sortedLongest.last().durationMs)
+
+    assertEquals(MusicSortOrder.RANDOM, MusicSortOrder.fromNameOrDefault("RANDOM"))
+    assertEquals("Random", MusicSortOrder.RANDOM.displayName)
+    val sortedRandom = MusicPlayerEngine.sortTracks(tracks, MusicSortOrder.RANDOM, randomSeed = 42L)
+    assertEquals(tracks.size, sortedRandom.size)
+    assertEquals(tracks.map { it.id }.toSet(), sortedRandom.map { it.id }.toSet())
+    assertNotEquals(tracks.map { it.id }, sortedRandom.map { it.id })
   }
 
   @Test
@@ -1189,10 +1196,14 @@ class MusicPlayerEngineTest {
       )
     }
 
-    // Mix 1 & Mix 2 mash similar genres together (e.g. Synthwave + Electronic)
+    // Mix 1 mashes similar genres together (e.g. Synthwave + Electronic), Mix 2 is Old Favorites
     assertTrue(MusicPlayerEngine.areGenresSimilar("Synthwave", "Electronic"))
     assertTrue(mixesGen0[0].subtitle.contains("Genre Mashup"))
-    assertTrue(mixesGen0[1].subtitle.contains("Genre Mashup"))
+    assertEquals("Old Favorites", mixesGen0[1].name)
+    assertTrue(mixesGen0[1].subtitle.contains("Old Favorites"))
+    // track_1 (in favorite genre Synthwave, played a lot at oldest timestamp 1_000L) and track_2 (by favorite Artist 2, played at 2_000L)
+    // rank at the very top of Old Favorites ahead of recently-played or unplayed tracks
+    assertEquals("track_1", mixesGen0[1].tracks.first().id)
 
     // Mix 3 uses play stats
     assertTrue(mixesGen0[2].subtitle.contains("Play Stats"))
@@ -1459,11 +1470,10 @@ class MusicPlayerEngineTest {
         session.systemMediaControlState.favoriteIconRes,
       )
 
-      // Shuffle and Repeat buttons flank playback controls and reflect state in icons
+      // Shuffle (left) and Star / Favorite (right) buttons flank playback controls and reflect state in icons
       assertEquals(
         listOf(
           MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE,
-          MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT,
           MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE,
         ),
         session.systemMediaControlState.customActionIds,
@@ -1559,6 +1569,48 @@ class MusicPlayerEngineTest {
       assertTrue(MusicPlayerEngine.isPlaybackStateActive(android.media.session.PlaybackState.STATE_CONNECTING))
       assertFalse(MusicPlayerEngine.isPlaybackStateActive(android.media.session.PlaybackState.STATE_PAUSED))
       assertFalse(MusicPlayerEngine.isPlaybackStateActive(android.media.session.PlaybackState.STATE_STOPPED))
+
+      // 6. External system media player transport controls (Play/Pause, Seek, Next, Previous)
+      val controllableInfo = MusicPlayerEngine.updateExternalSystemMediaFromMetadata(
+        title = "Starboy",
+        artist = "The Weeknd",
+        album = "Starboy",
+        genre = "Synth-Pop",
+        sourcePackage = "com.spotify.music",
+        sourceAppName = "Spotify",
+        isPlaying = true,
+        notificationColorRgb = 0xE50914,
+        durationMs = 230_000L,
+        positionMs = 45_000L,
+        positionUpdateElapsedRealtimeMs = 10_000L,
+      )
+      assertEquals(230_000L, controllableInfo.durationMs)
+      assertEquals(45_000L, controllableInfo.positionMs)
+      assertTrue(controllableInfo.canSeek)
+      assertEquals(50_000L, MusicPlayerEngine.currentExternalSystemMediaPositionMs(15_000L))
+
+      // Toggle Play/Pause pauses external session
+      assertTrue(MusicPlayerEngine.toggleExternalSystemMediaPlayPause())
+      assertEquals("PAUSE", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
+      assertFalse(MusicPlayerEngine.externalSystemMediaInfo?.isPlaying == true)
+
+      // Toggle Play/Pause resumes external session
+      assertTrue(MusicPlayerEngine.toggleExternalSystemMediaPlayPause())
+      assertEquals("PLAY", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
+      assertTrue(MusicPlayerEngine.externalSystemMediaInfo?.isPlaying == true)
+
+      // Seek updates external position
+      assertTrue(MusicPlayerEngine.seekExternalSystemMediaTo(120_000L))
+      assertEquals("SEEK:120000", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
+      assertEquals(120_000L, MusicPlayerEngine.externalSystemMediaInfo?.positionMs)
+
+      // Skip Next and Skip Previous reset position and record action
+      assertTrue(MusicPlayerEngine.skipExternalSystemMediaToNext())
+      assertEquals("NEXT", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
+      assertEquals(0L, MusicPlayerEngine.externalSystemMediaInfo?.positionMs)
+
+      assertTrue(MusicPlayerEngine.skipExternalSystemMediaToPrevious())
+      assertEquals("PREVIOUS", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
     } finally {
       MusicPlayerEngine.updateExternalSystemMediaSession(null)
       session.release()
@@ -1603,6 +1655,137 @@ class MusicPlayerEngineTest {
       assertEquals(listOf(secondTrack.id), session.favoritesPlaylist.tracks.map { it.id })
       assertTrue(session.favoritesPlaylist.containsTrack(secondTrack.id))
       assertFalse(session.favoritesPlaylist.containsTrack(firstTrack.id))
+    } finally {
+      session.release()
+    }
+  }
+
+  @Test
+  fun preferredMusicApps_supportsInstalledStreamingCatalogCustomLinksAndSerialization() {
+    try {
+      // Without installed packages on a null context, only installed streaming apps are listed (empty)
+      assertTrue(MusicPlayerEngine.discoverPopularStreamingApps(context = null).isEmpty())
+
+      // When streaming apps are installed, only the installed ones are returned
+      MusicPlayerEngine.installedStreamingAppsOverrideForTest =
+        MusicPlayerEngine.POPULAR_STREAMING_MUSIC_APPS.filter { it.id in setOf("spotify", "youtube_music", "tidal") }
+
+      val installedPopular = MusicPlayerEngine.discoverPopularStreamingApps(context = null)
+      assertEquals(listOf("spotify", "youtube_music", "tidal"), installedPopular.map { it.id })
+      assertTrue(installedPopular.all { it.isInstalled })
+
+      val custom = MusicPlayerEngine.createCustomPreferredMusicAppLink(
+        label = "Plexamp",
+        packageOrUrl = "tv.plex.labs.plexamp",
+      )
+      assertTrue(custom.isCustom)
+      assertEquals("Plexamp", custom.label)
+      assertEquals("tv.plex.labs.plexamp", custom.packageName)
+
+      val serialized = MusicPlayerEngine.serializePreferredMusicApps(
+        listOf(installedPopular.first(), custom)
+      )
+      val deserialized = MusicPlayerEngine.deserializePreferredMusicApps(serialized)
+      assertEquals(2, deserialized.size)
+      assertEquals(installedPopular.first().id, deserialized[0].id)
+      assertEquals(custom.id, deserialized[1].id)
+      assertEquals("Plexamp", deserialized[1].label)
+      assertTrue(deserialized[1].isCustom)
+    } finally {
+      MusicPlayerEngine.installedStreamingAppsOverrideForTest = null
+    }
+  }
+
+  @Test
+  fun scopedStorage_customFolders_andPerSectionSavedSortsWorkCorrectly() = kotlinx.coroutines.runBlocking {
+    val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+    val session = MusicPlaybackSession(
+      context = null,
+      isInspection = true,
+      initialTracks = tracks,
+      initialTab = MusicLibraryTab.HOME,
+      initialGrantedFolderPaths = emptySet(),
+    )
+    try {
+      // 1. Scoped storage initially locked when /Music permission is not granted
+      assertFalse(session.isMusicFolderGranted)
+      assertNull(session.pendingPermissionFolderPath)
+
+      // Tapping a navigation tab while locked requests /Music permission prompt instead of switching tabs
+      session.updateTab(MusicLibraryTab.SONGS)
+      assertEquals(MusicLibraryTab.HOME, session.selectedTab)
+      assertEquals("/Music", session.pendingPermissionFolderPath)
+
+      // Granting /Music unlocks navigation
+      session.grantFolderAccess(MusicPlayerEngine.DEFAULT_MUSIC_SCOPED_FOLDER)
+      assertTrue(session.isMusicFolderGranted)
+      assertNull(session.pendingPermissionFolderPath)
+
+      // 2. Default sort on Home is RANDOM and "Save for home" is pre-checked
+      assertEquals(MusicLibraryTab.HOME, session.selectedTab)
+      assertEquals(MusicSortOrder.RANDOM, session.sortOrder)
+      assertTrue(session.isSortSavedForCurrentScope)
+      assertEquals("Save for home", session.currentSortSaveLabel)
+
+      // Switching to Songs falls back to global default sort (TITLE_ASC) with "Save for songs" unchecked
+      session.updateTab(MusicLibraryTab.SONGS)
+      assertEquals(MusicLibraryTab.SONGS, session.selectedTab)
+      assertEquals(MusicSortOrder.TITLE_ASC, session.sortOrder)
+      assertFalse(session.isSortSavedForCurrentScope)
+      assertEquals("Save for songs", session.currentSortSaveLabel)
+
+      // Check "Save for songs" and set sort to DURATION_DESC
+      session.setSaveSortForCurrentScope(true)
+      assertTrue(session.isSortSavedForCurrentScope)
+      session.updateSortOrder(MusicSortOrder.DURATION_DESC)
+      assertEquals(MusicSortOrder.DURATION_DESC, session.sortOrder)
+
+      // Check other section labels: playlists, albums, artists, genre
+      session.updateTab(MusicLibraryTab.PLAYLISTS)
+      assertEquals("Save for playlists", session.currentSortSaveLabel)
+      assertEquals(MusicSortOrder.TITLE_ASC, session.sortOrder)
+
+      session.updateTab(MusicLibraryTab.ALBUMS)
+      assertEquals("Save for albums", session.currentSortSaveLabel)
+
+      session.updateTab(MusicLibraryTab.ARTISTS)
+      assertEquals("Save for artists", session.currentSortSaveLabel)
+
+      session.updateTab(MusicLibraryTab.GENRES)
+      assertEquals("Save for genre", session.currentSortSaveLabel)
+
+      // Returning to Home restores saved RANDOM sort; returning to Songs restores saved DURATION_DESC sort
+      session.updateTab(MusicLibraryTab.HOME)
+      assertEquals(MusicSortOrder.RANDOM, session.sortOrder)
+      assertTrue(session.isSortSavedForCurrentScope)
+
+      session.updateTab(MusicLibraryTab.SONGS)
+      assertEquals(MusicSortOrder.DURATION_DESC, session.sortOrder)
+      assertTrue(session.isSortSavedForCurrentScope)
+
+      // 3. Adding and removing a custom folder pill, and "Save for folder" sort option
+      val customFolder = MusicFolder(
+        folderName = "SynthwaveVault",
+        displayPath = "/Music/SynthwaveVault",
+        isCustom = true,
+      )
+      session.addCustomFolder(customFolder)
+      assertEquals(1, session.customFolders.size)
+      assertEquals(customFolder.folderPath, session.selectedCustomFolderPath)
+      assertEquals("Save for folder", session.currentSortSaveLabel)
+      assertFalse(session.isSortSavedForCurrentScope)
+
+      session.setSaveSortForCurrentScope(true)
+      session.updateSortOrder(MusicSortOrder.YEAR_DESC)
+      assertTrue(session.isSortSavedForCurrentScope)
+      assertEquals(MusicSortOrder.YEAR_DESC, session.sortOrder)
+
+      // Removing the custom folder clears selection and restores active tab sort
+      session.removeCustomFolder(customFolder)
+      assertTrue(session.customFolders.isEmpty())
+      assertNull(session.selectedCustomFolderPath)
+      assertEquals(MusicLibraryTab.SONGS, session.selectedTab)
+      assertEquals(MusicSortOrder.DURATION_DESC, session.sortOrder)
     } finally {
       session.release()
     }

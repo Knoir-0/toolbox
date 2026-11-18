@@ -62,6 +62,7 @@ class AudioRecorderScreenTest {
       ToolboxTheme {
         AudioRecorderScreen(
           initialDirectory = testAudioDir,
+          initialHasFullFilesPermission = false,
           onRequestFolderSystemAccess = { folder, onResult ->
             systemPromptFolder = folder
             pendingSystemGrantCallback = onResult
@@ -71,10 +72,10 @@ class AudioRecorderScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // 1. Initially all navigation pills show a lock icon and no folder has been granted access
+    // 1. Initially default navigation pills (Audio and Recordings; Download is hidden under scoped storage) show a lock icon and no folder has been granted access
     composeTestRule.onNodeWithTag("folder_lock_icon_Audio").assertIsDisplayed()
     composeTestRule.onNodeWithTag("folder_lock_icon_Recordings").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("folder_lock_icon_Download").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_pill_Download").assertDoesNotExist()
 
     // 2. Recorder is entirely disabled and bottom message reflects that while disabled
     composeTestRule.onNodeWithTag("audio_recorder_fab").assertIsDisplayed().assertIsNotEnabled()
@@ -138,7 +139,7 @@ class AudioRecorderScreenTest {
 
     composeTestRule.onNodeWithTag("folder_unlocked_icon_Audio").assertIsDisplayed()
     composeTestRule.onNodeWithTag("folder_lock_icon_Recordings").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("folder_lock_icon_Download").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_pill_Download").assertDoesNotExist()
 
     composeTestRule.onNodeWithTag("audio_recorder_fab").assertIsEnabled()
     composeTestRule.onNodeWithTag("device_audio_recorder_fab").assertIsEnabled()
@@ -398,11 +399,14 @@ class AudioRecorderScreenTest {
 
   @Test
   fun formatSelector_folderPills_filterButton_andTopListLayout_workCorrectly() {
+    val hasFullFiles = androidx.compose.runtime.mutableStateOf(false)
+
     composeTestRule.setContent {
       ToolboxTheme {
         AudioRecorderScreen(
           initialDirectory = testAudioDir,
           initialGrantedFolders = AudioRecorderDefaultFolder.entries.toSet(),
+          initialHasFullFilesPermission = hasFullFiles.value,
         )
       }
     }
@@ -447,11 +451,17 @@ class AudioRecorderScreenTest {
       formatSelectorBounds.bottom <= instructionTextBounds.top + 4f,
     )
 
-    // Verify default folder pills (Audio, Recordings, Download) and filter button are displayed
+    // Verify default folder pills (Audio, Recordings; Download is hidden under scoped storage and re-appears with full files permission) and filter button are displayed
     composeTestRule.onNodeWithTag("folder_pill_Audio").assertIsDisplayed()
     composeTestRule.onNodeWithTag("folder_pill_Recordings").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("folder_pill_Download").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("folder_pill_Download").assertDoesNotExist()
     composeTestRule.onNodeWithTag("audio_recorder_filter_button").assertIsDisplayed()
+
+    composeTestRule.runOnUiThread {
+      hasFullFiles.value = true
+    }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("folder_pill_Download").assertIsDisplayed()
 
     // Default format is M4A; open format dropdown and swap to WAV
     composeTestRule.onNodeWithTag("format_selector_button").assertIsDisplayed().performClick()

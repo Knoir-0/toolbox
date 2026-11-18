@@ -20,6 +20,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -102,6 +104,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -143,6 +146,7 @@ import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -263,7 +267,7 @@ data class SavedDiceRoll(
         DieType.D20
       }
       val diceCount = obj.optInt("diceCount", 1).coerceIn(1, 20)
-      val modifier = obj.optInt("modifier", 0).coerceIn(-20, 20)
+      val modifier = obj.optInt("modifier", 0).coerceIn(-20, 40)
       val rollMode = try {
         RollMode.valueOf(obj.optString("rollMode", RollMode.NORMAL.name))
       } catch (_: Exception) {
@@ -606,7 +610,7 @@ internal fun DiceRollerScreen(
                 inlinePrefix = "Mod",
                 valueText = if (modifierValue >= 0) "+$modifierValue" else "$modifierValue",
                 onDecrement = { if (modifierValue > -20) modifierValue-- },
-                onIncrement = { if (modifierValue < 20) modifierValue++ },
+                onIncrement = { if (modifierValue < 40) modifierValue++ },
                 modifier = Modifier.weight(1f),
               )
             }
@@ -2299,6 +2303,33 @@ private fun StepperCard(
   onIncrement: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val currentOnDecrement by rememberUpdatedState(onDecrement)
+  val currentOnIncrement by rememberUpdatedState(onIncrement)
+  val decrementInteractionSource = remember { MutableInteractionSource() }
+  val incrementInteractionSource = remember { MutableInteractionSource() }
+  val isDecrementPressed by decrementInteractionSource.collectIsPressedAsState()
+  val isIncrementPressed by incrementInteractionSource.collectIsPressedAsState()
+
+  LaunchedEffect(isDecrementPressed) {
+    if (isDecrementPressed) {
+      delay(400L)
+      while (true) {
+        currentOnDecrement()
+        delay(80L)
+      }
+    }
+  }
+
+  LaunchedEffect(isIncrementPressed) {
+    if (isIncrementPressed) {
+      delay(400L)
+      while (true) {
+        currentOnIncrement()
+        delay(80L)
+      }
+    }
+  }
+
   Surface(
     modifier = modifier,
     shape = RoundedCornerShape(16.dp),
@@ -2314,6 +2345,7 @@ private fun StepperCard(
     ) {
       FilledIconButton(
         onClick = onDecrement,
+        interactionSource = decrementInteractionSource,
         modifier = Modifier.size(32.dp),
         colors = IconButtonDefaults.filledIconButtonColors(
           containerColor = MaterialTheme.colorScheme.secondaryContainer,
@@ -2346,6 +2378,7 @@ private fun StepperCard(
       }
       FilledIconButton(
         onClick = onIncrement,
+        interactionSource = incrementInteractionSource,
         modifier = Modifier.size(32.dp),
         colors = IconButtonDefaults.filledIconButtonColors(
           containerColor = MaterialTheme.colorScheme.secondaryContainer,

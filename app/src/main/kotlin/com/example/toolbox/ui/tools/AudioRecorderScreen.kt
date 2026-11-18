@@ -181,6 +181,7 @@ fun AudioRecorderScreen(
   initialDirectory: File? = null,
   initialFormat: AudioRecordingFormat? = null,
   initialGrantedFolders: Set<AudioRecorderDefaultFolder>? = null,
+  initialHasFullFilesPermission: Boolean? = null,
   onRequestFolderSystemAccess: ((AudioRecorderDefaultFolder, (Boolean) -> Unit) -> Unit)? = null,
   onRequestFolderPathSystemAccess: ((AudioRecorderFolder, (Boolean) -> Unit) -> Unit)? = null,
   onRequestAddCustomFolder: (((AudioRecorderFolder?) -> Unit) -> Unit)? = null,
@@ -189,6 +190,7 @@ fun AudioRecorderScreen(
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
   val haptic = LocalHapticFeedback.current
+  val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
   val prefs = remember(context, isInspection) {
     if (isInspection) null
@@ -222,15 +224,42 @@ fun AudioRecorderScreen(
     }
   }
 
+  val storagePermissionSettingGranted = com.example.toolbox.ui.main.NavigationPreferencesBridge.isPermissionGranted(
+    com.example.toolbox.ui.main.AppPermission.STORAGE
+  )
+  var systemHasFullFilesPermission by remember(context, isInspection) {
+    mutableStateOf(if (isInspection) false else FileManagerEngine.hasStoragePermission(context))
+  }
+  DisposableEffect(lifecycleOwner, context, isInspection) {
+    val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+      if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME && !isInspection) {
+        systemHasFullFilesPermission = FileManagerEngine.hasStoragePermission(context)
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+    }
+  }
+  val hasFullFilesPermission: Boolean = initialHasFullFilesPermission
+    ?: (!isInspection && storagePermissionSettingGranted && systemHasFullFilesPermission)
+
   // Ordered list of navigation folder pills (defaults + any custom folders added via scoped storage)
-  var folderPills by remember(isInspection) {
+  // Downloads is hidden under scoped storage and re-appears when full files permission is granted.
+  var rawFolderPills by remember(isInspection) {
     mutableStateOf(
-      if (isInspection) DEFAULT_AUDIO_RECORDER_FOLDERS
-      else AudioRecorderEngine.getFolderPills(context)
+      if (isInspection) FULL_FILES_DEFAULT_AUDIO_RECORDER_FOLDERS
+      else AudioRecorderEngine.getFolderPills(context, hasFullFilesPermission = true)
+    )
+  }
+  val folderPills: List<AudioRecorderFolder> = remember(rawFolderPills, hasFullFilesPermission) {
+    AudioRecorderEngine.filterFolderPillsForPermission(
+      folders = rawFolderPills,
+      hasFullFilesPermission = hasFullFilesPermission,
     )
   }
 
-  // Scoped folder access states (initially empty until at least one folder is granted access)
+  // Scoped folder access states (initially empty until at least one folder is granted access, or unlocked for Downloads when full files permission is granted)
   var grantedFolderPaths by remember(initialGrantedFolders, isInspection) {
     mutableStateOf(
       when {
@@ -241,8 +270,20 @@ fun AudioRecorderScreen(
     )
   }
 
+  val effectiveGrantedFolderPaths: Set<String> = remember(
+    grantedFolderPaths,
+    hasFullFilesPermission,
+    initialGrantedFolders,
+  ) {
+    if (hasFullFilesPermission && initialGrantedFolders == null) {
+      grantedFolderPaths + AudioRecorderDefaultFolder.DOWNLOADS.displayPath
+    } else {
+      grantedFolderPaths
+    }
+  }
+
   fun isFolderGranted(folder: AudioRecorderFolder): Boolean {
-    return grantedFolderPaths.any { it.equals(folder.displayPath, ignoreCase = true) }
+    return effectiveGrantedFolderPaths.any { it.equals(folder.displayPath, ignoreCase = true) }
   }
 
   // Folder display path for which the in-app permission view is currently displayed after tapping a lock icon
@@ -276,7 +317,7 @@ fun AudioRecorderScreen(
 
   val selectedFolder: AudioRecorderFolder = remember(selectedFolderPath, folderPills) {
     folderPills.find { it.displayPath.equals(selectedFolderPath, ignoreCase = true) }
-      ?: AudioRecorderDefaultFolder.fromPathOrName(selectedFolderPath)?.toAudioRecorderFolder()
+      ?: folderPills.firstOrNull { isFolderGranted(it) }
       ?: folderPills.firstOrNull()
       ?: AudioRecorderDefaultFolder.DEFAULT.toAudioRecorderFolder()
   }
@@ -417,15 +458,15 @@ fun AudioRecorderScreen(
   var refreshTrigger by remember { mutableIntStateOf(0) }
 
   fun grantFolderAccess(folder: AudioRecorderFolder) {
-    if (folderPills.none { it.displayPath.equals(folder.displayPath, ignoreCase = true) }) {
+    if (rawFolderPills.none { it.displayPath.equals(folder.displayPath, ignoreCase = true) }) {
       val updatedPills = if (folder.isCustom) {
-        listOf(folder) + folderPills
+        listOf(folder) + rawFolderPills
       } else {
-        folderPills + folder
+        rawFolderPills + folder
       }
-      folderPills = updatedPills
+      rawFolderPills = updatedPills
       if (!isInspection) {
-        AudioRecorderEngine.setFolderPills(context, updatedPills)
+        AudioRecorderEngine.setFolderPills(context, updatedPills, hasFullFilesPermission = true)
       }
     }
     grantedFolderPaths = if (isInspection) {
@@ -439,11 +480,15 @@ fun AudioRecorderScreen(
   }
 
   fun moveFolderPill(fromIndex: Int, toIndex: Int) {
-    val updated = AudioRecorderEngine.reorderFolders(folderPills, fromIndex, toIndex)
-    if (updated != folderPills) {
-      folderPills = updated
+    val updatedVisible = AudioRecorderEngine.reorderFolders(folderPills, fromIndex, toIndex)
+    if (updatedVisible != folderPills) {
+      val hiddenPills = rawFolderPills.filter { raw ->
+        updatedVisible.none { it.displayPath.equals(raw.displayPath, ignoreCase = true) }
+      }
+      val updatedRaw = updatedVisible + hiddenPills
+      rawFolderPills = updatedRaw
       if (!isInspection) {
-        AudioRecorderEngine.setFolderPills(context, updated)
+        AudioRecorderEngine.setFolderPills(context, updatedRaw, hasFullFilesPermission = true)
       }
     }
   }
@@ -451,8 +496,8 @@ fun AudioRecorderScreen(
   fun deleteCustomFolder(folder: AudioRecorderFolder) {
     if (folder.isDefault || isRecording) return
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-    val updatedPills = AudioRecorderEngine.removeCustomFolder(folderPills, folder)
-    folderPills = updatedPills
+    val updatedPills = AudioRecorderEngine.removeCustomFolder(rawFolderPills, folder)
+    rawFolderPills = updatedPills
     if (!isInspection) {
       AudioRecorderEngine.removeCustomFolder(context, folder)
     }
@@ -463,8 +508,9 @@ fun AudioRecorderScreen(
     if (selectedFolderPath.equals(folder.displayPath, ignoreCase = true) ||
       selectedFolder.folderName.equals(folder.folderName, ignoreCase = true)
     ) {
-      val fallbackFolder = updatedPills.firstOrNull { isFolderGranted(it) }
-        ?: updatedPills.firstOrNull()
+      val visibleUpdated = AudioRecorderEngine.filterFolderPillsForPermission(updatedPills, hasFullFilesPermission)
+      val fallbackFolder = visibleUpdated.firstOrNull { isFolderGranted(it) }
+        ?: visibleUpdated.firstOrNull()
         ?: AudioRecorderDefaultFolder.DEFAULT.toAudioRecorderFolder()
       selectRecordingsFolder(fallbackFolder)
     }
@@ -856,7 +902,7 @@ fun AudioRecorderScreen(
     AudioRecorderFolderPillBar(
       folders = folderPills,
       selectedFolder = selectedFolder,
-      grantedFolderPaths = grantedFolderPaths,
+      grantedFolderPaths = effectiveGrantedFolderPaths,
       pendingPermissionFolder = pendingPermissionFolder,
       enabled = !isRecording,
       groupOption = groupOption,

@@ -36,6 +36,28 @@ const val EXTRA_STANDALONE_TOOL = "extra_standalone_tool"
 const val EXTRA_FOLDER_PATH = "extra_folder_path"
 const val EXTRA_EXPAND_MUSIC_PLAYER = "extra_expand_music_player"
 
+const val STANDALONE_SHORTCUT_INTENT_FLAGS =
+  Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_SINGLE_TOP
+
+/**
+ * Builds the canonical `toolbox://standalone/<tool>` [Uri] (including optional `folder` query parameter)
+ * used as `Intent.data` so Android's document task matcher reuses an existing standalone instance
+ * of the same tool (or folder) instead of spawning duplicate tasks.
+ */
+fun resolveStandaloneDocumentUri(
+  tool: Tool,
+  folderPath: String? = null,
+): android.net.Uri {
+  val builder = android.net.Uri.Builder()
+    .scheme("toolbox")
+    .authority("standalone")
+    .appendPath(tool.name)
+  if (!folderPath.isNullOrBlank()) {
+    builder.appendQueryParameter("folder", folderPath)
+  }
+  return builder.build()
+}
+
 private const val SHORTCUT_ICON_SIZE_PX = 216
 private const val SHORTCUT_ADAPTIVE_VIEWPORT_DP = 108f
 private const val SHORTCUT_FOREGROUND_ICON_DP = 50f
@@ -232,27 +254,31 @@ fun syncStandaloneTaskDescription(
 }
 
 /**
- * Creates the [Intent] used to launch [tool] in a standalone instance without navigation.
+ * Creates the [Intent] used to launch [tool] in a standalone instance without navigation, reusing
+ * an existing standalone task for [tool] if one is already open.
  */
 fun createStandaloneToolIntent(context: Context, tool: Tool): Intent {
   return Intent(context, MainActivity::class.java).apply {
     component = ComponentName(context, resolveToolShortcutAliasClassName(tool))
     action = Intent.ACTION_VIEW
+    data = resolveStandaloneDocumentUri(tool)
     putExtra(EXTRA_STANDALONE_TOOL, tool.name)
-    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
+    addFlags(STANDALONE_SHORTCUT_INTENT_FLAGS)
   }
 }
 
 /**
- * Creates the [Intent] used to launch [Tool.FILES] at [folder] from a home screen shortcut.
+ * Creates the [Intent] used to launch [Tool.FILES] at [folder] from a home screen shortcut, reusing
+ * an existing standalone task for [folder] if one is already open.
  */
 fun createFolderShortcutIntent(context: Context, folder: File): Intent {
   return Intent(context, MainActivity::class.java).apply {
     component = ComponentName(context, resolveToolShortcutAliasClassName(Tool.FILES))
     action = Intent.ACTION_VIEW
+    data = resolveStandaloneDocumentUri(Tool.FILES, folder.absolutePath)
     putExtra(EXTRA_STANDALONE_TOOL, Tool.FILES.name)
     putExtra(EXTRA_FOLDER_PATH, folder.absolutePath)
-    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
+    addFlags(STANDALONE_SHORTCUT_INTENT_FLAGS)
   }
 }
 
@@ -416,6 +442,57 @@ fun createFolderShortcutIcon(
 }
 
 /**
+ * Synchronizes already-pinned home screen shortcuts so their launch [Intent]s use the latest
+ * standalone instance-reuse flags (`FLAG_ACTIVITY_NEW_DOCUMENT` without `FLAG_ACTIVITY_MULTIPLE_TASK`)
+ * and canonical document URI.
+ */
+fun syncPinnedHomeScreenShortcuts(context: Context) {
+  try {
+    val existingPinned = ShortcutManagerCompat.getShortcuts(
+      context,
+      ShortcutManagerCompat.FLAG_MATCH_PINNED,
+    )
+    if (existingPinned.isEmpty()) return
+
+    val updatedShortcuts = existingPinned.mapNotNull { shortcut ->
+      val shortcutId = shortcut.id
+      when {
+        shortcutId.startsWith("shortcut_tool_") -> {
+          val tool = parseStandaloneToolName(shortcutId.removePrefix("shortcut_tool_"))
+            ?: parseStandaloneTool(shortcut.intent)
+            ?: return@mapNotNull null
+          ShortcutInfoCompat.Builder(context, shortcutId)
+            .setShortLabel(tool.title)
+            .setLongLabel(tool.title)
+            .setIcon(createToolShortcutIcon(context, tool))
+            .setIntent(createStandaloneToolIntent(context, tool))
+            .setAlwaysBadged()
+            .build()
+        }
+        shortcutId.startsWith("shortcut_folder_") -> {
+          val folderPath = parseFolderShortcut(shortcut.intent) ?: return@mapNotNull null
+          val folder = File(folderPath)
+          val folderName = folder.name.ifBlank { "Files" }
+          ShortcutInfoCompat.Builder(context, shortcutId)
+            .setShortLabel(folderName)
+            .setLongLabel(folderName)
+            .setIcon(createFolderShortcutIcon(context))
+            .setIntent(createFolderShortcutIntent(context, folder))
+            .setAlwaysBadged()
+            .build()
+        }
+        else -> null
+      }
+    }
+    if (updatedShortcuts.isNotEmpty()) {
+      ShortcutManagerCompat.updateShortcuts(context, updatedShortcuts)
+    }
+  } catch (_: Exception) {
+    // Ignore when ShortcutManager is unavailable in unit tests
+  }
+}
+
+/**
  * Requests pinning a home screen shortcut to launch [tool] in a standalone instance.
  */
 fun addToolToHomeScreen(
@@ -434,6 +511,7 @@ fun addToolToHomeScreen(
         .setAlwaysBadged()
         .build()
 
+      ShortcutManagerCompat.updateShortcuts(context, listOf(pinShortcutInfo))
       val pinned = ShortcutManagerCompat.requestPinShortcut(context, pinShortcutInfo, null)
       Toast.makeText(context, "Adding ${tool.title} to Home screen...", Toast.LENGTH_SHORT).show()
       pinned
@@ -468,6 +546,7 @@ fun addFolderToHomeScreen(
         .setAlwaysBadged()
         .build()
 
+      ShortcutManagerCompat.updateShortcuts(context, listOf(pinShortcutInfo))
       val pinned = ShortcutManagerCompat.requestPinShortcut(context, pinShortcutInfo, null)
       Toast.makeText(context, "Adding $folderName to Home screen...", Toast.LENGTH_SHORT).show()
       pinned

@@ -865,7 +865,11 @@ fun FilesScreen(
         },
         onBulkMove = {
           if (selectedItems.isNotEmpty()) {
-            itemsToMove = selectedItems
+            clipboardState = ClipboardState(ClipboardOperation.MOVE, selectedItems)
+            isSelectionMode = false
+            selectedPaths = emptySet()
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            Toast.makeText(context, "${selectedItems.size} items ready to move", Toast.LENGTH_SHORT).show()
           }
         },
         onBulkCopy = {
@@ -1223,7 +1227,11 @@ fun FilesScreen(
                           haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                           Toast.makeText(context, "\"${item.name}\" cut", Toast.LENGTH_SHORT).show()
                         },
-                        onMove = { itemsToMove = listOf(item) },
+                        onMove = {
+                          clipboardState = ClipboardState(ClipboardOperation.MOVE, listOf(item))
+                          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                          Toast.makeText(context, "\"${item.name}\" ready to move", Toast.LENGTH_SHORT).show()
+                        },
                         onCopy = {
                           clipboardState = ClipboardState(ClipboardOperation.COPY, listOf(item))
                           haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1378,7 +1386,11 @@ fun FilesScreen(
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         Toast.makeText(context, "\"${item.name}\" cut", Toast.LENGTH_SHORT).show()
                       },
-                      onMove = { itemsToMove = listOf(item) },
+                      onMove = {
+                        clipboardState = ClipboardState(ClipboardOperation.MOVE, listOf(item))
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        Toast.makeText(context, "\"${item.name}\" ready to move", Toast.LENGTH_SHORT).show()
+                      },
                       onCopy = {
                         clipboardState = ClipboardState(ClipboardOperation.COPY, listOf(item))
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1558,8 +1570,10 @@ fun FilesScreen(
       }
     }
 
-    // Floating Paste Bar (shown when items are in clipboard to copy/cut)
+    // Floating Paste / Move Bar (shown when items are in clipboard to copy/cut/move)
     clipboardState?.let { clip ->
+      val isMove = clip.operation == ClipboardOperation.MOVE
+      val isCut = clip.operation == ClipboardOperation.CUT
       Surface(
         shape = CircleShape,
         tonalElevation = 6.dp,
@@ -1580,49 +1594,76 @@ fun FilesScreen(
         Row(
           modifier = Modifier
             .fillMaxSize()
-            .padding(start = 16.dp, end = 8.dp),
+            .padding(start = 16.dp, end = 8.dp)
+            .let { mod -> if (isMove) mod.testTag("files_move_bar") else mod },
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
           Icon(
-            imageVector = if (clip.operation == ClipboardOperation.CUT) Icons.Default.ContentCut else Icons.Default.ContentCopy,
+            imageVector = when (clip.operation) {
+              ClipboardOperation.CUT -> Icons.Default.ContentCut
+              ClipboardOperation.MOVE -> Icons.AutoMirrored.Filled.DriveFileMove
+              ClipboardOperation.COPY -> Icons.Default.ContentCopy
+            },
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(20.dp),
           )
           Text(
-            text = "${clip.items.size} ${if (clip.operation == ClipboardOperation.CUT) "cut" else "copied"}",
+            text = when (clip.operation) {
+              ClipboardOperation.CUT -> "${clip.items.size} cut"
+              ClipboardOperation.MOVE -> "${clip.items.size} to move"
+              ClipboardOperation.COPY -> "${clip.items.size} copied"
+            },
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
           )
-          Button(
-            onClick = {
-              val count = if (clip.operation == ClipboardOperation.CUT) {
-                FileManagerEngine.moveMultipleFiles(clip.items.map { it.file }, currentDirectory)
-              } else {
-                FileManagerEngine.copyMultipleFiles(clip.items.map { it.file }, currentDirectory)
-              }
-              clipboardState = null
-              refreshTrigger++
-              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-              Toast.makeText(context, "Pasted $count items", Toast.LENGTH_SHORT).show()
-            },
-            shape = CircleShape,
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-            modifier = Modifier.testTag("action_paste_here"),
+          Box(
+            modifier = if (isMove) Modifier.testTag("action_move_here") else Modifier,
           ) {
-            Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(modifier = Modifier.width(4.dp))
-            Text("Paste here")
+            Button(
+              onClick = {
+                val count = if (isCut || isMove) {
+                  FileManagerEngine.moveMultipleFiles(clip.items.map { it.file }, currentDirectory)
+                } else {
+                  FileManagerEngine.copyMultipleFiles(clip.items.map { it.file }, currentDirectory)
+                }
+                clipboardState = null
+                refreshTrigger++
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                val toastText = if (isMove) {
+                  "Moved $count items"
+                } else {
+                  "Pasted $count items"
+                }
+                Toast.makeText(context, toastText, Toast.LENGTH_SHORT).show()
+              },
+              shape = CircleShape,
+              contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+              modifier = Modifier.testTag("action_paste_here"),
+            ) {
+              Icon(
+                imageVector = if (isMove) Icons.AutoMirrored.Filled.DriveFileMove else Icons.Default.ContentPaste,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+              )
+              Spacer(modifier = Modifier.width(4.dp))
+              Text(if (isMove) "Move here" else "Paste here")
+            }
           }
           IconButton(
             onClick = { clipboardState = null },
-            modifier = Modifier.size(32.dp),
+            modifier = Modifier
+              .size(32.dp)
+              .testTag(if (isMove) "action_cancel_move" else "action_cancel_paste"),
           ) {
-            Icon(Icons.Default.Close, contentDescription = "Cancel paste")
+            Icon(
+              Icons.Default.Close,
+              contentDescription = if (isMove) "Cancel move" else "Cancel paste",
+            )
           }
         }
       }

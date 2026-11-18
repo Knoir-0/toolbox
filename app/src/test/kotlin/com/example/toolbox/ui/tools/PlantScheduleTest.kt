@@ -99,6 +99,31 @@ class PlantScheduleTest {
   }
 
   @Test
+  fun filterScheduleByCategory_returnsAllOrMatchingCategory() {
+    val tomato = PlantScheduleEngine.BUILT_IN_PLANTS.first { it.id == "tomato" }
+    val basil = PlantScheduleEngine.BUILT_IN_PLANTS.first { it.id == "basil" }
+    val lettuce = PlantScheduleEngine.BUILT_IN_PLANTS.first { it.id == "lettuce" }
+    val schedule = listOf(tomato, basil, lettuce)
+
+    assertEquals(schedule, PlantScheduleEngine.filterScheduleByCategory(schedule, null))
+    assertEquals(
+      listOf(tomato),
+      PlantScheduleEngine.filterScheduleByCategory(schedule, PlantCategory.VEGETABLES),
+    )
+    assertEquals(
+      listOf(basil),
+      PlantScheduleEngine.filterScheduleByCategory(schedule, PlantCategory.HERBS),
+    )
+    assertEquals(
+      listOf(lettuce),
+      PlantScheduleEngine.filterScheduleByCategory(schedule, PlantCategory.LEAFY_GREENS),
+    )
+    assertTrue(
+      PlantScheduleEngine.filterScheduleByCategory(schedule, PlantCategory.FLOWERS).isEmpty(),
+    )
+  }
+
+  @Test
   fun activityForMonth_distinguishesPlantingHarvestingBothAndNone() {
     val plant = PlantItem(
       id = "test_lettuce",

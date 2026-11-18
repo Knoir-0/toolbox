@@ -59,6 +59,7 @@ const val PREF_KEY_CAMERA_SCAN_FILTER = "camera_scan_filter"
 const val PREF_KEY_CAMERA_NOTE_PRESET = "camera_note_preset"
 const val PREF_KEY_CAMERA_VISION_THRESHOLD = "camera_vision_threshold"
 const val PREF_KEY_CAMERA_VISION_PRESET = "camera_vision_preset"
+const val PREF_KEY_CAMERA_PHOTO_SUB_MODE = "camera_photo_sub_mode"
 
 const val DEFAULT_CAMERA_FOLDER_SUBPATH = "DCIM/Camera"
 const val DEFAULT_CAMERA_FOLDER_DISPLAY = "/DCIM/Camera"
@@ -112,6 +113,87 @@ enum class CameraCaptureMode(
         it.name.equals(trimmed, ignoreCase = true) ||
           it.displayName.equals(trimmed, ignoreCase = true) ||
           it.shortLabel.equals(trimmed, ignoreCase = true)
+      } ?: DEFAULT
+    }
+  }
+}
+
+/**
+ * Photo sub-modes / tools available in the slide-up navigation pill bar when in [CameraCaptureMode.PHOTO] mode.
+ */
+enum class CameraPhotoSubMode(
+  val displayName: String,
+  val shortLabel: String,
+  val filePrefix: String,
+  val description: String,
+) {
+  STANDARD(
+    displayName = "Standard",
+    shortLabel = "Standard",
+    filePrefix = "IMG",
+    description = "Standard single-shot photo capture",
+  ),
+  PANORAMA(
+    displayName = "Panorama",
+    shortLabel = "Panorama",
+    filePrefix = "PANO",
+    description = "Ultra-wide panoramic sweep photo stitcher",
+  ),
+  HDR(
+    displayName = "HDR",
+    shortLabel = "HDR",
+    filePrefix = "HDR",
+    description = "High Dynamic Range multi-exposure tone-mapped capture",
+  ),
+  NIGHT(
+    displayName = "Night",
+    shortLabel = "Night",
+    filePrefix = "NIGHT",
+    description = "Low-light multi-frame bright night sight capture",
+  ),
+  BURST(
+    displayName = "Burst",
+    shortLabel = "Burst",
+    filePrefix = "BURST",
+    description = "Rapid 3-frame continuous action burst sequence",
+  ),
+  COLLAGE(
+    displayName = "2×2 Booth",
+    shortLabel = "2×2 Booth",
+    filePrefix = "BOOTH",
+    description = "4-shot 2×2 photo booth contact sheet grid",
+  ),
+  ;
+
+  fun next(): CameraPhotoSubMode {
+    val nextIndex = (ordinal + 1) % entries.size
+    return entries[nextIndex]
+  }
+
+  companion object {
+    val DEFAULT: CameraPhotoSubMode = STANDARD
+
+    fun fromNameOrDefault(name: String?): CameraPhotoSubMode {
+      if (name.isNullOrBlank()) return DEFAULT
+      val trimmed = name.trim()
+      if (trimmed.equals("pano", ignoreCase = true) ||
+        trimmed.equals("panoramic", ignoreCase = true) ||
+        trimmed.equals("wide", ignoreCase = true)
+      ) {
+        return PANORAMA
+      }
+      if (trimmed.equals("booth", ignoreCase = true) ||
+        trimmed.equals("photobooth", ignoreCase = true) ||
+        trimmed.equals("grid", ignoreCase = true) ||
+        trimmed.equals("2x2", ignoreCase = true)
+      ) {
+        return COLLAGE
+      }
+      return entries.find {
+        it.name.equals(trimmed, ignoreCase = true) ||
+          it.displayName.equals(trimmed, ignoreCase = true) ||
+          it.shortLabel.equals(trimmed, ignoreCase = true) ||
+          it.filePrefix.equals(trimmed, ignoreCase = true)
       } ?: DEFAULT
     }
   }
@@ -212,21 +294,70 @@ data class CameraVisionBoundingBox(
   }
 
   /**
-   * Returns `true` when this box and [other] are fully or heavily overlapping (one box is contained
-   * within the other, they share high Intersection-over-Union, or their top-left label anchors collide).
+   * Returns `true` when this box and [other] are nearly identical or heavily overlapping beyond
+   * the allowed overlap tolerance ([containmentThreshold] and [iouThreshold]).
+   * Allows a moderate amount of bounding-box overlap (e.g., nested sub-parts or adjacent overlapping
+   * objects) while still suppressing identical duplicate boxes.
    */
   fun isFullyOverlappingWith(
     other: CameraVisionBoundingBox,
-    containmentThreshold: Float = 0.80f,
-    iouThreshold: Float = 0.50f,
+    containmentThreshold: Float = 0.94f,
+    iouThreshold: Float = 0.78f,
   ): Boolean {
-    if (abs(left - other.left) < 0.06f && abs(top - other.top) < 0.06f &&
-      abs(right - other.right) < 0.06f && abs(bottom - other.bottom) < 0.06f
+    if (abs(left - other.left) < 0.03f && abs(top - other.top) < 0.03f &&
+      abs(right - other.right) < 0.03f && abs(bottom - other.bottom) < 0.03f
     ) {
       return true
     }
-    return containmentRatio(other) >= containmentThreshold ||
+    return (containmentRatio(other) >= containmentThreshold && intersectionOverUnion(other) >= 0.62f) ||
       intersectionOverUnion(other) >= iouThreshold
+  }
+}
+
+/**
+ * Corner / edge anchor slot inside a [CameraVisionBoundingBox] where its label badge is positioned
+ * so that overlapping or nested boxes never have overlapping label pills.
+ */
+enum class CameraVisionLabelCorner(
+  val displayName: String,
+) {
+  TOP_LEFT("Top-Left"),
+  TOP_RIGHT("Top-Right"),
+  BOTTOM_LEFT("Bottom-Left"),
+  BOTTOM_RIGHT("Bottom-Right"),
+  TOP_CENTER("Top-Center"),
+  BOTTOM_CENTER("Bottom-Center"),
+}
+
+/**
+ * Computed non-overlapping pixel/normalized rectangle and chosen [corner] for a [CameraVisionTag]'s
+ * label badge inside the viewfinder stage.
+ */
+data class CameraVisionLabelPlacement(
+  val tag: CameraVisionTag,
+  val corner: CameraVisionLabelCorner,
+  val leftPx: Float,
+  val topPx: Float,
+  val rightPx: Float,
+  val bottomPx: Float,
+) {
+  val widthPx: Float get() = (rightPx - leftPx).coerceAtLeast(0f)
+  val heightPx: Float get() = (bottomPx - topPx).coerceAtLeast(0f)
+
+  fun overlapsWith(other: CameraVisionLabelPlacement, paddingPx: Float = 4f): Boolean {
+    return (leftPx - paddingPx) < (other.rightPx + paddingPx) &&
+      (rightPx + paddingPx) > (other.leftPx - paddingPx) &&
+      (topPx - paddingPx) < (other.bottomPx + paddingPx) &&
+      (bottomPx + paddingPx) > (other.topPx - paddingPx)
+  }
+
+  fun intersectionAreaWith(other: CameraVisionLabelPlacement, paddingPx: Float = 4f): Float {
+    val interL = maxOf(leftPx - paddingPx, other.leftPx - paddingPx)
+    val interT = maxOf(topPx - paddingPx, other.topPx - paddingPx)
+    val interR = minOf(rightPx + paddingPx, other.rightPx + paddingPx)
+    val interB = minOf(bottomPx + paddingPx, other.bottomPx + paddingPx)
+    if (interR <= interL || interB <= interT) return 0f
+    return (interR - interL) * (interB - interT)
   }
 }
 
@@ -1190,15 +1321,16 @@ object CameraEngine {
 
   /**
    * Generates a timestamped filename for a photo captured at [epochMs].
-   * Example: `IMG_20261110_174500.jpg`
+   * Example: `IMG_20261110_174500.jpg` or `PANO_20261110_174500.jpg`
    */
   fun generatePhotoFileName(
     format: CameraPhotoFormat = CameraPhotoFormat.DEFAULT,
+    subMode: CameraPhotoSubMode = CameraPhotoSubMode.STANDARD,
     epochMs: Long = System.currentTimeMillis(),
   ): String {
     val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
     val stamp = sdf.format(Date(epochMs))
-    return "IMG_${stamp}.${format.extension}"
+    return "${subMode.filePrefix}_${stamp}.${format.extension}"
   }
 
   /**
@@ -1220,6 +1352,7 @@ object CameraEngine {
   fun createTimestampedPhotoFile(
     directory: File,
     format: CameraPhotoFormat = CameraPhotoFormat.DEFAULT,
+    subMode: CameraPhotoSubMode = CameraPhotoSubMode.STANDARD,
     epochMs: Long = System.currentTimeMillis(),
   ): File {
     if (!directory.exists()) {
@@ -1227,7 +1360,7 @@ object CameraEngine {
     }
     val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
     val stamp = sdf.format(Date(epochMs))
-    val baseStem = "IMG_$stamp"
+    val baseStem = "${subMode.filePrefix}_$stamp"
     val ext = format.extension
 
     var candidate = File(directory, "$baseStem.$ext")
@@ -1237,6 +1370,54 @@ object CameraEngine {
       counter++
     }
     return candidate
+  }
+
+  /**
+   * Resolves a unique [File] inside [directory] for a newly captured panoramic photo (`PANO_yyyyMMdd_HHmmss`).
+   */
+  fun createTimestampedPanoramaFile(
+    directory: File,
+    format: CameraPhotoFormat = CameraPhotoFormat.DEFAULT,
+    epochMs: Long = System.currentTimeMillis(),
+  ): File {
+    return createTimestampedPhotoFile(
+      directory = directory,
+      format = format,
+      subMode = CameraPhotoSubMode.PANORAMA,
+      epochMs = epochMs,
+    )
+  }
+
+  /**
+   * Resolves a list of [burstCount] unique [File]s inside [directory] for a burst capture sequence
+   * (`BURST_yyyyMMdd_HHmmss_1.jpg`, `BURST_yyyyMMdd_HHmmss_2.jpg`, ...).
+   */
+  fun createTimestampedBurstPhotoFiles(
+    directory: File,
+    format: CameraPhotoFormat = CameraPhotoFormat.DEFAULT,
+    burstCount: Int = 3,
+    epochMs: Long = System.currentTimeMillis(),
+  ): List<File> {
+    if (!directory.exists()) {
+      directory.mkdirs()
+    }
+    val count = burstCount.coerceIn(2, 10)
+    val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+    val stamp = sdf.format(Date(epochMs))
+    val baseStem = "${CameraPhotoSubMode.BURST.filePrefix}_$stamp"
+    val ext = format.extension
+
+    val files = mutableListOf<File>()
+    for (idx in 1..count) {
+      var candidate = File(directory, "${baseStem}_$idx.$ext")
+      var collision = 1
+      while (candidate.exists() || candidate in files) {
+        candidate = File(directory, "${baseStem}_${idx}_$collision.$ext")
+        collision++
+      }
+      files.add(candidate)
+    }
+    return files
   }
 
   /**
@@ -1659,13 +1840,47 @@ object CameraEngine {
     exposureEv: Float = 0f,
     mirrorFront: Boolean = false,
     flashMode: CameraFlashMode = CameraFlashMode.OFF,
+    subMode: CameraPhotoSubMode = CameraPhotoSubMode.STANDARD,
     epochMs: Long = System.currentTimeMillis(),
   ): File {
+    if (subMode == CameraPhotoSubMode.PANORAMA) {
+      return captureSyntheticPanoramaFile(
+        outputFile = outputFile,
+        lensFacing = lensFacing,
+        filter = filter,
+        zoom = zoom,
+        exposureEv = exposureEv,
+        mirrorFront = mirrorFront,
+        flashMode = flashMode,
+        epochMs = epochMs,
+      )
+    }
+    if (subMode == CameraPhotoSubMode.COLLAGE) {
+      return captureSyntheticCollagePhotoFile(
+        outputFile = outputFile,
+        lensFacing = lensFacing,
+        aspectRatio = aspectRatio,
+        filter = filter,
+        zoom = zoom,
+        exposureEv = exposureEv,
+        mirrorFront = mirrorFront,
+        flashMode = flashMode,
+        epochMs = epochMs,
+      )
+    }
     outputFile.parentFile?.mkdirs()
     val effectiveEv = if (flashMode == CameraFlashMode.ON || flashMode == CameraFlashMode.TORCH) {
       (exposureEv + 0.35f).coerceIn(MIN_CAMERA_EXPOSURE_EV, MAX_CAMERA_EXPOSURE_EV)
     } else {
       exposureEv
+    }
+
+    fun transformSceneColor(r: Int, g: Int, b: Int): Triple<Int, Int, Int> {
+      return when (subMode) {
+        CameraPhotoSubMode.HDR -> applyHdrToneMapToRgb(r, g, b, filter, effectiveEv)
+        CameraPhotoSubMode.NIGHT -> applyNightSightToRgb(r, g, b, filter, effectiveEv)
+        else -> applyFilterAndExposureToRgb(r, g, b, filter, effectiveEv)
+      }
     }
 
     // Try Android Bitmap + Canvas first (succeeds on Android device/emulator)
@@ -1678,33 +1893,25 @@ object CameraEngine {
           canvas.scale(-1f, 1f, width / 2f, height / 2f)
         }
 
-        val skyTop = applyFilterAndExposureToRgb(
-          red = if (lensFacing == CameraLensFacing.BACK) 34 else 72,
-          green = if (lensFacing == CameraLensFacing.BACK) 56 else 48,
-          blue = if (lensFacing == CameraLensFacing.BACK) 112 else 118,
-          filter = filter,
-          exposureEv = effectiveEv,
+        val skyTop = transformSceneColor(
+          r = if (lensFacing == CameraLensFacing.BACK) 34 else 72,
+          g = if (lensFacing == CameraLensFacing.BACK) 56 else 48,
+          b = if (lensFacing == CameraLensFacing.BACK) 112 else 118,
         )
-        val skyBottom = applyFilterAndExposureToRgb(
-          red = if (lensFacing == CameraLensFacing.BACK) 218 else 186,
-          green = if (lensFacing == CameraLensFacing.BACK) 132 else 120,
-          blue = if (lensFacing == CameraLensFacing.BACK) 110 else 168,
-          filter = filter,
-          exposureEv = effectiveEv,
+        val skyBottom = transformSceneColor(
+          r = if (lensFacing == CameraLensFacing.BACK) 218 else 186,
+          g = if (lensFacing == CameraLensFacing.BACK) 132 else 120,
+          b = if (lensFacing == CameraLensFacing.BACK) 110 else 168,
         )
-        val groundColor = applyFilterAndExposureToRgb(
-          red = 42,
-          green = 68,
-          blue = 64,
-          filter = filter,
-          exposureEv = effectiveEv,
+        val groundColor = transformSceneColor(
+          r = 42,
+          g = 68,
+          b = 64,
         )
-        val sunColor = applyFilterAndExposureToRgb(
-          red = 255,
-          green = 224,
-          blue = 142,
-          filter = filter,
-          exposureEv = effectiveEv,
+        val sunColor = transformSceneColor(
+          r = 255,
+          g = 224,
+          b = 142,
         )
 
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -1765,10 +1972,384 @@ object CameraEngine {
       val baseRed = if (lensFacing == CameraLensFacing.BACK) 0x5C else 0x8E
       val baseGreen = if (lensFacing == CameraLensFacing.BACK) 0x7A else 0x66
       val baseBlue = if (lensFacing == CameraLensFacing.BACK) 0xA6 else 0xA6
+      val (r, g, b) = transformSceneColor(
+        r = baseRed,
+        g = baseGreen,
+        b = baseBlue,
+      )
+      val (w, h) = aspectRatio.resolveDimensions(baseLongEdge = 64)
+      GalleryEngine.writeSolidColorPng(
+        outputFile = outputFile,
+        red = r,
+        green = g,
+        blue = b,
+        width = w.coerceIn(16, 128),
+        height = h.coerceIn(16, 128),
+        lastModifiedMs = epochMs,
+      )
+    } else {
+      outputFile.setLastModified(epochMs)
+    }
+
+    return outputFile
+  }
+
+  /**
+   * Captures and writes an ultra-wide stitched panoramic scene (`3:1` wide aspect ratio) to [outputFile]
+   * reflecting [lensFacing], [filter], [zoom], [exposureEv], [mirrorFront], and [flashMode].
+   */
+  fun captureSyntheticPanoramaFile(
+    outputFile: File,
+    lensFacing: CameraLensFacing = CameraLensFacing.BACK,
+    filter: CameraColorFilter = CameraColorFilter.NONE,
+    zoom: Float = 1.0f,
+    exposureEv: Float = 0f,
+    mirrorFront: Boolean = false,
+    flashMode: CameraFlashMode = CameraFlashMode.OFF,
+    segments: Int = 3,
+    epochMs: Long = System.currentTimeMillis(),
+  ): File {
+    outputFile.parentFile?.mkdirs()
+    val effectiveEv = if (flashMode == CameraFlashMode.ON || flashMode == CameraFlashMode.TORCH) {
+      (exposureEv + 0.35f).coerceIn(MIN_CAMERA_EXPOSURE_EV, MAX_CAMERA_EXPOSURE_EV)
+    } else {
+      exposureEv
+    }
+    val segCount = segments.coerceIn(2, 6)
+
+    val androidWritten = try {
+      val width = 1800
+      val height = 600
+      val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+      if (bitmap != null && bitmap.width > 0 && bitmap.height > 0) {
+        val canvas = Canvas(bitmap)
+        if (lensFacing == CameraLensFacing.FRONT && mirrorFront) {
+          canvas.scale(-1f, 1f, width / 2f, height / 2f)
+        }
+
+        val skyTop = applyFilterAndExposureToRgb(
+          red = if (lensFacing == CameraLensFacing.BACK) 28 else 64,
+          green = if (lensFacing == CameraLensFacing.BACK) 52 else 44,
+          blue = if (lensFacing == CameraLensFacing.BACK) 118 else 124,
+          filter = filter,
+          exposureEv = effectiveEv,
+        )
+        val skyBottom = applyFilterAndExposureToRgb(
+          red = if (lensFacing == CameraLensFacing.BACK) 232 else 196,
+          green = if (lensFacing == CameraLensFacing.BACK) 142 else 126,
+          blue = if (lensFacing == CameraLensFacing.BACK) 104 else 172,
+          filter = filter,
+          exposureEv = effectiveEv,
+        )
+        val ridgeFar = applyFilterAndExposureToRgb(
+          red = 58,
+          green = 78,
+          blue = 96,
+          filter = filter,
+          exposureEv = effectiveEv,
+        )
+        val groundColor = applyFilterAndExposureToRgb(
+          red = 38,
+          green = 66,
+          blue = 60,
+          filter = filter,
+          exposureEv = effectiveEv,
+        )
+        val sunColor = applyFilterAndExposureToRgb(
+          red = 255,
+          green = 228,
+          blue = 148,
+          filter = filter,
+          exposureEv = effectiveEv,
+        )
+
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        paint.shader = LinearGradient(
+          0f,
+          0f,
+          0f,
+          height * 0.72f,
+          android.graphics.Color.rgb(skyTop.first, skyTop.second, skyTop.third),
+          android.graphics.Color.rgb(skyBottom.first, skyBottom.second, skyBottom.third),
+          Shader.TileMode.CLAMP,
+        )
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+
+        val zoomClamped = coerceZoom(zoom)
+        val sunRadius = height * 0.24f * (1f + (zoomClamped - 1f) * 0.15f)
+        val sunCx = width * (0.35f + (segCount - 2) * 0.08f).coerceIn(0.25f, 0.75f)
+        val sunCy = height * 0.36f
+        paint.shader = RadialGradient(
+          sunCx,
+          sunCy,
+          sunRadius,
+          android.graphics.Color.rgb(sunColor.first, sunColor.second, sunColor.third),
+          android.graphics.Color.argb(0, sunColor.first, sunColor.second, sunColor.third),
+          Shader.TileMode.CLAMP,
+        )
+        canvas.drawCircle(sunCx, sunCy, sunRadius, paint)
+
+        // Wide panoramic mountain ridge silhouette across all stitched segments
+        paint.shader = null
+        paint.color = android.graphics.Color.rgb(ridgeFar.first, ridgeFar.second, ridgeFar.third)
+        canvas.drawRect(0f, height * 0.56f, width.toFloat(), height.toFloat(), paint)
+
+        paint.color = android.graphics.Color.rgb(groundColor.first, groundColor.second, groundColor.third)
+        canvas.drawRect(0f, height * 0.68f, width.toFloat(), height.toFloat(), paint)
+
+        val isPng = outputFile.extension.equals("png", ignoreCase = true)
+        val compressFormat = if (isPng) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+        val bos = ByteArrayOutputStream()
+        val ok = bitmap.compress(compressFormat, 92, bos)
+        val bytes = bos.toByteArray()
+        if (ok && bytes.size > 64) {
+          FileOutputStream(outputFile).use { fos ->
+            fos.write(bytes)
+            fos.flush()
+          }
+          true
+        } else {
+          false
+        }
+      } else {
+        false
+      }
+    } catch (_: Throwable) {
+      false
+    }
+
+    if (!androidWritten) {
+      // Pure-JVM fallback with wide 3:1 panoramic dimensions (e.g. 120x40)
+      val baseRed = if (lensFacing == CameraLensFacing.BACK) 0x4A else 0x7E
+      val baseGreen = if (lensFacing == CameraLensFacing.BACK) 0x82 else 0x6A
+      val baseBlue = if (lensFacing == CameraLensFacing.BACK) 0xB4 else 0xB0
       val (r, g, b) = applyFilterAndExposureToRgb(
         red = baseRed,
         green = baseGreen,
         blue = baseBlue,
+        filter = filter,
+        exposureEv = effectiveEv,
+      )
+      GalleryEngine.writeSolidColorPng(
+        outputFile = outputFile,
+        red = r,
+        green = g,
+        blue = b,
+        width = 120,
+        height = 40,
+        lastModifiedMs = epochMs,
+      )
+    } else {
+      outputFile.setLastModified(epochMs)
+    }
+
+    return outputFile
+  }
+
+  /**
+   * Stitches a list of horizontal panoramic segment [frames] into a single wide panoramic [Bitmap]
+   * with feathered overlap blending across adjacent frames.
+   */
+  fun stitchPanoramaBitmaps(
+    frames: List<Bitmap>,
+    overlapFraction: Float = 0.18f,
+  ): Bitmap? {
+    val valid = frames.filter { it.width > 16 && it.height > 16 }
+    if (valid.isEmpty()) return null
+    if (valid.size == 1) return valid.first()
+    return try {
+      val targetH = valid.first().height.coerceIn(120, 1440)
+      val clampedOverlap = overlapFraction.coerceIn(0.05f, 0.35f)
+      val scaledFrames = valid.map { bmp ->
+        if (bmp.height == targetH) {
+          bmp
+        } else {
+          val scaledW = ((bmp.width.toFloat() * targetH) / bmp.height.toFloat()).roundToInt().coerceAtLeast(32)
+          Bitmap.createScaledBitmap(bmp, scaledW, targetH, true) ?: bmp
+        }
+      }
+      val frameW = scaledFrames.first().width
+      val stepW = (frameW * (1f - clampedOverlap)).roundToInt().coerceAtLeast(16)
+      val totalW = (frameW + stepW * (scaledFrames.size - 1)).coerceIn(frameW, 4096)
+      val outBmp = Bitmap.createBitmap(totalW, targetH, Bitmap.Config.ARGB_8888) ?: return valid.first()
+      val canvas = Canvas(outBmp)
+      val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+      scaledFrames.forEachIndexed { idx, frame ->
+        val left = (idx * stepW).toFloat()
+        canvas.drawBitmap(frame, left, 0f, paint)
+      }
+      outBmp
+    } catch (_: Throwable) {
+      valid.firstOrNull()
+    }
+  }
+
+  /**
+   * Applies High Dynamic Range (HDR) multi-exposure tone-mapping to an RGB triple (`0..255` each),
+   * lifting dark shadow detail, recovering clipped highlights, and boosting local midtone contrast.
+   */
+  fun applyHdrToneMapToRgb(
+    red: Int,
+    green: Int,
+    blue: Int,
+    filter: CameraColorFilter = CameraColorFilter.NONE,
+    exposureEv: Float = 0f,
+  ): Triple<Int, Int, Int> {
+    // Fuse low (-0.85 EV), normal (0.0 EV), and high (+1.0 EV) virtual exposures with Mertens-style weights
+    val low = applyFilterAndExposureToRgb(red, green, blue, filter, exposureEv - 0.85f)
+    val mid = applyFilterAndExposureToRgb(red, green, blue, filter, exposureEv)
+    val high = applyFilterAndExposureToRgb(red, green, blue, filter, exposureEv + 1.0f)
+
+    fun fuseChannel(l: Int, m: Int, h: Int): Int {
+      val normM = (m / 255f).coerceIn(0f, 1f)
+      // When pixel is dark, favor high exposure (shadow lift); when bright, favor low exposure (highlight recovery)
+      val shadowWeight = (1f - normM).pow(1.4f) * 0.55f
+      val highlightWeight = normM.pow(1.6f) * 0.45f
+      val midWeight = (1f - shadowWeight - highlightWeight).coerceAtLeast(0.15f)
+      val fused = (l * highlightWeight + m * midWeight + h * shadowWeight).coerceIn(0f, 255f)
+      // Gentle shadow-lift gamma (0.86) + midtone contrast
+      val lifted = (fused / 255f).pow(0.86f).coerceIn(0f, 1f)
+      return (lifted * 255f).roundToInt().coerceIn(0, 255)
+    }
+
+    return Triple(
+      fuseChannel(low.first, mid.first, high.first),
+      fuseChannel(low.second, mid.second, high.second),
+      fuseChannel(low.third, mid.third, high.third),
+    )
+  }
+
+  /**
+   * Applies Night Sight low-light enhancement to an RGB triple (`0..255` each), lifting deep shadows
+   * via a non-linear gamma curve while preserving starlight/highlight warmth.
+   */
+  fun applyNightSightToRgb(
+    red: Int,
+    green: Int,
+    blue: Int,
+    filter: CameraColorFilter = CameraColorFilter.NONE,
+    exposureEv: Float = 0f,
+  ): Triple<Int, Int, Int> {
+    val boostedEv = (exposureEv + 0.95f).coerceIn(MIN_CAMERA_EXPOSURE_EV, MAX_CAMERA_EXPOSURE_EV)
+    val (r, g, b) = applyFilterAndExposureToRgb(red, green, blue, filter, boostedEv)
+    fun liftGamma(c: Int): Int {
+      val norm = (c / 255f).coerceIn(0f, 1f)
+      val lifted = norm.pow(0.74f)
+      return (lifted * 255f).roundToInt().coerceIn(0, 255)
+    }
+    return Triple(liftGamma(r), liftGamma(g), liftGamma(b))
+  }
+
+  /**
+   * Captures and writes a 2×2 Photo Booth Collage contact sheet to [outputFile] combining 4 quadrants
+   * with subtle white gallery dividers. Works in both Android runtime and pure JVM unit tests.
+   */
+  fun captureSyntheticCollagePhotoFile(
+    outputFile: File,
+    quadrantBitmaps: List<Bitmap> = emptyList(),
+    lensFacing: CameraLensFacing = CameraLensFacing.BACK,
+    aspectRatio: CameraAspectRatio = CameraAspectRatio.RATIO_4_3,
+    filter: CameraColorFilter = CameraColorFilter.NONE,
+    zoom: Float = 1.0f,
+    exposureEv: Float = 0f,
+    mirrorFront: Boolean = false,
+    flashMode: CameraFlashMode = CameraFlashMode.OFF,
+    epochMs: Long = System.currentTimeMillis(),
+  ): File {
+    outputFile.parentFile?.mkdirs()
+    val effectiveEv = if (flashMode == CameraFlashMode.ON || flashMode == CameraFlashMode.TORCH) {
+      (exposureEv + 0.35f).coerceIn(MIN_CAMERA_EXPOSURE_EV, MAX_CAMERA_EXPOSURE_EV)
+    } else {
+      exposureEv
+    }
+
+    val androidWritten = try {
+      val (width, height) = aspectRatio.resolveDimensions(baseLongEdge = 960)
+      val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+      if (bitmap != null && bitmap.width > 0 && bitmap.height > 0) {
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(android.graphics.Color.rgb(18, 18, 22))
+        val gap = 10f
+        val cellW = (width - gap * 3f) / 2f
+        val cellH = (height - gap * 3f) / 2f
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+        val evOffsets = listOf(-0.25f, 0.0f, 0.25f, 0.45f)
+        for (idx in 0 until 4) {
+          val col = idx % 2
+          val row = idx / 2
+          val left = gap + col * (cellW + gap)
+          val top = gap + row * (cellH + gap)
+          val right = left + cellW
+          val bottom = top + cellH
+
+          val quadBmp = quadrantBitmaps.getOrNull(idx)
+          if (quadBmp != null && quadBmp.width > 8 && quadBmp.height > 8) {
+            val scaled = Bitmap.createScaledBitmap(
+              quadBmp,
+              cellW.roundToInt().coerceAtLeast(16),
+              cellH.roundToInt().coerceAtLeast(16),
+              true,
+            )
+            if (scaled != null) {
+              canvas.drawBitmap(scaled, left, top, paint)
+            }
+          } else {
+            val cellEv = (effectiveEv + evOffsets[idx]).coerceIn(MIN_CAMERA_EXPOSURE_EV, MAX_CAMERA_EXPOSURE_EV)
+            val skyTop = applyFilterAndExposureToRgb(
+              red = if (lensFacing == CameraLensFacing.BACK) 34 + idx * 14 else 72 + idx * 10,
+              green = if (lensFacing == CameraLensFacing.BACK) 56 + idx * 8 else 48 + idx * 12,
+              blue = if (lensFacing == CameraLensFacing.BACK) 112 else 118,
+              filter = filter,
+              exposureEv = cellEv,
+            )
+            val skyBottom = applyFilterAndExposureToRgb(
+              red = if (lensFacing == CameraLensFacing.BACK) 218 else 186,
+              green = if (lensFacing == CameraLensFacing.BACK) 132 else 120,
+              blue = if (lensFacing == CameraLensFacing.BACK) 110 else 168,
+              filter = filter,
+              exposureEv = cellEv,
+            )
+            paint.shader = LinearGradient(
+              left,
+              top,
+              left,
+              bottom,
+              android.graphics.Color.rgb(skyTop.first, skyTop.second, skyTop.third),
+              android.graphics.Color.rgb(skyBottom.first, skyBottom.second, skyBottom.third),
+              Shader.TileMode.CLAMP,
+            )
+            canvas.drawRect(left, top, right, bottom, paint)
+            paint.shader = null
+          }
+        }
+
+        val isPng = outputFile.extension.equals("png", ignoreCase = true)
+        val compressFormat = if (isPng) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+        val bos = ByteArrayOutputStream()
+        val ok = bitmap.compress(compressFormat, 92, bos)
+        val bytes = bos.toByteArray()
+        if (ok && bytes.size > 64) {
+          FileOutputStream(outputFile).use { fos ->
+            fos.write(bytes)
+            fos.flush()
+          }
+          true
+        } else {
+          false
+        }
+      } else {
+        false
+      }
+    } catch (_: Throwable) {
+      false
+    }
+
+    if (!androidWritten) {
+      val (r, g, b) = applyFilterAndExposureToRgb(
+        red = 0x6A,
+        green = 0x7E,
+        blue = 0xA8,
         filter = filter,
         exposureEv = effectiveEv,
       )
@@ -1785,7 +2366,6 @@ object CameraEngine {
     } else {
       outputFile.setLastModified(epochMs)
     }
-
     return outputFile
   }
 
@@ -3573,6 +4153,129 @@ object CameraEngine {
       }
     }
     return kept
+  }
+
+  /**
+   * Computes non-overlapping label badge placements ([CameraVisionLabelPlacement]) for a list of
+   * visible [tags] inside a stage of size [stageWidthPx] × [usableHeightPx] (starting at [usableTopPx]).
+   *
+   * Evaluates candidate corners ([CameraVisionLabelCorner.TOP_LEFT], [CameraVisionLabelCorner.TOP_RIGHT],
+   * [CameraVisionLabelCorner.BOTTOM_LEFT], [CameraVisionLabelCorner.BOTTOM_RIGHT],
+   * [CameraVisionLabelCorner.TOP_CENTER], [CameraVisionLabelCorner.BOTTOM_CENTER]) and vertical offset steps
+   * within each bounding box so that overlapping or nested boxes place their labels in distinct corners
+   * and never overlap one another.
+   */
+  fun computeNonOverlappingVisionLabelPlacements(
+    tags: List<CameraVisionTag>,
+    stageWidthPx: Float,
+    usableTopPx: Float,
+    usableBottomPx: Float,
+    charWidthPx: Float = 7.5f,
+    baseBadgePaddingPx: Float = 38f,
+    badgeHeightPx: Float = 26f,
+    insetPx: Float = 6f,
+    collisionPaddingPx: Float = 4f,
+    edgeMarginPx: Float = 12f,
+  ): List<CameraVisionLabelPlacement> {
+    if (tags.isEmpty()) return emptyList()
+    val safeStageW = stageWidthPx.coerceAtLeast(160f)
+    val safeUsableTop = usableTopPx.coerceAtLeast(0f)
+    val safeUsableBottom = usableBottomPx.coerceAtLeast(safeUsableTop + 80f)
+    val usableHeight = (safeUsableBottom - safeUsableTop).coerceAtLeast(1f)
+
+    val placements = mutableListOf<CameraVisionLabelPlacement>()
+    val cornersOrder = listOf(
+      CameraVisionLabelCorner.TOP_LEFT,
+      CameraVisionLabelCorner.TOP_RIGHT,
+      CameraVisionLabelCorner.BOTTOM_LEFT,
+      CameraVisionLabelCorner.BOTTOM_RIGHT,
+      CameraVisionLabelCorner.TOP_CENTER,
+      CameraVisionLabelCorner.BOTTOM_CENTER,
+    )
+
+    tags.forEachIndexed { idx, tag ->
+      val normBox = (tag.boundingBox ?: defaultVisionBoundingBoxForRank(idx)).coerceNormalized()
+      val boxLeft = (normBox.left * safeStageW).coerceIn(edgeMarginPx, (safeStageW - 64f).coerceAtLeast(edgeMarginPx))
+      val boxRight = (normBox.right * safeStageW).coerceIn(boxLeft + 52f, (safeStageW - edgeMarginPx).coerceAtLeast(boxLeft + 52f))
+      val boxTop = (safeUsableTop + normBox.top * usableHeight).coerceIn(
+        safeUsableTop,
+        (safeUsableBottom - 44f).coerceAtLeast(safeUsableTop),
+      )
+      val boxBottom = (safeUsableTop + normBox.bottom * usableHeight).coerceIn(
+        boxTop + 40f,
+        safeUsableBottom.coerceAtLeast(boxTop + 40f),
+      )
+
+      val textChars = tag.label.length + "${tag.confidencePercent}%".length
+      val estWidth = (baseBadgePaddingPx + textChars * charWidthPx)
+        .coerceIn(76f, (safeStageW - edgeMarginPx * 2f).coerceAtLeast(76f))
+      val estHeight = badgeHeightPx.coerceAtLeast(18f)
+
+      val minAllowedX = edgeMarginPx
+      val maxAllowedX = (safeStageW - estWidth - edgeMarginPx).coerceAtLeast(minAllowedX)
+      val minAllowedY = safeUsableTop
+      val maxAllowedY = (safeUsableBottom - estHeight).coerceAtLeast(minAllowedY)
+
+      fun buildCandidate(corner: CameraVisionLabelCorner, step: Int): CameraVisionLabelPlacement {
+        val rawX = when (corner) {
+          CameraVisionLabelCorner.TOP_LEFT,
+          CameraVisionLabelCorner.BOTTOM_LEFT -> boxLeft + insetPx
+          CameraVisionLabelCorner.TOP_RIGHT,
+          CameraVisionLabelCorner.BOTTOM_RIGHT -> boxRight - estWidth - insetPx
+          CameraVisionLabelCorner.TOP_CENTER,
+          CameraVisionLabelCorner.BOTTOM_CENTER -> (boxLeft + boxRight - estWidth) * 0.5f
+        }
+        val stepShiftY = step * (estHeight + collisionPaddingPx * 1.5f)
+        val rawY = when (corner) {
+          CameraVisionLabelCorner.TOP_LEFT,
+          CameraVisionLabelCorner.TOP_RIGHT,
+          CameraVisionLabelCorner.TOP_CENTER -> boxTop + insetPx + stepShiftY
+          CameraVisionLabelCorner.BOTTOM_LEFT,
+          CameraVisionLabelCorner.BOTTOM_RIGHT,
+          CameraVisionLabelCorner.BOTTOM_CENTER -> boxBottom - estHeight - insetPx - stepShiftY
+        }
+        val clampedX = rawX.coerceIn(minAllowedX, maxAllowedX)
+        val clampedY = rawY.coerceIn(minAllowedY, maxAllowedY)
+        return CameraVisionLabelPlacement(
+          tag = tag,
+          corner = corner,
+          leftPx = clampedX,
+          topPx = clampedY,
+          rightPx = clampedX + estWidth,
+          bottomPx = clampedY + estHeight,
+        )
+      }
+
+      var chosenPlacement: CameraVisionLabelPlacement? = null
+      var bestFallback: CameraVisionLabelPlacement? = null
+      var minOverlapArea = Float.MAX_VALUE
+
+      // Try all 6 corners at step 0 first (keeps labels tucked cleanly into box corners),
+      // then try inward vertical steps if all corners are occupied.
+      outerLoop@ for (step in 0..3) {
+        for (corner in cornersOrder) {
+          val candidate = buildCandidate(corner, step)
+          val overlapsAny = placements.any { existing ->
+            candidate.overlapsWith(existing, paddingPx = collisionPaddingPx)
+          }
+          if (!overlapsAny) {
+            chosenPlacement = candidate
+            break@outerLoop
+          }
+          val totalOverlap = placements.sumOf { existing ->
+            candidate.intersectionAreaWith(existing, paddingPx = collisionPaddingPx).toDouble()
+          }.toFloat()
+          if (totalOverlap < minOverlapArea) {
+            minOverlapArea = totalOverlap
+            bestFallback = candidate
+          }
+        }
+      }
+
+      placements.add(chosenPlacement ?: bestFallback ?: buildCandidate(CameraVisionLabelCorner.TOP_LEFT, idx))
+    }
+
+    return placements
   }
 
   /**

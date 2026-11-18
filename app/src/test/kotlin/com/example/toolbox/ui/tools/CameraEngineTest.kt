@@ -497,17 +497,55 @@ class CameraEngineTest {
       inferenceLatencyMs = 18L,
       sourceDescription = "Indoor Monstera Plant",
     )
-    // Plant (96.2%) and Flowerpot (84.1%) have non-overlapping boxes and are >= 65%.
-    // Houseplant (91.4%) and Leaf (75.8%) overlap with Plant (96.2%) and are suppressed in favor of Plant.
+    // Plant (96.2%), Flowerpot (84.1%), and Leaf (75.8% nested sub-region with moderate overlap) are >= 65% and kept.
+    // Houseplant (91.4%) has an identical duplicate box to Plant (96.2%) and is suppressed.
     // Room (58.2%) and Furniture (39.4%) are below 65% and are hidden.
-    assertEquals(2, standardResult.tags.size)
-    assertEquals(listOf("Plant", "Flowerpot"), standardResult.tags.map { it.label })
+    assertEquals(3, standardResult.tags.size)
+    assertEquals(listOf("Plant", "Flowerpot", "Leaf"), standardResult.tags.map { it.label })
     assertTrue(standardResult.tags.all { it.confidence >= 0.65f && it.boundingBox != null })
     assertEquals(6, standardResult.allCandidateTags.size)
     assertEquals(2, standardResult.galleryPassingCount)
     assertEquals("Plant", standardResult.topTag?.label)
     assertEquals("96.2%", standardResult.topTag?.confidenceFormatted)
     assertTrue(standardResult.topTag?.passesGalleryThreshold == true)
+
+    // Verify overlapping boxes arrange their labels in different corners so labels never overlap
+    val placements = CameraEngine.computeNonOverlappingVisionLabelPlacements(
+      tags = standardResult.tags,
+      stageWidthPx = 420f,
+      usableTopPx = 80f,
+      usableBottomPx = 640f,
+    )
+    assertEquals(3, placements.size)
+    for (i in placements.indices) {
+      for (j in i + 1 until placements.size) {
+        assertFalse(
+          "Labels for ${placements[i].tag.label} and ${placements[j].tag.label} must not overlap",
+          placements[i].overlapsWith(placements[j], paddingPx = 2f),
+        )
+      }
+    }
+
+    // Even when multiple boxes share nearly identical top-left coordinates, their labels are placed in different corners
+    val heavilyOverlappingTags = listOf(
+      CameraVisionTag("Monitor", 0.92f, boundingBox = CameraVisionBoundingBox(0.18f, 0.20f, 0.80f, 0.62f)),
+      CameraVisionTag("Screen", 0.86f, boundingBox = CameraVisionBoundingBox(0.20f, 0.22f, 0.72f, 0.54f)),
+      CameraVisionTag("Keyboard", 0.81f, boundingBox = CameraVisionBoundingBox(0.20f, 0.22f, 0.68f, 0.50f)),
+      CameraVisionTag("Laptop", 0.78f, boundingBox = CameraVisionBoundingBox(0.18f, 0.20f, 0.76f, 0.58f)),
+    )
+    val cornerPlacements = CameraEngine.computeNonOverlappingVisionLabelPlacements(
+      tags = heavilyOverlappingTags,
+      stageWidthPx = 420f,
+      usableTopPx = 80f,
+      usableBottomPx = 640f,
+    )
+    assertEquals(4, cornerPlacements.size)
+    assertTrue("Overlapping boxes use distinct corners", cornerPlacements.map { it.corner }.distinct().size >= 3)
+    for (i in cornerPlacements.indices) {
+      for (j in i + 1 until cornerPlacements.size) {
+        assertFalse(cornerPlacements[i].overlapsWith(cornerPlacements[j], paddingPx = 2f))
+      }
+    }
 
     // Verify salient region extraction locates foreground object bounding box in pixel buffer
     val w = 64
@@ -564,5 +602,71 @@ class CameraEngineTest {
       radiusPx = 2,
     )
     assertEquals("#102030", sampledCornerHex)
+  }
+
+  @Test
+  fun photoSubModes_resolveAndCapturePanoramaHdrNightBurstAndCollage() {
+    assertEquals(CameraPhotoSubMode.STANDARD, CameraPhotoSubMode.DEFAULT)
+    assertEquals(CameraPhotoSubMode.PANORAMA, CameraPhotoSubMode.STANDARD.next())
+    assertEquals(CameraPhotoSubMode.HDR, CameraPhotoSubMode.PANORAMA.next())
+    assertEquals(CameraPhotoSubMode.NIGHT, CameraPhotoSubMode.HDR.next())
+    assertEquals(CameraPhotoSubMode.BURST, CameraPhotoSubMode.NIGHT.next())
+    assertEquals(CameraPhotoSubMode.COLLAGE, CameraPhotoSubMode.BURST.next())
+    assertEquals(CameraPhotoSubMode.STANDARD, CameraPhotoSubMode.COLLAGE.next())
+
+    assertEquals(CameraPhotoSubMode.PANORAMA, CameraPhotoSubMode.fromNameOrDefault("Panorama"))
+    assertEquals(CameraPhotoSubMode.PANORAMA, CameraPhotoSubMode.fromNameOrDefault("pano"))
+    assertEquals(CameraPhotoSubMode.HDR, CameraPhotoSubMode.fromNameOrDefault("HDR"))
+    assertEquals(CameraPhotoSubMode.NIGHT, CameraPhotoSubMode.fromNameOrDefault("Night"))
+    assertEquals(CameraPhotoSubMode.BURST, CameraPhotoSubMode.fromNameOrDefault("Burst"))
+    assertEquals(CameraPhotoSubMode.COLLAGE, CameraPhotoSubMode.fromNameOrDefault("2×2 Booth"))
+    assertEquals(CameraPhotoSubMode.COLLAGE, CameraPhotoSubMode.fromNameOrDefault("booth"))
+
+    val fixedEpoch = 1794335400000L
+    // Panorama file capture
+    val panoFile = CameraEngine.createTimestampedPanoramaFile(
+      directory = tempDir,
+      format = CameraPhotoFormat.PNG,
+      epochMs = fixedEpoch,
+    )
+    assertTrue(panoFile.name.startsWith("PANO_"))
+    CameraEngine.captureSyntheticPhotoFile(
+      outputFile = panoFile,
+      subMode = CameraPhotoSubMode.PANORAMA,
+      epochMs = fixedEpoch,
+    )
+    assertTrue(panoFile.exists() && panoFile.length() > 32L)
+
+    // HDR and Night Sight tone-mapping
+    val (baseR, _, _) = CameraEngine.applyFilterAndExposureToRgb(40, 40, 40, CameraColorFilter.NONE, 0f)
+    val (hdrR, _, _) = CameraEngine.applyHdrToneMapToRgb(40, 40, 40, CameraColorFilter.NONE, 0f)
+    val (nightR, _, _) = CameraEngine.applyNightSightToRgb(40, 40, 40, CameraColorFilter.NONE, 0f)
+    assertTrue("HDR lifts dark shadows", hdrR > baseR)
+    assertTrue("Night Sight significantly lifts low-light shadows", nightR > hdrR)
+
+    // Burst file creation (3 files)
+    val burstFiles = CameraEngine.createTimestampedBurstPhotoFiles(
+      directory = tempDir,
+      format = CameraPhotoFormat.JPG,
+      burstCount = 3,
+      epochMs = fixedEpoch,
+    )
+    assertEquals(3, burstFiles.size)
+    assertTrue(burstFiles.all { it.name.startsWith("BURST_") && it.name.endsWith(".jpg") })
+
+    // 2x2 Booth Collage capture
+    val boothFile = CameraEngine.createTimestampedPhotoFile(
+      directory = tempDir,
+      format = CameraPhotoFormat.PNG,
+      subMode = CameraPhotoSubMode.COLLAGE,
+      epochMs = fixedEpoch,
+    )
+    assertTrue(boothFile.name.startsWith("BOOTH_"))
+    CameraEngine.captureSyntheticPhotoFile(
+      outputFile = boothFile,
+      subMode = CameraPhotoSubMode.COLLAGE,
+      epochMs = fixedEpoch,
+    )
+    assertTrue(boothFile.exists() && boothFile.length() > 32L)
   }
 }

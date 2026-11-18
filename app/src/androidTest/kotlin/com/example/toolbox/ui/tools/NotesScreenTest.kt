@@ -131,11 +131,69 @@ class NotesScreenTest {
     composeTestRule.onNodeWithText("Grocery Run").assertIsDisplayed()
     composeTestRule.onNodeWithText("Oat milk").assertIsDisplayed()
 
-    // Check off 'Oat milk' directly from the note card
+    // Tapping the checklist item row text opens the note instead of checking the item
+    composeTestRule.onNodeWithText("Oat milk").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("single_note_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("single_note_back_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("single_note_view").assertIsNotDisplayed()
+    composeTestRule.onNodeWithText("Oat milk").assertIsDisplayed()
+
+    // Check off 'Oat milk' directly from the note card's checkbox
     composeTestRule.onNodeWithTag("note_card_check_item_item-1").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithText("+ 1 checked item").assertIsDisplayed()
+  }
+
+  @Test
+  fun notesScreen_checklistWithMoreThanSixItems_showsFiveAndMoreItemsAtBottomLeftWithTimestampAtBottomRight() {
+    val repo = InMemoryNotesRepository(
+      initialNotes = listOf(
+        NoteItem(
+          id = "chk-many",
+          title = "Packing List",
+          isChecklist = true,
+          checklistItems = (1..7).map { idx ->
+            NoteChecklistItem(id = "item-$idx", text = "Gear $idx", isChecked = false)
+          },
+          color = NoteColor.SAGE,
+        ),
+      ),
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        NotesScreen(repository = repo)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    (1..5).forEach { idx ->
+      composeTestRule.onNodeWithText("Gear $idx").assertIsDisplayed()
+    }
+    composeTestRule.onNodeWithText("Gear 6").assertDoesNotExist()
+    composeTestRule.onNodeWithText("Gear 7").assertDoesNotExist()
+
+    val moreNode = composeTestRule.onNodeWithTag("note_card_more_items_chk-many")
+    val timestampNode = composeTestRule.onNodeWithTag("note_card_timestamp_chk-many")
+    moreNode.assertIsDisplayed()
+    composeTestRule.onNodeWithText("2 more items").assertIsDisplayed()
+    timestampNode.assertIsDisplayed()
+
+    val moreBounds = moreNode.fetchSemanticsNode().boundsInRoot
+    val timestampBounds = timestampNode.fetchSemanticsNode().boundsInRoot
+    assertTrue(moreBounds.left < timestampBounds.left)
+
+    // Checking one item leaves 6 unchecked items -> all 6 are shown and "# more items" disappears
+    composeTestRule.onNodeWithTag("note_card_check_item_item-1").performClick()
+    composeTestRule.waitForIdle()
+
+    (2..7).forEach { idx ->
+      composeTestRule.onNodeWithText("Gear $idx").assertIsDisplayed()
+    }
+    composeTestRule.onNodeWithTag("note_card_more_items_chk-many").assertDoesNotExist()
   }
 
   @Test

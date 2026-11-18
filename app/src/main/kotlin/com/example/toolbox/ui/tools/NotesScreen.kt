@@ -2394,10 +2394,18 @@ fun NoteCard(
       }
 
       // Body preview: either checklist items or text content
+      val remainingUncheckedCount = if (note.isChecklist) {
+        val uncheckedCount = note.uncheckedItems.size
+        if (uncheckedCount > 6) uncheckedCount - 5 else 0
+      } else {
+        0
+      }
+
       if (note.isChecklist) {
         val unchecked = note.uncheckedItems
         val checked = note.checkedItems
-        val previewItems = unchecked.take(6)
+        val previewLimit = if (unchecked.size > 6) 5 else 6
+        val previewItems = unchecked.take(previewLimit)
 
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
           previewItems.forEach { item ->
@@ -2406,19 +2414,25 @@ fun NoteCard(
               horizontalArrangement = Arrangement.spacedBy(6.dp),
               modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .clickable(enabled = !isSelectionMode && !note.isTrashed) {
-                  onToggleChecklistItem(item.id)
-                }
                 .padding(vertical = 1.dp)
-                .testTag("note_card_check_item_${item.id}"),
+                .testTag("note_card_check_row_${item.id}"),
             ) {
-              Icon(
-                imageVector = Icons.Default.CheckBoxOutlineBlank,
-                contentDescription = "Check ${item.text}",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp),
-              )
+              Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                  .clip(RoundedCornerShape(4.dp))
+                  .clickable(enabled = !isSelectionMode && !note.isTrashed) {
+                    onToggleChecklistItem(item.id)
+                  }
+                  .testTag("note_card_check_item_${item.id}"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.CheckBoxOutlineBlank,
+                  contentDescription = "Check ${item.text}",
+                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.size(16.dp),
+                )
+              }
               Text(
                 text = item.text,
                 style = MaterialTheme.typography.bodyMedium,
@@ -2427,15 +2441,6 @@ fun NoteCard(
                 overflow = TextOverflow.Ellipsis,
               )
             }
-          }
-
-          val remainingUnchecked = unchecked.size - previewItems.size
-          if (remainingUnchecked > 0) {
-            Text(
-              text = "+ $remainingUnchecked more unchecked",
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
           }
 
           if (checked.isNotEmpty()) {
@@ -2497,11 +2502,35 @@ fun NoteCard(
         }
       }
 
-      Text(
-        text = NotesEngine.formatTimestamp(note.updatedAt),
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
-      )
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        if (remainingUncheckedCount > 0) {
+          val moreWord = if (remainingUncheckedCount == 1) "more item" else "more items"
+          Text(
+            text = "$remainingUncheckedCount $moreWord",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+              .weight(1f, fill = false)
+              .padding(end = 8.dp)
+              .testTag("note_card_more_items_${note.id}"),
+          )
+        } else {
+          Spacer(modifier = Modifier.width(0.dp))
+        }
+
+        Text(
+          text = NotesEngine.formatTimestamp(note.updatedAt),
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+          modifier = Modifier.testTag("note_card_timestamp_${note.id}"),
+        )
+      }
     }
   }
 }
@@ -3124,8 +3153,8 @@ private fun NoteEditorContent(
   // Drag-and-drop reorder state for checklist items
   val density = LocalDensity.current
   val haptic = LocalHapticFeedback.current
-  val itemSpacingPx = with(density) { 6.dp.toPx() }
-  val defaultItemHeightPx = with(density) { 44.dp.toPx() }
+  val itemSpacingPx = with(density) { 2.dp.toPx() }
+  val defaultItemHeightPx = with(density) { 36.dp.toPx() }
   val maxOverscrollPx = with(density) { 4.dp.toPx() }
   var draggedChecklistItemId by remember(draft.id) { mutableStateOf<String?>(null) }
   var isChecklistHandlePressed by remember(draft.id) { mutableStateOf(false) }
@@ -3193,7 +3222,7 @@ private fun NoteEditorContent(
 
   Column(
     modifier = Modifier.fillMaxWidth(),
-    verticalArrangement = Arrangement.spacedBy(12.dp),
+    verticalArrangement = Arrangement.spacedBy(if (draft.isChecklist) 8.dp else 12.dp),
   ) {
     // Editor Top Toolbar
     Row(
@@ -3384,7 +3413,7 @@ private fun NoteEditorContent(
 
       Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
       ) {
         uncheckedItems.forEach { item ->
           key(item.id) {
@@ -3451,7 +3480,7 @@ private fun NoteEditorContent(
         if (checkedItems.isNotEmpty()) {
           HorizontalDivider(
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-            modifier = Modifier.padding(vertical = 4.dp),
+            modifier = Modifier.padding(vertical = 2.dp),
           )
           Row(
             modifier = Modifier.fillMaxWidth(),
@@ -3464,7 +3493,7 @@ private fun NoteEditorContent(
                 .weight(1f)
                 .clip(RoundedCornerShape(8.dp))
                 .clickable { isCheckedSectionExpanded = !isCheckedSectionExpanded }
-                .padding(vertical = 4.dp, horizontal = 4.dp),
+                .padding(vertical = 2.dp, horizontal = 4.dp),
             ) {
               Icon(
                 imageVector = if (isCheckedSectionExpanded) {
@@ -3775,7 +3804,7 @@ private fun ChecklistEditorRow(
     border = if (isBeingDragged) {
       BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
     } else {
-      BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+      null
     },
     modifier = Modifier
       .fillMaxWidth()
@@ -3794,7 +3823,7 @@ private fun ChecklistEditorRow(
     Row(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(start = 8.dp, end = 6.dp, top = 2.dp, bottom = 2.dp),
+        .padding(start = 8.dp, end = 6.dp, top = 0.dp, bottom = 0.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Box(
@@ -3857,7 +3886,9 @@ private fun ChecklistEditorRow(
       Checkbox(
         checked = item.isChecked,
         onCheckedChange = { onToggleChecked() },
-        modifier = Modifier.testTag("editor_checkbox_${item.id}"),
+        modifier = Modifier
+          .size(32.dp)
+          .testTag("editor_checkbox_${item.id}"),
       )
       BasicTextField(
         value = item.text,
@@ -3873,7 +3904,7 @@ private fun ChecklistEditorRow(
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         modifier = Modifier
           .weight(1f)
-          .padding(vertical = 8.dp),
+          .padding(horizontal = 4.dp, vertical = 4.dp),
       )
       IconButton(
         onClick = onDelete,

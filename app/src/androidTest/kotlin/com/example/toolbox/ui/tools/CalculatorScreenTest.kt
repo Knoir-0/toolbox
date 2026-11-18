@@ -182,9 +182,12 @@ class CalculatorScreenTest {
     composeTestRule.onNodeWithTag("calculator_unit_converter_button").performClick()
     composeTestRule.waitForIdle()
 
-    // Unit Converter opens with its toolbar and the prefilled parseable value ("42")
+    // Unit Converter opens with its toolbar, pill navigation bar, and the prefilled parseable value ("42")
     composeTestRule.onNodeWithTag("unit_converter_screen").assertIsDisplayed()
     composeTestRule.onNodeWithTag("unit_converter_toolbar_title").assertTextEquals("Unit Converter")
+    composeTestRule.onNodeWithTag("unit_converter_pill_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("unit_converter_category_chip_LENGTH").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("unit_converter_category_chip_WEIGHT").assertIsDisplayed()
     composeTestRule.onNodeWithTag("unit_converter_input").assertTextEquals("42")
   }
 }

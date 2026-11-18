@@ -43,6 +43,7 @@ import com.example.toolbox.ui.theme.calculateAccentHarmonyColor
 import com.example.toolbox.ui.theme.calculateMusicPlayerBackgroundColor
 import com.example.toolbox.ui.theme.createCustomColorScheme
 import com.example.toolbox.ui.theme.createTertiaryTokens
+import java.io.File
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -196,8 +197,13 @@ class MusicPlayerScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("music_view_mode_toggle").assertIsDisplayed()
 
-    // 7. Sort button is pinned on the right inside the pill bar, and press and hold reorders section tabs
+    // 7. Sort button is pinned on the right inside the pill bar, includes Random option, and press and hold reorders section tabs
     composeTestRule.onNodeWithTag("music_sort_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_sort_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_sort_option_random").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_sort_option_title_asc").performClick()
+    composeTestRule.waitForIdle()
     val barBounds = composeTestRule.onNodeWithTag("music_category_bar").fetchSemanticsNode().boundsInRoot
     val sortBounds = composeTestRule.onNodeWithTag("music_sort_button").fetchSemanticsNode().boundsInRoot
     assertTrue(sortBounds.top >= barBounds.top - 1f && sortBounds.bottom <= barBounds.bottom + 1f)
@@ -969,5 +975,248 @@ class MusicPlayerScreenTest {
     assertNotNull(session)
     assertTrue(session!!.isPlaying)
     assertEquals(2, session.playbackQueue.size)
+  }
+
+  @Test
+  fun musicPlayer_controlsExternalAndroidSystemMediaPlayer_andHidesLocalOnlyControls() {
+    MusicPlayerEngine.updateExternalSystemMediaFromMetadata(
+      title = "Veridis Quo",
+      artist = "Daft Punk",
+      album = "Discovery",
+      genre = "French House",
+      sourcePackage = "com.spotify.music",
+      sourceAppName = "Spotify",
+      isPlaying = true,
+      notificationColorRgb = 0x1DB954,
+      durationMs = 345_000L,
+      positionMs = 60_000L,
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        MusicPlayerScreen(
+          initialTracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS,
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // 1. Mini-player displays external track metadata and hides local favorite button
+    composeTestRule.onNodeWithTag("music_player_collapsed").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Veridis Quo").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Daft Punk • Discovery • Spotify").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("mini_player_favorite_button").assertDoesNotExist()
+
+    // 2. Mini-player Play/Pause button toggles external media playback without hiding the player
+    composeTestRule.onNodeWithTag("mini_player_play_pause_button").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("PAUSE", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
+    assertFalse(MusicPlayerEngine.externalSystemMediaInfo?.isPlaying == true)
+    composeTestRule.onNodeWithTag("music_player_collapsed").assertIsDisplayed()
+
+    // 3. Expand full player: shows external media metadata, seek slider, and transport controls,
+    // while hiding local-only favorite star, file info, shuffle, repeat, speed, sleep, and queue sheet
+    composeTestRule.onNodeWithTag("music_player_collapsed").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("music_player_expanded").assertIsDisplayed()
+    composeTestRule.onNodeWithText("PLAYING FROM SPOTIFY").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("expanded_player_external_source_badge").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("expanded_player_seek_slider").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("expanded_player_prev_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("expanded_player_play_pause_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("expanded_player_next_button").assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("expanded_player_favorite_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("expanded_player_info_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("expanded_player_shuffle_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("expanded_player_repeat_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("expanded_player_speed_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("expanded_player_sleep_button").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("music_queue_panel_toggle").assertDoesNotExist()
+
+    // 4. Transport buttons in expanded player control external Android system media session
+    composeTestRule.onNodeWithTag("expanded_player_play_pause_button").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("PLAY", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
+    assertTrue(MusicPlayerEngine.externalSystemMediaInfo?.isPlaying == true)
+
+    composeTestRule.onNodeWithTag("expanded_player_next_button").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("NEXT", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
+
+    composeTestRule.onNodeWithTag("expanded_player_prev_button").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("PREVIOUS", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
+  }
+
+  @Test
+  fun musicPlayer_homeViewFloatingAppBar_addsPopularAndCustomMusicApps_andScrollsWhenOverflowing() {
+    MusicPlayerEngine.installedStreamingAppsOverrideForTest =
+      MusicPlayerEngine.POPULAR_STREAMING_MUSIC_APPS.filter { it.id in setOf("spotify", "youtube_music") }
+    MusicPlayerEngine.customPickerInstalledAppsOverrideForTest = listOf(
+      PreferredMusicAppLink(
+        id = "custom_tv_plex_labs_plexamp",
+        label = "Plexamp",
+        packageName = "tv.plex.labs.plexamp",
+        accentRgb = 0xE5A00D,
+        isCustom = true,
+        isInstalled = true,
+      ),
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        MusicPlayerScreen(
+          initialTracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS,
+          initialTab = MusicLibraryTab.HOME,
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // 1. Floating rounded pill bar is visible at the bottom of the Home view with the plus button on the left
+    composeTestRule.onNodeWithTag("music_home_floating_app_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_home_add_app_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_home_empty_apps_prompt").assertIsDisplayed()
+
+    // 2. Tapping the plus button opens the preferred music app picker (installed streaming apps + Custom App at the end, no search bar)
+    composeTestRule.onNodeWithTag("music_home_add_app_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_preferred_app_picker_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_app_picker_search_input").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("music_app_picker_option_spotify").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_app_picker_option_youtube_music").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Custom App").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Choose any installed app").assertIsDisplayed()
+
+    // Add Spotify & YouTube Music
+    composeTestRule.onNodeWithTag("music_app_picker_option_spotify").performClick()
+    composeTestRule.onNodeWithTag("music_app_picker_option_youtube_music").performClick()
+    composeTestRule.waitForIdle()
+
+    // 3. Tap Custom App at the end of the picker list and select an installed app
+    composeTestRule.onNodeWithTag("music_app_picker_list")
+      .performScrollToNode(hasTestTag("music_app_picker_custom_option"))
+    composeTestRule.onNodeWithTag("music_app_picker_custom_option").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("music_custom_installed_option_custom_tv_plex_labs_plexamp").performClick()
+    composeTestRule.waitForIdle()
+
+    // Close picker dialog
+    composeTestRule.onNodeWithTag("music_app_picker_done_button").performClick()
+    composeTestRule.waitForIdle()
+
+    // 4. Added apps appear inside the rounded pill bar on the Home view
+    composeTestRule.onNodeWithTag("music_home_apps_scroll_row").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_home_app_chip_spotify").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_home_app_chip_youtube_music").assertIsDisplayed()
+    val session = MusicPlayerEngine.getActivePlaybackSession()
+    assertNotNull(session)
+    assertEquals(3, session!!.preferredMusicApps.size)
+    assertTrue(session.preferredMusicApps.any { it.label == "Plexamp" && it.isCustom })
+  }
+
+  @Test
+  fun musicPlayer_scopedStorageLocksPillsUntilGranted_supportsCustomFolders_andPerSectionSavedSort() {
+    val customDir = java.io.File(composeTestRule.activity.cacheDir, "CustomBeats_${System.currentTimeMillis()}").apply {
+      mkdirs()
+    }
+    val customFolder = MusicFolder(
+      folderName = "CustomBeats",
+      displayPath = "/CustomBeats",
+      customAbsolutePath = customDir.absolutePath,
+    )
+
+    try {
+      composeTestRule.setContent {
+        ToolboxTheme {
+          MusicPlayerScreen(
+            initialTracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS,
+            initialTab = MusicLibraryTab.HOME,
+            initialGrantedFolderPaths = emptySet(),
+            onRequestFolderSystemAccess = { _, onResult ->
+              onResult(true)
+            },
+            onRequestAddCustomFolder = { onFolderPicked ->
+              onFolderPicked(customFolder)
+            },
+          )
+        }
+      }
+      composeTestRule.waitForIdle()
+
+      // 1. Before granting permission to /Music, navigation pills show lock icons and locked storage view is displayed
+      composeTestRule.onNodeWithTag("locked_storage_state").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("music_tab_lock_icon_HOME", useUnmergedTree = true).assertExists()
+      composeTestRule.onNodeWithTag("music_tab_lock_icon_SONGS", useUnmergedTree = true).assertExists()
+
+      // Tapping a locked navigation pill opens the /Music folder permission request view
+      composeTestRule.onNodeWithTag("music_tab_SONGS").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("folder_permission_view").assertIsDisplayed()
+      composeTestRule.onNodeWithText("Allow access to files in /Music?").assertIsDisplayed()
+
+      // Tapping "Allow" grants scoped access to /Music and unlocks the navigation pills
+      composeTestRule.onNodeWithTag("allow_folder_permission_button").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("locked_storage_state").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("folder_permission_view").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("music_tab_unlocked_icon_HOME", useUnmergedTree = true).assertExists()
+
+      // 2. On the Home view, default sort is Random and "Save for home" is pre-checked
+      val session = MusicPlayerEngine.getActivePlaybackSession()
+      assertNotNull(session)
+      assertEquals(MusicLibraryTab.HOME, session!!.selectedTab)
+      assertEquals(MusicSortOrder.RANDOM, session.sortOrder)
+      assertTrue(session.isSortSavedForCurrentScope)
+
+      composeTestRule.onNodeWithTag("music_sort_button").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("music_sort_menu").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("music_save_sort_for_section").assertIsDisplayed()
+      composeTestRule.onNodeWithText("Save for home").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("music_save_sort_for_section_checkbox").assertIsOn()
+
+      // Dismiss sort menu and switch to Songs tab: label becomes "Save for songs"
+      composeTestRule.onNodeWithTag("music_sort_option_random").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("music_tab_SONGS").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("music_sort_button").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithText("Save for songs").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("music_save_sort_for_section").performClick()
+      composeTestRule.waitForIdle()
+      assertTrue(session.isSortSavedForCurrentScope)
+      composeTestRule.onNodeWithTag("music_sort_option_duration_desc").performClick()
+      composeTestRule.waitForIdle()
+      assertEquals(MusicSortOrder.DURATION_DESC, session.sortOrder)
+
+      // 3. Tapping the Add Folder button in the navigation bar adds a custom folder pill with an 'x' removal button
+      composeTestRule.onNodeWithTag("music_add_folder_button").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("music_add_folder_button").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("music_folder_pill_CustomBeats").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("folder_delete_icon_CustomBeats", useUnmergedTree = true).assertExists()
+
+      // Sort menu inside custom folder shows "Save for folder"
+      composeTestRule.onNodeWithTag("music_sort_button").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithText("Save for folder").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("music_sort_option_title_asc").performClick()
+      composeTestRule.waitForIdle()
+
+      // Tapping the 'x' button on the right of the custom folder pill removes the custom folder
+      composeTestRule.onNodeWithTag("folder_delete_icon_CustomBeats", useUnmergedTree = true).performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("music_folder_pill_CustomBeats").assertDoesNotExist()
+      assertTrue(session.customFolders.isEmpty())
+    } finally {
+      customDir.deleteRecursively()
+    }
   }
 }

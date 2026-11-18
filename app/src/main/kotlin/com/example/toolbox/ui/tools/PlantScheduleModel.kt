@@ -1695,6 +1695,20 @@ object PlantScheduleEngine {
   }
 
   /**
+   * Filters [schedule] by the given plant [category], returning all scheduled plants when [category] is null.
+   */
+  fun filterScheduleByCategory(
+    schedule: List<PlantItem>,
+    category: PlantCategory?,
+  ): List<PlantItem> {
+    return if (category == null) {
+      schedule
+    } else {
+      schedule.filter { it.category == category }
+    }
+  }
+
+  /**
    * Returns a pair of lists `(plantingInMonth, harvestingInMonth)` for the given [month] (1..12).
    */
   fun getPlantsForMonth(

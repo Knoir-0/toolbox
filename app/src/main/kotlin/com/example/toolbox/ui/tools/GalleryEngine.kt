@@ -99,10 +99,20 @@ data class GalleryVideoPreviewState(
 val DEFAULT_GALLERY_FOLDER_NAMES: List<String> = listOf(
   DEFAULT_DCIM_FOLDER_NAME,
   DEFAULT_PICTURES_FOLDER_NAME,
+)
+
+val FULL_FILES_DEFAULT_GALLERY_FOLDER_NAMES: List<String> = listOf(
+  DEFAULT_DCIM_FOLDER_NAME,
+  DEFAULT_PICTURES_FOLDER_NAME,
   DEFAULT_GALLERY_DOWNLOADS_FOLDER_NAME,
 )
 
 val DEFAULT_GALLERY_FOLDER_DISPLAY_PATHS: List<String> = listOf(
+  DEFAULT_DCIM_FOLDER_DISPLAY,
+  DEFAULT_PICTURES_FOLDER_DISPLAY,
+)
+
+val FULL_FILES_DEFAULT_GALLERY_FOLDER_DISPLAY_PATHS: List<String> = listOf(
   DEFAULT_DCIM_FOLDER_DISPLAY,
   DEFAULT_PICTURES_FOLDER_DISPLAY,
   DEFAULT_GALLERY_DOWNLOADS_FOLDER_DISPLAY,
@@ -111,12 +121,13 @@ val DEFAULT_GALLERY_FOLDER_DISPLAY_PATHS: List<String> = listOf(
 const val DEFAULT_NEW_ALBUM_FOLDER_NAME: String = "Pictures"
 
 /**
- * Default folders accessed by the Gallery tool (`DCIM`, `Pictures`, `Download`).
+ * Default folders accessed by the Gallery tool (`DCIM`, `Pictures`, and `Download` when full files permission is granted).
  */
 enum class GalleryDefaultFolder(
   val folderName: String,
   val displayPath: String,
   val pillLabel: String = folderName,
+  val requiresFullFilesPermission: Boolean = false,
 ) {
   DCIM(
     folderName = DEFAULT_DCIM_FOLDER_NAME,
@@ -130,11 +141,20 @@ enum class GalleryDefaultFolder(
   DOWNLOADS(
     folderName = DEFAULT_GALLERY_DOWNLOADS_FOLDER_NAME,
     displayPath = DEFAULT_GALLERY_DOWNLOADS_FOLDER_DISPLAY,
+    requiresFullFilesPermission = true,
   ),
   ;
 
   companion object {
     val DEFAULT: GalleryDefaultFolder = DCIM
+
+    fun defaultEntries(hasFullFilesPermission: Boolean = false): List<GalleryDefaultFolder> {
+      return if (hasFullFilesPermission) {
+        entries
+      } else {
+        entries.filterNot { it.requiresFullFilesPermission }
+      }
+    }
 
     fun fromPathOrName(pathOrName: String?): GalleryDefaultFolder? {
       if (pathOrName.isNullOrBlank()) return null
@@ -196,7 +216,10 @@ data class GalleryFolder(
 }
 
 val DEFAULT_GALLERY_FOLDERS: List<GalleryFolder> =
-  GalleryDefaultFolder.entries.map { it.toGalleryFolder() }
+  GalleryDefaultFolder.defaultEntries(hasFullFilesPermission = false).map { it.toGalleryFolder() }
+
+val FULL_FILES_DEFAULT_GALLERY_FOLDERS: List<GalleryFolder> =
+  GalleryDefaultFolder.defaultEntries(hasFullFilesPermission = true).map { it.toGalleryFolder() }
 
 /**
  * Presentation modes for the Gallery tool:
@@ -228,6 +251,7 @@ enum class GallerySortOrder(val displayName: String) {
   NAME_DESC("Name (Z to A)"),
   SIZE_DESC("Size (Largest first)"),
   SIZE_ASC("Size (Smallest first)"),
+  RANDOM("Random"),
   ;
 
   companion object {
@@ -837,12 +861,49 @@ object GalleryEngine {
   }
 
   /**
-   * Returns the default folders loaded into the gallery (`Pictures` and `DCIM`) under [rootDirectory].
+   * Checks whether the app currently has the full files access permission (`MANAGE_EXTERNAL_STORAGE`
+   * on Android 11+ / `READ_EXTERNAL_STORAGE` on older versions) and [AppPermission.STORAGE] is enabled.
+   */
+  fun hasFullFilesPermission(context: Context): Boolean {
+    return NavigationPreferencesBridge.isPermissionGranted(com.example.toolbox.ui.main.AppPermission.STORAGE) &&
+      FileManagerEngine.hasStoragePermission(context)
+  }
+
+  /**
+   * Filters or augments [folders] based on whether [hasFullFilesPermission] is granted:
+   * - When `false` (scoped storage only), hides the `Download` default folder since Android scoped
+   *   storage (`ACTION_OPEN_DOCUMENT_TREE`) does not allow granting access to the `Download` root.
+   * - When `true` (full files permission granted), ensures `Download` re-appears in the folder pills.
+   */
+  fun filterFolderPillsForPermission(
+    folders: List<GalleryFolder>,
+    hasFullFilesPermission: Boolean,
+  ): List<GalleryFolder> {
+    return if (hasFullFilesPermission) {
+      val existingPaths = folders.map { it.displayPath.lowercase(Locale.ROOT) }.toSet()
+      val missingDefaults = FULL_FILES_DEFAULT_GALLERY_FOLDERS.filter {
+        it.displayPath.lowercase(Locale.ROOT) !in existingPaths
+      }
+      folders + missingDefaults
+    } else {
+      folders.filterNot { it.defaultFolder?.requiresFullFilesPermission == true }
+    }
+  }
+
+  /**
+   * Returns the default folders loaded into the gallery (`DCIM` and `Pictures` under scoped storage,
+   * plus `Download` when [hasFullFilesPermission] is `true`) under [rootDirectory].
    */
   fun getDefaultGalleryFolders(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
+    hasFullFilesPermission: Boolean = false,
   ): List<File> {
-    return DEFAULT_GALLERY_FOLDER_NAMES.map { folderName ->
+    val folderNames = if (hasFullFilesPermission) {
+      FULL_FILES_DEFAULT_GALLERY_FOLDER_NAMES
+    } else {
+      DEFAULT_GALLERY_FOLDER_NAMES
+    }
+    return folderNames.map { folderName ->
       File(rootDirectory, folderName)
     }
   }
@@ -857,18 +918,24 @@ object GalleryEngine {
   }
 
   /**
-   * Resolves the list of folders loaded into the gallery, starting with the default `DCIM`, `Pictures`,
-   * and `Download` folders and appending any user-added folder paths.
+   * Resolves the list of folders loaded into the gallery, starting with the default `DCIM` and `Pictures`
+   * folders (and `Download` when [hasFullFilesPermission] is `true`) and appending any user-added folder paths.
    */
   fun resolveGalleryFolders(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
     additionalPaths: List<String> = emptyList(),
+    hasFullFilesPermission: Boolean = false,
   ): List<File> {
-    val defaults = getDefaultGalleryFolders(rootDirectory).toMutableList()
-    // Also include plural "Downloads" folder when present on storage
-    val downloadsDir = File(rootDirectory, "Downloads")
-    if (downloadsDir.exists() && downloadsDir.isDirectory) {
-      defaults.add(downloadsDir)
+    val defaults = getDefaultGalleryFolders(
+      rootDirectory = rootDirectory,
+      hasFullFilesPermission = hasFullFilesPermission,
+    ).toMutableList()
+    // Also include plural "Downloads" folder when present on storage and full files permission is granted
+    if (hasFullFilesPermission) {
+      val downloadsDir = File(rootDirectory, "Downloads")
+      if (downloadsDir.exists() && downloadsDir.isDirectory) {
+        defaults.add(downloadsDir)
+      }
     }
     val extras = additionalPaths.mapNotNull { raw ->
       val trimmed = raw.trim()
@@ -1247,7 +1314,11 @@ object GalleryEngine {
   /**
    * Serializes an ordered list of [GalleryFolder] pills into a persistent string.
    */
-  fun serializeFolderPills(folders: List<GalleryFolder>): String {
+  fun serializeFolderPills(
+    folders: List<GalleryFolder>,
+    hasFullFilesPermission: Boolean = false,
+  ): String {
+    val defaultPills = if (hasFullFilesPermission) FULL_FILES_DEFAULT_GALLERY_FOLDERS else DEFAULT_GALLERY_FOLDERS
     val seenPaths = mutableSetOf<String>()
     val deduplicated = mutableListOf<GalleryFolder>()
     for (folder in folders) {
@@ -1256,7 +1327,7 @@ object GalleryEngine {
         deduplicated.add(folder)
       }
     }
-    for (defaultFolder in DEFAULT_GALLERY_FOLDERS) {
+    for (defaultFolder in defaultPills) {
       val normKey = defaultFolder.displayPath.lowercase(Locale.ROOT)
       if (seenPaths.add(normKey)) {
         deduplicated.add(defaultFolder)
@@ -1274,10 +1345,15 @@ object GalleryEngine {
 
   /**
    * Parses a serialized folder pills string into an ordered list of [GalleryFolder]s,
-   * preserving the saved order and ensuring all default folders (`DCIM`, `Pictures`, `Download`) are included.
+   * preserving the saved order and ensuring all default folders (`DCIM`, `Pictures`, and `Download`
+   * when [hasFullFilesPermission] is `true`) are included.
    */
-  fun parseFolderPills(rawString: String?): List<GalleryFolder> {
-    if (rawString.isNullOrBlank()) return DEFAULT_GALLERY_FOLDERS
+  fun parseFolderPills(
+    rawString: String?,
+    hasFullFilesPermission: Boolean = false,
+  ): List<GalleryFolder> {
+    val defaultPills = if (hasFullFilesPermission) FULL_FILES_DEFAULT_GALLERY_FOLDERS else DEFAULT_GALLERY_FOLDERS
+    if (rawString.isNullOrBlank()) return defaultPills
     val seenPaths = mutableSetOf<String>()
     val parsed = mutableListOf<GalleryFolder>()
     val lines = if (rawString.contains("\n") || rawString.contains("\t")) {
@@ -1312,29 +1388,45 @@ object GalleryEngine {
         }
       }
       if (folder != null) {
+        if (!hasFullFilesPermission && folder.defaultFolder?.requiresFullFilesPermission == true) {
+          continue
+        }
         val normKey = folder.displayPath.lowercase(Locale.ROOT)
         if (seenPaths.add(normKey)) {
           parsed.add(folder)
         }
       }
     }
-    for (defaultFolder in DEFAULT_GALLERY_FOLDERS) {
+    for (defaultFolder in defaultPills) {
       val normKey = defaultFolder.displayPath.lowercase(Locale.ROOT)
       if (seenPaths.add(normKey)) {
         parsed.add(defaultFolder)
       }
     }
-    return if (parsed.isEmpty()) DEFAULT_GALLERY_FOLDERS else parsed
+    return if (parsed.isEmpty()) defaultPills else parsed
   }
 
-  fun getFolderPills(context: Context): List<GalleryFolder> {
+  fun getFolderPills(
+    context: Context,
+    hasFullFilesPermission: Boolean = hasFullFilesPermission(context),
+  ): List<GalleryFolder> {
     val prefs = context.getSharedPreferences(GALLERY_PREFS_NAME, Context.MODE_PRIVATE)
-    return parseFolderPills(prefs.getString(PREF_KEY_GALLERY_FOLDER_PILLS, null))
+    return parseFolderPills(
+      rawString = prefs.getString(PREF_KEY_GALLERY_FOLDER_PILLS, null),
+      hasFullFilesPermission = hasFullFilesPermission,
+    )
   }
 
-  fun setFolderPills(context: Context, folders: List<GalleryFolder>) {
+  fun setFolderPills(
+    context: Context,
+    folders: List<GalleryFolder>,
+    hasFullFilesPermission: Boolean = hasFullFilesPermission(context),
+  ) {
     val prefs = context.getSharedPreferences(GALLERY_PREFS_NAME, Context.MODE_PRIVATE)
-    prefs.edit().putString(PREF_KEY_GALLERY_FOLDER_PILLS, serializeFolderPills(folders)).apply()
+    prefs.edit().putString(
+      PREF_KEY_GALLERY_FOLDER_PILLS,
+      serializeFolderPills(folders, hasFullFilesPermission = hasFullFilesPermission),
+    ).apply()
   }
 
   /**
@@ -1823,8 +1915,8 @@ object GalleryEngine {
   }
 
   /**
-   * Loads the root contents of the Gallery from the default folders (`DCIM`, `Pictures`, `Photos`,
-   * and `Downloads`, plus any [additionalPaths]):
+   * Loads the root contents of the Gallery from the default folders (`DCIM` and `Pictures` under
+   * scoped storage, plus `Downloads` when [hasFullFilesPermission] is `true`, plus any [additionalPaths]):
    * - `DCIM`, `Pictures`, and `Photos` (and non-Downloads folders) have their subdirectories un-nested
    *   as top-level albums (merging same-named subfolders) and their direct photo files combined at root.
    * - `Downloads` (including Android's `Download` folder) is treated as a single `"Downloads"` album
@@ -1834,8 +1926,15 @@ object GalleryEngine {
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
     folders: List<File>? = null,
     additionalPaths: List<String> = emptyList(),
+    hasFullFilesPermission: Boolean = false,
   ): AlbumContents {
-    val targetFolders = (folders ?: resolveGalleryFolders(rootDirectory, additionalPaths))
+    val targetFolders = (
+      folders ?: resolveGalleryFolders(
+        rootDirectory = rootDirectory,
+        additionalPaths = additionalPaths,
+        hasFullFilesPermission = hasFullFilesPermission,
+      )
+      )
       .filterNot { isHiddenByNoMedia(it) }
     val downloadsFolders = targetFolders.filter { isDownloadsDirectory(it) && isAlbumDirectory(it) }
     val unNestedFolders = targetFolders.filterNot { isDownloadsDirectory(it) }
@@ -1868,18 +1967,20 @@ object GalleryEngine {
   }
 
   /**
-   * Loads the root-level albums for the Gallery (`DCIM`, `Pictures`, and `Photos` un-nested, plus
-   * `Downloads` treated as a single album).
+   * Loads the root-level albums for the Gallery (`DCIM` and `Pictures` un-nested, plus
+   * `Downloads` treated as a single album when [hasFullFilesPermission] is `true`).
    */
   fun loadRootAlbums(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
     folders: List<File>? = null,
     additionalPaths: List<String> = emptyList(),
+    hasFullFilesPermission: Boolean = false,
   ): List<GalleryAlbum> {
     return loadRootContents(
       rootDirectory = rootDirectory,
       folders = folders,
       additionalPaths = additionalPaths,
+      hasFullFilesPermission = hasFullFilesPermission,
     ).nestedAlbums
   }
 
@@ -2037,7 +2138,17 @@ object GalleryEngine {
   fun sortAlbums(
     albums: List<GalleryAlbum>,
     sortOrder: GallerySortOrder,
+    randomSeed: Long = 0L,
   ): List<GalleryAlbum> {
+    if (albums.size <= 1) return albums.toList()
+    if (sortOrder == GallerySortOrder.RANDOM) {
+      val rng = if (randomSeed != 0L) kotlin.random.Random(randomSeed) else kotlin.random.Random.Default
+      var shuffled = albums.shuffled(rng)
+      if (albums.size > 1 && shuffled.map { it.path } == albums.map { it.path }) {
+        shuffled = albums.drop(1) + albums.first()
+      }
+      return shuffled
+    }
     val comparator: Comparator<GalleryAlbum> = when (sortOrder) {
       GallerySortOrder.DATE_DESC ->
         compareByDescending<GalleryAlbum> { it.lastModifiedMs }
@@ -2055,6 +2166,8 @@ object GalleryEngine {
       GallerySortOrder.SIZE_ASC ->
         compareBy<GalleryAlbum> { it.totalPhotoCount }
           .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+      GallerySortOrder.RANDOM ->
+        compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }
     }
     return albums.sortedWith(comparator)
   }
@@ -2065,7 +2178,17 @@ object GalleryEngine {
   fun sortPhotos(
     photos: List<GalleryPhoto>,
     sortOrder: GallerySortOrder,
+    randomSeed: Long = 0L,
   ): List<GalleryPhoto> {
+    if (photos.size <= 1) return photos.toList()
+    if (sortOrder == GallerySortOrder.RANDOM) {
+      val rng = if (randomSeed != 0L) kotlin.random.Random(randomSeed) else kotlin.random.Random.Default
+      var shuffled = photos.shuffled(rng)
+      if (photos.size > 1 && shuffled.map { it.path } == photos.map { it.path }) {
+        shuffled = photos.drop(1) + photos.first()
+      }
+      return shuffled
+    }
     val comparator: Comparator<GalleryPhoto> = when (sortOrder) {
       GallerySortOrder.DATE_DESC ->
         compareByDescending<GalleryPhoto> { it.lastModifiedMs }
@@ -2085,6 +2208,8 @@ object GalleryEngine {
       GallerySortOrder.SIZE_ASC ->
         compareBy<GalleryPhoto> { it.sizeBytes }
           .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+      GallerySortOrder.RANDOM ->
+        compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }
     }
     return photos.sortedWith(comparator)
   }
@@ -2118,6 +2243,7 @@ object GalleryEngine {
     selectedTag: String? = null,
     indexMap: Map<String, GalleryPhotoIndexEntry> = emptyMap(),
     bypassNoMedia: Boolean = currentAlbum?.bypassNoMedia ?: false,
+    randomSeed: Long = 0L,
   ): List<GalleryFolderGroup> {
     val sourceDirs = if (currentAlbum != null) {
       currentAlbum.directories
@@ -2184,6 +2310,7 @@ object GalleryEngine {
           searchQuery = searchQuery,
           selectedTag = selectedTag,
           sortOrder = sortOrder,
+          randomSeed = randomSeed,
         )
         if (searchRes.matchingAlbums.isNotEmpty() || searchRes.matchingPhotos.isNotEmpty()) {
           groups.add(
@@ -2195,8 +2322,8 @@ object GalleryEngine {
           )
         }
       } else {
-        val sortedAlbums = sortAlbums(contents.nestedAlbums, sortOrder)
-        val sortedPhotos = sortPhotos(contents.photos, sortOrder)
+        val sortedAlbums = sortAlbums(contents.nestedAlbums, sortOrder, randomSeed)
+        val sortedPhotos = sortPhotos(contents.photos, sortOrder, randomSeed)
         if (sortedAlbums.isNotEmpty() || sortedPhotos.isNotEmpty()) {
           groups.add(
             GalleryFolderGroup(
@@ -2375,8 +2502,9 @@ object GalleryEngine {
     sortOrder: GallerySortOrder = GallerySortOrder.DATE_DESC,
     indexMap: Map<String, GalleryPhotoIndexEntry> = emptyMap(),
     nowMs: Long = System.currentTimeMillis(),
+    randomSeed: Long = 0L,
   ): List<GalleryPhotoGroup> {
-    val sorted = sortPhotos(photos.distinctBy { it.path }, sortOrder)
+    val sorted = sortPhotos(photos.distinctBy { it.path }, sortOrder, randomSeed)
     if (sorted.isEmpty()) return emptyList()
 
     return when (groupOption) {
@@ -2425,7 +2553,7 @@ object GalleryEngine {
         buckets.map { (title, groupItems) ->
           GalleryPhotoGroup(
             title = title,
-            photos = sortPhotos(groupItems, sortOrder),
+            photos = sortPhotos(groupItems, sortOrder, randomSeed),
           )
         }
       }
@@ -3565,14 +3693,15 @@ object GalleryEngine {
     searchQuery: String,
     selectedTag: String? = null,
     sortOrder: GallerySortOrder = GallerySortOrder.DATE_DESC,
+    randomSeed: Long = 0L,
   ): GallerySearchResult {
     val query = searchQuery.trim()
     val tagFilter = selectedTag?.trim()?.takeIf { it.isNotEmpty() }
 
     if (query.isEmpty() && tagFilter == null) {
       return GallerySearchResult(
-        matchingAlbums = sortAlbums(albums, sortOrder),
-        matchingPhotos = sortPhotos(directPhotos, sortOrder),
+        matchingAlbums = sortAlbums(albums, sortOrder, randomSeed),
+        matchingPhotos = sortPhotos(directPhotos, sortOrder, randomSeed),
         matchSnippetsByPath = emptyMap(),
       )
     }
@@ -3585,6 +3714,7 @@ object GalleryEngine {
           album.name.contains(query, ignoreCase = true)
         },
         sortOrder,
+        randomSeed,
       )
     }
 
@@ -3639,7 +3769,7 @@ object GalleryEngine {
 
     return GallerySearchResult(
       matchingAlbums = matchingAlbums,
-      matchingPhotos = sortPhotos(matchedPhotos, sortOrder),
+      matchingPhotos = sortPhotos(matchedPhotos, sortOrder, randomSeed),
       matchSnippetsByPath = snippets,
     )
   }

@@ -94,5 +94,14 @@ class DiceRollerTest {
     assertEquals(20, restoredCorrupt.diceCount)
     assertEquals(-20, restoredCorrupt.modifier)
     assertEquals(RollMode.NORMAL, restoredCorrupt.rollMode)
+    val highModObj = JSONObject().apply {
+      put("name", "High Mod Test")
+      put("dieType", "D20")
+      put("diceCount", 1)
+      put("modifier", 50) // Should be coerced to 40
+      put("rollMode", "NORMAL")
+    }
+    val restoredHighMod = SavedDiceRoll.fromJson(highModObj)
+    assertEquals(40, restoredHighMod.modifier)
   }
 }
