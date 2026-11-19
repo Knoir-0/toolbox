@@ -998,15 +998,39 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("photo_tile_item_bakery_receipt.png").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_tile_item_trail_map.png").assertDoesNotExist()
 
-    // Open bakery_receipt.png in Photo Viewer and inspect recognition info dialog
+    // Open bakery_receipt.png in Photo Viewer: tapping a tag shows its bounding box & tag badge over the image (no modal), while OCR Text still opens the modal
     composeTestRule.onNodeWithTag("photo_tile_item_bakery_receipt.png").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("photo_viewer_recognition_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_tag_bounding_box_overlay").assertDoesNotExist()
+
+    // Pressing "Food" tag shows the bounding box and "Food" tag badge on the image without popping up the modal
+    composeTestRule.onNodeWithTag("photo_viewer_tag_Food").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_info_dialog").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_viewer_tag_bounding_box_overlay").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_tag_box_Food").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_tag_box_badge_Food").assertIsDisplayed()
+
+    // Pressing "Receipt" tag switches the bounding box and badge to "Receipt"
+    composeTestRule.onNodeWithTag("photo_viewer_tag_Receipt").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_info_dialog").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_viewer_tag_box_Receipt").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_viewer_tag_box_badge_Receipt").assertIsDisplayed()
+
+    // Pressing the active "Receipt" tag again hides the bounding box overlay
+    composeTestRule.onNodeWithTag("photo_viewer_tag_Receipt").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_tag_bounding_box_overlay").assertDoesNotExist()
+
+    // Pressing "OCR Text" still opens the OCR modal without the Automatic Tags list
     composeTestRule.onNodeWithTag("photo_viewer_ocr_pill").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("photo_viewer_info_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Automatic Tags").assertDoesNotExist()
     composeTestRule.onNodeWithTag("photo_info_ocr_text").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_info_copy_ocr_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_info_save_to_notes_button").assertIsDisplayed()

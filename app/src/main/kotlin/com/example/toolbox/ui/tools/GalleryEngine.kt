@@ -421,6 +421,8 @@ data class GalleryClipboardState(
  * - [barcodeSummaries]: Human-readable summaries for each decoded code (e.g. `"QR Code: https://..."`).
  * - [autoTags]: Combined automatic tags from ML Kit Image Labeling, OCR document classification,
  *   QR/barcode payload classification, and file/folder metadata heuristics.
+ * - [tagBoundingBoxes]: Normalized (`0f..1f`) spatial bounding boxes in image coordinates for recognized tags.
+ * - [tagConfidences]: Optional confidence scores (`0f..1f`) for ML Kit visual recognition tags.
  */
 data class GalleryPhotoIndexEntry(
   val path: String,
@@ -430,6 +432,8 @@ data class GalleryPhotoIndexEntry(
   val barcodePayloads: List<String> = emptyList(),
   val barcodeSummaries: List<String> = emptyList(),
   val autoTags: List<String> = emptyList(),
+  val tagBoundingBoxes: Map<String, CameraVisionBoundingBox> = emptyMap(),
+  val tagConfidences: Map<String, Float> = emptyMap(),
   val indexedAtMs: Long = System.currentTimeMillis(),
 ) {
   val hasOcrText: Boolean get() = ocrText.isNotBlank()
@@ -448,6 +452,26 @@ data class GalleryPhotoIndexEntry(
       put("barcodePayloads", JSONArray(barcodePayloads))
       put("barcodeSummaries", JSONArray(barcodeSummaries))
       put("autoTags", JSONArray(autoTags))
+      if (tagBoundingBoxes.isNotEmpty() || tagConfidences.isNotEmpty()) {
+        val detectionsArr = JSONArray()
+        val allKeys = (tagBoundingBoxes.keys + tagConfidences.keys).distinct()
+        for (tag in allKeys) {
+          val detObj = JSONObject().apply {
+            put("tag", tag)
+            tagBoundingBoxes[tag]?.let { box ->
+              put("left", box.left.toDouble())
+              put("top", box.top.toDouble())
+              put("right", box.right.toDouble())
+              put("bottom", box.bottom.toDouble())
+            }
+            tagConfidences[tag]?.let { conf ->
+              put("confidence", conf.toDouble())
+            }
+          }
+          detectionsArr.put(detObj)
+        }
+        put("tagDetections", detectionsArr)
+      }
       put("indexedAtMs", indexedAtMs)
     }
   }
@@ -483,6 +507,32 @@ data class GalleryPhotoIndexEntry(
           if (v.isNotEmpty()) tags.add(v)
         }
       }
+      val boxesMap = LinkedHashMap<String, CameraVisionBoundingBox>()
+      val confidencesMap = LinkedHashMap<String, Float>()
+      val detectionsArr = obj.optJSONArray("tagDetections")
+      if (detectionsArr != null) {
+        for (i in 0 until detectionsArr.length()) {
+          val detObj = detectionsArr.optJSONObject(i) ?: continue
+          val tagKey = detObj.optString("tag", "").trim()
+          if (tagKey.isEmpty()) continue
+          val left = detObj.optDouble("left", Double.NaN).toFloat()
+          val top = detObj.optDouble("top", Double.NaN).toFloat()
+          val right = detObj.optDouble("right", Double.NaN).toFloat()
+          val bottom = detObj.optDouble("bottom", Double.NaN).toFloat()
+          if (!left.isNaN() && !top.isNaN() && !right.isNaN() && !bottom.isNaN() && right > left && bottom > top) {
+            boxesMap[tagKey] = CameraVisionBoundingBox(
+              left = left.coerceIn(0f, 1f),
+              top = top.coerceIn(0f, 1f),
+              right = right.coerceIn(0f, 1f),
+              bottom = bottom.coerceIn(0f, 1f),
+            )
+          }
+          val conf = detObj.optDouble("confidence", Double.NaN).toFloat()
+          if (!conf.isNaN()) {
+            confidencesMap[tagKey] = conf.coerceIn(0f, 1f)
+          }
+        }
+      }
       val indexedAt = obj.optLong("indexedAtMs", 0L)
       return GalleryPhotoIndexEntry(
         path = path,
@@ -492,6 +542,8 @@ data class GalleryPhotoIndexEntry(
         barcodePayloads = payloads.distinct(),
         barcodeSummaries = summaries.distinct(),
         autoTags = tags.distinct(),
+        tagBoundingBoxes = boxesMap,
+        tagConfidences = confidencesMap,
         indexedAtMs = indexedAt,
       )
     }
@@ -3537,8 +3589,24 @@ object GalleryEngine {
 
     ensureActive()
 
-    // 5. Run ML Kit Image Labeling for automatic visual scene/object tags
-    val mlKitLabels = if (bitmap != null && bitmap.width > 16 && bitmap.height > 16) {
+    // 5. Run ML Kit Image Labeling for automatic visual scene/object tags + localized bounding boxes
+    val mlKitVisionResult = if (bitmap != null && bitmap.width > 16 && bitmap.height > 16) {
+      CameraEngine.recognizeVisionTagsFromBitmapWithMlKit(
+        bitmap = bitmap,
+        confidenceThreshold = DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD,
+        baseDetectorMinConfidence = DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD,
+        maxLabels = 5,
+        sourceDescription = file.name,
+      )
+    } else {
+      null
+    }
+    val mlKitVisionTags = mlKitVisionResult?.allCandidateTags
+      ?.filter { it.confidenceClamped >= DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD }
+      .orEmpty()
+    val mlKitLabels = if (mlKitVisionTags.isNotEmpty()) {
+      mlKitVisionTags.map { it.label }
+    } else if (bitmap != null && bitmap.width > 16 && bitmap.height > 16) {
       recognizeImageLabelsWithMlKit(bitmap)
     } else {
       emptyList()
@@ -3554,6 +3622,17 @@ object GalleryEngine {
       imageLabels = combinedVisualLabels,
     )
 
+    val (tagBoundingBoxes, tagConfidences) = deriveTagBoundingBoxesForPhoto(
+      file = file,
+      bitmap = bitmap,
+      autoTags = autoTags,
+      ocrDoc = mlKitOcrDoc,
+      ocrText = finalOcrText,
+      scannedCodes = scannedCodes,
+      mlKitVisionTags = mlKitVisionTags,
+      visualLabels = combinedVisualLabels,
+    )
+
     val entry = GalleryPhotoIndexEntry(
       path = file.absolutePath,
       lastModifiedMs = lastMod,
@@ -3562,9 +3641,168 @@ object GalleryEngine {
       barcodePayloads = barcodePayloads,
       barcodeSummaries = barcodeSummaries,
       autoTags = autoTags,
+      tagBoundingBoxes = tagBoundingBoxes,
+      tagConfidences = tagConfidences,
     )
     putCachedPhotoIndex(entry)
     entry
+  }
+
+  private fun coerceGalleryBoundingBox(box: CameraVisionBoundingBox): CameraVisionBoundingBox {
+    val l = box.left.coerceIn(0.04f, 0.84f)
+    val t = box.top.coerceIn(0.04f, 0.84f)
+    val r = box.right.coerceIn(l + 0.10f, 0.96f)
+    val b = box.bottom.coerceIn(t + 0.10f, 0.96f)
+    return CameraVisionBoundingBox(left = l, top = t, right = r, bottom = b)
+  }
+
+  private fun computeBarcodeBoundingBox(code: CameraScannedCode): CameraVisionBoundingBox? {
+    val pts = code.cornerPoints
+    if (pts.isEmpty()) return null
+    val minX = pts.minOf { it.first }
+    val maxX = pts.maxOf { it.first }
+    val minY = pts.minOf { it.second }
+    val maxY = pts.maxOf { it.second }
+    val padX = 0.04f
+    val padY = if (maxY - minY < 0.08f) 0.08f else 0.04f
+    return coerceGalleryBoundingBox(
+      CameraVisionBoundingBox(
+        left = minX - padX,
+        top = minY - padY,
+        right = maxX + padX,
+        bottom = maxY + padY,
+      )
+    )
+  }
+
+  private fun computeOcrBlocksBoundingBox(
+    blocks: List<CameraScannedTextBlock>,
+    predicate: ((CameraScannedTextBlock) -> Boolean)? = null,
+  ): CameraVisionBoundingBox? {
+    val matching = if (predicate != null) blocks.filter(predicate) else blocks
+    val pts = matching.flatMap { it.boundingBoxNormalized }
+    if (pts.isEmpty()) return null
+    val minX = pts.minOf { it.first }
+    val maxX = pts.maxOf { it.first }
+    val minY = pts.minOf { it.second }
+    val maxY = pts.maxOf { it.second }
+    return coerceGalleryBoundingBox(
+      CameraVisionBoundingBox(
+        left = minX - 0.02f,
+        top = minY - 0.02f,
+        right = maxX + 0.02f,
+        bottom = maxY + 0.02f,
+      )
+    )
+  }
+
+  private fun extractSalientRegionsForFileOrBitmap(
+    file: File?,
+    bitmap: Bitmap?,
+    maxRegions: Int = 5,
+  ): List<CameraVisionBoundingBox> {
+    if (bitmap != null && bitmap.width > 8 && bitmap.height > 8) {
+      return CameraEngine.extractSalientRegionsFromBitmap(bitmap, maxRegions = maxRegions)
+    }
+    if (file != null && file.exists() && file.isFile) {
+      val pngData = CameraEngine.readPngToArgbPixels(file)
+      if (pngData != null && pngData.first > 8 && pngData.second > 8) {
+        return CameraEngine.extractSalientRegionsFromArgbPixels(
+          pixels = pngData.third,
+          width = pngData.first,
+          height = pngData.second,
+          maxRegions = maxRegions,
+        )
+      }
+    }
+    return listOf(CameraEngine.defaultVisionBoundingBoxForRank(0))
+  }
+
+  private fun deriveTagBoundingBoxesForPhoto(
+    file: File,
+    bitmap: Bitmap?,
+    autoTags: List<String>,
+    ocrDoc: CameraScannedDocument?,
+    ocrText: String,
+    scannedCodes: List<CameraScannedCode>,
+    mlKitVisionTags: List<CameraVisionTag>,
+    visualLabels: List<String>,
+  ): Pair<Map<String, CameraVisionBoundingBox>, Map<String, Float>> {
+    if (autoTags.isEmpty()) return emptyMap<String, CameraVisionBoundingBox>() to emptyMap()
+
+    val boxes = LinkedHashMap<String, CameraVisionBoundingBox>()
+    val confidences = LinkedHashMap<String, Float>()
+    val salientRegions = extractSalientRegionsForFileOrBitmap(file, bitmap, maxRegions = 5)
+    val primarySalient = coerceGalleryBoundingBox(
+      salientRegions.firstOrNull() ?: CameraEngine.defaultVisionBoundingBoxForRank(0)
+    )
+
+    val ocrUnionBox = ocrDoc?.let { computeOcrBlocksBoundingBox(it.blocks) }
+      ?: if (ocrText.isNotBlank()) {
+        CameraVisionBoundingBox(left = 0.08f, top = 0.14f, right = 0.92f, bottom = 0.86f)
+      } else {
+        null
+      }
+    val ocrUrlBox = ocrDoc?.let { doc ->
+      computeOcrBlocksBoundingBox(doc.blocks) { block ->
+        val lower = block.text.lowercase(Locale.ROOT)
+        lower.contains("http://") || lower.contains("https://") || lower.contains("www.")
+      }
+    }
+
+    val first2dCodeBox = scannedCodes.firstOrNull { it.format.is2D }?.let { computeBarcodeBoundingBox(it) }
+    val first1dCodeBox = scannedCodes.firstOrNull { !it.format.is2D }?.let { computeBarcodeBoundingBox(it) }
+    val anyCodeBox = first2dCodeBox ?: first1dCodeBox
+
+    val mlKitByLower = mlKitVisionTags.associateBy { it.label.lowercase(Locale.US) }
+    val visualSetLower = visualLabels.map { it.trim().lowercase(Locale.US) }.toSet()
+    var visualRank = 0
+
+    autoTags.forEachIndexed { tagIdx, tag ->
+      val lowerTag = tag.lowercase(Locale.US)
+      val mlMatch = mlKitByLower[lowerTag]
+      if (mlMatch != null) {
+        val rawBox = mlMatch.boundingBox
+          ?: salientRegions.getOrElse(visualRank) { CameraEngine.defaultVisionBoundingBoxForRank(visualRank) }
+        boxes[tag] = coerceGalleryBoundingBox(rawBox)
+        confidences[tag] = mlMatch.confidenceClamped
+        visualRank++
+        return@forEachIndexed
+      }
+
+      val resolvedBox: CameraVisionBoundingBox = when (lowerTag) {
+        "qr code" -> first2dCodeBox ?: anyCodeBox ?: primarySalient
+        "barcode", "product" -> first1dCodeBox ?: anyCodeBox ?: primarySalient
+        "wi-fi", "contact", "calendar", "location" -> anyCodeBox ?: primarySalient
+        "link" -> {
+          val urlCodeBox = scannedCodes
+            .firstOrNull { it.payloadType == CameraScanPayloadType.URL }
+            ?.let { computeBarcodeBoundingBox(it) }
+          urlCodeBox ?: ocrUrlBox ?: ocrUnionBox ?: primarySalient
+        }
+        "text", "receipt", "document", "notes" -> ocrUnionBox ?: primarySalient
+        "screenshot", "scanned", "camera", "video", "gif" -> primarySalient
+        else -> {
+          if (lowerTag in visualSetLower) {
+            val candidate = if (visualRank < salientRegions.size) {
+              salientRegions[visualRank]
+            } else {
+              CameraEngine.defaultVisionBoundingBoxForRank(visualRank)
+            }
+            visualRank++
+            coerceGalleryBoundingBox(candidate)
+          } else {
+            val candidate = salientRegions.getOrElse(tagIdx) {
+              CameraEngine.defaultVisionBoundingBoxForRank(tagIdx)
+            }
+            coerceGalleryBoundingBox(candidate)
+          }
+        }
+      }
+      boxes[tag] = coerceGalleryBoundingBox(resolvedBox)
+    }
+
+    return boxes to confidences
   }
 
   /**
@@ -3792,6 +4030,128 @@ object GalleryEngine {
       else -> "Tag: $tag"
     }
   }
+
+  /**
+   * Resolves the normalized (`0f..1f`) spatial [CameraVisionBoundingBox] in image coordinates for
+   * [tag] on a photo, using cached [GalleryPhotoIndexEntry.tagBoundingBoxes] when available or
+   * computing salient foreground bounds on demand from [bitmap] / [file].
+   */
+  fun resolveTagBoundingBox(
+    tag: String,
+    indexEntry: GalleryPhotoIndexEntry? = null,
+    bitmap: Bitmap? = null,
+    file: File? = null,
+  ): CameraVisionBoundingBox {
+    val cleanTag = tag.trim()
+    if (indexEntry != null && indexEntry.tagBoundingBoxes.isNotEmpty()) {
+      indexEntry.tagBoundingBoxes[cleanTag]?.let { return coerceGalleryBoundingBox(it) }
+      indexEntry.tagBoundingBoxes.entries
+        .firstOrNull { it.key.equals(cleanTag, ignoreCase = true) }
+        ?.value
+        ?.let { return coerceGalleryBoundingBox(it) }
+    }
+
+    val tagRank = indexEntry?.autoTags
+      ?.indexOfFirst { it.equals(cleanTag, ignoreCase = true) }
+      ?.takeIf { it >= 0 } ?: 0
+
+    val lowerTag = cleanTag.lowercase(Locale.US)
+    if (lowerTag in setOf("text", "receipt", "document", "notes") && indexEntry?.hasOcrText == true) {
+      return CameraVisionBoundingBox(left = 0.08f, top = 0.14f, right = 0.92f, bottom = 0.86f)
+    }
+
+    val salient = extractSalientRegionsForFileOrBitmap(file = file, bitmap = bitmap, maxRegions = 5)
+    val chosen = salient.getOrElse(tagRank) { CameraEngine.defaultVisionBoundingBoxForRank(tagRank) }
+    return coerceGalleryBoundingBox(chosen)
+  }
+
+  /**
+   * Resolves the optional recognition confidence (`0f..1f`) for [tag] from [indexEntry], or `null`
+   * if [tag] was derived from heuristic/OCR/barcode rules without an ML Kit confidence score.
+   */
+  fun resolveTagConfidence(
+    tag: String,
+    indexEntry: GalleryPhotoIndexEntry?,
+  ): Float? {
+    if (indexEntry == null || indexEntry.tagConfidences.isEmpty()) return null
+    val cleanTag = tag.trim()
+    indexEntry.tagConfidences[cleanTag]?.let { return it.coerceIn(0f, 1f) }
+    return indexEntry.tagConfidences.entries
+      .firstOrNull { it.key.equals(cleanTag, ignoreCase = true) }
+      ?.value
+      ?.coerceIn(0f, 1f)
+  }
+
+  /**
+   * Maps a normalized image bounding box ([normBox], in `0f..1f` image coordinates) to pixel
+   * coordinates `(left, top, right, bottom)` within a viewer container of size
+   * ([containerWidth] x [containerHeight]) displaying an image of size ([imageWidth] x [imageHeight])
+   * with `ContentScale.Fit`, [zoomScale], and translation ([panOffsetX], [panOffsetY]).
+   */
+  fun mapImageBoundingBoxToViewport(
+    normBox: CameraVisionBoundingBox,
+    containerWidth: Float,
+    containerHeight: Float,
+    imageWidth: Int,
+    imageHeight: Int,
+    zoomScale: Float = 1f,
+    panOffsetX: Float = 0f,
+    panOffsetY: Float = 0f,
+    edgePaddingPx: Float = 12f,
+  ): CameraVisionBoundingBox {
+    val cw = containerWidth.coerceAtLeast(1f)
+    val ch = containerHeight.coerceAtLeast(1f)
+    val safeZoom = zoomScale.coerceAtLeast(0.1f)
+    val coerced = coerceGalleryBoundingBox(normBox)
+
+    val (imgLeft, imgTop, fitW, fitH) = if (imageWidth > 0 && imageHeight > 0) {
+      val imgAspect = imageWidth.toFloat() / imageHeight.toFloat()
+      val containerAspect = cw / ch
+      val (w, h) = if (containerAspect > imgAspect) {
+        (ch * imgAspect) to ch
+      } else {
+        cw to (cw / imgAspect)
+      }
+      Quadruple((cw - w) / 2f, (ch - h) / 2f, w, h)
+    } else {
+      val fallbackH = ch * 0.65f
+      Quadruple(0f, (ch - fallbackH) / 2f, cw, fallbackH)
+    }
+
+    val unzoomedLeft = imgLeft + coerced.left * fitW
+    val unzoomedRight = imgLeft + coerced.right * fitW
+    val unzoomedTop = imgTop + coerced.top * fitH
+    val unzoomedBottom = imgTop + coerced.bottom * fitH
+
+    val centerX = cw / 2f
+    val centerY = ch / 2f
+    val rawLeft = centerX + (unzoomedLeft - centerX) * safeZoom + panOffsetX
+    val rawRight = centerX + (unzoomedRight - centerX) * safeZoom + panOffsetX
+    val rawTop = centerY + (unzoomedTop - centerY) * safeZoom + panOffsetY
+    val rawBottom = centerY + (unzoomedBottom - centerY) * safeZoom + panOffsetY
+
+    val pad = edgePaddingPx.coerceIn(0f, minOf(cw, ch) * 0.2f)
+    val minBoxW = minOf(52f, (cw - pad * 2f).coerceAtLeast(16f))
+    val minBoxH = minOf(44f, (ch - pad * 2f).coerceAtLeast(16f))
+    val leftPx = rawLeft.coerceIn(pad, (cw - pad - minBoxW).coerceAtLeast(pad))
+    val rightPx = rawRight.coerceIn(leftPx + minBoxW, (cw - pad).coerceAtLeast(leftPx + minBoxW))
+    val topPx = rawTop.coerceIn(pad, (ch - pad - minBoxH).coerceAtLeast(pad))
+    val bottomPx = rawBottom.coerceIn(topPx + minBoxH, (ch - pad).coerceAtLeast(topPx + minBoxH))
+
+    return CameraVisionBoundingBox(
+      left = leftPx,
+      top = topPx,
+      right = rightPx,
+      bottom = bottomPx,
+    )
+  }
+
+  private data class Quadruple<A, B, C, D>(
+    val first: A,
+    val second: B,
+    val third: C,
+    val fourth: D,
+  )
 
   /**
    * Maps a viewport touch position ([viewportX], [viewportY]) inside a container of size

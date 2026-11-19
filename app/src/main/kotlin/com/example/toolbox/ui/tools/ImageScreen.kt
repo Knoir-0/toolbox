@@ -34,8 +34,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -113,8 +111,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -170,7 +171,7 @@ import kotlinx.coroutines.withContext
  *   color picker reticle with hex pill link to the Colors tool, one-tap Edit link to Image Editor,
  *   Share, Delete confirmation, and bottom thumbnail preview strip.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ImageScreen(
   modifier: Modifier = Modifier,
@@ -455,7 +456,6 @@ private fun copyUriToCacheImageFile(context: Context, uri: Uri): File? {
   }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun GalleryPhotoViewerDialog(
   photos: List<GalleryPhoto>,
@@ -565,7 +565,6 @@ internal fun GalleryPhotoViewerDialog(
   }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ImageViewerContent(
   photos: List<GalleryPhoto>,
@@ -621,6 +620,9 @@ internal fun ImageViewerContent(
   var showRecognitionInfoSheet by rememberSaveable { mutableStateOf(false) }
   var showDeleteConfirmDialog by rememberSaveable { mutableStateOf(false) }
   var isColorPickerActive by rememberSaveable { mutableStateOf(false) }
+  var selectedOverlayTag by rememberSaveable { mutableStateOf<String?>(null) }
+  var topBarHeightPx by remember { mutableIntStateOf(0) }
+  var bottomBarHeightPx by remember { mutableIntStateOf(0) }
 
   // Videos play automatically and muted by default in the viewer
   var isVideoPlaying by rememberSaveable(initialPhoto.path) { mutableStateOf(true) }
@@ -629,9 +631,10 @@ internal fun ImageViewerContent(
   // Current active page's zoom scale (1f..5f)
   var currentZoomScale by remember { mutableFloatStateOf(MIN_PHOTO_ZOOM) }
 
-  // Reset zoom and auto-play muted when swiping to a different photo/video, keeping bottom preview scroll bar synced
+  // Reset zoom, active tag box overlay, and auto-play muted when swiping to a different photo/video
   LaunchedEffect(pagerState.currentPage) {
     currentZoomScale = MIN_PHOTO_ZOOM
+    selectedOverlayTag = null
     isVideoPlaying = true
     isVideoMuted = true
     if (viewerPhotos.isNotEmpty() && pagerState.currentPage in viewerPhotos.indices) {
@@ -644,6 +647,39 @@ internal fun ImageViewerContent(
 
   val currentPhoto = viewerPhotos.getOrElse(pagerState.currentPage) { initialPhoto }
   val currentIndexEntry = photoIndexMap[currentPhoto.path]
+
+  val tagBoxStrokeColors = listOf(
+    MaterialTheme.colorScheme.tertiary,
+    MaterialTheme.colorScheme.primary,
+    MaterialTheme.colorScheme.secondary,
+    MaterialTheme.colorScheme.inversePrimary,
+    MaterialTheme.colorScheme.error,
+  )
+  val tagBadgeContainerColors = listOf(
+    MaterialTheme.colorScheme.tertiaryContainer,
+    MaterialTheme.colorScheme.primaryContainer,
+    MaterialTheme.colorScheme.secondaryContainer,
+    MaterialTheme.colorScheme.surfaceContainerHigh,
+    MaterialTheme.colorScheme.errorContainer,
+  )
+  val tagBadgeContentColors = listOf(
+    MaterialTheme.colorScheme.onTertiaryContainer,
+    MaterialTheme.colorScheme.onPrimaryContainer,
+    MaterialTheme.colorScheme.onSecondaryContainer,
+    MaterialTheme.colorScheme.onSurface,
+    MaterialTheme.colorScheme.onErrorContainer,
+  )
+
+  val selectedOverlayTagIndex = remember(selectedOverlayTag, currentIndexEntry) {
+    val active = selectedOverlayTag
+    if (active == null) {
+      0
+    } else {
+      currentIndexEntry?.autoTags
+        ?.indexOfFirst { it.equals(active, ignoreCase = true) }
+        ?.takeIf { it >= 0 } ?: 0
+    }
+  }
 
   // Ensure the active photo is indexed immediately if it hasn't been indexed yet
   LaunchedEffect(currentPhoto.path, currentPhoto.lastModifiedMs) {
@@ -679,6 +715,11 @@ internal fun ImageViewerContent(
         isVideoPlaying = isCurrentPage && isVideoPlaying,
         isVideoMuted = isVideoMuted,
         isColorPickerActive = isCurrentPage && isColorPickerActive && !pagePhoto.isVideo,
+        activeOverlayTag = if (isCurrentPage) selectedOverlayTag else null,
+        activeOverlayTagColorIndex = selectedOverlayTagIndex,
+        indexEntry = if (isCurrentPage) currentIndexEntry else photoIndexMap[pagePhoto.path],
+        safeTopInsetPx = if (showPreviewBar) topBarHeightPx else 0,
+        safeBottomInsetPx = if (showPreviewBar) bottomBarHeightPx else 0,
         zoomScale = if (isCurrentPage) currentZoomScale else MIN_PHOTO_ZOOM,
         onZoomScaleChange = { updatedZoom ->
           if (isCurrentPage) {
@@ -703,6 +744,7 @@ internal fun ImageViewerContent(
       Row(
         modifier = Modifier
           .fillMaxWidth()
+          .onSizeChanged { topBarHeightPx = it.height }
           .background(Color.Black.copy(alpha = 0.65f))
           .testTag("photo_viewer_top_bar")
           .padding(
@@ -799,7 +841,9 @@ internal fun ImageViewerContent(
       modifier = Modifier.align(Alignment.BottomCenter),
     ) {
       Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+          .fillMaxWidth()
+          .onSizeChanged { bottomBarHeightPx = it.height },
       ) {
         if (currentPhoto.isVideo || currentPhoto.isAnimatedImage) {
           Row(
@@ -971,23 +1015,50 @@ internal fun ImageViewerContent(
                   }
                 }
 
-                currentIndexEntry.autoTags.forEach { tag ->
+                currentIndexEntry.autoTags.forEachIndexed { tagIdx, tag ->
+                  val isTagSelected = selectedOverlayTag?.equals(tag, ignoreCase = true) == true
+                  val accentBorder = tagBoxStrokeColors[tagIdx % tagBoxStrokeColors.size]
+                  val accentContainer = tagBadgeContainerColors[tagIdx % tagBadgeContainerColors.size]
+                  val accentContent = tagBadgeContentColors[tagIdx % tagBadgeContentColors.size]
                   Surface(
                     shape = CircleShape,
-                    color = Color.White.copy(alpha = 0.16f),
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
+                    color = if (isTagSelected) {
+                      accentContainer.copy(alpha = 0.95f)
+                    } else {
+                      Color.White.copy(alpha = 0.16f)
+                    },
+                    border = BorderStroke(
+                      width = if (isTagSelected) 1.5.dp else 1.dp,
+                      color = if (isTagSelected) accentBorder else Color.White.copy(alpha = 0.28f),
+                    ),
                     modifier = Modifier
                       .clip(CircleShape)
-                      .clickable { showRecognitionInfoSheet = true }
+                      .clickable {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        selectedOverlayTag = if (isTagSelected) null else tag
+                      }
                       .testTag("photo_viewer_tag_$tag"),
                   ) {
-                    Text(
-                      text = tag,
-                      style = MaterialTheme.typography.labelSmall,
-                      fontWeight = FontWeight.Medium,
-                      color = Color.White,
+                    Row(
                       modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                    )
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                      if (isTagSelected) {
+                        Box(
+                          modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(accentBorder),
+                        )
+                      }
+                      Text(
+                        text = tag,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (isTagSelected) FontWeight.Bold else FontWeight.Medium,
+                        color = if (isTagSelected) accentContent else Color.White,
+                      )
+                    }
                   }
                 }
               }
@@ -1271,7 +1342,6 @@ internal fun GalleryViewerDeleteConfirmDialog(
   )
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun GalleryPhotoRecognitionInfoDialog(
   photo: GalleryPhoto,
@@ -1301,7 +1371,11 @@ internal fun GalleryPhotoRecognitionInfoDialog(
           contentAlignment = Alignment.Center,
         ) {
           Icon(
-            imageVector = Icons.Default.AutoAwesome,
+            imageVector = if (indexEntry?.hasOcrText == true) {
+              Icons.Default.DocumentScanner
+            } else {
+              Icons.Default.AutoAwesome
+            },
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(24.dp),
@@ -1309,7 +1383,11 @@ internal fun GalleryPhotoRecognitionInfoDialog(
         }
         Column {
           Text(
-            text = "Photo Info & Recognition",
+            text = if (indexEntry?.hasOcrText == true && indexEntry.hasBarcodes != true) {
+              "Recognized Text (OCR)"
+            } else {
+              "Photo Info & Recognition"
+            },
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
@@ -1331,59 +1409,7 @@ internal fun GalleryPhotoRecognitionInfoDialog(
           .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
-        // 1. Auto-Tags Card
-        Card(
-          shape = RoundedCornerShape(14.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-          ),
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            Text(
-              text = "Automatic Tags",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.primary,
-            )
-            val tags = indexEntry?.autoTags.orEmpty()
-            if (tags.isEmpty()) {
-              Text(
-                text = "No automatic tags detected",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            } else {
-              FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-              ) {
-                tags.forEach { tag ->
-                  Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.testTag("photo_info_tag_$tag"),
-                  ) {
-                    Text(
-                      text = tag,
-                      style = MaterialTheme.typography.labelMedium,
-                      fontWeight = FontWeight.SemiBold,
-                      color = MaterialTheme.colorScheme.onPrimaryContainer,
-                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                    )
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        // 2. Recognized Text (OCR) Card
+        // 1. Recognized Text (OCR) Card
         if (indexEntry?.hasOcrText == true) {
           Card(
             shape = RoundedCornerShape(14.dp),
@@ -1541,6 +1567,49 @@ internal fun GalleryPhotoRecognitionInfoDialog(
             }
           }
         }
+
+        // File Details Card (shown when opened via the info button on photos without OCR or barcodes)
+        if (indexEntry?.hasOcrText != true && indexEntry?.hasBarcodes != true) {
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            ),
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("photo_info_file_details_card"),
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+              verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Text(
+                text = "File Details",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+              )
+              Text(
+                text = "Name: ${photo.name}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Text(
+                text = "Size: ${photo.sizeFormatted} • ${photo.timestampFormatted}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+              Text(
+                text = photo.path,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
       }
     },
     confirmButton = {
@@ -1562,6 +1631,11 @@ internal fun PhotoViewerPageContent(
   isVideoPlaying: Boolean = isCurrentPage,
   isVideoMuted: Boolean = true,
   isColorPickerActive: Boolean = false,
+  activeOverlayTag: String? = null,
+  activeOverlayTagColorIndex: Int = 0,
+  indexEntry: GalleryPhotoIndexEntry? = null,
+  safeTopInsetPx: Int = 0,
+  safeBottomInsetPx: Int = 0,
   zoomScale: Float,
   onZoomScaleChange: (Float) -> Unit,
   onTapImage: () -> Unit,
@@ -2105,6 +2179,297 @@ internal fun PhotoViewerPageContent(
               modifier = Modifier.testTag("photo_viewer_color_hex_text"),
             )
           }
+        }
+      }
+    }
+
+    // Camera-style recognized element bounding box & tag overlay when a tag pill is pressed
+    if (isCurrentPage && activeOverlayTag != null) {
+      GalleryTagBoundingBoxOverlay(
+        tag = activeOverlayTag,
+        colorIndex = activeOverlayTagColorIndex,
+        indexEntry = indexEntry,
+        photoFile = photo.file,
+        bitmap = currentBitmap,
+        zoomScale = zoomScale,
+        panOffsetX = panOffsetX,
+        panOffsetY = panOffsetY,
+        safeTopInsetPx = safeTopInsetPx,
+        safeBottomInsetPx = safeBottomInsetPx,
+        modifier = Modifier.fillMaxSize(),
+      )
+    }
+  }
+}
+
+/**
+ * Draws the localized bounding box, corner accent brackets, and attached tag badge over a Gallery
+ * image when a smart tag pill is tapped, matching [CameraScreen]'s Vision reticle overlay style.
+ */
+@Composable
+private fun GalleryTagBoundingBoxOverlay(
+  tag: String,
+  colorIndex: Int,
+  indexEntry: GalleryPhotoIndexEntry?,
+  photoFile: File,
+  bitmap: android.graphics.Bitmap?,
+  zoomScale: Float,
+  panOffsetX: Float,
+  panOffsetY: Float,
+  safeTopInsetPx: Int = 0,
+  safeBottomInsetPx: Int = 0,
+  modifier: Modifier = Modifier,
+) {
+  val density = LocalDensity.current
+
+  val boxStrokeColors = listOf(
+    MaterialTheme.colorScheme.tertiary,
+    MaterialTheme.colorScheme.primary,
+    MaterialTheme.colorScheme.secondary,
+    MaterialTheme.colorScheme.inversePrimary,
+    MaterialTheme.colorScheme.error,
+  )
+  val badgeContainerColors = listOf(
+    MaterialTheme.colorScheme.tertiaryContainer,
+    MaterialTheme.colorScheme.primaryContainer,
+    MaterialTheme.colorScheme.secondaryContainer,
+    MaterialTheme.colorScheme.surfaceContainerHigh,
+    MaterialTheme.colorScheme.errorContainer,
+  )
+  val badgeContentColors = listOf(
+    MaterialTheme.colorScheme.onTertiaryContainer,
+    MaterialTheme.colorScheme.onPrimaryContainer,
+    MaterialTheme.colorScheme.onSecondaryContainer,
+    MaterialTheme.colorScheme.onSurface,
+    MaterialTheme.colorScheme.onErrorContainer,
+  )
+
+  val safeIdx = colorIndex.coerceAtLeast(0)
+  val boxColor = boxStrokeColors[safeIdx % boxStrokeColors.size]
+  val containerColor = badgeContainerColors[safeIdx % badgeContainerColors.size]
+  val contentColor = badgeContentColors[safeIdx % badgeContentColors.size]
+
+  val normBox = remember(tag, indexEntry, bitmap, photoFile.absolutePath) {
+    GalleryEngine.resolveTagBoundingBox(
+      tag = tag,
+      indexEntry = indexEntry,
+      bitmap = bitmap,
+      file = photoFile,
+    )
+  }
+  val confidence = remember(tag, indexEntry) {
+    GalleryEngine.resolveTagConfidence(tag = tag, indexEntry = indexEntry)
+  }
+
+  var measuredBadgeSize by remember(tag) { mutableStateOf(IntSize.Zero) }
+
+  BoxWithConstraints(
+    modifier = modifier.testTag("photo_viewer_tag_bounding_box_overlay"),
+  ) {
+    val stageW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+    val stageH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+    val edgePadPx = with(density) { 12.dp.toPx() }
+    val insetPx = with(density) { 6.dp.toPx() }
+
+    val viewportBox = remember(
+      normBox,
+      stageW,
+      stageH,
+      bitmap?.width,
+      bitmap?.height,
+      zoomScale,
+      panOffsetX,
+      panOffsetY,
+      edgePadPx,
+    ) {
+      GalleryEngine.mapImageBoundingBoxToViewport(
+        normBox = normBox,
+        containerWidth = stageW,
+        containerHeight = stageH,
+        imageWidth = bitmap?.width ?: 0,
+        imageHeight = bitmap?.height ?: 0,
+        zoomScale = zoomScale,
+        panOffsetX = panOffsetX,
+        panOffsetY = panOffsetY,
+        edgePaddingPx = edgePadPx,
+      )
+    }
+
+    val leftPx = viewportBox.left
+    val topPx = viewportBox.top
+    val rightPx = viewportBox.right
+    val bottomPx = viewportBox.bottom
+    val boxW = (rightPx - leftPx).coerceAtLeast(1f)
+    val boxH = (bottomPx - topPx).coerceAtLeast(1f)
+
+    Canvas(modifier = Modifier.fillMaxSize()) {
+      val cornerRadiusPx = 10.dp.toPx()
+      val strokePx = 2.dp.toPx()
+      val bracketStrokePx = 3.5.dp.toPx()
+      val armLen = (minOf(boxW, boxH) * 0.20f).coerceIn(10.dp.toPx(), 26.dp.toPx())
+
+      // Translucent colored region fill
+      drawRoundRect(
+        color = boxColor.copy(alpha = 0.12f),
+        topLeft = Offset(leftPx, topPx),
+        size = Size(boxW, boxH),
+        cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx),
+      )
+
+      // Colored bounding box outline
+      drawRoundRect(
+        color = boxColor.copy(alpha = 0.85f),
+        topLeft = Offset(leftPx, topPx),
+        size = Size(boxW, boxH),
+        cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx),
+        style = Stroke(width = strokePx),
+      )
+
+      // Corner accent brackets
+      drawLine(
+        color = boxColor,
+        start = Offset(leftPx, topPx + armLen),
+        end = Offset(leftPx, topPx),
+        strokeWidth = bracketStrokePx,
+        cap = StrokeCap.Round,
+      )
+      drawLine(
+        color = boxColor,
+        start = Offset(leftPx, topPx),
+        end = Offset(leftPx + armLen, topPx),
+        strokeWidth = bracketStrokePx,
+        cap = StrokeCap.Round,
+      )
+
+      drawLine(
+        color = boxColor,
+        start = Offset(rightPx - armLen, topPx),
+        end = Offset(rightPx, topPx),
+        strokeWidth = bracketStrokePx,
+        cap = StrokeCap.Round,
+      )
+      drawLine(
+        color = boxColor,
+        start = Offset(rightPx, topPx),
+        end = Offset(rightPx, topPx + armLen),
+        strokeWidth = bracketStrokePx,
+        cap = StrokeCap.Round,
+      )
+
+      drawLine(
+        color = boxColor,
+        start = Offset(leftPx, bottomPx - armLen),
+        end = Offset(leftPx, bottomPx),
+        strokeWidth = bracketStrokePx,
+        cap = StrokeCap.Round,
+      )
+      drawLine(
+        color = boxColor,
+        start = Offset(leftPx, bottomPx),
+        end = Offset(leftPx + armLen, bottomPx),
+        strokeWidth = bracketStrokePx,
+        cap = StrokeCap.Round,
+      )
+
+      drawLine(
+        color = boxColor,
+        start = Offset(rightPx - armLen, bottomPx),
+        end = Offset(rightPx, bottomPx),
+        strokeWidth = bracketStrokePx,
+        cap = StrokeCap.Round,
+      )
+      drawLine(
+        color = boxColor,
+        start = Offset(rightPx, bottomPx - armLen),
+        end = Offset(rightPx, bottomPx),
+        strokeWidth = bracketStrokePx,
+        cap = StrokeCap.Round,
+      )
+    }
+
+    // Semantics / layout node matching the exact bounding box region on screen
+    Box(
+      modifier = Modifier
+        .offset {
+          IntOffset(
+            x = leftPx.roundToInt(),
+            y = topPx.roundToInt(),
+          )
+        }
+        .size(
+          width = with(density) { boxW.toDp() },
+          height = with(density) { boxH.toDp() },
+        )
+        .testTag("photo_viewer_tag_box_$tag")
+        .semantics {
+          contentDescription = "Recognized $tag bounding box"
+        },
+    )
+
+    val estBadgeW = if (measuredBadgeSize.width > 0) {
+      measuredBadgeSize.width.toFloat()
+    } else {
+      with(density) { (38.dp + (tag.length * 7.5f).dp).toPx() }
+    }
+    val estBadgeH = if (measuredBadgeSize.height > 0) {
+      measuredBadgeSize.height.toFloat()
+    } else {
+      with(density) { 26.dp.toPx() }
+    }
+
+    val safeTop = (safeTopInsetPx.toFloat() + insetPx).coerceAtMost(stageH * 0.35f)
+    val safeBottom = (stageH - safeBottomInsetPx.toFloat() - estBadgeH - insetPx)
+      .coerceAtLeast(safeTop)
+
+    val badgeLeftPx = (leftPx + insetPx).coerceIn(
+      edgePadPx,
+      (stageW - estBadgeW - edgePadPx).coerceAtLeast(edgePadPx),
+    )
+    val rawBadgeTopPx = topPx + insetPx
+    val badgeTopPx = rawBadgeTopPx.coerceIn(safeTop, safeBottom)
+
+    Surface(
+      shape = RoundedCornerShape(8.dp),
+      color = containerColor.copy(alpha = 0.92f),
+      border = BorderStroke(1.5.dp, boxColor),
+      tonalElevation = 3.dp,
+      modifier = Modifier
+        .onSizeChanged { measuredBadgeSize = it }
+        .offset {
+          IntOffset(
+            x = badgeLeftPx.roundToInt(),
+            y = badgeTopPx.roundToInt(),
+          )
+        }
+        .testTag("photo_viewer_tag_box_badge_$tag"),
+    ) {
+      Row(
+        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(7.dp)
+            .clip(CircleShape)
+            .background(boxColor),
+        )
+        Text(
+          text = tag,
+          style = MaterialTheme.typography.labelSmall,
+          fontWeight = FontWeight.Bold,
+          color = contentColor,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        if (confidence != null) {
+          Text(
+            text = "${(confidence * 100f).roundToInt().coerceIn(0, 100)}%",
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.ExtraBold,
+            color = contentColor,
+          )
         }
       }
     }

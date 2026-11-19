@@ -6497,7 +6497,7 @@ object MusicPlayerEngine {
   var activeTrackPalette: AlbumArtPalette
     get() {
       val internalPlaying = activeSessionState?.let { !it.isReleased && it.isPlaying && it.currentTrack != null } == true
-      val external = externalSystemMediaInfo
+      val external = externalSystemMediaInfo?.takeUnless { isIgnoredPhoneOrCallSystemMediaInfo(it) }
       val internalPalette = internalTrackPalette
       if (internalPlaying || isMusicPlayingOverride == true) return internalPalette
       if (external != null && external.isPlaying) return external.palette
@@ -6524,7 +6524,9 @@ object MusicPlayerEngine {
     get() {
       val override = isMusicPlayingOverride
       val internalPlaying = activeSessionState?.let { !it.isReleased && it.isPlaying && it.currentTrack != null } == true
-      val externalPlaying = externalSystemMediaInfo?.isPlaying == true
+      val externalPlaying = externalSystemMediaInfo
+        ?.takeUnless { isIgnoredPhoneOrCallSystemMediaInfo(it) }
+        ?.isPlaying == true
       return override ?: (internalPlaying || externalPlaying)
     }
 
@@ -6536,7 +6538,7 @@ object MusicPlayerEngine {
     get() {
       val internalSession = activeSessionState
       val internalTrack = internalSession?.currentTrack
-      val external = externalSystemMediaInfo
+      val external = externalSystemMediaInfo?.takeUnless { isIgnoredPhoneOrCallSystemMediaInfo(it) }
       val internalPalette = internalTrackPalette
       if (internalSession != null && !internalSession.isReleased && internalSession.isPlaying && internalTrack != null) {
         return SystemMediaPlayingInfo(
@@ -6724,11 +6726,411 @@ object MusicPlayerEngine {
   }
 
   /**
+   * Package names of system Phone, Dialer, Telecom, and In-Call UI components whose media sessions,
+   * ringtones, call audio streams, and call notifications must be ignored by the Music Player.
+   */
+  val IGNORED_PHONE_AND_CALL_PACKAGES: Set<String> = setOf(
+    "com.google.android.dialer",
+    "com.android.dialer",
+    "com.android.phone",
+    "com.android.server.telecom",
+    "com.android.incallui",
+    "com.android.contacts",
+    "com.android.providers.telephony",
+    "com.android.stk",
+    "com.android.cellbroadcastreceiver",
+    "com.google.android.cellbroadcastreceiver",
+    "com.google.android.ims",
+    "com.sec.imsservice",
+    "com.samsung.android.dialer",
+    "com.samsung.android.incallui",
+    "com.samsung.android.app.telephonyui",
+    "com.oneplus.dialer",
+    "com.oplus.dialer",
+    "com.coloros.phonemanager",
+    "com.miui.incallui",
+    "com.xiaomi.incallui",
+    "com.huawei.contacts",
+    "com.motorola.dialer",
+    "com.asus.dialer",
+    "com.lge.ltecall",
+    "com.sonyericsson.android.socialphonebook",
+    "com.qualcomm.qti.telephonyservice",
+    "com.sh.smart.caller",
+    "com.truecaller",
+  )
+
+  /**
+   * Application labels of Phone, Dialer, Telecom, and Call management components that should never
+   * be displayed as an external media player in the Music Player.
+   */
+  val IGNORED_PHONE_AND_CALL_APP_NAMES: Set<String> = setOf(
+    "phone",
+    "phone app",
+    "phone services",
+    "phone service",
+    "phone call",
+    "phone calls",
+    "google phone",
+    "samsung phone",
+    "dialer",
+    "phone & messaging storage",
+    "call",
+    "calls",
+    "call management",
+    "call services",
+    "call screen",
+    "call screening",
+    "incallui",
+    "in-call ui",
+    "telecom",
+    "telephony",
+    "telephony ui",
+    "carrier services",
+    "incoming call",
+    "incoming phone call",
+    "ongoing call",
+    "ongoing phone call",
+    "active call",
+    "voice call",
+    "wi-fi calling",
+  )
+
+  /**
+   * Call status titles and subtitles emitted by phone/telecom notifications or call sessions.
+   */
+  val IGNORED_PHONE_AND_CALL_STATUS_TEXTS: Set<String> = setOf(
+    "incoming call",
+    "incoming phone call",
+    "incoming voice call",
+    "ongoing call",
+    "ongoing phone call",
+    "ongoing voice call",
+    "active call",
+    "call in progress",
+    "phone call",
+    "voice call",
+    "ringing",
+    "ringing...",
+    "calling...",
+    "dialing",
+    "dialing...",
+    "on hold",
+    "call on hold",
+  )
+
+  /**
+   * Returns `true` if [usage] is an [AudioAttributes] usage for phone calls, ringtones, alarms,
+   * or system notifications rather than media playback.
+   */
+  fun isNonMediaCallOrRingtoneUsage(usage: Int): Boolean {
+    return usage == AudioAttributes.USAGE_VOICE_COMMUNICATION ||
+      usage == AudioAttributes.USAGE_VOICE_COMMUNICATION_SIGNALLING ||
+      usage == AudioAttributes.USAGE_NOTIFICATION_RINGTONE ||
+      usage == AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_REQUEST ||
+      usage == AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_INSTANT ||
+      usage == AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_DELAYED ||
+      usage == AudioAttributes.USAGE_NOTIFICATION ||
+      usage == AudioAttributes.USAGE_NOTIFICATION_EVENT ||
+      usage == AudioAttributes.USAGE_ALARM ||
+      usage == AudioAttributes.USAGE_ASSISTANCE_SONIFICATION
+  }
+
+  /**
+   * Returns `true` if [mode] is an [AudioManager] mode corresponding to an incoming or active
+   * phone/communication call.
+   */
+  fun isPhoneCallAudioMode(mode: Int): Boolean {
+    return mode == AudioManager.MODE_RINGTONE ||
+      mode == AudioManager.MODE_IN_CALL ||
+      mode == AudioManager.MODE_IN_COMMUNICATION ||
+      mode == AudioManager.MODE_CALL_SCREENING ||
+      mode == AudioManager.MODE_CALL_REDIRECT ||
+      mode == AudioManager.MODE_COMMUNICATION_REDIRECT
+  }
+
+  /**
+   * Returns `true` if the device is currently ringing for an incoming phone call or in an active
+   * phone call.
+   */
+  fun isPhoneCallActiveOrRinging(context: Context? = monitoredAppContext): Boolean {
+    if (context == null) return false
+    try {
+      val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+      if (audioManager != null && isPhoneCallAudioMode(audioManager.mode)) {
+        return true
+      }
+    } catch (_: Throwable) {}
+    try {
+      val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as? android.telephony.TelephonyManager
+      @Suppress("DEPRECATION")
+      val callState = telephonyManager?.callState ?: android.telephony.TelephonyManager.CALL_STATE_IDLE
+      if (callState != android.telephony.TelephonyManager.CALL_STATE_IDLE) {
+        return true
+      }
+    } catch (_: Throwable) {}
+    return false
+  }
+
+  /**
+   * Returns `true` if [packageName] belongs to a Phone, Dialer, Telecom, or In-Call UI app that
+   * must be ignored by the Music Player's external Android system media player integration.
+   */
+  fun isIgnoredPhoneOrCallPackage(
+    context: Context? = monitoredAppContext,
+    packageName: String?,
+  ): Boolean {
+    val cleanPkg = packageName?.trim()?.lowercase(Locale.ROOT).orEmpty()
+    if (cleanPkg.isEmpty()) return false
+    if (cleanPkg in IGNORED_PHONE_AND_CALL_PACKAGES) return true
+    if (
+      cleanPkg.contains("dialer") ||
+      cleanPkg.contains("telecom") ||
+      cleanPkg.contains("incallui") ||
+      cleanPkg.contains("incall") ||
+      cleanPkg.contains("telephony") ||
+      cleanPkg.contains("phonecall") ||
+      cleanPkg.contains("callscreen") ||
+      cleanPkg.contains("callmanagement") ||
+      cleanPkg == "phone" ||
+      cleanPkg.endsWith(".phone") ||
+      cleanPkg.endsWith(".caller") ||
+      cleanPkg.endsWith(".call") ||
+      cleanPkg.endsWith(".calls")
+    ) {
+      return true
+    }
+    if (context != null) {
+      try {
+        val telecom = context.getSystemService(Context.TELECOM_SERVICE) as? android.telecom.TelecomManager
+        if (telecom != null) {
+          val defaultDialer = try { telecom.defaultDialerPackage?.trim()?.lowercase(Locale.ROOT) } catch (_: Throwable) { null }
+          if (!defaultDialer.isNullOrEmpty() && cleanPkg == defaultDialer) return true
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val systemDialer = try { telecom.systemDialerPackage?.trim()?.lowercase(Locale.ROOT) } catch (_: Throwable) { null }
+            if (!systemDialer.isNullOrEmpty() && cleanPkg == systemDialer) return true
+          }
+        }
+      } catch (_: Throwable) {}
+      try {
+        val pm = context.packageManager
+        if (pm != null) {
+          val appInfo = pm.getApplicationInfo(packageName!!.trim(), 0)
+          val label = pm.getApplicationLabel(appInfo)?.toString()?.trim().orEmpty()
+          if (label.isNotEmpty() && isIgnoredPhoneOrCallAppName(label)) {
+            return true
+          }
+        }
+      } catch (_: Throwable) {}
+    }
+    return false
+  }
+
+  /**
+   * Returns `true` if [appName] is a Phone, Dialer, Telecom, or Call management label.
+   */
+  fun isIgnoredPhoneOrCallAppName(appName: String?): Boolean {
+    val clean = appName?.trim()?.lowercase(Locale.ROOT).orEmpty()
+    if (clean.isEmpty()) return false
+    return clean in IGNORED_PHONE_AND_CALL_APP_NAMES
+  }
+
+  /**
+   * Returns `true` if the given external media metadata represents a phone call or the Phone/Dialer
+   * portion of the Android system media player.
+   */
+  fun isIgnoredPhoneOrCallMediaMetadata(
+    title: String?,
+    artist: String? = "",
+    album: String? = "",
+    sourcePackage: String? = "",
+    sourceAppName: String? = "",
+    context: Context? = monitoredAppContext,
+  ): Boolean {
+    if (isIgnoredPhoneOrCallPackage(context, sourcePackage)) return true
+    if (isIgnoredPhoneOrCallAppName(sourceAppName)) return true
+    val cleanTitle = title?.trim()?.lowercase(Locale.ROOT).orEmpty()
+    val cleanArtist = artist?.trim()?.lowercase(Locale.ROOT).orEmpty()
+    val cleanAlbum = album?.trim()?.lowercase(Locale.ROOT).orEmpty()
+    val cleanPkg = sourcePackage?.trim().orEmpty()
+    val cleanApp = sourceAppName?.trim().orEmpty()
+
+    if (cleanTitle in IGNORED_PHONE_AND_CALL_STATUS_TEXTS) return true
+    if (cleanArtist in IGNORED_PHONE_AND_CALL_STATUS_TEXTS) return true
+    if (cleanAlbum in IGNORED_PHONE_AND_CALL_STATUS_TEXTS) return true
+
+    if (isIgnoredPhoneOrCallAppName(cleanTitle)) {
+      val hasKnownMusicSource = cleanPkg.isNotEmpty() && !isIgnoredPhoneOrCallPackage(context, cleanPkg) &&
+        cleanApp.isNotEmpty() && !isIgnoredPhoneOrCallAppName(cleanApp)
+      val hasSongMetadata = cleanArtist.isNotEmpty() || cleanAlbum.isNotEmpty()
+      if (!hasKnownMusicSource || !hasSongMetadata) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /**
+   * Returns `true` if [info] represents a phone call or the Phone/Dialer portion of the Android
+   * system media player that should be ignored by the Music Player.
+   */
+  fun isIgnoredPhoneOrCallSystemMediaInfo(
+    info: SystemMediaPlayingInfo?,
+    context: Context? = monitoredAppContext,
+  ): Boolean {
+    if (info == null || !info.isExternalApp) return false
+    return isIgnoredPhoneOrCallMediaMetadata(
+      title = info.title,
+      artist = info.artist,
+      album = info.album,
+      sourcePackage = info.sourcePackage,
+      sourceAppName = info.sourceAppName,
+      context = context,
+    )
+  }
+
+  /**
+   * Returns `true` if [controller] is a [MediaController] belonging to the Phone, Dialer, Telecom
+   * headset button handler, or a voice call / ringtone stream.
+   */
+  internal fun isIgnoredPhoneOrCallMediaController(
+    context: Context? = monitoredAppContext,
+    controller: MediaController,
+  ): Boolean {
+    val pkg = try { controller.packageName } catch (_: Throwable) { null }
+    if (isIgnoredPhoneOrCallPackage(context, pkg)) return true
+
+    val tag = try { controller.tag } catch (_: Throwable) { null }?.trim()?.lowercase(Locale.ROOT).orEmpty()
+    if (
+      tag == "headsetmediabutton" ||
+      tag.contains("telecom") ||
+      tag.contains("incall") ||
+      tag.contains("phonecall") ||
+      tag.contains("call_session")
+    ) {
+      return true
+    }
+
+    try {
+      val audioAttrs = controller.playbackInfo?.audioAttributes
+      if (audioAttrs != null) {
+        if (isNonMediaCallOrRingtoneUsage(audioAttrs.usage)) return true
+        if (audioAttrs.contentType == AudioAttributes.CONTENT_TYPE_SONIFICATION) return true
+        val stream = try { audioAttrs.volumeControlStream } catch (_: Throwable) { AudioManager.USE_DEFAULT_STREAM_TYPE }
+        if (stream == AudioManager.STREAM_VOICE_CALL || stream == AudioManager.STREAM_RING) return true
+      }
+    } catch (_: Throwable) {}
+
+    val meta = try { controller.metadata } catch (_: Throwable) { null }
+    val desc = try { meta?.description } catch (_: Throwable) { null }
+    val title = try {
+      meta?.getString(MediaMetadata.METADATA_KEY_TITLE)
+        ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
+        ?: desc?.title?.toString()
+        ?: ""
+    } catch (_: Throwable) { "" }
+    val artist = try {
+      meta?.getString(MediaMetadata.METADATA_KEY_ARTIST)
+        ?: meta?.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
+        ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
+        ?: desc?.subtitle?.toString()
+        ?: ""
+    } catch (_: Throwable) { "" }
+    val album = try {
+      meta?.getString(MediaMetadata.METADATA_KEY_ALBUM)
+        ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION)
+        ?: desc?.description?.toString()
+        ?: ""
+    } catch (_: Throwable) { "" }
+    val appLabel = if (context != null && !pkg.isNullOrBlank()) resolveAppLabel(context, pkg) else ""
+    return isIgnoredPhoneOrCallMediaMetadata(
+      title = title,
+      artist = artist,
+      album = album,
+      sourcePackage = pkg,
+      sourceAppName = appLabel,
+      context = context,
+    )
+  }
+
+  /**
+   * Returns `true` if [notification] from [packageName] is a phone call, ringtone, or non-media
+   * call notification that must be ignored by the Music Player.
+   */
+  internal fun isIgnoredPhoneOrCallNotification(
+    context: Context? = monitoredAppContext,
+    packageName: String?,
+    notification: Notification,
+  ): Boolean {
+    if (isIgnoredPhoneOrCallPackage(context, packageName)) return true
+    val category = notification.category
+    if (
+      category == Notification.CATEGORY_CALL ||
+      category == Notification.CATEGORY_ALARM ||
+      category == Notification.CATEGORY_MESSAGE ||
+      category == Notification.CATEGORY_SYSTEM ||
+      category == Notification.CATEGORY_STATUS
+    ) {
+      return true
+    }
+    try {
+      @Suppress("DEPRECATION")
+      val audioAttrs = notification.audioAttributes
+      if (audioAttrs != null && isNonMediaCallOrRingtoneUsage(audioAttrs.usage)) {
+        return true
+      }
+    } catch (_: Throwable) {}
+    val extras = notification.extras
+    if (extras != null) {
+      val template = try { extras.getString(Notification.EXTRA_TEMPLATE).orEmpty() } catch (_: Throwable) { "" }
+      if (template.contains("CallStyle", ignoreCase = true)) return true
+      val hasCallExtras = try {
+        extras.containsKey("android.callType") ||
+          extras.containsKey("android.callPerson") ||
+          extras.containsKey("android.callIsVideo")
+      } catch (_: Throwable) { false }
+      if (hasCallExtras) return true
+
+      val title = try {
+        (extras.getCharSequence(Notification.EXTRA_TITLE)
+          ?: extras.getCharSequence(Notification.EXTRA_TITLE_BIG))?.toString().orEmpty()
+      } catch (_: Throwable) { "" }
+      val artist = try {
+        extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
+      } catch (_: Throwable) { "" }
+      val album = try {
+        (extras.getCharSequence(Notification.EXTRA_SUB_TEXT)
+          ?: extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT))?.toString().orEmpty()
+      } catch (_: Throwable) { "" }
+      val appLabel = if (context != null && !packageName.isNullOrBlank()) resolveAppLabel(context, packageName) else ""
+      if (
+        isIgnoredPhoneOrCallMediaMetadata(
+          title = title,
+          artist = artist,
+          album = album,
+          sourcePackage = packageName,
+          sourceAppName = appLabel,
+          context = context,
+        )
+      ) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /**
    * Updates the observable external system media player state (from another app's [MediaSession]
-   * or media notification).
+   * or media notification), ignoring phone call / dialer sessions.
    */
   fun updateExternalSystemMediaSession(info: SystemMediaPlayingInfo?) {
     externalMediaSetFromSystemSync = false
+    if (info != null && isIgnoredPhoneOrCallSystemMediaInfo(info)) {
+      if (isIgnoredPhoneOrCallSystemMediaInfo(externalSystemMediaInfo)) {
+        externalSystemMediaInfo = null
+      }
+      return
+    }
     externalSystemMediaInfo = info
   }
 
@@ -6827,6 +7229,12 @@ object MusicPlayerEngine {
       canSkipNext = canSkipNext,
       canSkipPrevious = canSkipPrevious,
     )
+    if (isIgnoredPhoneOrCallSystemMediaInfo(info)) {
+      if (isIgnoredPhoneOrCallSystemMediaInfo(externalSystemMediaInfo)) {
+        externalSystemMediaInfo = null
+      }
+      return info
+    }
     externalMediaSetFromSystemSync = fromSystemSync
     if (externalSystemMediaInfo != info) {
       externalSystemMediaInfo = info
@@ -7300,9 +7708,10 @@ object MusicPlayerEngine {
             else -> findActiveExternalPlaybackPackage(context).orEmpty()
           }
         ).trim()
-      if (senderPkg == context.packageName) return
+      if (senderPkg == context.packageName || isIgnoredPhoneOrCallPackage(context, senderPkg)) return
 
-      val previous = lastBroadcastMediaInfo ?: externalSystemMediaInfo
+      val previous = (lastBroadcastMediaInfo ?: externalSystemMediaInfo)
+        ?.takeUnless { isIgnoredPhoneOrCallSystemMediaInfo(it, context) }
       val title = extras.getString("track")
         ?: extras.getString("title")
         ?: extras.getString("trackName")
@@ -7313,6 +7722,19 @@ object MusicPlayerEngine {
       val album = extras.getString("album")
         ?: extras.getString("albumName")
         ?: previous?.album.orEmpty()
+      val appLabel = resolveAppLabel(context, senderPkg).ifBlank { "External Player" }
+      if (
+        isIgnoredPhoneOrCallMediaMetadata(
+          title = title.ifBlank { appLabel },
+          artist = artist,
+          album = album,
+          sourcePackage = senderPkg,
+          sourceAppName = appLabel,
+          context = context,
+        )
+      ) {
+        return
+      }
       val playing = when {
         action.endsWith("playbackcomplete") -> false
         extras.containsKey("playing") -> extras.getBoolean("playing", true)
@@ -7327,7 +7749,6 @@ object MusicPlayerEngine {
       }
       val artBitmap = findLocalOrMediaStoreArtworkBitmap(context, title, artist, album, albumId)
         ?: loadAppIconBitmap(context, senderPkg)
-      val appLabel = resolveAppLabel(context, senderPkg).ifBlank { "External Player" }
       val nowElapsed = safeElapsedRealtimeMs()
       val info = applyExternalSystemMediaMetadata(
         title = title.ifBlank { appLabel },
@@ -7360,6 +7781,7 @@ object MusicPlayerEngine {
       val list = controllers ?: return
       for (controller in list) {
         if (controller.packageName == ownPkg) continue
+        if (isIgnoredPhoneOrCallMediaController(context, controller)) continue
         val callback = object : MediaController.Callback() {
           override fun onPlaybackStateChanged(state: PlaybackState?) {
             syncExternalSystemMediaSessions(context)
@@ -7384,19 +7806,24 @@ object MusicPlayerEngine {
   /**
    * Returns `true` if another application is currently outputting media audio on the device
    * (either via [AudioManager.isMusicActive] or an active media [AudioPlaybackConfiguration]),
-   * excluding Toolbox's own built-in player.
+   * excluding Toolbox's own built-in player and phone call / ringtone audio streams.
    */
   internal fun isExternalAudioPlaybackActive(context: Context): Boolean {
     val internalPlaying = activeSessionState?.let { !it.isReleased && it.isPlaying } == true
     if (internalPlaying) return false
+    if (isPhoneCallActiveOrRinging(context)) return false
     return try {
       val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+      if (isPhoneCallAudioMode(audioManager.mode)) return false
       if (audioManager.isMusicActive) return true
       val configs = audioManager.activePlaybackConfigurations.orEmpty()
       val myUid = Process.myUid()
       val uidRegex = Regex("""u/pid:(\d+)/""")
       for (cfg in configs) {
-        val usage = cfg.audioAttributes?.usage ?: AudioAttributes.USAGE_UNKNOWN
+        val attrs = cfg.audioAttributes
+        val usage = attrs?.usage ?: AudioAttributes.USAGE_UNKNOWN
+        if (isNonMediaCallOrRingtoneUsage(usage)) continue
+        if (attrs?.contentType == AudioAttributes.CONTENT_TYPE_SONIFICATION) continue
         val isMediaUsage = usage == AudioAttributes.USAGE_MEDIA ||
           usage == AudioAttributes.USAGE_GAME ||
           usage == AudioAttributes.USAGE_UNKNOWN
@@ -7407,6 +7834,12 @@ object MusicPlayerEngine {
         }
         val uidMatch = uidRegex.find(dump)?.groupValues?.getOrNull(1)?.toIntOrNull()
         if (uidMatch != null && uidMatch == myUid) continue
+        if (uidMatch != null && uidMatch > 1000) {
+          val pkgs = try { context.packageManager.getPackagesForUid(uidMatch) } catch (_: Throwable) { null }
+          if (pkgs != null && pkgs.any { isIgnoredPhoneOrCallPackage(context, it) }) {
+            continue
+          }
+        }
         if (dump.contains("state:started") || (uidMatch != null && uidMatch != myUid && uidMatch > 1000)) {
           return true
         }
@@ -7420,26 +7853,39 @@ object MusicPlayerEngine {
   private fun findActiveExternalPlaybackPackage(context: Context): String? {
     val internalPlaying = activeSessionState?.let { !it.isReleased && it.isPlaying } == true
     if (internalPlaying) return null
+    if (isPhoneCallActiveOrRinging(context)) return null
     return try {
       val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return null
+      if (isPhoneCallAudioMode(audioManager.mode)) return null
       val configs = audioManager.activePlaybackConfigurations.orEmpty()
       val myUid = Process.myUid()
       val uidRegex = Regex("""u/pid:(\d+)/""")
       for (cfg in configs) {
-        val usage = cfg.audioAttributes?.usage ?: AudioAttributes.USAGE_UNKNOWN
+        val attrs = cfg.audioAttributes
+        val usage = attrs?.usage ?: AudioAttributes.USAGE_UNKNOWN
+        if (isNonMediaCallOrRingtoneUsage(usage)) continue
+        if (attrs?.contentType == AudioAttributes.CONTENT_TYPE_SONIFICATION) continue
         val isMediaUsage = usage == AudioAttributes.USAGE_MEDIA ||
           usage == AudioAttributes.USAGE_GAME ||
           usage == AudioAttributes.USAGE_UNKNOWN
         if (!isMediaUsage) continue
         val dump = cfg.toString()
-        if (dump.contains("state:idle") || dump.contains("state:stopped") || dump.contains("state:released")) {
+        if (dump.contains("state:idle") || dump.contains("state:stopped") || dump.contains("state:released") || dump.contains("state:paused")) {
           continue
         }
         val uidMatch = uidRegex.find(dump)?.groupValues?.getOrNull(1)?.toIntOrNull()
         if (uidMatch != null && uidMatch != myUid && uidMatch > 1000) {
           val pkgs = context.packageManager.getPackagesForUid(uidMatch)
-          val pkg = pkgs?.firstOrNull { it != context.packageName }
-          if (!pkg.isNullOrBlank()) return pkg
+          if (pkgs != null && pkgs.any { isIgnoredPhoneOrCallPackage(context, it) }) {
+            continue
+          }
+          val pkg = pkgs?.firstOrNull { it != context.packageName && !isIgnoredPhoneOrCallPackage(context, it) }
+          if (!pkg.isNullOrBlank()) {
+            val label = resolveAppLabel(context, pkg)
+            if (!isIgnoredPhoneOrCallAppName(label)) {
+              return pkg
+            }
+          }
         }
       }
       null
@@ -7475,16 +7921,20 @@ object MusicPlayerEngine {
               emptyList()
             }
           }
-          collectedControllers.addAll(active)
+          collectedControllers.addAll(active.filterNot { isIgnoredPhoneOrCallMediaController(appCtx, it) })
         }
       } catch (_: Throwable) {}
 
       // Also build MediaControllers from any active media notification tokens not already in list
       for (cachedNotif in activeMediaNotifications.values) {
+        if (isIgnoredPhoneOrCallPackage(appCtx, cachedNotif.packageName)) continue
         val token = cachedNotif.sessionToken ?: continue
         try {
           val ctrl = MediaController(appCtx, token)
-          if (collectedControllers.none { it.packageName == ctrl.packageName }) {
+          if (
+            !isIgnoredPhoneOrCallMediaController(appCtx, ctrl) &&
+            collectedControllers.none { it.packageName == ctrl.packageName }
+          ) {
             collectedControllers.add(ctrl)
           }
         } catch (_: Throwable) {}
@@ -7501,9 +7951,33 @@ object MusicPlayerEngine {
   ) {
     try {
       val ownPkg = context.packageName
+      // Purge any phone/call session that may have been cached previously
+      if (isIgnoredPhoneOrCallSystemMediaInfo(externalSystemMediaInfo, context)) {
+        externalSystemMediaInfo = null
+      }
+      if (isIgnoredPhoneOrCallSystemMediaInfo(lastBroadcastMediaInfo, context)) {
+        lastBroadcastMediaInfo = null
+      }
+      val ignoredNotifPkgs = activeMediaNotifications.values
+        .filter { notif ->
+          isIgnoredPhoneOrCallPackage(context, notif.packageName) ||
+            isIgnoredPhoneOrCallMediaMetadata(
+              title = notif.title,
+              artist = notif.artist,
+              album = notif.album,
+              sourcePackage = notif.packageName,
+              sourceAppName = resolveAppLabel(context, notif.packageName),
+              context = context,
+            )
+        }
+        .map { it.packageName }
+      for (pkg in ignoredNotifPkgs) {
+        activeMediaNotifications.remove(pkg)
+      }
+
       val externalControllers = controllers.orEmpty().filter {
         try {
-          it.packageName != ownPkg
+          it.packageName != ownPkg && !isIgnoredPhoneOrCallMediaController(context, it)
         } catch (_: Throwable) {
           false
         }
@@ -7513,7 +7987,18 @@ object MusicPlayerEngine {
       if (externalControllers.isEmpty()) {
         // Check cached media notifications from ToolboxMediaListenerService
         val latestNotif = activeMediaNotifications.values
-          .filter { it.packageName != ownPkg }
+          .filter { notif ->
+            notif.packageName != ownPkg &&
+              !isIgnoredPhoneOrCallPackage(context, notif.packageName) &&
+              !isIgnoredPhoneOrCallMediaMetadata(
+                title = notif.title,
+                artist = notif.artist,
+                album = notif.album,
+                sourcePackage = notif.packageName,
+                sourceAppName = resolveAppLabel(context, notif.packageName),
+                context = context,
+              )
+          }
           .maxByOrNull { (if (it.isOngoing) 1_000_000_000_000L else 0L) + it.postedAtMs }
         if (latestNotif != null) {
           val appLabel = resolveAppLabel(context, latestNotif.packageName)
@@ -7535,7 +8020,7 @@ object MusicPlayerEngine {
         }
 
         // Check standard Android music broadcast info
-        val broadcastInfo = lastBroadcastMediaInfo
+        val broadcastInfo = lastBroadcastMediaInfo?.takeUnless { isIgnoredPhoneOrCallSystemMediaInfo(it, context) }
         if (broadcastInfo != null) {
           val nowElapsed = safeElapsedRealtimeMs()
           val recentlyBroadcast = lastBroadcastReceivedElapsedMs > 0L &&
@@ -7556,32 +8041,39 @@ object MusicPlayerEngine {
 
         // Check active external AudioPlaybackConfiguration package
         val activeExternalPkg = findActiveExternalPlaybackPackage(context)
-        if (activeExternalPkg != null) {
+        if (activeExternalPkg != null && !isIgnoredPhoneOrCallPackage(context, activeExternalPkg)) {
           val appLabel = resolveAppLabel(context, activeExternalPkg)
-          val existing = externalSystemMediaInfo
-          if (existing != null && existing.sourcePackage == activeExternalPkg) {
-            externalMediaSetFromSystemSync = true
-            if (!existing.isPlaying) {
-              externalSystemMediaInfo = existing.copy(isPlaying = true)
+          if (!isIgnoredPhoneOrCallAppName(appLabel)) {
+            val existing = externalSystemMediaInfo
+            if (existing != null && existing.sourcePackage == activeExternalPkg) {
+              externalMediaSetFromSystemSync = true
+              if (!existing.isPlaying) {
+                externalSystemMediaInfo = existing.copy(isPlaying = true)
+              }
+            } else {
+              val iconBmp = loadAppIconBitmap(context, activeExternalPkg)
+              applyExternalSystemMediaMetadata(
+                title = appLabel.ifBlank { "System Media" },
+                sourcePackage = activeExternalPkg,
+                sourceAppName = appLabel,
+                isPlaying = true,
+                artworkBitmap = iconBmp,
+                fromSystemSync = true,
+              )
             }
-          } else {
-            val iconBmp = loadAppIconBitmap(context, activeExternalPkg)
-            applyExternalSystemMediaMetadata(
-              title = appLabel.ifBlank { "System Media" },
-              sourcePackage = activeExternalPkg,
-              sourceAppName = appLabel,
-              isPlaying = true,
-              artworkBitmap = iconBmp,
-              fromSystemSync = true,
-            )
+            return
           }
-          return
         }
 
         // Fallback when the user explicitly launched a preferred external music app from Toolbox
         // and system audio playback is active (e.g., before Notification Access is granted)
         val launchedApp = lastLaunchedPreferredMusicApp
-        if (systemMusicStreamActive && launchedApp != null) {
+        if (
+          systemMusicStreamActive &&
+          launchedApp != null &&
+          !isIgnoredPhoneOrCallPackage(context, launchedApp.packageName) &&
+          !isIgnoredPhoneOrCallAppName(launchedApp.label)
+        ) {
           val fallbackPkg = launchedApp.packageName.trim()
           val fallbackLabel = launchedApp.label.ifBlank {
             resolveAppLabel(context, fallbackPkg).ifBlank { "Android Media Player" }
@@ -7660,7 +8152,12 @@ object MusicPlayerEngine {
       activeExternalMediaController = chosen
 
       val playing = isControllerPlaying(chosen) ||
-        (systemMusicStreamActive && externalControllers.size == 1 && chosen.playbackState?.state != PlaybackState.STATE_STOPPED)
+        (
+          systemMusicStreamActive &&
+            externalControllers.size == 1 &&
+            chosen.playbackState?.state != PlaybackState.STATE_STOPPED &&
+            chosen.playbackState?.state != PlaybackState.STATE_PAUSED
+          )
       val meta = try { chosen.metadata } catch (_: Throwable) { null }
       val desc = try { meta?.description } catch (_: Throwable) { null }
       val pbState = try { chosen.playbackState } catch (_: Throwable) { null }
@@ -7753,7 +8250,7 @@ object MusicPlayerEngine {
   private fun resolveActiveExternalController(context: Context? = monitoredAppContext): MediaController? {
     val current = activeExternalMediaController
     val targetPkg = externalSystemMediaInfo?.sourcePackage.orEmpty()
-    if (current != null) {
+    if (current != null && !isIgnoredPhoneOrCallMediaController(context, current)) {
       val matches = try {
         targetPkg.isBlank() || current.packageName == targetPkg
       } catch (_: Throwable) {
@@ -7762,13 +8259,16 @@ object MusicPlayerEngine {
       if (matches) return current
     }
     synchronized(systemMediaMonitorLock) {
-      val tracked = engineTrackedControllers.keys.firstOrNull { ctrl ->
+      val validControllers = engineTrackedControllers.keys.filterNot {
+        isIgnoredPhoneOrCallMediaController(context, it)
+      }
+      val tracked = validControllers.firstOrNull { ctrl ->
         try {
           targetPkg.isBlank() || ctrl.packageName == targetPkg
         } catch (_: Throwable) {
           false
         }
-      } ?: engineTrackedControllers.keys.firstOrNull()
+      } ?: validControllers.firstOrNull()
       if (tracked != null) {
         activeExternalMediaController = tracked
         return tracked
@@ -7776,11 +8276,20 @@ object MusicPlayerEngine {
     }
     val appCtx = context?.applicationContext ?: context ?: monitoredAppContext
     if (appCtx != null) {
-      val notifToken = (if (targetPkg.isNotBlank()) activeMediaNotifications[targetPkg]?.sessionToken else null)
-        ?: activeMediaNotifications.values.firstNotNullOfOrNull { it.sessionToken }
+      val notifToken = (
+        if (targetPkg.isNotBlank() && !isIgnoredPhoneOrCallPackage(appCtx, targetPkg)) {
+          activeMediaNotifications[targetPkg]?.sessionToken
+        } else {
+          null
+        }
+        ) ?: activeMediaNotifications.values
+          .filterNot { isIgnoredPhoneOrCallPackage(appCtx, it.packageName) }
+          .firstNotNullOfOrNull { it.sessionToken }
       if (notifToken != null) {
         return try {
-          MediaController(appCtx, notifToken).also { activeExternalMediaController = it }
+          MediaController(appCtx, notifToken)
+            .takeUnless { isIgnoredPhoneOrCallMediaController(appCtx, it) }
+            ?.also { activeExternalMediaController = it }
         } catch (_: Throwable) {
           null
         }
@@ -8219,8 +8728,10 @@ object MusicPlayerEngine {
           }
         }
         for (pkg in discoveredPkgs) {
+          if (isIgnoredPhoneOrCallPackage(context, pkg)) continue
           if (pm.getLaunchIntentForPackage(pkg) == null) continue
           val appLabel = resolveAppLabel(context, pkg).ifBlank { continue }
+          if (isIgnoredPhoneOrCallAppName(appLabel)) continue
           val (primaryRgb, _, _) = computeDeterministicArtworkColors(appLabel, pkg, "Audio")
           extraAudioApps.add(
             PreferredMusicAppLink(
@@ -8422,9 +8933,9 @@ object MusicPlayerEngine {
    */
   fun resolveExternalSystemMediaPackage(context: Context? = monitoredAppContext): String {
     val ownPkg = context?.packageName.orEmpty()
-    val info = externalSystemMediaInfo
+    val info = externalSystemMediaInfo?.takeUnless { isIgnoredPhoneOrCallSystemMediaInfo(it, context) }
     val fromInfoPkg = info?.sourcePackage?.trim().orEmpty()
-    if (fromInfoPkg.isNotEmpty() && fromInfoPkg != ownPkg) {
+    if (fromInfoPkg.isNotEmpty() && fromInfoPkg != ownPkg && !isIgnoredPhoneOrCallPackage(context, fromInfoPkg)) {
       return fromInfoPkg
     }
 
@@ -8433,12 +8944,16 @@ object MusicPlayerEngine {
     } catch (_: Throwable) {
       ""
     }
-    if (controllerPkg.isNotEmpty() && controllerPkg != ownPkg) {
+    if (controllerPkg.isNotEmpty() && controllerPkg != ownPkg && !isIgnoredPhoneOrCallPackage(context, controllerPkg)) {
       return controllerPkg
     }
 
     val notifPkg = activeMediaNotifications.values
-      .filter { it.packageName.isNotBlank() && it.packageName != ownPkg }
+      .filter {
+        it.packageName.isNotBlank() &&
+          it.packageName != ownPkg &&
+          !isIgnoredPhoneOrCallPackage(context, it.packageName)
+      }
       .maxByOrNull { (if (it.isOngoing) 1_000_000_000_000L else 0L) + it.postedAtMs }
       ?.packageName
       ?.trim()
@@ -8449,13 +8964,13 @@ object MusicPlayerEngine {
 
     if (context != null) {
       val activeAudioPkg = findActiveExternalPlaybackPackage(context)?.trim().orEmpty()
-      if (activeAudioPkg.isNotEmpty() && activeAudioPkg != ownPkg) {
+      if (activeAudioPkg.isNotEmpty() && activeAudioPkg != ownPkg && !isIgnoredPhoneOrCallPackage(context, activeAudioPkg)) {
         return activeAudioPkg
       }
     }
 
     val sourceAppName = info?.sourceAppName?.trim().orEmpty()
-    if (sourceAppName.isNotEmpty()) {
+    if (sourceAppName.isNotEmpty() && !isIgnoredPhoneOrCallAppName(sourceAppName)) {
       val presetMatch = POPULAR_STREAMING_MUSIC_APPS.firstOrNull {
         it.label.equals(sourceAppName, ignoreCase = true) ||
           it.id.equals(sourceAppName, ignoreCase = true)
@@ -8465,7 +8980,8 @@ object MusicPlayerEngine {
       }
       if (context != null) {
         val installedMatch = discoverCustomPickerInstalledApps(context, sourceAppName).firstOrNull {
-          it.label.equals(sourceAppName, ignoreCase = true)
+          it.label.equals(sourceAppName, ignoreCase = true) &&
+            !isIgnoredPhoneOrCallPackage(context, it.packageName)
         }
         if (installedMatch != null && installedMatch.packageName.isNotBlank()) {
           return installedMatch.packageName
@@ -12514,6 +13030,9 @@ class ToolboxMediaListenerService : NotificationListenerService() {
       val notification = sbn.notification ?: return null
       val pkg = sbn.packageName ?: return null
       if (pkg == packageName) return null
+      if (MusicPlayerEngine.isIgnoredPhoneOrCallNotification(applicationContext, pkg, notification)) {
+        return null
+      }
       val extras = notification.extras ?: return null
       val template = try { extras.getString(Notification.EXTRA_TEMPLATE).orEmpty() } catch (_: Throwable) { "" }
       val hasMediaSession = try { extras.containsKey(Notification.EXTRA_MEDIA_SESSION) } catch (_: Throwable) { false }
@@ -12580,8 +13099,10 @@ class ToolboxMediaListenerService : NotificationListenerService() {
     try {
       val pkg = sbn?.packageName ?: return
       if (pkg == packageName) return
-      MusicPlayerEngine.activeMediaNotifications.remove(pkg)
-      MusicPlayerEngine.syncExternalSystemMediaSessions(applicationContext)
+      val removed = MusicPlayerEngine.activeMediaNotifications.remove(pkg)
+      if (removed != null && !MusicPlayerEngine.isIgnoredPhoneOrCallPackage(applicationContext, pkg)) {
+        MusicPlayerEngine.syncExternalSystemMediaSessions(applicationContext)
+      }
     } catch (_: Throwable) {}
   }
 
@@ -12590,6 +13111,7 @@ class ToolboxMediaListenerService : NotificationListenerService() {
     val list = controllers ?: return
     for (controller in list) {
       if (controller.packageName == packageName) continue
+      if (MusicPlayerEngine.isIgnoredPhoneOrCallMediaController(applicationContext, controller)) continue
       val callback = object : MediaController.Callback() {
         override fun onPlaybackStateChanged(state: PlaybackState?) {
           MusicPlayerEngine.syncExternalSystemMediaSessions(applicationContext)

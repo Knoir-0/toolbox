@@ -908,6 +908,7 @@ fun MusicPlayerScreen(
   }
 
   val externalSystemMedia = MusicPlayerEngine.externalSystemMediaInfo
+    ?.takeUnless { MusicPlayerEngine.isIgnoredPhoneOrCallSystemMediaInfo(it, context) }
   var isControllingExternalMedia by remember {
     mutableStateOf(
       !isPlaying &&

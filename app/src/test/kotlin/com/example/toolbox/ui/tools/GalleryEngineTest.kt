@@ -1151,4 +1151,85 @@ class GalleryEngineTest {
       GalleryEngine.reorderNavigationPills(navPills, fromIndex = 3, toIndex = 1),
     )
   }
+
+  @Test
+  fun tagBoundingBoxes_persistedInPhotoIndexAndMappedToFittedViewportCoordinates() = runBlocking {
+    val cacheFile = File(tempRootDir, "gallery_tag_boxes_cache.json")
+    GalleryEngine.clearPhotoIndexCache()
+
+    val picturesDir = File(tempRootDir, "Pictures").apply { mkdirs() }
+    val qrFile = File(picturesDir, "wifi_qr_card.png")
+    CameraEngine.saveBarcodeImageFile(
+      outputFile = qrFile,
+      content = "https://toolbox.example.com/gallery",
+      format = CameraBarcodeFormat.QR_CODE,
+      width = 320,
+      height = 320,
+    )
+    val docFile = GalleryEngine.writeTextDocumentPng(
+      outputFile = File(picturesDir, "nature_poster.png"),
+      ocrText = "NATIONAL PARK GUIDE\nTotal $15.00",
+      imageLabels = listOf("Nature", "Mountain"),
+      lastModifiedMs = 7_000_000L,
+    )
+
+    val qrEntry = GalleryEngine.indexSinglePhoto(qrFile)
+    assertTrue(qrEntry.autoTags.contains("QR Code"))
+    val qrBox = GalleryEngine.resolveTagBoundingBox("QR Code", qrEntry, file = qrFile)
+    assertTrue(qrBox.left in 0.03f..0.90f)
+    assertTrue(qrBox.right > qrBox.left)
+    assertTrue(qrBox.bottom > qrBox.top)
+
+    val docEntry = GalleryEngine.indexSinglePhoto(docFile)
+    assertTrue(docEntry.tagBoundingBoxes.containsKey("Nature"))
+    assertTrue(docEntry.tagBoundingBoxes.containsKey("Mountain"))
+    assertTrue(docEntry.tagBoundingBoxes.containsKey("Receipt"))
+
+    // Verify JSON round-trip of tagBoundingBoxes and tagConfidences
+    val entryWithConfidence = docEntry.copy(
+      tagConfidences = mapOf("Nature" to 0.94f),
+    )
+    GalleryEngine.saveIndexCacheToDisk(cacheFile, mapOf(docFile.absolutePath to entryWithConfidence))
+    GalleryEngine.clearPhotoIndexCache()
+    val reloaded = GalleryEngine.loadIndexCacheFromDisk(cacheFile)[docFile.absolutePath]
+    assertNotNull(reloaded)
+    assertEquals(
+      docEntry.tagBoundingBoxes["Nature"]!!.left,
+      reloaded!!.tagBoundingBoxes["Nature"]!!.left,
+      0.001f,
+    )
+    assertEquals(0.94f, GalleryEngine.resolveTagConfidence("Nature", reloaded) ?: 0f, 0.001f)
+
+    // Verify ContentScale.Fit viewport mapping keeps bounding box inside letterboxed 1:1 image in portrait container
+    val squareImageW = 1000
+    val squareImageH = 1000
+    val containerW = 1000f
+    val containerH = 2000f // 1:1 image occupies y = 500..1500 at 1x zoom
+    val normBox = CameraVisionBoundingBox(left = 0.20f, top = 0.25f, right = 0.80f, bottom = 0.75f)
+    val unzoomedViewport = GalleryEngine.mapImageBoundingBoxToViewport(
+      normBox = normBox,
+      containerWidth = containerW,
+      containerHeight = containerH,
+      imageWidth = squareImageW,
+      imageHeight = squareImageH,
+      zoomScale = 1f,
+    )
+    assertEquals(200f, unzoomedViewport.left, 1f)
+    assertEquals(800f, unzoomedViewport.right, 1f)
+    assertEquals(750f, unzoomedViewport.top, 1f)
+    assertEquals(1250f, unzoomedViewport.bottom, 1f)
+
+    // Zooming 2x around center expands the viewport box outward around (500, 1000)
+    val zoomedViewport = GalleryEngine.mapImageBoundingBoxToViewport(
+      normBox = normBox,
+      containerWidth = containerW,
+      containerHeight = containerH,
+      imageWidth = squareImageW,
+      imageHeight = squareImageH,
+      zoomScale = 2f,
+      edgePaddingPx = 0f,
+    )
+    assertTrue(zoomedViewport.width > unzoomedViewport.width)
+    assertTrue(zoomedViewport.height > unzoomedViewport.height)
+  }
 }

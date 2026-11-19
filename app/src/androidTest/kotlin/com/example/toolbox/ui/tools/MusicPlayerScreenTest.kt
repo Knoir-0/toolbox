@@ -1059,6 +1059,20 @@ class MusicPlayerScreenTest {
     composeTestRule.waitForIdle()
     assertEquals("com.spotify.music", MusicPlayerEngine.lastOpenedExternalMediaPackage)
     assertEquals("com.spotify.music", interceptedOpenPkg)
+
+    // 6. Receiving a phone call from the Android system media player is ignored and never displays "Phone"
+    composeTestRule.runOnIdle {
+      MusicPlayerEngine.updateExternalSystemMediaSession(null)
+      MusicPlayerEngine.updateExternalSystemMediaFromMetadata(
+        title = "Phone",
+        sourcePackage = "com.google.android.dialer",
+        sourceAppName = "Phone",
+        isPlaying = true,
+      )
+    }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_player_collapsed").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("music_player_expanded").assertDoesNotExist()
   }
 
   @Test

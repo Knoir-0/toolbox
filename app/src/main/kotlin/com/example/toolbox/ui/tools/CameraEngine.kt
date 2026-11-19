@@ -294,8 +294,8 @@ data class CameraVisionBoundingBox(
   val centerY: Float get() = (top + bottom) * 0.5f
 
   fun coerceNormalized(): CameraVisionBoundingBox {
-    val l = left.coerceIn(0.04f, 0.88f)
-    val t = top.coerceIn(0.10f, 0.84f)
+    val l = left.coerceIn(0.04f, 0.82f)
+    val t = top.coerceIn(0.10f, 0.78f)
     val r = right.coerceIn(l + 0.12f, 0.96f)
     val b = bottom.coerceIn(t + 0.10f, 0.90f)
     return CameraVisionBoundingBox(left = l, top = t, right = r, bottom = b)
@@ -4884,8 +4884,8 @@ object CameraEngine {
         }
       }
 
-      val leftNorm = (minGx.toFloat() / cols).coerceIn(0.06f, 0.82f)
-      val topNorm = (minGy.toFloat() / rows).coerceIn(0.12f, 0.78f)
+      val leftNorm = (minGx.toFloat() / cols).coerceIn(0.06f, 0.74f)
+      val topNorm = (minGy.toFloat() / rows).coerceIn(0.12f, 0.72f)
       val rightNorm = ((maxGx + 1).toFloat() / cols).coerceIn(leftNorm + 0.18f, 0.94f)
       val bottomNorm = ((maxGy + 1).toFloat() / rows).coerceIn(topNorm + 0.14f, 0.88f)
       regions.add(

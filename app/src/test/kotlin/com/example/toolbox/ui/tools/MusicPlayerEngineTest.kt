@@ -2462,4 +2462,84 @@ class MusicPlayerEngineTest {
       MusicPlayerEngine.resetPlaybackSession()
     }
   }
+
+  @Test
+  fun externalSystemMedia_ignoresPhoneCallDialerAndTelecomSessions() {
+    MusicPlayerEngine.resetPlaybackSession()
+    try {
+      // 1. Phone, Dialer, Telecom, and InCallUI packages, labels, audio modes, and usages are recognized as ignored
+      assertTrue(MusicPlayerEngine.isIgnoredPhoneOrCallPackage(null, "com.google.android.dialer"))
+      assertTrue(MusicPlayerEngine.isIgnoredPhoneOrCallPackage(null, "com.android.dialer"))
+      assertTrue(MusicPlayerEngine.isIgnoredPhoneOrCallPackage(null, "com.android.phone"))
+      assertTrue(MusicPlayerEngine.isIgnoredPhoneOrCallPackage(null, "com.android.server.telecom"))
+      assertTrue(MusicPlayerEngine.isIgnoredPhoneOrCallPackage(null, "com.samsung.android.incallui"))
+      assertFalse(MusicPlayerEngine.isIgnoredPhoneOrCallPackage(null, "com.spotify.music"))
+      assertFalse(MusicPlayerEngine.isIgnoredPhoneOrCallPackage(null, "com.google.android.apps.youtube.music"))
+
+      assertTrue(MusicPlayerEngine.isIgnoredPhoneOrCallAppName("Phone"))
+      assertTrue(MusicPlayerEngine.isIgnoredPhoneOrCallAppName("Dialer"))
+      assertTrue(MusicPlayerEngine.isIgnoredPhoneOrCallAppName("Call Management"))
+      assertTrue(MusicPlayerEngine.isIgnoredPhoneOrCallAppName("Phone Services"))
+      assertTrue(MusicPlayerEngine.isIgnoredPhoneOrCallAppName("Incoming call"))
+      assertFalse(MusicPlayerEngine.isIgnoredPhoneOrCallAppName("Spotify"))
+      assertFalse(MusicPlayerEngine.isIgnoredPhoneOrCallAppName("YouTube Music"))
+
+      assertTrue(MusicPlayerEngine.isPhoneCallAudioMode(android.media.AudioManager.MODE_RINGTONE))
+      assertTrue(MusicPlayerEngine.isPhoneCallAudioMode(android.media.AudioManager.MODE_IN_CALL))
+      assertTrue(MusicPlayerEngine.isPhoneCallAudioMode(android.media.AudioManager.MODE_IN_COMMUNICATION))
+      assertFalse(MusicPlayerEngine.isPhoneCallAudioMode(android.media.AudioManager.MODE_NORMAL))
+
+      assertTrue(MusicPlayerEngine.isNonMediaCallOrRingtoneUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE))
+      assertTrue(MusicPlayerEngine.isNonMediaCallOrRingtoneUsage(android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION))
+      assertFalse(MusicPlayerEngine.isNonMediaCallOrRingtoneUsage(android.media.AudioAttributes.USAGE_MEDIA))
+
+      // 2. Receiving a phone call when no external media is active does NOT populate externalSystemMediaInfo
+      MusicPlayerEngine.updateExternalSystemMediaFromMetadata(
+        title = "Phone",
+        sourcePackage = "com.google.android.dialer",
+        sourceAppName = "Phone",
+        isPlaying = true,
+      )
+      assertNull(MusicPlayerEngine.externalSystemMediaInfo)
+      assertFalse(MusicPlayerEngine.isMusicPlaying)
+      assertEquals(false, MusicPlayerEngine.activeSystemMediaInfo?.isExternalApp)
+
+      MusicPlayerEngine.applyExternalSystemMediaMetadata(
+        title = "Incoming call",
+        artist = "(555) 019-2834",
+        sourcePackage = "com.android.server.telecom",
+        sourceAppName = "Call Management",
+        isPlaying = true,
+        fromSystemSync = true,
+      )
+      assertNull(MusicPlayerEngine.externalSystemMediaInfo)
+      assertFalse(MusicPlayerEngine.isMusicPlaying)
+
+      // 3. When a legitimate external music player (e.g. Spotify) is active and a phone call arrives,
+      // the phone session is ignored and does not overwrite the music player's session with "Phone"
+      MusicPlayerEngine.updateExternalSystemMediaFromMetadata(
+        title = "Veridis Quo",
+        artist = "Daft Punk",
+        album = "Discovery",
+        sourcePackage = "com.spotify.music",
+        sourceAppName = "Spotify",
+        isPlaying = false,
+      )
+      assertEquals("Veridis Quo", MusicPlayerEngine.externalSystemMediaInfo?.title)
+      assertEquals("Spotify", MusicPlayerEngine.externalSystemMediaInfo?.sourceAppName)
+
+      MusicPlayerEngine.applyExternalSystemMediaMetadata(
+        title = "Phone",
+        sourcePackage = "com.google.android.dialer",
+        sourceAppName = "Phone",
+        isPlaying = true,
+        fromSystemSync = true,
+      )
+      assertEquals("Veridis Quo", MusicPlayerEngine.externalSystemMediaInfo?.title)
+      assertEquals("Spotify", MusicPlayerEngine.externalSystemMediaInfo?.sourceAppName)
+      assertFalse(MusicPlayerEngine.isMusicPlaying)
+    } finally {
+      MusicPlayerEngine.resetPlaybackSession()
+    }
+  }
 }
