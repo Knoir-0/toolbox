@@ -609,7 +609,8 @@ class GalleryEngineTest {
 
   @Test
   fun indexSinglePhoto_andDeriveAutoTags_extractsOcrTextVisualLabelsAndSmartTags() = runBlocking {
-    assertEquals(0.80f, GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD)
+    assertEquals(0.85f, GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD)
+    assertEquals(MIN_VISION_CONFIDENCE_THRESHOLD, GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD)
     GalleryEngine.clearPhotoIndexCache()
     val screenshotsDir = File(tempRootDir, "Pictures/Screenshots").apply { mkdirs() }
     val receiptsDir = File(tempRootDir, "Pictures/Finance").apply { mkdirs() }

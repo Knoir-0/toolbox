@@ -490,6 +490,9 @@ class CameraEngineTest {
     assertEquals("Vision", CameraCaptureMode.VISION.displayName)
     assertEquals("VISION", CameraCaptureMode.VISION.shortLabel)
 
+    assertEquals(0.85f, MIN_VISION_CONFIDENCE_THRESHOLD)
+    assertEquals(GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD, MIN_VISION_CONFIDENCE_THRESHOLD)
+
     val rawTags = CameraVisionSamplePreset.BOTANICAL.sampleTags
     val standardResult = CameraEngine.buildVisionAnalysisResult(
       rawTags = rawTags,
@@ -497,14 +500,14 @@ class CameraEngineTest {
       inferenceLatencyMs = 18L,
       sourceDescription = "Indoor Monstera Plant",
     )
-    // Plant (96.2%), Flowerpot (84.1%), and Leaf (75.8% nested sub-region with moderate overlap) are >= 65% and kept.
+    // Plant (96.2%), Flowerpot (89.1%), and Leaf (86.4% nested sub-region with moderate overlap) are >= 85% and kept.
     // Houseplant (91.4%) has an identical duplicate box to Plant (96.2%) and is suppressed.
-    // Room (58.2%) and Furniture (39.4%) are below 65% and are hidden.
+    // Room (58.2%) and Furniture (39.4%) are below 85% and are hidden.
     assertEquals(3, standardResult.tags.size)
     assertEquals(listOf("Plant", "Flowerpot", "Leaf"), standardResult.tags.map { it.label })
-    assertTrue(standardResult.tags.all { it.confidence >= 0.65f && it.boundingBox != null })
+    assertTrue(standardResult.tags.all { it.confidence >= 0.85f && it.boundingBox != null })
     assertEquals(6, standardResult.allCandidateTags.size)
-    assertEquals(2, standardResult.galleryPassingCount)
+    assertEquals(3, standardResult.galleryPassingCount)
     assertEquals("Plant", standardResult.topTag?.label)
     assertEquals("96.2%", standardResult.topTag?.confidenceFormatted)
     assertTrue(standardResult.topTag?.passesGalleryThreshold == true)
@@ -562,14 +565,20 @@ class CameraEngineTest {
     assertTrue(primaryBox.left >= 0.04f && primaryBox.right <= 0.96f)
     assertTrue(primaryBox.width >= 0.12f && primaryBox.height >= 0.10f)
 
-    // Filtering with 80% Gallery threshold keeps the 2 non-overlapping >= 80% tags
+    // Filtering with linked 85% Gallery threshold keeps the 3 non-overlapping >= 85% tags
     val galleryStrictResult = standardResult.withThreshold(CameraVisionThresholdPreset.GALLERY_80.minConfidence)
-    assertEquals(2, galleryStrictResult.tags.size)
+    assertEquals(3, galleryStrictResult.tags.size)
     assertTrue(galleryStrictResult.tags.all { it.passesGalleryThreshold })
+
+    // Filtering with 90% High preset keeps only Plant (96.2%)
+    val high90Result = standardResult.withThreshold(CameraVisionThresholdPreset.HIGH_70.minConfidence)
+    assertEquals(1, high90Result.tags.size)
+    assertEquals(listOf("Plant"), high90Result.tags.map { it.label })
 
     val report = galleryStrictResult.formatSummaryReport()
     assertTrue(report.contains("ML Kit Vision Tagging Report (Indoor Monstera Plant)"))
     assertTrue(report.contains("Plant: 96.2%"))
+    assertTrue(report.contains("[GALLERY ≥85%]"))
 
     // Verify generic/abstract ontology labels are blocked and verbose ML Kit classes map to canonical nouns
     assertTrue(CameraEngine.isBlockedGenericVisionLabel("Font"))
@@ -782,6 +791,27 @@ class CameraEngineTest {
     // Default selected camera resolves to the primary 1x Wide back camera (ID 0), not the 0.5x ultra-wide
     val defaultBack = CameraEngine.resolveSelectedCamera(catalog, requestedCameraId = null, fallbackFacing = CameraLensFacing.BACK)
     assertEquals("0", defaultBack.cameraId)
+
+    // Back and front camera selector lists are separated by facing direction
+    val backCameras = CameraEngine.getCamerasForFacing(catalog, CameraLensFacing.BACK)
+    val frontCameras = CameraEngine.getCamerasForFacing(catalog, CameraLensFacing.FRONT)
+    assertEquals(listOf("2", "0", "4", "3"), backCameras.map { it.cameraId })
+    assertEquals(listOf("1"), frontCameras.map { it.cameraId })
+
+    // Primary camera resolution for each facing direction
+    assertEquals("0", CameraEngine.resolvePrimaryCameraForFacing(catalog, CameraLensFacing.BACK).cameraId)
+    assertEquals("1", CameraEngine.resolvePrimaryCameraForFacing(catalog, CameraLensFacing.FRONT).cameraId)
+
+    // Front/back switch button toggles between the primary front camera (ID 1) and primary back camera (ID 0)
+    // regardless of which back lens (0.5x Ultra, 1x Wide, or 3x Tele) was active
+    val toggledFromWideBack = CameraEngine.togglePrimaryFrontBackCamera(catalog, currentCameraId = "0")
+    assertEquals("1", toggledFromWideBack.cameraId)
+    val toggledFromTeleBack = CameraEngine.togglePrimaryFrontBackCamera(catalog, currentCameraId = "3")
+    assertEquals("1", toggledFromTeleBack.cameraId)
+    val toggledFromUltraBack = CameraEngine.togglePrimaryFrontBackCamera(catalog, currentCameraId = "2")
+    assertEquals("1", toggledFromUltraBack.cameraId)
+    val toggledBackToPrimaryBack = CameraEngine.togglePrimaryFrontBackCamera(catalog, currentCameraId = "1")
+    assertEquals("0", toggledBackToPrimaryBack.cameraId)
 
     // Cycling through all system cameras visits every back and front camera in order and wraps around
     val step1 = CameraEngine.nextSystemCamera(catalog, defaultBack.cameraId)

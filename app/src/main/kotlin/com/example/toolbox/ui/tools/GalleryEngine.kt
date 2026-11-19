@@ -3108,7 +3108,7 @@ object GalleryEngine {
   // =========================================================================
 
   const val GALLERY_INDEX_CACHE_FILE_NAME = "gallery_smart_index_v2.json"
-  const val DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD = 0.80f
+  const val DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD = 0.85f
   private const val PNG_TEXT_KEYWORD_OCR = "OCR_TEXT"
   private const val PNG_TEXT_KEYWORD_LABELS = "IMAGE_LABELS"
 
@@ -3161,7 +3161,7 @@ object GalleryEngine {
     }
   }
 
-  private const val GALLERY_INDEX_CACHE_SCHEMA_VERSION = 2
+  private const val GALLERY_INDEX_CACHE_SCHEMA_VERSION = 3
 
   /**
    * Loads persisted [GalleryPhotoIndexEntry] records from [cacheFile] on disk and merges them into
@@ -3397,12 +3397,12 @@ object GalleryEngine {
     maxLabels: Int = 5,
   ): List<String> {
     if (bitmap.width <= 16 || bitmap.height <= 16) return emptyList()
-    val effectiveThreshold = confidenceThreshold.coerceIn(0.3f, 0.98f)
+    val effectiveThreshold = confidenceThreshold.coerceIn(MIN_VISION_CONFIDENCE_THRESHOLD, 0.98f)
     val visionResult = CameraEngine.recognizeVisionTagsFromBitmapWithMlKit(
       bitmap = bitmap,
       rotationDegrees = rotationDegrees,
-      confidenceThreshold = effectiveThreshold.coerceAtLeast(MIN_VISION_CONFIDENCE_THRESHOLD),
-      baseDetectorMinConfidence = effectiveThreshold.coerceAtLeast(MIN_VISION_CONFIDENCE_THRESHOLD),
+      confidenceThreshold = effectiveThreshold,
+      baseDetectorMinConfidence = effectiveThreshold,
       maxLabels = maxLabels,
       sourceDescription = "Gallery Image",
     )

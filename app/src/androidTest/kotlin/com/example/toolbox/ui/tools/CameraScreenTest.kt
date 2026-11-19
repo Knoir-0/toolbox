@@ -369,39 +369,53 @@ class CameraScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // Verify all 4 system camera pills (0.5x Ultra, 1x Wide, 3x Tele, Front) are displayed
+    // Initially on back camera: verify Back camera selector bar is displayed with the 3 back camera pills (0.5x Ultra, 1x Wide, 3x Tele) and Front pill is not in the back bar
     composeTestRule.onNodeWithTag("camera_lens_selector_row").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_back_lens_selector_row").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_front_lens_selector_row").assertDoesNotExist()
     composeTestRule.onNodeWithTag("camera_device_pill_2").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_device_pill_0").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_device_pill_3").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("camera_device_pill_1").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_device_pill_1").assertDoesNotExist()
 
     // Default active camera is primary 1x Wide back camera (ID 0)
     val prefs = composeTestRule.activity.getSharedPreferences(CAMERA_PREFS_NAME, Context.MODE_PRIVATE)
     composeTestRule.onNodeWithTag("viewfinder_status_pill").assertTextEquals("Back • Wide 1x")
 
-    // Switch directly to Ultra-Wide back camera (ID 2) via pill selector
+    // Switch directly to Ultra-Wide back camera (ID 2) via back pill selector
     composeTestRule.onNodeWithTag("camera_device_pill_2").performClick()
     composeTestRule.waitForIdle()
     assertEquals("2", prefs.getString(PREF_KEY_CAMERA_ID, null))
     composeTestRule.onNodeWithTag("viewfinder_status_pill").assertTextEquals("Back • Ultra 0.5x")
 
-    // Switch directly to Telephoto back camera (ID 3) via pill selector
+    // Switch directly to Telephoto back camera (ID 3) via back pill selector
     composeTestRule.onNodeWithTag("camera_device_pill_3").performClick()
     composeTestRule.waitForIdle()
     assertEquals("3", prefs.getString(PREF_KEY_CAMERA_ID, null))
     composeTestRule.onNodeWithTag("viewfinder_status_pill").assertTextEquals("Back • Tele 3x")
 
-    // Cycle camera using the shutter-row camera switch button (3 -> 1 Front -> 2 Ultra-Wide)
+    // Front/back switch button toggles from back (3x Tele) to primary Front camera (ID 1) and shows the Front camera selector bar
     composeTestRule.onNodeWithTag("camera_flip_lens_button").performClick()
     composeTestRule.waitForIdle()
     assertEquals("1", prefs.getString(PREF_KEY_CAMERA_ID, null))
     composeTestRule.onNodeWithTag("viewfinder_status_pill").assertTextEquals("Front")
+    composeTestRule.onNodeWithTag("camera_front_lens_selector_row").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_back_lens_selector_row").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_device_pill_1").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_device_pill_0").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_device_pill_2").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_device_pill_3").assertDoesNotExist()
 
+    // Tapping front/back switch button again toggles back to the primary Back camera (1x Wide, ID 0) and shows the Back camera selector bar
     composeTestRule.onNodeWithTag("camera_flip_lens_button").performClick()
     composeTestRule.waitForIdle()
-    assertEquals("2", prefs.getString(PREF_KEY_CAMERA_ID, null))
-    composeTestRule.onNodeWithTag("viewfinder_status_pill").assertTextEquals("Back • Ultra 0.5x")
+    assertEquals("0", prefs.getString(PREF_KEY_CAMERA_ID, null))
+    composeTestRule.onNodeWithTag("viewfinder_status_pill").assertTextEquals("Back • Wide 1x")
+    composeTestRule.onNodeWithTag("camera_back_lens_selector_row").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_front_lens_selector_row").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_device_pill_0").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_device_pill_2").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_device_pill_3").assertIsDisplayed()
 
     // Open Camera Settings dialog and verify all system camera lens chips and hardware specs are shown
     composeTestRule.onNodeWithTag("camera_settings_button").performClick()

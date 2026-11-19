@@ -295,6 +295,14 @@ fun CameraScreen(
     )
   }
 
+  val backSystemCameras = remember(systemCameras) {
+    CameraEngine.getCamerasForFacing(systemCameras, CameraLensFacing.BACK)
+  }
+
+  val frontSystemCameras = remember(systemCameras) {
+    CameraEngine.getCamerasForFacing(systemCameras, CameraLensFacing.FRONT)
+  }
+
   LaunchedEffect(selectedCamera.cameraId, selectedCamera.lensFacing) {
     if (selectedCameraId != selectedCamera.cameraId) {
       selectedCameraId = selectedCamera.cameraId
@@ -547,10 +555,11 @@ fun CameraScreen(
       ?.apply()
   }
 
-  fun cycleToNextSystemCamera() {
-    val nextDevice = CameraEngine.nextSystemCamera(
+  fun toggleFrontBackPrimaryCamera() {
+    val nextDevice = CameraEngine.togglePrimaryFrontBackCamera(
       cameras = systemCameras,
       currentCameraId = selectedCamera.cameraId,
+      currentFacing = selectedCamera.lensFacing,
     )
     selectCameraDevice(nextDevice)
   }
@@ -2027,7 +2036,7 @@ fun CameraScreen(
               .clip(RoundedCornerShape(20.dp))
               .clickable(enabled = !isCountingDown && systemCameras.size > 1) {
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                cycleToNextSystemCamera()
+                toggleFrontBackPrimaryCamera()
               }
               .testTag("viewfinder_status_pill"),
           ) {
@@ -2080,24 +2089,35 @@ fun CameraScreen(
         }
       }
 
-      // Detected System Cameras Pill Selector Row (below top status pills, away from viewfinder center)
+      // Detected System Cameras Pill Selector Bar (separated into Back and Front selector bars, showing the bar for the active facing mode)
       Box(
         modifier = Modifier
           .fillMaxWidth()
-          .padding(horizontal = 12.dp),
+          .padding(horizontal = 12.dp)
+          .testTag("camera_lens_selector_row"),
         contentAlignment = Alignment.Center,
       ) {
+        val activeFacingCameras = if (selectedCamera.lensFacing == CameraLensFacing.FRONT) {
+          frontSystemCameras.ifEmpty { systemCameras }
+        } else {
+          backSystemCameras.ifEmpty { systemCameras }
+        }
+        val facingSelectorTestTag = if (selectedCamera.lensFacing == CameraLensFacing.FRONT) {
+          "camera_front_lens_selector_row"
+        } else {
+          "camera_back_lens_selector_row"
+        }
         Row(
           modifier = Modifier
             .clip(RoundedCornerShape(24.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f))
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = 6.dp, vertical = 4.dp)
-            .testTag("camera_lens_selector_row"),
+            .testTag(facingSelectorTestTag),
           horizontalArrangement = Arrangement.spacedBy(4.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
-          systemCameras.forEach { camera ->
+          activeFacingCameras.forEach { camera ->
             val isSelected = camera.cameraId == selectedCamera.cameraId
             Surface(
               shape = RoundedCornerShape(16.dp),
@@ -3053,11 +3073,11 @@ fun CameraScreen(
                   .clip(CircleShape)
                   .clickable(enabled = !isCountingDown) {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    cycleToNextSystemCamera()
+                    toggleFrontBackPrimaryCamera()
                   }
                   .testTag("camera_flip_lens_button")
                   .semantics {
-                    contentDescription = "Switch camera lens (${selectedCamera.displayName})"
+                    contentDescription = "Switch front and back camera (${selectedCamera.displayName})"
                   },
               ) {
                 Box(contentAlignment = Alignment.Center) {
@@ -3922,52 +3942,103 @@ private fun CameraFolderAndFormatDialog(
           }
         }
 
-        // Detected System Cameras Selector Chips & Hardware Specs
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-          Text(
-            text = "System Camera Lens (${systemCameras.size} detected)",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            systemCameras.forEach { camera ->
-              val isSelected = camera.cameraId == selectedCamera.cameraId
-              FilterChip(
-                selected = isSelected,
-                onClick = { onSelectCamera(camera) },
-                label = { Text(camera.chipLabel) },
-                leadingIcon = if (isSelected) {
-                  {
-                    Icon(
-                      imageVector = Icons.Default.Check,
-                      contentDescription = null,
-                      modifier = Modifier.size(16.dp),
-                    )
-                  }
-                } else {
-                  {
-                    Icon(
-                      imageVector = if (camera.lensFacing == CameraLensFacing.FRONT) {
-                        Icons.Default.CameraAlt
-                      } else {
-                        Icons.Default.PhotoCamera
-                      },
-                      contentDescription = null,
-                      modifier = Modifier.size(16.dp),
-                    )
-                  }
-                },
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.testTag("camera_settings_lens_chip_${camera.cameraId}"),
-              )
+        // Detected System Cameras Selector Chips & Hardware Specs (Separated into Back and Front bars)
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+          val backDialogCameras = remember(systemCameras) {
+            CameraEngine.getCamerasForFacing(systemCameras, CameraLensFacing.BACK)
+          }
+          val frontDialogCameras = remember(systemCameras) {
+            CameraEngine.getCamerasForFacing(systemCameras, CameraLensFacing.FRONT)
+          }
+
+          if (backDialogCameras.isNotEmpty()) {
+            Text(
+              text = "Back Cameras (${backDialogCameras.size})",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .testTag("camera_settings_back_lens_row"),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              backDialogCameras.forEach { camera ->
+                val isSelected = camera.cameraId == selectedCamera.cameraId
+                FilterChip(
+                  selected = isSelected,
+                  onClick = { onSelectCamera(camera) },
+                  label = { Text(camera.chipLabel) },
+                  leadingIcon = if (isSelected) {
+                    {
+                      Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                      )
+                    }
+                  } else {
+                    {
+                      Icon(
+                        imageVector = Icons.Default.PhotoCamera,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                      )
+                    }
+                  },
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("camera_settings_lens_chip_${camera.cameraId}"),
+                )
+              }
             }
           }
+
+          if (frontDialogCameras.isNotEmpty()) {
+            Text(
+              text = "Front Cameras (${frontDialogCameras.size})",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .testTag("camera_settings_front_lens_row"),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              frontDialogCameras.forEach { camera ->
+                val isSelected = camera.cameraId == selectedCamera.cameraId
+                FilterChip(
+                  selected = isSelected,
+                  onClick = { onSelectCamera(camera) },
+                  label = { Text(camera.chipLabel) },
+                  leadingIcon = if (isSelected) {
+                    {
+                      Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                      )
+                    }
+                  } else {
+                    {
+                      Icon(
+                        imageVector = Icons.Default.CameraAlt,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                      )
+                    }
+                  },
+                  shape = RoundedCornerShape(20.dp),
+                  modifier = Modifier.testTag("camera_settings_lens_chip_${camera.cameraId}"),
+                )
+              }
+            }
+          }
+
           Text(
             text = selectedCamera.specsSummary,
             style = MaterialTheme.typography.labelSmall,

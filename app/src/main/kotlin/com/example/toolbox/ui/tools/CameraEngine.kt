@@ -233,11 +233,15 @@ enum class CameraNightMode(
   }
 }
 
-const val MIN_VISION_CONFIDENCE_THRESHOLD = 0.65f
+/**
+ * Shared minimum confidence threshold (`85%`) linked across both Camera Vision and Gallery ML Kit tagging.
+ */
+const val MIN_VISION_CONFIDENCE_THRESHOLD = GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD
 
 /**
  * Confidence threshold presets for live ML Kit Image Labeling in [CameraCaptureMode.VISION] mode.
- * Anything lower than 65% confidence ([MIN_VISION_CONFIDENCE_THRESHOLD]) is hidden.
+ * Linked with Gallery smart auto-tagging so anything lower than 85% confidence
+ * ([MIN_VISION_CONFIDENCE_THRESHOLD] / [GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD]) is hidden.
  */
 enum class CameraVisionThresholdPreset(
   val label: String,
@@ -246,22 +250,22 @@ enum class CameraVisionThresholdPreset(
   val description: String,
 ) {
   STANDARD_65(
-    label = "≥65% Standard",
-    shortLabel = "≥65%",
+    label = "≥85% Standard",
+    shortLabel = "≥85%",
     minConfidence = MIN_VISION_CONFIDENCE_THRESHOLD,
-    description = "Standard ML Kit confidence threshold (65% minimum)",
+    description = "Linked Camera & Gallery ML Kit minimum confidence threshold (85% minimum)",
   ),
   HIGH_70(
-    label = "≥70% High",
-    shortLabel = "≥70%",
-    minConfidence = 0.70f,
-    description = "High-confidence visual scene and object labels (70%)",
+    label = "≥90% High",
+    shortLabel = "≥90%",
+    minConfidence = 0.90f,
+    description = "High-confidence visual scene and object labels (90%)",
   ),
   GALLERY_80(
-    label = "≥80% Gallery",
-    shortLabel = "≥80% Gallery",
+    label = "≥85% Gallery",
+    shortLabel = "≥85% Gallery",
     minConfidence = GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD,
-    description = "Exact confidence threshold used by Gallery smart auto-tagging (80%)",
+    description = "Exact confidence threshold linked with Gallery smart auto-tagging (85%)",
   ),
   ;
 
@@ -441,16 +445,16 @@ enum class CameraVisionSamplePreset(
       ),
       CameraVisionTag(
         label = "Flowerpot",
-        confidence = 0.841f,
+        confidence = 0.891f,
         index = 148,
         // Separate non-overlapping region for the pot below the foliage
         boundingBox = CameraVisionBoundingBox(0.30f, 0.58f, 0.72f, 0.84f),
       ),
       CameraVisionTag(
         label = "Leaf",
-        confidence = 0.758f,
+        confidence = 0.864f,
         index = 211,
-        // Contained inside Plant's bounding box, so Leaf is suppressed in favor of Plant
+        // Nested sub-region with moderate overlap
         boundingBox = CameraVisionBoundingBox(0.18f, 0.20f, 0.52f, 0.48f),
       ),
       CameraVisionTag(
@@ -485,7 +489,7 @@ enum class CameraVisionSamplePreset(
       ),
       CameraVisionTag(
         label = "Monitor",
-        confidence = 0.825f,
+        confidence = 0.865f,
         index = 230,
         boundingBox = CameraVisionBoundingBox(0.20f, 0.18f, 0.80f, 0.52f),
       ),
@@ -533,7 +537,7 @@ enum class CameraVisionSamplePreset(
       ),
       CameraVisionTag(
         label = "Baked goods",
-        confidence = 0.691f,
+        confidence = 0.858f,
         index = 74,
         boundingBox = CameraVisionBoundingBox(0.18f, 0.42f, 0.54f, 0.70f),
       ),
@@ -569,7 +573,7 @@ enum class CameraVisionSamplePreset(
       ),
       CameraVisionTag(
         label = "Car",
-        confidence = 0.831f,
+        confidence = 0.861f,
         index = 96,
         boundingBox = CameraVisionBoundingBox(0.46f, 0.54f, 0.88f, 0.78f),
       ),
@@ -645,13 +649,14 @@ data class CameraVisionAnalysisResult(
   }
 
   fun formatSummaryReport(): String {
+    val galleryThresholdPct = (GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD * 100f).roundToInt()
     return buildString {
       appendLine("ML Kit Vision Tagging Report ($sourceDescription)")
       appendLine(
-        "Threshold: ${(confidenceThreshold * 100f).roundToInt()}% • Latency: ${inferenceLatencyMs}ms • Gallery (≥80%): $galleryPassingCount/${tags.size}"
+        "Threshold: ${(confidenceThreshold * 100f).roundToInt()}% • Latency: ${inferenceLatencyMs}ms • Gallery (≥${galleryThresholdPct}%): $galleryPassingCount/${tags.size}"
       )
       tags.forEachIndexed { idx, tag ->
-        val galleryBadge = if (tag.passesGalleryThreshold) "[GALLERY ≥80%]" else "[BELOW 80%]"
+        val galleryBadge = if (tag.passesGalleryThreshold) "[GALLERY ≥${galleryThresholdPct}%]" else "[BELOW ${galleryThresholdPct}%]"
         val indexSuffix = if (tag.index >= 0) " (#${tag.index})" else ""
         appendLine("${idx + 1}. ${tag.label}: ${tag.confidenceFormatted}$indexSuffix $galleryBadge")
       }
@@ -1828,6 +1833,49 @@ object CameraEngine {
       ?: effectiveList.firstOrNull { it.lensFacing == fallbackFacing }
       ?: effectiveList.firstOrNull { it.isPrimaryForFacing }
       ?: effectiveList.first()
+  }
+
+  /**
+   * Returns all [CameraSystemDevice] entries in [cameras] matching [facing]
+   * ([CameraLensFacing.BACK] or [CameraLensFacing.FRONT]).
+   */
+  fun getCamerasForFacing(
+    cameras: List<CameraSystemDevice>,
+    facing: CameraLensFacing,
+  ): List<CameraSystemDevice> {
+    val effectiveList = cameras.ifEmpty { getDefaultFallbackSystemCameras() }
+    return effectiveList.filter { it.lensFacing == facing }
+  }
+
+  /**
+   * Resolves the primary [CameraSystemDevice] for [facing] (e.g. primary `1x Wide` for
+   * [CameraLensFacing.BACK] or primary `Front` for [CameraLensFacing.FRONT]).
+   */
+  fun resolvePrimaryCameraForFacing(
+    cameras: List<CameraSystemDevice>,
+    facing: CameraLensFacing,
+  ): CameraSystemDevice {
+    val effectiveList = cameras.ifEmpty { getDefaultFallbackSystemCameras() }
+    return effectiveList.firstOrNull { it.lensFacing == facing && it.isPrimaryForFacing }
+      ?: effectiveList.firstOrNull { it.lensFacing == facing }
+      ?: resolveSelectedCamera(effectiveList, fallbackFacing = facing)
+  }
+
+  /**
+   * Toggles between the primary back camera and the primary front camera based on the facing of
+   * [currentCameraId] (or [currentFacing] if specified).
+   */
+  fun togglePrimaryFrontBackCamera(
+    cameras: List<CameraSystemDevice>,
+    currentCameraId: String? = null,
+    currentFacing: CameraLensFacing? = null,
+  ): CameraSystemDevice {
+    val effectiveList = cameras.ifEmpty { getDefaultFallbackSystemCameras() }
+    val activeFacing = currentFacing
+      ?: effectiveList.find { it.cameraId == currentCameraId }?.lensFacing
+      ?: CameraLensFacing.BACK
+    val targetFacing = activeFacing.toggle()
+    return resolvePrimaryCameraForFacing(effectiveList, targetFacing)
   }
 
   /**
