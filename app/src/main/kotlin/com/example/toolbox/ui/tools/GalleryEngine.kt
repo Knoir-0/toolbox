@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -2862,6 +2864,77 @@ object GalleryEngine {
   }
 
   /**
+   * Decodes a [Bitmap] from [file] (optionally downsampled so its longest edge is around
+   * [maxDimensionPx] when `maxDimensionPx > 0`) and applies any EXIF rotation/flip matrix so that
+   * portrait camera photos are always oriented upright for display, ML Kit Object Detection, OCR,
+   * and coordinate mapping.
+   */
+  fun decodeOrientedBitmapFromFile(file: File, maxDimensionPx: Int = 0): Bitmap? {
+    if (!file.exists() || !file.isFile) return null
+    return try {
+      val decoded = if (maxDimensionPx <= 0) {
+        BitmapFactory.decodeFile(file.absolutePath)
+      } else {
+        val boundsOptions = BitmapFactory.Options().apply {
+          inJustDecodeBounds = true
+        }
+        BitmapFactory.decodeFile(file.absolutePath, boundsOptions)
+        val width = boundsOptions.outWidth
+        val height = boundsOptions.outHeight
+        if (width <= 0 || height <= 0) {
+          BitmapFactory.decodeFile(file.absolutePath)
+        } else {
+          var inSampleSize = 1
+          val maxDim = maxOf(width, height)
+          while ((maxDim / inSampleSize) > maxDimensionPx) {
+            inSampleSize *= 2
+          }
+          val decodeOptions = BitmapFactory.Options().apply {
+            this.inSampleSize = inSampleSize
+            this.inPreferredConfig = Bitmap.Config.ARGB_8888
+          }
+          BitmapFactory.decodeFile(file.absolutePath, decodeOptions)
+        }
+      } ?: return null
+
+      applyExifOrientationIfNeeded(file, decoded)
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  private fun applyExifOrientationIfNeeded(file: File, bitmap: Bitmap): Bitmap {
+    if (bitmap.width <= 0 || bitmap.height <= 0) return bitmap
+    return try {
+      val exif = ExifInterface(file.absolutePath)
+      val orientation = exif.getAttributeInt(
+        ExifInterface.TAG_ORIENTATION,
+        ExifInterface.ORIENTATION_NORMAL,
+      )
+      val matrix = Matrix()
+      when (orientation) {
+        ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+        ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+        ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
+        ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
+        ExifInterface.ORIENTATION_TRANSPOSE -> {
+          matrix.postRotate(90f)
+          matrix.preScale(-1f, 1f)
+        }
+        ExifInterface.ORIENTATION_TRANSVERSE -> {
+          matrix.postRotate(270f)
+          matrix.preScale(-1f, 1f)
+        }
+        else -> return bitmap
+      }
+      Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    } catch (_: Throwable) {
+      bitmap
+    }
+  }
+
+  /**
    * Decodes a thumbnail [Bitmap] from [file] with downsampling to prevent OOM on large camera photos,
    * storing the decoded bitmap in the in-memory LRU cache.
    */
@@ -2891,28 +2964,7 @@ object GalleryEngine {
     }
 
     return try {
-      val boundsOptions = BitmapFactory.Options().apply {
-        inJustDecodeBounds = true
-      }
-      BitmapFactory.decodeFile(file.absolutePath, boundsOptions)
-      val width = boundsOptions.outWidth
-      val height = boundsOptions.outHeight
-      val decoded = if (width <= 0 || height <= 0) {
-        BitmapFactory.decodeFile(file.absolutePath)
-      } else {
-        var inSampleSize = 1
-        if (height > reqSizePx || width > reqSizePx) {
-          val halfHeight = height / 2
-          val halfWidth = width / 2
-          while ((halfHeight / inSampleSize) >= reqSizePx && (halfWidth / inSampleSize) >= reqSizePx) {
-            inSampleSize *= 2
-          }
-        }
-        val decodeOptions = BitmapFactory.Options().apply {
-          this.inSampleSize = inSampleSize
-        }
-        BitmapFactory.decodeFile(file.absolutePath, decodeOptions)
-      }
+      val decoded = decodeOrientedBitmapFromFile(file, maxDimensionPx = (reqSizePx * 2).coerceAtLeast(360))
       if (decoded != null) {
         val key = thumbnailCacheKey(file, reqSizePx)
         synchronized(thumbnailCacheLock) {
@@ -3109,9 +3161,12 @@ object GalleryEngine {
     }
   }
 
+  private const val GALLERY_INDEX_CACHE_SCHEMA_VERSION = 2
+
   /**
    * Loads persisted [GalleryPhotoIndexEntry] records from [cacheFile] on disk and merges them into
-   * the in-memory cache, pruning entries whose files no longer exist or have modified signatures.
+   * the in-memory cache, pruning entries whose files no longer exist, have modified signatures, or
+   * were written by an older recognition pipeline schema version.
    */
   fun loadIndexCacheFromDisk(cacheFile: File?): Map<String, GalleryPhotoIndexEntry> {
     if (cacheFile == null || !cacheFile.exists() || !cacheFile.isFile) {
@@ -3121,6 +3176,10 @@ object GalleryEngine {
       val raw = cacheFile.readText(Charsets.UTF_8)
       if (raw.isNotBlank()) {
         val root = JSONObject(raw)
+        val version = root.optInt("version", 1)
+        if (version != GALLERY_INDEX_CACHE_SCHEMA_VERSION) {
+          return getAllCachedPhotoIndices()
+        }
         val entriesArray = root.optJSONArray("entries")
         if (entriesArray != null) {
           synchronized(photoIndexCacheLock) {
@@ -3156,7 +3215,7 @@ object GalleryEngine {
         arr.put(entry.toJson())
       }
       val root = JSONObject().apply {
-        put("version", 1)
+        put("version", GALLERY_INDEX_CACHE_SCHEMA_VERSION)
         put("entries", arr)
       }
       cacheFile.writeText(root.toString(), Charsets.UTF_8)
@@ -3327,9 +3386,9 @@ object GalleryEngine {
   }
 
   /**
-   * Runs Google ML Kit on-device Image Labeling (`com.google.mlkit:image-labeling`) on [bitmap]
-   * and returns the top confident visual scene/object labels (e.g. `"Food"`, `"Nature"`, `"Pet"`,
-   * `"Plant"`, `"Sky"`, `"Building"`, `"Car"`).
+   * Runs Google ML Kit on-device Object Detection + Image Labeling on [bitmap] and returns the top
+   * confident, non-generic visual object/scene labels (e.g. `"Laptop"`, `"Coffee"`, `"Cat"`,
+   * `"Plant"`, `"Building"`, `"Car"`).
    */
   suspend fun recognizeImageLabelsWithMlKit(
     bitmap: Bitmap,
@@ -3339,46 +3398,22 @@ object GalleryEngine {
   ): List<String> {
     if (bitmap.width <= 16 || bitmap.height <= 16) return emptyList()
     val effectiveThreshold = confidenceThreshold.coerceIn(0.3f, 0.98f)
-    return try {
-      val options = ImageLabelerOptions.Builder()
-        .setConfidenceThreshold(effectiveThreshold)
-        .build()
-      val labeler = ImageLabeling.getClient(options)
-      val inputImage = InputImage.fromBitmap(bitmap, rotationDegrees)
-      val rawLabels = suspendCancellableCoroutine<List<String>> { continuation ->
-        labeler.process(inputImage)
-          .addOnSuccessListener { results ->
-            labeler.close()
-            val mapped = results
-              .filter { it.confidence >= effectiveThreshold }
-              .sortedByDescending { it.confidence }
-              .mapNotNull { item ->
-                val text = item.text.trim()
-                if (text.isNotEmpty()) {
-                  text.replaceFirstChar { ch ->
-                    if (ch.isLowerCase()) ch.titlecase(Locale.US) else ch.toString()
-                  }
-                } else {
-                  null
-                }
-              }
-              .distinct()
-              .take(maxLabels)
-            if (continuation.isActive) {
-              continuation.resume(mapped)
-            }
-          }
-          .addOnFailureListener {
-            labeler.close()
-            if (continuation.isActive) {
-              continuation.resume(emptyList())
-            }
-          }
-      }
-      rawLabels
-    } catch (_: Throwable) {
-      emptyList()
+    val visionResult = CameraEngine.recognizeVisionTagsFromBitmapWithMlKit(
+      bitmap = bitmap,
+      rotationDegrees = rotationDegrees,
+      confidenceThreshold = effectiveThreshold.coerceAtLeast(MIN_VISION_CONFIDENCE_THRESHOLD),
+      baseDetectorMinConfidence = effectiveThreshold.coerceAtLeast(MIN_VISION_CONFIDENCE_THRESHOLD),
+      maxLabels = maxLabels,
+      sourceDescription = "Gallery Image",
+    )
+    if (visionResult != null && visionResult.tags.isNotEmpty()) {
+      return visionResult.tags
+        .filter { it.confidenceClamped >= effectiveThreshold }
+        .map { it.label }
+        .distinct()
+        .take(maxLabels)
     }
+    return emptyList()
   }
 
   /**
@@ -3539,23 +3574,8 @@ object GalleryEngine {
     // 1. Check embedded PNG metadata (fast & deterministic for synthetic/test images)
     val (embeddedOcr, embeddedLabels) = readEmbeddedPngMetadata(file)
 
-    // 2. Decode bitmap downsampled to 1024px max edge for ML Kit & ZXing
-    val bitmap: Bitmap? = try {
-      val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-      BitmapFactory.decodeFile(file.absolutePath, boundsOpts)
-      var sampleSize = 1
-      val maxDim = maxOf(boundsOpts.outWidth, boundsOpts.outHeight)
-      while (maxDim / sampleSize > 1024) {
-        sampleSize *= 2
-      }
-      val decodeOpts = BitmapFactory.Options().apply {
-        inSampleSize = sampleSize
-        inPreferredConfig = Bitmap.Config.ARGB_8888
-      }
-      BitmapFactory.decodeFile(file.absolutePath, decodeOpts)
-    } catch (_: Throwable) {
-      null
-    }
+    // 2. Decode EXIF-oriented bitmap downsampled to 1024px max edge for ML Kit Object Detection, OCR & ZXing
+    val bitmap: Bitmap? = decodeOrientedBitmapFromFile(file, maxDimensionPx = 1024)
 
     ensureActive()
 
@@ -3589,7 +3609,7 @@ object GalleryEngine {
 
     ensureActive()
 
-    // 5. Run ML Kit Image Labeling for automatic visual scene/object tags + localized bounding boxes
+    // 5. Run ML Kit Object Detection + Image Labeling for specific object tags & real bounding boxes
     val mlKitVisionResult = if (bitmap != null && bitmap.width > 16 && bitmap.height > 16) {
       CameraEngine.recognizeVisionTagsFromBitmapWithMlKit(
         bitmap = bitmap,
@@ -3601,16 +3621,10 @@ object GalleryEngine {
     } else {
       null
     }
-    val mlKitVisionTags = mlKitVisionResult?.allCandidateTags
+    val mlKitVisionTags = mlKitVisionResult?.tags
       ?.filter { it.confidenceClamped >= DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD }
       .orEmpty()
-    val mlKitLabels = if (mlKitVisionTags.isNotEmpty()) {
-      mlKitVisionTags.map { it.label }
-    } else if (bitmap != null && bitmap.width > 16 && bitmap.height > 16) {
-      recognizeImageLabelsWithMlKit(bitmap)
-    } else {
-      emptyList()
-    }
+    val mlKitLabels = mlKitVisionTags.map { it.label }
     val combinedVisualLabels = (embeddedLabels + mlKitLabels).distinct()
 
     val barcodePayloads = scannedCodes.map { it.rawValue.trim() }.filter { it.isNotEmpty() }.distinct()
@@ -3649,10 +3663,10 @@ object GalleryEngine {
   }
 
   private fun coerceGalleryBoundingBox(box: CameraVisionBoundingBox): CameraVisionBoundingBox {
-    val l = box.left.coerceIn(0.04f, 0.84f)
-    val t = box.top.coerceIn(0.04f, 0.84f)
-    val r = box.right.coerceIn(l + 0.10f, 0.96f)
-    val b = box.bottom.coerceIn(t + 0.10f, 0.96f)
+    val l = box.left.coerceIn(0.02f, 0.90f)
+    val t = box.top.coerceIn(0.02f, 0.90f)
+    val r = box.right.coerceIn(l + 0.08f, 0.98f)
+    val b = box.bottom.coerceIn(t + 0.08f, 0.98f)
     return CameraVisionBoundingBox(left = l, top = t, right = r, bottom = b)
   }
 

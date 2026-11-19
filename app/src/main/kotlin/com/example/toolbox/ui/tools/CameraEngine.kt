@@ -16,6 +16,9 @@ import android.os.Build
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.label.ImageLabeling
 import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
+import com.google.mlkit.vision.objects.DetectedObject
+import com.google.mlkit.vision.objects.ObjectDetection
+import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
 import com.google.mlkit.vision.text.Text as MlKitText
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -294,10 +297,10 @@ data class CameraVisionBoundingBox(
   val centerY: Float get() = (top + bottom) * 0.5f
 
   fun coerceNormalized(): CameraVisionBoundingBox {
-    val l = left.coerceIn(0.04f, 0.82f)
-    val t = top.coerceIn(0.10f, 0.78f)
-    val r = right.coerceIn(l + 0.12f, 0.96f)
-    val b = bottom.coerceIn(t + 0.10f, 0.90f)
+    val l = left.coerceIn(0.02f, 0.90f)
+    val t = top.coerceIn(0.02f, 0.90f)
+    val r = right.coerceIn(l + 0.08f, 0.98f)
+    val b = bottom.coerceIn(t + 0.08f, 0.98f)
     return CameraVisionBoundingBox(left = l, top = t, right = r, bottom = b)
   }
 
@@ -3409,11 +3412,26 @@ object CameraEngine {
     zoom: Float = 1.0f,
     lensFacing: CameraLensFacing = CameraLensFacing.BACK,
     mirrorFront: Boolean = false,
+    viewWidth: Int = rawBitmap.width,
+    viewHeight: Int = rawBitmap.height,
   ): Bitmap {
     if (rawBitmap.width <= 0 || rawBitmap.height <= 0) return rawBitmap
     return try {
       val outBitmap = Bitmap.createBitmap(rawBitmap.width, rawBitmap.height, Bitmap.Config.ARGB_8888)
       val combinedMatrix = Matrix(textureTransformMatrix)
+      val safeViewW = viewWidth.coerceAtLeast(1)
+      val safeViewH = viewHeight.coerceAtLeast(1)
+      if (safeViewW != rawBitmap.width || safeViewH != rawBitmap.height) {
+        // Conjugate the TextureView matrix from (viewWidth, viewHeight) space into (rawBitmap.width, rawBitmap.height) space
+        combinedMatrix.preScale(
+          safeViewW.toFloat() / rawBitmap.width.toFloat(),
+          safeViewH.toFloat() / rawBitmap.height.toFloat(),
+        )
+        combinedMatrix.postScale(
+          rawBitmap.width.toFloat() / safeViewW.toFloat(),
+          rawBitmap.height.toFloat() / safeViewH.toFloat(),
+        )
+      }
       val cx = rawBitmap.width / 2f
       val cy = rawBitmap.height / 2f
       val clampedZoom = coerceZoom(zoom)
@@ -4672,18 +4690,34 @@ object CameraEngine {
       val rawText = visionText.text.trim()
       if (rawText.isEmpty()) return null
 
-      val bw = bitmap.width.toFloat().coerceAtLeast(1f)
-      val bh = bitmap.height.toFloat().coerceAtLeast(1f)
+      val normRot = ((rotationDegrees % 360) + 360) % 360
+      val swapDims = normRot == 90 || normRot == 270
+      val bw = (if (swapDims) bitmap.height else bitmap.width).toFloat().coerceAtLeast(1f)
+      val bh = (if (swapDims) bitmap.width else bitmap.height).toFloat().coerceAtLeast(1f)
       val blocks = visionText.textBlocks.mapNotNull { block ->
         val blockText = block.text.trim()
         if (blockText.isEmpty()) return@mapNotNull null
         val blockLines = block.lines.map { it.text.trim() }.filter { it.isNotEmpty() }
-        val normBox = block.cornerPoints?.map { pt ->
+        val cornerPts = block.cornerPoints?.map { pt ->
           Pair(
             (pt.x / bw).coerceIn(0f, 1f),
             (pt.y / bh).coerceIn(0f, 1f),
           )
         }.orEmpty()
+        val normBox = if (cornerPts.isNotEmpty()) {
+          cornerPts
+        } else {
+          val rect = block.boundingBox
+          if (rect != null && rect.width() > 0 && rect.height() > 0) {
+            val l = (rect.left / bw).coerceIn(0f, 1f)
+            val t = (rect.top / bh).coerceIn(0f, 1f)
+            val r = (rect.right / bw).coerceIn(0f, 1f)
+            val b = (rect.bottom / bh).coerceIn(0f, 1f)
+            listOf(l to t, r to t, r to b, l to b)
+          } else {
+            emptyList()
+          }
+        }
         CameraScannedTextBlock(
           text = blockText,
           lines = blockLines.ifEmpty { blockText.lines() },
@@ -4702,8 +4736,386 @@ object CameraEngine {
   }
 
   // =========================================================================
-  // Live ML Kit Image Labeling / Vision Tagging Engine
+  // Live ML Kit Object Detection & Image Labeling / Vision Tagging Engine
   // =========================================================================
+
+  /**
+   * Overly generic, abstract, geometric, lighting, material, color-name, body-part-noise, and
+   * Knowledge Graph parent ontology labels from ML Kit's base 400-class image labeler that
+   * produce false or uninformative tags even at high confidence.
+   */
+  val BLOCKED_GENERIC_ML_KIT_LABELS: Set<String> = setOf(
+    // Geometry & visual artifacts
+    "font", "rectangle", "square", "circle", "triangle", "oval", "pattern", "symmetry",
+    "parallel", "slope", "line", "angle", "point", "shape", "mesh", "grid", "net", "checkerboard",
+    "polka dot", "plaid", "stripe", "motif",
+    // Lighting & optical artifacts
+    "tint and shade", "shade", "shadow", "darkness", "light", "lighting", "daylighting",
+    "backlighting", "lens flare", "reflection", "gloss", "transparency", "flash photography",
+    "light fixture", "lamp", "lampshade",
+    // Abstract & photography ontology classes
+    "material property", "composite material", "space", "design", "graphic design",
+    "interior design", "automotive design", "urban design", "product design", "fashion design",
+    "architecture", "engineering", "technology", "science", "art", "visual arts", "creative arts",
+    "modern art", "fine art", "illustration", "drawing", "sketch", "painting", "watercolor paint",
+    "photography", "still life photography", "macro photography", "monochrome",
+    "monochrome photography", "black-and-white", "close-up", "snapshot", "stock photography",
+    "portrait photography", "landscape",
+    // Generic commerce / event / ontology hypernyms
+    "goods", "product", "home good", "fashion good", "place", "event", "fun", "leisure",
+    "recreation", "job", "white-collar worker", "business", "service", "advertising", "brand",
+    "logo", "trademark", "symbol", "number", "handwriting", "calligraphy", "paper",
+    "paper product", "publication", "document", "text", "label", "signage", "sign", "banner",
+    "poster",
+    // Room / wall / material background surfaces
+    "room", "hall", "lobby", "wall", "floor", "flooring", "ceiling", "surface", "wood",
+    "plywood", "hardwood", "wood flooring", "laminate flooring", "plank", "lumber", "wood stain",
+    "varnish", "stain", "metal", "steel", "aluminum", "iron", "brass", "copper", "plastic",
+    "glass", "concrete", "cement", "asphalt", "brick", " brickwork", "masonry", "tile", "plaster",
+    "drywall", "paint", "coating", "countertop", "beam", "molding", "siding", "roofing",
+    "building material", "fixture", "door", "window", "sash window", "curtain", "window blind",
+    "window treatment", "window covering",
+    // Pure color names output by ML Kit base labeler
+    "electric blue", "magenta", "carmine", "peach", "beige", "tan", "maroon", "cyan", "azure",
+    "cobalt blue", "amber", "gold", "silver", "bronze", "grey", "gray", "black", "white", "red",
+    "blue", "green", "yellow", "orange", "purple", "pink", "brown", "violet", "teal", "turquoise",
+    "indigo", "lavender", "coral", "crimson", "khaki", "ivory", "aqua", "lime", "navy blue",
+    // Hardware / display / wire noise
+    "multimedia", "software", "website", "screenshot", "display device", "output device",
+    "input device", "peripheral", "electronic component", "electronic engineering",
+    "electrical wiring", "cable", "wire", "electrical cable", "power supply",
+    "electrical connector", "adapter", " electronic instrument", "machine", "tool",
+    // Body-part / skin-patch false positives
+    "human", "human body", "human leg", "human arm", "human hand", "human foot", "human head",
+    "human hair", "flesh", "skin", "limb", "joint", "thumb", "finger", "nail", "wrist", "arm",
+    "elbow", "shoulder", "neck", "jaw", "chin", "cheek", "forehead", "nose", "nostril", "eyelash",
+    "eyebrow", "temple", "ear", "hair", "facial hair", "beard", "mustache", "gesture", "wrinkle",
+    "abdomen", "chest", "trunk", "leg", "thigh", "knee", "calf", "ankle", "foot", "toe", "back",
+    "hand", "face", "head", "mouth", "lip", "tooth", "tongue", "eye", "iris", "pupil", "smile",
+    "happy", "selfie", "portrait", "youth", "child", "toddler", "adult",
+    // Biological / botanical / environmental hypernyms
+    "biological process", "organism", "adaptation", "terrestrial animal", "vertebrate",
+    "invertebrate", "mammal", "carnivore", "terrestrial plant", "vascular plant",
+    "flowering plant", "annual plant", "perennial plant", "herbaceous plant", "botany",
+    "vegetation", "flora", "fauna", "natural environment", "natural landscape", "ecoregion",
+    "biome", "atmosphere", "meteorological phenomenon", "atmospheric phenomenon",
+    "geological phenomenon", "horizon", "twig", "plant stem", "arecales", "groundcover",
+    "subshrub", "shrub", "grass", "grass family", "soil", "rock", "pebble", "sand", "mud",
+    "fluid", "liquid", "gas", "vapor", "smoke", "steam", "drop", "moisture", "dew",
+    // Food / kitchen hypernyms
+    "ingredient", "recipe", "cuisine", "dish", "staple food", "comfort food", "finger food",
+    "fast food", "junk food", "superfood", "produce", "natural foods", "whole food", "local food",
+    "vegan nutrition", "vegetarian food", "gluten", "sweetness", "delicacy", "side dish",
+    "condiment", "garnish", "tableware", "drinkware", "serveware", "dishware", "flatware",
+    "kitchen utensil", "kitchenware", "cutlery", "home appliance", "major appliance",
+    "small appliance", "kitchen appliance", "appliance",
+    // Clothing / textile / furniture hypernyms
+    "textile", "fabric", "fiber", "thread", "yarn", "wool", "cotton", "silk", "satin", "denim",
+    "leather", "fur", "linens", "bedding", "tablecloth", "carpet", "rug", "mat", "cushion",
+    "pillow", "throw pillow", "fashion", "fashion accessory", "clothing", "apparel", "outerwear",
+    "activewear", "workwear", "streetwear", "sportswear", "formal wear", "sleeve", "collar",
+    "pocket", "button", "zipper", "furniture", "cabinetry", "shelving", "shelf", "drawer",
+    // Vehicle sub-part noise
+    "motor vehicle", "land vehicle", "mode of transport", "transport", "transportation",
+    "automotive exterior", "automotive lighting", "automotive tire", "automotive wheel system",
+    "auto part", "bumper", "fender", "hood", "grille", "windshield", "wiper", "rim",
+    "alloy wheel", "hubcap", "tread", "rolling", "spoke", "tire", "wheel", "headlamp", "taillight",
+    "vehicle registration plate", "asphalt", "road surface", "sidewalk", "curb",
+  )
+
+  /**
+   * Maps verbose or awkward ML Kit ontology terms to clean, specific user-facing object labels.
+   */
+  val CANONICAL_ML_KIT_LABEL_MAP: Map<String, String> = mapOf(
+    "computer monitor" to "Monitor",
+    "flat screen" to "Monitor",
+    "liquid-crystal display" to "Monitor",
+    "led-backlit lcd" to "Monitor",
+    "personal computer" to "Computer",
+    "netbook" to "Laptop",
+    "ultrabook" to "Laptop",
+    "computer keyboard" to "Computer keyboard",
+    "space bar" to "Computer keyboard",
+    "office equipment" to "Laptop",
+    "mobile phone" to "Smartphone",
+    "telephony" to "Smartphone",
+    "communication device" to "Smartphone",
+    "portable communications device" to "Smartphone",
+    "feature phone" to "Phone",
+    "smartphone" to "Smartphone",
+    "tablet computer" to "Tablet",
+    "computer desk" to "Desk",
+    "office chair" to "Chair",
+    "armrest" to "Chair",
+    "club chair" to "Chair",
+    "folding chair" to "Chair",
+    "stool" to "Stool",
+    "couch" to "Sofa",
+    "loveseat" to "Sofa",
+    "studio couch" to "Sofa",
+    "sofa bed" to "Sofa",
+    "coffee table" to "Table",
+    "dining table" to "Table",
+    "nightstand" to "Table",
+    "eyewear" to "Glasses",
+    "goggles" to "Glasses",
+    "vision care" to "Glasses",
+    "sunglasses" to "Sunglasses",
+    "wristwatch" to "Watch",
+    "analog watch" to "Watch",
+    "timepiece" to "Clock",
+    "wall clock" to "Clock",
+    "alarm clock" to "Clock",
+    "running shoe" to "Shoes",
+    "athletic shoe" to "Sneakers",
+    "outdoor shoe" to "Shoes",
+    "walking shoe" to "Shoes",
+    "footwear" to "Shoes",
+    "high-heeled shoe" to "Shoes",
+    "sandal" to "Sandals",
+    "boot" to "Boots",
+    "t-shirt" to "T-shirt",
+    "dress shirt" to "Shirt",
+    "polo shirt" to "Shirt",
+    "trousers" to "Pants",
+    "coat" to "Jacket",
+    "blazer" to "Jacket",
+    "windbreaker" to "Jacket",
+    "handbag" to "Bag",
+    "shoulder bag" to "Bag",
+    "tote bag" to "Bag",
+    "luggage and bags" to "Backpack",
+    "baggage" to "Luggage",
+    "suitcase" to "Luggage",
+    "water bottle" to "Bottle",
+    "plastic bottle" to "Bottle",
+    "glass bottle" to "Bottle",
+    "beer bottle" to "Bottle",
+    "wine bottle" to "Bottle",
+    "drink" to "Beverage",
+    "soft drink" to "Beverage",
+    "teacup" to "Cup",
+    "coffee cup" to "Coffee cup",
+    "espresso" to "Coffee",
+    "cappuccino" to "Coffee",
+    "latte" to "Coffee",
+    "americano" to "Coffee",
+    "caffeine" to "Coffee",
+    "pastry" to "Baked goods",
+    "croissant" to "Croissant",
+    "baked goods" to "Baked goods",
+    "felidae" to "Cat",
+    "small to medium-sized cats" to "Cat",
+    "domestic short-haired cat" to "Cat",
+    "whiskers" to "Cat",
+    "tabby cat" to "Cat",
+    "kitten" to "Cat",
+    "canidae" to "Dog",
+    "dog breed" to "Dog",
+    "companion dog" to "Dog",
+    "working animal" to "Dog",
+    "Sporting Group" to "Dog",
+    "puppy" to "Dog",
+    "snout" to "Dog",
+    "aves" to "Bird",
+    "beak" to "Bird",
+    "songbird" to "Bird",
+    "water bird" to "Bird",
+    "ducks, geese and swans" to "Bird",
+    "succulent plant" to "Succulent",
+    "caryophyllales" to "Succulent",
+    "monstera" to "Houseplant",
+    "philodendron" to "Houseplant",
+    "fern" to "Houseplant",
+    "palm tree" to "Tree",
+    "woody plant" to "Tree",
+    "conifer" to "Tree",
+    "petal" to "Flower",
+    "blossom" to "Flower",
+    "flowerpot" to "Flowerpot",
+    "family car" to "Car",
+    "sedan" to "Car",
+    "hatchback" to "Car",
+    "sports car" to "Car",
+    "luxury vehicle" to "Car",
+    "compact car" to "Car",
+    "mid-size car" to "Car",
+    "full-size car" to "Car",
+    "subcompact car" to "Car",
+    "city car" to "Car",
+    "coupe" to "Car",
+    "convertible" to "Car",
+    "crossover suv" to "SUV",
+    "sport utility vehicle" to "SUV",
+    "pickup truck" to "Truck",
+    "commercial vehicle" to "Truck",
+    "van" to "Van",
+    "minivan" to "Van",
+    "bicycle wheel" to "Bicycle",
+    "cycle sport" to "Bicycle",
+    "road bicycle" to "Bicycle",
+    "mountain bike" to "Bicycle",
+    "skyline" to "Cityscape",
+    "metropolitan area" to "City",
+    "metropolis" to "City",
+    "downtown" to "City",
+    "tower block" to "Building",
+    "skyscraper" to "Building",
+    "condominium" to "Building",
+    "commercial building" to "Building",
+    "facade" to "Building",
+    "apartment" to "Building",
+    "cumulus" to "Clouds",
+    "cloud" to "Clouds",
+    "body of water" to "Water",
+    "audio equipment" to "Headphones",
+    "headset" to "Headphones",
+    "loudspeaker" to "Speaker",
+    "musical keyboard" to "Piano",
+    "string instrument" to "Guitar",
+    "plucked string instruments" to "Guitar",
+    "acoustic guitar" to "Guitar",
+    "electric guitar" to "Guitar",
+    "musical instrument" to "Instrument",
+  )
+
+  /**
+   * Maps generic parent hypernym labels (in lowercase) to the set of more specific child labels
+   * (in lowercase) that should supersede and suppress the generic parent when both are detected.
+   */
+  private val GENERIC_HYPERNYM_PARENTS: Map<String, Set<String>> = mapOf(
+    "food" to setOf(
+      "coffee", "coffee cup", "croissant", "baked goods", "bread", "pizza", "burger", "sandwich",
+      "salad", "fruit", "apple", "banana", "orange", "berry", "strawberry", "vegetable", "sushi",
+      "pasta", "noodle", "soup", "steak", "meat", "seafood", "cake", "cookie", "ice cream",
+      "chocolate", "dessert", "cheese", "egg", "breakfast", "snack",
+    ),
+    "beverage" to setOf("coffee", "coffee cup", "tea", "cup", "mug", "wine", "beer", "juice", "bottle"),
+    "electronics" to setOf(
+      "laptop", "monitor", "computer", "computer keyboard", "mouse", "smartphone", "phone",
+      "tablet", "television", "camera", "headphones", "speaker", "watch", "clock", "game controller",
+    ),
+    "gadget" to setOf(
+      "laptop", "monitor", "computer", "computer keyboard", "mouse", "smartphone", "phone",
+      "tablet", "camera", "headphones", "speaker", "watch", "game controller",
+    ),
+    "computer" to setOf("laptop", "monitor", "computer keyboard", "mouse", "tablet"),
+    "vehicle" to setOf("car", "suv", "truck", "van", "bus", "train", "bicycle", "motorcycle", "airplane", "boat", "ship"),
+    "animal" to setOf("cat", "dog", "bird", "fish", "horse", "rabbit", "deer", "bear", "wildlife"),
+    "pet" to setOf("cat", "dog", "bird", "fish", "rabbit"),
+    "nature" to setOf("plant", "houseplant", "flowerpot", "flower", "tree", "succulent", "leaf", "mountain", "forest", "beach", "ocean", "lake", "river"),
+    "plant" to setOf("houseplant", "flowerpot", "flower", "succulent", "tree"),
+  )
+
+  /**
+   * Maps ML Kit's 5 coarse `ObjectDetector` category names to matching specific domain labels so
+   * real `DetectedObject` bounding boxes pair accurately with their fine-grained `ImageLabeling` label.
+   */
+  private val OBJECT_DETECTOR_CATEGORY_KEYWORDS: Map<String, Set<String>> = mapOf(
+    "plant" to setOf(
+      "plant", "houseplant", "flowerpot", "flower", "flowers", "tree", "leaf", "succulent",
+      "cactus", "vase", "garden", "forest",
+    ),
+    "food" to setOf(
+      "food", "coffee", "coffee cup", "cup", "mug", "beverage", "croissant", "baked goods",
+      "bread", "dessert", "cake", "cookie", "fruit", "apple", "banana", "orange", "vegetable",
+      "salad", "pizza", "burger", "sandwich", "pasta", "sushi", "meat", "cheese", "bottle",
+      "bowl", "plate",
+    ),
+    "home good" to setOf(
+      "laptop", "monitor", "computer", "computer keyboard", "mouse", "smartphone", "phone",
+      "tablet", "television", "camera", "headphones", "speaker", "clock", "watch", "desk",
+      "table", "chair", "sofa", "stool", "bed", "book", "notebook", "pen", "pencil", "cup",
+      "mug", "coffee cup", "bottle", "bowl", "plate", "vase", "flowerpot", "houseplant",
+      "toy", "instrument", "guitar", "piano",
+    ),
+    "fashion good" to setOf(
+      "glasses", "sunglasses", "watch", "shoes", "sneakers", "boots", "sandals", "bag",
+      "backpack", "luggage", "hat", "cap", "helmet", "shirt", "t-shirt", "jacket", "hoodie",
+      "pants", "jeans", "dress", "umbrella", "jewelry",
+    ),
+    "place" to setOf(
+      "building", "house", "city", "cityscape", "street", "road", "bridge", "tower", "church",
+      "castle", "stadium", "park", "mountain", "beach", "ocean", "lake", "river", "forest", "sky",
+    ),
+  )
+
+  /**
+   * Returns `true` if [label] is an overly generic, abstract, geometric, lighting, material, or
+   * ontology-noise class that should be suppressed from ML Kit tagging output.
+   */
+  fun isBlockedGenericVisionLabel(label: String): Boolean {
+    val clean = label.trim().lowercase(Locale.US)
+    if (clean.isEmpty()) return true
+    val canonical = CANONICAL_ML_KIT_LABEL_MAP[clean]?.lowercase(Locale.US) ?: clean
+    return clean in BLOCKED_GENERIC_ML_KIT_LABELS || canonical in BLOCKED_GENERIC_ML_KIT_LABELS
+  }
+
+  /**
+   * Normalizes a raw ML Kit label into a clean, specific user-facing object label, or returns
+   * `null` if the label is in [BLOCKED_GENERIC_ML_KIT_LABELS].
+   */
+  fun normalizeAndFilterMlKitLabel(rawLabel: String): String? {
+    val trimmed = rawLabel.trim()
+    if (trimmed.isEmpty()) return null
+    val lower = trimmed.lowercase(Locale.US)
+    if (lower in BLOCKED_GENERIC_ML_KIT_LABELS) return null
+    val canonical = CANONICAL_ML_KIT_LABEL_MAP[lower] ?: trimmed
+    if (canonical.lowercase(Locale.US) in BLOCKED_GENERIC_ML_KIT_LABELS) return null
+    return canonical.replaceFirstChar { ch ->
+      if (ch.isLowerCase()) ch.titlecase(Locale.US) else ch.toString()
+    }
+  }
+
+  /**
+   * Returns a specificity bonus (`-0.08f..+0.06f`) used to prioritize concrete object nouns
+   * (e.g., `"Laptop"`, `"Coffee cup"`, `"Cat"`, `"Flowerpot"`) over broad category terms
+   * (e.g., `"Electronics"`, `"Food"`, `"Nature"`).
+   */
+  fun computeVisionLabelSpecificityBonus(label: String): Float {
+    val lower = label.trim().lowercase(Locale.US)
+    if (lower in GENERIC_HYPERNYM_PARENTS.keys) {
+      return -0.06f
+    }
+    if (lower in setOf("indoor", "outdoor", "sky", "clouds", "water", "city", "street", "road")) {
+      return -0.04f
+    }
+    return 0.04f
+  }
+
+  /**
+   * Suppresses generic parent hypernym tags (such as `"Food"` when `"Coffee"` or `"Croissant"` is
+   * already present, or `"Electronics"` when `"Laptop"` or `"Monitor"` is present).
+   */
+  fun suppressGenericHypernymVisionTags(tags: List<CameraVisionTag>): List<CameraVisionTag> {
+    if (tags.size <= 1) return tags
+    val presentLower = tags.map { it.label.trim().lowercase(Locale.US) }.toSet()
+    return tags.filter { candidate ->
+      val lower = candidate.label.trim().lowercase(Locale.US)
+      val specificChildren = GENERIC_HYPERNYM_PARENTS[lower]
+      if (specificChildren == null) {
+        true
+      } else {
+        // Keep the generic parent only if none of its specific child labels were detected
+        presentLower.none { it != lower && it in specificChildren }
+      }
+    }
+  }
+
+  /**
+   * Rotates [bitmap] by [rotationDegrees] (`90`, `180`, `270`) if needed so all downstream object
+   * detection, cropping, and normalized coordinate calculations operate in upright display space.
+   */
+  fun orientBitmapIfNeeded(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
+    val normRot = ((rotationDegrees % 360) + 360) % 360
+    if (normRot == 0 || bitmap.width <= 0 || bitmap.height <= 0) return bitmap
+    return try {
+      val matrix = Matrix().apply { postRotate(normRot.toFloat()) }
+      Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    } catch (_: Throwable) {
+      bitmap
+    }
+  }
 
   /**
    * Returns a well-spaced fallback [CameraVisionBoundingBox] for a given tag rank (`0..N`)
@@ -4720,9 +5132,9 @@ object CameraEngine {
   }
 
   /**
-   * Analyzes an ARGB pixel buffer (`width` × `height`) on a spatial grid to locate distinct
-   * high-saliency foreground element regions (based on color contrast against the frame perimeter
-   * and local edge gradient energy) and returns their normalized [CameraVisionBoundingBox] bounds.
+   * Analyzes an ARGB pixel buffer (`width` × `height`) on a 32×32 spatial grid to locate distinct
+   * foreground object contours (using perceptual color contrast against the frame perimeter and
+   * local Sobel gradient energy) and returns their tight normalized [CameraVisionBoundingBox] bounds.
    */
   fun extractSalientRegionsFromArgbPixels(
     pixels: IntArray,
@@ -4734,8 +5146,8 @@ object CameraEngine {
       return listOf(defaultVisionBoundingBoxForRank(0))
     }
 
-    val cols = 16
-    val rows = 16
+    val cols = 32.coerceAtMost(width)
+    val rows = 32.coerceAtMost(height)
     val cellR = FloatArray(cols * rows)
     val cellG = FloatArray(cols * rows)
     val cellB = FloatArray(cols * rows)
@@ -4806,7 +5218,8 @@ object CameraEngine {
         val dr = cellR[idx] - bgR
         val dg = cellG[idx] - bgG
         val db = cellB[idx] - bgB
-        val colorContrast = kotlin.math.sqrt(dr * dr + dg * dg + db * db)
+        // Perceptually weighted RGB distance against perimeter background
+        val colorContrast = kotlin.math.sqrt((dr * dr * 0.30f + dg * dg * 0.59f + db * db * 0.11f) * 3f)
 
         val rightIdx = gy * cols + (gx + 1).coerceAtMost(cols - 1)
         val downIdx = (gy + 1).coerceAtMost(rows - 1) * cols + gx
@@ -4815,12 +5228,11 @@ object CameraEngine {
         val edgeB = abs(cellB[idx] - cellB[rightIdx]) + abs(cellB[idx] - cellB[downIdx])
         val edgeEnergy = (edgeR + edgeG + edgeB) / 3f
 
-        // Mild center bias so central subjects are prioritized over edge noise
         val normDx = (gx + 0.5f) / cols - 0.5f
         val normDy = (gy + 0.5f) / rows - 0.5f
-        val centerWeight = (1.15f - (normDx * normDx + normDy * normDy) * 0.9f).coerceIn(0.6f, 1.15f)
+        val centerWeight = (1.12f - (normDx * normDx + normDy * normDy) * 0.65f).coerceIn(0.72f, 1.12f)
 
-        val score = (colorContrast * 0.65f + edgeEnergy * 0.95f) * centerWeight
+        val score = (colorContrast * 0.78f + edgeEnergy * 0.85f) * centerWeight
         saliency[idx] = score
         totalSaliency += score
       }
@@ -4832,7 +5244,7 @@ object CameraEngine {
 
     for (regionIdx in 0 until maxRegions.coerceAtLeast(1)) {
       var peakIdx = -1
-      var peakScore = meanSaliency * 1.05f
+      var peakScore = maxOf(meanSaliency * 1.12f, 6f)
       for (i in saliency.indices) {
         if (!visited[i] && saliency[i] > peakScore) {
           peakScore = saliency[i]
@@ -4877,17 +5289,17 @@ object CameraEngine {
           val cdG = cellG[nb] - seedG
           val cdB = cellB[nb] - seedB
           val colorDistToSeed = kotlin.math.sqrt(cdR * cdR + cdG * cdG + cdB * cdB)
-          if (saliency[nb] >= meanSaliency * 0.85f && (colorDistToSeed <= 72f || saliency[nb] >= peakScore * 0.65f)) {
+          if (saliency[nb] >= meanSaliency * 0.90f && (colorDistToSeed <= 68f || saliency[nb] >= peakScore * 0.60f)) {
             visited[nb] = true
             queue.add(nb)
           }
         }
       }
 
-      val leftNorm = (minGx.toFloat() / cols).coerceIn(0.06f, 0.74f)
-      val topNorm = (minGy.toFloat() / rows).coerceIn(0.12f, 0.72f)
-      val rightNorm = ((maxGx + 1).toFloat() / cols).coerceIn(leftNorm + 0.18f, 0.94f)
-      val bottomNorm = ((maxGy + 1).toFloat() / rows).coerceIn(topNorm + 0.14f, 0.88f)
+      val leftNorm = (minGx.toFloat() / cols).coerceIn(0.02f, 0.88f)
+      val topNorm = (minGy.toFloat() / rows).coerceIn(0.02f, 0.88f)
+      val rightNorm = ((maxGx + 1).toFloat() / cols).coerceIn(leftNorm + 0.12f, 0.98f)
+      val bottomNorm = ((maxGy + 1).toFloat() / rows).coerceIn(topNorm + 0.10f, 0.98f)
       regions.add(
         CameraVisionBoundingBox(
           left = leftNorm,
@@ -4947,7 +5359,8 @@ object CameraEngine {
 
   /**
    * Computes non-overlapping label badge placements ([CameraVisionLabelPlacement]) for a list of
-   * visible [tags] inside a stage of size [stageWidthPx] × [usableHeightPx] (starting at [usableTopPx]).
+   * visible [tags] inside a stage of size [stageWidthPx] × [stageHeightPx] (with badges clamped to
+   * the unobstructed vertical range [usableTopPx]..[usableBottomPx]).
    *
    * Evaluates candidate corners ([CameraVisionLabelCorner.TOP_LEFT], [CameraVisionLabelCorner.TOP_RIGHT],
    * [CameraVisionLabelCorner.BOTTOM_LEFT], [CameraVisionLabelCorner.BOTTOM_RIGHT],
@@ -4966,12 +5379,13 @@ object CameraEngine {
     insetPx: Float = 6f,
     collisionPaddingPx: Float = 4f,
     edgeMarginPx: Float = 12f,
+    stageHeightPx: Float = usableBottomPx,
   ): List<CameraVisionLabelPlacement> {
     if (tags.isEmpty()) return emptyList()
     val safeStageW = stageWidthPx.coerceAtLeast(160f)
     val safeUsableTop = usableTopPx.coerceAtLeast(0f)
     val safeUsableBottom = usableBottomPx.coerceAtLeast(safeUsableTop + 80f)
-    val usableHeight = (safeUsableBottom - safeUsableTop).coerceAtLeast(1f)
+    val safeStageH = stageHeightPx.coerceAtLeast(safeUsableBottom)
 
     val placements = mutableListOf<CameraVisionLabelPlacement>()
     val cornersOrder = listOf(
@@ -4987,11 +5401,11 @@ object CameraEngine {
       val normBox = (tag.boundingBox ?: defaultVisionBoundingBoxForRank(idx)).coerceNormalized()
       val boxLeft = (normBox.left * safeStageW).coerceIn(edgeMarginPx, (safeStageW - 64f).coerceAtLeast(edgeMarginPx))
       val boxRight = (normBox.right * safeStageW).coerceIn(boxLeft + 52f, (safeStageW - edgeMarginPx).coerceAtLeast(boxLeft + 52f))
-      val boxTop = (safeUsableTop + normBox.top * usableHeight).coerceIn(
+      val boxTop = (normBox.top * safeStageH).coerceIn(
         safeUsableTop,
         (safeUsableBottom - 44f).coerceAtLeast(safeUsableTop),
       )
-      val boxBottom = (safeUsableTop + normBox.bottom * usableHeight).coerceIn(
+      val boxBottom = (normBox.bottom * safeStageH).coerceIn(
         boxTop + 40f,
         safeUsableBottom.coerceAtLeast(boxTop + 40f),
       )
@@ -5129,9 +5543,14 @@ object CameraEngine {
   }
 
   /**
-   * Runs Google ML Kit on-device Image Labeling (`com.google.mlkit:image-labeling`) on [bitmap]
-   * and its salient foreground regions, returning a [CameraVisionAnalysisResult] with each
-   * detected element's localized [CameraVisionBoundingBox], label, and confidence score (>= 50%).
+   * Runs a two-stage on-device Google ML Kit vision pipeline on [bitmap]:
+   * 1. **Object Detection** (`com.google.mlkit:object-detection`) in `SINGLE_IMAGE_MODE` with
+   *    multi-object detection and classification enabled to locate real physical object bounding
+   *    boxes (`DetectedObject.boundingBox`).
+   * 2. **Fine-Grained Classification** (`com.google.mlkit:image-labeling`) on each detected object's
+   *    bounding box crop (with contextual padding) and on the full frame, filtered through
+   *    [normalizeAndFilterMlKitLabel] and [suppressGenericHypernymVisionTags] to eliminate generic
+   *    ontology noise and uncorroborated crop hallucinations.
    */
   suspend fun recognizeVisionTagsFromBitmapWithMlKit(
     bitmap: Bitmap,
@@ -5144,31 +5563,69 @@ object CameraEngine {
   ): CameraVisionAnalysisResult? {
     if (bitmap.width <= 16 || bitmap.height <= 16) return null
     val effectiveThreshold = confidenceThreshold.coerceIn(MIN_VISION_CONFIDENCE_THRESHOLD, 0.98f)
-    val detectorMin = maxOf(MIN_VISION_CONFIDENCE_THRESHOLD, minOf(effectiveThreshold, baseDetectorMinConfidence))
-      .coerceIn(MIN_VISION_CONFIDENCE_THRESHOLD, 0.95f)
+    val detectorMin = maxOf(0.50f, minOf(effectiveThreshold, baseDetectorMinConfidence) - 0.10f)
+      .coerceIn(0.50f, 0.90f)
     return try {
       val startNs = System.nanoTime()
-      val salientRegions = extractSalientRegionsFromBitmap(bitmap, maxRegions = 5)
-      val options = ImageLabelerOptions.Builder()
+      val orientedBitmap = orientBitmapIfNeeded(bitmap, rotationDegrees)
+      val bw = orientedBitmap.width
+      val bh = orientedBitmap.height
+      if (bw <= 16 || bh <= 16) return null
+
+      // Stage 1: Real ML Kit Object Detector for true neural-network object bounding boxes
+      val objectDetectorOptions = ObjectDetectorOptions.Builder()
+        .setDetectorMode(ObjectDetectorOptions.SINGLE_IMAGE_MODE)
+        .enableMultipleObjects()
+        .enableClassification()
+        .build()
+      val objectDetector = ObjectDetection.getClient(objectDetectorOptions)
+      val fullInputImage = InputImage.fromBitmap(orientedBitmap, 0)
+
+      val detectedObjects: List<DetectedObject> = try {
+        suspendCancellableCoroutine { continuation ->
+          objectDetector.process(fullInputImage)
+            .addOnSuccessListener { results ->
+              if (continuation.isActive) {
+                continuation.resume(results.orEmpty())
+              }
+            }
+            .addOnFailureListener {
+              if (continuation.isActive) {
+                continuation.resume(emptyList())
+              }
+            }
+        }
+      } catch (_: Throwable) {
+        emptyList()
+      } finally {
+        try {
+          objectDetector.close()
+        } catch (_: Throwable) {}
+      }
+
+      // Stage 2: ML Kit Image Labeler (with generic/abstract label filtering & canonical normalization)
+      val labelerOptions = ImageLabelerOptions.Builder()
         .setConfidenceThreshold(detectorMin)
         .build()
-      val labeler = ImageLabeling.getClient(options)
+      val labeler = ImageLabeling.getClient(labelerOptions)
 
-      suspend fun runLabelerOnBitmap(targetBmp: Bitmap): List<Pair<String, Pair<Float, Int>>> {
-        val inputImage = InputImage.fromBitmap(targetBmp, rotationDegrees)
+      suspend fun runFilteredLabelerOnBitmap(targetBmp: Bitmap): List<Pair<String, Pair<Float, Int>>> {
+        val img = InputImage.fromBitmap(targetBmp, 0)
         return suspendCancellableCoroutine { continuation ->
-          labeler.process(inputImage)
+          labeler.process(img)
             .addOnSuccessListener { results ->
-              val mapped = results.mapNotNull { item ->
-                val text = item.text.trim()
-                if (text.isNotEmpty() && item.confidence >= MIN_VISION_CONFIDENCE_THRESHOLD) {
-                  text to (item.confidence to item.index)
-                } else {
-                  null
+              val dedup = linkedMapOf<String, Pair<String, Pair<Float, Int>>>()
+              for (item in results) {
+                val normalizedLabel = normalizeAndFilterMlKitLabel(item.text) ?: continue
+                if (item.confidence < detectorMin) continue
+                val key = normalizedLabel.lowercase(Locale.US)
+                val existing = dedup[key]
+                if (existing == null || item.confidence > existing.second.first) {
+                  dedup[key] = normalizedLabel to (item.confidence to item.index)
                 }
               }
               if (continuation.isActive) {
-                continuation.resume(mapped)
+                continuation.resume(dedup.values.toList())
               }
             }
             .addOnFailureListener {
@@ -5179,41 +5636,173 @@ object CameraEngine {
         }
       }
 
-      val fullFrameLabels = runLabelerOnBitmap(bitmap)
+      val fullFrameLabels = runFilteredLabelerOnBitmap(orientedBitmap)
+      val fullFrameByKey = fullFrameLabels.associateBy { it.first.lowercase(Locale.US) }
 
-      // Also run ML Kit on up to 2 distinct salient sub-region crops to localize specific objects
-      val localizedByLabel = linkedMapOf<String, CameraVisionTag>()
-      val bw = bitmap.width
-      val bh = bitmap.height
-      for (region in salientRegions.take(2)) {
-        val area = region.width * region.height
-        if (area in 0.04f..0.72f) {
-          val cropLeft = (region.left * bw).roundToInt().coerceIn(0, bw - 16)
-          val cropTop = (region.top * bh).roundToInt().coerceIn(0, bh - 16)
-          val cropW = (region.width * bw).roundToInt().coerceIn(16, bw - cropLeft)
-          val cropH = (region.height * bh).roundToInt().coerceIn(16, bh - cropTop)
-          if (cropW >= 24 && cropH >= 24) {
-            val cropBmp = try {
-              Bitmap.createBitmap(bitmap, cropLeft, cropTop, cropW, cropH)
-            } catch (_: Throwable) {
-              null
-            }
-            if (cropBmp != null) {
-              val regionLabels = runLabelerOnBitmap(cropBmp)
-              for ((text, scoreAndIdx) in regionLabels) {
-                val key = text.lowercase(Locale.US)
-                val existing = localizedByLabel[key]
-                if (existing == null || scoreAndIdx.first > existing.confidence) {
-                  localizedByLabel[key] = CameraVisionTag(
-                    label = text,
-                    confidence = scoreAndIdx.first,
-                    index = scoreAndIdx.second,
-                    boundingBox = region,
-                  )
-                }
-              }
-            }
+      data class RealObjectCandidate(
+        val normBox: CameraVisionBoundingBox,
+        val rawRect: android.graphics.Rect,
+        val coarseCategoryLower: String?,
+        val coarseConfidence: Float,
+        val coarseIndex: Int,
+      )
+
+      val validObjectBoxes = detectedObjects.mapNotNull { obj ->
+        val rect = obj.boundingBox
+        val left = (rect.left.toFloat() / bw.toFloat()).coerceIn(0f, 1f)
+        val top = (rect.top.toFloat() / bh.toFloat()).coerceIn(0f, 1f)
+        val right = (rect.right.toFloat() / bw.toFloat()).coerceIn(0f, 1f)
+        val bottom = (rect.bottom.toFloat() / bh.toFloat()).coerceIn(0f, 1f)
+        val box = CameraVisionBoundingBox(left, top, right, bottom)
+        // Filter out tiny specks (< 4% edge) and full-bleed frame backgrounds (> 92% area)
+        if (box.width < 0.04f || box.height < 0.04f || box.area > 0.92f) {
+          null
+        } else {
+          val topCoarse = obj.labels.maxByOrNull { it.confidence }
+          RealObjectCandidate(
+            normBox = box.coerceNormalized(),
+            rawRect = rect,
+            coarseCategoryLower = topCoarse?.text?.trim()?.lowercase(Locale.US),
+            coarseConfidence = topCoarse?.confidence ?: 0f,
+            coarseIndex = topCoarse?.index ?: -1,
+          )
+        }
+      }.sortedByDescending { candidate ->
+        // Prioritize prominent, centrally-framed or classified objects
+        val dx = candidate.normBox.centerX - 0.5f
+        val dy = candidate.normBox.centerY - 0.5f
+        val centerBonus = (1f - (dx * dx + dy * dy)).coerceIn(0.4f, 1f)
+        candidate.normBox.area.coerceIn(0.04f, 0.65f) * centerBonus + candidate.coarseConfidence * 0.35f
+      }
+
+      val localizedTags = mutableListOf<CameraVisionTag>()
+      val claimedLabelsLower = mutableSetOf<String>()
+
+      // Classify each real DetectedObject bounding box using a contextual crop + full-frame corroboration
+      for (objCandidate in validObjectBoxes.take(maxLabels.coerceAtLeast(1))) {
+        val rect = objCandidate.rawRect
+        val padX = (rect.width() * 0.08f).roundToInt().coerceAtLeast(6)
+        val padY = (rect.height() * 0.08f).roundToInt().coerceAtLeast(6)
+        val cropLeft = (rect.left - padX).coerceIn(0, bw - 16)
+        val cropTop = (rect.top - padY).coerceIn(0, bh - 16)
+        val cropRight = (rect.right + padX).coerceIn(cropLeft + 16, bw)
+        val cropBottom = (rect.bottom + padY).coerceIn(cropTop + 16, bh)
+        val cropW = cropRight - cropLeft
+        val cropH = cropBottom - cropTop
+
+        val cropLabels = if (cropW >= 24 && cropH >= 24) {
+          val cropBmp = try {
+            Bitmap.createBitmap(orientedBitmap, cropLeft, cropTop, cropW, cropH)
+          } catch (_: Throwable) {
+            null
           }
+          if (cropBmp != null) {
+            runFilteredLabelerOnBitmap(cropBmp)
+          } else {
+            emptyList()
+          }
+        } else {
+          emptyList()
+        }
+
+        val allowedKeywordsForCoarse = objCandidate.coarseCategoryLower?.let {
+          OBJECT_DETECTOR_CATEGORY_KEYWORDS[it]
+        }
+
+        var bestLabel: String? = null
+        var bestConfidence = 0f
+        var bestIndex = -1
+        var bestRankingScore = -1f
+
+        // 1. Evaluate crop labels corroborated by full-frame labels or the object detector's category
+        for ((labelText, scoreAndIdx) in cropLabels) {
+          val key = labelText.lowercase(Locale.US)
+          if (key in claimedLabelsLower) continue
+          val cropConf = scoreAndIdx.first
+          val fullMatch = fullFrameByKey[key]
+          val matchesCoarseDomain = allowedKeywordsForCoarse != null && key in allowedKeywordsForCoarse
+          val isCorroborated = fullMatch != null || matchesCoarseDomain
+
+          // Calibrate confidence: uncorroborated crop-only labels are discounted by 0.88x so zoomed-in
+          // texture hallucinations cannot pass the threshold, while corroborated labels combine scores.
+          val calibratedConf = when {
+            fullMatch != null -> maxOf(fullMatch.second.first, cropConf * 0.97f)
+            matchesCoarseDomain -> maxOf(cropConf, objCandidate.coarseConfidence * 0.92f)
+            else -> cropConf * 0.88f
+          }
+          if (!isCorroborated && calibratedConf < maxOf(effectiveThreshold, 0.78f)) {
+            continue
+          }
+          if (calibratedConf < MIN_VISION_CONFIDENCE_THRESHOLD) continue
+
+          val rankScore = calibratedConf +
+            computeVisionLabelSpecificityBonus(labelText) +
+            (if (fullMatch != null) 0.05f else 0f) +
+            (if (matchesCoarseDomain) 0.04f else 0f)
+
+          if (rankScore > bestRankingScore) {
+            bestRankingScore = rankScore
+            bestLabel = labelText
+            bestConfidence = calibratedConf
+            bestIndex = scoreAndIdx.second
+          }
+        }
+
+        // 2. If crop didn't yield a label, match an unclaimed full-frame label belonging to this object's category
+        if (bestLabel == null && allowedKeywordsForCoarse != null) {
+          val domainFullMatch = fullFrameLabels
+            .filter { (lbl, _) ->
+              val k = lbl.lowercase(Locale.US)
+              k !in claimedLabelsLower && k in allowedKeywordsForCoarse
+            }
+            .maxByOrNull { (lbl, scoreAndIdx) ->
+              scoreAndIdx.first + computeVisionLabelSpecificityBonus(lbl)
+            }
+          if (domainFullMatch != null) {
+            bestLabel = domainFullMatch.first
+            bestConfidence = domainFullMatch.second.first
+            bestIndex = domainFullMatch.second.second
+          }
+        }
+
+        // 3. If still unmatched and this is the primary detected object, pair with the top specific full-frame label
+        if (bestLabel == null && localizedTags.isEmpty() && fullFrameLabels.isNotEmpty()) {
+          val topFull = fullFrameLabels
+            .filter { (lbl, _) -> lbl.lowercase(Locale.US) !in claimedLabelsLower }
+            .maxByOrNull { (lbl, scoreAndIdx) ->
+              scoreAndIdx.first + computeVisionLabelSpecificityBonus(lbl)
+            }
+          if (topFull != null) {
+            bestLabel = topFull.first
+            bestConfidence = topFull.second.first
+            bestIndex = topFull.second.second
+          }
+        }
+
+        // 4. Fallback to ObjectDetector's own coarse category ONLY if it is a concrete noun ("Plant" or "Food"),
+        // never internal categories like "Home good", "Fashion good", or "Place".
+        if (bestLabel == null &&
+          objCandidate.coarseCategoryLower in setOf("plant", "food") &&
+          objCandidate.coarseConfidence >= MIN_VISION_CONFIDENCE_THRESHOLD
+        ) {
+          val cleanCoarse = normalizeAndFilterMlKitLabel(objCandidate.coarseCategoryLower.orEmpty())
+          if (cleanCoarse != null && cleanCoarse.lowercase(Locale.US) !in claimedLabelsLower) {
+            bestLabel = cleanCoarse
+            bestConfidence = objCandidate.coarseConfidence
+            bestIndex = objCandidate.coarseIndex
+          }
+        }
+
+        if (bestLabel != null && bestConfidence >= MIN_VISION_CONFIDENCE_THRESHOLD) {
+          claimedLabelsLower.add(bestLabel.lowercase(Locale.US))
+          localizedTags.add(
+            CameraVisionTag(
+              label = bestLabel,
+              confidence = bestConfidence.coerceIn(0f, 1f),
+              index = bestIndex,
+              boundingBox = objCandidate.normBox,
+            )
+          )
         }
       }
 
@@ -5221,33 +5810,38 @@ object CameraEngine {
         labeler.close()
       } catch (_: Throwable) {}
 
-      // Merge full-frame labels with salient region bounding boxes
-      val combinedTags = mutableListOf<CameraVisionTag>()
-      combinedTags.addAll(localizedByLabel.values)
-
-      fullFrameLabels.forEach { (text, scoreAndIdx) ->
-        val key = text.lowercase(Locale.US)
-        val localized = localizedByLabel[key]
-        val assignedBox = localized?.boundingBox
-          ?: salientRegions.firstOrNull()
-          ?: defaultVisionBoundingBoxForRank(0)
-        combinedTags.add(
-          CameraVisionTag(
-            label = text,
-            confidence = maxOf(scoreAndIdx.first, localized?.confidence ?: 0f),
-            index = scoreAndIdx.second,
-            boundingBox = assignedBox,
-          )
-        )
+      // Only fall back to foreground contour extraction if ObjectDetector found 0 objects in the frame
+      if (localizedTags.isEmpty() && fullFrameLabels.isNotEmpty()) {
+        val foregroundContours = extractSalientRegionsFromBitmap(orientedBitmap, maxRegions = 3)
+        fullFrameLabels
+          .sortedByDescending { (lbl, scoreAndIdx) ->
+            scoreAndIdx.first + computeVisionLabelSpecificityBonus(lbl)
+          }
+          .take(foregroundContours.size)
+          .forEachIndexed { idx, (labelText, scoreAndIdx) ->
+            val adjustedConfidence = (scoreAndIdx.first + minOf(0f, computeVisionLabelSpecificityBonus(labelText)))
+              .coerceIn(0f, 1f)
+            if (adjustedConfidence >= MIN_VISION_CONFIDENCE_THRESHOLD) {
+              localizedTags.add(
+                CameraVisionTag(
+                  label = labelText,
+                  confidence = adjustedConfidence,
+                  index = scoreAndIdx.second,
+                  boundingBox = foregroundContours[idx],
+                )
+              )
+            }
+          }
       }
 
+      val hypernymFiltered = suppressGenericHypernymVisionTags(localizedTags)
       val latencyMs = ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(1L)
       buildVisionAnalysisResult(
-        rawTags = combinedTags,
+        rawTags = hypernymFiltered,
         confidenceThreshold = effectiveThreshold,
         inferenceLatencyMs = latencyMs,
-        frameWidth = bitmap.width,
-        frameHeight = bitmap.height,
+        frameWidth = bw,
+        frameHeight = bh,
         sourceDescription = sourceDescription,
         analyzedAtMs = analyzedAtMs,
         maxLabels = maxLabels,

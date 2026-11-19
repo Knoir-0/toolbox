@@ -570,6 +570,32 @@ class CameraEngineTest {
     val report = galleryStrictResult.formatSummaryReport()
     assertTrue(report.contains("ML Kit Vision Tagging Report (Indoor Monstera Plant)"))
     assertTrue(report.contains("Plant: 96.2%"))
+
+    // Verify generic/abstract ontology labels are blocked and verbose ML Kit classes map to canonical nouns
+    assertTrue(CameraEngine.isBlockedGenericVisionLabel("Font"))
+    assertTrue(CameraEngine.isBlockedGenericVisionLabel("Rectangle"))
+    assertTrue(CameraEngine.isBlockedGenericVisionLabel("Material property"))
+    assertTrue(CameraEngine.isBlockedGenericVisionLabel("Room"))
+    assertTrue(CameraEngine.isBlockedGenericVisionLabel("Furniture"))
+    assertTrue(CameraEngine.isBlockedGenericVisionLabel("Tableware"))
+    assertTrue(CameraEngine.isBlockedGenericVisionLabel("Home good"))
+    assertTrue(CameraEngine.isBlockedGenericVisionLabel("Fashion good"))
+    assertEquals(null, CameraEngine.normalizeAndFilterMlKitLabel("Tint and shade"))
+    assertEquals("Cat", CameraEngine.normalizeAndFilterMlKitLabel("Felidae"))
+    assertEquals("Dog", CameraEngine.normalizeAndFilterMlKitLabel("Canidae"))
+    assertEquals("Laptop", CameraEngine.normalizeAndFilterMlKitLabel("Netbook"))
+    assertEquals("Smartphone", CameraEngine.normalizeAndFilterMlKitLabel("Mobile phone"))
+
+    // Verify generic parent hypernyms ("Food", "Electronics") are suppressed when specific child labels exist
+    val hypernymFiltered = CameraEngine.suppressGenericHypernymVisionTags(
+      listOf(
+        CameraVisionTag("Food", 0.94f),
+        CameraVisionTag("Coffee cup", 0.89f),
+        CameraVisionTag("Electronics", 0.91f),
+        CameraVisionTag("Laptop", 0.88f),
+      )
+    )
+    assertEquals(listOf("Coffee cup", "Laptop"), hypernymFiltered.map { it.label })
   }
 
   @Test

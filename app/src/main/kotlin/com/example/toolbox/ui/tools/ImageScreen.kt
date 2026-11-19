@@ -1663,11 +1663,7 @@ internal fun PhotoViewerPageContent(
       }
     } else {
       val fullBitmap = withContext(Dispatchers.IO) {
-        try {
-          BitmapFactory.decodeFile(photo.file.absolutePath)
-        } catch (_: Throwable) {
-          null
-        }
+        GalleryEngine.decodeOrientedBitmapFromFile(photo.file)
       }
       if (fullBitmap != null) {
         bitmap = fullBitmap

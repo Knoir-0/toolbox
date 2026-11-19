@@ -103,6 +103,8 @@ dependencies {
   implementation(libs.mlkit.text.recognition)
   // Google ML Kit Image Labeling (On-device automatic image tagging for Gallery)
   implementation(libs.mlkit.image.labeling)
+  // Google ML Kit Object Detection & Tracking (On-device localized object bounding boxes)
+  implementation(libs.mlkit.objectDetection)
 }
 
 abstract class SyncRootApkTask : DefaultTask() {

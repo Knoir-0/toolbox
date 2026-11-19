@@ -844,33 +844,56 @@ fun CameraScreen(
     }
   }
 
-  // Continuous live frame ML Kit Image Labeling when in VISION mode and hardware TextureView is rendering
-  LaunchedEffect(captureMode, activeTextureView) {
+  fun captureTransformedAnalysisBitmap(maxEdgePx: Int = 640): Bitmap? {
+    return try {
+      val tv = activeTextureView ?: return null
+      if (!tv.isAvailable) return null
+      val vw = tv.width
+      val vh = tv.height
+      val raw = if (vw > 32 && vh > 32) {
+        val scale = minOf(1f, maxEdgePx.toFloat() / maxOf(vw, vh).toFloat())
+        val targetW = (vw * scale).roundToInt().coerceAtLeast(64)
+        val targetH = (vh * scale).roundToInt().coerceAtLeast(64)
+        tv.getBitmap(targetW, targetH)
+      } else {
+        tv.getBitmap(maxEdgePx, maxEdgePx)
+      } ?: return null
+
+      if (raw.width <= 16 || raw.height <= 16) return null
+      CameraEngine.transformCapturedPreviewBitmap(
+        rawBitmap = raw,
+        textureTransformMatrix = tv.getTransform(null),
+        zoom = zoomLevel,
+        lensFacing = lensFacing,
+        mirrorFront = mirrorFrontCamera,
+        viewWidth = if (vw > 32) vw else raw.width,
+        viewHeight = if (vh > 32) vh else raw.height,
+      )
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  // Continuous live frame ML Kit Object Detection & Image Labeling when in VISION mode and hardware TextureView is rendering
+  LaunchedEffect(captureMode, activeTextureView, zoomLevel, lensFacing, mirrorFrontCamera) {
     if (captureMode != CameraCaptureMode.VISION || isInspection) {
       return@LaunchedEffect
     }
     while (isActive && captureMode == CameraCaptureMode.VISION) {
-      val tv = activeTextureView
-      if (tv != null && tv.isAvailable) {
-        val rawFrame = try {
-          tv.getBitmap(512, 512)
-        } catch (_: Throwable) {
-          null
+      val alignedFrame = captureTransformedAnalysisBitmap(maxEdgePx = 640)
+      if (alignedFrame != null && alignedFrame.width > 32 && alignedFrame.height > 32) {
+        val analyzed = withContext(Dispatchers.Default) {
+          CameraEngine.recognizeVisionTagsFromBitmapWithMlKit(
+            bitmap = alignedFrame,
+            confidenceThreshold = MIN_VISION_CONFIDENCE_THRESHOLD,
+            sourceDescription = "Live Camera Frame",
+          )
         }
-        if (rawFrame != null && rawFrame.width > 32 && rawFrame.height > 32) {
-          val analyzed = withContext(Dispatchers.Default) {
-            CameraEngine.recognizeVisionTagsFromBitmapWithMlKit(
-              bitmap = rawFrame,
-              confidenceThreshold = MIN_VISION_CONFIDENCE_THRESHOLD,
-              sourceDescription = "Live Camera Frame",
-            )
-          }
-          if (analyzed != null) {
-            if (analyzed.tags.isNotEmpty()) {
-              latestVisionResult = analyzed
-            } else if (latestVisionResult?.sourceDescription == "Live Camera Frame") {
-              latestVisionResult = null
-            }
+        if (analyzed != null) {
+          if (analyzed.tags.isNotEmpty()) {
+            latestVisionResult = analyzed
+          } else if (latestVisionResult?.sourceDescription == "Live Camera Frame") {
+            latestVisionResult = null
           }
         }
       }
@@ -901,18 +924,13 @@ fun CameraScreen(
     val nextPresetIndex = (visionSamplePreset.ordinal + 1) % CameraVisionSamplePreset.entries.size
     updateVisionSamplePreset(CameraVisionSamplePreset.entries[nextPresetIndex])
 
-    // Also run on-device ML Kit Image Labeling asynchronously on the current hardware frame if available
-    val tv = activeTextureView
-    val rawHardwareBitmap = try {
-      if (tv != null && tv.isAvailable) tv.bitmap else null
-    } catch (_: Throwable) {
-      null
-    }
-    if (rawHardwareBitmap != null && rawHardwareBitmap.width > 32 && rawHardwareBitmap.height > 32) {
+    // Also run on-device ML Kit Object Detection & Image Labeling asynchronously on the aligned hardware frame if available
+    val alignedHardwareBitmap = captureTransformedAnalysisBitmap(maxEdgePx = 768)
+    if (alignedHardwareBitmap != null && alignedHardwareBitmap.width > 32 && alignedHardwareBitmap.height > 32) {
       coroutineScope.launch {
         val hwResult = withContext(Dispatchers.Default) {
           CameraEngine.recognizeVisionTagsFromBitmapWithMlKit(
-            bitmap = rawHardwareBitmap,
+            bitmap = alignedHardwareBitmap,
             confidenceThreshold = MIN_VISION_CONFIDENCE_THRESHOLD,
             sourceDescription = "Live Camera Frame",
           )
@@ -4567,7 +4585,6 @@ private fun VisionReticleOverlayCanvas(
     val bottomMarginPx = with(density) { 170.dp.toPx() }.coerceAtMost(stageH * 0.35f)
     val usableTop = topInsetPx.coerceAtMost(stageH * 0.3f)
     val usableBottom = (stageH - bottomMarginPx).coerceAtLeast(usableTop + 80f)
-    val usableHeight = (usableBottom - usableTop).coerceAtLeast(1f)
 
     Canvas(modifier = Modifier.fillMaxSize()) {
       val cornerRadiusPx = 10.dp.toPx()
@@ -4580,8 +4597,8 @@ private fun VisionReticleOverlayCanvas(
 
         val leftPx = (normBox.left * size.width).coerceIn(12.dp.toPx(), size.width - 64.dp.toPx())
         val rightPx = (normBox.right * size.width).coerceIn(leftPx + 52.dp.toPx(), size.width - 12.dp.toPx())
-        val topPx = (usableTop + normBox.top * usableHeight).coerceIn(usableTop, usableBottom - 44.dp.toPx())
-        val bottomPx = (usableTop + normBox.bottom * usableHeight).coerceIn(topPx + 40.dp.toPx(), usableBottom)
+        val topPx = (normBox.top * size.height).coerceIn(usableTop, usableBottom - 44.dp.toPx())
+        val bottomPx = (normBox.bottom * size.height).coerceIn(topPx + 40.dp.toPx(), usableBottom)
         val boxW = rightPx - leftPx
         val boxH = bottomPx - topPx
         val armLen = (minOf(boxW, boxH) * 0.20f).coerceIn(10.dp.toPx(), 26.dp.toPx())
@@ -4668,7 +4685,7 @@ private fun VisionReticleOverlayCanvas(
 
     // Attached Label + Confidence Percentage Pills on each colored bounding box
     if (visibleTags.isNotEmpty()) {
-      val labelPlacements = remember(visibleTags, stageW, usableTop, usableBottom, density) {
+      val labelPlacements = remember(visibleTags, stageW, stageH, usableTop, usableBottom, density) {
         CameraEngine.computeNonOverlappingVisionLabelPlacements(
           tags = visibleTags,
           stageWidthPx = stageW,
@@ -4680,6 +4697,7 @@ private fun VisionReticleOverlayCanvas(
           insetPx = with(density) { 6.dp.toPx() },
           collisionPaddingPx = with(density) { 4.dp.toPx() },
           edgeMarginPx = with(density) { 12.dp.toPx() },
+          stageHeightPx = stageH,
         )
       }
       Box(
