@@ -597,6 +597,29 @@ object AudioRecorderEngine {
   }
 
   /**
+   * Converts an audio [file] into an [AudioRecordingItem] suitable for playback in [MiniAudioPlayerModal].
+   */
+  fun toAudioRecordingItem(
+    file: File,
+    includeDurationMetadata: Boolean = true,
+  ): AudioRecordingItem {
+    val duration = if (includeDurationMetadata) {
+      extractAudioDurationMs(file)
+    } else {
+      estimateDurationFromFile(file)
+    }
+    return AudioRecordingItem(
+      file = file,
+      name = file.name,
+      path = file.absolutePath,
+      sizeBytes = file.length(),
+      lastModifiedMs = file.lastModified(),
+      extension = file.extension.lowercase(Locale.ROOT),
+      durationMs = duration,
+    )
+  }
+
+  /**
    * Lists all audio recordings inside [directory], sorted according to [sortOrder] (defaults to newest first).
    * When [directory] is `Downloads` (or `Download`), also includes any audio recordings in the sibling
    * `Download` / `Downloads` directory under the same parent if present.

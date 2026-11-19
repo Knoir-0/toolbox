@@ -277,6 +277,14 @@ object SearchEngine {
       keywords = listOf("dice", "dice roller", "rpg", "dnd", "d20", "d6", "d100", "polyhedral", "advantage", "disadvantage", "random", "tabletop"),
       sampleQueries = listOf("2d20+5", "4d6", "d20"),
     ),
+    Tool.IMAGE to ToolSearchMetadata(
+      tool = Tool.IMAGE,
+      summary = "Full-screen image viewer with pinch-to-zoom, OCR text, QR codes & color sampling",
+      description = "View images and animated GIFs/WebPs on a full black canvas with pinch-to-zoom, swipeable folder paging, OCR text & QR/barcode inspection, live color reticle sampling, and direct handoff to Image Editor or Colors.",
+      capabilities = listOf("Full-Screen Pinch-to-Zoom (100%–500%) & Folder Paging", "OCR Text, QR/Barcode & Smart Tag Recognition Inspector", "Interactive Auto-Focus Color Picker Reticle & Hex Pill", "Animated GIF & WebP Playback Controls", "One-Tap Handoff to Image Editor & Colors"),
+      keywords = listOf("image", "image viewer", "photo viewer", "picture viewer", "zoom", "ocr", "qr", "barcode", "color picker", "gif", "webp", "png", "jpg", "heic"),
+      sampleQueries = listOf("Image", "Image Viewer", "Photo Viewer"),
+    ),
     Tool.IMAGE_EDITOR to ToolSearchMetadata(
       tool = Tool.IMAGE_EDITOR,
       summary = "Non-destructive image editor with crop, rotate, color adjustments & filters",

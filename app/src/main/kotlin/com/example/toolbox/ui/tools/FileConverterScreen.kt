@@ -182,10 +182,9 @@ fun FileConverterScreen(
   val recentConversions = remember { mutableStateListOf<ConvertedFileHistoryItem>() }
 
   // Dialog states
-  var showFileBrowserDialog by remember { mutableStateOf(false) }
   var showCapabilityMapDialog by remember { mutableStateOf(false) }
 
-  // System SAF document picker (accessible inside the file picker dialog)
+  // System SAF document picker
   val documentPickerLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.OpenDocument()
   ) { uri: Uri? ->
@@ -242,7 +241,7 @@ fun FileConverterScreen(
       // EMPTY STATE: Aligned with Image & Video Editors (OpenFileInitialView)
       // ======================================================================
       OpenFileInitialView(
-        onOpenFile = { showFileBrowserDialog = true },
+        onOpenFile = { documentPickerLauncher.launch(arrayOf("*/*")) },
         onUseSample = {
           val sampleFile = FileManagerEngine.getOrCreateSampleImageFile(context)
           selectedFile = sampleFile
@@ -278,7 +277,7 @@ fun FileConverterScreen(
             modifier = Modifier
               .fillMaxWidth()
               .clip(RoundedCornerShape(14.dp))
-              .clickable { showFileBrowserDialog = true }
+              .clickable { documentPickerLauncher.launch(arrayOf("*/*")) }
               .testTag("selected_source_file_card"),
           ) {
             Row(
@@ -813,288 +812,11 @@ fun FileConverterScreen(
     }
   }
 
-  if (showFileBrowserDialog) {
-    StorageFilePickerDialog(
-      initialDirectory = selectedFile?.parentFile ?: FileManagerEngine.getUserRootDirectory(),
-      onDismiss = { showFileBrowserDialog = false },
-      onLaunchSystemPicker = {
-        showFileBrowserDialog = false
-        documentPickerLauncher.launch(arrayOf("*/*"))
-      },
-      onFileSelected = { pickedFile ->
-        selectedFile = pickedFile
-        sourceFormat = FileConverterEngine.detectFormat(pickedFile)
-        lastResult = null
-        showFileBrowserDialog = false
-        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-      },
-    )
-  }
-
   if (showCapabilityMapDialog) {
     ConversionCapabilityMapDialog(
       onDismiss = { showCapabilityMapDialog = false },
     )
   }
-}
-
-/**
- * In-app storage file browser dialog adhering to DESIGN_LANGUAGE.md Section 5.2,
- * with a secondary action to launch the Android System Picker.
- * Shared across FileConverterScreen and AudioEditorScreen.
- */
-@Composable
-internal fun StorageFilePickerDialog(
-  initialDirectory: File,
-  onDismiss: () -> Unit,
-  onLaunchSystemPicker: () -> Unit,
-  onFileSelected: (File) -> Unit,
-  title: String = "Select File to Convert",
-  fileFilter: ((File) -> Boolean)? = null,
-) {
-  val rootDir = remember { FileManagerEngine.getUserRootDirectory() }
-  var currentDir by remember {
-    mutableStateOf(if (initialDirectory.exists() && initialDirectory.isDirectory) initialDirectory else rootDir)
-  }
-  var searchQuery by remember { mutableStateOf("") }
-
-  val entries = remember(currentDir, searchQuery, fileFilter) {
-    val rawList = currentDir.listFiles()?.toList() ?: emptyList()
-    rawList
-      .filter { !it.name.startsWith(".") }
-      .filter { it.isDirectory || fileFilter == null || fileFilter(it) }
-      .filter {
-        searchQuery.isBlank() || it.name.contains(searchQuery.trim(), ignoreCase = true)
-      }
-      .sortedWith(
-        compareByDescending<File> { it.isDirectory }
-          .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
-      )
-  }
-
-  val quickFolders = remember(rootDir) {
-    listOf(
-      "Storage" to rootDir,
-      "Download" to File(rootDir, "Download"),
-      "Documents" to File(rootDir, "Documents"),
-      "Pictures" to File(rootDir, "Pictures"),
-      "Audio" to File(rootDir, "Audio"),
-      "Movies" to File(rootDir, "Movies"),
-    )
-  }
-
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    shape = RoundedCornerShape(28.dp),
-    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-    tonalElevation = 6.dp,
-    title = {
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Box(
-          modifier = Modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primaryContainer),
-          contentAlignment = Alignment.Center,
-        ) {
-          Icon(
-            imageVector = Icons.Default.FolderOpen,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(24.dp),
-          )
-        }
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = title,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
-          Text(
-            text = currentDir.absolutePath,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-      }
-    },
-    text = {
-      Column(
-        modifier = Modifier
-          .fillMaxWidth()
-          .heightIn(max = 420.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        // Quick volume / directory pills
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          for ((label, folder) in quickFolders) {
-            FilterChip(
-              selected = currentDir.absolutePath == folder.absolutePath,
-              onClick = {
-                if (folder.exists() || folder.mkdirs()) {
-                  currentDir = folder
-                }
-              },
-              label = { Text(label) },
-              shape = RoundedCornerShape(20.dp),
-            )
-          }
-        }
-
-        // Search & Up navigation row
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          val parent = currentDir.parentFile
-          IconButton(
-            onClick = { if (parent != null && parent.canRead()) currentDir = parent },
-            enabled = parent != null && parent.canRead(),
-          ) {
-            Icon(Icons.Default.ArrowUpward, contentDescription = "Parent folder")
-          }
-
-          OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            placeholder = { Text("Filter files...") },
-            singleLine = true,
-            shape = RoundedCornerShape(14.dp),
-            trailingIcon = if (searchQuery.isNotEmpty()) {
-              {
-                IconButton(onClick = { searchQuery = "" }) {
-                  Icon(Icons.Default.Clear, contentDescription = "Clear search")
-                }
-              }
-            } else null,
-            modifier = Modifier.weight(1f),
-          )
-        }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-        if (entries.isEmpty()) {
-          Box(
-            modifier = Modifier
-              .fillMaxWidth()
-              .height(160.dp),
-            contentAlignment = Alignment.Center,
-          ) {
-            Text(
-              text = "No files in this folder",
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-        } else {
-          LazyColumn(
-            modifier = Modifier
-              .fillMaxWidth()
-              .weight(1f, fill = false),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-          ) {
-            items(entries, key = { it.absolutePath }) { item ->
-              val detected = if (!item.isDirectory) FileConverterEngine.detectFormat(item) else null
-              Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(
-                  containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                ),
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .clip(RoundedCornerShape(12.dp))
-                  .clickable {
-                    if (item.isDirectory) {
-                      currentDir = item
-                    } else {
-                      onFileSelected(item)
-                    }
-                  },
-              ) {
-                Row(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                  Icon(
-                    imageVector = if (item.isDirectory) {
-                      Icons.Default.Folder
-                    } else {
-                      categoryIcon(detected?.category)
-                    },
-                    contentDescription = null,
-                    tint = if (item.isDirectory) {
-                      MaterialTheme.colorScheme.primary
-                    } else {
-                      MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    modifier = Modifier.size(22.dp),
-                  )
-                  Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                      text = item.name,
-                      style = MaterialTheme.typography.bodyMedium,
-                      fontWeight = FontWeight.SemiBold,
-                      color = MaterialTheme.colorScheme.onSurface,
-                      maxLines = 1,
-                      overflow = TextOverflow.Ellipsis,
-                    )
-                    if (!item.isDirectory) {
-                      val sizeStr = FileManagerEngine.formatFileSize(item.length())
-                      val badgeStr = detected?.displayName ?: "Unsupported"
-                      Text(
-                        text = "$badgeStr • $sizeStr",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                      )
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    confirmButton = {
-      TextButton(
-        onClick = onLaunchSystemPicker,
-        shape = CircleShape,
-        modifier = Modifier.testTag("system_file_picker_button"),
-      ) {
-        Icon(
-          imageVector = Icons.Default.FileOpen,
-          contentDescription = null,
-          modifier = Modifier.size(18.dp),
-        )
-        Spacer(modifier = Modifier.width(6.dp))
-        Text("System Picker")
-      }
-    },
-    dismissButton = {
-      TextButton(
-        onClick = onDismiss,
-        shape = CircleShape,
-      ) {
-        Text("Close")
-      }
-    },
-  )
 }
 
 /**

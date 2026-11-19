@@ -261,7 +261,6 @@ fun ArchiveScreen(
   var selectedArchivePaths by remember { mutableStateOf(setOf<String>()) }
 
   // Dialog states
-  var showOpenArchivePicker by remember { mutableStateOf(false) }
   var showCreateZipDialog by remember(initialFile?.absolutePath, initialFilesToCompress) {
     mutableStateOf(
       (!initialFilesToCompress.isNullOrEmpty() && initialFilesToCompress.any { it.exists() }) ||
@@ -278,7 +277,6 @@ fun ArchiveScreen(
       }
     )
   }
-  var showAddFilesDialog by remember { mutableStateOf(false) }
   var showCreateFolderDialog by remember { mutableStateOf(false) }
   var showArchiveInfoDialog by remember { mutableStateOf(false) }
   var showBulkInfoDialog by remember { mutableStateOf(false) }
@@ -309,7 +307,7 @@ fun ArchiveScreen(
     }
   }
 
-  // System document picker fallback
+  // System document picker
   val systemFilePickerLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.GetContent(),
   ) { uri: Uri? ->
@@ -333,6 +331,41 @@ fun ArchiveScreen(
           }
         } else {
           Toast.makeText(context, "Could not load selected file", Toast.LENGTH_SHORT).show()
+        }
+      }
+    }
+  }
+
+  // System multi-file picker for adding files to the active archive
+  val addFilesToArchiveLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.OpenMultipleDocuments(),
+  ) { uris: List<Uri> ->
+    val info = archiveInfo ?: return@rememberLauncherForActivityResult
+    if (uris.isNotEmpty()) {
+      coroutineScope.launch {
+        isBusy = true
+        val filesToAdd = withContext(Dispatchers.IO) {
+          uris.mapNotNull { uri -> copyUriToTempSourceFile(context, uri) }
+        }
+        if (filesToAdd.isNotEmpty()) {
+          val result = withContext(Dispatchers.IO) {
+            ArchiveEngine.addFilesToArchive(
+              archiveFile = info.file,
+              filesToAdd = filesToAdd,
+              targetVirtualDir = currentVirtualDir,
+              compressionLevel = ArchiveCompressionLevel.BALANCED,
+            )
+          }
+          isBusy = false
+          lastOperationBanner = result
+          if (result.success) {
+            archiveRevision++
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          }
+          Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+        } else {
+          isBusy = false
+          Toast.makeText(context, "Could not load selected files", Toast.LENGTH_SHORT).show()
         }
       }
     }
@@ -545,7 +578,7 @@ fun ArchiveScreen(
         ArchiveInitialView(
           onOpenFile = {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            showOpenArchivePicker = true
+            systemFilePickerLauncher.launch("*/*")
           },
           onCreateZip = {
             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -689,7 +722,7 @@ fun ArchiveScreen(
           },
           onNavigateRoot = { navigateToVirtualDir("") },
           onExtractAll = { extractPathsTarget = emptySet() },
-          onAddFiles = { showAddFilesDialog = true },
+          onAddFiles = { addFilesToArchiveLauncher.launch(arrayOf("*/*")) },
           onNewZip = {
             preselectedFilesForZip = emptyList()
             showCreateZipDialog = true
@@ -736,7 +769,7 @@ fun ArchiveScreen(
               isSearching = searchQuery.isNotEmpty(),
               searchQuery = searchQuery,
               supportsModify = currentInfo.format.supportsMultiEntryWrite,
-              onAddFiles = { showAddFilesDialog = true },
+              onAddFiles = { addFilesToArchiveLauncher.launch(arrayOf("*/*")) },
               onCreateFolder = { showCreateFolderDialog = true },
             )
           } else {
@@ -976,7 +1009,7 @@ fun ArchiveScreen(
                   testTag = "fab_add_files",
                   onClick = {
                     isFabExpanded = false
-                    showAddFilesDialog = true
+                    addFilesToArchiveLauncher.launch(arrayOf("*/*"))
                   },
                 )
 
@@ -1042,35 +1075,7 @@ fun ArchiveScreen(
   // DIALOGS
   // ============================================================================
 
-  // 1. Open Archive Picker Dialog
-  if (showOpenArchivePicker) {
-    StorageFilePickerDialog(
-      initialDirectory = defaultBrowseDir,
-      onDismiss = { showOpenArchivePicker = false },
-      onLaunchSystemPicker = {
-        showOpenArchivePicker = false
-        systemFilePickerLauncher.launch("*/*")
-      },
-      onFileSelected = { selectedFile ->
-        showOpenArchivePicker = false
-        if (ArchiveEngine.isSupportedArchive(selectedFile)) {
-          activeArchiveFile = selectedFile
-          currentVirtualDir = ""
-          selectedArchivePaths = emptySet()
-          isSelectionMode = false
-          archiveRevision++
-          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        } else {
-          preselectedFilesForZip = listOf(selectedFile)
-          showCreateZipDialog = true
-        }
-      },
-      title = "Select Archive to Open",
-      fileFilter = { file -> ArchiveEngine.isSupportedArchive(file) },
-    )
-  }
-
-  // 2. Create / Zip Archive Dialog
+  // 1. Create / Zip Archive Dialog
   if (showCreateZipDialog) {
     CreateZipArchiveDialog(
       initialDirectory = activeArchiveFile?.parentFile ?: defaultBrowseDir,
@@ -1151,37 +1156,6 @@ fun ArchiveScreen(
           isSelectionMode = false
           selectedArchivePaths = emptySet()
           haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-          Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-        }
-      },
-    )
-  }
-
-  // 4. Add Files to Existing Archive Dialog
-  if (showAddFilesDialog && archiveInfo != null) {
-    AddFilesToArchiveDialog(
-      archiveName = archiveInfo.file.name,
-      targetVirtualDir = currentVirtualDir,
-      initialDirectory = archiveInfo.file.parentFile ?: defaultBrowseDir,
-      onDismiss = { showAddFilesDialog = false },
-      onConfirmAdd = { filesToAdd, compressionLevel ->
-        showAddFilesDialog = false
-        coroutineScope.launch {
-          isBusy = true
-          val result = withContext(Dispatchers.IO) {
-            ArchiveEngine.addFilesToArchive(
-              archiveFile = archiveInfo.file,
-              filesToAdd = filesToAdd,
-              targetVirtualDir = currentVirtualDir,
-              compressionLevel = compressionLevel,
-            )
-          }
-          isBusy = false
-          lastOperationBanner = result
-          if (result.success) {
-            archiveRevision++
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-          }
           Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
         }
       },
@@ -3039,15 +3013,15 @@ internal fun CreateZipArchiveDialog(
     compressionLevel: ArchiveCompressionLevel,
   ) -> Unit,
 ) {
+  val context = LocalContext.current
+  val coroutineScope = rememberCoroutineScope()
   val rootDir = remember { FileManagerEngine.getUserRootDirectory() }
-  var currentDir by remember {
-    mutableStateOf(
-      if (initialDirectory.exists() && initialDirectory.isDirectory) {
-        initialDirectory
-      } else {
-        rootDir
-      }
-    )
+  val outputDir = remember(initialDirectory) {
+    if (initialDirectory.exists() && initialDirectory.isDirectory) {
+      initialDirectory
+    } else {
+      rootDir
+    }
   }
   var selectedFiles by remember {
     mutableStateOf(initialSelectedFiles.filter { it.exists() }.distinctBy { it.absolutePath })
@@ -3069,14 +3043,21 @@ internal fun CreateZipArchiveDialog(
   }
   var archiveNameInput by rememberSaveable { mutableStateOf(defaultStem) }
 
-  val browserEntries = remember(currentDir) {
-    val rawList = currentDir.listFiles()?.toList() ?: emptyList()
-    rawList
-      .filter { !it.name.startsWith(".") }
-      .sortedWith(
-        compareByDescending<File> { it.isDirectory }
-          .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
-      )
+  val pickFilesForZipLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.OpenMultipleDocuments(),
+  ) { uris: List<Uri> ->
+    if (uris.isNotEmpty()) {
+      coroutineScope.launch {
+        val imported = withContext(Dispatchers.IO) {
+          uris.mapNotNull { uri -> copyUriToTempSourceFile(context, uri) }
+        }
+        if (imported.isNotEmpty()) {
+          selectedFiles = (selectedFiles + imported).distinctBy { it.absolutePath }
+        } else {
+          Toast.makeText(context, "Could not load selected files", Toast.LENGTH_SHORT).show()
+        }
+      }
+    }
   }
 
   val writableFormats = remember {
@@ -3087,7 +3068,7 @@ internal fun CreateZipArchiveDialog(
     .removeSuffix(".${selectedFormat.extension}")
     .replace(Regex("[\\\\/:*?\"<>|]"), "_")
     .ifEmpty { "archive" }
-  val outputFile = File(currentDir, "$sanitizedStem.${selectedFormat.extension}")
+  val outputFile = File(outputDir, "$sanitizedStem.${selectedFormat.extension}")
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -3186,59 +3167,50 @@ internal fun CreateZipArchiveDialog(
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-        // 3. Folder navigation header to select files/folders to zip
+        // 3. System File Picker header & selected files list
         Row(
           modifier = Modifier.fillMaxWidth(),
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-          val parent = currentDir.parentFile
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(1f),
-          ) {
-            IconButton(
-              onClick = { if (parent != null && parent.canRead()) currentDir = parent },
-              enabled = parent != null && parent.canRead(),
-              modifier = Modifier.size(32.dp),
-            ) {
-              Icon(Icons.Default.ArrowUpward, contentDescription = "Parent folder", modifier = Modifier.size(18.dp))
-            }
-            Text(
-              text = currentDir.name.ifEmpty { "/" },
-              style = MaterialTheme.typography.labelLarge,
-              fontWeight = FontWeight.SemiBold,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-          }
+          Text(
+            text = "Files to include",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+          )
 
           TextButton(
-            onClick = {
-              selectedFiles = if (browserEntries.all { entry -> selectedFiles.any { it.absolutePath == entry.absolutePath } }) {
-                val dirSet = browserEntries.map { it.absolutePath }.toSet()
-                selectedFiles.filterNot { it.absolutePath in dirSet }
-              } else {
-                (selectedFiles + browserEntries).distinctBy { it.absolutePath }
-              }
-            },
+            onClick = { pickFilesForZipLauncher.launch(arrayOf("*/*")) },
+            modifier = Modifier.testTag("zip_pick_files_button"),
           ) {
-            Text("Select All", fontSize = 12.sp)
+            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("Pick Files", fontSize = 12.sp)
           }
         }
 
-        if (browserEntries.isEmpty()) {
-          Box(
+        if (selectedFiles.isEmpty()) {
+          Card(
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            ),
             modifier = Modifier
               .fillMaxWidth()
-              .height(120.dp),
-            contentAlignment = Alignment.Center,
+              .height(110.dp)
+              .clip(RoundedCornerShape(12.dp))
+              .clickable { pickFilesForZipLauncher.launch(arrayOf("*/*")) },
           ) {
-            Text(
-              text = "No files in this folder",
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Box(
+              modifier = Modifier.fillMaxSize(),
+              contentAlignment = Alignment.Center,
+            ) {
+              Text(
+                text = "Tap to pick files",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
           }
         } else {
           LazyColumn(
@@ -3247,27 +3219,15 @@ internal fun CreateZipArchiveDialog(
               .weight(1f, fill = false),
             verticalArrangement = Arrangement.spacedBy(6.dp),
           ) {
-            items(browserEntries, key = { it.absolutePath }) { item ->
-              val isChecked = selectedFiles.any { it.absolutePath == item.absolutePath }
+            items(selectedFiles, key = { it.absolutePath }) { item ->
               Card(
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(
-                  containerColor = if (isChecked) {
-                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-                  } else {
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                  },
+                  containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
                 ),
                 modifier = Modifier
                   .fillMaxWidth()
                   .clip(RoundedCornerShape(12.dp))
-                  .clickable {
-                    selectedFiles = if (isChecked) {
-                      selectedFiles.filterNot { it.absolutePath == item.absolutePath }
-                    } else {
-                      selectedFiles + item
-                    }
-                  }
                   .testTag("zip_pick_item_${item.name}"),
               ) {
                 Row(
@@ -3277,17 +3237,6 @@ internal fun CreateZipArchiveDialog(
                   verticalAlignment = Alignment.CenterVertically,
                   horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                  Checkbox(
-                    checked = isChecked,
-                    onCheckedChange = { checked ->
-                      selectedFiles = if (checked) {
-                        (selectedFiles + item).distinctBy { it.absolutePath }
-                      } else {
-                        selectedFiles.filterNot { it.absolutePath == item.absolutePath }
-                      }
-                    },
-                    modifier = Modifier.size(28.dp),
-                  )
                   Icon(
                     imageVector = if (item.isDirectory) Icons.Default.Folder else Icons.AutoMirrored.Filled.InsertDriveFile,
                     contentDescription = null,
@@ -3308,13 +3257,17 @@ internal fun CreateZipArchiveDialog(
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                   }
-                  if (item.isDirectory) {
-                    TextButton(
-                      onClick = { currentDir = item },
-                      contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                    ) {
-                      Text("Open", fontSize = 12.sp)
-                    }
+                  IconButton(
+                    onClick = {
+                      selectedFiles = selectedFiles.filterNot { it.absolutePath == item.absolutePath }
+                    },
+                    modifier = Modifier.size(28.dp),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.Close,
+                      contentDescription = "Remove ${item.name}",
+                      modifier = Modifier.size(16.dp),
+                    )
                   }
                 }
               }
@@ -3342,201 +3295,6 @@ internal fun CreateZipArchiveDialog(
         onClick = onDismiss,
         shape = CircleShape,
       ) {
-        Text("Cancel")
-      }
-    },
-  )
-}
-
-@Composable
-private fun AddFilesToArchiveDialog(
-  archiveName: String,
-  targetVirtualDir: String,
-  initialDirectory: File,
-  onDismiss: () -> Unit,
-  onConfirmAdd: (filesToAdd: List<File>, compressionLevel: ArchiveCompressionLevel) -> Unit,
-) {
-  val rootDir = remember { FileManagerEngine.getUserRootDirectory() }
-  var currentDir by remember {
-    mutableStateOf(
-      if (initialDirectory.exists() && initialDirectory.isDirectory) {
-        initialDirectory
-      } else {
-        rootDir
-      }
-    )
-  }
-  var selectedFiles by remember { mutableStateOf<List<File>>(emptyList()) }
-
-  val entries = remember(currentDir) {
-    val rawList = currentDir.listFiles()?.toList() ?: emptyList()
-    rawList
-      .filter { !it.name.startsWith(".") }
-      .sortedWith(
-        compareByDescending<File> { it.isDirectory }
-          .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
-      )
-  }
-
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    shape = RoundedCornerShape(28.dp),
-    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-    tonalElevation = 6.dp,
-    title = {
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Box(
-          modifier = Modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primaryContainer),
-          contentAlignment = Alignment.Center,
-        ) {
-          Icon(
-            imageVector = Icons.AutoMirrored.Filled.NoteAdd,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(24.dp),
-          )
-        }
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = "Add to Archive",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-          )
-          Text(
-            text = if (targetVirtualDir.isEmpty()) archiveName else "$archiveName / $targetVirtualDir",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-      }
-    },
-    text = {
-      Column(
-        modifier = Modifier
-          .fillMaxWidth()
-          .heightIn(max = 380.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          val parent = currentDir.parentFile
-          IconButton(
-            onClick = { if (parent != null && parent.canRead()) currentDir = parent },
-            enabled = parent != null && parent.canRead(),
-            modifier = Modifier.size(32.dp),
-          ) {
-            Icon(Icons.Default.ArrowUpward, contentDescription = "Parent folder", modifier = Modifier.size(18.dp))
-          }
-          Text(
-            text = currentDir.absolutePath,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-        LazyColumn(
-          modifier = Modifier
-            .fillMaxWidth()
-            .weight(1f, fill = false),
-          verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          items(entries, key = { it.absolutePath }) { item ->
-            val isChecked = selectedFiles.any { it.absolutePath == item.absolutePath }
-            Card(
-              shape = RoundedCornerShape(12.dp),
-              colors = CardDefaults.cardColors(
-                containerColor = if (isChecked) {
-                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-                } else {
-                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                },
-              ),
-              modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .clickable {
-                  selectedFiles = if (isChecked) {
-                    selectedFiles.filterNot { it.absolutePath == item.absolutePath }
-                  } else {
-                    selectedFiles + item
-                  }
-                },
-            ) {
-              Row(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-              ) {
-                Checkbox(
-                  checked = isChecked,
-                  onCheckedChange = { checked ->
-                    selectedFiles = if (checked) {
-                      (selectedFiles + item).distinctBy { it.absolutePath }
-                    } else {
-                      selectedFiles.filterNot { it.absolutePath == item.absolutePath }
-                    }
-                  },
-                  modifier = Modifier.size(28.dp),
-                )
-                Icon(
-                  imageVector = if (item.isDirectory) Icons.Default.Folder else Icons.AutoMirrored.Filled.InsertDriveFile,
-                  contentDescription = null,
-                  tint = if (item.isDirectory) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier.size(20.dp),
-                )
-                Column(modifier = Modifier.weight(1f)) {
-                  Text(
-                    text = item.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                  )
-                  Text(
-                    text = if (item.isDirectory) "Folder" else FileManagerEngine.formatFileSize(item.length()),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  )
-                }
-                if (item.isDirectory) {
-                  TextButton(onClick = { currentDir = item }) {
-                    Text("Open", fontSize = 12.sp)
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    confirmButton = {
-      Button(
-        onClick = { onConfirmAdd(selectedFiles, ArchiveCompressionLevel.BALANCED) },
-        enabled = selectedFiles.isNotEmpty(),
-        shape = CircleShape,
-      ) {
-        Text("Add (${selectedFiles.size})")
-      }
-    },
-    dismissButton = {
-      TextButton(onClick = onDismiss, shape = CircleShape) {
         Text("Cancel")
       }
     },

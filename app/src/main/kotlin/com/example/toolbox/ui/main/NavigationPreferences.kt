@@ -15,6 +15,7 @@ import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
 import org.json.JSONObject
 
 const val NAVIGATION_PREFERENCES_NAME = "navigation_preferences"
@@ -107,6 +108,7 @@ enum class AppPermission(
     toolsUsingPermission = listOf(
       Tool.FILES,
       Tool.GALLERY,
+      Tool.IMAGE,
       Tool.MUSIC,
       Tool.IMAGE_EDITOR,
       Tool.VIDEO_EDITOR,
@@ -244,6 +246,7 @@ object NavigationPreferencesBridge {
 
 val DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
   Tool.UNIT_CONVERTER,
+  Tool.IMAGE,
   Tool.IMAGE_EDITOR,
   Tool.VIDEO_EDITOR,
   Tool.AUDIO_EDITOR,
@@ -1596,3 +1599,553 @@ fun resetAllSettingsToDefaults(repository: NavigationPreferencesRepository) {
   repository.resetPermissionUsage()
   repository.setLastOpenedTool(null)
 }
+
+const val DATA_BACKUP_FORMAT = "toolbox_data_v1"
+const val DEFAULT_DATA_BACKUP_FILENAME = "toolbox_data_backup.json"
+
+const val DATA_BACKUP_KEY_NOTES = "notes_tool"
+const val DATA_BACKUP_KEY_TODO_LIST = "todo_list"
+const val DATA_BACKUP_KEY_RECIPE_BOOK = "recipe_book"
+const val DATA_BACKUP_KEY_PLANT_SCHEDULE = "plant_schedule"
+const val DATA_BACKUP_KEY_DICE_ROLLER = "dice_roller"
+const val DATA_BACKUP_KEY_CHORD_BOOK = "chord_book"
+const val DATA_BACKUP_KEY_GUITAR_TUNER = "guitar_tuner"
+const val DATA_BACKUP_KEY_MUSIC_PLAYER = "music_player"
+const val DATA_BACKUP_KEY_SHARED_PREFERENCES = "tool_shared_preferences"
+
+val TOOL_DATA_SHARED_PREFERENCES_NAMES: List<String> = listOf(
+  com.example.toolbox.ui.tools.SharedPreferencesNotesRepository.PREFS_NAME,
+  com.example.toolbox.ui.tools.SharedPreferencesTodoListRepository.PREFS_NAME,
+  "recipe_book_prefs",
+  com.example.toolbox.ui.tools.SharedPreferencesPlantScheduleRepository.PREFS_NAME,
+  com.example.toolbox.ui.tools.DiceRollerPreferences.PREFS_NAME,
+  com.example.toolbox.ui.tools.CHORD_BOOK_PREFS_NAME,
+  com.example.toolbox.ui.tools.SharedPreferencesGuitarTunerRepository.PREFS_NAME,
+  com.example.toolbox.ui.tools.MUSIC_PLAYER_PREFS_NAME,
+  com.example.toolbox.ui.tools.GALLERY_PREFS_NAME,
+  com.example.toolbox.ui.tools.AUDIO_RECORDER_PREFS_NAME,
+  com.example.toolbox.ui.tools.CAMERA_PREFS_NAME,
+  com.example.toolbox.ui.tools.FILE_CONVERTER_PREFS_NAME,
+  "files_tool_preferences",
+)
+
+private val RECOGNIZED_DATA_BACKUP_KEYS = setOf(
+  DATA_BACKUP_KEY_NOTES,
+  DATA_BACKUP_KEY_TODO_LIST,
+  DATA_BACKUP_KEY_RECIPE_BOOK,
+  DATA_BACKUP_KEY_PLANT_SCHEDULE,
+  DATA_BACKUP_KEY_DICE_ROLLER,
+  DATA_BACKUP_KEY_CHORD_BOOK,
+  DATA_BACKUP_KEY_GUITAR_TUNER,
+  DATA_BACKUP_KEY_MUSIC_PLAYER,
+  DATA_BACKUP_KEY_SHARED_PREFERENCES,
+)
+
+/**
+ * Bundle of tool data repositories and preferences used by [exportDataToJson] and [importDataFromJson].
+ * Can be constructed from an Android [Context] or from in-memory repositories in unit tests.
+ */
+data class ToolboxDataRepositories(
+  val notesRepository: com.example.toolbox.ui.tools.NotesRepository? = null,
+  val todoListRepository: com.example.toolbox.ui.tools.TodoListRepository? = null,
+  val recipeBookRepository: com.example.toolbox.ui.tools.RecipeBookRepository? = null,
+  val plantScheduleRepository: com.example.toolbox.ui.tools.PlantScheduleRepository? = null,
+  val diceRollerPreferences: com.example.toolbox.ui.tools.DiceRollerPreferences? = null,
+  val chordBookPreferences: com.example.toolbox.ui.tools.ChordBookPreferencesRepository? = null,
+  val guitarTunerRepository: com.example.toolbox.ui.tools.GuitarTunerRepository? = null,
+  val currentTodoDate: String = com.example.toolbox.ui.tools.getTodayDateKey(),
+  val sharedPreferencesProvider: ((String) -> SharedPreferences?)? = null,
+  val context: Context? = null,
+) {
+  companion object {
+    fun fromContext(context: Context): ToolboxDataRepositories {
+      val appCtx = context.applicationContext ?: context
+      return ToolboxDataRepositories(
+        notesRepository = com.example.toolbox.ui.tools.SharedPreferencesNotesRepository(appCtx),
+        todoListRepository = com.example.toolbox.ui.tools.SharedPreferencesTodoListRepository(appCtx),
+        recipeBookRepository = com.example.toolbox.ui.tools.SharedPreferencesRecipeBookRepository(appCtx),
+        plantScheduleRepository = com.example.toolbox.ui.tools.SharedPreferencesPlantScheduleRepository(appCtx),
+        diceRollerPreferences = com.example.toolbox.ui.tools.DiceRollerPreferences(appCtx),
+        chordBookPreferences = com.example.toolbox.ui.tools.ChordBookPreferencesRepository(appCtx),
+        guitarTunerRepository = com.example.toolbox.ui.tools.SharedPreferencesGuitarTunerRepository(appCtx),
+        sharedPreferencesProvider = { prefName ->
+          appCtx.getSharedPreferences(prefName, Context.MODE_PRIVATE)
+        },
+        context = appCtx,
+      )
+    }
+  }
+}
+
+private fun exportSharedPreferencesToJsonObject(prefs: SharedPreferences): JSONObject {
+  val entriesObj = JSONObject()
+  prefs.all.forEach { (key, value) ->
+    if (key.isNullOrBlank() || value == null) return@forEach
+    val entry = JSONObject()
+    when (value) {
+      is String -> {
+        entry.put("type", "string")
+        entry.put("value", value)
+        entriesObj.put(key, entry)
+      }
+      is Int -> {
+        entry.put("type", "int")
+        entry.put("value", value)
+        entriesObj.put(key, entry)
+      }
+      is Long -> {
+        entry.put("type", "long")
+        entry.put("value", value)
+        entriesObj.put(key, entry)
+      }
+      is Float -> {
+        entry.put("type", "float")
+        entry.put("value", value.toDouble())
+        entriesObj.put(key, entry)
+      }
+      is Boolean -> {
+        entry.put("type", "boolean")
+        entry.put("value", value)
+        entriesObj.put(key, entry)
+      }
+      is Set<*> -> {
+        entry.put("type", "string_set")
+        val arr = JSONArray()
+        value.filterIsInstance<String>().sorted().forEach { arr.put(it) }
+        entry.put("value", arr)
+        entriesObj.put(key, entry)
+      }
+    }
+  }
+  return entriesObj
+}
+
+private fun importSharedPreferencesFromJsonObject(
+  entriesObj: JSONObject,
+  prefs: SharedPreferences,
+) {
+  val editor = prefs.edit().clear()
+  val keys = entriesObj.keys()
+  while (keys.hasNext()) {
+    val key = keys.next()
+    val entry = entriesObj.optJSONObject(key) ?: continue
+    when (entry.optString("type", "")) {
+      "string" -> editor.putString(key, entry.optString("value", ""))
+      "int" -> editor.putInt(key, entry.optInt("value", 0))
+      "long" -> editor.putLong(key, entry.optLong("value", 0L))
+      "float" -> editor.putFloat(key, entry.optDouble("value", 0.0).toFloat())
+      "boolean" -> editor.putBoolean(key, entry.optBoolean("value", false))
+      "string_set" -> {
+        val arr = entry.optJSONArray("value")
+        val set = mutableSetOf<String>()
+        if (arr != null) {
+          for (i in 0 until arr.length()) {
+            set.add(arr.optString(i, ""))
+          }
+        }
+        editor.putStringSet(key, set)
+      }
+    }
+  }
+  editor.apply()
+}
+
+/**
+ * Exports all tool data across [repositories] into a formatted JSON string suitable for saving to a backup file.
+ */
+fun exportDataToJson(repositories: ToolboxDataRepositories): String {
+  com.example.toolbox.ui.tools.MusicPlayerEngine.activeSessionState?.flushPlayStats()
+
+  val root = JSONObject()
+  root.put("format", DATA_BACKUP_FORMAT)
+
+  repositories.notesRepository?.let { notesRepo ->
+    val notesObj = JSONObject()
+    val notesArr = JSONArray()
+    notesRepo.loadNotes().forEach { notesArr.put(it.toJson()) }
+    notesObj.put("notes", notesArr)
+    val labelsArr = JSONArray()
+    notesRepo.loadLabels().forEach { labelsArr.put(it) }
+    notesObj.put("labels", labelsArr)
+    notesObj.put("is_grid_view", notesRepo.isGridView())
+    notesObj.put("grid_columns_per_row", notesRepo.getGridColumnsPerRow())
+    root.put(DATA_BACKUP_KEY_NOTES, notesObj)
+  }
+
+  repositories.todoListRepository?.let { todoRepo ->
+    val dateKey = repositories.currentTodoDate
+    val todoObj = JSONObject()
+    val tasksArr = JSONArray()
+    todoRepo.loadTasks().forEach { tasksArr.put(it.toJson()) }
+    todoObj.put("tasks", tasksArr)
+    val savedArr = JSONArray()
+    todoRepo.loadSavedTasks().forEach { savedArr.put(it.toJson()) }
+    todoObj.put("saved_tasks", savedArr)
+    val completedArr = JSONArray()
+    todoRepo.loadCompletedTasks(dateKey).forEach { completedArr.put(it.toJson()) }
+    todoObj.put("completed_tasks", completedArr)
+    todoObj.put("completed_today_count", todoRepo.getCompletedTodayCount(dateKey))
+    todoObj.put("completed_today_date", dateKey)
+    root.put(DATA_BACKUP_KEY_TODO_LIST, todoObj)
+  }
+
+  repositories.recipeBookRepository?.let { recipeRepo ->
+    val recipeObj = JSONObject()
+    val savedArr = JSONArray()
+    recipeRepo.getSavedRecipes().forEach { savedArr.put(it.toJson()) }
+    recipeObj.put("saved_recipes", savedArr)
+    val customArr = JSONArray()
+    recipeRepo.getCustomCatalogRecipes().forEach { customArr.put(it.toJson()) }
+    recipeObj.put("custom_recipes", customArr)
+    root.put(DATA_BACKUP_KEY_RECIPE_BOOK, recipeObj)
+  }
+
+  repositories.plantScheduleRepository?.let { plantRepo ->
+    val plantObj = JSONObject()
+    val scheduledArr = JSONArray()
+    plantRepo.loadScheduledPlants().forEach { scheduledArr.put(it.toJson()) }
+    plantObj.put("scheduled_plants", scheduledArr)
+    val customArr = JSONArray()
+    plantRepo.loadCustomPlants().forEach { customArr.put(it.toJson()) }
+    plantObj.put("custom_plants", customArr)
+    root.put(DATA_BACKUP_KEY_PLANT_SCHEDULE, plantObj)
+  }
+
+  repositories.diceRollerPreferences?.let { dicePrefs ->
+    val diceObj = JSONObject()
+    val rollsArr = JSONArray()
+    dicePrefs.loadSavedRolls().forEach { rollsArr.put(it.toJson()) }
+    diceObj.put("saved_rolls", rollsArr)
+    root.put(DATA_BACKUP_KEY_DICE_ROLLER, diceObj)
+  }
+
+  repositories.chordBookPreferences?.let { chordPrefs ->
+    val chordObj = JSONObject()
+    val tuningsArr = JSONArray()
+    chordPrefs.loadCustomTunings().forEach { tuningsArr.put(it.toJson()) }
+    chordObj.put("custom_tunings", tuningsArr)
+    val progressionsArr = JSONArray()
+    chordPrefs.loadProgressions().forEach { progressionsArr.put(it.toJson()) }
+    chordObj.put("progressions", progressionsArr)
+    chordObj.put("selected_tuning_id", chordPrefs.getSelectedTuningId())
+    chordObj.put("capo_fret", chordPrefs.getCapoFret())
+    chordObj.put("enharmonic_preference", chordPrefs.getEnharmonicPreference().name)
+    chordObj.put("dot_label_mode", chordPrefs.getDotLabelMode().name)
+    root.put(DATA_BACKUP_KEY_CHORD_BOOK, chordObj)
+  }
+
+  repositories.guitarTunerRepository?.let { tunerRepo ->
+    val tunerObj = JSONObject()
+    val favArr = JSONArray()
+    tunerRepo.loadFavoriteTuningIds().sorted().forEach { favArr.put(it) }
+    tunerObj.put("favorite_tuning_ids", favArr)
+    root.put(DATA_BACKUP_KEY_GUITAR_TUNER, tunerObj)
+  }
+
+  repositories.sharedPreferencesProvider?.let { provider ->
+    val allPrefsObj = JSONObject()
+    TOOL_DATA_SHARED_PREFERENCES_NAMES.forEach { prefName ->
+      val prefs = provider(prefName)
+      if (prefs != null) {
+        allPrefsObj.put(prefName, exportSharedPreferencesToJsonObject(prefs))
+      }
+    }
+    root.put(DATA_BACKUP_KEY_SHARED_PREFERENCES, allPrefsObj)
+  }
+
+  return root.toString(2)
+}
+
+/**
+ * Exports all tool data for the given Android [context] to a formatted JSON string.
+ */
+fun exportDataToJson(context: Context): String =
+  exportDataToJson(ToolboxDataRepositories.fromContext(context))
+
+/**
+ * Imports and restores tool data from [jsonString] into [repositories].
+ * Returns `true` if the JSON was valid and contained recognized tool data, or `false` otherwise.
+ */
+fun importDataFromJson(
+  jsonString: String,
+  repositories: ToolboxDataRepositories,
+): Boolean {
+  val trimmed = jsonString.trim()
+  if (trimmed.isEmpty()) return false
+  return try {
+    val json = JSONObject(trimmed)
+    val isDataBackupFormat = json.optString("format", "") == DATA_BACKUP_FORMAT
+    val hasRecognizedSection = RECOGNIZED_DATA_BACKUP_KEYS.any { json.has(it) }
+    if (!isDataBackupFormat && !hasRecognizedSection) return false
+
+    // 1. Restore raw tool SharedPreferences snapshots first (if available)
+    if (json.has(DATA_BACKUP_KEY_SHARED_PREFERENCES)) {
+      val allPrefsObj = json.optJSONObject(DATA_BACKUP_KEY_SHARED_PREFERENCES)
+      val provider = repositories.sharedPreferencesProvider
+      if (allPrefsObj != null && provider != null) {
+        TOOL_DATA_SHARED_PREFERENCES_NAMES.forEach { prefName ->
+          val prefEntries = allPrefsObj.optJSONObject(prefName)
+          val targetPrefs = provider(prefName)
+          if (prefEntries != null && targetPrefs != null) {
+            importSharedPreferencesFromJsonObject(prefEntries, targetPrefs)
+          }
+        }
+      }
+    }
+
+    // 2. Restore structured tool repositories (works for both SharedPreferences and InMemory repositories)
+    if (json.has(DATA_BACKUP_KEY_NOTES)) {
+      val notesObj = json.optJSONObject(DATA_BACKUP_KEY_NOTES)
+      val notesRepo = repositories.notesRepository
+      if (notesObj != null && notesRepo != null) {
+        if (notesObj.has("notes")) {
+          val arr = notesObj.optJSONArray("notes")
+          val notes = mutableListOf<com.example.toolbox.ui.tools.NoteItem>()
+          if (arr != null) {
+            for (i in 0 until arr.length()) {
+              val itemObj = arr.optJSONObject(i) ?: continue
+              notes.add(com.example.toolbox.ui.tools.NoteItem.fromJson(itemObj))
+            }
+          }
+          notesRepo.saveNotes(notes)
+        }
+        if (notesObj.has("labels")) {
+          val arr = notesObj.optJSONArray("labels")
+          val labels = mutableListOf<String>()
+          if (arr != null) {
+            for (i in 0 until arr.length()) {
+              val label = arr.optString(i, "").trim()
+              if (label.isNotEmpty()) labels.add(label)
+            }
+          }
+          notesRepo.saveLabels(labels)
+        }
+        if (notesObj.has("is_grid_view")) {
+          notesRepo.setGridView(notesObj.optBoolean("is_grid_view", true))
+        }
+        if (notesObj.has("grid_columns_per_row")) {
+          notesRepo.setGridColumnsPerRow(
+            notesObj.optInt("grid_columns_per_row", com.example.toolbox.ui.tools.DEFAULT_NOTES_GRID_COLUMNS)
+          )
+        }
+      }
+    }
+
+    if (json.has(DATA_BACKUP_KEY_TODO_LIST)) {
+      val todoObj = json.optJSONObject(DATA_BACKUP_KEY_TODO_LIST)
+      val todoRepo = repositories.todoListRepository
+      if (todoObj != null && todoRepo != null) {
+        val dateKey = todoObj.optString("completed_today_date", "")
+          .ifBlank { repositories.currentTodoDate }
+        if (todoObj.has("tasks")) {
+          val arr = todoObj.optJSONArray("tasks")
+          val tasks = mutableListOf<com.example.toolbox.ui.tools.TodoItem>()
+          if (arr != null) {
+            for (i in 0 until arr.length()) {
+              val itemObj = arr.optJSONObject(i) ?: continue
+              tasks.add(com.example.toolbox.ui.tools.TodoItem.fromJson(itemObj))
+            }
+          }
+          todoRepo.saveTasks(tasks)
+        }
+        if (todoObj.has("saved_tasks")) {
+          val arr = todoObj.optJSONArray("saved_tasks")
+          val savedTasks = mutableListOf<com.example.toolbox.ui.tools.TodoItem>()
+          if (arr != null) {
+            for (i in 0 until arr.length()) {
+              val itemObj = arr.optJSONObject(i) ?: continue
+              savedTasks.add(com.example.toolbox.ui.tools.TodoItem.fromJson(itemObj))
+            }
+          }
+          todoRepo.saveSavedTasks(savedTasks)
+        }
+        if (todoObj.has("completed_tasks")) {
+          val arr = todoObj.optJSONArray("completed_tasks")
+          val completedTasks = mutableListOf<com.example.toolbox.ui.tools.TodoItem>()
+          if (arr != null) {
+            for (i in 0 until arr.length()) {
+              val itemObj = arr.optJSONObject(i) ?: continue
+              completedTasks.add(com.example.toolbox.ui.tools.TodoItem.fromJson(itemObj))
+            }
+          }
+          todoRepo.saveCompletedTasks(completedTasks, dateKey)
+        }
+        if (todoObj.has("completed_today_count")) {
+          todoRepo.setCompletedTodayCount(todoObj.optInt("completed_today_count", 0), dateKey)
+        }
+      }
+    }
+
+    if (json.has(DATA_BACKUP_KEY_RECIPE_BOOK)) {
+      val recipeObj = json.optJSONObject(DATA_BACKUP_KEY_RECIPE_BOOK)
+      val recipeRepo = repositories.recipeBookRepository
+      if (recipeObj != null && recipeRepo != null) {
+        if (recipeObj.has("saved_recipes")) {
+          val arr = recipeObj.optJSONArray("saved_recipes")
+          val saved = mutableListOf<com.example.toolbox.ui.tools.RecipeItem>()
+          if (arr != null) {
+            for (i in 0 until arr.length()) {
+              val itemObj = arr.optJSONObject(i) ?: continue
+              saved.add(com.example.toolbox.ui.tools.RecipeItem.fromJson(itemObj))
+            }
+          }
+          recipeRepo.saveSavedRecipes(saved)
+        }
+        if (recipeObj.has("custom_recipes")) {
+          val arr = recipeObj.optJSONArray("custom_recipes")
+          val custom = mutableListOf<com.example.toolbox.ui.tools.RecipeItem>()
+          if (arr != null) {
+            for (i in 0 until arr.length()) {
+              val itemObj = arr.optJSONObject(i) ?: continue
+              custom.add(com.example.toolbox.ui.tools.RecipeItem.fromJson(itemObj))
+            }
+          }
+          recipeRepo.saveCustomCatalogRecipes(custom)
+        }
+      }
+    }
+
+    if (json.has(DATA_BACKUP_KEY_PLANT_SCHEDULE)) {
+      val plantObj = json.optJSONObject(DATA_BACKUP_KEY_PLANT_SCHEDULE)
+      val plantRepo = repositories.plantScheduleRepository
+      if (plantObj != null && plantRepo != null) {
+        if (plantObj.has("scheduled_plants")) {
+          val arr = plantObj.optJSONArray("scheduled_plants")
+          val scheduled = mutableListOf<com.example.toolbox.ui.tools.PlantItem>()
+          if (arr != null) {
+            for (i in 0 until arr.length()) {
+              val itemObj = arr.optJSONObject(i) ?: continue
+              val plant = com.example.toolbox.ui.tools.PlantItem.fromJson(itemObj)
+              if (plant.name.isNotBlank()) scheduled.add(plant)
+            }
+          }
+          plantRepo.saveScheduledPlants(scheduled)
+        }
+        if (plantObj.has("custom_plants")) {
+          val arr = plantObj.optJSONArray("custom_plants")
+          val custom = mutableListOf<com.example.toolbox.ui.tools.PlantItem>()
+          if (arr != null) {
+            for (i in 0 until arr.length()) {
+              val itemObj = arr.optJSONObject(i) ?: continue
+              val plant = com.example.toolbox.ui.tools.PlantItem.fromJson(itemObj)
+              if (plant.name.isNotBlank()) custom.add(plant)
+            }
+          }
+          plantRepo.saveCustomPlants(custom)
+        }
+      }
+    }
+
+    if (json.has(DATA_BACKUP_KEY_DICE_ROLLER)) {
+      val diceObj = json.optJSONObject(DATA_BACKUP_KEY_DICE_ROLLER)
+      val dicePrefs = repositories.diceRollerPreferences
+      if (diceObj != null && dicePrefs != null && diceObj.has("saved_rolls")) {
+        val arr = diceObj.optJSONArray("saved_rolls")
+        val rolls = mutableListOf<com.example.toolbox.ui.tools.SavedDiceRoll>()
+        if (arr != null) {
+          for (i in 0 until arr.length()) {
+            val itemObj = arr.optJSONObject(i) ?: continue
+            rolls.add(com.example.toolbox.ui.tools.SavedDiceRoll.fromJson(itemObj))
+          }
+        }
+        dicePrefs.saveSavedRolls(rolls)
+      }
+    }
+
+    if (json.has(DATA_BACKUP_KEY_CHORD_BOOK)) {
+      val chordObj = json.optJSONObject(DATA_BACKUP_KEY_CHORD_BOOK)
+      val chordPrefs = repositories.chordBookPreferences
+      if (chordObj != null && chordPrefs != null) {
+        if (chordObj.has("custom_tunings")) {
+          val arr = chordObj.optJSONArray("custom_tunings")
+          val tunings = mutableListOf<com.example.toolbox.ui.tools.ChordTuning>()
+          if (arr != null) {
+            for (i in 0 until arr.length()) {
+              val itemObj = arr.optJSONObject(i) ?: continue
+              com.example.toolbox.ui.tools.ChordTuning.fromJson(itemObj)?.let { tunings.add(it) }
+            }
+          }
+          chordPrefs.saveCustomTunings(tunings)
+        }
+        if (chordObj.has("progressions")) {
+          val arr = chordObj.optJSONArray("progressions")
+          val progressions = mutableListOf<com.example.toolbox.ui.tools.ChordProgression>()
+          if (arr != null) {
+            for (i in 0 until arr.length()) {
+              val itemObj = arr.optJSONObject(i) ?: continue
+              com.example.toolbox.ui.tools.ChordProgression.fromJson(itemObj)?.let { progressions.add(it) }
+            }
+          }
+          chordPrefs.saveProgressions(progressions)
+        }
+        if (chordObj.has("selected_tuning_id")) {
+          val tuningId = chordObj.optString("selected_tuning_id", "").trim()
+          if (tuningId.isNotEmpty()) {
+            chordPrefs.setSelectedTuningId(tuningId)
+          }
+        }
+        if (chordObj.has("capo_fret")) {
+          chordPrefs.setCapoFret(chordObj.optInt("capo_fret", 0))
+        }
+        if (chordObj.has("enharmonic_preference")) {
+          val enhName = chordObj.optString("enharmonic_preference", "")
+          val enh = try {
+            com.example.toolbox.ui.tools.EnharmonicPreference.valueOf(enhName)
+          } catch (_: IllegalArgumentException) {
+            com.example.toolbox.ui.tools.EnharmonicPreference.AUTO
+          }
+          chordPrefs.setEnharmonicPreference(enh)
+        }
+        if (chordObj.has("dot_label_mode")) {
+          val dotName = chordObj.optString("dot_label_mode", "")
+          val dot = try {
+            com.example.toolbox.ui.tools.DotLabelMode.valueOf(dotName)
+          } catch (_: IllegalArgumentException) {
+            com.example.toolbox.ui.tools.DotLabelMode.INTERVALS
+          }
+          chordPrefs.setDotLabelMode(dot)
+        }
+      }
+    }
+
+    if (json.has(DATA_BACKUP_KEY_GUITAR_TUNER)) {
+      val tunerObj = json.optJSONObject(DATA_BACKUP_KEY_GUITAR_TUNER)
+      val tunerRepo = repositories.guitarTunerRepository
+      if (tunerObj != null && tunerRepo != null && tunerObj.has("favorite_tuning_ids")) {
+        val arr = tunerObj.optJSONArray("favorite_tuning_ids")
+        val ids = mutableSetOf<String>()
+        if (arr != null) {
+          for (i in 0 until arr.length()) {
+            val id = arr.optString(i, "").trim()
+            if (id.isNotEmpty()) ids.add(id)
+          }
+        }
+        tunerRepo.saveFavoriteTuningIds(ids)
+      }
+    }
+
+    // Refresh alarms and active sessions if running with a live Context
+    val ctx = repositories.context
+    if (ctx != null) {
+      try {
+        val tasks = repositories.todoListRepository?.loadTasks().orEmpty()
+        com.example.toolbox.ui.tools.TodoNotificationHelper.syncTaskAlarms(ctx, tasks)
+      } catch (_: Throwable) {}
+    }
+    try {
+      com.example.toolbox.ui.tools.MusicPlayerEngine.activeSessionState?.reloadPersistedDataFromPrefs()
+    } catch (_: Throwable) {}
+
+    true
+  } catch (_: Exception) {
+    false
+  }
+}
+
+/**
+ * Imports and restores tool data from [jsonString] for the given Android [context].
+ */
+fun importDataFromJson(
+  jsonString: String,
+  context: Context,
+): Boolean = importDataFromJson(jsonString, ToolboxDataRepositories.fromContext(context))

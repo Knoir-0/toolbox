@@ -632,26 +632,30 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
     composeTestRule.waitForIdle()
 
-    // Tool visibility card is displayed and expanded by default
+    // Tool visibility card and Permissions card are displayed and collapsed by default
     composeTestRule.onNodeWithTag("tool_visibility_card").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tool_visibility_toggle").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("permissions_card").assertExists()
+    composeTestRule.onNodeWithTag("permissions_toggle").assertExists()
 
-    // Initially expanded: category headers exist while individual tool rows are collapsed inside categories
+    // Initially collapsed: category headers and permission cards do not exist
+    composeTestRule.onNodeWithTag("category_header_math_and_measurement").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("tool_visibility_row_CALCULATOR").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("permission_card_camera").assertDoesNotExist()
+
+    // Click toggle to expand Tool Settings
+    composeTestRule.onNodeWithTag("tool_visibility_toggle").performClick()
+    composeTestRule.waitForIdle()
+
+    // Now expanded: category headers exist while individual tool rows are collapsed inside categories
     composeTestRule.onNodeWithTag("category_header_math_and_measurement").assertExists()
     composeTestRule.onNodeWithTag("tool_visibility_row_CALCULATOR").assertDoesNotExist()
 
-    // Click toggle to collapse Tool Settings
+    // Click toggle to collapse again
     composeTestRule.onNodeWithTag("tool_visibility_toggle").performClick()
     composeTestRule.waitForIdle()
 
-    // Now collapsed: category headers do not exist
     composeTestRule.onNodeWithTag("category_header_math_and_measurement").assertDoesNotExist()
-
-    // Click toggle to expand again
-    composeTestRule.onNodeWithTag("tool_visibility_toggle").performClick()
-    composeTestRule.waitForIdle()
-
-    composeTestRule.onNodeWithTag("category_header_math_and_measurement").assertExists()
   }
 
   @Test
@@ -775,11 +779,16 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
     composeTestRule.waitForIdle()
 
-    // Tool settings card & toggle exist and are expanded by default
+    // Tool settings card & toggle exist and are collapsed by default
     composeTestRule.onNodeWithTag("tool_settings_card").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tool_settings_toggle").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("category_header_math_and_measurement").assertDoesNotExist()
 
-    // Category headers and their tool/hidden count badges should exist by default without tapping toggle
+    // Expand Tool Settings
+    composeTestRule.onNodeWithTag("tool_settings_toggle").performClick()
+    composeTestRule.waitForIdle()
+
+    // Category headers and their tool/hidden count badges should exist after expanding Tool Settings
     composeTestRule.onNodeWithTag("category_header_math_and_measurement").assertExists()
     composeTestRule.onNodeWithTag("category_tool_count_math_and_measurement").assertExists()
     composeTestRule.onNodeWithTag("category_hidden_count_math_and_measurement").assertExists()
@@ -823,7 +832,9 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
     composeTestRule.waitForIdle()
 
-    // Expand Music & Instruments category in Tool Settings
+    // Expand Tool Settings and then Music & Instruments category in Tool Settings
+    composeTestRule.onNodeWithTag("tool_settings_toggle").performClick()
+    composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("category_header_music_and_instruments").performClick()
     composeTestRule.waitForIdle()
 
@@ -833,12 +844,14 @@ class MainScreenTest {
     composeTestRule.onNodeWithText("TARGET").assertExists()
     assertTrue(Tool.GUITAR_TUNER !in repo.getHiddenTools())
 
-    // Navigate back to Settings and expand Music & Instruments category
+    // Navigate back to Settings and expand Tool Settings and Music & Instruments category
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tools_panel_page_indicator_dot_$lastPageIndex").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("tool_settings_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("category_header_music_and_instruments").performClick()
     composeTestRule.waitForIdle()
@@ -1258,14 +1271,25 @@ class MainScreenTest {
       }
       composeTestRule.waitForIdle()
 
-      // 1. Image file menu shows Gallery (without Inspect Color) and opens GalleryScreen
+      // 1. Image file menu shows Image and Gallery (without Inspect Color) and opens ImageScreen and GalleryScreen
       composeTestRule.onNodeWithTag("file_options_swatch.png").performClick()
       composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("action_open_image").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_open_gallery").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_inspect_color").assertDoesNotExist()
       composeTestRule.onNodeWithTag("action_cut").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_copy").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_duplicate").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_open_image").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("image_screen").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("gallery_viewer_close").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()
+
+      composeTestRule.onNodeWithTag("file_options_swatch.png").performClick()
+      composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("action_open_gallery").performClick()
       composeTestRule.waitForIdle()
 
@@ -1363,5 +1387,252 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("unit_converter_screen").assertIsDisplayed()
     composeTestRule.onNodeWithTag("unit_converter_input").assertTextEquals("2.13")
     composeTestRule.onNodeWithText("From Unit (Inch)").assertIsDisplayed()
+  }
+
+  @Test
+  fun imageTool_scrollingPreviewBarOutOfViewOfSelectedPhoto_doesNotShiftActionButtons() {
+    val tempDir = java.io.File(composeTestRule.activity.cacheDir, "image_preview_scroll_${System.currentTimeMillis()}").apply {
+      mkdirs()
+    }
+    try {
+      val files = (1..20).map { idx ->
+        val file = java.io.File(tempDir, "photo_%02d.png".format(idx))
+        com.example.toolbox.ui.tools.GalleryEngine.writeSolidColorPng(
+          outputFile = file,
+          red = (idx * 10) % 255,
+          green = (idx * 20) % 255,
+          blue = (idx * 30) % 255,
+        )
+        file
+      }
+
+      setTestContent {
+        com.example.toolbox.ui.tools.ImageScreen(initialFile = files.first())
+      }
+      composeTestRule.waitForIdle()
+
+      val actionsRow = composeTestRule.onNodeWithTag("photo_viewer_actions_row")
+      val previewBar = composeTestRule.onNodeWithTag("photo_viewer_preview_scroll_bar")
+      actionsRow.assertIsDisplayed()
+      previewBar.assertIsDisplayed()
+
+      val initialActionsTop = actionsRow.fetchSemanticsNode().boundsInRoot.top
+      val initialActionsBottom = actionsRow.fetchSemanticsNode().boundsInRoot.bottom
+      val initialPreviewHeight = previewBar.fetchSemanticsNode().boundsInRoot.height
+
+      // Scroll the bottom preview strip to the far end so the selected first photo is scrolled out of view
+      previewBar.performTouchInput {
+        swipeLeft()
+      }
+      composeTestRule.waitForIdle()
+      previewBar.performTouchInput {
+        swipeLeft()
+      }
+      composeTestRule.waitForIdle()
+
+      val afterScrollActionsTop = actionsRow.fetchSemanticsNode().boundsInRoot.top
+      val afterScrollActionsBottom = actionsRow.fetchSemanticsNode().boundsInRoot.bottom
+      val afterScrollPreviewHeight = previewBar.fetchSemanticsNode().boundsInRoot.height
+
+      org.junit.Assert.assertEquals(initialActionsTop, afterScrollActionsTop, 0.5f)
+      org.junit.Assert.assertEquals(initialActionsBottom, afterScrollActionsBottom, 0.5f)
+      org.junit.Assert.assertEquals(initialPreviewHeight, afterScrollPreviewHeight, 0.5f)
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun filesTool_tappingApk_opensSystemSettingToAllowInstallingApps_thenInstallsApkWhenTurnedOn() {
+    val tempDir = java.io.File(composeTestRule.activity.cacheDir, "apk_install_test_${System.currentTimeMillis()}").apply {
+      mkdirs()
+    }
+    try {
+      val apkFile = java.io.File(tempDir, "toolbox-update.apk").apply {
+        writeBytes(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
+      }
+
+      var settingsLaunchedCount = 0
+      var lastSettingsIntent: android.content.Intent? = null
+      var installerLaunchedCount = 0
+      var lastInstalledApkFile: java.io.File? = null
+      var lastInstallerIntent: android.content.Intent? = null
+
+      com.example.toolbox.ui.tools.FileManagerEngine.canInstallApksOverrideForTest = false
+      com.example.toolbox.ui.tools.FileManagerEngine.unknownAppSourcesSettingsLauncherForTest = { intent ->
+        settingsLaunchedCount++
+        lastSettingsIntent = intent
+        true
+      }
+      com.example.toolbox.ui.tools.FileManagerEngine.apkInstallerLauncherForTest = { file, intent ->
+        installerLaunchedCount++
+        lastInstalledApkFile = file
+        lastInstallerIntent = intent
+        true
+      }
+
+      setTestContent {
+        com.example.toolbox.ui.tools.FilesScreen(initialDirectory = tempDir)
+      }
+      composeTestRule.waitForIdle()
+
+      // 1. When install unknown apps setting is off, tapping the APK brings the user to the system setting
+      composeTestRule.onNodeWithTag("file_item_toolbox-update.apk").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("file_item_toolbox-update.apk").performClick()
+      composeTestRule.waitForIdle()
+
+      assertEquals(1, settingsLaunchedCount)
+      assertEquals(0, installerLaunchedCount)
+      assertEquals(
+        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+        lastSettingsIntent?.action,
+      )
+      assertEquals(
+        android.net.Uri.parse("package:${composeTestRule.activity.packageName}"),
+        lastSettingsIntent?.data,
+      )
+
+      // 2. Simulate the user turning on the ability to let Toolbox install applications in system settings
+      com.example.toolbox.ui.tools.FileManagerEngine.canInstallApksOverrideForTest = true
+
+      // 3. Tapping on the APK now launches the system package installer for that APK
+      composeTestRule.onNodeWithTag("file_item_toolbox-update.apk").performClick()
+      composeTestRule.waitForIdle()
+
+      assertEquals(1, settingsLaunchedCount)
+      assertEquals(1, installerLaunchedCount)
+      assertEquals(apkFile.absolutePath, lastInstalledApkFile?.absolutePath)
+      assertEquals(android.content.Intent.ACTION_VIEW, lastInstallerIntent?.action)
+      assertEquals(
+        com.example.toolbox.ui.tools.FileManagerEngine.APK_MIME_TYPE,
+        lastInstallerIntent?.type,
+      )
+      assertTrue(
+        ((lastInstallerIntent?.flags ?: 0) and android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0,
+      )
+
+      // 4. Also verify tapping the APK in Grid view works identically
+      composeTestRule.onNodeWithTag("files_view_mode_grid").performClick()
+      composeTestRule.waitForIdle()
+
+      com.example.toolbox.ui.tools.FileManagerEngine.canInstallApksOverrideForTest = false
+      composeTestRule.onNodeWithTag("file_grid_item_toolbox-update.apk").performClick()
+      composeTestRule.waitForIdle()
+      assertEquals(2, settingsLaunchedCount)
+      assertEquals(1, installerLaunchedCount)
+
+      com.example.toolbox.ui.tools.FileManagerEngine.canInstallApksOverrideForTest = true
+      composeTestRule.onNodeWithTag("file_grid_item_toolbox-update.apk").performClick()
+      composeTestRule.waitForIdle()
+      assertEquals(2, settingsLaunchedCount)
+      assertEquals(2, installerLaunchedCount)
+    } finally {
+      com.example.toolbox.ui.tools.FileManagerEngine.resetApkInstallTestOverrides()
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun filesTool_tappingAudioFile_opensAudioRecorderMiniAudioPlayerModal() {
+    val tempDir = java.io.File(composeTestRule.activity.cacheDir, "audio_modal_test_${System.currentTimeMillis()}").apply {
+      mkdirs()
+    }
+    try {
+      val wavFile = java.io.File(tempDir, "voice_memo.wav")
+      com.example.toolbox.ui.tools.AudioRecorderEngine.writeFallbackAudioFile(
+        outputFile = wavFile,
+        durationMs = 2000L,
+      )
+
+      setTestContent {
+        com.example.toolbox.ui.tools.FilesScreen(initialDirectory = tempDir)
+      }
+      composeTestRule.waitForIdle()
+
+      // 1. Tap the audio file in List view -> Audio Recorder's MiniAudioPlayerModal pops up
+      composeTestRule.onNodeWithTag("file_item_voice_memo.wav").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("file_item_voice_memo.wav").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("mini_player_modal").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("mini_player_title").assertTextEquals("voice_memo.wav")
+      composeTestRule.onNodeWithTag("mini_player_play_pause_button").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("mini_player_tracking_slider").assertIsDisplayed()
+
+      // Close the modal
+      composeTestRule.onNodeWithTag("mini_player_close_button").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("mini_player_modal").assertDoesNotExist()
+
+      // 2. Switch to Grid view and tap the audio file -> MiniAudioPlayerModal pops up
+      composeTestRule.onNodeWithTag("files_view_mode_grid").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("file_grid_item_voice_memo.wav").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("file_grid_item_voice_memo.wav").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("mini_player_modal").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("mini_player_title").assertTextEquals("voice_memo.wav")
+
+      composeTestRule.onNodeWithTag("mini_player_close_button").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("mini_player_modal").assertDoesNotExist()
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun filesTool_tappingVideoFile_opensMiniVideoPlayerModal() {
+    val tempDir = java.io.File(composeTestRule.activity.cacheDir, "video_modal_test_${System.currentTimeMillis()}").apply {
+      mkdirs()
+    }
+    try {
+      val mp4File = java.io.File(tempDir, "demo_clip.mp4").apply {
+        writeBytes(byteArrayOf(0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70))
+      }
+      assertTrue(com.example.toolbox.ui.tools.FileManagerEngine.isVideoFile(mp4File))
+
+      setTestContent {
+        com.example.toolbox.ui.tools.FilesScreen(initialDirectory = tempDir)
+      }
+      composeTestRule.waitForIdle()
+
+      // 1. Tap the video file in List view -> MiniVideoPlayerModal pops up
+      composeTestRule.onNodeWithTag("file_item_demo_clip.mp4").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("file_item_demo_clip.mp4").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("mini_video_player_modal").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("mini_video_player_title").assertTextEquals("demo_clip.mp4")
+      composeTestRule.onNodeWithTag("mini_video_player_viewport").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("mini_video_player_play_pause_button").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("mini_video_player_tracking_slider").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("mini_video_player_elapsed_time").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("mini_video_player_total_time").assertIsDisplayed()
+
+      // Close the modal
+      composeTestRule.onNodeWithTag("mini_video_player_close_button").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("mini_video_player_modal").assertDoesNotExist()
+
+      // 2. Switch to Grid view and tap the video file -> MiniVideoPlayerModal pops up
+      composeTestRule.onNodeWithTag("files_view_mode_grid").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("file_grid_item_demo_clip.mp4").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("file_grid_item_demo_clip.mp4").performClick()
+      composeTestRule.waitForIdle()
+
+      composeTestRule.onNodeWithTag("mini_video_player_modal").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("mini_video_player_title").assertTextEquals("demo_clip.mp4")
+
+      composeTestRule.onNodeWithTag("mini_video_player_close_button").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("mini_video_player_modal").assertDoesNotExist()
+    } finally {
+      tempDir.deleteRecursively()
+    }
   }
 }

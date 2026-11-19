@@ -519,7 +519,8 @@ data class GallerySearchResult(
 object GalleryEngine {
 
   val SUPPORTED_IMAGE_EXTENSIONS: Set<String> = setOf(
-    "jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "heif",
+    "jpg", "jpeg", "jpe", "jfif", "png", "webp", "gif", "bmp", "dib",
+    "heic", "heif", "avif", "tiff", "tif", "ico",
   )
 
   val SUPPORTED_VIDEO_EXTENSIONS: Set<String> = VideoEditorEngine.SUPPORTED_VIDEO_EXTENSIONS

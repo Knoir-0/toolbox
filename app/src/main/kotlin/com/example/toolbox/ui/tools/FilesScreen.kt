@@ -8,10 +8,15 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.SurfaceTexture
+import android.media.MediaMetadataRetriever
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
+import android.view.Surface as AndroidSurface
+import android.view.TextureView
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -39,6 +44,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
@@ -87,6 +93,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.CropOriginal
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.automirrored.filled.DriveFileMove
@@ -105,8 +112,10 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SdCard
 import androidx.compose.material.icons.filled.Search
@@ -146,25 +155,34 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
@@ -193,6 +211,7 @@ fun FilesScreen(
   initialSearchActive: Boolean = false,
   onOpenFile: ((File, Boolean) -> Unit)? = null,
   onOpenFileConverter: ((File) -> Unit)? = null,
+  onOpenImage: ((File) -> Unit)? = null,
   onOpenImageEditor: ((File) -> Unit)? = null,
   onOpenVideoEditor: ((File) -> Unit)? = null,
   onOpenAudioEditor: ((File) -> Unit)? = null,
@@ -360,6 +379,12 @@ fun FilesScreen(
     storageRevision++
   }
 
+  val manageUnknownSourcesLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.StartActivityForResult()
+  ) {
+    storageRevision++
+  }
+
   fun requestStoragePermission() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       try {
@@ -509,7 +534,9 @@ fun FilesScreen(
   var fileToDelete by remember { mutableStateOf<FileItem?>(null) }
   var fileForDetails by remember { mutableStateOf<FileItem?>(null) }
   var fileForTextEdit by remember { mutableStateOf<FileItem?>(null) }
-  var fileForImagePreview by remember { mutableStateOf<FileItem?>(null) }
+  var activeAudioPlaybackItem by remember { mutableStateOf<AudioRecordingItem?>(null) }
+  var activeVideoPlaybackFile by remember { mutableStateOf<File?>(null) }
+  var fileForImage by remember { mutableStateOf<File?>(null) }
   var fileForConverter by remember { mutableStateOf<File?>(null) }
   var fileForImageEditor by remember { mutableStateOf<File?>(null) }
   var fileForVideoEditor by remember { mutableStateOf<File?>(null) }
@@ -580,10 +607,28 @@ fun FilesScreen(
   }
 
   fun openFile(file: File, chooseApp: Boolean = false) {
+    if (!chooseApp && (FileManagerEngine.isVideoFile(file) || VideoEditorEngine.isVideoFile(file))) {
+      activeVideoPlaybackFile = file
+      return
+    }
+    if (!chooseApp && FileManagerEngine.isAudioFile(file) && !VideoEditorEngine.isVideoFile(file)) {
+      activeAudioPlaybackItem = AudioRecorderEngine.toAudioRecordingItem(
+        file = file,
+        includeDurationMetadata = !isInspection,
+      )
+      return
+    }
     if (onOpenFile != null) {
       onOpenFile(file, chooseApp)
     } else {
-      FileManagerEngine.openFile(context, file, chooseApp)
+      FileManagerEngine.openFile(
+        context = context,
+        file = file,
+        chooseApp = chooseApp,
+        unknownSourcesSettingsLauncher = { settingsIntent ->
+          manageUnknownSourcesLauncher.launch(settingsIntent)
+        },
+      )
     }
   }
 
@@ -678,6 +723,70 @@ fun FilesScreen(
       onNavigateBack = {
         fileForConverter = null
         refreshTrigger++
+      },
+    )
+    return
+  }
+
+  val activeImageFile = fileForImage
+  if (activeImageFile != null) {
+    val siblingPhotos = remember(processedItems, activeImageFile.absolutePath) {
+      val mediaItems = processedItems.filter {
+        !it.isDirectory && FileManagerEngine.isImageFile(it.file)
+      }.map { mediaItem ->
+        GalleryPhoto(
+          file = mediaItem.file,
+          name = mediaItem.name,
+          path = mediaItem.path,
+          sizeBytes = mediaItem.sizeBytes,
+          lastModifiedMs = mediaItem.lastModifiedMs,
+          extension = mediaItem.extension.lowercase(Locale.ROOT),
+        )
+      }
+      val initialPhoto = GalleryPhoto(
+        file = activeImageFile,
+        name = activeImageFile.name,
+        path = activeImageFile.absolutePath,
+        sizeBytes = activeImageFile.length(),
+        lastModifiedMs = activeImageFile.lastModified(),
+        extension = activeImageFile.extension.lowercase(Locale.ROOT),
+      )
+      if (mediaItems.any { it.path == initialPhoto.path }) {
+        mediaItems
+      } else {
+        listOf(initialPhoto) + mediaItems
+      }
+    }
+    ImageScreen(
+      modifier = modifier,
+      initialFile = activeImageFile,
+      initialPhotos = siblingPhotos,
+      initialDirectory = currentDirectory,
+      photoIndexMap = previewPhotoIndexMap,
+      onPhotoIndexed = { entry ->
+        previewPhotoIndexMap = previewPhotoIndexMap + (entry.path to entry)
+        if (!isInspection) {
+          GalleryEngine.saveIndexCacheToDisk(previewIndexCacheFile, previewPhotoIndexMap)
+        }
+      },
+      onNavigateBack = {
+        fileForImage = null
+        refreshTrigger++
+      },
+      onOpenImageEditor = { editFile ->
+        fileForImage = null
+        fileForImageEditor = editFile
+        onOpenImageEditor?.invoke(editFile)
+      },
+      onOpenVideoEditor = { editFile ->
+        fileForImage = null
+        fileForVideoEditor = editFile
+        onOpenVideoEditor?.invoke(editFile)
+      },
+      onOpenColorPicker = { hex ->
+        fileForImage = null
+        colorHexForColorPicker = hex
+        onOpenColorPicker?.invoke(hex)
       },
     )
     return
@@ -939,6 +1048,12 @@ fun FilesScreen(
           selectedPaths = emptySet()
           fileForConverter = file
           onOpenFileConverter?.invoke(file)
+        },
+        onOpenSelectedImage = { file ->
+          isSelectionMode = false
+          selectedPaths = emptySet()
+          fileForImage = file
+          onOpenImage?.invoke(file)
         },
         onEditSelectedImage = { file ->
           isSelectionMode = false
@@ -1248,7 +1363,10 @@ fun FilesScreen(
                           importFileToTodo(item.file)
                         },
                         onOpenText = { fileForTextEdit = item },
-                        onOpenImage = { fileForImagePreview = item },
+                        onOpenImage = {
+                          fileForImage = item.file
+                          onOpenImage?.invoke(item.file)
+                        },
                         onShare = {
                           if (item.isDirectory) {
                             shareMultipleItems(listOf(item.file))
@@ -1407,7 +1525,10 @@ fun FilesScreen(
                         importFileToTodo(item.file)
                       },
                       onOpenText = { fileForTextEdit = item },
-                      onOpenImage = { fileForImagePreview = item },
+                      onOpenImage = {
+                        fileForImage = item.file
+                        onOpenImage?.invoke(item.file)
+                      },
                       onShare = {
                         if (item.isDirectory) {
                           shareMultipleItems(listOf(item.file))
@@ -1758,9 +1879,29 @@ fun FilesScreen(
         onDismiss = { fileToDelete = null },
         onConfirm = {
           FileManagerEngine.deleteFileOrDirectory(item.file)
+          if (activeAudioPlaybackItem?.path == item.path) {
+            activeAudioPlaybackItem = null
+          }
+          if (activeVideoPlaybackFile?.absolutePath == item.path) {
+            activeVideoPlaybackFile = null
+          }
           refreshTrigger++
           fileToDelete = null
         },
+      )
+    }
+
+    activeAudioPlaybackItem?.let { recording ->
+      MiniAudioPlayerModal(
+        recording = recording,
+        onDismiss = { activeAudioPlaybackItem = null },
+      )
+    }
+
+    activeVideoPlaybackFile?.let { videoFile ->
+      MiniVideoPlayerModal(
+        file = videoFile,
+        onDismiss = { activeVideoPlaybackFile = null },
       )
     }
 
@@ -1781,69 +1922,6 @@ fun FilesScreen(
         onSaved = {
           refreshTrigger++
         },
-      )
-    }
-
-    fileForImagePreview?.let { item ->
-      val siblingPhotos = remember(processedItems, item.path) {
-        val mediaItems = processedItems.filter {
-          !it.isDirectory && (FileManagerEngine.isImageFile(it.file) || VideoEditorEngine.isVideoFile(it.file))
-        }.map { mediaItem ->
-          GalleryPhoto(
-            file = mediaItem.file,
-            name = mediaItem.name,
-            path = mediaItem.path,
-            sizeBytes = mediaItem.sizeBytes,
-            lastModifiedMs = mediaItem.lastModifiedMs,
-            extension = mediaItem.extension.lowercase(Locale.ROOT),
-          )
-        }
-        val initialPhoto = GalleryPhoto(
-          file = item.file,
-          name = item.name,
-          path = item.path,
-          sizeBytes = item.sizeBytes,
-          lastModifiedMs = item.lastModifiedMs,
-          extension = item.extension.lowercase(Locale.ROOT),
-        )
-        if (mediaItems.any { it.path == initialPhoto.path }) {
-          mediaItems
-        } else {
-          listOf(initialPhoto) + mediaItems
-        }
-      }
-      val initialGalleryPhoto = remember(item.path) {
-        GalleryPhoto(
-          file = item.file,
-          name = item.name,
-          path = item.path,
-          sizeBytes = item.sizeBytes,
-          lastModifiedMs = item.lastModifiedMs,
-          extension = item.extension.lowercase(Locale.ROOT),
-        )
-      }
-      GalleryPhotoViewerDialog(
-        photos = siblingPhotos,
-        initialPhoto = initialGalleryPhoto,
-        photoIndexMap = previewPhotoIndexMap,
-        onPhotoIndexed = { entry ->
-          previewPhotoIndexMap = previewPhotoIndexMap + (entry.path to entry)
-          if (!isInspection) {
-            GalleryEngine.saveIndexCacheToDisk(previewIndexCacheFile, previewPhotoIndexMap)
-          }
-        },
-        onDismiss = { fileForImagePreview = null },
-        onEdit = { photo ->
-          fileForImagePreview = null
-          if (photo.isVideo) {
-            fileForVideoEditor = photo.file
-            onOpenVideoEditor?.invoke(photo.file)
-          } else {
-            fileForImageEditor = photo.file
-            onOpenImageEditor?.invoke(photo.file)
-          }
-        },
-        onShare = { photo -> shareFile(photo.file) },
       )
     }
 
@@ -1923,6 +2001,7 @@ private fun FilesHeader(
   singleSelectedFile: File? = null,
   onOpenSelectedFile: ((File, Boolean) -> Unit)? = null,
   onConvertSelectedFile: ((File) -> Unit)? = null,
+  onOpenSelectedImage: ((File) -> Unit)? = null,
   onEditSelectedImage: ((File) -> Unit)? = null,
   onEditSelectedVideo: ((File) -> Unit)? = null,
   onEditSelectedAudio: ((File) -> Unit)? = null,
@@ -2164,6 +2243,17 @@ private fun FilesHeader(
                     onPlaySelectedMusic(singleSelectedFile)
                   },
                   modifier = Modifier.testTag("action_selection_play_music"),
+                )
+              }
+              if (singleSelectedFile != null && onOpenSelectedImage != null && FileManagerEngine.isImageFile(singleSelectedFile)) {
+                DropdownMenuItem(
+                  text = { Text("Image") },
+                  leadingIcon = { Icon(Icons.Default.CropOriginal, contentDescription = null) },
+                  onClick = {
+                    showOverflowMenu = false
+                    onOpenSelectedImage(singleSelectedFile)
+                  },
+                  modifier = Modifier.testTag("action_selection_open_image"),
                 )
               }
               if (singleSelectedFile != null && onOpenSelectedGallery != null && (FileManagerEngine.isImageFile(singleSelectedFile) || VideoEditorEngine.isVideoFile(singleSelectedFile))) {
@@ -3277,17 +3367,19 @@ private fun FileActionMenu(
         )
       }
       if (FileManagerEngine.isImageFile(item.file)) {
+        Box(modifier = Modifier.testTag("action_preview_image")) {
+          DropdownMenuItem(
+            text = { Text("Image") },
+            leadingIcon = { Icon(Icons.Default.CropOriginal, contentDescription = null) },
+            onClick = onOpenImage,
+            modifier = Modifier.testTag("action_open_image"),
+          )
+        }
         DropdownMenuItem(
           text = { Text("Edit") },
           leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
           onClick = onEditImage,
           modifier = Modifier.testTag("action_edit_image"),
-        )
-        DropdownMenuItem(
-          text = { Text("Preview") },
-          leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
-          onClick = onOpenImage,
-          modifier = Modifier.testTag("action_preview_image"),
         )
         DropdownMenuItem(
           text = { Text("Gallery") },
@@ -4909,6 +5001,460 @@ private fun ImageViewerDialog(
             text = FileManagerEngine.formatFileSize(file.length()),
             style = MaterialTheme.typography.labelMedium,
           )
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Simple Video Player Modal (styled matching [MiniAudioPlayerModal]) that pops up when a video file
+ * is tapped in the File Manager tool, immediately starts playing the video, and provides a video
+ * viewport along with a play/pause toggle to the left of a tracking slider.
+ */
+@Composable
+fun MiniVideoPlayerModal(
+  file: File,
+  onDismiss: () -> Unit,
+) {
+  val isInspection = LocalInspectionMode.current
+  val density = LocalDensity.current
+
+  val initialDurationMs = remember(file.absolutePath, isInspection) {
+    if (isInspection) {
+      5000L
+    } else {
+      AudioRecorderEngine.extractAudioDurationMs(file).coerceAtLeast(1000L)
+    }
+  }
+
+  val thumbnailBitmap = remember(file.absolutePath, isInspection) {
+    if (isInspection || !file.exists() || file.length() <= 0L) {
+      null
+    } else {
+      try {
+        val retriever = MediaMetadataRetriever()
+        try {
+          retriever.setDataSource(file.absolutePath)
+          retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        } finally {
+          try {
+            retriever.release()
+          } catch (_: Throwable) {}
+        }
+      } catch (_: Throwable) {
+        null
+      }
+    }
+  }
+
+  var isPlaying by remember(file.absolutePath) { mutableStateOf(true) }
+  var durationMs by remember(file.absolutePath) { mutableLongStateOf(initialDurationMs) }
+  var currentPositionMs by remember(file.absolutePath) { mutableLongStateOf(0L) }
+  var isDraggingSlider by remember(file.absolutePath) { mutableStateOf(false) }
+  var dragFraction by remember(file.absolutePath) { mutableFloatStateOf(0f) }
+  var usingFallbackTimer by remember(file.absolutePath) { mutableStateOf(isInspection) }
+
+  var mediaPlayerRef by remember(file.absolutePath) { mutableStateOf<MediaPlayer?>(null) }
+  var isPlayerPrepared by remember(file.absolutePath) { mutableStateOf(false) }
+  var videoWidth by remember(file.absolutePath) { mutableIntStateOf(thumbnailBitmap?.width ?: 0) }
+  var videoHeight by remember(file.absolutePath) { mutableIntStateOf(thumbnailBitmap?.height ?: 0) }
+
+  val formatBadge = remember(file.name) {
+    file.extension.uppercase(Locale.ROOT).ifEmpty { "VIDEO" }
+  }
+  val sizeFormatted = remember(file.absolutePath) {
+    FileManagerEngine.formatFileSize(file.length())
+  }
+
+  DisposableEffect(file.absolutePath) {
+    onDispose {
+      isPlayerPrepared = false
+      mediaPlayerRef?.let { mp ->
+        try {
+          if (mp.isPlaying) {
+            mp.stop()
+          }
+        } catch (_: Throwable) {}
+        try {
+          mp.release()
+        } catch (_: Throwable) {}
+      }
+      mediaPlayerRef = null
+    }
+  }
+
+  // Synchronize playback progress with tracking slider
+  LaunchedEffect(isPlaying, mediaPlayerRef, isPlayerPrepared, usingFallbackTimer, isDraggingSlider) {
+    if (!isPlaying) return@LaunchedEffect
+    while (kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive != false && isPlaying) {
+      if (!isDraggingSlider) {
+        val mp = mediaPlayerRef
+        if (mp != null && isPlayerPrepared && !usingFallbackTimer) {
+          try {
+            val pos = mp.currentPosition.toLong().coerceAtLeast(0L)
+            currentPositionMs = pos.coerceAtMost(durationMs)
+            if (!mp.isPlaying && currentPositionMs >= durationMs - 80L) {
+              isPlaying = false
+            }
+          } catch (_: Throwable) {
+            usingFallbackTimer = true
+          }
+        } else {
+          // Simulated timer fallback when running in test / headless environment or while preparing
+          val nextPos = currentPositionMs + 100L
+          if (nextPos >= durationMs) {
+            currentPositionMs = durationMs
+            isPlaying = false
+          } else {
+            currentPositionMs = nextPos
+          }
+        }
+      }
+      kotlinx.coroutines.delay(100L)
+    }
+  }
+
+  fun togglePlayPause() {
+    val mp = mediaPlayerRef
+    if (isPlaying) {
+      isPlaying = false
+      if (isPlayerPrepared) {
+        try {
+          mp?.pause()
+        } catch (_: Throwable) {}
+      }
+    } else {
+      if (currentPositionMs >= durationMs) {
+        currentPositionMs = 0L
+        if (isPlayerPrepared) {
+          try {
+            mp?.seekTo(0)
+          } catch (_: Throwable) {}
+        }
+      }
+      isPlaying = true
+      if (isPlayerPrepared) {
+        try {
+          mp?.start()
+        } catch (_: Throwable) {}
+      }
+    }
+  }
+
+  fun seekToFraction(fraction: Float) {
+    val clampedFraction = fraction.coerceIn(0f, 1f)
+    val targetMs = (clampedFraction * durationMs).toLong()
+    currentPositionMs = targetMs
+    if (isPlayerPrepared) {
+      try {
+        mediaPlayerRef?.seekTo(targetMs.toInt())
+      } catch (_: Throwable) {}
+    }
+  }
+
+  val sliderProgress = if (isDraggingSlider) {
+    dragFraction
+  } else if (durationMs > 0L) {
+    (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+  } else {
+    0f
+  }
+
+  Dialog(
+    onDismissRequest = onDismiss,
+    properties = DialogProperties(usePlatformDefaultWidth = false),
+  ) {
+    Surface(
+      shape = RoundedCornerShape(28.dp),
+      color = MaterialTheme.colorScheme.surfaceContainerHigh,
+      tonalElevation = 6.dp,
+      shadowElevation = 8.dp,
+      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 24.dp)
+        .testTag("mini_video_player_modal"),
+    ) {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 20.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        // Modal Header: Icon Badge + File Name + Close Button (matching MiniAudioPlayerModal)
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+          ) {
+            Box(
+              modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Default.VideoFile,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp),
+              )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = file.name,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("mini_video_player_title"),
+              )
+              Text(
+                text = "$formatBadge • $sizeFormatted",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("mini_video_player_subtitle"),
+              )
+            }
+          }
+
+          IconButton(
+            onClick = onDismiss,
+            modifier = Modifier
+              .size(32.dp)
+              .testTag("mini_video_player_close_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Close,
+              contentDescription = "Close player",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+        }
+
+        // Video Viewport Card
+        Surface(
+          shape = RoundedCornerShape(16.dp),
+          color = Color.Black,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+          modifier = Modifier
+            .fillMaxWidth()
+            .height(210.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .clickable { togglePlayPause() }
+            .testTag("mini_video_player_viewport"),
+        ) {
+          BoxWithConstraints(
+            modifier = Modifier
+              .fillMaxSize()
+              .clipToBounds(),
+            contentAlignment = Alignment.Center,
+          ) {
+            val availWPx = with(density) { maxWidth.toPx() }
+            val availHPx = with(density) { maxHeight.toPx() }
+            val videoAspect = if (videoWidth > 0 && videoHeight > 0) {
+              videoWidth.toFloat() / videoHeight.toFloat()
+            } else {
+              16f / 9f
+            }
+            val (fitWPx, fitHPx) = if (availWPx > 0f && availHPx > 0f) {
+              if (availWPx / availHPx > videoAspect) {
+                (availHPx * videoAspect) to availHPx
+              } else {
+                availWPx to (availWPx / videoAspect)
+              }
+            } else {
+              320f to 180f
+            }
+            val fitW = with(density) { fitWPx.toDp() }
+            val fitH = with(density) { fitHPx.toDp() }
+
+            if (thumbnailBitmap != null && !isPlayerPrepared) {
+              Image(
+                bitmap = thumbnailBitmap.asImageBitmap(),
+                contentDescription = file.name,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.size(fitW, fitH),
+              )
+            } else if (!isPlayerPrepared) {
+              Icon(
+                imageVector = Icons.Default.VideoFile,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.size(48.dp),
+              )
+            }
+
+            if (!isInspection && file.exists()) {
+              AndroidView(
+                factory = { ctx ->
+                  TextureView(ctx).apply {
+                    isOpaque = false
+                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                      override fun onSurfaceTextureAvailable(
+                        surfaceTexture: SurfaceTexture,
+                        width: Int,
+                        height: Int,
+                      ) {
+                        val surface = AndroidSurface(surfaceTexture)
+                        val mp = MediaPlayer()
+                        try {
+                          mp.setDataSource(file.absolutePath)
+                          mp.setSurface(surface)
+                          mp.setOnVideoSizeChangedListener { _, w, h ->
+                            if (w > 0 && h > 0) {
+                              videoWidth = w
+                              videoHeight = h
+                            }
+                          }
+                          mp.setOnPreparedListener { preparedMp ->
+                            if (preparedMp.videoWidth > 0 && preparedMp.videoHeight > 0) {
+                              videoWidth = preparedMp.videoWidth
+                              videoHeight = preparedMp.videoHeight
+                            }
+                            val mpDuration = preparedMp.duration.toLong()
+                            if (mpDuration > 0L) {
+                              durationMs = mpDuration
+                            }
+                            mediaPlayerRef = preparedMp
+                            isPlayerPrepared = true
+                            usingFallbackTimer = false
+                            if (currentPositionMs > 0L && currentPositionMs < durationMs) {
+                              try {
+                                preparedMp.seekTo(currentPositionMs.toInt())
+                              } catch (_: Throwable) {}
+                            }
+                            if (isPlaying) {
+                              try {
+                                preparedMp.start()
+                              } catch (_: Throwable) {}
+                            }
+                          }
+                          mp.setOnCompletionListener {
+                            isPlaying = false
+                            currentPositionMs = durationMs
+                          }
+                          mp.setOnErrorListener { _, _, _ ->
+                            isPlayerPrepared = false
+                            usingFallbackTimer = true
+                            true
+                          }
+                          mp.prepareAsync()
+                        } catch (_: Throwable) {
+                          isPlayerPrepared = false
+                          usingFallbackTimer = true
+                          try {
+                            mp.release()
+                          } catch (_: Throwable) {}
+                          surface.release()
+                        }
+                      }
+
+                      override fun onSurfaceTextureSizeChanged(
+                        surface: SurfaceTexture,
+                        width: Int,
+                        height: Int,
+                      ) = Unit
+
+                      override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                        isPlayerPrepared = false
+                        mediaPlayerRef?.let { mp ->
+                          try {
+                            mp.setSurface(null)
+                            mp.release()
+                          } catch (_: Throwable) {}
+                        }
+                        mediaPlayerRef = null
+                        return true
+                      }
+
+                      override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
+                    }
+                  }
+                },
+                modifier = Modifier
+                  .size(fitW, fitH)
+                  .alpha(if (isPlayerPrepared) 1f else 0f),
+              )
+            }
+          }
+        }
+
+        // Play/Pause toggle mini-FAB to the left of the tracking slider (matching MiniAudioPlayerModal)
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          SmallFloatingActionButton(
+            onClick = { togglePlayPause() },
+            shape = CircleShape,
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier
+              .testTag("mini_video_player_play_pause_button")
+              .semantics {
+                contentDescription = if (isPlaying) "Pause" else "Play"
+              },
+          ) {
+            Icon(
+              imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+              contentDescription = null,
+              modifier = Modifier.size(22.dp),
+            )
+          }
+
+          Column(modifier = Modifier.weight(1f)) {
+            SlimDotSlider(
+              value = sliderProgress,
+              onValueChange = { newFraction ->
+                isDraggingSlider = true
+                dragFraction = newFraction.coerceIn(0f, 1f)
+                currentPositionMs = (dragFraction * durationMs).toLong()
+              },
+              onValueChangeFinished = {
+                seekToFraction(dragFraction)
+                isDraggingSlider = false
+              },
+              valueRange = 0f..1f,
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("mini_video_player_tracking_slider"),
+            )
+
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+              horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+              Text(
+                text = AudioRecorderEngine.formatDurationMs(currentPositionMs),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("mini_video_player_elapsed_time"),
+              )
+              Text(
+                text = AudioRecorderEngine.formatDurationMs(durationMs),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("mini_video_player_total_time"),
+              )
+            }
+          }
         }
       }
     }

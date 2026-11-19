@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -96,11 +97,30 @@ class CameraScreenTest {
         shrunkBoxBounds.width < stageBounds.width - 1f
     )
 
-    // Take a photo in Standard mode and verify the Photo Mode slide-up navigation pill bar is displayed
+    // Take a photo in Standard mode and verify the Photo Mode slide-up navigation pill bar is displayed (without 2x2 Booth or Night)
     composeTestRule.onNodeWithTag("photo_controls_bar").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_sub_mode_STANDARD").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_sub_mode_PANORAMA").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_sub_mode_HDR").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_sub_mode_BURST").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_sub_mode_COLLAGE").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_sub_mode_NIGHT").assertDoesNotExist()
+
+    // Verify floating Night Mode icon button is positioned to the left of the zoom options and cycles Auto -> On -> Off
+    val nightButtonBounds = composeTestRule.onNodeWithTag("camera_night_mode_button").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val zoomPresetsBounds = composeTestRule.onNodeWithTag("zoom_presets_row").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    assertTrue(nightButtonBounds.right <= zoomPresetsBounds.left + 1f)
+    composeTestRule.onNodeWithTag("camera_night_mode_label", useUnmergedTree = true).assertTextEquals("Auto")
+    composeTestRule.onNodeWithTag("camera_night_mode_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_night_mode_label", useUnmergedTree = true).assertTextEquals("On")
+    composeTestRule.onNodeWithTag("camera_night_mode_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_night_mode_label", useUnmergedTree = true).assertTextEquals("Off")
+    composeTestRule.onNodeWithTag("camera_night_mode_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_night_mode_label", useUnmergedTree = true).assertTextEquals("Auto")
+
     composeTestRule.onNodeWithTag("camera_shutter_button").performClick()
     composeTestRule.waitForIdle()
 
@@ -108,10 +128,18 @@ class CameraScreenTest {
     assertEquals(1, mediaAfterPhoto.size)
     assertTrue(mediaAfterPhoto.first().name.startsWith("IMG_"))
 
-    // Select Panorama from the Photo navigation pill bar and capture a panoramic photo
+    // Select Panorama from the Photo navigation pill bar, start a panorama sweep, and finish/stitch the panorama
     composeTestRule.onNodeWithTag("photo_sub_mode_PANORAMA").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("camera_panorama_reticle_overlay").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("panorama_sweep_status_badge").assertIsDisplayed()
+
+    // Start panorama sweep
+    composeTestRule.onNodeWithTag("camera_shutter_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_shutter_stop_icon", useUnmergedTree = true).assertIsDisplayed()
+
+    // Finish panorama sweep and save stitched PANO_ file
     composeTestRule.onNodeWithTag("camera_shutter_button").performClick()
     composeTestRule.waitForIdle()
 
@@ -164,8 +192,7 @@ class CameraScreenTest {
     composeTestRule.onNodeWithTag("recent_captures_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("gallery_screen").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("gallery_header_title").assertIsDisplayed()
-    composeTestRule.onNodeWithText("Camera").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_header_title").assertIsDisplayed().assertTextEquals("Camera")
     composeTestRule.onNodeWithTag("gallery_breadcrumb_Camera").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_tile_item_${mediaAfterPhoto.first().name}").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_back_button").performClick()
@@ -286,5 +313,107 @@ class CameraScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("notes_screen").assertIsDisplayed()
     composeTestRule.onNodeWithText("Product Roadmap Sync").assertIsDisplayed()
+  }
+
+  @Test
+  fun cameraScreen_detectsAndSwitchesBetweenMultipleBackAndFrontCameras() {
+    val multiCameraCatalog = CameraEngine.buildSystemCameraCatalog(
+      listOf(
+        RawCameraCharacteristicsInfo(
+          cameraId = "0",
+          openCameraId = "0",
+          lensFacing = CameraLensFacing.BACK,
+          focalLengthMm = 4.8f,
+          sensorWidthMm = 6.4f,
+          aperture = 1.8f,
+          hasFlash = true,
+        ),
+        RawCameraCharacteristicsInfo(
+          cameraId = "2",
+          openCameraId = "0",
+          physicalCameraId = "2",
+          lensFacing = CameraLensFacing.BACK,
+          focalLengthMm = 1.85f,
+          sensorWidthMm = 4.8f,
+          aperture = 2.2f,
+          hasFlash = false,
+        ),
+        RawCameraCharacteristicsInfo(
+          cameraId = "3",
+          openCameraId = "3",
+          lensFacing = CameraLensFacing.BACK,
+          focalLengthMm = 10.8f,
+          sensorWidthMm = 4.8f,
+          aperture = 2.8f,
+          hasFlash = false,
+        ),
+        RawCameraCharacteristicsInfo(
+          cameraId = "1",
+          openCameraId = "1",
+          lensFacing = CameraLensFacing.FRONT,
+          focalLengthMm = 3.2f,
+          sensorWidthMm = 4.0f,
+          aperture = 2.0f,
+          hasFlash = false,
+        ),
+      )
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        CameraScreen(
+          initialDirectory = tempCameraDir,
+          systemCamerasOverride = multiCameraCatalog,
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Verify all 4 system camera pills (0.5x Ultra, 1x Wide, 3x Tele, Front) are displayed
+    composeTestRule.onNodeWithTag("camera_lens_selector_row").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_device_pill_2").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_device_pill_0").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_device_pill_3").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_device_pill_1").assertIsDisplayed()
+
+    // Default active camera is primary 1x Wide back camera (ID 0)
+    val prefs = composeTestRule.activity.getSharedPreferences(CAMERA_PREFS_NAME, Context.MODE_PRIVATE)
+    composeTestRule.onNodeWithTag("viewfinder_status_pill").assertTextEquals("Back • Wide 1x")
+
+    // Switch directly to Ultra-Wide back camera (ID 2) via pill selector
+    composeTestRule.onNodeWithTag("camera_device_pill_2").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("2", prefs.getString(PREF_KEY_CAMERA_ID, null))
+    composeTestRule.onNodeWithTag("viewfinder_status_pill").assertTextEquals("Back • Ultra 0.5x")
+
+    // Switch directly to Telephoto back camera (ID 3) via pill selector
+    composeTestRule.onNodeWithTag("camera_device_pill_3").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("3", prefs.getString(PREF_KEY_CAMERA_ID, null))
+    composeTestRule.onNodeWithTag("viewfinder_status_pill").assertTextEquals("Back • Tele 3x")
+
+    // Cycle camera using the shutter-row camera switch button (3 -> 1 Front -> 2 Ultra-Wide)
+    composeTestRule.onNodeWithTag("camera_flip_lens_button").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("1", prefs.getString(PREF_KEY_CAMERA_ID, null))
+    composeTestRule.onNodeWithTag("viewfinder_status_pill").assertTextEquals("Front")
+
+    composeTestRule.onNodeWithTag("camera_flip_lens_button").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("2", prefs.getString(PREF_KEY_CAMERA_ID, null))
+    composeTestRule.onNodeWithTag("viewfinder_status_pill").assertTextEquals("Back • Ultra 0.5x")
+
+    // Open Camera Settings dialog and verify all system camera lens chips and hardware specs are shown
+    composeTestRule.onNodeWithTag("camera_settings_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_folder_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_settings_lens_chip_0").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_settings_lens_chip_3").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_settings_lens_specs").assertIsDisplayed()
+
+    // Select 1x Wide (ID 0) from settings dialog
+    composeTestRule.onNodeWithTag("camera_settings_lens_chip_0").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("0", prefs.getString(PREF_KEY_CAMERA_ID, null))
   }
 }

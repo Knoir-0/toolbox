@@ -136,6 +136,7 @@ import com.example.toolbox.ui.main.AppPermission
 import com.example.toolbox.ui.main.CategorySortingOption
 import com.example.toolbox.ui.main.CategoryToolSortingOption
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
+import com.example.toolbox.ui.main.DEFAULT_DATA_BACKUP_FILENAME
 import com.example.toolbox.ui.main.DEFAULT_SETTINGS_BACKUP_FILENAME
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
 import com.example.toolbox.ui.main.FALLBACK_THEME_COLOR_HEX
@@ -149,8 +150,10 @@ import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.ToolSortOrder
 import com.example.toolbox.ui.main.ToolSortingOption
 import com.example.toolbox.ui.main.coerceToolsPerRow
+import com.example.toolbox.ui.main.exportDataToJson
 import com.example.toolbox.ui.main.exportSettingsToJson
 import com.example.toolbox.ui.main.formatPermissionUsageTimestamp
+import com.example.toolbox.ui.main.importDataFromJson
 import com.example.toolbox.ui.main.importSettingsFromJson
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
 import com.example.toolbox.ui.main.resetAllSettingsToDefaults
@@ -253,11 +256,11 @@ fun openAppPermissionSystemSettings(context: Context, permission: AppPermission)
 fun SettingsScreen(
   modifier: Modifier = Modifier,
   preferencesRepository: NavigationPreferencesRepository = rememberNavigationPreferencesRepository(),
-  initialVisibilityExpanded: Boolean = true,
+  initialVisibilityExpanded: Boolean = false,
   initialCollapsedCategories: Set<ToolCategory> = remember { ToolCategory.entries.toSet() },
   initialThemeColorExpanded: Boolean = false,
   initialAccentColorExpanded: Boolean = false,
-  initialPermissionsExpanded: Boolean = true,
+  initialPermissionsExpanded: Boolean = false,
   onOpenUrl: ((String) -> Unit)? = null,
   onSelectTool: ((Tool) -> Unit)? = null,
 ) {
@@ -1062,10 +1065,7 @@ fun SettingsScreen(
                     }
                   },
                 )
-                .testTag("color_preset_music_player")
-                .testTag("theme_preset_music_player")
-                .testTag("music_player_theme_checkbox")
-                .testTag("theme_music_player_checkbox"),
+                .testTag("color_preset_music_player"),
               shape = RoundedCornerShape(12.dp),
               border = CardDefaults.outlinedCardBorder().copy(
                 brush = androidx.compose.ui.graphics.SolidColor(
@@ -1217,8 +1217,7 @@ fun SettingsScreen(
                     },
                     modifier = Modifier
                       .weight(1f)
-                      .testTag("theme_music_swatch_${musicOption.name.lowercase()}")
-                      .testTag("color_music_swatch_${musicOption.name.lowercase()}"),
+                      .testTag("theme_music_swatch_${musicOption.name.lowercase()}"),
                     shape = RoundedCornerShape(14.dp),
                     color = if (isSwatchSelected) {
                       MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
@@ -1356,7 +1355,7 @@ fun SettingsScreen(
                       customHexInput = preset.hex
                     }
                     .padding(4.dp)
-                    .testTag("color_preset_${preset.hex.removePrefix("#").lowercase()}"),
+                    .testTag("color_swatch_${preset.hex}"),
                 ) {
                   Box(
                     modifier = Modifier
@@ -1854,7 +1853,8 @@ fun SettingsScreen(
                         width = if (isSelected) 3.dp else 1.dp,
                         color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
                         shape = CircleShape,
-                      ),
+                      )
+                      .testTag("accent_swatch_${preset.hex}"),
                     contentAlignment = Alignment.Center,
                   ) {
                     if (isSelected) {
@@ -2702,8 +2702,9 @@ fun SettingsScreen(
       }
     }
 
-    // Section 7: Backup & Restore Settings
+    // Section 7: Backup & Restore Settings and Data
     var backupRestoreStatus by rememberSaveable { mutableStateOf<String?>(null) }
+    var dataBackupRestoreStatus by rememberSaveable { mutableStateOf<String?>(null) }
     var showResetConfirmDialog by rememberSaveable { mutableStateOf(false) }
 
     val backupDocumentLauncher = rememberLauncherForActivityResult(
@@ -2761,6 +2762,47 @@ fun SettingsScreen(
       }
     }
 
+    val backupDataDocumentLauncher = rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+      if (uri != null) {
+        try {
+          val jsonContent = exportDataToJson(context)
+          context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+            outputStream.write(jsonContent.toByteArray(Charsets.UTF_8))
+          }
+          dataBackupRestoreStatus = "Data backed up successfully."
+          Toast.makeText(context, "Data backed up to file", Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+          dataBackupRestoreStatus = "Failed to export data to file."
+          Toast.makeText(context, "Failed to backup data", Toast.LENGTH_SHORT).show()
+        }
+      }
+    }
+
+    val restoreDataDocumentLauncher = rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+      if (uri != null) {
+        try {
+          val jsonContent = context.contentResolver.openInputStream(uri)?.use { inputStream ->
+            inputStream.bufferedReader(Charsets.UTF_8).readText()
+          } ?: ""
+          val imported = importDataFromJson(jsonContent, context)
+          if (imported) {
+            dataBackupRestoreStatus = "Data restored successfully."
+            Toast.makeText(context, "Data restored from file", Toast.LENGTH_SHORT).show()
+          } else {
+            dataBackupRestoreStatus = "Invalid or unrecognized data backup file."
+            Toast.makeText(context, "Invalid data backup file", Toast.LENGTH_SHORT).show()
+          }
+        } catch (_: Exception) {
+          dataBackupRestoreStatus = "Failed to read data backup file."
+          Toast.makeText(context, "Failed to restore data", Toast.LENGTH_SHORT).show()
+        }
+      }
+    }
+
     Card(
       modifier = Modifier
         .fillMaxWidth()
@@ -2790,6 +2832,14 @@ fun SettingsScreen(
             fontWeight = FontWeight.SemiBold,
           )
         }
+
+        // Settings Backup & Restore
+        Text(
+          text = "Settings",
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.SemiBold,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
 
         Text(
           text = "Save your current settings to a JSON file or restore settings from a previous backup.",
@@ -2842,6 +2892,70 @@ fun SettingsScreen(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.testTag("backup_restore_status"),
+          )
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        // Data Backup & Restore
+        Text(
+          text = "Data",
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.SemiBold,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+
+        Text(
+          text = "Save your tool data (notes, tasks, custom recipes, plant schedule, saved dice rolls, custom tunings, progressions, and music playlists/favorites/stats) to a JSON file or restore data from a previous backup.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          OutlinedButton(
+            onClick = {
+              backupDataDocumentLauncher.launch(DEFAULT_DATA_BACKUP_FILENAME)
+            },
+            modifier = Modifier
+              .weight(1f)
+              .testTag("backup_data_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.FileUpload,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Backup")
+          }
+
+          OutlinedButton(
+            onClick = {
+              restoreDataDocumentLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+            },
+            modifier = Modifier
+              .weight(1f)
+              .testTag("restore_data_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.FileDownload,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Restore")
+          }
+        }
+
+        dataBackupRestoreStatus?.let { statusMessage ->
+          Text(
+            text = statusMessage,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.testTag("data_backup_restore_status"),
           )
         }
       }
@@ -2975,10 +3089,12 @@ fun SettingsScreen(
               customAccentHexInput = ""
               selectedHarmonyMode = HarmonyMode.ANALOGOUS
               collapsedCategories = ToolCategory.entries.toSet()
-              isToolSettingsExpanded = true
+              isToolSettingsExpanded = false
+              isPermissionsExpanded = false
               isThemeColorExpanded = false
               isAccentColorExpanded = false
               backupRestoreStatus = null
+              dataBackupRestoreStatus = null
               showResetConfirmDialog = false
             },
             shape = CircleShape,

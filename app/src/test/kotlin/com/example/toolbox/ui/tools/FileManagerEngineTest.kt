@@ -597,14 +597,32 @@ class FileManagerEngineTest {
   fun isImageFile_andIsVideoFile_detectSupportedEditorFormats() {
     val dir = File(tempFolder.root, "MediaFolder").apply { mkdirs() }
     val png = File(tempFolder.root, "photo.png")
+    val jpg = File(tempFolder.root, "photo.jpg")
+    val jpeg = File(tempFolder.root, "photo.jpeg")
+    val webp = File(tempFolder.root, "photo.webp")
+    val gif = File(tempFolder.root, "anim.gif")
+    val bmp = File(tempFolder.root, "bitmap.bmp")
     val heic = File(tempFolder.root, "photo.heic")
+    val heif = File(tempFolder.root, "photo.heif")
+    val avif = File(tempFolder.root, "photo.avif")
+    val tiff = File(tempFolder.root, "scan.tiff")
+    val ico = File(tempFolder.root, "favicon.ico")
     val mp4 = File(tempFolder.root, "clip.mp4")
     val mov = File(tempFolder.root, "clip.mov")
     val txt = File(tempFolder.root, "readme.txt")
 
     assertFalse(FileManagerEngine.isImageFile(dir))
     assertTrue(FileManagerEngine.isImageFile(png))
+    assertTrue(FileManagerEngine.isImageFile(jpg))
+    assertTrue(FileManagerEngine.isImageFile(jpeg))
+    assertTrue(FileManagerEngine.isImageFile(webp))
+    assertTrue(FileManagerEngine.isImageFile(gif))
+    assertTrue(FileManagerEngine.isImageFile(bmp))
     assertTrue(FileManagerEngine.isImageFile(heic))
+    assertTrue(FileManagerEngine.isImageFile(heif))
+    assertTrue(FileManagerEngine.isImageFile(avif))
+    assertTrue(FileManagerEngine.isImageFile(tiff))
+    assertTrue(FileManagerEngine.isImageFile(ico))
     assertFalse(FileManagerEngine.isImageFile(mp4))
     assertFalse(FileManagerEngine.isImageFile(txt))
 
@@ -746,5 +764,33 @@ class FileManagerEngineTest {
 
     val shareable = FileManagerEngine.collectShareableFiles(listOf(pngFile, nestedDir, hiddenFile))
     assertEquals(listOf(pngFile.absolutePath, nestedFile.absolutePath), shareable.map { it.absolutePath })
+  }
+
+  @Test
+  fun isApkFile_detectsApkFilesCaseInsensitivelyAndRejectsDirectoriesAndOtherFiles() {
+    val apkLower = File(tempFolder.root, "app-release.apk").apply { writeBytes(byteArrayOf(0x50, 0x4B, 0x03, 0x04)) }
+    val apkUpper = File(tempFolder.root, "Update.APK").apply { writeBytes(byteArrayOf(0x50, 0x4B, 0x03, 0x04)) }
+    val zipFile = File(tempFolder.root, "bundle.zip").apply { writeBytes(byteArrayOf(0x50, 0x4B, 0x03, 0x04)) }
+    val fakeApkDir = File(tempFolder.root, "folder.apk").apply { mkdirs() }
+
+    assertTrue(FileManagerEngine.isApkFile(apkLower))
+    assertTrue(FileManagerEngine.isApkFile(apkUpper))
+    assertFalse(FileManagerEngine.isApkFile(zipFile))
+    assertFalse(FileManagerEngine.isApkFile(fakeApkDir))
+    assertEquals(FileManagerEngine.APK_MIME_TYPE, FileManagerEngine.getMimeType(apkLower))
+  }
+
+  @Test
+  fun toAudioRecordingItem_createsPlaybackItemForAudioFile() {
+    val wavFile = File(tempFolder.root, "sample_voice.wav")
+    AudioRecorderEngine.writeFallbackAudioFile(wavFile, durationMs = 2000L)
+
+    assertTrue(FileManagerEngine.isAudioFile(wavFile))
+    val recordingItem = AudioRecorderEngine.toAudioRecordingItem(wavFile, includeDurationMetadata = false)
+    assertEquals("sample_voice.wav", recordingItem.name)
+    assertEquals(wavFile.absolutePath, recordingItem.path)
+    assertEquals("wav", recordingItem.extension)
+    assertEquals("WAV", recordingItem.formatBadge)
+    assertTrue(recordingItem.durationMs >= 1000L)
   }
 }

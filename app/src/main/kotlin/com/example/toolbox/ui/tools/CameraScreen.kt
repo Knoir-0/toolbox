@@ -9,12 +9,19 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Range
@@ -195,6 +202,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -203,6 +211,7 @@ import com.example.toolbox.ui.theme.ToolboxTheme
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -217,6 +226,7 @@ fun CameraScreen(
   initialDirectory: File? = null,
   initialCaptureMode: CameraCaptureMode? = null,
   initialFormat: CameraPhotoFormat? = null,
+  systemCamerasOverride: List<CameraSystemDevice>? = null,
   notesRepository: NotesRepository? = null,
   onOpenGallery: ((File) -> Unit)? = null,
   onOpenNotes: (() -> Unit)? = null,
@@ -248,6 +258,15 @@ fun CameraScreen(
     if (isInspection) null else (context.getExternalFilesDir(null) ?: context.filesDir)
   }
 
+  // Detect all available system cameras (all back, front, and physical multi-camera lenses)
+  val systemCameras = remember(context, isInspection, systemCamerasOverride) {
+    systemCamerasOverride?.takeIf { it.isNotEmpty() } ?: if (isInspection) {
+      CameraEngine.getDefaultFallbackSystemCameras()
+    } else {
+      CameraEngine.detectSystemCameras(context)
+    }
+  }
+
   // Persisted camera configuration states
   var captureMode by rememberSaveable {
     mutableStateOf(initialCaptureMode ?: CameraCaptureMode.DEFAULT)
@@ -258,9 +277,31 @@ fun CameraScreen(
     mutableStateOf(CameraLensFacing.fromNameOrDefault(saved))
   }
 
-  fun updateLensFacing(facing: CameraLensFacing) {
-    lensFacing = facing
-    prefs?.edit()?.putString(PREF_KEY_CAMERA_LENS, facing.name)?.apply()
+  var selectedCameraId by rememberSaveable {
+    val savedId = prefs?.getString(PREF_KEY_CAMERA_ID, null)
+    val initialDevice = CameraEngine.resolveSelectedCamera(
+      cameras = systemCameras,
+      requestedCameraId = savedId,
+      fallbackFacing = lensFacing,
+    )
+    mutableStateOf(initialDevice.cameraId)
+  }
+
+  val selectedCamera = remember(systemCameras, selectedCameraId, lensFacing) {
+    CameraEngine.resolveSelectedCamera(
+      cameras = systemCameras,
+      requestedCameraId = selectedCameraId,
+      fallbackFacing = lensFacing,
+    )
+  }
+
+  LaunchedEffect(selectedCamera.cameraId, selectedCamera.lensFacing) {
+    if (selectedCameraId != selectedCamera.cameraId) {
+      selectedCameraId = selectedCamera.cameraId
+    }
+    if (lensFacing != selectedCamera.lensFacing) {
+      lensFacing = selectedCamera.lensFacing
+    }
   }
 
   var flashMode by rememberSaveable {
@@ -333,7 +374,7 @@ fun CameraScreen(
     prefs?.edit()?.putBoolean(PREF_KEY_CAMERA_MIRROR_FRONT, mirror)?.apply()
   }
 
-  // Photo Sub-Mode / Tools Navigation Pill Bar state (Standard, Panorama, HDR, Night, Burst, 2×2 Booth)
+  // Photo Sub-Mode / Tools Navigation Pill Bar state (Standard, Panorama, HDR, Burst)
   var photoSubMode by rememberSaveable {
     val saved = prefs?.getString(PREF_KEY_CAMERA_PHOTO_SUB_MODE, null)
     mutableStateOf(CameraPhotoSubMode.fromNameOrDefault(saved))
@@ -342,6 +383,17 @@ fun CameraScreen(
   fun updatePhotoSubMode(newSubMode: CameraPhotoSubMode) {
     photoSubMode = newSubMode
     prefs?.edit()?.putString(PREF_KEY_CAMERA_PHOTO_SUB_MODE, newSubMode.name)?.apply()
+  }
+
+  // Floating Night Mode state (Auto, On, Off) positioned to the left of the zoom options
+  var nightMode by rememberSaveable {
+    val saved = prefs?.getString(PREF_KEY_CAMERA_NIGHT_MODE, null)
+    mutableStateOf(CameraNightMode.fromNameOrDefault(saved))
+  }
+
+  fun updateNightMode(newNightMode: CameraNightMode) {
+    nightMode = newNightMode
+    prefs?.edit()?.putString(PREF_KEY_CAMERA_NIGHT_MODE, newNightMode.name)?.apply()
   }
 
   // QR Code Reader & Barcode Scanner states
@@ -482,6 +534,27 @@ fun CameraScreen(
   var showAdjustmentsPanel by rememberSaveable { mutableStateOf(false) }
   var showFiltersBar by rememberSaveable { mutableStateOf(false) }
 
+  fun selectCameraDevice(device: CameraSystemDevice, resetZoom: Boolean = true) {
+    val changedDevice = selectedCameraId != device.cameraId
+    selectedCameraId = device.cameraId
+    lensFacing = device.lensFacing
+    if (resetZoom && changedDevice) {
+      zoomLevel = MIN_CAMERA_ZOOM
+    }
+    prefs?.edit()
+      ?.putString(PREF_KEY_CAMERA_ID, device.cameraId)
+      ?.putString(PREF_KEY_CAMERA_LENS, device.lensFacing.name)
+      ?.apply()
+  }
+
+  fun cycleToNextSystemCamera() {
+    val nextDevice = CameraEngine.nextSystemCamera(
+      cameras = systemCameras,
+      currentCameraId = selectedCamera.cameraId,
+    )
+    selectCameraDevice(nextDevice)
+  }
+
   // Tap-to-focus indicator state (normalized 0f..1f coordinates) & center-radius sampled hex color
   var focusPointNormalized by remember { mutableStateOf<Offset?>(null) }
   var focusSampledColorHex by remember { mutableStateOf<String?>(null) }
@@ -543,6 +616,13 @@ fun CameraScreen(
   var activeVideoSession by remember { mutableStateOf<ActiveCameraVideoSession?>(null) }
   var refreshTrigger by remember { mutableIntStateOf(0) }
 
+  // Interactive Panorama sweep state
+  var isCapturingPanorama by remember { mutableStateOf(false) }
+  var panoramaSweepProgress by remember { mutableFloatStateOf(0f) }
+  var panoramaCapturedCount by remember { mutableIntStateOf(0) }
+  var panoramaVerticalOffsetNorm by remember { mutableFloatStateOf(0f) }
+  val panoramaCapturedFrames = remember { mutableListOf<Bitmap>() }
+
   // Optional live hardware TextureView reference for capturing real camera frames when available
   var activeTextureView by remember { mutableStateOf<TextureView?>(null) }
 
@@ -550,6 +630,8 @@ fun CameraScreen(
     onDispose {
       activeVideoSession?.stop()
       activeVideoSession = null
+      isCapturingPanorama = false
+      panoramaCapturedFrames.clear()
     }
   }
 
@@ -842,6 +924,258 @@ fun CameraScreen(
     }
   }
 
+  fun captureHardwarePreviewFrame(extractPanoramaBand: Boolean = false): Bitmap? {
+    return try {
+      val tv = activeTextureView
+      val raw = if (tv != null && tv.isAvailable) tv.bitmap else null
+      if (raw != null && tv != null && raw.width > 16 && raw.height > 16) {
+        val transformed = CameraEngine.transformCapturedPreviewBitmap(
+          rawBitmap = raw,
+          textureTransformMatrix = tv.getTransform(null),
+          zoom = zoomLevel,
+          lensFacing = lensFacing,
+          mirrorFront = mirrorFrontCamera,
+        )
+        if (extractPanoramaBand) {
+          CameraEngine.extractPanoramaBandFromFrame(transformed)
+        } else {
+          transformed
+        }
+      } else {
+        null
+      }
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  fun finishPanoramaSweep() {
+    if (!isCapturingPanorama) return
+    isCapturingPanorama = false
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    showShutterFlash = true
+
+    // Capture final frame at the end of the sweep if distinct from the last keyframe
+    val finalSlice = captureHardwarePreviewFrame(extractPanoramaBand = true)
+    if (finalSlice != null) {
+      val lastSlice = panoramaCapturedFrames.lastOrNull()
+      if (lastSlice == null) {
+        panoramaCapturedFrames.add(finalSlice)
+      } else {
+        val (shiftFrac, _, zeroMad) = CameraEngine.estimatePanoramaPairAlignment(lastSlice, finalSlice)
+        if (zeroMad >= 2.2f && abs(shiftFrac) >= 0.08f) {
+          panoramaCapturedFrames.add(finalSlice)
+        }
+      }
+    }
+
+    val outputFile = CameraEngine.createTimestampedPhotoFile(
+      directory = cameraDirectory,
+      format = photoFormat,
+      subMode = CameraPhotoSubMode.PANORAMA,
+    )
+
+    val stitchedHardware = if (panoramaCapturedFrames.isNotEmpty()) {
+      val rawStitched = CameraEngine.stitchPanoramaBitmaps(panoramaCapturedFrames)
+      if (rawStitched != null) {
+        CameraEngine.applyPhotoEnhancementsToBitmap(
+          bitmap = rawStitched,
+          filter = colorFilter,
+          exposureEv = exposureEv,
+          flashMode = flashMode,
+          subMode = CameraPhotoSubMode.PANORAMA,
+          nightMode = nightMode,
+        )
+      } else {
+        null
+      }
+    } else {
+      null
+    }
+
+    var savedFromHardware = false
+    if (stitchedHardware != null && stitchedHardware.width > 16 && stitchedHardware.height > 16) {
+      savedFromHardware = try {
+        val bos = ByteArrayOutputStream()
+        val fmt = if (photoFormat == CameraPhotoFormat.PNG) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+        val compressed = stitchedHardware.compress(fmt, 92, bos)
+        val bytes = bos.toByteArray()
+        if (compressed && bytes.size > 64) {
+          outputFile.parentFile?.mkdirs()
+          FileOutputStream(outputFile).use { fos ->
+            fos.write(bytes)
+            fos.flush()
+          }
+          true
+        } else {
+          false
+        }
+      } catch (_: Throwable) {
+        false
+      }
+    }
+
+    if (!savedFromHardware) {
+      CameraEngine.captureSyntheticPanoramaFile(
+        outputFile = outputFile,
+        lensFacing = lensFacing,
+        filter = colorFilter,
+        zoom = zoomLevel,
+        exposureEv = exposureEv,
+        mirrorFront = mirrorFrontCamera,
+        flashMode = flashMode,
+        nightMode = nightMode,
+        segments = panoramaCapturedCount.coerceAtLeast(PANORAMA_TARGET_SEGMENTS),
+      )
+    }
+
+    panoramaCapturedFrames.clear()
+    panoramaSweepProgress = 0f
+    panoramaCapturedCount = 0
+    panoramaVerticalOffsetNorm = 0f
+    refreshTrigger++
+    if (!isInspection) {
+      Toast.makeText(context, "Saved panorama ${outputFile.name}", Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  fun startPanoramaSweep() {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    panoramaCapturedFrames.clear()
+    val firstSlice = captureHardwarePreviewFrame(extractPanoramaBand = true)
+    if (firstSlice != null) {
+      panoramaCapturedFrames.add(firstSlice)
+    }
+    panoramaCapturedCount = 1
+    panoramaSweepProgress = 1f / PANORAMA_TARGET_SEGMENTS.toFloat()
+    panoramaVerticalOffsetNorm = 0f
+    isCapturingPanorama = true
+  }
+
+  // Cancel active panorama sweep if user switches away from Photo / Panorama sub-mode
+  LaunchedEffect(captureMode, photoSubMode) {
+    if (isCapturingPanorama && (captureMode != CameraCaptureMode.PHOTO || photoSubMode != CameraPhotoSubMode.PANORAMA)) {
+      isCapturingPanorama = false
+      panoramaCapturedFrames.clear()
+      panoramaSweepProgress = 0f
+      panoramaCapturedCount = 0
+      panoramaVerticalOffsetNorm = 0f
+    }
+  }
+
+  // Live gyroscope + optical frame shift tracking while sweeping a panorama
+  DisposableEffect(isCapturingPanorama) {
+    if (!isCapturingPanorama || isInspection) {
+      return@DisposableEffect onDispose {}
+    }
+    val sensorManager = try {
+      context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+    } catch (_: Throwable) {
+      null
+    }
+    val gyroSensor = try {
+      sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+    } catch (_: Throwable) {
+      null
+    }
+
+    var lastTimestampNs = 0L
+    var accumulatedYawRad = 0f
+    var accumulatedPitchRad = 0f
+    val radiansPerSegment = 0.16f // ~9.2 degrees of horizontal rotation per panorama segment
+
+    val sensorListener = object : SensorEventListener {
+      override fun onSensorChanged(event: SensorEvent?) {
+        val ev = event ?: return
+        if (ev.sensor?.type != Sensor.TYPE_GYROSCOPE || ev.values.size < 3) return
+        if (lastTimestampNs != 0L) {
+          val dtSec = ((ev.timestamp - lastTimestampNs) * 1e-9f).coerceIn(0f, 0.25f)
+          val pitchRate = ev.values[0]
+          val yawRate = ev.values[1]
+          accumulatedYawRad += abs(yawRate) * dtSec
+          accumulatedPitchRad = (accumulatedPitchRad + pitchRate * dtSec).coerceIn(-0.35f, 0.35f)
+          panoramaVerticalOffsetNorm = (accumulatedPitchRad / 0.35f).coerceIn(-1f, 1f)
+
+          val targetCount = (1 + (accumulatedYawRad / radiansPerSegment).toInt())
+            .coerceIn(1, PANORAMA_TARGET_SEGMENTS)
+          val rawProgress = ((1f + (accumulatedYawRad / radiansPerSegment)) / PANORAMA_TARGET_SEGMENTS.toFloat())
+            .coerceIn(1f / PANORAMA_TARGET_SEGMENTS.toFloat(), 1f)
+          if (rawProgress > panoramaSweepProgress) {
+            panoramaSweepProgress = rawProgress
+          }
+          if (targetCount > panoramaCapturedCount) {
+            val nextSlice = captureHardwarePreviewFrame(extractPanoramaBand = true)
+            if (nextSlice != null) {
+              panoramaCapturedFrames.add(nextSlice)
+            }
+            panoramaCapturedCount = targetCount
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            if (panoramaCapturedCount >= PANORAMA_TARGET_SEGMENTS) {
+              finishPanoramaSweep()
+            }
+          }
+        }
+        lastTimestampNs = ev.timestamp
+      }
+
+      override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
+
+    if (sensorManager != null && gyroSensor != null) {
+      try {
+        sensorManager.registerListener(sensorListener, gyroSensor, SensorManager.SENSOR_DELAY_GAME)
+      } catch (_: Throwable) {}
+    }
+
+    onDispose {
+      if (sensorManager != null) {
+        try {
+          sensorManager.unregisterListener(sensorListener)
+        } catch (_: Throwable) {}
+      }
+    }
+  }
+
+  // Optical frame-to-frame translation fallback when panning without gyroscope trigger
+  LaunchedEffect(isCapturingPanorama, activeTextureView) {
+    if (!isCapturingPanorama || isInspection) {
+      return@LaunchedEffect
+    }
+    while (isActive && isCapturingPanorama) {
+      delay(130L)
+      if (!isCapturingPanorama) break
+      val candidate = captureHardwarePreviewFrame(extractPanoramaBand = true)
+      if (candidate != null) {
+        val lastKeyframe = panoramaCapturedFrames.lastOrNull()
+        if (lastKeyframe == null) {
+          panoramaCapturedFrames.add(candidate)
+        } else {
+          val (shiftFrac, dyFrac, zeroMad) = withContext(Dispatchers.Default) {
+            CameraEngine.estimatePanoramaPairAlignment(lastKeyframe, candidate)
+          }
+          panoramaVerticalOffsetNorm = (dyFrac * 4f).coerceIn(-1f, 1f)
+          val absShift = abs(shiftFrac)
+          val stepThreshold = 0.22f
+          val partialSegment = (absShift / stepThreshold).coerceIn(0f, 1f)
+          val opticalProgress = ((panoramaCapturedCount.toFloat() + partialSegment * 0.85f) / PANORAMA_TARGET_SEGMENTS.toFloat())
+            .coerceIn(panoramaSweepProgress, 1f)
+          panoramaSweepProgress = opticalProgress
+
+          if (zeroMad >= 2.8f && absShift >= stepThreshold) {
+            panoramaCapturedFrames.add(candidate)
+            panoramaCapturedCount = (panoramaCapturedCount + 1).coerceAtMost(PANORAMA_TARGET_SEGMENTS)
+            panoramaSweepProgress = (panoramaCapturedCount.toFloat() / PANORAMA_TARGET_SEGMENTS.toFloat()).coerceIn(0f, 1f)
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            if (panoramaCapturedCount >= PANORAMA_TARGET_SEGMENTS) {
+              finishPanoramaSweep()
+              break
+            }
+          }
+        }
+      }
+    }
+  }
+
   fun performPhotoCapture() {
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     showShutterFlash = true
@@ -873,6 +1207,7 @@ fun CameraScreen(
           mirrorFront = mirrorFrontCamera,
           flashMode = flashMode,
           subMode = CameraPhotoSubMode.BURST,
+          nightMode = nightMode,
         )
       }
       refreshTrigger++
@@ -894,23 +1229,24 @@ fun CameraScreen(
 
     // Try capturing from live hardware TextureView if available and rendering frames
     val hwBitmap = try {
-      val tv = activeTextureView
-      val raw = if (tv != null && tv.isAvailable) tv.bitmap else null
-      if (raw != null && tv != null) {
-        val baseFrame = CameraEngine.transformCapturedPreviewBitmap(
-          rawBitmap = raw,
-          textureTransformMatrix = tv.getTransform(null),
-          zoom = zoomLevel,
-          lensFacing = lensFacing,
-          mirrorFront = mirrorFrontCamera,
-        )
-        when (activeSubMode) {
+      val baseFrame = captureHardwarePreviewFrame(
+        extractPanoramaBand = activeSubMode == CameraPhotoSubMode.PANORAMA,
+      )
+      if (baseFrame != null) {
+        val rawProcessed = when (activeSubMode) {
           CameraPhotoSubMode.PANORAMA -> {
-            CameraEngine.stitchPanoramaBitmaps(listOf(baseFrame, baseFrame, baseFrame)) ?: baseFrame
+            CameraEngine.stitchPanoramaBitmaps(listOf(baseFrame)) ?: baseFrame
           }
-          CameraPhotoSubMode.COLLAGE -> null // Uses 2x2 collage generator with baseFrame quadrants
           else -> baseFrame
         }
+        CameraEngine.applyPhotoEnhancementsToBitmap(
+          bitmap = rawProcessed,
+          filter = colorFilter,
+          exposureEv = exposureEv,
+          flashMode = flashMode,
+          subMode = activeSubMode,
+          nightMode = nightMode,
+        )
       } else {
         null
       }
@@ -951,6 +1287,7 @@ fun CameraScreen(
         mirrorFront = mirrorFrontCamera,
         flashMode = flashMode,
         subMode = activeSubMode,
+        nightMode = nightMode,
       )
     }
 
@@ -1025,6 +1362,26 @@ fun CameraScreen(
           }
         } else {
           startVideoRecording()
+        }
+      }
+    } else if (captureMode == CameraCaptureMode.PHOTO && photoSubMode == CameraPhotoSubMode.PANORAMA) {
+      if (isCapturingPanorama) {
+        finishPanoramaSweep()
+      } else {
+        if (timerDuration.seconds > 0) {
+          coroutineScope.launch {
+            var remaining = timerDuration.seconds
+            while (remaining > 0) {
+              countdownSecondsRemaining = remaining
+              delay(1000L)
+              if (countdownSecondsRemaining == 0) return@launch
+              remaining--
+            }
+            countdownSecondsRemaining = 0
+            startPanoramaSweep()
+          }
+        } else {
+          startPanoramaSweep()
         }
       }
     } else {
@@ -1116,6 +1473,7 @@ fun CameraScreen(
     BoxWithConstraints(
       modifier = Modifier
         .fillMaxSize()
+        .zIndex(if (focusPointNormalized != null) 2f else 0f)
         .background(Color.Black)
         .testTag("camera_viewfinder_stage"),
       contentAlignment = Alignment.Center,
@@ -1146,6 +1504,8 @@ fun CameraScreen(
           }
           .pointerInput(colorFilter, exposureEv, lensFacing) {
             detectTapGestures { tapOffset ->
+              showAdjustmentsPanel = false
+              showFiltersBar = false
               val normX = (tapOffset.x / size.width.toFloat()).coerceIn(0.08f, 0.92f)
               val normY = (tapOffset.y / size.height.toFloat()).coerceIn(0.08f, 0.92f)
               focusPointNormalized = Offset(normX, normY)
@@ -1183,6 +1543,7 @@ fun CameraScreen(
         // Hardware Camera2 Live Preview when camera permission is granted
         if (hasCameraPermission && !isInspection) {
           HardwareCamera2Preview(
+            selectedCamera = selectedCamera,
             lensFacing = lensFacing,
             aspectRatio = aspectRatio,
             zoomLevel = zoomLevel,
@@ -1238,26 +1599,21 @@ fun CameraScreen(
           )
         }
 
-        // Photo Mode Panorama & Tool Reticle Overlays
+        // Photo Mode Panorama Reticle Overlay
         if (captureMode == CameraCaptureMode.PHOTO && photoSubMode == CameraPhotoSubMode.PANORAMA) {
           val frameTopInScreen = (containerH - frameH) / 2
           val topOverlayHeight = with(density) { topOverlayHeightPx.toDp() }
           val reticleTopInset = (topOverlayHeight + 24.dp - frameTopInScreen).coerceAtLeast(24.dp)
           PanoramaReticleOverlayCanvas(
+            isCapturingPanorama = isCapturingPanorama,
+            sweepProgress = panoramaSweepProgress,
+            capturedSegments = panoramaCapturedCount,
+            targetSegments = PANORAMA_TARGET_SEGMENTS,
+            verticalOffsetNorm = panoramaVerticalOffsetNorm,
             topInset = reticleTopInset,
             modifier = Modifier
               .fillMaxSize()
               .testTag("camera_panorama_reticle_overlay"),
-          )
-        } else if (captureMode == CameraCaptureMode.PHOTO && photoSubMode == CameraPhotoSubMode.COLLAGE) {
-          val frameTopInScreen = (containerH - frameH) / 2
-          val topOverlayHeight = with(density) { topOverlayHeightPx.toDp() }
-          val reticleTopInset = (topOverlayHeight + 24.dp - frameTopInScreen).coerceAtLeast(24.dp)
-          CollageBoothReticleOverlayCanvas(
-            topInset = reticleTopInset,
-            modifier = Modifier
-              .fillMaxSize()
-              .testTag("camera_collage_reticle_overlay"),
           )
         }
 
@@ -1649,7 +2005,13 @@ fun CameraScreen(
           Surface(
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f),
-            modifier = Modifier.testTag("viewfinder_status_pill"),
+            modifier = Modifier
+              .clip(RoundedCornerShape(20.dp))
+              .clickable(enabled = !isCountingDown && systemCameras.size > 1) {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                cycleToNextSystemCamera()
+              }
+              .testTag("viewfinder_status_pill"),
           ) {
             Row(
               modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -1658,7 +2020,7 @@ fun CameraScreen(
             ) {
               Text(
                 text = buildString {
-                  append(lensFacing.shortLabel)
+                  append(selectedCamera.shortLabel)
                   if (captureMode == CameraCaptureMode.PHOTO && photoSubMode != CameraPhotoSubMode.STANDARD) {
                     append(" • ")
                     append(photoSubMode.shortLabel)
@@ -1699,9 +2061,83 @@ fun CameraScreen(
           )
         }
       }
+
+      // Detected System Cameras Pill Selector Row (below top status pills, away from viewfinder center)
+      Box(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+      ) {
+        Row(
+          modifier = Modifier
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f))
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 6.dp, vertical = 4.dp)
+            .testTag("camera_lens_selector_row"),
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          systemCameras.forEach { camera ->
+            val isSelected = camera.cameraId == selectedCamera.cameraId
+            Surface(
+              shape = RoundedCornerShape(16.dp),
+              color = if (isSelected) {
+                MaterialTheme.colorScheme.primaryContainer
+              } else {
+                Color.Transparent
+              },
+              modifier = Modifier
+                .height(28.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .clickable(enabled = !isCountingDown) {
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  selectCameraDevice(camera)
+                }
+                .testTag("camera_device_pill_${camera.cameraId}")
+                .semantics {
+                  contentDescription = camera.displayName
+                },
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+              ) {
+                Icon(
+                  imageVector = if (camera.lensFacing == CameraLensFacing.FRONT) {
+                    Icons.Default.CameraAlt
+                  } else {
+                    Icons.Default.PhotoCamera
+                  },
+                  contentDescription = null,
+                  tint = if (isSelected) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                  modifier = Modifier.size(12.dp),
+                )
+                Text(
+                  text = camera.chipLabel,
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                  color = if (isSelected) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                  maxLines = 1,
+                )
+              }
+            }
+          }
+        }
+      }
     }
 
-    // 3. Bottom Controls Overlay (Zoom Presets + Expandable Sliders/Filters + Translucent Control Deck)
+    // 3. Bottom Controls Overlay (Floating Night Mode + Zoom Presets + Expandable Sliders/Filters + Translucent Control Deck)
     Column(
       modifier = Modifier
         .fillMaxWidth()
@@ -1709,47 +2145,106 @@ fun CameraScreen(
         .testTag("camera_bottom_overlay"),
       horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-      // Zoom Preset Pills (1x, 2x, 3x, 5x)
+      // Floating Night Mode Icon Button (Auto / On / Off) to the left of Zoom Preset Pills (1x, 2x, 3x, 5x)
       Row(
-        modifier = Modifier
-          .padding(bottom = 8.dp)
-          .clip(RoundedCornerShape(24.dp))
-          .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f))
-          .padding(horizontal = 6.dp, vertical = 4.dp)
-          .testTag("zoom_presets_row"),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.padding(bottom = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        CAMERA_ZOOM_PRESETS.forEach { preset ->
-          val isSelected = kotlin.math.abs(zoomLevel - preset) < 0.15f
-          val presetLabel = "${preset.toInt()}x"
-          Surface(
-            shape = CircleShape,
-            color = if (isSelected) {
-              MaterialTheme.colorScheme.primaryContainer
-            } else {
-              Color.Transparent
+        val nightContainerColor by animateColorAsState(
+          targetValue = when (nightMode) {
+            CameraNightMode.ON -> MaterialTheme.colorScheme.primaryContainer
+            CameraNightMode.AUTO -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.88f)
+            CameraNightMode.OFF -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f)
+          },
+          label = "NightModeButtonContainerColor",
+        )
+        val nightContentColor by animateColorAsState(
+          targetValue = when (nightMode) {
+            CameraNightMode.ON -> MaterialTheme.colorScheme.onPrimaryContainer
+            CameraNightMode.AUTO -> MaterialTheme.colorScheme.onSecondaryContainer
+            CameraNightMode.OFF -> MaterialTheme.colorScheme.onSurfaceVariant
+          },
+          label = "NightModeButtonContentColor",
+        )
+
+        Surface(
+          shape = RoundedCornerShape(24.dp),
+          color = nightContainerColor,
+          modifier = Modifier
+            .height(42.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .clickable(enabled = !isCountingDown) {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              updateNightMode(nightMode.next())
+            }
+            .testTag("camera_night_mode_button")
+            .semantics {
+              contentDescription = nightMode.displayName
             },
-            modifier = Modifier
-              .size(34.dp)
-              .clip(CircleShape)
-              .clickable {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                zoomLevel = preset
-              }
-              .testTag("zoom_preset_${preset.toInt()}x"),
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
           ) {
-            Box(contentAlignment = Alignment.Center) {
-              Text(
-                text = presetLabel,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
-                color = if (isSelected) {
-                  MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                  MaterialTheme.colorScheme.onSurfaceVariant
-                },
-              )
+            Icon(
+              imageVector = Icons.Default.NightsStay,
+              contentDescription = null,
+              tint = nightContentColor,
+              modifier = Modifier.size(16.dp),
+            )
+            Text(
+              text = nightMode.shortLabel,
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = if (nightMode != CameraNightMode.OFF) FontWeight.ExtraBold else FontWeight.Medium,
+              color = nightContentColor,
+              modifier = Modifier.testTag("camera_night_mode_label"),
+            )
+          }
+        }
+
+        // Zoom Preset Pills (1x, 2x, 3x, 5x)
+        Row(
+          modifier = Modifier
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f))
+            .padding(horizontal = 6.dp, vertical = 4.dp)
+            .testTag("zoom_presets_row"),
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          CAMERA_ZOOM_PRESETS.forEach { preset ->
+            val isSelected = kotlin.math.abs(zoomLevel - preset) < 0.15f
+            val presetLabel = "${preset.toInt()}x"
+            Surface(
+              shape = CircleShape,
+              color = if (isSelected) {
+                MaterialTheme.colorScheme.primaryContainer
+              } else {
+                Color.Transparent
+              },
+              modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .clickable {
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  zoomLevel = preset
+                }
+                .testTag("zoom_preset_${preset.toInt()}x"),
+            ) {
+              Box(contentAlignment = Alignment.Center) {
+                Text(
+                  text = presetLabel,
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                  color = if (isSelected) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                  } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                  },
+                )
+              }
             }
           }
         }
@@ -1921,7 +2416,7 @@ fun CameraScreen(
           // Live Scanned QR Code / Barcode Result Card
           val activeDetectedCode = latestScannedCode
           AnimatedVisibility(
-            visible = activeDetectedCode != null,
+            visible = activeDetectedCode != null && captureMode == CameraCaptureMode.SCANNER,
             enter = expandVertically() + fadeIn(),
             exit = shrinkVertically() + fadeOut(),
           ) {
@@ -2175,9 +2670,7 @@ fun CameraScreen(
                         CameraPhotoSubMode.STANDARD -> Icons.Default.PhotoCamera
                         CameraPhotoSubMode.PANORAMA -> Icons.Default.PanoramaHorizontal
                         CameraPhotoSubMode.HDR -> Icons.Default.HdrOn
-                        CameraPhotoSubMode.NIGHT -> Icons.Default.NightsStay
                         CameraPhotoSubMode.BURST -> Icons.Default.BurstMode
-                        CameraPhotoSubMode.COLLAGE -> Icons.Default.GridView
                       },
                       contentDescription = null,
                       modifier = Modifier.size(16.dp),
@@ -2221,8 +2714,10 @@ fun CameraScreen(
                     },
                     modifier = Modifier
                       .clip(RoundedCornerShape(20.dp))
-                      .clickable(enabled = !isRecordingVideo && !isCountingDown) {
+                      .clickable(enabled = !isRecordingVideo && !isCapturingPanorama && !isCountingDown) {
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        showFiltersBar = false
+                        showAdjustmentsPanel = false
                         captureMode = mode
                       }
                       .testTag("mode_tab_${mode.name}"),
@@ -2381,7 +2876,7 @@ fun CameraScreen(
 
             val outerRingColor by animateColorAsState(
               targetValue = when {
-                isRecordingVideo -> MaterialTheme.colorScheme.error
+                isRecordingVideo || isCapturingPanorama -> MaterialTheme.colorScheme.error
                 captureMode == CameraCaptureMode.VIDEO -> MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
                 captureMode == CameraCaptureMode.SCANNER ||
                   captureMode == CameraCaptureMode.NOTE ||
@@ -2394,7 +2889,7 @@ fun CameraScreen(
 
             val innerCircleColor by animateColorAsState(
               targetValue = when {
-                isRecordingVideo -> MaterialTheme.colorScheme.error
+                isRecordingVideo || isCapturingPanorama -> MaterialTheme.colorScheme.error
                 captureMode == CameraCaptureMode.VIDEO -> MaterialTheme.colorScheme.error
                 captureMode == CameraCaptureMode.SCANNER ||
                   captureMode == CameraCaptureMode.NOTE ||
@@ -2409,7 +2904,7 @@ fun CameraScreen(
             Box(
               modifier = Modifier
                 .size(76.dp)
-                .scale(if (isRecordingVideo) recordPulseScale else 1f)
+                .scale(if (isRecordingVideo || isCapturingPanorama) recordPulseScale else 1f)
                 .clip(CircleShape)
                 .border(3.dp, outerRingColor, CircleShape)
                 .clickable { triggerShutterAction() }
@@ -2420,6 +2915,10 @@ fun CameraScreen(
                     isCountingDown -> "Cancel timer"
                     captureMode == CameraCaptureMode.VIDEO && isRecordingVideo -> "Stop video recording"
                     captureMode == CameraCaptureMode.VIDEO -> "Start video recording"
+                    captureMode == CameraCaptureMode.PHOTO && photoSubMode == CameraPhotoSubMode.PANORAMA && isCapturingPanorama ->
+                      "Finish panorama capture"
+                    captureMode == CameraCaptureMode.PHOTO && photoSubMode == CameraPhotoSubMode.PANORAMA ->
+                      "Start panorama sweep"
                     captureMode == CameraCaptureMode.SCANNER -> "Scan QR code or barcode"
                     captureMode == CameraCaptureMode.NOTE -> "Scan document to note"
                     captureMode == CameraCaptureMode.VISION -> "Analyze frame with ML Kit Vision"
@@ -2429,13 +2928,16 @@ fun CameraScreen(
               contentAlignment = Alignment.Center,
             ) {
               Surface(
-                shape = if (isRecordingVideo) RoundedCornerShape(10.dp) else CircleShape,
+                shape = if (isRecordingVideo || isCapturingPanorama) RoundedCornerShape(10.dp) else CircleShape,
                 color = innerCircleColor,
-                modifier = Modifier.size(if (isRecordingVideo) 32.dp else 60.dp),
+                modifier = Modifier.size(if (isRecordingVideo || isCapturingPanorama) 32.dp else 60.dp),
               ) {
                 Box(contentAlignment = Alignment.Center) {
                   AnimatedContent(
-                    targetState = Pair(Triple(captureMode, isRecordingVideo, isCountingDown), photoSubMode),
+                    targetState = Pair(
+                      Triple(captureMode, isRecordingVideo || isCapturingPanorama, isCountingDown),
+                      photoSubMode,
+                    ),
                     transitionSpec = { (fadeIn() + scaleIn()).togetherWith(fadeOut() + scaleOut()) },
                     label = "ShutterIconAnim",
                   ) { (stateTriple, activePhotoSubMode) ->
@@ -2451,7 +2953,9 @@ fun CameraScreen(
                         imageVector = Icons.Default.Stop,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onError,
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier
+                          .size(20.dp)
+                          .testTag("camera_shutter_stop_icon"),
                       )
                       mode == CameraCaptureMode.VIDEO -> Icon(
                         imageVector = Icons.Default.FiberManualRecord,
@@ -2485,9 +2989,7 @@ fun CameraScreen(
                         imageVector = when (activePhotoSubMode) {
                           CameraPhotoSubMode.PANORAMA -> Icons.Default.PanoramaHorizontal
                           CameraPhotoSubMode.HDR -> Icons.Default.HdrOn
-                          CameraPhotoSubMode.NIGHT -> Icons.Default.NightsStay
                           CameraPhotoSubMode.BURST -> Icons.Default.BurstMode
-                          CameraPhotoSubMode.COLLAGE -> Icons.Default.GridView
                           CameraPhotoSubMode.STANDARD -> Icons.Default.Camera
                         },
                         contentDescription = null,
@@ -2533,11 +3035,11 @@ fun CameraScreen(
                   .clip(CircleShape)
                   .clickable(enabled = !isCountingDown) {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    updateLensFacing(lensFacing.toggle())
+                    cycleToNextSystemCamera()
                   }
                   .testTag("camera_flip_lens_button")
                   .semantics {
-                    contentDescription = "Switch camera lens (${lensFacing.displayName})"
+                    contentDescription = "Switch camera lens (${selectedCamera.displayName})"
                   },
               ) {
                 Box(contentAlignment = Alignment.Center) {
@@ -2591,6 +3093,12 @@ fun CameraScreen(
       currentDirectory = cameraDirectory,
       currentFormat = photoFormat,
       mirrorFront = mirrorFrontCamera,
+      systemCameras = systemCameras,
+      selectedCamera = selectedCamera,
+      onSelectCamera = { device ->
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        selectCameraDevice(device)
+      },
       onDismiss = { showFolderSettingsDialog = false },
       onConfirm = { newPath, newFormat, newMirror ->
         updateCameraDirectory(newPath)
@@ -2775,12 +3283,14 @@ private fun ViewfinderGridOverlayCanvas(
 
 /**
  * Hardware Camera2 live preview backed by a [TextureView].
- * Safely initializes the requested [lensFacing] camera when available on the device/emulator,
+ * Safely initializes the requested [selectedCamera] (including top-level camera IDs and
+ * physical sub-cameras of logical multi-camera groups) when available on the device/emulator,
  * and cleans up the session automatically when disposed or switched.
  */
 @SuppressLint("MissingPermission")
 @Composable
 private fun HardwareCamera2Preview(
+  selectedCamera: CameraSystemDevice,
   lensFacing: CameraLensFacing,
   aspectRatio: CameraAspectRatio,
   zoomLevel: Float,
@@ -2911,6 +3421,9 @@ private fun HardwareCamera2Preview(
   }
 
   DisposableEffect(
+    selectedCamera.cameraId,
+    selectedCamera.openCameraId,
+    selectedCamera.physicalCameraId,
     lensFacing,
     surfaceReadyTrigger,
     isLifecycleResumed,
@@ -2925,22 +3438,38 @@ private fun HardwareCamera2Preview(
     val manager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
       ?: return@DisposableEffect onDispose {}
 
+    val availableIds = try {
+      manager.cameraIdList.toList()
+    } catch (_: Throwable) {
+      emptyList()
+    }
+
     val desiredLensConst = if (lensFacing == CameraLensFacing.FRONT) {
       CameraCharacteristics.LENS_FACING_FRONT
     } else {
       CameraCharacteristics.LENS_FACING_BACK
     }
 
-    val cameraId = try {
-      manager.cameraIdList.firstOrNull { id ->
-        manager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == desiredLensConst
-      } ?: manager.cameraIdList.firstOrNull()
-    } catch (_: Throwable) {
-      null
+    val cameraId = when {
+      selectedCamera.openCameraId in availableIds -> selectedCamera.openCameraId
+      selectedCamera.cameraId in availableIds -> selectedCamera.cameraId
+      else -> {
+        try {
+          availableIds.firstOrNull { id ->
+            manager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == desiredLensConst
+          } ?: availableIds.firstOrNull()
+        } catch (_: Throwable) {
+          null
+        }
+      }
     }
 
     if (cameraId == null) {
       return@DisposableEffect onDispose {}
+    }
+
+    val requestedPhysicalCameraId = selectedCamera.physicalCameraId?.takeIf {
+      it != cameraId && it !in availableIds
     }
 
     val mainHandler = Handler(Looper.getMainLooper())
@@ -2970,7 +3499,11 @@ private fun HardwareCamera2Preview(
     } catch (_: Throwable) {}
 
     try {
-      val chars = manager.getCameraCharacteristics(cameraId)
+      val chars = try {
+        manager.getCameraCharacteristics(selectedCamera.cameraId)
+      } catch (_: Throwable) {
+        manager.getCameraCharacteristics(cameraId)
+      }
       activeCharacteristics = chars
       val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
       activeSensorOrientation = sensorOrientation
@@ -2978,7 +3511,16 @@ private fun HardwareCamera2Preview(
         .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         ?.getOutputSizes(SurfaceTexture::class.java)
         ?.map { Pair(it.width, it.height) }
-        .orEmpty()
+        ?.takeIf { it.isNotEmpty() }
+        ?: try {
+          manager.getCameraCharacteristics(cameraId)
+            .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?.getOutputSizes(SurfaceTexture::class.java)
+            ?.map { Pair(it.width, it.height) }
+            .orEmpty()
+        } catch (_: Throwable) {
+          emptyList()
+        }
 
       val initialPreviewSize = CameraEngine.selectOptimalSensorPreviewSize(
         supportedSensorSizes = supportedSizes,
@@ -3036,27 +3578,70 @@ private fun HardwareCamera2Preview(
               previewBuilder = builder
 
               @Suppress("DEPRECATION")
-              device.createCaptureSession(
-                listOf(surface),
-                object : CameraCaptureSession.StateCallback() {
-                  override fun onConfigured(session: CameraCaptureSession) {
-                    if (isDisposed || !isLifecycleResumed) {
-                      try {
-                        session.close()
-                      } catch (_: Throwable) {}
-                      return
-                    }
-                    openedSession = session
-                    captureSession = session
-                    try {
-                      session.setRepeatingRequest(builder.build(), null, mainHandler)
-                    } catch (_: Throwable) {}
-                  }
+              fun createStandardSession() {
+                try {
+                  device.createCaptureSession(
+                    listOf(surface),
+                    object : CameraCaptureSession.StateCallback() {
+                      override fun onConfigured(session: CameraCaptureSession) {
+                        if (isDisposed || !isLifecycleResumed) {
+                          try {
+                            session.close()
+                          } catch (_: Throwable) {}
+                          return
+                        }
+                        openedSession = session
+                        captureSession = session
+                        try {
+                          session.setRepeatingRequest(builder.build(), null, mainHandler)
+                        } catch (_: Throwable) {}
+                      }
 
-                  override fun onConfigureFailed(session: CameraCaptureSession) {}
-                },
-                mainHandler,
-              )
+                      override fun onConfigureFailed(session: CameraCaptureSession) {}
+                    },
+                    mainHandler,
+                  )
+                } catch (_: Throwable) {}
+              }
+
+              if (requestedPhysicalCameraId != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                try {
+                  val outputConfig = OutputConfiguration(surface).apply {
+                    setPhysicalCameraId(requestedPhysicalCameraId)
+                  }
+                  val sessionConfig = SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR,
+                    listOf(outputConfig),
+                    ContextCompat.getMainExecutor(context),
+                    object : CameraCaptureSession.StateCallback() {
+                      override fun onConfigured(session: CameraCaptureSession) {
+                        if (isDisposed || !isLifecycleResumed) {
+                          try {
+                            session.close()
+                          } catch (_: Throwable) {}
+                          return
+                        }
+                        openedSession = session
+                        captureSession = session
+                        try {
+                          session.setRepeatingRequest(builder.build(), null, mainHandler)
+                        } catch (_: Throwable) {}
+                      }
+
+                      override fun onConfigureFailed(session: CameraCaptureSession) {
+                        if (!isDisposed && isLifecycleResumed) {
+                          createStandardSession()
+                        }
+                      }
+                    },
+                  )
+                  device.createCaptureSession(sessionConfig)
+                } catch (_: Throwable) {
+                  createStandardSession()
+                }
+              } else {
+                createStandardSession()
+              }
             } catch (_: Throwable) {}
           }
 
@@ -3174,6 +3759,9 @@ private fun CameraFolderAndFormatDialog(
   currentDirectory: File,
   currentFormat: CameraPhotoFormat,
   mirrorFront: Boolean,
+  systemCameras: List<CameraSystemDevice>,
+  selectedCamera: CameraSystemDevice,
+  onSelectCamera: (CameraSystemDevice) -> Unit,
   onDismiss: () -> Unit,
   onConfirm: (String, CameraPhotoFormat, Boolean) -> Unit,
 ) {
@@ -3314,6 +3902,62 @@ private fun CameraFolderAndFormatDialog(
               )
             }
           }
+        }
+
+        // Detected System Cameras Selector Chips & Hardware Specs
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          Text(
+            text = "System Camera Lens (${systemCameras.size} detected)",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            systemCameras.forEach { camera ->
+              val isSelected = camera.cameraId == selectedCamera.cameraId
+              FilterChip(
+                selected = isSelected,
+                onClick = { onSelectCamera(camera) },
+                label = { Text(camera.chipLabel) },
+                leadingIcon = if (isSelected) {
+                  {
+                    Icon(
+                      imageVector = Icons.Default.Check,
+                      contentDescription = null,
+                      modifier = Modifier.size(16.dp),
+                    )
+                  }
+                } else {
+                  {
+                    Icon(
+                      imageVector = if (camera.lensFacing == CameraLensFacing.FRONT) {
+                        Icons.Default.CameraAlt
+                      } else {
+                        Icons.Default.PhotoCamera
+                      },
+                      contentDescription = null,
+                      modifier = Modifier.size(16.dp),
+                    )
+                  }
+                },
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.testTag("camera_settings_lens_chip_${camera.cameraId}"),
+              )
+            }
+          }
+          Text(
+            text = selectedCamera.specsSummary,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.testTag("camera_settings_lens_specs"),
+          )
         }
 
         // Quick Folder Presets
@@ -3732,15 +4376,29 @@ private fun DocumentNoteReticleOverlayCanvas(
 /**
  * Viewfinder panoramic horizon track overlay rendered when [CameraCaptureMode.PHOTO] and
  * [CameraPhotoSubMode.PANORAMA] are active.
+ * Displays real-time sweep progress, captured segment dots, horizon level indicator, and status prompt.
  */
 @Composable
 private fun PanoramaReticleOverlayCanvas(
+  isCapturingPanorama: Boolean,
+  sweepProgress: Float,
+  capturedSegments: Int,
+  targetSegments: Int = PANORAMA_TARGET_SEGMENTS,
+  verticalOffsetNorm: Float = 0f,
   modifier: Modifier = Modifier,
   topInset: Dp = 24.dp,
 ) {
-  val bracketColor = MaterialTheme.colorScheme.tertiary
+  val bracketColor = if (isCapturingPanorama) {
+    MaterialTheme.colorScheme.primary
+  } else {
+    MaterialTheme.colorScheme.tertiary
+  }
   val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.28f)
-  val guideLineColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+  val progressFillColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.26f)
+  val guideLineColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
+  val activeDotColor = MaterialTheme.colorScheme.tertiary
+  val clampedProgress = sweepProgress.coerceIn(0f, 1f)
+  val totalSegs = targetSegments.coerceAtLeast(2)
 
   Box(modifier = modifier) {
     Canvas(modifier = Modifier.fillMaxSize()) {
@@ -3754,6 +4412,16 @@ private fun PanoramaReticleOverlayCanvas(
       val cy = (top + bottom) / 2f
       val armLen = minOf(panoW, panoH) * 0.22f
       val strokePx = 3.5.dp.toPx()
+
+      // Live sweep progress fill inside the panoramic track
+      if (isCapturingPanorama && clampedProgress > 0f) {
+        drawRoundRect(
+          color = progressFillColor,
+          topLeft = Offset(left, top),
+          size = Size(panoW * clampedProgress, panoH),
+          cornerRadius = CornerRadius(16.dp.toPx(), 16.dp.toPx()),
+        )
+      }
 
       // Wide panoramic sweep track container
       drawRoundRect(
@@ -3773,9 +4441,9 @@ private fun PanoramaReticleOverlayCanvas(
         pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f),
       )
 
-      // 3 segment vertical dividers & alignment target dots
-      for (i in 1..2) {
-        val segX = left + (panoW * i) / 3f
+      // Segment vertical dividers & alignment target dots
+      for (i in 1 until totalSegs) {
+        val segX = left + (panoW * i) / totalSegs.toFloat()
         drawLine(
           color = trackColor,
           start = Offset(segX, top + 10.dp.toPx()),
@@ -3783,12 +4451,27 @@ private fun PanoramaReticleOverlayCanvas(
           strokeWidth = 1.dp.toPx(),
         )
       }
-      for (i in 0..2) {
-        val dotX = left + panoW * (0.167f + i * 0.333f)
+      for (i in 0 until totalSegs) {
+        val dotX = left + panoW * ((i + 0.5f) / totalSegs.toFloat())
+        val isCaptured = isCapturingPanorama && i < capturedSegments
         drawCircle(
-          color = if (i == 1) bracketColor else guideLineColor,
-          radius = if (i == 1) 5.dp.toPx() else 3.5.dp.toPx(),
+          color = if (isCaptured) activeDotColor else guideLineColor,
+          radius = if (isCaptured) 5.5.dp.toPx() else 3.5.dp.toPx(),
           center = Offset(dotX, cy),
+        )
+      }
+
+      // Live moving reticle ring tracking horizontal sweep progress and vertical horizon tilt
+      if (isCapturingPanorama) {
+        val cursorX = (left + 16.dp.toPx() + (panoW - 32.dp.toPx()) * clampedProgress)
+          .coerceIn(left + 16.dp.toPx(), right - 16.dp.toPx())
+        val cursorY = (cy + verticalOffsetNorm.coerceIn(-1f, 1f) * (panoH * 0.28f))
+          .coerceIn(top + 14.dp.toPx(), bottom - 14.dp.toPx())
+        drawCircle(
+          color = activeDotColor,
+          radius = 10.dp.toPx(),
+          center = Offset(cursorX, cursorY),
+          style = Stroke(width = 2.dp.toPx()),
         )
       }
 
@@ -3802,53 +4485,35 @@ private fun PanoramaReticleOverlayCanvas(
       drawLine(bracketColor, Offset(right - armLen, bottom), Offset(right, bottom), strokePx, StrokeCap.Round)
       drawLine(bracketColor, Offset(right, bottom - armLen), Offset(right, bottom), strokePx, StrokeCap.Round)
     }
-  }
-}
 
-/**
- * Viewfinder 2×2 Photo Booth Collage quadrant guide overlay rendered when [CameraCaptureMode.PHOTO] and
- * [CameraPhotoSubMode.COLLAGE] are active.
- */
-@Composable
-private fun CollageBoothReticleOverlayCanvas(
-  modifier: Modifier = Modifier,
-  topInset: Dp = 24.dp,
-) {
-  val bracketColor = MaterialTheme.colorScheme.tertiary
-  val dividerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
-
-  Box(modifier = modifier) {
-    Canvas(modifier = Modifier.fillMaxSize()) {
-      val minDim = size.minDimension
-      val gridW = (minDim * 0.72f).coerceAtMost(280.dp.toPx())
-      val gridH = (gridW * 1.15f).coerceAtMost(size.height * 0.72f)
-      val left = (size.width - gridW) / 2f
-      val top = topInset.toPx().coerceAtMost((size.height - gridH).coerceAtLeast(0f))
-      val right = left + gridW
-      val bottom = top + gridH
-      val midX = (left + right) / 2f
-      val midY = (top + bottom) / 2f
-      val armLen = minOf(gridW, gridH) * 0.14f
-      val strokePx = 3.5.dp.toPx()
-
-      drawRoundRect(
-        color = dividerColor,
-        topLeft = Offset(left, top),
-        size = Size(gridW, gridH),
-        cornerRadius = CornerRadius(14.dp.toPx(), 14.dp.toPx()),
-        style = Stroke(width = 1.5.dp.toPx()),
+    // Panorama guidance / active sweep status badge
+    Surface(
+      shape = RoundedCornerShape(20.dp),
+      color = if (isCapturingPanorama) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
+      } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.78f)
+      },
+      modifier = Modifier
+        .align(Alignment.TopCenter)
+        .padding(top = (topInset - 4.dp).coerceAtLeast(8.dp))
+        .testTag("panorama_sweep_status_badge"),
+    ) {
+      Text(
+        text = if (isCapturingPanorama) {
+          "SWEEPING ${capturedSegments.coerceAtLeast(1)}/$totalSegs • Pan & tap shutter to finish"
+        } else {
+          "Panorama • Tap shutter and pan slowly"
+        },
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = if (isCapturingPanorama) {
+          MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+          MaterialTheme.colorScheme.onSurface
+        },
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
       )
-      drawLine(dividerColor, Offset(midX, top), Offset(midX, bottom), 1.5.dp.toPx())
-      drawLine(dividerColor, Offset(left, midY), Offset(right, midY), 1.5.dp.toPx())
-
-      drawLine(bracketColor, Offset(left, top + armLen), Offset(left, top), strokePx, StrokeCap.Round)
-      drawLine(bracketColor, Offset(left, top), Offset(left + armLen, top), strokePx, StrokeCap.Round)
-      drawLine(bracketColor, Offset(right - armLen, top), Offset(right, top), strokePx, StrokeCap.Round)
-      drawLine(bracketColor, Offset(right, top), Offset(right, top + armLen), strokePx, StrokeCap.Round)
-      drawLine(bracketColor, Offset(left, bottom - armLen), Offset(left, bottom), strokePx, StrokeCap.Round)
-      drawLine(bracketColor, Offset(left, bottom), Offset(left + armLen, bottom), strokePx, StrokeCap.Round)
-      drawLine(bracketColor, Offset(right - armLen, bottom), Offset(right, bottom), strokePx, StrokeCap.Round)
-      drawLine(bracketColor, Offset(right, bottom - armLen), Offset(right, bottom), strokePx, StrokeCap.Round)
     }
   }
 }

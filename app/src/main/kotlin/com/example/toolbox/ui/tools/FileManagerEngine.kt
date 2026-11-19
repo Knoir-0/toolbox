@@ -179,9 +179,18 @@ object FileManagerEngine {
     "png" to "image/png",
     "jpg" to "image/jpeg",
     "jpeg" to "image/jpeg",
+    "jpe" to "image/jpeg",
+    "jfif" to "image/jpeg",
     "webp" to "image/webp",
     "gif" to "image/gif",
     "bmp" to "image/bmp",
+    "dib" to "image/bmp",
+    "heic" to "image/heic",
+    "heif" to "image/heif",
+    "avif" to "image/avif",
+    "tiff" to "image/tiff",
+    "tif" to "image/tiff",
+    "ico" to "image/x-icon",
     "svg" to "image/svg+xml",
     "mp3" to "audio/mpeg",
     "wav" to "audio/wav",
@@ -271,7 +280,7 @@ object FileManagerEngine {
   fun isImageFile(file: File): Boolean {
     if (file.isDirectory) return false
     val ext = file.extension.lowercase(Locale.ROOT)
-    return ext in setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "heic", "heif")
+    return ext in GalleryEngine.SUPPORTED_IMAGE_EXTENSIONS
   }
 
   fun isAudioFile(file: File): Boolean {
@@ -303,6 +312,11 @@ object FileManagerEngine {
   fun isPdfFile(file: File): Boolean {
     if (file.isDirectory) return false
     return file.extension.lowercase(Locale.ROOT) == "pdf"
+  }
+
+  fun isApkFile(file: File): Boolean {
+    if (file.isDirectory) return false
+    return file.extension.lowercase(Locale.ROOT) == "apk"
   }
 
   fun isCodeFile(file: File): Boolean {
@@ -1129,6 +1143,224 @@ object FileManagerEngine {
     }
   }
 
+  const val APK_MIME_TYPE = "application/vnd.android.package-archive"
+
+  /**
+   * Optional test override for [canInstallApks]. When non-null, [canInstallApks] returns this value.
+   */
+  var canInstallApksOverrideForTest: Boolean? = null
+
+  /**
+   * Optional test callback invoked when [openUnknownAppSourcesSettings] is triggered.
+   * When non-null, intercepts the system settings intent launch and returns its result.
+   */
+  var unknownAppSourcesSettingsLauncherForTest: ((android.content.Intent) -> Boolean)? = null
+
+  /**
+   * Optional test callback invoked when [installApk] launches the package installer for an APK file.
+   * When non-null, intercepts the package installer intent launch and returns its result.
+   */
+  var apkInstallerLauncherForTest: ((File, android.content.Intent) -> Boolean)? = null
+
+  /**
+   * Resets any APK installation test overrides and interceptors.
+   */
+  fun resetApkInstallTestOverrides() {
+    canInstallApksOverrideForTest = null
+    unknownAppSourcesSettingsLauncherForTest = null
+    apkInstallerLauncherForTest = null
+  }
+
+  /**
+   * Checks whether Toolbox currently has permission to install unknown applications
+   * (`PackageManager.canRequestPackageInstalls()` on Android 8.0+).
+   */
+  fun canInstallApks(context: android.content.Context): Boolean {
+    canInstallApksOverrideForTest?.let { return it }
+    return try {
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+        context.packageManager.canRequestPackageInstalls()
+      } else {
+        true
+      }
+    } catch (_: Throwable) {
+      true
+    }
+  }
+
+  /**
+   * Creates an [android.content.Intent] to open the system setting that lets the user turn on
+   * the ability for [packageName] to install unknown applications
+   * (`Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES` with `package:<packageName>`).
+   */
+  fun createManageUnknownAppSourcesIntent(packageName: String): android.content.Intent {
+    return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+      android.content.Intent(
+        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+        android.net.Uri.parse("package:$packageName"),
+      )
+    } else {
+      android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)
+    }
+  }
+
+  /**
+   * Brings the user to the system setting to turn on the ability to let Toolbox install applications.
+   */
+  fun openUnknownAppSourcesSettings(
+    context: android.content.Context,
+    launcher: ((android.content.Intent) -> Unit)? = null,
+  ): Boolean {
+    val newTaskFlag = if (context !is android.app.Activity && launcher == null) {
+      android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+    } else {
+      0
+    }
+    val primaryIntent = createManageUnknownAppSourcesIntent(context.packageName).apply {
+      if (newTaskFlag != 0) addFlags(newTaskFlag)
+    }
+    unknownAppSourcesSettingsLauncherForTest?.let { interceptor ->
+      return interceptor(primaryIntent)
+    }
+    return try {
+      if (launcher != null) {
+        launcher(primaryIntent)
+      } else {
+        context.startActivity(primaryIntent)
+      }
+      true
+    } catch (_: Exception) {
+      try {
+        val fallbackAction = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+          android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES
+        } else {
+          android.provider.Settings.ACTION_SECURITY_SETTINGS
+        }
+        val fallbackIntent = android.content.Intent(fallbackAction).apply {
+          if (newTaskFlag != 0) addFlags(newTaskFlag)
+        }
+        if (launcher != null) {
+          launcher(fallbackIntent)
+        } else {
+          context.startActivity(fallbackIntent)
+        }
+        true
+      } catch (_: Exception) {
+        try {
+          val securityIntent = android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS).apply {
+            if (newTaskFlag != 0) addFlags(newTaskFlag)
+          }
+          if (launcher != null) {
+            launcher(securityIntent)
+          } else {
+            context.startActivity(securityIntent)
+          }
+          true
+        } catch (_: Exception) {
+          android.widget.Toast.makeText(
+            context,
+            "Please allow installing unknown apps in System Settings",
+            android.widget.Toast.LENGTH_SHORT,
+          ).show()
+          false
+        }
+      }
+    }
+  }
+
+  /**
+   * Creates an [android.content.Intent] to launch the system package installer for [contentUri].
+   */
+  fun createInstallApkIntentForUri(
+    contentUri: android.net.Uri,
+    isActivityContext: Boolean = true,
+  ): android.content.Intent {
+    val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+      if (!isActivityContext) android.content.Intent.FLAG_ACTIVITY_NEW_TASK else 0
+    return android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+      setDataAndType(contentUri, APK_MIME_TYPE)
+      putExtra(android.content.Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+      addFlags(flags)
+    }
+  }
+
+  /**
+   * Creates an [android.content.Intent] backed by `FileProvider` to install the given APK [file].
+   */
+  fun createInstallApkIntent(
+    context: android.content.Context,
+    file: File,
+  ): android.content.Intent {
+    val contentUri = androidx.core.content.FileProvider.getUriForFile(
+      context,
+      "${context.packageName}.fileprovider",
+      file,
+    )
+    return createInstallApkIntentForUri(
+      contentUri = contentUri,
+      isActivityContext = context is android.app.Activity,
+    )
+  }
+
+  /**
+   * Handles tapping on an APK [file] in the File Manager:
+   * - If Toolbox is not yet allowed to install applications ([canInstallApks] is `false`),
+   *   brings the user to the system setting (`Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES`) so
+   *   the user can turn it on.
+   * - If Toolbox is allowed to install applications ([canInstallApks] is `true`), launches the
+   *   system package installer for [file] so the user can install the APK.
+   */
+  fun installApk(
+    context: android.content.Context,
+    file: File,
+    settingsLauncher: ((android.content.Intent) -> Unit)? = null,
+  ): Boolean {
+    if (file.isDirectory || !file.exists() || !isApkFile(file)) return false
+    if (!canInstallApks(context)) {
+      return openUnknownAppSourcesSettings(context, settingsLauncher)
+    }
+    return try {
+      val installIntent = createInstallApkIntent(context, file)
+      apkInstallerLauncherForTest?.let { interceptor ->
+        return interceptor(file, installIntent)
+      }
+      context.startActivity(installIntent)
+      true
+    } catch (_: android.content.ActivityNotFoundException) {
+      try {
+        val contentUri = androidx.core.content.FileProvider.getUriForFile(
+          context,
+          "${context.packageName}.fileprovider",
+          file,
+        )
+        val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+          if (context !is android.app.Activity) android.content.Intent.FLAG_ACTIVITY_NEW_TASK else 0
+        @Suppress("DEPRECATION")
+        val fallbackInstallIntent = android.content.Intent(android.content.Intent.ACTION_INSTALL_PACKAGE).apply {
+          setDataAndType(contentUri, APK_MIME_TYPE)
+          putExtra(android.content.Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+          addFlags(flags)
+        }
+        context.startActivity(fallbackInstallIntent)
+        true
+      } catch (_: Exception) {
+        android.widget.Toast.makeText(
+          context,
+          "No package installer found to install ${file.name}",
+          android.widget.Toast.LENGTH_SHORT,
+        ).show()
+        false
+      }
+    } catch (_: Exception) {
+      android.widget.Toast.makeText(
+        context,
+        "Could not install ${file.name}",
+        android.widget.Toast.LENGTH_SHORT,
+      ).show()
+      false
+    }
+  }
+
   /**
    * Resolves the MIME type to use when launching an `ACTION_VIEW` intent for [file].
    * When [chooseApp] is true and the resolved MIME type is generic (`application/octet-stream`),
@@ -1141,7 +1373,10 @@ object FileManagerEngine {
 
   /**
    * Opens [file] using an Android `ACTION_VIEW` intent backed by `FileProvider`.
-   * When [chooseApp] is `false`, opens the file directly with the default app (or system resolver).
+   * When [file] is an APK and [chooseApp] is `false`, checks whether Toolbox has permission to
+   * install applications: if not, brings the user to the system setting to enable it; if enabled,
+   * launches the system package installer for the APK.
+   * When [chooseApp] is `false` for non-APK files, opens the file directly with the default app (or system resolver).
    * When [chooseApp] is `true`, wraps the intent in `Intent.createChooser` so the user can choose
    * a specific app to open the file with.
    */
@@ -1149,8 +1384,16 @@ object FileManagerEngine {
     context: android.content.Context,
     file: File,
     chooseApp: Boolean = false,
+    unknownSourcesSettingsLauncher: ((android.content.Intent) -> Unit)? = null,
   ): Boolean {
     if (file.isDirectory || !file.exists()) return false
+    if (isApkFile(file) && !chooseApp) {
+      return installApk(
+        context = context,
+        file = file,
+        settingsLauncher = unknownSourcesSettingsLauncher,
+      )
+    }
     return try {
       val contentUri = androidx.core.content.FileProvider.getUriForFile(
         context,

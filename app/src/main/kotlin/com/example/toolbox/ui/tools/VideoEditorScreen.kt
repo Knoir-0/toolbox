@@ -192,7 +192,6 @@ fun VideoEditorScreen(
 
   var isLoadingVideo by remember { mutableStateOf(false) }
   var isGeneratingSample by remember { mutableStateOf(false) }
-  var showFilePickerDialog by remember { mutableStateOf(false) }
   var showExportDialog by remember { mutableStateOf(false) }
   var exportOptions by remember { mutableStateOf(VideoExportOptions()) }
 
@@ -369,7 +368,7 @@ fun VideoEditorScreen(
 
     if (currentMetadata == null) {
       OpenFileInitialView(
-        onOpenFile = { showFilePickerDialog = true },
+        onOpenFile = { systemVideoPickerLauncher.launch("video/*") },
         onUseSample = {
           if (!isGeneratingSample && !isLoadingVideo) {
             coroutineScope.launch {
@@ -545,7 +544,7 @@ fun VideoEditorScreen(
           onOpenVideo = {
             performWithDiscardCheck {
               isPlaying = false
-              showFilePickerDialog = true
+              systemVideoPickerLauncher.launch("video/*")
             }
           },
           onResetAll = {
@@ -801,28 +800,6 @@ fun VideoEditorScreen(
         )
       }
     }
-  }
-
-  // In-app Video File Browser Dialog (shared StorageFilePickerDialog)
-  if (showFilePickerDialog) {
-    StorageFilePickerDialog(
-      initialDirectory = initialDirectory
-        ?: metadata?.file?.parentFile
-        ?: File(FileManagerEngine.getUserRootDirectory(), Environment.DIRECTORY_MOVIES)
-          .takeIf { it.exists() }
-        ?: FileManagerEngine.getUserRootDirectory(),
-      onDismiss = { showFilePickerDialog = false },
-      onFileSelected = { selected ->
-        showFilePickerDialog = false
-        loadVideoFile(selected)
-      },
-      onLaunchSystemPicker = {
-        showFilePickerDialog = false
-        systemVideoPickerLauncher.launch("video/*")
-      },
-      title = "Select Video to Edit",
-      fileFilter = VideoEditorEngine::isVideoFile,
-    )
   }
 
   // Export Settings Dialog

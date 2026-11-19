@@ -220,7 +220,6 @@ fun AudioEditorScreen(
   var activeAudioTrack by remember { mutableStateOf<AudioTrack?>(null) }
 
   // Dialog states
-  var showFilePickerDialog by remember { mutableStateOf(false) }
   var showExportDialog by remember { mutableStateOf(false) }
   var showDiscardDialog by remember { mutableStateOf(false) }
   var pendingDiscardAction by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -509,7 +508,7 @@ fun AudioEditorScreen(
       OpenFileInitialView(
         onOpenFile = {
           haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-          showFilePickerDialog = true
+          systemPickerLauncher.launch("audio/*")
         },
         onUseSample = {
           haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -724,7 +723,7 @@ fun AudioEditorScreen(
             onOpenAudio = {
               performWithDiscardCheck {
                 stopPlayback()
-                showFilePickerDialog = true
+                systemPickerLauncher.launch("audio/*")
               }
             },
             onResetAll = {
@@ -979,24 +978,6 @@ fun AudioEditorScreen(
         }
       }
     }
-  }
-
-  // Shared StorageFilePickerDialog from FileConverterScreen
-  if (showFilePickerDialog) {
-    StorageFilePickerDialog(
-      initialDirectory = audioDirectory,
-      title = "Select Audio File",
-      fileFilter = { file -> AudioEditorEngine.isSupportedAudioFile(file) },
-      onDismiss = { showFilePickerDialog = false },
-      onLaunchSystemPicker = {
-        showFilePickerDialog = false
-        systemPickerLauncher.launch("audio/*")
-      },
-      onFileSelected = { selectedFile ->
-        showFilePickerDialog = false
-        openAudioFile(selectedFile)
-      },
-    )
   }
 
   // Unsaved Changes Confirmation Dialog (aligned with ImageEditorScreen & VideoEditorScreen)

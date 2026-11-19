@@ -254,6 +254,7 @@ object CrossToolActions {
 @Stable
 class CrossToolFileHostState {
   var fileForConverter by mutableStateOf<File?>(null)
+  var fileForImage by mutableStateOf<File?>(null)
   var fileForImageEditor by mutableStateOf<File?>(null)
   var fileForVideoEditor by mutableStateOf<File?>(null)
   var fileForAudioEditor by mutableStateOf<File?>(null)
@@ -288,6 +289,7 @@ class CrossToolFileHostState {
 
   val hasActiveSubScreen: Boolean
     get() = fileForConverter != null ||
+      fileForImage != null ||
       fileForImageEditor != null ||
       fileForVideoEditor != null ||
       fileForAudioEditor != null ||
@@ -334,6 +336,20 @@ fun CrossToolFileHostState.RenderSubScreen(
       initialDirectory = activeConverterFile.parentFile ?: defaultDirectory,
       onNavigateBack = {
         fileForConverter = null
+        notifyReturned()
+      },
+    )
+    return true
+  }
+
+  val activeImageFile = fileForImage
+  if (activeImageFile != null) {
+    ImageScreen(
+      modifier = modifier,
+      initialFile = activeImageFile,
+      initialDirectory = activeImageFile.parentFile ?: defaultDirectory,
+      onNavigateBack = {
+        fileForImage = null
         notifyReturned()
       },
     )

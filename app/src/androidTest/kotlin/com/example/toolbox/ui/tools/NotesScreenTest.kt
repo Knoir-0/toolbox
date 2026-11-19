@@ -31,6 +31,12 @@ class NotesScreenTest {
     }
 
     composeTestRule.onNodeWithTag("notes_empty_state").assertIsDisplayed()
+    val pinBounds = composeTestRule.onNodeWithTag("new_pin_note_button").fetchSemanticsNode().boundsInRoot
+    val checklistBounds = composeTestRule.onNodeWithTag("new_checklist_button").fetchSemanticsNode().boundsInRoot
+    assertTrue("Pin and checklist buttons should not overlap", pinBounds.right <= checklistBounds.left)
+    assertEquals(pinBounds.width, checklistBounds.width, 1f)
+    assertEquals(pinBounds.height, checklistBounds.height, 1f)
+
     composeTestRule.onNodeWithTag("take_a_note_button").performClick()
     composeTestRule.waitForIdle()
 

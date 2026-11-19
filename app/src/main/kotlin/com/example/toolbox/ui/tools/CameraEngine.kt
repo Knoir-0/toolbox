@@ -9,6 +9,10 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RadialGradient
 import android.graphics.Shader
+import android.graphics.SurfaceTexture
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.os.Build
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.label.ImageLabeling
 import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
@@ -48,6 +52,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 const val CAMERA_PREFS_NAME = "camera_tool_preferences"
 const val PREF_KEY_CAMERA_DIRECTORY = "camera_save_directory"
 const val PREF_KEY_CAMERA_LENS = "camera_lens_facing"
+const val PREF_KEY_CAMERA_ID = "camera_selected_device_id"
 const val PREF_KEY_CAMERA_FLASH = "camera_flash_mode"
 const val PREF_KEY_CAMERA_TIMER = "camera_timer_duration"
 const val PREF_KEY_CAMERA_ASPECT_RATIO = "camera_aspect_ratio"
@@ -60,6 +65,9 @@ const val PREF_KEY_CAMERA_NOTE_PRESET = "camera_note_preset"
 const val PREF_KEY_CAMERA_VISION_THRESHOLD = "camera_vision_threshold"
 const val PREF_KEY_CAMERA_VISION_PRESET = "camera_vision_preset"
 const val PREF_KEY_CAMERA_PHOTO_SUB_MODE = "camera_photo_sub_mode"
+const val PREF_KEY_CAMERA_NIGHT_MODE = "camera_night_mode"
+
+const val PANORAMA_TARGET_SEGMENTS = 5
 
 const val DEFAULT_CAMERA_FOLDER_SUBPATH = "DCIM/Camera"
 const val DEFAULT_CAMERA_FOLDER_DISPLAY = "/DCIM/Camera"
@@ -145,23 +153,11 @@ enum class CameraPhotoSubMode(
     filePrefix = "HDR",
     description = "High Dynamic Range multi-exposure tone-mapped capture",
   ),
-  NIGHT(
-    displayName = "Night",
-    shortLabel = "Night",
-    filePrefix = "NIGHT",
-    description = "Low-light multi-frame bright night sight capture",
-  ),
   BURST(
     displayName = "Burst",
     shortLabel = "Burst",
     filePrefix = "BURST",
     description = "Rapid 3-frame continuous action burst sequence",
-  ),
-  COLLAGE(
-    displayName = "2×2 Booth",
-    shortLabel = "2×2 Booth",
-    filePrefix = "BOOTH",
-    description = "4-shot 2×2 photo booth contact sheet grid",
   ),
   ;
 
@@ -182,18 +178,53 @@ enum class CameraPhotoSubMode(
       ) {
         return PANORAMA
       }
-      if (trimmed.equals("booth", ignoreCase = true) ||
-        trimmed.equals("photobooth", ignoreCase = true) ||
-        trimmed.equals("grid", ignoreCase = true) ||
-        trimmed.equals("2x2", ignoreCase = true)
-      ) {
-        return COLLAGE
-      }
       return entries.find {
         it.name.equals(trimmed, ignoreCase = true) ||
           it.displayName.equals(trimmed, ignoreCase = true) ||
           it.shortLabel.equals(trimmed, ignoreCase = true) ||
           it.filePrefix.equals(trimmed, ignoreCase = true)
+      } ?: DEFAULT
+    }
+  }
+}
+
+/**
+ * Floating Night Mode toggle state (positioned to the left of the zoom options),
+ * cycling between [AUTO], [ON], and [OFF].
+ */
+enum class CameraNightMode(
+  val displayName: String,
+  val shortLabel: String,
+) {
+  AUTO(
+    displayName = "Night Mode Auto",
+    shortLabel = "Auto",
+  ),
+  ON(
+    displayName = "Night Mode On",
+    shortLabel = "On",
+  ),
+  OFF(
+    displayName = "Night Mode Off",
+    shortLabel = "Off",
+  ),
+  ;
+
+  fun next(): CameraNightMode {
+    val nextIndex = (ordinal + 1) % entries.size
+    return entries[nextIndex]
+  }
+
+  companion object {
+    val DEFAULT: CameraNightMode = AUTO
+
+    fun fromNameOrDefault(name: String?): CameraNightMode {
+      if (name.isNullOrBlank()) return DEFAULT
+      val trimmed = name.trim()
+      return entries.find {
+        it.name.equals(trimmed, ignoreCase = true) ||
+          it.displayName.equals(trimmed, ignoreCase = true) ||
+          it.shortLabel.equals(trimmed, ignoreCase = true)
       } ?: DEFAULT
     }
   }
@@ -1012,6 +1043,69 @@ enum class CameraLensFacing(
 }
 
 /**
+ * Optical lens role classification for multi-camera systems.
+ */
+enum class CameraLensType(
+  val displayName: String,
+  val shortLabel: String,
+) {
+  WIDE(displayName = "Wide", shortLabel = "Wide"),
+  ULTRA_WIDE(displayName = "Ultra-Wide", shortLabel = "Ultra"),
+  TELEPHOTO(displayName = "Telephoto", shortLabel = "Tele"),
+  MACRO(displayName = "Macro", shortLabel = "Macro"),
+  AUXILIARY(displayName = "Auxiliary", shortLabel = "Aux"),
+  EXTERNAL(displayName = "External", shortLabel = "Ext"),
+}
+
+/**
+ * Raw hardware camera metadata extracted from [CameraCharacteristics] prior to
+ * relative optical zoom ratio calculation and catalog labeling.
+ */
+data class RawCameraCharacteristicsInfo(
+  val cameraId: String,
+  val openCameraId: String = cameraId,
+  val physicalCameraId: String? = null,
+  val lensFacing: CameraLensFacing,
+  val isExternal: Boolean = false,
+  val focalLengthMm: Float? = null,
+  val sensorWidthMm: Float? = null,
+  val sensorHeightMm: Float? = null,
+  val aperture: Float? = null,
+  val hasFlash: Boolean = false,
+  val isLogicalMultiCamera: Boolean = false,
+  val sensorOrientationDegrees: Int = 90,
+  val minFocusDistanceDiopters: Float? = null,
+)
+
+/**
+ * Represents a detected system camera lens (either a top-level Camera2 ID or a physical lens
+ * backing a logical multi-camera) available for live preview and capture.
+ */
+data class CameraSystemDevice(
+  val cameraId: String,
+  val openCameraId: String = cameraId,
+  val physicalCameraId: String? = null,
+  val lensFacing: CameraLensFacing,
+  val lensType: CameraLensType = CameraLensType.WIDE,
+  val isPrimaryForFacing: Boolean = true,
+  val isExternal: Boolean = false,
+  val opticalZoomFactor: Float = 1.0f,
+  val focalLengthMm: Float? = null,
+  val equivalentFocalLength35mm: Int? = null,
+  val aperture: Float? = null,
+  val hasFlash: Boolean = false,
+  val isLogicalMultiCamera: Boolean = false,
+  val sensorOrientationDegrees: Int = 90,
+  val displayName: String,
+  val shortLabel: String,
+  val chipLabel: String,
+  val specsSummary: String,
+) {
+  val opticalZoomLabel: String
+    get() = CameraEngine.formatOpticalZoomFactor(opticalZoomFactor)
+}
+
+/**
  * Flash / Torch operation modes.
  */
 enum class CameraFlashMode(
@@ -1292,6 +1386,480 @@ object CameraEngine {
     } else {
       String.format(Locale.US, "%.1fx", roundedTenths)
     }
+  }
+
+  /**
+   * Formats an optical lens zoom factor (including `< 1.0f` ultra-wide factors like `0.5x`, `0.6x`
+   * as well as `1x`, `2x`, `3x`, `3.5x`, `5x`) into a concise badge string.
+   */
+  fun formatOpticalZoomFactor(factor: Float): String {
+    if (factor.isNaN() || factor <= 0f) return "1x"
+    val clamped = factor.coerceIn(0.1f, 100f)
+    val roundedTenths = (clamped * 10f).roundToInt() / 10f
+    return if (roundedTenths >= 1f && roundedTenths == roundedTenths.toInt().toFloat()) {
+      "${roundedTenths.toInt()}x"
+    } else {
+      String.format(Locale.US, "%.1fx", roundedTenths)
+    }
+  }
+
+  /**
+   * Returns a default 2-camera (Back + Front) fallback list when `CameraManager` is unavailable
+   * or during headless/Compose preview inspection.
+   */
+  fun getDefaultFallbackSystemCameras(): List<CameraSystemDevice> {
+    return buildSystemCameraCatalog(
+      listOf(
+        RawCameraCharacteristicsInfo(
+          cameraId = "0",
+          openCameraId = "0",
+          lensFacing = CameraLensFacing.BACK,
+          focalLengthMm = 4.75f,
+          sensorWidthMm = 6.4f,
+          sensorHeightMm = 4.8f,
+          aperture = 1.8f,
+          hasFlash = true,
+          sensorOrientationDegrees = 90,
+        ),
+        RawCameraCharacteristicsInfo(
+          cameraId = "1",
+          openCameraId = "1",
+          lensFacing = CameraLensFacing.FRONT,
+          focalLengthMm = 3.2f,
+          sensorWidthMm = 4.0f,
+          sensorHeightMm = 3.0f,
+          aperture = 2.0f,
+          hasFlash = false,
+          sensorOrientationDegrees = 270,
+        ),
+      )
+    )
+  }
+
+  /**
+   * Computes the 35mm full-frame equivalent focal length (in mm) from a physical [focalLengthMm]
+   * and [sensorWidthMm], or returns `null` when either dimension is unavailable.
+   */
+  fun computeEquivalentFocalLength35mm(
+    focalLengthMm: Float?,
+    sensorWidthMm: Float?,
+  ): Int? {
+    val f = focalLengthMm ?: return null
+    val sw = sensorWidthMm ?: return null
+    if (f <= 0f || sw <= 0f || f.isNaN() || sw.isNaN()) return null
+    val eq = ((f * 36.0f) / sw).roundToInt()
+    return eq.takeIf { it in 6..800 }
+  }
+
+  /**
+   * Builds an ordered, disambiguated catalog of [CameraSystemDevice] descriptors from a list of
+   * raw hardware camera metadata entries.
+   *
+   * - Calculates each lens's 35mm equivalent focal length and relative optical zoom ratio (`0.5x`, `0.6x`, `1x`, `2x`, `3x`, `5x`, etc.)
+   *   against the primary reference camera of that facing direction.
+   * - Classifies lenses into [CameraLensType.ULTRA_WIDE], [CameraLensType.WIDE], [CameraLensType.TELEPHOTO],
+   *   [CameraLensType.MACRO], [CameraLensType.AUXILIARY], or [CameraLensType.EXTERNAL].
+   * - Orders cameras by facing ([CameraLensFacing.BACK] first, then [CameraLensFacing.FRONT]) and ascending
+   *   optical zoom factor, while marking the main `1x` camera as [CameraSystemDevice.isPrimaryForFacing].
+   * - Automatically disambiguates labels with `(ID)` whenever two lenses share the same facing, type, and zoom ratio.
+   */
+  fun buildSystemCameraCatalog(
+    rawCameras: List<RawCameraCharacteristicsInfo>,
+  ): List<CameraSystemDevice> {
+    val deduplicated = rawCameras
+      .filter { it.cameraId.isNotBlank() }
+      .distinctBy { it.cameraId.trim() }
+    if (deduplicated.isEmpty()) {
+      return getDefaultFallbackSystemCameras()
+    }
+
+    val result = mutableListOf<CameraSystemDevice>()
+
+    for (facing in listOf(CameraLensFacing.BACK, CameraLensFacing.FRONT)) {
+      val group = deduplicated.filter { it.lensFacing == facing }
+      if (group.isEmpty()) continue
+
+      val primary = group.firstOrNull { it.physicalCameraId == null && !it.isExternal }
+        ?: group.first()
+      val primaryEq35 = computeEquivalentFocalLength35mm(primary.focalLengthMm, primary.sensorWidthMm)
+      val primaryFocalMm = primary.focalLengthMm?.takeIf { it > 0f && !it.isNaN() }
+
+      data class IntermediateCamera(
+        val raw: RawCameraCharacteristicsInfo,
+        val originalIndex: Int,
+        val isPrimary: Boolean,
+        val eq35mm: Int?,
+        val opticalZoom: Float,
+        val lensType: CameraLensType,
+      )
+
+      val intermediates = group.mapIndexed { idx, info ->
+        val isPrimary = info.cameraId == primary.cameraId
+        val eq35 = computeEquivalentFocalLength35mm(info.focalLengthMm, info.sensorWidthMm)
+        val rawZoom = when {
+          isPrimary -> 1.0f
+          eq35 != null && primaryEq35 != null && primaryEq35 > 0 ->
+            eq35.toFloat() / primaryEq35.toFloat()
+          info.focalLengthMm != null && info.focalLengthMm > 0f && !info.focalLengthMm.isNaN() &&
+            primaryFocalMm != null && primaryFocalMm > 0f ->
+            info.focalLengthMm / primaryFocalMm
+          else -> 1.0f
+        }
+        val roundedZoom = ((rawZoom.coerceIn(0.1f, 50f) * 10f).roundToInt() / 10f).coerceAtLeast(0.1f)
+        val lensType = when {
+          info.isExternal -> CameraLensType.EXTERNAL
+          roundedZoom < 0.85f || (eq35 != null && eq35 <= 19) -> CameraLensType.ULTRA_WIDE
+          roundedZoom >= 1.45f || (eq35 != null && eq35 >= 45) -> CameraLensType.TELEPHOTO
+          isPrimary -> CameraLensType.WIDE
+          (info.minFocusDistanceDiopters ?: 0f) >= 12.0f -> CameraLensType.MACRO
+          else -> CameraLensType.AUXILIARY
+        }
+        IntermediateCamera(
+          raw = info,
+          originalIndex = idx,
+          isPrimary = isPrimary,
+          eq35mm = eq35,
+          opticalZoom = roundedZoom,
+          lensType = lensType,
+        )
+      }.sortedWith(
+        compareBy<IntermediateCamera> { it.raw.isExternal }
+          .thenBy { it.opticalZoom }
+          .thenByDescending { it.isPrimary }
+          .thenBy { it.originalIndex }
+      )
+
+      val hasMultipleInFacing = intermediates.size > 1
+
+      val baseChipLabels = intermediates.map { item ->
+        val zoomStr = formatOpticalZoomFactor(item.opticalZoom)
+        if (!hasMultipleInFacing) {
+          if (item.raw.isExternal) "External" else facing.shortLabel
+        } else if (facing == CameraLensFacing.BACK) {
+          "$zoomStr ${item.lensType.shortLabel}"
+        } else {
+          "Front $zoomStr"
+        }
+      }
+
+      val chipLabelCounts = baseChipLabels.groupingBy { it }.eachCount()
+
+      intermediates.forEachIndexed { idx, item ->
+        val info = item.raw
+        val zoomStr = formatOpticalZoomFactor(item.opticalZoom)
+        val baseChip = baseChipLabels[idx]
+        val needsIdDisambiguation = (chipLabelCounts[baseChip] ?: 0) > 1
+        val finalChipLabel = if (needsIdDisambiguation) {
+          "$baseChip (${info.cameraId})"
+        } else {
+          baseChip
+        }
+
+        val shortLabel = if (!hasMultipleInFacing) {
+          if (info.isExternal) "External" else facing.shortLabel
+        } else {
+          val baseShort = "${facing.shortLabel} • ${item.lensType.shortLabel} $zoomStr"
+          if (needsIdDisambiguation) "$baseShort (${info.cameraId})" else baseShort
+        }
+
+        val displayName = if (!hasMultipleInFacing) {
+          if (info.isExternal) {
+            "External Camera (ID ${info.cameraId})"
+          } else {
+            "${facing.displayName} (ID ${info.cameraId})"
+          }
+        } else {
+          "${facing.shortLabel} ${item.lensType.displayName} ($zoomStr • ID ${info.cameraId})"
+        }
+
+        val specsSummary = buildString {
+          append("ID ${info.cameraId}")
+          if (info.physicalCameraId != null && info.physicalCameraId != info.openCameraId) {
+            append(" (Logical ${info.openCameraId})")
+          }
+          append(" • ${facing.shortLabel} ${item.lensType.displayName} ($zoomStr)")
+          if (item.eq35mm != null) {
+            append(" • ${item.eq35mm}mm")
+          } else if (info.focalLengthMm != null && info.focalLengthMm > 0f) {
+            append(String.format(Locale.US, " • %.1fmm", info.focalLengthMm))
+          }
+          if (info.aperture != null && info.aperture > 0f) {
+            append(String.format(Locale.US, " • f/%.1f", info.aperture))
+          }
+          if (info.hasFlash) {
+            append(" • Flash")
+          }
+        }
+
+        result.add(
+          CameraSystemDevice(
+            cameraId = info.cameraId,
+            openCameraId = info.openCameraId,
+            physicalCameraId = info.physicalCameraId,
+            lensFacing = facing,
+            lensType = item.lensType,
+            isPrimaryForFacing = item.isPrimary,
+            isExternal = info.isExternal,
+            opticalZoomFactor = item.opticalZoom,
+            focalLengthMm = info.focalLengthMm,
+            equivalentFocalLength35mm = item.eq35mm,
+            aperture = info.aperture,
+            hasFlash = info.hasFlash,
+            isLogicalMultiCamera = info.isLogicalMultiCamera,
+            sensorOrientationDegrees = info.sensorOrientationDegrees,
+            displayName = displayName,
+            shortLabel = shortLabel,
+            chipLabel = finalChipLabel,
+            specsSummary = specsSummary,
+          )
+        )
+      }
+    }
+
+    return if (result.isEmpty()) getDefaultFallbackSystemCameras() else result
+  }
+
+  private fun extractRawCameraCharacteristicsInfo(
+    cameraId: String,
+    openCameraId: String,
+    physicalCameraId: String?,
+    chars: CameraCharacteristics,
+    fallbackFacing: CameraLensFacing = CameraLensFacing.BACK,
+  ): RawCameraCharacteristicsInfo {
+    val facingInt = try {
+      chars.get(CameraCharacteristics.LENS_FACING)
+    } catch (_: Throwable) {
+      null
+    }
+    val isExternal = facingInt == CameraCharacteristics.LENS_FACING_EXTERNAL
+    val lensFacing = when (facingInt) {
+      CameraCharacteristics.LENS_FACING_FRONT -> CameraLensFacing.FRONT
+      CameraCharacteristics.LENS_FACING_BACK -> CameraLensFacing.BACK
+      CameraCharacteristics.LENS_FACING_EXTERNAL -> CameraLensFacing.BACK
+      else -> fallbackFacing
+    }
+    val focalLengthMm = try {
+      chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+        ?.firstOrNull { it > 0f && !it.isNaN() }
+    } catch (_: Throwable) {
+      null
+    }
+    val sensorSize = try {
+      chars.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+    } catch (_: Throwable) {
+      null
+    }
+    val aperture = try {
+      chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
+        ?.firstOrNull { it > 0f && !it.isNaN() }
+    } catch (_: Throwable) {
+      null
+    }
+    val hasFlash = try {
+      chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+    } catch (_: Throwable) {
+      false
+    }
+    val capabilities = try {
+      chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+    } catch (_: Throwable) {
+      null
+    }
+    val isLogicalMulti = capabilities?.contains(
+      CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA
+    ) == true
+    val sensorOrientation = try {
+      chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+    } catch (_: Throwable) {
+      90
+    }
+    val minFocusDistance = try {
+      chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
+        ?.takeIf { it > 0f && !it.isNaN() }
+    } catch (_: Throwable) {
+      null
+    }
+
+    return RawCameraCharacteristicsInfo(
+      cameraId = cameraId,
+      openCameraId = openCameraId,
+      physicalCameraId = physicalCameraId,
+      lensFacing = lensFacing,
+      isExternal = isExternal,
+      focalLengthMm = focalLengthMm,
+      sensorWidthMm = sensorSize?.width,
+      sensorHeightMm = sensorSize?.height,
+      aperture = aperture,
+      hasFlash = hasFlash,
+      isLogicalMultiCamera = isLogicalMulti,
+      sensorOrientationDegrees = sensorOrientation,
+      minFocusDistanceDiopters = minFocusDistance,
+    )
+  }
+
+  /**
+   * Queries Android's [CameraManager] to detect all preview-capable system cameras on the device,
+   * including all top-level camera IDs in [CameraManager.getCameraIdList] as well as underlying
+   * physical lenses backing logical multi-cameras on Android 9 (API 28)+.
+   */
+  fun detectSystemCameras(context: Context): List<CameraSystemDevice> {
+    val manager = try {
+      context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+    } catch (_: Throwable) {
+      null
+    } ?: return getDefaultFallbackSystemCameras()
+
+    val topLevelIds = try {
+      manager.cameraIdList.toList()
+    } catch (_: Throwable) {
+      emptyList()
+    }
+    if (topLevelIds.isEmpty()) {
+      return getDefaultFallbackSystemCameras()
+    }
+
+    val topLevelIdSet = topLevelIds.toSet()
+    val rawList = mutableListOf<RawCameraCharacteristicsInfo>()
+
+    for (id in topLevelIds) {
+      val chars = try {
+        manager.getCameraCharacteristics(id)
+      } catch (_: Throwable) {
+        null
+      } ?: continue
+
+      val streamMap = try {
+        chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+      } catch (_: Throwable) {
+        null
+      }
+      val previewSizes = try {
+        streamMap?.getOutputSizes(SurfaceTexture::class.java)
+      } catch (_: Throwable) {
+        null
+      }
+      if (streamMap != null && previewSizes.isNullOrEmpty()) {
+        continue
+      }
+
+      val topInfo = extractRawCameraCharacteristicsInfo(
+        cameraId = id,
+        openCameraId = id,
+        physicalCameraId = null,
+        chars = chars,
+      )
+      rawList.add(topInfo)
+
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        val physicalIds = try {
+          chars.physicalCameraIds.toList()
+        } catch (_: Throwable) {
+          emptyList()
+        }
+        val hiddenPhysicalIds = physicalIds.filter { it !in topLevelIdSet && it != id }
+        var skippedPrimaryDuplicate = false
+        for (physId in hiddenPhysicalIds) {
+          val physChars = try {
+            manager.getCameraCharacteristics(physId)
+          } catch (_: Throwable) {
+            null
+          } ?: continue
+
+          val physStreamMap = try {
+            physChars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+          } catch (_: Throwable) {
+            null
+          }
+          val physPreviewSizes = try {
+            physStreamMap?.getOutputSizes(SurfaceTexture::class.java)
+          } catch (_: Throwable) {
+            null
+          }
+          if (physStreamMap != null && physPreviewSizes.isNullOrEmpty()) {
+            continue
+          }
+
+          val physInfo = extractRawCameraCharacteristicsInfo(
+            cameraId = physId,
+            openCameraId = id,
+            physicalCameraId = physId,
+            chars = physChars,
+            fallbackFacing = topInfo.lensFacing,
+          )
+
+          val sameFocalAsLogical = topInfo.focalLengthMm != null &&
+            physInfo.focalLengthMm != null &&
+            abs(topInfo.focalLengthMm - physInfo.focalLengthMm) < 0.05f
+          if (!skippedPrimaryDuplicate && sameFocalAsLogical && hiddenPhysicalIds.size > 1) {
+            skippedPrimaryDuplicate = true
+            continue
+          }
+
+          rawList.add(physInfo)
+        }
+      }
+    }
+
+    return if (rawList.isEmpty()) {
+      getDefaultFallbackSystemCameras()
+    } else {
+      buildSystemCameraCatalog(rawList)
+    }
+  }
+
+  /**
+   * Resolves the active [CameraSystemDevice] from [cameras] matching [requestedCameraId],
+   * falling back to the primary camera for [fallbackFacing] (e.g. `1x Wide` Back Camera),
+   * or the first available camera.
+   */
+  fun resolveSelectedCamera(
+    cameras: List<CameraSystemDevice>,
+    requestedCameraId: String? = null,
+    fallbackFacing: CameraLensFacing = CameraLensFacing.BACK,
+  ): CameraSystemDevice {
+    val effectiveList = cameras.ifEmpty { getDefaultFallbackSystemCameras() }
+    if (!requestedCameraId.isNullOrBlank()) {
+      effectiveList.find { it.cameraId == requestedCameraId.trim() }?.let { return it }
+    }
+    return effectiveList.firstOrNull { it.lensFacing == fallbackFacing && it.isPrimaryForFacing }
+      ?: effectiveList.firstOrNull { it.lensFacing == fallbackFacing }
+      ?: effectiveList.firstOrNull { it.isPrimaryForFacing }
+      ?: effectiveList.first()
+  }
+
+  /**
+   * Returns the next [CameraSystemDevice] in [cameras] after [currentCameraId], wrapping around
+   * so the user can cycle through every detected system camera on the device.
+   */
+  fun nextSystemCamera(
+    cameras: List<CameraSystemDevice>,
+    currentCameraId: String?,
+  ): CameraSystemDevice {
+    val effectiveList = cameras.ifEmpty { getDefaultFallbackSystemCameras() }
+    val currentIndex = effectiveList.indexOfFirst { it.cameraId == currentCameraId }
+    if (currentIndex < 0) {
+      return resolveSelectedCamera(effectiveList)
+    }
+    return effectiveList[(currentIndex + 1) % effectiveList.size]
+  }
+
+  /**
+   * Returns the next [CameraSystemDevice] matching [facing] after [currentCameraId], wrapping around.
+   */
+  fun nextCameraForFacing(
+    cameras: List<CameraSystemDevice>,
+    currentCameraId: String?,
+    facing: CameraLensFacing,
+  ): CameraSystemDevice {
+    val facingCameras = cameras.filter { it.lensFacing == facing }
+    if (facingCameras.isEmpty()) {
+      return resolveSelectedCamera(cameras, requestedCameraId = currentCameraId, fallbackFacing = facing)
+    }
+    val currentIndex = facingCameras.indexOfFirst { it.cameraId == currentCameraId }
+    if (currentIndex < 0) {
+      return facingCameras.firstOrNull { it.isPrimaryForFacing } ?: facingCameras.first()
+    }
+    return facingCameras[(currentIndex + 1) % facingCameras.size]
   }
 
   /**
@@ -1825,8 +2393,32 @@ object CameraEngine {
   }
 
   /**
+   * Determines whether Night Sight low-light enhancement should be applied given [nightMode],
+   * [exposureEv], [flashMode], and optional frame [averageLuma] (`0..255`).
+   */
+  fun shouldApplyNightSight(
+    nightMode: CameraNightMode,
+    exposureEv: Float = 0f,
+    flashMode: CameraFlashMode = CameraFlashMode.OFF,
+    averageLuma: Int? = null,
+  ): Boolean {
+    return when (nightMode) {
+      CameraNightMode.ON -> true
+      CameraNightMode.OFF -> false
+      CameraNightMode.AUTO -> {
+        val flashActive = flashMode == CameraFlashMode.ON || flashMode == CameraFlashMode.TORCH
+        if (averageLuma != null) {
+          averageLuma < 85 && !flashActive
+        } else {
+          exposureEv <= -0.5f && !flashActive
+        }
+      }
+    }
+  }
+
+  /**
    * Captures and writes a rich procedural scene photo to [outputFile] reflecting the active camera
-   * parameters ([lensFacing], [aspectRatio], [filter], [zoom], [exposureEv], [mirrorFront], [flashMode]).
+   * parameters ([lensFacing], [aspectRatio], [filter], [zoom], [exposureEv], [mirrorFront], [flashMode], [subMode], [nightMode]).
    *
    * Works in both full Android runtime (using hardware-accelerated `Bitmap` & `Canvas` encoding)
    * and pure JVM unit tests (falling back to spec-compliant PNG encoding).
@@ -1841,6 +2433,7 @@ object CameraEngine {
     mirrorFront: Boolean = false,
     flashMode: CameraFlashMode = CameraFlashMode.OFF,
     subMode: CameraPhotoSubMode = CameraPhotoSubMode.STANDARD,
+    nightMode: CameraNightMode = CameraNightMode.OFF,
     epochMs: Long = System.currentTimeMillis(),
   ): File {
     if (subMode == CameraPhotoSubMode.PANORAMA) {
@@ -1852,19 +2445,7 @@ object CameraEngine {
         exposureEv = exposureEv,
         mirrorFront = mirrorFront,
         flashMode = flashMode,
-        epochMs = epochMs,
-      )
-    }
-    if (subMode == CameraPhotoSubMode.COLLAGE) {
-      return captureSyntheticCollagePhotoFile(
-        outputFile = outputFile,
-        lensFacing = lensFacing,
-        aspectRatio = aspectRatio,
-        filter = filter,
-        zoom = zoom,
-        exposureEv = exposureEv,
-        mirrorFront = mirrorFront,
-        flashMode = flashMode,
+        nightMode = nightMode,
         epochMs = epochMs,
       )
     }
@@ -1874,11 +2455,16 @@ object CameraEngine {
     } else {
       exposureEv
     }
+    val useNightSight = shouldApplyNightSight(
+      nightMode = nightMode,
+      exposureEv = exposureEv,
+      flashMode = flashMode,
+    )
 
     fun transformSceneColor(r: Int, g: Int, b: Int): Triple<Int, Int, Int> {
-      return when (subMode) {
-        CameraPhotoSubMode.HDR -> applyHdrToneMapToRgb(r, g, b, filter, effectiveEv)
-        CameraPhotoSubMode.NIGHT -> applyNightSightToRgb(r, g, b, filter, effectiveEv)
+      return when {
+        useNightSight -> applyNightSightToRgb(r, g, b, filter, effectiveEv)
+        subMode == CameraPhotoSubMode.HDR -> applyHdrToneMapToRgb(r, g, b, filter, effectiveEv)
         else -> applyFilterAndExposureToRgb(r, g, b, filter, effectiveEv)
       }
     }
@@ -1996,7 +2582,7 @@ object CameraEngine {
 
   /**
    * Captures and writes an ultra-wide stitched panoramic scene (`3:1` wide aspect ratio) to [outputFile]
-   * reflecting [lensFacing], [filter], [zoom], [exposureEv], [mirrorFront], and [flashMode].
+   * reflecting [lensFacing], [filter], [zoom], [exposureEv], [mirrorFront], [flashMode], and [nightMode].
    */
   fun captureSyntheticPanoramaFile(
     outputFile: File,
@@ -2006,7 +2592,8 @@ object CameraEngine {
     exposureEv: Float = 0f,
     mirrorFront: Boolean = false,
     flashMode: CameraFlashMode = CameraFlashMode.OFF,
-    segments: Int = 3,
+    nightMode: CameraNightMode = CameraNightMode.OFF,
+    segments: Int = PANORAMA_TARGET_SEGMENTS,
     epochMs: Long = System.currentTimeMillis(),
   ): File {
     outputFile.parentFile?.mkdirs()
@@ -2015,53 +2602,44 @@ object CameraEngine {
     } else {
       exposureEv
     }
-    val segCount = segments.coerceIn(2, 6)
+    val useNightSight = shouldApplyNightSight(
+      nightMode = nightMode,
+      exposureEv = exposureEv,
+      flashMode = flashMode,
+    )
+    val segCount = segments.coerceIn(2, 8)
+
+    fun transformColor(r: Int, g: Int, b: Int): Triple<Int, Int, Int> {
+      return if (useNightSight) {
+        applyNightSightToRgb(r, g, b, filter, effectiveEv)
+      } else {
+        applyFilterAndExposureToRgb(r, g, b, filter, effectiveEv)
+      }
+    }
 
     val androidWritten = try {
       val width = 1800
       val height = 600
       val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-      if (bitmap != null && bitmap.width > 0 && bitmap.height > 0) {
+      if (bitmap.width > 0 && bitmap.height > 0) {
         val canvas = Canvas(bitmap)
         if (lensFacing == CameraLensFacing.FRONT && mirrorFront) {
           canvas.scale(-1f, 1f, width / 2f, height / 2f)
         }
 
-        val skyTop = applyFilterAndExposureToRgb(
-          red = if (lensFacing == CameraLensFacing.BACK) 28 else 64,
-          green = if (lensFacing == CameraLensFacing.BACK) 52 else 44,
-          blue = if (lensFacing == CameraLensFacing.BACK) 118 else 124,
-          filter = filter,
-          exposureEv = effectiveEv,
+        val skyTop = transformColor(
+          r = if (lensFacing == CameraLensFacing.BACK) 28 else 64,
+          g = if (lensFacing == CameraLensFacing.BACK) 52 else 44,
+          b = if (lensFacing == CameraLensFacing.BACK) 118 else 124,
         )
-        val skyBottom = applyFilterAndExposureToRgb(
-          red = if (lensFacing == CameraLensFacing.BACK) 232 else 196,
-          green = if (lensFacing == CameraLensFacing.BACK) 142 else 126,
-          blue = if (lensFacing == CameraLensFacing.BACK) 104 else 172,
-          filter = filter,
-          exposureEv = effectiveEv,
+        val skyBottom = transformColor(
+          r = if (lensFacing == CameraLensFacing.BACK) 232 else 196,
+          g = if (lensFacing == CameraLensFacing.BACK) 142 else 126,
+          b = if (lensFacing == CameraLensFacing.BACK) 104 else 172,
         )
-        val ridgeFar = applyFilterAndExposureToRgb(
-          red = 58,
-          green = 78,
-          blue = 96,
-          filter = filter,
-          exposureEv = effectiveEv,
-        )
-        val groundColor = applyFilterAndExposureToRgb(
-          red = 38,
-          green = 66,
-          blue = 60,
-          filter = filter,
-          exposureEv = effectiveEv,
-        )
-        val sunColor = applyFilterAndExposureToRgb(
-          red = 255,
-          green = 228,
-          blue = 148,
-          filter = filter,
-          exposureEv = effectiveEv,
-        )
+        val ridgeFar = transformColor(58, 78, 96)
+        val groundColor = transformColor(38, 66, 60)
+        val sunColor = transformColor(255, 228, 148)
 
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         paint.shader = LinearGradient(
@@ -2077,7 +2655,7 @@ object CameraEngine {
 
         val zoomClamped = coerceZoom(zoom)
         val sunRadius = height * 0.24f * (1f + (zoomClamped - 1f) * 0.15f)
-        val sunCx = width * (0.35f + (segCount - 2) * 0.08f).coerceIn(0.25f, 0.75f)
+        val sunCx = width * (0.35f + (segCount - 2) * 0.06f).coerceIn(0.25f, 0.75f)
         val sunCy = height * 0.36f
         paint.shader = RadialGradient(
           sunCx,
@@ -2123,13 +2701,7 @@ object CameraEngine {
       val baseRed = if (lensFacing == CameraLensFacing.BACK) 0x4A else 0x7E
       val baseGreen = if (lensFacing == CameraLensFacing.BACK) 0x82 else 0x6A
       val baseBlue = if (lensFacing == CameraLensFacing.BACK) 0xB4 else 0xB0
-      val (r, g, b) = applyFilterAndExposureToRgb(
-        red = baseRed,
-        green = baseGreen,
-        blue = baseBlue,
-        filter = filter,
-        exposureEv = effectiveEv,
-      )
+      val (r, g, b) = transformColor(baseRed, baseGreen, baseBlue)
       GalleryEngine.writeSolidColorPng(
         outputFile = outputFile,
         red = r,
@@ -2147,40 +2719,387 @@ object CameraEngine {
   }
 
   /**
+   * Crops a tall portrait viewfinder frame to its central horizontal panoramic horizon band
+   * so stitched panorama slices produce a true wide panoramic aspect ratio matching the
+   * viewfinder Panorama reticle window.
+   */
+  fun extractPanoramaBandFromFrame(frame: Bitmap): Bitmap {
+    if (frame.width <= 16 || frame.height <= 16) return frame
+    // If already landscape or compact, keep as-is
+    if (frame.height <= (frame.width * 0.85f).roundToInt()) {
+      return frame
+    }
+    return try {
+      val bandH = (frame.width * 0.72f).roundToInt().coerceIn(64, frame.height)
+      val top = ((frame.height - bandH) * 0.42f).roundToInt().coerceIn(0, (frame.height - bandH).coerceAtLeast(0))
+      Bitmap.createBitmap(frame, 0, top, frame.width, bandH)
+    } catch (_: Throwable) {
+      frame
+    }
+  }
+
+  /**
+   * Crops a single stationary frame into a clean `2.4:1` wide panoramic strip instead of
+   * duplicating the same frame multiple times side by side.
+   */
+  fun cropSingleFrameToWidePanorama(frame: Bitmap): Bitmap {
+    if (frame.width <= 16 || frame.height <= 16) return frame
+    val targetH = (frame.width / 2.4f).roundToInt().coerceIn(32, frame.height)
+    if (targetH >= frame.height) return frame
+    return try {
+      val top = ((frame.height - targetH) * 0.45f).roundToInt().coerceIn(0, (frame.height - targetH).coerceAtLeast(0))
+      Bitmap.createBitmap(frame, 0, top, frame.width, targetH)
+    } catch (_: Throwable) {
+      frame
+    }
+  }
+
+  /**
+   * Estimates the normalized horizontal translation shift (`-1.0f..+1.0f` of frame width)
+   * and vertical offset (`dy` in normalized fraction) between [prevFrame] and [currFrame],
+   * along with the zero-shift Mean Absolute Difference (`zeroShiftMad` in `0f..255f`).
+   *
+   * Used both during live panorama sweeping (to detect when the user has panned far enough
+   * for the next keyframe) and during final panorama stitching (to align overlapping seams
+   * and discard stationary duplicate frames).
+   */
+  fun estimatePanoramaPairAlignment(
+    prevFrame: Bitmap,
+    currFrame: Bitmap,
+    defaultOverlapFraction: Float = 0.25f,
+  ): Triple<Float, Float, Float> {
+    val defaultStep = (1f - defaultOverlapFraction.coerceIn(0.08f, 0.75f)).coerceIn(0.25f, 0.92f)
+    if (prevFrame.width <= 16 || prevFrame.height <= 16 || currFrame.width <= 16 || currFrame.height <= 16) {
+      return Triple(defaultStep, 0f, 32f)
+    }
+    return try {
+      val sampleW = 48
+      val sampleH = 28
+      val prevSmall = Bitmap.createScaledBitmap(prevFrame, sampleW, sampleH, true)
+      val currSmall = Bitmap.createScaledBitmap(currFrame, sampleW, sampleH, true)
+      val prevPixels = IntArray(sampleW * sampleH)
+      val currPixels = IntArray(sampleW * sampleH)
+      prevSmall.getPixels(prevPixels, 0, sampleW, 0, 0, sampleW, sampleH)
+      currSmall.getPixels(currPixels, 0, sampleW, 0, 0, sampleW, sampleH)
+
+      fun luma(argb: Int): Int {
+        val r = (argb shr 16) and 0xFF
+        val g = (argb shr 8) and 0xFF
+        val b = argb and 0xFF
+        return (r * 77 + g * 150 + b * 29) shr 8
+      }
+
+      val prevLuma = IntArray(sampleW * sampleH) { luma(prevPixels[it]) }
+      val currLuma = IntArray(sampleW * sampleH) { luma(currPixels[it]) }
+
+      // 1. Check zero-shift MAD to detect stationary / duplicate frames
+      var zeroDiffSum = 0L
+      for (i in prevLuma.indices) {
+        zeroDiffSum += abs(prevLuma[i] - currLuma[i])
+      }
+      val zeroShiftMad = zeroDiffSum.toFloat() / prevLuma.size.toFloat()
+      if (zeroShiftMad < 2.2f) {
+        // Virtually identical stationary frame
+        return Triple(0f, 0f, zeroShiftMad)
+      }
+
+      // 2. Search horizontal step dx in [-0.75..+0.75] of sampleW and vertical dy in [-2..+2]
+      val minStepPx = (sampleW * 0.15f).roundToInt().coerceAtLeast(4)
+      val maxStepPx = (sampleW * 0.78f).roundToInt().coerceAtMost(sampleW - 6)
+      var bestCost = Float.MAX_VALUE
+      var bestDxPx = (sampleW * defaultStep).roundToInt()
+      var bestDyPx = 0
+
+      for (absDx in minStepPx..maxStepPx) {
+        for (sign in intArrayOf(1, -1)) {
+          val dx = absDx * sign
+          val overlapW = sampleW - absDx
+          if (overlapW < 6) continue
+          for (dy in -2..2) {
+            var diffSum = 0L
+            var count = 0
+            val yStart = maxOf(2, 2 - dy)
+            val yEnd = minOf(sampleH - 2, sampleH - 2 - dy)
+            for (y in yStart until yEnd) {
+              val prevRow = y * sampleW
+              val currRow = (y + dy) * sampleW
+              for (ox in 0 until overlapW) {
+                val pxPrev = if (dx >= 0) dx + ox else ox
+                val pxCurr = if (dx >= 0) ox else absDx + ox
+                diffSum += abs(prevLuma[prevRow + pxPrev] - currLuma[currRow + pxCurr])
+                count++
+              }
+            }
+            if (count > 0) {
+              // Slight regularization toward moderate overlap so uniform skies don't collapse to extreme edges
+              val mad = diffSum.toFloat() / count.toFloat()
+              val stepNorm = absDx.toFloat() / sampleW.toFloat()
+              val regPenalty = abs(stepNorm - 0.55f) * 3.0f + abs(dy) * 0.6f
+              val cost = mad + regPenalty
+              if (cost < bestCost) {
+                bestCost = cost
+                bestDxPx = dx
+                bestDyPx = dy
+              }
+            }
+          }
+        }
+      }
+
+      val shiftFraction = (bestDxPx.toFloat() / sampleW.toFloat()).coerceIn(-0.85f, 0.85f)
+      val dyFraction = (bestDyPx.toFloat() / sampleH.toFloat()).coerceIn(-0.15f, 0.15f)
+      Triple(shiftFraction, dyFraction, zeroShiftMad)
+    } catch (_: Throwable) {
+      Triple(defaultStep, 0f, 32f)
+    }
+  }
+
+  /**
    * Stitches a list of horizontal panoramic segment [frames] into a single wide panoramic [Bitmap]
-   * with feathered overlap blending across adjacent frames.
+   * with:
+   * - Automatic stationary/duplicate frame suppression (never clones identical frames side-by-side)
+   * - Pairwise horizontal and vertical alignment via [estimatePanoramaPairAlignment]
+   * - Raised-cosine feathered seam blending and luminance gain matching across overlap zones
    */
   fun stitchPanoramaBitmaps(
     frames: List<Bitmap>,
-    overlapFraction: Float = 0.18f,
+    overlapFraction: Float = 0.22f,
   ): Bitmap? {
     val valid = frames.filter { it.width > 16 && it.height > 16 }
     if (valid.isEmpty()) return null
-    if (valid.size == 1) return valid.first()
+    if (valid.size == 1) {
+      return cropSingleFrameToWidePanorama(extractPanoramaBandFromFrame(valid.first()))
+    }
     return try {
-      val targetH = valid.first().height.coerceIn(120, 1440)
-      val clampedOverlap = overlapFraction.coerceIn(0.05f, 0.35f)
-      val scaledFrames = valid.map { bmp ->
+      val bandedFrames = valid.map { extractPanoramaBandFromFrame(it) }
+      val targetH = bandedFrames.first().height.coerceIn(80, 1080)
+      val clampedOverlap = overlapFraction.coerceIn(0.08f, 0.55f)
+      val defaultStepFraction = (1f - clampedOverlap).coerceIn(0.35f, 0.90f)
+
+      val scaledFrames = bandedFrames.map { bmp ->
         if (bmp.height == targetH) {
           bmp
         } else {
           val scaledW = ((bmp.width.toFloat() * targetH) / bmp.height.toFloat()).roundToInt().coerceAtLeast(32)
-          Bitmap.createScaledBitmap(bmp, scaledW, targetH, true) ?: bmp
+          Bitmap.createScaledBitmap(bmp, scaledW, targetH, true)
         }
       }
-      val frameW = scaledFrames.first().width
-      val stepW = (frameW * (1f - clampedOverlap)).roundToInt().coerceAtLeast(16)
-      val totalW = (frameW + stepW * (scaledFrames.size - 1)).coerceIn(frameW, 4096)
-      val outBmp = Bitmap.createBitmap(totalW, targetH, Bitmap.Config.ARGB_8888) ?: return valid.first()
-      val canvas = Canvas(outBmp)
-      val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-      scaledFrames.forEachIndexed { idx, frame ->
-        val left = (idx * stepW).toFloat()
-        canvas.drawBitmap(frame, left, 0f, paint)
+
+      // Filter out stationary duplicate frames and collect relative horizontal shifts
+      val uniqueFrames = mutableListOf<Bitmap>()
+      val stepFractions = mutableListOf<Float>()
+      val dyFractions = mutableListOf<Float>()
+      uniqueFrames.add(scaledFrames.first())
+
+      var panDirectionSign = 0
+      for (i in 1 until scaledFrames.size) {
+        val prev = uniqueFrames.last()
+        val curr = scaledFrames[i]
+        val (shiftFrac, dyFrac, zeroMad) = estimatePanoramaPairAlignment(
+          prevFrame = prev,
+          currFrame = curr,
+          defaultOverlapFraction = clampedOverlap,
+        )
+        // Skip duplicate stationary frame when camera hasn't panned
+        if (zeroMad < 2.2f || abs(shiftFrac) < 0.06f) {
+          continue
+        }
+        if (panDirectionSign == 0) {
+          panDirectionSign = if (shiftFrac < 0f) -1 else 1
+        }
+        uniqueFrames.add(curr)
+        stepFractions.add(abs(shiftFrac).coerceIn(0.25f, 0.85f))
+        dyFractions.add(dyFrac)
       }
+
+      if (uniqueFrames.size == 1) {
+        return cropSingleFrameToWidePanorama(uniqueFrames.first())
+      }
+
+      // If user panned right-to-left, reverse frame order so we composite left-to-right
+      val orderedFrames = if (panDirectionSign < 0) uniqueFrames.reversed() else uniqueFrames
+      val orderedSteps = if (panDirectionSign < 0) stepFractions.reversed() else stepFractions
+      val orderedDys = if (panDirectionSign < 0) dyFractions.reversed().map { -it } else dyFractions
+
+      val frameW = orderedFrames.first().width
+      val stepPixels = orderedSteps.map { frac ->
+        (frameW * frac.coerceIn(0.25f, defaultStepFraction.coerceAtLeast(0.45f)))
+          .roundToInt()
+          .coerceIn(16, (frameW - 8).coerceAtLeast(16))
+      }
+
+      val totalW = (frameW + stepPixels.sum()).coerceIn(frameW, 4096)
+      val outPixels = IntArray(totalW * targetH)
+
+      // Place first frame into output buffer
+      val firstPixels = IntArray(frameW * targetH)
+      orderedFrames.first().getPixels(firstPixels, 0, frameW, 0, 0, frameW, targetH)
+      for (y in 0 until targetH) {
+        System.arraycopy(firstPixels, y * frameW, outPixels, y * totalW, minOf(frameW, totalW))
+      }
+
+      var currentRightEdge = minOf(frameW, totalW)
+      var currentOriginX = 0
+      var cumulativeDyPx = 0
+
+      for (idx in 1 until orderedFrames.size) {
+        val frame = orderedFrames[idx]
+        val fw = frame.width
+        val fh = frame.height
+        val stepPx = stepPixels[idx - 1]
+        val nextOriginX = currentOriginX + stepPx
+        if (nextOriginX >= totalW) break
+
+        cumulativeDyPx = (cumulativeDyPx + (orderedDys[idx - 1] * targetH).roundToInt())
+          .coerceIn(-(targetH / 8), targetH / 8)
+
+        val framePixels = IntArray(fw * fh)
+        frame.getPixels(framePixels, 0, fw, 0, 0, fw, fh)
+
+        val overlapStart = nextOriginX.coerceIn(0, currentRightEdge)
+        val overlapEnd = minOf(currentRightEdge, minOf(nextOriginX + fw, totalW))
+        val overlapWidth = (overlapEnd - overlapStart).coerceAtLeast(1)
+
+        // Compute luminance gain across the overlap zone for seamless exposure matching
+        var leftLumaSum = 0L
+        var rightLumaSum = 0L
+        var lumaSamples = 0
+        for (y in (targetH / 6) until (targetH * 5 / 6) step 2) {
+          val srcY = (y - cumulativeDyPx).coerceIn(0, fh - 1)
+          for (x in overlapStart until overlapEnd step 2) {
+            val leftArgb = outPixels[y * totalW + x]
+            val rightArgb = framePixels[srcY * fw + (x - nextOriginX)]
+            val lLuma = (((leftArgb shr 16) and 0xFF) * 77 + ((leftArgb shr 8) and 0xFF) * 150 + (leftArgb and 0xFF) * 29) shr 8
+            val rLuma = (((rightArgb shr 16) and 0xFF) * 77 + ((rightArgb shr 8) and 0xFF) * 150 + (rightArgb and 0xFF) * 29) shr 8
+            leftLumaSum += lLuma
+            rightLumaSum += rLuma
+            lumaSamples++
+          }
+        }
+        val exposureGain = if (lumaSamples > 0 && rightLumaSum > 100L) {
+          (leftLumaSum.toFloat() / rightLumaSum.toFloat()).coerceIn(0.85f, 1.18f)
+        } else {
+          1.0f
+        }
+
+        val copyEnd = minOf(nextOriginX + fw, totalW)
+        for (x in nextOriginX until copyEnd) {
+          val srcX = x - nextOriginX
+          // Raised-cosine feathered blend weight across overlap zone, 1.0f past overlapEnd
+          val weightRight = if (x < overlapEnd && overlapWidth > 1) {
+            val t = ((x - overlapStart).toFloat() / overlapWidth.toFloat()).coerceIn(0f, 1f)
+            (0.5f - 0.5f * cos(Math.PI * t).toFloat()).coerceIn(0f, 1f)
+          } else {
+            1.0f
+          }
+          val weightLeft = 1.0f - weightRight
+          // Smoothly taper gain adjustment from exposureGain at overlapStart to 1.0f at copyEnd
+          val gainProgress = ((x - nextOriginX).toFloat() / fw.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
+          val colGain = exposureGain + (1.0f - exposureGain) * gainProgress
+
+          for (y in 0 until targetH) {
+            val srcY = (y - cumulativeDyPx).coerceIn(0, fh - 1)
+            val rightArgb = framePixels[srcY * fw + srcX]
+            val rr = (((rightArgb shr 16) and 0xFF) * colGain).roundToInt().coerceIn(0, 255)
+            val rg = (((rightArgb shr 8) and 0xFF) * colGain).roundToInt().coerceIn(0, 255)
+            val rb = ((rightArgb and 0xFF) * colGain).roundToInt().coerceIn(0, 255)
+
+            if (weightRight >= 0.999f) {
+              outPixels[y * totalW + x] = (0xFF shl 24) or (rr shl 16) or (rg shl 8) or rb
+            } else {
+              val leftArgb = outPixels[y * totalW + x]
+              val lr = (leftArgb shr 16) and 0xFF
+              val lg = (leftArgb shr 8) and 0xFF
+              val lb = leftArgb and 0xFF
+              val br = (lr * weightLeft + rr * weightRight).roundToInt().coerceIn(0, 255)
+              val bg = (lg * weightLeft + rg * weightRight).roundToInt().coerceIn(0, 255)
+              val bb = (lb * weightLeft + rb * weightRight).roundToInt().coerceIn(0, 255)
+              outPixels[y * totalW + x] = (0xFF shl 24) or (br shl 16) or (bg shl 8) or bb
+            }
+          }
+        }
+
+        currentOriginX = nextOriginX
+        currentRightEdge = maxOf(currentRightEdge, copyEnd)
+      }
+
+      val finalW = currentRightEdge.coerceIn(32, totalW)
+      val outBmp = Bitmap.createBitmap(finalW, targetH, Bitmap.Config.ARGB_8888)
+      outBmp.setPixels(outPixels, 0, totalW, 0, 0, finalW, targetH)
       outBmp
     } catch (_: Throwable) {
       valid.firstOrNull()
+    }
+  }
+
+  /**
+   * Applies active [filter], [exposureEv], [subMode] (HDR), and [nightMode] (Off / Auto / On)
+   * pixel enhancements to a captured hardware [bitmap].
+   */
+  fun applyPhotoEnhancementsToBitmap(
+    bitmap: Bitmap,
+    filter: CameraColorFilter = CameraColorFilter.NONE,
+    exposureEv: Float = 0f,
+    flashMode: CameraFlashMode = CameraFlashMode.OFF,
+    subMode: CameraPhotoSubMode = CameraPhotoSubMode.STANDARD,
+    nightMode: CameraNightMode = CameraNightMode.OFF,
+  ): Bitmap {
+    val w = bitmap.width
+    val h = bitmap.height
+    if (w <= 0 || h <= 0) return bitmap
+    return try {
+      val pixels = IntArray(w * h)
+      bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
+
+      // Compute average luminance when Night Mode is AUTO
+      val avgLuma = if (nightMode == CameraNightMode.AUTO) {
+        var sum = 0L
+        var count = 0
+        val step = maxOf(1, pixels.size / 1024)
+        var i = 0
+        while (i < pixels.size) {
+          val p = pixels[i]
+          val r = (p shr 16) and 0xFF
+          val g = (p shr 8) and 0xFF
+          val b = p and 0xFF
+          sum += (r * 77 + g * 150 + b * 29) shr 8
+          count++
+          i += step
+        }
+        if (count > 0) (sum / count).toInt() else 128
+      } else {
+        null
+      }
+
+      val useNight = shouldApplyNightSight(
+        nightMode = nightMode,
+        exposureEv = exposureEv,
+        flashMode = flashMode,
+        averageLuma = avgLuma,
+      )
+      val useHdr = subMode == CameraPhotoSubMode.HDR
+      if (!useNight && !useHdr && filter == CameraColorFilter.NONE && abs(exposureEv) < 0.05f) {
+        return bitmap
+      }
+
+      for (i in pixels.indices) {
+        val argb = pixels[i]
+        val a = (argb ushr 24) and 0xFF
+        val r = (argb shr 16) and 0xFF
+        val g = (argb shr 8) and 0xFF
+        val b = argb and 0xFF
+        val (nr, ng, nb) = when {
+          useNight -> applyNightSightToRgb(r, g, b, filter, exposureEv)
+          useHdr -> applyHdrToneMapToRgb(r, g, b, filter, exposureEv)
+          else -> applyFilterAndExposureToRgb(r, g, b, filter, exposureEv)
+        }
+        pixels[i] = (a shl 24) or (nr shl 16) or (ng shl 8) or nb
+      }
+      val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+      out.setPixels(pixels, 0, w, 0, 0, w, h)
+      out
+    } catch (_: Throwable) {
+      bitmap
     }
   }
 
@@ -2238,135 +3157,6 @@ object CameraEngine {
       return (lifted * 255f).roundToInt().coerceIn(0, 255)
     }
     return Triple(liftGamma(r), liftGamma(g), liftGamma(b))
-  }
-
-  /**
-   * Captures and writes a 2×2 Photo Booth Collage contact sheet to [outputFile] combining 4 quadrants
-   * with subtle white gallery dividers. Works in both Android runtime and pure JVM unit tests.
-   */
-  fun captureSyntheticCollagePhotoFile(
-    outputFile: File,
-    quadrantBitmaps: List<Bitmap> = emptyList(),
-    lensFacing: CameraLensFacing = CameraLensFacing.BACK,
-    aspectRatio: CameraAspectRatio = CameraAspectRatio.RATIO_4_3,
-    filter: CameraColorFilter = CameraColorFilter.NONE,
-    zoom: Float = 1.0f,
-    exposureEv: Float = 0f,
-    mirrorFront: Boolean = false,
-    flashMode: CameraFlashMode = CameraFlashMode.OFF,
-    epochMs: Long = System.currentTimeMillis(),
-  ): File {
-    outputFile.parentFile?.mkdirs()
-    val effectiveEv = if (flashMode == CameraFlashMode.ON || flashMode == CameraFlashMode.TORCH) {
-      (exposureEv + 0.35f).coerceIn(MIN_CAMERA_EXPOSURE_EV, MAX_CAMERA_EXPOSURE_EV)
-    } else {
-      exposureEv
-    }
-
-    val androidWritten = try {
-      val (width, height) = aspectRatio.resolveDimensions(baseLongEdge = 960)
-      val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-      if (bitmap != null && bitmap.width > 0 && bitmap.height > 0) {
-        val canvas = Canvas(bitmap)
-        canvas.drawColor(android.graphics.Color.rgb(18, 18, 22))
-        val gap = 10f
-        val cellW = (width - gap * 3f) / 2f
-        val cellH = (height - gap * 3f) / 2f
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-
-        val evOffsets = listOf(-0.25f, 0.0f, 0.25f, 0.45f)
-        for (idx in 0 until 4) {
-          val col = idx % 2
-          val row = idx / 2
-          val left = gap + col * (cellW + gap)
-          val top = gap + row * (cellH + gap)
-          val right = left + cellW
-          val bottom = top + cellH
-
-          val quadBmp = quadrantBitmaps.getOrNull(idx)
-          if (quadBmp != null && quadBmp.width > 8 && quadBmp.height > 8) {
-            val scaled = Bitmap.createScaledBitmap(
-              quadBmp,
-              cellW.roundToInt().coerceAtLeast(16),
-              cellH.roundToInt().coerceAtLeast(16),
-              true,
-            )
-            if (scaled != null) {
-              canvas.drawBitmap(scaled, left, top, paint)
-            }
-          } else {
-            val cellEv = (effectiveEv + evOffsets[idx]).coerceIn(MIN_CAMERA_EXPOSURE_EV, MAX_CAMERA_EXPOSURE_EV)
-            val skyTop = applyFilterAndExposureToRgb(
-              red = if (lensFacing == CameraLensFacing.BACK) 34 + idx * 14 else 72 + idx * 10,
-              green = if (lensFacing == CameraLensFacing.BACK) 56 + idx * 8 else 48 + idx * 12,
-              blue = if (lensFacing == CameraLensFacing.BACK) 112 else 118,
-              filter = filter,
-              exposureEv = cellEv,
-            )
-            val skyBottom = applyFilterAndExposureToRgb(
-              red = if (lensFacing == CameraLensFacing.BACK) 218 else 186,
-              green = if (lensFacing == CameraLensFacing.BACK) 132 else 120,
-              blue = if (lensFacing == CameraLensFacing.BACK) 110 else 168,
-              filter = filter,
-              exposureEv = cellEv,
-            )
-            paint.shader = LinearGradient(
-              left,
-              top,
-              left,
-              bottom,
-              android.graphics.Color.rgb(skyTop.first, skyTop.second, skyTop.third),
-              android.graphics.Color.rgb(skyBottom.first, skyBottom.second, skyBottom.third),
-              Shader.TileMode.CLAMP,
-            )
-            canvas.drawRect(left, top, right, bottom, paint)
-            paint.shader = null
-          }
-        }
-
-        val isPng = outputFile.extension.equals("png", ignoreCase = true)
-        val compressFormat = if (isPng) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
-        val bos = ByteArrayOutputStream()
-        val ok = bitmap.compress(compressFormat, 92, bos)
-        val bytes = bos.toByteArray()
-        if (ok && bytes.size > 64) {
-          FileOutputStream(outputFile).use { fos ->
-            fos.write(bytes)
-            fos.flush()
-          }
-          true
-        } else {
-          false
-        }
-      } else {
-        false
-      }
-    } catch (_: Throwable) {
-      false
-    }
-
-    if (!androidWritten) {
-      val (r, g, b) = applyFilterAndExposureToRgb(
-        red = 0x6A,
-        green = 0x7E,
-        blue = 0xA8,
-        filter = filter,
-        exposureEv = effectiveEv,
-      )
-      val (w, h) = aspectRatio.resolveDimensions(baseLongEdge = 64)
-      GalleryEngine.writeSolidColorPng(
-        outputFile = outputFile,
-        red = r,
-        green = g,
-        blue = b,
-        width = w.coerceIn(16, 128),
-        height = h.coerceIn(16, 128),
-        lastModifiedMs = epochMs,
-      )
-    } else {
-      outputFile.setLastModified(epochMs)
-    }
-    return outputFile
   }
 
   /**

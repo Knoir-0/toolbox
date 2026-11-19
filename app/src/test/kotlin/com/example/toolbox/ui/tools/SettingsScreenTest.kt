@@ -368,6 +368,7 @@ class SettingsScreenTest {
     assertEquals(ToolCategory.MUSIC_AND_INSTRUMENTS, Tool.CHORD_BOOK.category)
     assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.AUDIO_EDITOR.category)
     assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.COLOR_PICKER.category)
+    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.IMAGE.category)
     assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.IMAGE_EDITOR.category)
     assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.FILE_CONVERTER.category)
     assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.GALLERY.category)
@@ -875,5 +876,143 @@ class SettingsScreenTest {
     com.example.toolbox.ui.main.resetAllSettingsToDefaults(restoredRepo)
     assertTrue(restoredRepo.isPermissionGranted(com.example.toolbox.ui.main.AppPermission.BLUETOOTH))
     assertEquals(0, restoredRepo.getTotalPermissionUsageCount(com.example.toolbox.ui.main.AppPermission.CAMERA))
+  }
+
+  @Test
+  fun exportAndImportDataJson_roundTripPreservesAllToolData() {
+    val notesRepo = InMemoryNotesRepository(
+      initialNotes = listOf(
+        NoteItem(
+          id = "note_1",
+          title = "Shopping List",
+          isChecklist = true,
+          checklistItems = listOf(NoteChecklistItem(id = "c1", text = "Milk", isChecked = true)),
+          color = NoteColor.MINT,
+          isPinned = true,
+          labels = listOf("Groceries"),
+        ),
+      ),
+      initialLabels = listOf("Groceries", "Work"),
+      initialGridView = false,
+      initialGridColumnsPerRow = 3,
+    )
+
+    val todoDate = "2026-11-19"
+    val todoRepo = InMemoryTodoListRepository(
+      initialTasks = listOf(
+        TodoItem(
+          id = "task_1",
+          title = "Ship data backup feature",
+          notes = "In Settings tool",
+          subtasks = listOf(TodoSubTask(id = "sub_1", title = "Add tests", isCompleted = true)),
+        ),
+      ),
+      completedDate = todoDate,
+      completedCount = 2,
+      initialCompletedTasks = listOf(TodoItem(id = "done_1", title = "Completed item")),
+      initialSavedTasks = listOf(TodoItem(id = "saved_1", title = "Recurring template")),
+    )
+
+    val recipeRepo = InMemoryRecipeBookRepository(
+      initialSaved = listOf(RecipeBookEngine.BUILT_IN_RECIPES.first()),
+      initialCustomCatalog = listOf(
+        RecipeItem(
+          id = "custom_recipe_1",
+          name = "Grandma's Pie",
+          subtitle = "Secret Recipe",
+          category = RecipeCategory.BAKING_AND_DESSERTS,
+          prepTimeMinutes = 25,
+          cookTimeMinutes = 45,
+          servings = 8,
+          ingredients = listOf("Apples", "Cinnamon"),
+          instructions = listOf("Bake at 375F"),
+          isCustom = true,
+        ),
+      ),
+    )
+
+    val plantRepo = InMemoryPlantScheduleRepository(
+      initialScheduledPlants = listOf(PlantScheduleEngine.BUILT_IN_PLANTS.first()),
+      initialCustomPlants = listOf(
+        PlantItem(
+          id = "custom_plant_1",
+          name = "Heirloom Basil",
+          scientificName = "Ocimum basilicum",
+          category = PlantCategory.HERBS,
+          plantingMonths = setOf(4, 5),
+          harvestMonths = setOf(6, 7, 8),
+          isCustom = true,
+        ),
+      ),
+    )
+
+    val tunerRepo = InMemoryGuitarTunerRepository(
+      initialFavorites = setOf(GuitarTuningPreset.DROP_D, GuitarTuningPreset.DADGAD),
+    )
+
+    val sourceRepos = com.example.toolbox.ui.main.ToolboxDataRepositories(
+      notesRepository = notesRepo,
+      todoListRepository = todoRepo,
+      recipeBookRepository = recipeRepo,
+      plantScheduleRepository = plantRepo,
+      guitarTunerRepository = tunerRepo,
+      currentTodoDate = todoDate,
+    )
+
+    val exportedJson = com.example.toolbox.ui.main.exportDataToJson(sourceRepos)
+    assertTrue(exportedJson.contains(com.example.toolbox.ui.main.DATA_BACKUP_FORMAT))
+
+    val targetNotesRepo = InMemoryNotesRepository()
+    val targetTodoRepo = InMemoryTodoListRepository(completedDate = todoDate)
+    val targetRecipeRepo = InMemoryRecipeBookRepository()
+    val targetPlantRepo = InMemoryPlantScheduleRepository()
+    val targetTunerRepo = InMemoryGuitarTunerRepository()
+
+    val targetRepos = com.example.toolbox.ui.main.ToolboxDataRepositories(
+      notesRepository = targetNotesRepo,
+      todoListRepository = targetTodoRepo,
+      recipeBookRepository = targetRecipeRepo,
+      plantScheduleRepository = targetPlantRepo,
+      guitarTunerRepository = targetTunerRepo,
+      currentTodoDate = todoDate,
+    )
+
+    val imported = com.example.toolbox.ui.main.importDataFromJson(exportedJson, targetRepos)
+    assertTrue(imported)
+
+    assertEquals(1, targetNotesRepo.loadNotes().size)
+    assertEquals("Shopping List", targetNotesRepo.loadNotes().first().title)
+    assertEquals(listOf("Groceries", "Work"), targetNotesRepo.loadLabels())
+    assertFalse(targetNotesRepo.isGridView())
+    assertEquals(3, targetNotesRepo.getGridColumnsPerRow())
+
+    assertEquals(1, targetTodoRepo.loadTasks().size)
+    assertEquals("Ship data backup feature", targetTodoRepo.loadTasks().first().title)
+    assertEquals(2, targetTodoRepo.getCompletedTodayCount(todoDate))
+    assertEquals(1, targetTodoRepo.loadCompletedTasks(todoDate).size)
+    assertEquals(1, targetTodoRepo.loadSavedTasks().size)
+
+    assertEquals(1, targetRecipeRepo.getSavedRecipes().size)
+    assertEquals(1, targetRecipeRepo.getCustomCatalogRecipes().size)
+    assertEquals("Grandma's Pie", targetRecipeRepo.getCustomCatalogRecipes().first().name)
+
+    assertEquals(1, targetPlantRepo.loadScheduledPlants().size)
+    assertEquals(1, targetPlantRepo.loadCustomPlants().size)
+    assertEquals("Heirloom Basil", targetPlantRepo.loadCustomPlants().first().name)
+
+    assertEquals(
+      setOf(GuitarTuningPreset.DROP_D.chordTuningId, GuitarTuningPreset.DADGAD.chordTuningId),
+      targetTunerRepo.loadFavoriteTuningIds(),
+    )
+  }
+
+  @Test
+  fun importDataFromJson_rejectsInvalidOrUnrecognizedJson() {
+    val targetRepos = com.example.toolbox.ui.main.ToolboxDataRepositories(
+      notesRepository = InMemoryNotesRepository(),
+    )
+    assertFalse(com.example.toolbox.ui.main.importDataFromJson("", targetRepos))
+    assertFalse(com.example.toolbox.ui.main.importDataFromJson("not-json", targetRepos))
+    assertFalse(com.example.toolbox.ui.main.importDataFromJson("{\"unrelated_key\": 123}", targetRepos))
   }
 }

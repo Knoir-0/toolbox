@@ -57,6 +57,7 @@ class NavigationPreferencesTest {
       Tool.RECIPES,
       Tool.PLANT_SCHEDULE,
       Tool.DICE_ROLLER,
+      Tool.IMAGE,
       Tool.IMAGE_EDITOR,
       Tool.VIDEO_EDITOR,
       Tool.AUDIO_EDITOR,
@@ -78,9 +79,10 @@ class NavigationPreferencesTest {
 
   @Test
   fun parseToolOrder_validSavedOrder_preservesOrder() {
-    val raw = "IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,NOTES,CHORD_BOOK,PLANT_SCHEDULE,CAMERA,AUDIO_EDITOR,VIDEO_EDITOR,BLUETOOTH_GAMEPAD,DECIBEL_METER,ARCHIVE,MUSIC,PDF_VIEWER,RECIPES,OBD2_SCANNER,SEARCH,SETTINGS"
+    val raw = "IMAGE,IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,NOTES,CHORD_BOOK,PLANT_SCHEDULE,CAMERA,AUDIO_EDITOR,VIDEO_EDITOR,BLUETOOTH_GAMEPAD,DECIBEL_METER,ARCHIVE,MUSIC,PDF_VIEWER,RECIPES,OBD2_SCANNER,SEARCH,SETTINGS"
     val result = parseToolOrder(raw)
     val expected = listOf(
+      Tool.IMAGE,
       Tool.IMAGE_EDITOR,
       Tool.CALCULATOR,
       Tool.RULER,
@@ -181,6 +183,7 @@ class NavigationPreferencesTest {
       Tool.METRONOME,
       Tool.COLOR_PICKER,
       Tool.BLUETOOTH_REMOTE,
+      Tool.IMAGE,
       Tool.IMAGE_EDITOR,
       Tool.TODO_LIST,
       Tool.FILES,
@@ -223,6 +226,7 @@ class NavigationPreferencesTest {
 
     // Update tool order
     val customOrder = listOf(
+      Tool.IMAGE,
       Tool.IMAGE_EDITOR,
       Tool.CALCULATOR,
       Tool.RULER,
@@ -351,6 +355,7 @@ class NavigationPreferencesTest {
     val expectedDefaultHidden = setOf(
       Tool.UNIT_CONVERTER,
       Tool.FILE_CONVERTER,
+      Tool.IMAGE,
       Tool.IMAGE_EDITOR,
       Tool.VIDEO_EDITOR,
       Tool.AUDIO_EDITOR,
@@ -883,6 +888,98 @@ class NavigationPreferencesTest {
     resetAllSettingsToDefaults(repo)
     assertEquals(null, repo.getLastOpenedTool())
     assertEquals(null, repo.lastOpenedToolFlow.value)
+  }
+
+  @Test
+  fun exportAndImportDataJson_preservesDiceChordMusicAndAllToolSharedPreferences() {
+    val sourcePrefsMap = mutableMapOf<String, FakeSharedPreferences>()
+    fun getSourcePrefs(name: String): SharedPreferences =
+      sourcePrefsMap.getOrPut(name) { FakeSharedPreferences() }
+
+    val dicePrefs = com.example.toolbox.ui.tools.DiceRollerPreferences(
+      getSourcePrefs(com.example.toolbox.ui.tools.DiceRollerPreferences.PREFS_NAME)
+    )
+    dicePrefs.saveSavedRolls(
+      listOf(
+        com.example.toolbox.ui.tools.SavedDiceRoll(
+          id = "roll_1",
+          name = "Fireball",
+          dieType = com.example.toolbox.ui.tools.DieType.D6,
+          diceCount = 8,
+          modifier = 0,
+          rollMode = com.example.toolbox.ui.tools.RollMode.NORMAL,
+        )
+      )
+    )
+
+    val chordPrefs = com.example.toolbox.ui.tools.ChordBookPreferencesRepository(
+      getSourcePrefs(com.example.toolbox.ui.tools.CHORD_BOOK_PREFS_NAME)
+    )
+    val customTuning = com.example.toolbox.ui.tools.ChordTuning(
+      id = "custom_open_c",
+      name = "Open C Custom",
+      instrument = com.example.toolbox.ui.tools.InstrumentFamily.GUITAR_6,
+      openStringMidi = listOf(36, 43, 48, 55, 60, 64),
+      isCustom = true,
+    )
+    chordPrefs.saveCustomTunings(listOf(customTuning))
+    chordPrefs.setSelectedTuningId("custom_open_c")
+    chordPrefs.setCapoFret(3)
+    chordPrefs.setEnharmonicPreference(com.example.toolbox.ui.tools.EnharmonicPreference.FLATS)
+    chordPrefs.setDotLabelMode(com.example.toolbox.ui.tools.DotLabelMode.NOTES)
+
+    val musicPrefs = getSourcePrefs(com.example.toolbox.ui.tools.MUSIC_PLAYER_PREFS_NAME)
+    musicPrefs.edit()
+      .putString(com.example.toolbox.ui.tools.PREF_KEY_MUSIC_FAVORITES, "track_1|track_2")
+      .putInt(com.example.toolbox.ui.tools.PREF_KEY_MUSIC_CARDS_PER_ROW, 3)
+      .putBoolean(com.example.toolbox.ui.tools.PREF_KEY_MUSIC_INCLUDE_SAMPLES, true)
+      .apply()
+
+    val sourceRepos = ToolboxDataRepositories(
+      diceRollerPreferences = dicePrefs,
+      chordBookPreferences = chordPrefs,
+      sharedPreferencesProvider = { getSourcePrefs(it) },
+    )
+
+    val exportedJson = exportDataToJson(sourceRepos)
+    assertTrue(exportedJson.contains(DATA_BACKUP_FORMAT))
+
+    val targetPrefsMap = mutableMapOf<String, FakeSharedPreferences>()
+    fun getTargetPrefs(name: String): SharedPreferences =
+      targetPrefsMap.getOrPut(name) { FakeSharedPreferences() }
+
+    val targetDicePrefs = com.example.toolbox.ui.tools.DiceRollerPreferences(
+      getTargetPrefs(com.example.toolbox.ui.tools.DiceRollerPreferences.PREFS_NAME)
+    )
+    val targetChordPrefs = com.example.toolbox.ui.tools.ChordBookPreferencesRepository(
+      getTargetPrefs(com.example.toolbox.ui.tools.CHORD_BOOK_PREFS_NAME)
+    )
+
+    val targetRepos = ToolboxDataRepositories(
+      diceRollerPreferences = targetDicePrefs,
+      chordBookPreferences = targetChordPrefs,
+      sharedPreferencesProvider = { getTargetPrefs(it) },
+    )
+
+    assertTrue(importDataFromJson(exportedJson, targetRepos))
+
+    val restoredRolls = targetDicePrefs.loadSavedRolls()
+    assertEquals(1, restoredRolls.size)
+    assertEquals("Fireball", restoredRolls.first().name)
+    assertEquals(8, restoredRolls.first().diceCount)
+
+    val restoredTunings = targetChordPrefs.loadCustomTunings()
+    assertEquals(1, restoredTunings.size)
+    assertEquals("Open C Custom", restoredTunings.first().name)
+    assertEquals("custom_open_c", targetChordPrefs.getSelectedTuningId())
+    assertEquals(3, targetChordPrefs.getCapoFret())
+    assertEquals(com.example.toolbox.ui.tools.EnharmonicPreference.FLATS, targetChordPrefs.getEnharmonicPreference())
+    assertEquals(com.example.toolbox.ui.tools.DotLabelMode.NOTES, targetChordPrefs.getDotLabelMode())
+
+    val restoredMusicPrefs = getTargetPrefs(com.example.toolbox.ui.tools.MUSIC_PLAYER_PREFS_NAME)
+    assertEquals("track_1|track_2", restoredMusicPrefs.getString(com.example.toolbox.ui.tools.PREF_KEY_MUSIC_FAVORITES, null))
+    assertEquals(3, restoredMusicPrefs.getInt(com.example.toolbox.ui.tools.PREF_KEY_MUSIC_CARDS_PER_ROW, 2))
+    assertEquals(true, restoredMusicPrefs.getBoolean(com.example.toolbox.ui.tools.PREF_KEY_MUSIC_INCLUDE_SAMPLES, false))
   }
 }
 

@@ -91,6 +91,7 @@ fun resolveToolShortcutAliasClassName(tool: Tool): String {
     Tool.UNIT_CONVERTER -> "com.example.toolbox.MainActivityToolUnitConverter"
     Tool.AUDIO_RECORDER -> "com.example.toolbox.MainActivityToolAudioRecorder"
     Tool.BLUETOOTH_REMOTE -> "com.example.toolbox.MainActivityToolBluetoothRemote"
+    Tool.IMAGE -> "com.example.toolbox.MainActivityToolImage"
     Tool.IMAGE_EDITOR -> "com.example.toolbox.MainActivityToolImageEditor"
     Tool.FILE_CONVERTER -> "com.example.toolbox.MainActivityToolFileConverter"
     Tool.RULER -> "com.example.toolbox.MainActivityToolRuler"
@@ -131,6 +132,7 @@ fun resolveToolShortcutMipmapResId(tool: Tool): Int {
     Tool.UNIT_CONVERTER -> R.mipmap.ic_tool_unit_converter
     Tool.AUDIO_RECORDER -> R.mipmap.ic_tool_audio_recorder
     Tool.BLUETOOTH_REMOTE -> R.mipmap.ic_tool_bluetooth_remote
+    Tool.IMAGE -> R.mipmap.ic_tool_image
     Tool.IMAGE_EDITOR -> R.mipmap.ic_tool_image_editor
     Tool.FILE_CONVERTER -> R.mipmap.ic_tool_file_converter
     Tool.RULER -> R.mipmap.ic_tool_ruler

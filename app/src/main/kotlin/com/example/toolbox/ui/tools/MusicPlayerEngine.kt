@@ -7098,6 +7098,42 @@ object MusicPlayerEngine {
     }
   }
 
+  /**
+   * Returns `true` if another application is currently outputting media audio on the device
+   * (either via [AudioManager.isMusicActive] or an active media [AudioPlaybackConfiguration]),
+   * excluding Toolbox's own built-in player.
+   */
+  internal fun isExternalAudioPlaybackActive(context: Context): Boolean {
+    val internalPlaying = activeSessionState?.let { !it.isReleased && it.isPlaying } == true
+    if (internalPlaying) return false
+    return try {
+      val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+      if (audioManager.isMusicActive) return true
+      val configs = audioManager.activePlaybackConfigurations.orEmpty()
+      val myUid = Process.myUid()
+      val uidRegex = Regex("""u/pid:(\d+)/""")
+      for (cfg in configs) {
+        val usage = cfg.audioAttributes?.usage ?: AudioAttributes.USAGE_UNKNOWN
+        val isMediaUsage = usage == AudioAttributes.USAGE_MEDIA ||
+          usage == AudioAttributes.USAGE_GAME ||
+          usage == AudioAttributes.USAGE_UNKNOWN
+        if (!isMediaUsage) continue
+        val dump = cfg.toString()
+        if (dump.contains("state:idle") || dump.contains("state:stopped") || dump.contains("state:released") || dump.contains("state:paused")) {
+          continue
+        }
+        val uidMatch = uidRegex.find(dump)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        if (uidMatch != null && uidMatch == myUid) continue
+        if (dump.contains("state:started") || (uidMatch != null && uidMatch != myUid && uidMatch > 1000)) {
+          return true
+        }
+      }
+      false
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
   private fun findActiveExternalPlaybackPackage(context: Context): String? {
     val internalPlaying = activeSessionState?.let { !it.isReleased && it.isPlaying } == true
     if (internalPlaying) return null
@@ -7189,13 +7225,7 @@ object MusicPlayerEngine {
           false
         }
       }
-      val internalPlaying = activeSessionState?.let { !it.isReleased && it.isPlaying } == true
-      val audioManager = try {
-        context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-      } catch (_: Throwable) {
-        null
-      }
-      val systemMusicStreamActive = !internalPlaying && (audioManager?.isMusicActive == true)
+      val systemMusicStreamActive = isExternalAudioPlaybackActive(context)
 
       if (externalControllers.isEmpty()) {
         // Check cached media notifications from ToolboxMediaListenerService
@@ -7233,13 +7263,49 @@ object MusicPlayerEngine {
         if (activeExternalPkg != null) {
           val appLabel = resolveAppLabel(context, activeExternalPkg)
           val iconBmp = loadAppIconBitmap(context, activeExternalPkg)
-          updateExternalSystemMediaFromMetadata(
-            title = appLabel.ifBlank { "System Media" },
-            sourcePackage = activeExternalPkg,
-            sourceAppName = appLabel,
-            isPlaying = true,
-            artworkBitmap = iconBmp,
-          )
+          val existing = externalSystemMediaInfo
+          if (existing != null && existing.sourcePackage == activeExternalPkg) {
+            externalSystemMediaInfo = existing.copy(isPlaying = true)
+          } else {
+            updateExternalSystemMediaFromMetadata(
+              title = appLabel.ifBlank { "System Media" },
+              sourcePackage = activeExternalPkg,
+              sourceAppName = appLabel,
+              isPlaying = true,
+              artworkBitmap = iconBmp,
+            )
+          }
+          return
+        }
+
+        // Fallback when the user explicitly launched a preferred external music app from Toolbox
+        // and system audio playback is active (e.g., before Notification Access is granted)
+        val launchedApp = lastLaunchedPreferredMusicApp
+        if (systemMusicStreamActive && launchedApp != null) {
+          val fallbackPkg = launchedApp.packageName.trim()
+          val fallbackLabel = launchedApp.label.ifBlank {
+            resolveAppLabel(context, fallbackPkg).ifBlank { "Android Media Player" }
+          }
+          val existing = externalSystemMediaInfo
+          if (existing != null && existing.isExternalApp && (fallbackPkg.isBlank() || existing.sourcePackage == fallbackPkg)) {
+            if (!existing.isPlaying) {
+              externalSystemMediaInfo = existing.copy(
+                isPlaying = true,
+                positionUpdateElapsedRealtimeMs = safeElapsedRealtimeMs(),
+              )
+            }
+          } else {
+            val iconBmp = loadAppIconBitmap(context, fallbackPkg)
+            val accentRgb = launchedApp.accentRgb.takeIf { it != 0 }
+            updateExternalSystemMediaFromMetadata(
+              title = fallbackLabel,
+              sourcePackage = fallbackPkg,
+              sourceAppName = fallbackLabel,
+              isPlaying = true,
+              artworkBitmap = iconBmp,
+              notificationColorRgb = accentRgb,
+            )
+          }
           return
         }
 
@@ -7265,7 +7331,27 @@ object MusicPlayerEngine {
         }
       }
 
+      fun controllerSelectionScore(ctrl: MediaController): Long {
+        return try {
+          val st = ctrl.playbackState?.state
+          val notif = activeMediaNotifications[ctrl.packageName]
+          val lastUpdate = try { ctrl.playbackState?.lastPositionUpdateTime ?: 0L } catch (_: Throwable) { 0L }
+          val notifTime = notif?.postedAtMs ?: 0L
+          val stateScore = when {
+            isPlaybackStateActive(st) -> 4_000_000_000_000L
+            notif?.isOngoing == true -> 3_000_000_000_000L
+            st == PlaybackState.STATE_PAUSED -> 2_000_000_000_000L
+            st != PlaybackState.STATE_STOPPED && st != PlaybackState.STATE_NONE && st != PlaybackState.STATE_ERROR -> 1_000_000_000_000L
+            else -> 0L
+          }
+          stateScore + max(notifTime, lastUpdate)
+        } catch (_: Throwable) {
+          0L
+        }
+      }
+
       val chosen = externalControllers.firstOrNull { isControllerPlaying(it) }
+        ?: externalControllers.maxByOrNull { controllerSelectionScore(it) }
         ?: externalControllers.first()
       activeExternalMediaController = chosen
 
@@ -8568,7 +8654,10 @@ class MusicPlaybackSession(
   var grantedFolderPaths by mutableStateOf<Set<String>>(
     when {
       initialGrantedFolderPaths != null -> initialGrantedFolderPaths
-      initialTracks != null || initialDirectory != null || isInspection ->
+      initialTracks != null ||
+        initialDirectory != null ||
+        isInspection ||
+        prefs?.getBoolean(PREF_KEY_MUSIC_INCLUDE_SAMPLES, false) == true ->
         setOf(MusicPlayerEngine.DEFAULT_MUSIC_SCOPED_FOLDER.folderPath)
       else -> MusicPlayerEngine.parseGrantedFolderPaths(
         prefs?.getString(PREF_KEY_MUSIC_GRANTED_FOLDER_PATHS, null)
@@ -8724,7 +8813,7 @@ class MusicPlaybackSession(
   fun updateCardsPerRow(count: Int) {
     val coerced = count.coerceIn(MIN_MUSIC_CARDS_PER_ROW, MAX_MUSIC_CARDS_PER_ROW)
     cardsPerRow = coerced
-    scope.launch(ioCoroutineContext) {
+    if (!isReleased) {
       prefs?.edit()?.putInt(PREF_KEY_MUSIC_CARDS_PER_ROW, coerced)?.apply()
     }
   }
@@ -8805,6 +8894,44 @@ class MusicPlaybackSession(
   }
 
   private fun applySortOrderToLibraryTracks(order: MusicSortOrder, statsChanged: Boolean) {
+    if (!statsChanged && allTracks.size <= 100) {
+      statsAndSortRecalcJob?.cancel()
+      sortedLibraryTracks = when (order) {
+        MusicSortOrder.MOST_PLAYED -> {
+          if (mostPlayedPlaylist.tracks.size == allTracks.size) {
+            mostPlayedPlaylist.tracks
+          } else {
+            MusicPlayerEngine.sortTracks(
+              tracks = allTracks,
+              sortOrder = order,
+              playStats = viewPlayStats,
+              favoriteIds = favoriteIds,
+              favoriteArtists = favoriteArtists,
+              favoriteAlbums = favoriteAlbums,
+              favoriteGenres = favoriteGenres,
+            )
+          }
+        }
+        MusicSortOrder.RECENTLY_PLAYED -> {
+          if (recentlyPlayedPlaylist.tracks.size == allTracks.size) {
+            recentlyPlayedPlaylist.tracks
+          } else {
+            MusicPlayerEngine.sortTracksByRecentlyPlayed(allTracks, viewPlayStats)
+          }
+        }
+        else -> MusicPlayerEngine.sortTracks(
+          tracks = allTracks,
+          sortOrder = order,
+          playStats = viewPlayStats,
+          favoriteIds = favoriteIds,
+          favoriteArtists = favoriteArtists,
+          favoriteAlbums = favoriteAlbums,
+          favoriteGenres = favoriteGenres,
+          randomSeed = randomSortSeed,
+        )
+      }
+      return
+    }
     if (statsChanged) {
       scheduleStatsAndSortRecalculation(statsChanged = true)
     } else {
@@ -8943,7 +9070,7 @@ class MusicPlaybackSession(
     random: kotlin.random.Random = kotlin.random.Random.Default,
   ) {
     shuffleMode = mode
-    scope.launch(ioCoroutineContext) {
+    if (!isReleased) {
       prefs?.edit()
         ?.putString(PREF_KEY_MUSIC_SHUFFLE_MODE, mode.name)
         ?.putBoolean(PREF_KEY_MUSIC_SHUFFLE, mode.isEnabled)
@@ -9216,12 +9343,9 @@ class MusicPlaybackSession(
   }
 
   private fun persistPlayStatsInBackground(statsSnapshot: Map<String, TrackPlayStats>) {
-    if (prefs == null) return
+    if (prefs == null || isReleased) return
     playStatsPersistJob?.cancel()
-    playStatsPersistJob = scope.launch(ioCoroutineContext) {
-      val serialized = MusicPlayerEngine.serializePlayStats(statsSnapshot)
-      prefs.edit().putString(PREF_KEY_MUSIC_PLAY_STATS, serialized).apply()
-    }
+    prefs.edit().putString(PREF_KEY_MUSIC_PLAY_STATS, MusicPlayerEngine.serializePlayStats(statsSnapshot)).apply()
   }
 
   private fun persistFavoritesInBackground(
@@ -9229,27 +9353,61 @@ class MusicPlaybackSession(
     values: Set<String>,
     separator: String,
   ) {
-    if (prefs == null) return
-    prefsPersistJob = scope.launch(ioCoroutineContext) {
-      val serialized = if (separator == "\n") {
-        MusicPlayerEngine.serializeFavoriteSet(values)
-      } else {
-        values.joinToString(separator)
-      }
-      prefs.edit().putString(prefKey, serialized).apply()
+    if (prefs == null || isReleased) return
+    val serialized = if (separator == "\n") {
+      MusicPlayerEngine.serializeFavoriteSet(values)
+    } else {
+      values.joinToString(separator)
     }
+    prefs.edit().putString(prefKey, serialized).apply()
   }
 
   private fun persistStringPrefInBackground(prefKey: String, value: String) {
-    if (prefs == null) return
-    scope.launch(ioCoroutineContext) {
-      prefs.edit().putString(prefKey, value).apply()
-    }
+    if (prefs == null || isReleased) return
+    prefs.edit().putString(prefKey, value).apply()
   }
 
   fun flushPlayStats() {
     playStatsPersistJob?.cancel()
-    prefs?.edit()?.putString(PREF_KEY_MUSIC_PLAY_STATS, MusicPlayerEngine.serializePlayStats(playStats))?.apply()
+    if (!isReleased && playStats.isNotEmpty()) {
+      prefs?.edit()?.putString(PREF_KEY_MUSIC_PLAY_STATS, MusicPlayerEngine.serializePlayStats(playStats))?.apply()
+    }
+  }
+
+  /**
+   * Reloads persisted preferences (favorites, playlists, play statistics, custom folders,
+   * preferred music apps, tab order, view mode, and sort configuration) from [prefs] after
+   * a data restore in Settings.
+   */
+  fun reloadPersistedDataFromPrefs() {
+    val p = prefs ?: return
+    playStatsPersistJob?.cancel()
+    prefsPersistJob?.cancel()
+    tabOrder = MusicPlayerEngine.parseTabOrder(p.getString(PREF_KEY_MUSIC_TAB_ORDER, null))
+    viewMode = MusicViewMode.fromNameOrDefault(p.getString(PREF_KEY_MUSIC_VIEW_MODE, null))
+    cardsPerRow = p.getInt(PREF_KEY_MUSIC_CARDS_PER_ROW, DEFAULT_MUSIC_CARDS_PER_ROW)
+      .coerceIn(MIN_MUSIC_CARDS_PER_ROW, MAX_MUSIC_CARDS_PER_ROW)
+    defaultSortOrder = MusicSortOrder.fromNameOrDefault(p.getString(PREF_KEY_MUSIC_SORT_ORDER, null))
+    defaultGroupOption = MusicGroupOption.fromNameOrDefault(p.getString(PREF_KEY_MUSIC_GROUP_OPTION, null))
+    savedSectionSortGroups = MusicPlayerEngine.parseSavedSectionSortGroups(p.getString(PREF_KEY_MUSIC_SAVED_SECTION_SORTS, null))
+    favoriteIds = p.getString(PREF_KEY_MUSIC_FAVORITES, "")
+      .orEmpty()
+      .split("|")
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .toSet()
+    favoriteArtists = MusicPlayerEngine.deserializeFavoriteSet(p.getString(PREF_KEY_MUSIC_FAVORITE_ARTISTS, ""))
+    favoriteAlbums = MusicPlayerEngine.deserializeFavoriteSet(p.getString(PREF_KEY_MUSIC_FAVORITE_ALBUMS, ""))
+    favoriteGenres = MusicPlayerEngine.deserializeFavoriteSet(p.getString(PREF_KEY_MUSIC_FAVORITE_GENRES, ""))
+    preferredMusicApps = MusicPlayerEngine.deserializePreferredMusicApps(p.getString(PREF_KEY_MUSIC_PREFERRED_APPS, ""))
+    playStats = MusicPlayerEngine.deserializePlayStats(p.getString(PREF_KEY_MUSIC_PLAY_STATS, ""))
+    viewPlayStats = playStats
+    homePlayStats = playStats
+    savedPlaylistEntries = MusicPlayerEngine.deserializePlaylists(p.getString(PREF_KEY_MUSIC_PLAYLISTS, ""))
+      .filterNot { it.id in MusicPlayerEngine.LEGACY_SAMPLE_PLAYLIST_IDS || it.id in MusicPlayerEngine.BUILT_IN_PLAYLIST_IDS }
+    customFolders = MusicPlayerEngine.parseCustomFolders(p.getString(PREF_KEY_MUSIC_CUSTOM_FOLDERS, null))
+    syncSortOrderWithCurrentScope()
+    refreshLibraryDerivedStateAfterMutation(allTracks)
   }
 
   //Playlists & Background-Derived Library Collections
@@ -9770,7 +9928,7 @@ class MusicPlaybackSession(
 
   fun updateSavedPlaylists(next: List<SavedPlaylistEntry>) {
     savedPlaylistEntries = next
-    scope.launch(ioCoroutineContext) {
+    if (!isReleased) {
       prefs?.edit()?.putString(PREF_KEY_MUSIC_PLAYLISTS, MusicPlayerEngine.serializePlaylists(next))?.apply()
     }
     val tracksSnapshot = allTracks
@@ -9978,7 +10136,7 @@ class MusicPlaybackSession(
     }
     allTracks = initialLoaded
     refreshLibraryDerivedStateAfterMutation(initialLoaded)
-    if ((initialPlayerExpanded || initialQueueExpanded) && initialLoaded.isNotEmpty()) {
+    if ((initialPlayerExpanded || initialQueueExpanded) && initialLoaded.isNotEmpty() && MusicPlayerEngine.externalSystemMediaInfo == null) {
       unshuffledQueue = initialLoaded
       playbackQueue = initialLoaded
       currentQueueIndex = 0
@@ -10035,7 +10193,7 @@ class MusicPlaybackSession(
   fun expandFullPlayer() {
     showQueueSheet = false
     isPlayerExpanded = true
-    if (currentTrack == null && allTracks.isNotEmpty()) {
+    if (currentTrack == null && allTracks.isNotEmpty() && MusicPlayerEngine.externalSystemMediaInfo == null) {
       unshuffledQueue = allTracks
       playbackQueue = allTracks
       currentQueueIndex = 0
@@ -10145,7 +10303,7 @@ class MusicPlaybackSession(
       if (newIdx >= 0) {
         currentQueueIndex = newIdx
       }
-    } else if ((isPlayerExpanded || configuredInitialPlayerExpanded) && playbackQueue.isEmpty() && loaded.isNotEmpty()) {
+    } else if ((isPlayerExpanded || configuredInitialPlayerExpanded) && playbackQueue.isEmpty() && loaded.isNotEmpty() && MusicPlayerEngine.externalSystemMediaInfo == null) {
       unshuffledQueue = loaded
       playbackQueue = loaded
       currentQueueIndex = 0

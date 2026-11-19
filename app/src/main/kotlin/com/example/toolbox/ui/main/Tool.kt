@@ -6,6 +6,7 @@ import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Camera
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.CropOriginal
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderZip
@@ -146,6 +147,11 @@ enum class Tool(
     icon = Icons.Default.Casino,
     category = ToolCategory.MISCELLANEOUS,
   ),
+  IMAGE(
+    title = "Image",
+    icon = Icons.Default.CropOriginal,
+    category = ToolCategory.PHOTO_AND_VIDEO,
+  ),
   IMAGE_EDITOR(
     title = "Image Editor",
     icon = Icons.Default.Image,
@@ -210,6 +216,7 @@ enum class Tool(
 
   companion object {
     val ARCHIVES: Tool get() = ARCHIVE
+    val IMAGE_VIEWER: Tool get() = IMAGE
     val MUSIC_PLAYER: Tool get() = MUSIC
     val RECIPE_BOOK: Tool get() = RECIPES
     val OBD2: Tool get() = OBD2_SCANNER

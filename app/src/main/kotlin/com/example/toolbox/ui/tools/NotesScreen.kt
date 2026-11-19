@@ -2576,8 +2576,7 @@ private fun NotesQuickCaptureBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        IconButton(
-          onClick = onTakePinnedNote,
+        Box(
           modifier = Modifier
             .size(28.dp)
             .clip(CircleShape)
@@ -2588,7 +2587,9 @@ private fun NotesQuickCaptureBar(
                 Color.Transparent
               },
             )
+            .clickable(onClick = onTakePinnedNote)
             .testTag("new_pin_note_button"),
+          contentAlignment = Alignment.Center,
         ) {
           Icon(
             imageVector = if (isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
@@ -2602,8 +2603,7 @@ private fun NotesQuickCaptureBar(
           )
         }
 
-        IconButton(
-          onClick = onTakeChecklistNote,
+        Box(
           modifier = Modifier
             .size(28.dp)
             .clip(CircleShape)
@@ -2614,7 +2614,9 @@ private fun NotesQuickCaptureBar(
                 Color.Transparent
               },
             )
+            .clickable(onClick = onTakeChecklistNote)
             .testTag("new_checklist_button"),
+          contentAlignment = Alignment.Center,
         ) {
           Icon(
             imageVector = Icons.Default.CheckBox,

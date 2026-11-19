@@ -218,16 +218,21 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -873,25 +878,52 @@ fun MusicPlayerScreen(
   }
 
   // Observe external Android system media player sessions when built-in player is idle
+  val lifecycleOwner = LocalLifecycleOwner.current
+  var isSystemMediaListenerEnabled by remember(context, isInspection) {
+    mutableStateOf(
+      if (isInspection) true else MusicPlayerEngine.isSystemMediaListenerEnabled(context)
+    )
+  }
   LaunchedEffect(context, isInspection) {
     if (!isInspection) {
+      isSystemMediaListenerEnabled = MusicPlayerEngine.isSystemMediaListenerEnabled(context)
       MusicPlayerEngine.syncExternalSystemMediaSessions(context)
+    }
+  }
+  DisposableEffect(lifecycleOwner, context, isInspection) {
+    if (isInspection) {
+      onDispose {}
+    } else {
+      val observer = LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+          isSystemMediaListenerEnabled = MusicPlayerEngine.isSystemMediaListenerEnabled(context)
+          MusicPlayerEngine.syncExternalSystemMediaSessions(context)
+        }
+      }
+      lifecycleOwner.lifecycle.addObserver(observer)
+      onDispose {
+        lifecycleOwner.lifecycle.removeObserver(observer)
+      }
     }
   }
 
   val externalSystemMedia = MusicPlayerEngine.externalSystemMediaInfo
   var isControllingExternalMedia by remember {
-    mutableStateOf(!isPlaying && externalSystemMedia?.isPlaying == true)
+    mutableStateOf(
+      !isPlaying &&
+        externalSystemMedia != null &&
+        (externalSystemMedia.isPlaying || currentTrack == null)
+    )
   }
-  LaunchedEffect(isPlaying, externalSystemMedia?.isPlaying, externalSystemMedia == null) {
+  LaunchedEffect(isPlaying, externalSystemMedia?.isPlaying, externalSystemMedia == null, currentTrack == null) {
     if (isPlaying || externalSystemMedia == null) {
       isControllingExternalMedia = false
-    } else if (externalSystemMedia.isPlaying) {
+    } else if (externalSystemMedia.isPlaying || currentTrack == null) {
       isControllingExternalMedia = true
     }
   }
   val activeExternalMedia: SystemMediaPlayingInfo? =
-    if (!isPlaying && externalSystemMedia != null && (externalSystemMedia.isPlaying || isControllingExternalMedia)) {
+    if (!isPlaying && externalSystemMedia != null && (externalSystemMedia.isPlaying || isControllingExternalMedia || currentTrack == null)) {
       externalSystemMedia
     } else {
       null
@@ -1812,7 +1844,13 @@ fun MusicPlayerScreen(
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                   },
                   onPlayAll = {
-                    val tracks = allHomePlaylists.flatMap { it.tracks }.distinctBy { it.id }.ifEmpty { sortedTracks }
+                    val tracks = if (selectedTab == MusicLibraryTab.HOME && sortOrder == MusicSortOrder.RANDOM && allTracks.isNotEmpty()) {
+                      allTracks
+                    } else {
+                      sortedTracks.ifEmpty {
+                        allHomePlaylists.flatMap { it.tracks }.distinctBy { it.id }
+                      }
+                    }
                     if (tracks.isNotEmpty()) {
                       playTrackInContext(tracks.first(), tracks)
                     }
@@ -2247,6 +2285,11 @@ fun MusicPlayerScreen(
             showSavePlaylistDialog = true
           },
           onOpenTrackInfo = { showTrackInfoDialog = true },
+          isSystemMediaListenerEnabled = isSystemMediaListenerEnabled,
+          onGrantSystemMediaAccess = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            MusicPlayerEngine.openSystemMediaListenerSettings(context)
+          },
           onOpenExternalApp = {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             MusicPlayerEngine.openExternalSystemMediaApp(context)
@@ -2653,6 +2696,7 @@ private fun MusicPlayerTopBar(
         totalCount = totalSelectableCount,
         onToggleSelectAll = onToggleSelectAll,
         onCloseSelection = onCloseSelection,
+        checkboxTestTag = "action_toggle_select_all",
         actions = {
           var showOverflowMenu by remember { mutableStateOf(false) }
           val hasSelection = selectedCount > 0
@@ -2970,6 +3014,16 @@ private fun MusicCategoryAndViewBar(
   val haptic = LocalHapticFeedback.current
   val scrollState = rememberScrollState()
 
+  var prevCustomFolderCount by remember { mutableIntStateOf(customFolders.size) }
+  LaunchedEffect(customFolders.size, scrollState.maxValue) {
+    if (customFolders.size > prevCustomFolderCount && scrollState.maxValue > 0) {
+      scrollState.scrollTo(scrollState.maxValue)
+      prevCustomFolderCount = customFolders.size
+    } else if (customFolders.size < prevCustomFolderCount) {
+      prevCustomFolderCount = customFolders.size
+    }
+  }
+
   val currentTabs by rememberUpdatedState(tabs)
   val currentIsGranted by rememberUpdatedState(isMusicFolderGranted)
   val currentOnMoveTab by rememberUpdatedState(onMoveTab)
@@ -3130,13 +3184,6 @@ private fun MusicCategoryAndViewBar(
                     }
                   }
                 }
-                .then(
-                  if (!isMusicFolderGranted && index == 0) {
-                    Modifier.testTag("folder_lock_icon_Music")
-                  } else {
-                    Modifier
-                  }
-                )
                 .testTag(
                   if (isMusicFolderGranted) {
                     "music_tab_unlocked_icon_${tab.name}"
@@ -3152,7 +3199,15 @@ private fun MusicCategoryAndViewBar(
                 } else {
                   "Unlock Music folder for ${tab.displayName}"
                 },
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier
+                  .size(16.dp)
+                  .then(
+                    if (!isMusicFolderGranted && index == 0) {
+                      Modifier.testTag("folder_lock_icon_Music")
+                    } else {
+                      Modifier
+                    }
+                  ),
               )
             }
           },
@@ -4342,7 +4397,29 @@ private fun PreferredMusicAppPickerDialog(
 ) {
   val context = LocalContext.current
   val isInspection = LocalInspectionMode.current
+  val lifecycleOwner = LocalLifecycleOwner.current
   var isCustomPickerMode by rememberSaveable { mutableStateOf(false) }
+  var isSystemMediaListenerEnabled by remember(context, isInspection) {
+    mutableStateOf(
+      if (isInspection) true else MusicPlayerEngine.isSystemMediaListenerEnabled(context)
+    )
+  }
+  DisposableEffect(lifecycleOwner, context, isInspection) {
+    if (isInspection) {
+      onDispose {}
+    } else {
+      val observer = LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+          isSystemMediaListenerEnabled = MusicPlayerEngine.isSystemMediaListenerEnabled(context)
+          MusicPlayerEngine.syncExternalSystemMediaSessions(context)
+        }
+      }
+      lifecycleOwner.lifecycle.addObserver(observer)
+      onDispose {
+        lifecycleOwner.lifecycle.removeObserver(observer)
+      }
+    }
+  }
 
   val popularApps = remember(context, isInspection) {
     MusicPlayerEngine.discoverPopularStreamingApps(
@@ -4424,6 +4501,55 @@ private fun PreferredMusicAppPickerDialog(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
+        if (!isSystemMediaListenerEnabled && !isCustomPickerMode) {
+          Surface(
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("music_app_picker_listener_permission_banner"),
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
+            border = BorderStroke(
+              width = 1.dp,
+              color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            ),
+          ) {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+              Text(
+                text = "Grant Notification Access to show playing songs in the Music Player",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                  .weight(1f)
+                  .padding(end = 8.dp),
+              )
+              OutlinedButton(
+                onClick = {
+                  MusicPlayerEngine.openSystemMediaListenerSettings(context)
+                },
+                shape = CircleShape,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                modifier = Modifier
+                  .height(26.dp)
+                  .testTag("music_app_picker_grant_access_button"),
+              ) {
+                Text(
+                  text = "Grant Access",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.SemiBold,
+                )
+              }
+            }
+          }
+        }
+
         if (!isCustomPickerMode) {
           LazyColumn(
             modifier = Modifier
@@ -8139,7 +8265,14 @@ private fun RenameMusicItemDialog(
   onConfirm: (String) -> Unit,
   onDismiss: () -> Unit,
 ) {
-  var name by rememberSaveable(initialValue) { mutableStateOf(initialValue) }
+  var textFieldValue by remember(initialValue) {
+    mutableStateOf(
+      TextFieldValue(
+        text = initialValue,
+        selection = TextRange(initialValue.length),
+      )
+    )
+  }
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -8186,8 +8319,8 @@ private fun RenameMusicItemDialog(
     },
     text = {
       OutlinedTextField(
-        value = name,
-        onValueChange = { name = it },
+        value = textFieldValue,
+        onValueChange = { textFieldValue = it },
         label = { Text(label) },
         singleLine = true,
         shape = RoundedCornerShape(14.dp),
@@ -8197,9 +8330,10 @@ private fun RenameMusicItemDialog(
       )
     },
     confirmButton = {
+      val trimmed = textFieldValue.text.trim()
       Button(
-        onClick = { onConfirm(name.trim()) },
-        enabled = name.trim().isNotEmpty() && name.trim() != initialValue,
+        onClick = { onConfirm(trimmed) },
+        enabled = trimmed.isNotEmpty() && trimmed != initialValue,
         shape = CircleShape,
         modifier = Modifier.testTag("confirm_rename_music_item_button"),
       ) {
@@ -8749,6 +8883,8 @@ private fun ExpandedMusicPlayerOverlay(
   onMoveQueueItem: (fromIndex: Int, toIndex: Int) -> Unit,
   onSaveQueueAsPlaylist: () -> Unit,
   onOpenTrackInfo: () -> Unit,
+  isSystemMediaListenerEnabled: Boolean = true,
+  onGrantSystemMediaAccess: (() -> Unit)? = null,
   onOpenExternalApp: (() -> Unit)? = null,
   onNavigateToArtist: () -> Unit,
   onNavigateToAlbum: () -> Unit,
@@ -9090,34 +9226,59 @@ private fun ExpandedMusicPlayerOverlay(
             } else {
               "${track.genre} • ${track.year}"
             }
-            Surface(
-              shape = RoundedCornerShape(12.dp),
-              color = Color.White.copy(alpha = 0.15f),
-              modifier = if (isExternal) {
-                Modifier
-                  .clip(RoundedCornerShape(12.dp))
-                  .then(
-                    if (onOpenExternalApp != null) {
-                      Modifier.clickable(onClick = onOpenExternalApp)
-                    } else {
-                      Modifier
-                    }
-                  )
-                  .semantics {
-                    val appLabel = externalMedia.sourceAppName.takeIf { it.isNotBlank() } ?: "Android Media Player"
-                    contentDescription = "Open $appLabel ($badgeText)"
-                  }
-                  .testTag("expanded_player_external_source_badge")
-              } else {
-                Modifier
-              },
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-              Text(
-                text = badgeText,
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.9f),
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-              )
+              Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color.White.copy(alpha = 0.15f),
+                modifier = if (isExternal) {
+                  Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .then(
+                      if (onOpenExternalApp != null) {
+                        Modifier.clickable(onClick = onOpenExternalApp)
+                      } else {
+                        Modifier
+                      }
+                    )
+                    .semantics {
+                      val appLabel = externalMedia.sourceAppName.takeIf { it.isNotBlank() } ?: "Android Media Player"
+                      contentDescription = "Open $appLabel ($badgeText)"
+                    }
+                    .testTag("expanded_player_external_source_badge")
+                } else {
+                  Modifier
+                },
+              ) {
+                Text(
+                  text = badgeText,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = Color.White.copy(alpha = 0.9f),
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                )
+              }
+              if (isExternal && !isSystemMediaListenerEnabled && onGrantSystemMediaAccess != null) {
+                Surface(
+                  shape = RoundedCornerShape(12.dp),
+                  color = Color.White.copy(alpha = 0.14f),
+                  border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f)),
+                  modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = onGrantSystemMediaAccess)
+                    .testTag("expanded_player_grant_media_access_banner"),
+                ) {
+                  Text(
+                    text = "Grant Access",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = accentColor,
+                    maxLines = 1,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                  )
+                }
+              }
             }
           }
 

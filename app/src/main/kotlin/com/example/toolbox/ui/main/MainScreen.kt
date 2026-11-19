@@ -130,6 +130,7 @@ import com.example.toolbox.ui.tools.GalleryScreen
 import java.io.File
 import com.example.toolbox.ui.tools.GuitarTunerScreen
 import com.example.toolbox.ui.tools.ImageEditorScreen
+import com.example.toolbox.ui.tools.ImageScreen
 import com.example.toolbox.ui.tools.MetronomeScreen
 import com.example.toolbox.ui.tools.MusicPlaybackSession
 import com.example.toolbox.ui.tools.MusicPlayerEngine
@@ -2584,6 +2585,13 @@ fun ToolContentView(
         },
         modifier = Modifier,
       )
+      Tool.IMAGE -> ImageScreen(
+        initialDirectory = initialDirectory,
+        onOpenImageEditor = { preferencesRepository?.incrementToolUsage(Tool.IMAGE_EDITOR) },
+        onOpenVideoEditor = { preferencesRepository?.incrementToolUsage(Tool.VIDEO_EDITOR) },
+        onOpenColorPicker = onOpenColorPicker,
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
       Tool.IMAGE_EDITOR -> ImageEditorScreen(modifier = Modifier.padding(bottom = bottomPadding))
       Tool.TODO_LIST -> TodoListScreen(modifier = Modifier.padding(bottom = bottomPadding))
       Tool.FILES -> {
@@ -2591,6 +2599,7 @@ fun ToolContentView(
           initialDirectory = initialDirectory,
           rootDirectory = initialDirectory,
           onOpenFileConverter = { preferencesRepository?.incrementToolUsage(Tool.FILE_CONVERTER) },
+          onOpenImage = { preferencesRepository?.incrementToolUsage(Tool.IMAGE) },
           onOpenImageEditor = { preferencesRepository?.incrementToolUsage(Tool.IMAGE_EDITOR) },
           onOpenVideoEditor = { preferencesRepository?.incrementToolUsage(Tool.VIDEO_EDITOR) },
           onOpenAudioEditor = { preferencesRepository?.incrementToolUsage(Tool.AUDIO_EDITOR) },
@@ -2615,6 +2624,7 @@ fun ToolContentView(
       )
       Tool.GALLERY -> GalleryScreen(
         rootDirectory = initialDirectory,
+        onOpenImage = { preferencesRepository?.incrementToolUsage(Tool.IMAGE) },
         onOpenImageEditor = { preferencesRepository?.incrementToolUsage(Tool.IMAGE_EDITOR) },
         onOpenVideoEditor = { preferencesRepository?.incrementToolUsage(Tool.VIDEO_EDITOR) },
         onOpenColorPicker = onOpenColorPicker,

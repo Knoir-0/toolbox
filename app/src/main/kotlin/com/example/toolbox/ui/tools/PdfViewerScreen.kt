@@ -6,6 +6,8 @@ import android.net.Uri
 import android.os.Environment
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -152,8 +154,27 @@ fun PdfViewerScreen(
   var isLoadingPage by remember { mutableStateOf(false) }
   var isSavingPdf by remember { mutableStateOf(false) }
 
-  var showFilePicker by remember { mutableStateOf(false) }
   var showSaveDialog by remember { mutableStateOf(false) }
+
+  val pdfPickerLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.GetContent(),
+  ) { uri: Uri? ->
+    if (uri != null) {
+      scope.launch {
+        isLoadingPage = true
+        val copied = withContext(Dispatchers.IO) {
+          copyUriToTempSourceFile(context, uri)
+        }
+        isLoadingPage = false
+        if (copied != null) {
+          currentFile = copied
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        } else {
+          Toast.makeText(context, "Unable to read selected PDF file", Toast.LENGTH_SHORT).show()
+        }
+      }
+    }
+  }
 
   // Edit mode & history
   var editMode by remember { mutableStateOf(PdfEditMode.VIEW) }
@@ -228,26 +249,6 @@ fun PdfViewerScreen(
   }
 
   val currentPageEdits = pageEditsMap[currentPageIndex] ?: PdfPageEdits()
-
-  if (showFilePicker) {
-    val defaultBrowseDir = remember(initialDirectory, currentFile) {
-      initialDirectory
-        ?: currentFile?.parentFile
-        ?: Environment.getExternalStorageDirectory()?.takeIf { it.exists() && it.canRead() }
-        ?: context.filesDir
-    }
-    StorageFilePickerDialog(
-      initialDirectory = defaultBrowseDir,
-      title = "Select PDF File",
-      fileFilter = { file -> FileManagerEngine.isPdfFile(file) },
-      onDismiss = { showFilePicker = false },
-      onLaunchSystemPicker = { showFilePicker = false },
-      onFileSelected = { selected: File ->
-        showFilePicker = false
-        currentFile = selected
-      },
-    )
-  }
 
   if (showTextDialog) {
     PdfTextEditDialog(
@@ -423,7 +424,7 @@ fun PdfViewerScreen(
 
     if (currentFile == null || (pageCount == 0 && !isLoadingPage)) {
       OpenFileInitialView(
-        onOpenFile = { showFilePicker = true },
+        onOpenFile = { pdfPickerLauncher.launch("application/pdf") },
         onUseSample = {
           scope.launch {
             isLoadingPage = true

@@ -605,22 +605,33 @@ class CameraEngineTest {
   }
 
   @Test
-  fun photoSubModes_resolveAndCapturePanoramaHdrNightBurstAndCollage() {
+  fun photoSubModes_andNightMode_resolveAndCapturePanoramaHdrBurstAndNightSight() {
     assertEquals(CameraPhotoSubMode.STANDARD, CameraPhotoSubMode.DEFAULT)
     assertEquals(CameraPhotoSubMode.PANORAMA, CameraPhotoSubMode.STANDARD.next())
     assertEquals(CameraPhotoSubMode.HDR, CameraPhotoSubMode.PANORAMA.next())
-    assertEquals(CameraPhotoSubMode.NIGHT, CameraPhotoSubMode.HDR.next())
-    assertEquals(CameraPhotoSubMode.BURST, CameraPhotoSubMode.NIGHT.next())
-    assertEquals(CameraPhotoSubMode.COLLAGE, CameraPhotoSubMode.BURST.next())
-    assertEquals(CameraPhotoSubMode.STANDARD, CameraPhotoSubMode.COLLAGE.next())
+    assertEquals(CameraPhotoSubMode.BURST, CameraPhotoSubMode.HDR.next())
+    assertEquals(CameraPhotoSubMode.STANDARD, CameraPhotoSubMode.BURST.next())
 
     assertEquals(CameraPhotoSubMode.PANORAMA, CameraPhotoSubMode.fromNameOrDefault("Panorama"))
     assertEquals(CameraPhotoSubMode.PANORAMA, CameraPhotoSubMode.fromNameOrDefault("pano"))
     assertEquals(CameraPhotoSubMode.HDR, CameraPhotoSubMode.fromNameOrDefault("HDR"))
-    assertEquals(CameraPhotoSubMode.NIGHT, CameraPhotoSubMode.fromNameOrDefault("Night"))
     assertEquals(CameraPhotoSubMode.BURST, CameraPhotoSubMode.fromNameOrDefault("Burst"))
-    assertEquals(CameraPhotoSubMode.COLLAGE, CameraPhotoSubMode.fromNameOrDefault("2×2 Booth"))
-    assertEquals(CameraPhotoSubMode.COLLAGE, CameraPhotoSubMode.fromNameOrDefault("booth"))
+    // Removed 2x2 Booth and Night sub-modes fall back cleanly to STANDARD
+    assertEquals(listOf(CameraPhotoSubMode.STANDARD, CameraPhotoSubMode.PANORAMA, CameraPhotoSubMode.HDR, CameraPhotoSubMode.BURST), CameraPhotoSubMode.entries)
+
+    // Floating Night Mode cycles Auto -> On -> Off -> Auto
+    assertEquals(CameraNightMode.AUTO, CameraNightMode.DEFAULT)
+    assertEquals(CameraNightMode.ON, CameraNightMode.AUTO.next())
+    assertEquals(CameraNightMode.OFF, CameraNightMode.ON.next())
+    assertEquals(CameraNightMode.AUTO, CameraNightMode.OFF.next())
+    assertEquals(CameraNightMode.ON, CameraNightMode.fromNameOrDefault("On"))
+    assertEquals(CameraNightMode.OFF, CameraNightMode.fromNameOrDefault("Off"))
+    assertEquals(CameraNightMode.AUTO, CameraNightMode.fromNameOrDefault("Auto"))
+
+    assertTrue(CameraEngine.shouldApplyNightSight(CameraNightMode.ON, exposureEv = 0f))
+    assertFalse(CameraEngine.shouldApplyNightSight(CameraNightMode.OFF, exposureEv = -1.5f, averageLuma = 20))
+    assertTrue(CameraEngine.shouldApplyNightSight(CameraNightMode.AUTO, exposureEv = 0f, averageLuma = 45))
+    assertFalse(CameraEngine.shouldApplyNightSight(CameraNightMode.AUTO, exposureEv = 0f, averageLuma = 140))
 
     val fixedEpoch = 1794335400000L
     // Panorama file capture
@@ -633,6 +644,7 @@ class CameraEngineTest {
     CameraEngine.captureSyntheticPhotoFile(
       outputFile = panoFile,
       subMode = CameraPhotoSubMode.PANORAMA,
+      nightMode = CameraNightMode.ON,
       epochMs = fixedEpoch,
     )
     assertTrue(panoFile.exists() && panoFile.length() > 32L)
@@ -653,20 +665,108 @@ class CameraEngineTest {
     )
     assertEquals(3, burstFiles.size)
     assertTrue(burstFiles.all { it.name.startsWith("BURST_") && it.name.endsWith(".jpg") })
+  }
 
-    // 2x2 Booth Collage capture
-    val boothFile = CameraEngine.createTimestampedPhotoFile(
-      directory = tempDir,
-      format = CameraPhotoFormat.PNG,
-      subMode = CameraPhotoSubMode.COLLAGE,
-      epochMs = fixedEpoch,
+  @Test
+  fun systemCameraCatalog_detectsMultipleBackAndFrontLenses_andCyclesBetweenThem() {
+    val rawCameras = listOf(
+      // Main Wide Back Camera (ID 0, ~27mm 35mm-eq)
+      RawCameraCharacteristicsInfo(
+        cameraId = "0",
+        openCameraId = "0",
+        lensFacing = CameraLensFacing.BACK,
+        focalLengthMm = 4.8f,
+        sensorWidthMm = 6.4f,
+        sensorHeightMm = 4.8f,
+        aperture = 1.8f,
+        hasFlash = true,
+      ),
+      // Front Selfie Camera (ID 1, ~29mm 35mm-eq)
+      RawCameraCharacteristicsInfo(
+        cameraId = "1",
+        openCameraId = "1",
+        lensFacing = CameraLensFacing.FRONT,
+        focalLengthMm = 3.2f,
+        sensorWidthMm = 4.0f,
+        sensorHeightMm = 3.0f,
+        aperture = 2.0f,
+        hasFlash = false,
+      ),
+      // Ultra-Wide Back Camera (ID 2, ~14mm 35mm-eq -> 0.5x optical zoom)
+      RawCameraCharacteristicsInfo(
+        cameraId = "2",
+        openCameraId = "0",
+        physicalCameraId = "2",
+        lensFacing = CameraLensFacing.BACK,
+        focalLengthMm = 1.85f,
+        sensorWidthMm = 4.8f,
+        sensorHeightMm = 3.6f,
+        aperture = 2.2f,
+        hasFlash = false,
+      ),
+      // Telephoto Back Camera (ID 3, ~81mm 35mm-eq -> 3x optical zoom)
+      RawCameraCharacteristicsInfo(
+        cameraId = "3",
+        openCameraId = "3",
+        lensFacing = CameraLensFacing.BACK,
+        focalLengthMm = 10.8f,
+        sensorWidthMm = 4.8f,
+        sensorHeightMm = 3.6f,
+        aperture = 2.8f,
+        hasFlash = false,
+      ),
+      // Macro Back Camera (ID 4, high diopter close focus)
+      RawCameraCharacteristicsInfo(
+        cameraId = "4",
+        openCameraId = "4",
+        lensFacing = CameraLensFacing.BACK,
+        focalLengthMm = 4.8f,
+        sensorWidthMm = 6.4f,
+        sensorHeightMm = 4.8f,
+        aperture = 2.4f,
+        minFocusDistanceDiopters = 25.0f,
+      ),
     )
-    assertTrue(boothFile.name.startsWith("BOOTH_"))
-    CameraEngine.captureSyntheticPhotoFile(
-      outputFile = boothFile,
-      subMode = CameraPhotoSubMode.COLLAGE,
-      epochMs = fixedEpoch,
-    )
-    assertTrue(boothFile.exists() && boothFile.length() > 32L)
+
+    val catalog = CameraEngine.buildSystemCameraCatalog(rawCameras)
+    assertEquals(5, catalog.size)
+
+    // Back cameras are sorted by ascending optical zoom (0.5x Ultra -> 1x Wide -> 1x Macro -> 3x Tele), followed by Front
+    assertEquals(listOf("2", "0", "4", "3", "1"), catalog.map { it.cameraId })
+    assertEquals(CameraLensType.ULTRA_WIDE, catalog[0].lensType)
+    assertEquals("0.5x Ultra", catalog[0].chipLabel)
+    assertEquals("0", catalog[0].openCameraId)
+    assertEquals("2", catalog[0].physicalCameraId)
+
+    assertEquals(CameraLensType.WIDE, catalog[1].lensType)
+    assertTrue(catalog[1].isPrimaryForFacing)
+    assertEquals("1x Wide", catalog[1].chipLabel)
+    assertEquals("Back • Wide 1x", catalog[1].shortLabel)
+
+    assertEquals(CameraLensType.MACRO, catalog[2].lensType)
+    assertEquals("1x Macro", catalog[2].chipLabel)
+
+    assertEquals(CameraLensType.TELEPHOTO, catalog[3].lensType)
+    assertEquals("3x Tele", catalog[3].chipLabel)
+    assertEquals("Back • Tele 3x", catalog[3].shortLabel)
+
+    assertEquals(CameraLensFacing.FRONT, catalog[4].lensFacing)
+    assertEquals("Front", catalog[4].chipLabel)
+
+    // Default selected camera resolves to the primary 1x Wide back camera (ID 0), not the 0.5x ultra-wide
+    val defaultBack = CameraEngine.resolveSelectedCamera(catalog, requestedCameraId = null, fallbackFacing = CameraLensFacing.BACK)
+    assertEquals("0", defaultBack.cameraId)
+
+    // Cycling through all system cameras visits every back and front camera in order and wraps around
+    val step1 = CameraEngine.nextSystemCamera(catalog, defaultBack.cameraId)
+    assertEquals("4", step1.cameraId)
+    val step2 = CameraEngine.nextSystemCamera(catalog, step1.cameraId)
+    assertEquals("3", step2.cameraId)
+    val step3 = CameraEngine.nextSystemCamera(catalog, step2.cameraId)
+    assertEquals("1", step3.cameraId)
+    val step4 = CameraEngine.nextSystemCamera(catalog, step3.cameraId)
+    assertEquals("2", step4.cameraId)
+    val step5 = CameraEngine.nextSystemCamera(catalog, step4.cameraId)
+    assertEquals("0", step5.cameraId)
   }
 }
