@@ -14,6 +14,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import com.example.toolbox.ui.main.EXTRA_EXPAND_MUSIC_PLAYER
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.createFolderShortcutIntent
 import com.example.toolbox.ui.main.createStandaloneToolIntent
@@ -171,7 +172,11 @@ class MainActivity : ComponentActivity() {
         val launchIntent = if (parsedFolder != null) {
           createFolderShortcutIntent(this, File(parsedFolder))
         } else {
-          createStandaloneToolIntent(this, incomingTool!!)
+          createStandaloneToolIntent(this, incomingTool!!).apply {
+            if (expandMusicPlayer) {
+              putExtra(EXTRA_EXPAND_MUSIC_PLAYER, true)
+            }
+          }
         }
         startActivity(launchIntent)
         return

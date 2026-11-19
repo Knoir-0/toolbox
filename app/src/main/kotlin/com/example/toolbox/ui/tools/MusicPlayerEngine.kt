@@ -954,6 +954,7 @@ object MusicPlayerEngine {
       fallbackPaletteCache.clear()
       noExternalArtworkCache.clear()
     }
+    clearExternalMediaArtworkCaches()
     try {
       artworkDiskCacheDir?.listFiles()?.forEach { it.delete() }
     } catch (_: Throwable) {}
@@ -1643,6 +1644,71 @@ object MusicPlayerEngine {
     } catch (_: Throwable) {
       bitmap
     }
+  }
+
+  /**
+   * Computes a power-of-two `BitmapFactory.Options.inSampleSize` that bounds both width and height
+   * (including wide or tall rectangular covers) safely near [targetSize] so decoded bitmaps never
+   * blow past Android's 1 MB Binder IPC transaction limit.
+   */
+  internal fun computeBoundedInSampleSize(width: Int, height: Int, targetSize: Int): Int {
+    if (width <= 0 || height <= 0 || targetSize <= 0) return 1
+    val safeTarget = targetSize.coerceAtLeast(64)
+    var inSampleSize = 1
+    if (height > safeTarget || width > safeTarget) {
+      val halfHeight = height / 2
+      val halfWidth = width / 2
+      while ((halfHeight / inSampleSize) >= safeTarget && (halfWidth / inSampleSize) >= safeTarget) {
+        inSampleSize *= 2
+      }
+      val maxAllowedDecodedEdge = safeTarget * 2
+      while ((width / inSampleSize) > maxAllowedDecodedEdge || (height / inSampleSize) > maxAllowedDecodedEdge) {
+        inSampleSize *= 2
+      }
+    }
+    return inSampleSize
+  }
+
+  /**
+   * Converts [bitmap] to a software `ARGB_8888` [Bitmap] (if backed by `Bitmap.Config.HARDWARE`)
+   * and scales it down proportionally if its longest edge exceeds [maxDimPx].
+   */
+  internal fun scaleAndNormalizeSoftwareBitmap(bitmap: Bitmap?, maxDimPx: Int = 360): Bitmap? {
+    if (bitmap == null) return null
+    return try {
+      if (bitmap.isRecycled) return null
+      val sw = ensureSoftwareBitmap(bitmap)
+      val w = sw.width
+      val h = sw.height
+      if (w <= 0 || h <= 0) return sw
+      val safeMax = maxDimPx.coerceAtLeast(64)
+      val longest = max(w, h)
+      if (longest <= safeMax) {
+        sw
+      } else {
+        val scale = safeMax.toFloat() / longest.toFloat()
+        val targetW = (w * scale).roundToInt().coerceAtLeast(1)
+        val targetH = (h * scale).roundToInt().coerceAtLeast(1)
+        val scaled = Bitmap.createScaledBitmap(sw, targetW, targetH, true)
+        if (sw !== bitmap && scaled !== sw) {
+          try {
+            sw.recycle()
+          } catch (_: Throwable) {}
+        }
+        scaled
+      }
+    } catch (_: Throwable) {
+      bitmap
+    }
+  }
+
+  /**
+   * Prepares an artwork [Bitmap] that is safe for Android `MediaMetadata` and `Notification`
+   * Binder IPC parcels (software-backed and bounded to at most [maxDimPx] on its longest edge,
+   * keeping parcel payload well below the 1 MB Binder limit).
+   */
+  internal fun prepareSystemMediaArtworkBitmap(bitmap: Bitmap?, maxDimPx: Int = 256): Bitmap? {
+    return scaleAndNormalizeSoftwareBitmap(bitmap, maxDimPx = maxDimPx.coerceIn(96, 320))
   }
 
   /**
@@ -3065,6 +3131,39 @@ object MusicPlayerEngine {
     )
   }
 
+  private fun runComposeStateUpdate(block: () -> Unit) {
+    val mainLooper = try {
+      Looper.getMainLooper()
+    } catch (_: Throwable) {
+      null
+    }
+    val currentLooper = try {
+      Looper.myLooper()
+    } catch (_: Throwable) {
+      null
+    }
+    if (mainLooper == null || currentLooper === mainLooper) {
+      Snapshot.withMutableSnapshot {
+        block()
+      }
+    } else {
+      val posted = try {
+        Handler(mainLooper).post {
+          Snapshot.withMutableSnapshot {
+            block()
+          }
+        }
+      } catch (_: Throwable) {
+        false
+      }
+      if (!posted) {
+        Snapshot.withMutableSnapshot {
+          block()
+        }
+      }
+    }
+  }
+
   private fun recordExtractedPaletteForTrack(
     track: MusicTrack,
     extractedPalette: AlbumArtPalette,
@@ -3098,13 +3197,19 @@ object MusicPlayerEngine {
         }
       }
     }
-    if (activeTrack?.id == track.id) {
-      activeTrack = updatedTrack
-      internalTrackPalette = extractedPalette
-    }
-    val session = activeSessionState
-    if (session != null && !session.isReleased && session.currentTrack?.id == track.id) {
-      session.activePalette = extractedPalette
+    runComposeStateUpdate {
+      if (activeTrack?.id == track.id) {
+        activeTrack = updatedTrack
+        internalTrackPalette = extractedPalette
+      }
+      val session = activeSessionState
+      if (session != null && !session.isReleased && session.currentTrack?.id == track.id) {
+        session.activePalette = extractedPalette
+        session.syncSystemMediaControls(
+          forceMetadataUpdate = false,
+          notifyPlatformInBackground = true,
+        )
+      }
     }
   }
 
@@ -3262,26 +3367,20 @@ object MusicPlayerEngine {
       BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOptions)
       val width = boundsOptions.outWidth
       val height = boundsOptions.outHeight
-      if (width <= 0 || height <= 0) {
+      val decoded = if (width <= 0 || height <= 0) {
         val opts = BitmapFactory.Options().apply {
           inPreferredConfig = Bitmap.Config.ARGB_8888
         }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
       } else {
-        var inSampleSize = 1
-        if (height > targetSize || width > targetSize) {
-          val halfHeight = height / 2
-          val halfWidth = width / 2
-          while ((halfHeight / inSampleSize) >= targetSize && (halfWidth / inSampleSize) >= targetSize) {
-            inSampleSize *= 2
-          }
-        }
+        val inSampleSize = computeBoundedInSampleSize(width, height, targetSize)
         val decodeOptions = BitmapFactory.Options().apply {
           this.inSampleSize = inSampleSize
           inPreferredConfig = Bitmap.Config.ARGB_8888
         }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions)
       }
+      scaleAndNormalizeSoftwareBitmap(decoded, maxDimPx = targetSize)
     } catch (_: Throwable) {
       null
     }
@@ -3901,6 +4000,7 @@ object MusicPlayerEngine {
               file = file,
               title = track.title,
               album = track.album,
+              reqSizePx = safeSize,
             )
             if (mediaStoreBmp != null) {
               val extractedPalette = extractPaletteFromBitmap(mediaStoreBmp)
@@ -4015,6 +4115,7 @@ object MusicPlayerEngine {
     file: File,
     title: String,
     album: String,
+    reqSizePx: Int = 360,
   ): Bitmap? {
     return try {
       val resolver = context.contentResolver
@@ -4031,7 +4132,7 @@ object MusicPlayerEngine {
           val foundAlbumId = cursor.getLong(0)
           if (foundAlbumId > 0L) {
             val artUri = Uri.parse("content://media/external/audio/albumart/$foundAlbumId")
-            loadArtworkBitmapFromUri(context, artUri.toString())?.let { return it }
+            loadArtworkBitmapFromUri(context, artUri.toString(), reqSizePx = reqSizePx)?.let { return it }
           }
         }
       }
@@ -4054,7 +4155,7 @@ object MusicPlayerEngine {
             val foundAlbumId = cursor.getLong(0)
             if (foundAlbumId > 0L) {
               val artUri = Uri.parse("content://media/external/audio/albumart/$foundAlbumId")
-              loadArtworkBitmapFromUri(context, artUri.toString())?.let { return it }
+              loadArtworkBitmapFromUri(context, artUri.toString(), reqSizePx = reqSizePx)?.let { return it }
             }
           }
         }
@@ -6504,6 +6605,65 @@ object MusicPlayerEngine {
     internalTrackPalette = palette
   }
 
+  private val externalMediaCacheLock = Any()
+  private val externalPaletteCache = object : LinkedHashMap<String, AlbumArtPalette>(32, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, AlbumArtPalette>?): Boolean = size > 32
+  }
+  private val externalNormalizedBitmapCache = object : LinkedHashMap<String, Bitmap>(16, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean = size > 16
+  }
+  private val externalFallbackArtworkCache = object : LinkedHashMap<String, Bitmap>(16, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean = size > 16
+  }
+  private val externalMissingArtworkCache = object : LinkedHashMap<String, Boolean>(32, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>?): Boolean = size > 32
+  }
+
+  @Volatile
+  private var externalMediaSetFromSystemSync = false
+
+  @Volatile
+  private var lastBroadcastReceivedElapsedMs = 0L
+
+  private fun clearExternalMediaArtworkCaches() {
+    synchronized(externalMediaCacheLock) {
+      externalPaletteCache.clear()
+      externalNormalizedBitmapCache.clear()
+      externalFallbackArtworkCache.clear()
+      externalMissingArtworkCache.clear()
+    }
+  }
+
+  private fun externalBitmapCacheSignature(bitmap: Bitmap): String {
+    val id = System.identityHashCode(bitmap)
+    val genId = try {
+      bitmap.generationId
+    } catch (_: Throwable) {
+      0
+    }
+    return "$id:$genId:${bitmap.width}x${bitmap.height}"
+  }
+
+  private fun normalizeExternalArtworkBitmap(bitmap: Bitmap?): Bitmap? {
+    if (bitmap == null) return null
+    return try {
+      if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) return null
+      val sig = externalBitmapCacheSignature(bitmap)
+      synchronized(externalMediaCacheLock) {
+        externalNormalizedBitmapCache[sig]?.takeIf { !it.isRecycled }?.let { return it }
+      }
+      val normalized = scaleAndNormalizeSoftwareBitmap(bitmap, maxDimPx = 360) ?: return null
+      synchronized(externalMediaCacheLock) {
+        externalNormalizedBitmapCache[sig] = normalized
+        val normSig = externalBitmapCacheSignature(normalized)
+        externalNormalizedBitmapCache[normSig] = normalized
+      }
+      normalized
+    } catch (_: Throwable) {
+      bitmap
+    }
+  }
+
   /**
    * Extracts an [AlbumArtPalette] for an external app playing in the Android system media player,
    * using its artwork [Bitmap] when available, or notification color, or deterministic metadata seed.
@@ -6516,8 +6676,27 @@ object MusicPlayerEngine {
     album: String = "",
     genre: String = "",
   ): AlbumArtPalette {
-    if (artworkBitmap != null && artworkBitmap.width > 0 && artworkBitmap.height > 0) {
-      return extractPaletteFromBitmap(artworkBitmap)
+    if (artworkBitmap != null) {
+      val validDims = try {
+        !artworkBitmap.isRecycled && artworkBitmap.width > 0 && artworkBitmap.height > 0
+      } catch (_: Throwable) {
+        false
+      }
+      if (validDims) {
+        val cacheKey = "bmp:${externalBitmapCacheSignature(artworkBitmap)}"
+        synchronized(externalMediaCacheLock) {
+          externalPaletteCache[cacheKey]?.let { return it }
+        }
+        val safeBitmap = normalizeExternalArtworkBitmap(artworkBitmap) ?: artworkBitmap
+        val extracted = extractPaletteFromBitmap(safeBitmap)
+        synchronized(externalMediaCacheLock) {
+          externalPaletteCache[cacheKey] = extracted
+          if (safeBitmap !== artworkBitmap) {
+            externalPaletteCache["bmp:${externalBitmapCacheSignature(safeBitmap)}"] = extracted
+          }
+        }
+        return extracted
+      }
     }
     if (notificationColorRgb != null && (notificationColorRgb and 0xFFFFFF) != 0) {
       val primary = notificationColorRgb and 0xFFFFFF
@@ -6549,6 +6728,7 @@ object MusicPlayerEngine {
    * or media notification).
    */
   fun updateExternalSystemMediaSession(info: SystemMediaPlayingInfo?) {
+    externalMediaSetFromSystemSync = false
     externalSystemMediaInfo = info
   }
 
@@ -6573,8 +6753,49 @@ object MusicPlayerEngine {
     canSkipNext: Boolean = true,
     canSkipPrevious: Boolean = true,
   ): SystemMediaPlayingInfo {
-    val palette = resolveSystemMediaPalette(
+    return applyExternalSystemMediaMetadata(
+      title = title,
+      artist = artist,
+      album = album,
+      genre = genre,
+      sourcePackage = sourcePackage,
+      sourceAppName = sourceAppName,
+      isPlaying = isPlaying,
       artworkBitmap = artworkBitmap,
+      notificationColorRgb = notificationColorRgb,
+      durationMs = durationMs,
+      positionMs = positionMs,
+      positionUpdateElapsedRealtimeMs = positionUpdateElapsedRealtimeMs,
+      playbackSpeed = playbackSpeed,
+      canSeek = canSeek,
+      canSkipNext = canSkipNext,
+      canSkipPrevious = canSkipPrevious,
+      fromSystemSync = false,
+    )
+  }
+
+  internal fun applyExternalSystemMediaMetadata(
+    title: String,
+    artist: String = "",
+    album: String = "",
+    genre: String = "",
+    sourcePackage: String = "",
+    sourceAppName: String = "",
+    isPlaying: Boolean = true,
+    artworkBitmap: Bitmap? = null,
+    notificationColorRgb: Int? = null,
+    durationMs: Long = 0L,
+    positionMs: Long = 0L,
+    positionUpdateElapsedRealtimeMs: Long = safeElapsedRealtimeMs(),
+    playbackSpeed: Float = 1.0f,
+    canSeek: Boolean = durationMs > 0L,
+    canSkipNext: Boolean = true,
+    canSkipPrevious: Boolean = true,
+    fromSystemSync: Boolean = false,
+  ): SystemMediaPlayingInfo {
+    val safeArtwork = normalizeExternalArtworkBitmap(artworkBitmap)
+    val palette = resolveSystemMediaPalette(
+      artworkBitmap = safeArtwork,
       notificationColorRgb = notificationColorRgb,
       title = title,
       artist = artist,
@@ -6597,7 +6818,7 @@ object MusicPlayerEngine {
       isExternalApp = true,
       isPlaying = isPlaying,
       palette = palette,
-      artworkBitmap = artworkBitmap,
+      artworkBitmap = safeArtwork,
       durationMs = safeDuration,
       positionMs = safePosition,
       positionUpdateElapsedRealtimeMs = positionUpdateElapsedRealtimeMs,
@@ -6606,7 +6827,10 @@ object MusicPlayerEngine {
       canSkipNext = canSkipNext,
       canSkipPrevious = canSkipPrevious,
     )
-    externalSystemMediaInfo = info
+    externalMediaSetFromSystemSync = fromSystemSync
+    if (externalSystemMediaInfo != info) {
+      externalSystemMediaInfo = info
+    }
     return info
   }
 
@@ -6799,30 +7023,60 @@ object MusicPlayerEngine {
     }
   }
 
-  internal fun loadArtworkBitmapFromUri(context: Context, uriString: String?): Bitmap? {
+  internal fun loadArtworkBitmapFromUri(
+    context: Context,
+    uriString: String?,
+    reqSizePx: Int = 360,
+  ): Bitmap? {
     if (uriString.isNullOrBlank()) return null
-    return try {
-      val uri = Uri.parse(uriString.trim())
+    val trimmed = uriString.trim()
+    val safeTarget = reqSizePx.coerceIn(64, 1024)
+    val cacheKey = "uri:$trimmed|$safeTarget"
+    synchronized(externalMediaCacheLock) {
+      externalFallbackArtworkCache[cacheKey]?.takeIf { !it.isRecycled }?.let { return it }
+      if (externalMissingArtworkCache[cacheKey] == true) return null
+    }
+    val loaded = try {
+      val uri = Uri.parse(trimmed)
       val scheme = uri.scheme?.lowercase(Locale.ROOT)
-      val opts = BitmapFactory.Options().apply {
-        inPreferredConfig = Bitmap.Config.ARGB_8888
-        inSampleSize = 1
-      }
       when (scheme) {
         "content", "android.resource" -> {
-          context.contentResolver.openInputStream(uri)?.use { stream ->
-            BitmapFactory.decodeStream(stream, null, opts)
+          val rawBytes = context.contentResolver.openInputStream(uri)?.use { stream ->
+            stream.readBytes()
+          }
+          if (rawBytes != null && rawBytes.isNotEmpty()) {
+            decodeDownsampledBitmap(rawBytes, reqSizePx = safeTarget)
+          } else {
+            null
           }
         }
         "file" -> {
           val path = uri.path
-          if (!path.isNullOrBlank()) BitmapFactory.decodeFile(path, opts) else null
+          if (!path.isNullOrBlank()) {
+            val file = File(path)
+            if (file.exists() && file.isFile) {
+              GalleryEngine.decodeThumbnailBitmap(file, reqSizePx = safeTarget)
+                ?.let { scaleAndNormalizeSoftwareBitmap(it, maxDimPx = safeTarget) }
+            } else {
+              null
+            }
+          } else {
+            null
+          }
         }
         else -> null
       }
     } catch (_: Throwable) {
       null
     }
+    synchronized(externalMediaCacheLock) {
+      if (loaded != null) {
+        externalFallbackArtworkCache[cacheKey] = loaded
+      } else {
+        externalMissingArtworkCache[cacheKey] = true
+      }
+    }
+    return loaded
   }
 
   internal fun findLocalOrMediaStoreArtworkBitmap(
@@ -6835,10 +7089,15 @@ object MusicPlayerEngine {
     if (albumId != null && albumId > 0L) {
       try {
         val artUri = Uri.parse("content://media/external/audio/albumart/$albumId")
-        loadArtworkBitmapFromUri(context, artUri.toString())?.let { return it }
+        loadArtworkBitmapFromUri(context, artUri.toString(), reqSizePx = 360)?.let { return it }
       } catch (_: Throwable) {}
     }
     if (title.isBlank() && album.isBlank()) return null
+    val lookupKey = "local_lookup:${title.trim().lowercase(Locale.ROOT)}|${artist.trim().lowercase(Locale.ROOT)}|${album.trim().lowercase(Locale.ROOT)}"
+    synchronized(externalMediaCacheLock) {
+      externalFallbackArtworkCache[lookupKey]?.takeIf { !it.isRecycled }?.let { return it }
+      if (externalMissingArtworkCache[lookupKey] == true) return null
+    }
     // Check in-memory indexed tracks first
     val matchingTrack = synchronized(metadataCacheLock) {
       trackIndexByPath.values.firstOrNull { track ->
@@ -6848,6 +7107,16 @@ object MusicPlayerEngine {
           )
       }
     }
+    if (matchingTrack != null) {
+      getCachedAlbumArtBitmap(matchingTrack, 360)?.let { cached ->
+        if (!isCachedBitmapProcedural(matchingTrack, cached, 360)) {
+          synchronized(externalMediaCacheLock) {
+            externalFallbackArtworkCache[lookupKey] = cached
+          }
+          return cached
+        }
+      }
+    }
     if (matchingTrack?.file != null && matchingTrack.file.exists()) {
       try {
         val retriever = MediaMetadataRetriever()
@@ -6855,10 +7124,12 @@ object MusicPlayerEngine {
           retriever.setDataSource(matchingTrack.file.absolutePath)
           val bytes = retriever.embeddedPicture
           if (bytes != null && bytes.isNotEmpty()) {
-            val opts = BitmapFactory.Options().apply {
-              inPreferredConfig = Bitmap.Config.ARGB_8888
+            decodeDownsampledBitmap(bytes, reqSizePx = 360)?.let { decoded ->
+              synchronized(externalMediaCacheLock) {
+                externalFallbackArtworkCache[lookupKey] = decoded
+              }
+              return decoded
             }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.let { return it }
           }
         } finally {
           try {
@@ -6888,11 +7159,19 @@ object MusicPlayerEngine {
           val foundAlbumId = cursor.getLong(0)
           if (foundAlbumId > 0L) {
             val artUri = Uri.parse("content://media/external/audio/albumart/$foundAlbumId")
-            loadArtworkBitmapFromUri(context, artUri.toString())?.let { return it }
+            loadArtworkBitmapFromUri(context, artUri.toString(), reqSizePx = 360)?.let { loaded ->
+              synchronized(externalMediaCacheLock) {
+                externalFallbackArtworkCache[lookupKey] = loaded
+              }
+              return loaded
+            }
           }
         }
       }
     } catch (_: Throwable) {}
+    synchronized(externalMediaCacheLock) {
+      externalMissingArtworkCache[lookupKey] = true
+    }
     return null
   }
 
@@ -7049,7 +7328,8 @@ object MusicPlayerEngine {
       val artBitmap = findLocalOrMediaStoreArtworkBitmap(context, title, artist, album, albumId)
         ?: loadAppIconBitmap(context, senderPkg)
       val appLabel = resolveAppLabel(context, senderPkg).ifBlank { "External Player" }
-      val info = updateExternalSystemMediaFromMetadata(
+      val nowElapsed = safeElapsedRealtimeMs()
+      val info = applyExternalSystemMediaMetadata(
         title = title.ifBlank { appLabel },
         artist = artist,
         album = album,
@@ -7057,7 +7337,10 @@ object MusicPlayerEngine {
         sourceAppName = appLabel,
         isPlaying = playing,
         artworkBitmap = artBitmap,
+        positionUpdateElapsedRealtimeMs = nowElapsed,
+        fromSystemSync = true,
       )
+      lastBroadcastReceivedElapsedMs = nowElapsed
       lastBroadcastMediaInfo = info
     } catch (_: Throwable) {}
   }
@@ -7237,7 +7520,7 @@ object MusicPlayerEngine {
           val artBmp = latestNotif.artworkBitmap
             ?: findLocalOrMediaStoreArtworkBitmap(context, latestNotif.title, latestNotif.artist, latestNotif.album)
             ?: loadAppIconBitmap(context, latestNotif.packageName)
-          updateExternalSystemMediaFromMetadata(
+          applyExternalSystemMediaMetadata(
             title = latestNotif.title.ifBlank { appLabel },
             artist = latestNotif.artist,
             album = latestNotif.album,
@@ -7246,6 +7529,7 @@ object MusicPlayerEngine {
             isPlaying = latestNotif.isOngoing || systemMusicStreamActive,
             artworkBitmap = artBmp,
             notificationColorRgb = latestNotif.colorRgb,
+            fromSystemSync = true,
           )
           return
         }
@@ -7253,8 +7537,20 @@ object MusicPlayerEngine {
         // Check standard Android music broadcast info
         val broadcastInfo = lastBroadcastMediaInfo
         if (broadcastInfo != null) {
-          val effectivePlaying = broadcastInfo.isPlaying && systemMusicStreamActive || broadcastInfo.isPlaying
-          externalSystemMediaInfo = broadcastInfo.copy(isPlaying = effectivePlaying)
+          val nowElapsed = safeElapsedRealtimeMs()
+          val recentlyBroadcast = lastBroadcastReceivedElapsedMs > 0L &&
+            nowElapsed >= lastBroadcastReceivedElapsedMs &&
+            (nowElapsed - lastBroadcastReceivedElapsedMs) <= 3_500L
+          val effectivePlaying = broadcastInfo.isPlaying && (systemMusicStreamActive || recentlyBroadcast)
+          val updatedBroadcast = if (broadcastInfo.isPlaying != effectivePlaying) {
+            broadcastInfo.copy(isPlaying = effectivePlaying)
+          } else {
+            broadcastInfo
+          }
+          externalMediaSetFromSystemSync = true
+          if (externalSystemMediaInfo != updatedBroadcast) {
+            externalSystemMediaInfo = updatedBroadcast
+          }
           return
         }
 
@@ -7262,17 +7558,21 @@ object MusicPlayerEngine {
         val activeExternalPkg = findActiveExternalPlaybackPackage(context)
         if (activeExternalPkg != null) {
           val appLabel = resolveAppLabel(context, activeExternalPkg)
-          val iconBmp = loadAppIconBitmap(context, activeExternalPkg)
           val existing = externalSystemMediaInfo
           if (existing != null && existing.sourcePackage == activeExternalPkg) {
-            externalSystemMediaInfo = existing.copy(isPlaying = true)
+            externalMediaSetFromSystemSync = true
+            if (!existing.isPlaying) {
+              externalSystemMediaInfo = existing.copy(isPlaying = true)
+            }
           } else {
-            updateExternalSystemMediaFromMetadata(
+            val iconBmp = loadAppIconBitmap(context, activeExternalPkg)
+            applyExternalSystemMediaMetadata(
               title = appLabel.ifBlank { "System Media" },
               sourcePackage = activeExternalPkg,
               sourceAppName = appLabel,
               isPlaying = true,
               artworkBitmap = iconBmp,
+              fromSystemSync = true,
             )
           }
           return
@@ -7288,6 +7588,7 @@ object MusicPlayerEngine {
           }
           val existing = externalSystemMediaInfo
           if (existing != null && existing.isExternalApp && (fallbackPkg.isBlank() || existing.sourcePackage == fallbackPkg)) {
+            externalMediaSetFromSystemSync = true
             if (!existing.isPlaying) {
               externalSystemMediaInfo = existing.copy(
                 isPlaying = true,
@@ -7297,21 +7598,24 @@ object MusicPlayerEngine {
           } else {
             val iconBmp = loadAppIconBitmap(context, fallbackPkg)
             val accentRgb = launchedApp.accentRgb.takeIf { it != 0 }
-            updateExternalSystemMediaFromMetadata(
+            applyExternalSystemMediaMetadata(
               title = fallbackLabel,
               sourcePackage = fallbackPkg,
               sourceAppName = fallbackLabel,
               isPlaying = true,
               artworkBitmap = iconBmp,
               notificationColorRgb = accentRgb,
+              fromSystemSync = true,
             )
           }
           return
         }
 
-        if (activeExternalMediaController != null && externalSystemMediaInfo != null) {
+        if ((activeExternalMediaController != null || externalMediaSetFromSystemSync) && externalSystemMediaInfo != null) {
           activeExternalMediaController = null
-          externalSystemMediaInfo = externalSystemMediaInfo?.copy(isPlaying = false)
+          if (externalSystemMediaInfo?.isPlaying == true) {
+            externalSystemMediaInfo = externalSystemMediaInfo?.copy(isPlaying = false)
+          }
         }
         return
       }
@@ -7417,14 +7721,14 @@ object MusicPlayerEngine {
         ?: try { meta?.getBitmap(MediaMetadata.METADATA_KEY_ART) } catch (_: Throwable) { null }
         ?: try { meta?.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON) } catch (_: Throwable) { null }
         ?: try { desc?.iconBitmap } catch (_: Throwable) { null }
-        ?: loadArtworkBitmapFromUri(context, artUri)
+        ?: loadArtworkBitmapFromUri(context, artUri, reqSizePx = 360)
         ?: cachedNotif?.artworkBitmap
         ?: findLocalOrMediaStoreArtworkBitmap(context, title, artist, album)
         ?: (if (cachedNotif?.colorRgb == null) loadAppIconBitmap(context, chosen.packageName) else null)
 
       val appLabel = resolveAppLabel(context, chosen.packageName)
 
-      updateExternalSystemMediaFromMetadata(
+      applyExternalSystemMediaMetadata(
         title = title.ifBlank { appLabel },
         artist = artist,
         album = album,
@@ -7441,6 +7745,7 @@ object MusicPlayerEngine {
         canSeek = canSeek,
         canSkipNext = canSkipNext,
         canSkipPrevious = canSkipPrevious,
+        fromSystemSync = true,
       )
     } catch (_: Throwable) {}
   }
@@ -8303,6 +8608,8 @@ object MusicPlayerEngine {
     }
     activeSessionState = null
     isMusicPlayingOverride = null
+    externalMediaSetFromSystemSync = false
+    lastBroadcastReceivedElapsedMs = 0L
     externalSystemMediaInfo = null
     activeExternalMediaController = null
     externalSystemMediaLastDispatchedAction = null
@@ -8313,6 +8620,7 @@ object MusicPlayerEngine {
     customPickerInstalledAppsOverrideForTest = null
     lastBroadcastMediaInfo = null
     activeMediaNotifications.clear()
+    clearExternalMediaArtworkCaches()
     if (activity is LifecycleOwner && observer != null) {
       try {
         activity.lifecycle.removeObserver(observer)
@@ -8567,6 +8875,7 @@ class MusicPlaybackSession(
   private var lastNotifiedRepeatIconRes: Int = 0
   private var lastNotifiedFavoriteIconRes: Int = 0
   private var lastNotifiedArtworkBitmap: Bitmap? = null
+  private var lastNotifiedColorRgb: Int = 0
   private var audioDisconnectReceiver: BroadcastReceiver? = null
   private var mediaControlReceiver: BroadcastReceiver? = null
   private var audioDeviceCallback: AudioDeviceCallback? = null
@@ -10387,7 +10696,9 @@ class MusicPlaybackSession(
               )
             }
           }
-          syncActiveTrackPalette(force = true)
+          if (currentTrack != null) {
+            syncActiveTrackPalette(force = true)
+          }
         } catch (_: kotlinx.coroutines.CancellationException) {
           throw kotlinx.coroutines.CancellationException()
         } catch (_: Throwable) {}
@@ -10440,6 +10751,10 @@ class MusicPlaybackSession(
           if (!isReleased && currentTrack?.id == track.id) {
             activePalette = loadedPalette
             MusicPlayerEngine.updateActiveTrackPalette(track, loadedPalette)
+            syncSystemMediaControls(
+              forceMetadataUpdate = false,
+              notifyPlatformInBackground = true,
+            )
           }
         } catch (_: kotlinx.coroutines.CancellationException) {
           throw kotlinx.coroutines.CancellationException()
@@ -11677,29 +11992,36 @@ class MusicPlaybackSession(
     val session = mediaSession ?: return
 
     val applyPlatformSync = {
-      try {
-        if (track == null || isReleased) {
+      if (track == null || isReleased) {
+        try {
           session.isActive = false
           val stopState = PlaybackState.Builder()
             .setState(PlaybackState.STATE_STOPPED, 0L, 0f)
             .setActions(MusicPlayerEngine.SYSTEM_MEDIA_PLAYBACK_ACTIONS)
             .build()
           session.setPlaybackState(stopState)
+        } catch (_: Throwable) {}
+        try {
           val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
           nm?.cancel(MusicPlayerEngine.MEDIA_NOTIFICATION_ID)
-          lastNotifiedTrackId = null
-          lastNotifiedIsPlaying = null
-          lastNotifiedShuffleIconRes = 0
-          lastNotifiedRepeatIconRes = 0
-          lastNotifiedFavoriteIconRes = 0
-          lastNotifiedArtworkBitmap = null
-        } else {
+        } catch (_: Throwable) {}
+        lastSyncedMediaMetadataTrackId = null
+        lastSyncedMediaMetadataDurationMs = -1L
+        lastSyncedMediaArtworkBitmap = null
+        lastNotifiedTrackId = null
+        lastNotifiedIsPlaying = null
+        lastNotifiedShuffleIconRes = 0
+        lastNotifiedRepeatIconRes = 0
+        lastNotifiedFavoriteIconRes = 0
+        lastNotifiedArtworkBitmap = null
+        lastNotifiedColorRgb = 0
+      } else {
+        // 1. Update PlaybackState (isolated try/catch so metadata/notification errors never block transport state):
+        //    - CustomAction 0 (left of playback controls): Shuffle (cycles OFF -> SHUFFLE -> SMART_SHUFFLE)
+        //    - Transport controls: Previous / Play-Pause / Next
+        //    - CustomAction 1 (right of playback controls): Star / Favorite for the individual song (reflects track.id in favoriteIds)
+        try {
           session.isActive = true
-
-          // 1. Update PlaybackState:
-          //    - CustomAction 0 (left of playback controls): Shuffle (cycles OFF -> SHUFFLE -> SMART_SHUFFLE)
-          //    - Transport controls: Previous / Play-Pause / Next
-          //    - CustomAction 1 (right of playback controls): Star / Favorite for the individual song (reflects track.id in favoriteIds)
           val stateInt = if (snapshotIsPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
           val effectiveSpeed = if (snapshotIsPlaying) snapshotSpeed else 0f
           val shuffleLabel = MusicPlayerEngine.resolveSystemMediaShuffleLabel(snapshotShuffleMode)
@@ -11723,75 +12045,121 @@ class MusicPlaybackSession(
             )
             .build()
           session.setPlaybackState(playbackState)
+        } catch (_: Throwable) {}
 
-          // 2. Load artwork asynchronously if not yet in memory
-          if (cachedArt == null && mediaArtworkLoadJob?.isActive != true) {
-            val targetId = track.id
-            mediaArtworkLoadJob = scope.launch {
+        // 2. Load artwork asynchronously if not yet in memory
+        if (cachedArt == null && mediaArtworkLoadJob?.isActive != true) {
+          val targetId = track.id
+          mediaArtworkLoadJob = scope.launch {
+            try {
+              val loadedArt = MusicPlayerEngine.loadAlbumArtBitmapAsync(track, sizePx = 360)
+              if (!isReleased && currentTrack?.id == targetId && loadedArt != lastSyncedMediaArtworkBitmap) {
+                syncSystemMediaControls(forceMetadataUpdate = true)
+              }
+            } catch (_: kotlinx.coroutines.CancellationException) {
+              throw kotlinx.coroutines.CancellationException()
+            } catch (_: Throwable) {}
+          }
+        }
+
+        val safeMediaArt = MusicPlayerEngine.prepareSystemMediaArtworkBitmap(cachedArt, maxDimPx = 240)
+
+        // 3. Update MediaMetadata when track, duration, or artwork changes (bounded below Binder IPC limits)
+        val metadataChanged = forceMetadataUpdate ||
+          lastSyncedMediaMetadataTrackId != track.id ||
+          lastSyncedMediaMetadataDurationMs != snapshotDurationMs ||
+          lastSyncedMediaArtworkBitmap !== cachedArt
+        if (metadataChanged) {
+          lastSyncedMediaMetadataTrackId = track.id
+          lastSyncedMediaMetadataDurationMs = snapshotDurationMs
+          lastSyncedMediaArtworkBitmap = cachedArt
+
+          fun buildBaseMetadataBuilder(): MediaMetadata.Builder = MediaMetadata.Builder()
+            .putString(MediaMetadata.METADATA_KEY_MEDIA_ID, track.id)
+            .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
+            .putString(MediaMetadata.METADATA_KEY_ALBUM, track.album)
+            .putString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST, track.artist)
+            .putString(MediaMetadata.METADATA_KEY_GENRE, track.genre)
+            .putLong(MediaMetadata.METADATA_KEY_DURATION, snapshotDurationMs)
+            .putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, track.trackNumber.toLong())
+            .putLong(MediaMetadata.METADATA_KEY_YEAR, track.year.toLong())
+
+          try {
+            val metaBuilder = buildBaseMetadataBuilder()
+            if (safeMediaArt != null) {
+              metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, safeMediaArt)
+              metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ART, safeMediaArt)
+            }
+            session.setMetadata(metaBuilder.build())
+          } catch (_: Throwable) {
+            // Fallback without duplicate bitmap keys if OEM Binder buffer is tight
+            try {
+              val fallbackBuilder = buildBaseMetadataBuilder()
+              val compactArt = MusicPlayerEngine.prepareSystemMediaArtworkBitmap(cachedArt, maxDimPx = 144)
+              if (compactArt != null) {
+                fallbackBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, compactArt)
+              }
+              session.setMetadata(fallbackBuilder.build())
+            } catch (_: Throwable) {
               try {
-                val loadedArt = MusicPlayerEngine.loadAlbumArtBitmapAsync(track, sizePx = 360)
-                if (!isReleased && currentTrack?.id == targetId && loadedArt != lastSyncedMediaArtworkBitmap) {
-                  syncSystemMediaControls(forceMetadataUpdate = true)
-                }
-              } catch (_: kotlinx.coroutines.CancellationException) {
-                throw kotlinx.coroutines.CancellationException()
+                session.setMetadata(buildBaseMetadataBuilder().build())
               } catch (_: Throwable) {}
             }
           }
+        }
 
-          // 3. Update MediaMetadata when track, duration, or artwork changes
-          val metadataChanged = forceMetadataUpdate ||
-            lastSyncedMediaMetadataTrackId != track.id ||
-            lastSyncedMediaMetadataDurationMs != snapshotDurationMs ||
-            lastSyncedMediaArtworkBitmap !== cachedArt
-          if (metadataChanged) {
-            lastSyncedMediaMetadataTrackId = track.id
-            lastSyncedMediaMetadataDurationMs = snapshotDurationMs
-            lastSyncedMediaArtworkBitmap = cachedArt
+        // 4. Only post/update the MediaStyle Notification when notification-visible fields change
+        val notifPalette = MusicPlayerEngine.resolveTrackPalette(track)
+        val notifColorRgb = ((notifPalette.dominantColor.red * 255f).roundToInt().coerceIn(0, 255) shl 16) or
+          ((notifPalette.dominantColor.green * 255f).roundToInt().coerceIn(0, 255) shl 8) or
+          (notifPalette.dominantColor.blue * 255f).roundToInt().coerceIn(0, 255)
 
-            val metaBuilder = MediaMetadata.Builder()
-              .putString(MediaMetadata.METADATA_KEY_MEDIA_ID, track.id)
-              .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
-              .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
-              .putString(MediaMetadata.METADATA_KEY_ALBUM, track.album)
-              .putString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST, track.artist)
-              .putString(MediaMetadata.METADATA_KEY_GENRE, track.genre)
-              .putLong(MediaMetadata.METADATA_KEY_DURATION, snapshotDurationMs)
-              .putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, track.trackNumber.toLong())
-              .putLong(MediaMetadata.METADATA_KEY_YEAR, track.year.toLong())
-            if (cachedArt != null) {
-              metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, cachedArt)
-              metaBuilder.putBitmap(MediaMetadata.METADATA_KEY_ART, cachedArt)
-            }
-            session.setMetadata(metaBuilder.build())
-          }
-
-          // 4. Only post/update the MediaStyle Notification when notification-visible fields change
-          val notificationNeedsUpdate = forceMetadataUpdate ||
-            lastNotifiedTrackId != track.id ||
-            lastNotifiedIsPlaying != snapshotIsPlaying ||
-            lastNotifiedShuffleIconRes != shuffleIconRes ||
-            lastNotifiedFavoriteIconRes != favIconRes ||
-            lastNotifiedRepeatIconRes != repeatIconRes ||
-            lastNotifiedArtworkBitmap !== cachedArt
-          if (notificationNeedsUpdate) {
-            lastNotifiedTrackId = track.id
-            lastNotifiedIsPlaying = snapshotIsPlaying
-            lastNotifiedShuffleIconRes = shuffleIconRes
-            lastNotifiedFavoriteIconRes = favIconRes
-            lastNotifiedRepeatIconRes = repeatIconRes
-            lastNotifiedArtworkBitmap = cachedArt
+        val notificationNeedsUpdate = forceMetadataUpdate ||
+          lastNotifiedTrackId != track.id ||
+          lastNotifiedIsPlaying != snapshotIsPlaying ||
+          lastNotifiedShuffleIconRes != shuffleIconRes ||
+          lastNotifiedFavoriteIconRes != favIconRes ||
+          lastNotifiedRepeatIconRes != repeatIconRes ||
+          lastNotifiedArtworkBitmap !== cachedArt ||
+          lastNotifiedColorRgb != notifColorRgb
+        if (notificationNeedsUpdate) {
+          lastNotifiedTrackId = track.id
+          lastNotifiedIsPlaying = snapshotIsPlaying
+          lastNotifiedShuffleIconRes = shuffleIconRes
+          lastNotifiedFavoriteIconRes = favIconRes
+          lastNotifiedRepeatIconRes = repeatIconRes
+          lastNotifiedArtworkBitmap = cachedArt
+          lastNotifiedColorRgb = notifColorRgb
+          try {
             postSystemMediaNotification(
               track = track,
+              isPlayingSnapshot = snapshotIsPlaying,
+              shuffleModeSnapshot = snapshotShuffleMode,
               isFavorite = isFav,
               shuffleIconRes = shuffleIconRes,
               favIconRes = favIconRes,
-              artworkBitmap = cachedArt,
+              notifColorRgb = notifColorRgb,
+              artworkBitmap = safeMediaArt,
               session = session,
             )
+          } catch (_: Throwable) {
+            try {
+              postSystemMediaNotification(
+                track = track,
+                isPlayingSnapshot = snapshotIsPlaying,
+                shuffleModeSnapshot = snapshotShuffleMode,
+                isFavorite = isFav,
+                shuffleIconRes = shuffleIconRes,
+                favIconRes = favIconRes,
+                notifColorRgb = notifColorRgb,
+                artworkBitmap = null,
+                session = session,
+              )
+            } catch (_: Throwable) {}
           }
         }
-      } catch (_: Throwable) {}
+      }
     }
 
     if (notifyPlatformInBackground) {
@@ -11818,9 +12186,12 @@ class MusicPlaybackSession(
 
   private fun postSystemMediaNotification(
     track: MusicTrack,
+    isPlayingSnapshot: Boolean,
+    shuffleModeSnapshot: MusicShuffleMode,
     isFavorite: Boolean,
     shuffleIconRes: Int,
     favIconRes: Int,
+    notifColorRgb: Int,
     artworkBitmap: Bitmap?,
     session: MediaSession,
   ) {
@@ -11838,7 +12209,7 @@ class MusicPlaybackSession(
 
     val shuffleAction = Notification.Action.Builder(
       Icon.createWithResource(ctx, shuffleIconRes),
-      MusicPlayerEngine.resolveSystemMediaShuffleLabel(shuffleMode),
+      MusicPlayerEngine.resolveSystemMediaShuffleLabel(shuffleModeSnapshot),
       buildMediaActionPendingIntent(MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE, 100),
     ).build()
 
@@ -11848,12 +12219,12 @@ class MusicPlaybackSession(
       buildMediaActionPendingIntent(MusicPlayerEngine.ACTION_MEDIA_PREVIOUS, 101),
     ).build()
 
-    val playPauseIcon = if (isPlaying) {
+    val playPauseIcon = if (isPlayingSnapshot) {
       R.drawable.ic_media_pause
     } else {
       R.drawable.ic_media_play
     }
-    val playPauseTitle = if (isPlaying) "Pause" else "Play"
+    val playPauseTitle = if (isPlayingSnapshot) "Pause" else "Play"
     val playPauseAction = Notification.Action.Builder(
       Icon.createWithResource(ctx, playPauseIcon),
       playPauseTitle,
@@ -11883,11 +12254,6 @@ class MusicPlaybackSession(
       .setMediaSession(session.sessionToken)
       .setShowActionsInCompactView(1, 2, 3)
 
-    val notifPalette = MusicPlayerEngine.resolveTrackPalette(track)
-    val notifColorRgb = ((notifPalette.dominantColor.red * 255f).roundToInt().coerceIn(0, 255) shl 16) or
-      ((notifPalette.dominantColor.green * 255f).roundToInt().coerceIn(0, 255) shl 8) or
-      (notifPalette.dominantColor.blue * 255f).roundToInt().coerceIn(0, 255)
-
     builder
       .setSmallIcon(R.drawable.ic_tool_music_player_foreground)
       .setContentTitle(track.title)
@@ -11897,7 +12263,7 @@ class MusicPlaybackSession(
       .setDeleteIntent(buildMediaActionPendingIntent(MusicPlayerEngine.ACTION_MEDIA_STOP, 105))
       .setVisibility(Notification.VISIBILITY_PUBLIC)
       .setCategory(Notification.CATEGORY_TRANSPORT)
-      .setOngoing(isPlaying)
+      .setOngoing(isPlayingSnapshot)
       .setOnlyAlertOnce(true)
       .setColor((0xFF000000 or (notifColorRgb.toLong() and 0xFFFFFFL)).toInt())
       .setStyle(mediaStyle)

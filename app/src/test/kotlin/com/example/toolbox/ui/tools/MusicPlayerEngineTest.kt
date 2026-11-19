@@ -2,7 +2,9 @@ package com.example.toolbox.ui.tools
 
 import java.io.File
 import java.nio.file.Files
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
@@ -2323,6 +2325,141 @@ class MusicPlayerEngineTest {
       MusicPlayerEngine.clearArtworkCache()
       MusicPlayerEngine.clearTrackMetadataCache()
       tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun computeBoundedInSampleSize_boundsSquareAndRectangularHighResArtworkBelowBinderLimit() {
+    // Square 3000x3000 cover targeting 240px for MediaMetadata / Notification IPC:
+    // Decoded dimensions must never exceed 2 * targetSize (480px -> <= 921 KB ARGB_8888 before final 240px scale).
+    val sampleSquare = MusicPlayerEngine.computeBoundedInSampleSize(3000, 3000, 240)
+    assertTrue((3000 / sampleSquare) <= 480)
+
+    // Borderline 718x718 cover (previously kept at inSampleSize=1 -> 2.06 MB ARGB_8888, exceeding 1 MB Binder limit):
+    val sampleBorderline = MusicPlayerEngine.computeBoundedInSampleSize(718, 718, 240)
+    assertTrue((718 / sampleBorderline) <= 480)
+
+    // Wide rectangular 2560x680 banner cover (previously kept at inSampleSize=1 because halfHeight < 360 -> ~7 MB!):
+    val sampleWide = MusicPlayerEngine.computeBoundedInSampleSize(2560, 680, 360)
+    assertTrue(
+      "Wide cover width after subsampling should be <= 720px, got ${2560 / sampleWide}",
+      (2560 / sampleWide) <= 720,
+    )
+    assertTrue((680 / sampleWide) <= 720)
+  }
+
+  @Test
+  fun recordExtractedPaletteForTrack_isSnapshotSafeAcrossBackgroundThreadsAndUpdatesActiveSession() = kotlinx.coroutines.runBlocking {
+    MusicPlayerEngine.resetPlaybackSession()
+    MusicPlayerEngine.clearArtworkCache()
+    val tempDir = java.nio.file.Files.createTempDirectory("music_snapshot_thread_safety_test").toFile()
+    try {
+      val trackFile = File(tempDir, "01 - Horizon.mp3").apply { writeBytes(ByteArray(64) { 7 }) }
+      val track = MusicTrack(
+        id = "file_${trackFile.absolutePath}",
+        title = "Horizon",
+        artist = "Solaris",
+        album = "Golden Hour",
+        genre = "Electronic",
+        durationMs = 200_000L,
+        file = trackFile,
+        sizeBytes = trackFile.length(),
+        lastModifiedMs = trackFile.lastModified(),
+        artworkPrimaryRgb = 0x00B4D8,
+        artworkSecondaryRgb = 0x7209B7,
+        artworkAccentRgb = 0x4CC9F0,
+        isSampleTrack = false,
+      )
+
+      val session = MusicPlaybackSession(
+        context = null,
+        isInspection = true,
+        initialTracks = listOf(track),
+      )
+      MusicPlayerEngine.activeSessionState = session
+      try {
+        session.playTrackInContext(track, listOf(track))
+        assertTrue(session.systemMediaControlState.isActive)
+        assertEquals(track.id, session.systemMediaControlState.trackId)
+
+        val recordMethod = MusicPlayerEngine::class.java.getDeclaredMethod(
+          "recordExtractedPaletteForTrack",
+          MusicTrack::class.java,
+          AlbumArtPalette::class.java,
+        ).apply { isAccessible = true }
+
+        val extractedPalette = MusicPlayerEngine.buildPaletteFromRgb(0xE63946, 0x9D0208, 0xFFB703)
+
+        // Hammer concurrent background Dispatchers.IO palette updates while taking & applying
+        // Compose snapshots on the foreground coroutine to verify zero Snapshot state crashes.
+        val jobs = (1..8).map {
+          launch(Dispatchers.IO) {
+            repeat(15) {
+              recordMethod.invoke(MusicPlayerEngine, track, extractedPalette)
+            }
+          }
+        }
+        repeat(20) {
+          androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
+            val currentHex = MusicPlayerEngine.activeTrackPalette.dominantHex
+            assertTrue(currentHex.startsWith("#"))
+          }
+        }
+        jobs.forEach { it.join() }
+
+        assertEquals(extractedPalette.dominantHex, session.activePalette.dominantHex)
+        assertEquals(extractedPalette.dominantHex, MusicPlayerEngine.activeTrackPalette.dominantHex)
+        assertTrue(session.systemMediaControlState.isActive)
+        assertTrue(session.systemMediaControlState.isPlaying)
+      } finally {
+        session.release()
+        MusicPlayerEngine.resetPlaybackSession()
+      }
+    } finally {
+      MusicPlayerEngine.clearArtworkCache()
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun applyExternalSystemMediaMetadata_syncsExternalPlaybackAndTransitionsStoppedStateCleanly() {
+    MusicPlayerEngine.resetPlaybackSession()
+    try {
+      // 1. System-synced external session becomes active and drives isMusicPlaying + activeTrackPalette
+      val syncedInfo = MusicPlayerEngine.applyExternalSystemMediaMetadata(
+        title = "Midnight City",
+        artist = "M83",
+        album = "Hurry Up, We're Dreaming",
+        sourcePackage = "com.spotify.music",
+        sourceAppName = "Spotify",
+        isPlaying = true,
+        notificationColorRgb = 0x1DB954,
+        durationMs = 243_000L,
+        positionMs = 42_000L,
+        fromSystemSync = true,
+      )
+      assertTrue(MusicPlayerEngine.isMusicPlaying)
+      assertEquals("Midnight City", MusicPlayerEngine.externalSystemMediaInfo?.title)
+      assertEquals("#1DB954", syncedInfo.palette.dominantHex)
+      assertEquals("#1DB954", MusicPlayerEngine.activeTrackPalette.dominantHex)
+
+      // 2. Repeating identical metadata does not corrupt state
+      val repeatedInfo = MusicPlayerEngine.applyExternalSystemMediaMetadata(
+        title = "Midnight City",
+        artist = "M83",
+        album = "Hurry Up, We're Dreaming",
+        sourcePackage = "com.spotify.music",
+        sourceAppName = "Spotify",
+        isPlaying = false,
+        notificationColorRgb = 0x1DB954,
+        durationMs = 243_000L,
+        positionMs = 45_000L,
+        fromSystemSync = true,
+      )
+      assertEquals(false, repeatedInfo.isPlaying)
+      assertEquals(false, MusicPlayerEngine.isMusicPlaying)
+    } finally {
+      MusicPlayerEngine.resetPlaybackSession()
     }
   }
 }
