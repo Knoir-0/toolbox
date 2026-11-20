@@ -16,6 +16,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
@@ -122,12 +123,14 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithText("Aurora Synth").assertIsDisplayed()
     composeTestRule.onNodeWithTag("artist_more_Aurora Synth").assertIsDisplayed()
 
-    composeTestRule.onNodeWithTag("music_view_mode_card").performClick()
+    // Cycle toolbar view button: List -> 2-column Card
+    composeTestRule.onNodeWithTag("music_view_mode_toggle").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_columns_per_row_count").assertTextEquals("2")
     composeTestRule.onNodeWithTag("artist_card_view").assertIsDisplayed()
     composeTestRule.onNodeWithTag("artist_more_Aurora Synth").assertIsDisplayed()
 
-    // 2. Albums Card & List View
+    // 2. Albums Card & List View (cycle 2 -> 3 -> List)
     composeTestRule.onNodeWithTag("music_tab_ALBUMS").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("music_play_all_button").assertIsDisplayed()
@@ -136,12 +139,15 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithText("Midnight Odyssey").assertIsDisplayed()
     composeTestRule.onNodeWithTag("album_more_Midnight Odyssey").assertIsDisplayed()
 
-    composeTestRule.onNodeWithTag("music_view_mode_list").performClick()
+    composeTestRule.onNodeWithTag("music_view_mode_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_columns_per_row_count").assertTextEquals("3")
+    composeTestRule.onNodeWithTag("music_view_mode_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("album_list_view").assertIsDisplayed()
     composeTestRule.onNodeWithTag("album_more_Midnight Odyssey").assertIsDisplayed()
 
-    // 3. Songs List & Card View
+    // 3. Songs List & Card View (cycle List -> 2-column Card)
     composeTestRule.onNodeWithTag("music_tab_SONGS").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("music_play_all_button").assertIsDisplayed()
@@ -150,12 +156,13 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithText("Neon Horizon").assertIsDisplayed()
     composeTestRule.onNodeWithTag("song_more_sample_neon_horizon").assertIsDisplayed()
 
-    composeTestRule.onNodeWithTag("music_view_mode_card").performClick()
+    composeTestRule.onNodeWithTag("music_view_mode_toggle").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_columns_per_row_count").assertTextEquals("2")
     composeTestRule.onNodeWithTag("song_card_view").assertIsDisplayed()
     composeTestRule.onNodeWithTag("song_more_sample_neon_horizon").assertIsDisplayed()
 
-    // 4. Genres Card & List View
+    // 4. Genres Card & List View (cycle 2 -> 3 -> List)
     composeTestRule.onNodeWithTag("music_tab_GENRES").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("music_play_all_button").assertIsDisplayed()
@@ -163,12 +170,15 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("genre_card_view").assertIsDisplayed()
     composeTestRule.onNodeWithTag("genre_more_Synthwave").assertIsDisplayed()
 
-    composeTestRule.onNodeWithTag("music_view_mode_list").performClick()
+    composeTestRule.onNodeWithTag("music_view_mode_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_columns_per_row_count").assertTextEquals("3")
+    composeTestRule.onNodeWithTag("music_view_mode_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("genre_list_view").assertIsDisplayed()
     composeTestRule.onNodeWithTag("genre_more_Synthwave").assertIsDisplayed()
 
-    // 5. Playlists List & Card View
+    // 5. Playlists List & Card View (cycle List -> 2-column Card)
     composeTestRule.onNodeWithTag("music_tab_PLAYLISTS").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("music_play_all_button").assertIsDisplayed()
@@ -179,8 +189,9 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithText("Recently Played").assertIsDisplayed()
     composeTestRule.onNodeWithTag("playlist_more_Favorites").assertIsDisplayed()
 
-    composeTestRule.onNodeWithTag("music_view_mode_card").performClick()
+    composeTestRule.onNodeWithTag("music_view_mode_toggle").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_columns_per_row_count").assertTextEquals("2")
     composeTestRule.onNodeWithTag("playlist_card_view").assertIsDisplayed()
     composeTestRule.onNodeWithTag("playlist_more_Favorites").assertIsDisplayed()
 
@@ -716,14 +727,16 @@ class MusicPlayerScreenTest {
     assertEquals(shuffleAllBounds.height, favoritesButtonBounds.height, 1f)
 
     // Switch to Card view in Songs section -> still pre-focused on "Starlight Drive"
-    composeTestRule.onNodeWithTag("music_view_mode_card").performClick()
+    composeTestRule.onNodeWithTag("music_view_mode_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("song_item_sample_starlight_drive")
       .assertIsDisplayed()
       .assertIsSelected()
 
-    // Switch back to List view
-    composeTestRule.onNodeWithTag("music_view_mode_list").performClick()
+    // Switch back to List view (2 -> 3 -> List)
+    composeTestRule.onNodeWithTag("music_view_mode_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_view_mode_toggle").performClick()
     composeTestRule.waitForIdle()
 
     // 2. Switch to Albums section -> pre-focused on "Midnight Odyssey"

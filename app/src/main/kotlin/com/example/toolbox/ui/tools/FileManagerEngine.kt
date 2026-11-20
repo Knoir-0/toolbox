@@ -77,9 +77,9 @@ enum class FileViewMode {
   GRID,
 }
 
-const val MIN_FILES_GRID_COLUMNS = 3
+const val MIN_FILES_GRID_COLUMNS = 2
 const val MAX_FILES_GRID_COLUMNS = 6
-const val DEFAULT_FILES_GRID_COLUMNS = 3
+const val DEFAULT_FILES_GRID_COLUMNS = 2
 
 /**
  * Represents a storage volume or device (Root / Internal Storage, SD Card, USB OTG, etc.).

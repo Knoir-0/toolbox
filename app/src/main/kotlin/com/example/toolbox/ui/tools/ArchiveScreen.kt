@@ -659,8 +659,23 @@ fun ArchiveScreen(
           },
           onSearchQueryChange = { searchQuery = it },
           viewMode = viewMode,
+          gridColumnsPerRow = gridColumnsPerRow,
           onToggleViewMode = {
-            viewMode = if (viewMode == FileViewMode.LIST) FileViewMode.GRID else FileViewMode.LIST
+            if (viewMode == FileViewMode.LIST) {
+              viewMode = FileViewMode.GRID
+              updateGridColumnsPerRow(MIN_FILES_GRID_COLUMNS)
+            } else if (gridColumnsPerRow < MAX_FILES_GRID_COLUMNS) {
+              updateGridColumnsPerRow(gridColumnsPerRow + 1)
+            } else {
+              viewMode = FileViewMode.LIST
+            }
+          },
+          onSelectListView = {
+            viewMode = FileViewMode.LIST
+          },
+          onSelectGridColumns = { cols ->
+            viewMode = FileViewMode.GRID
+            updateGridColumnsPerRow(cols)
           },
           onExtractAll = {
             extractPathsTarget = emptySet()
@@ -1497,7 +1512,10 @@ private fun ArchiveExplorerHeader(
   onToggleSearch: () -> Unit,
   onSearchQueryChange: (String) -> Unit,
   viewMode: FileViewMode,
+  gridColumnsPerRow: Int = DEFAULT_FILES_GRID_COLUMNS,
   onToggleViewMode: () -> Unit,
+  onSelectListView: () -> Unit = onToggleViewMode,
+  onSelectGridColumns: (Int) -> Unit = { onToggleViewMode() },
   onExtractAll: () -> Unit,
   onCloseArchive: () -> Unit,
   isSelectionMode: Boolean,
@@ -1657,16 +1675,16 @@ private fun ArchiveExplorerHeader(
       null
     },
     actions = {
-      ViewModeSegmentedToggle(
+      ToolboxViewModeCycleButton(
         isListView = viewMode == FileViewMode.LIST,
-        onSelectListView = { if (viewMode != FileViewMode.LIST) onToggleViewMode() },
-        onSelectGridView = { if (viewMode == FileViewMode.LIST) onToggleViewMode() },
-        onToggle = onToggleViewMode,
-        toggleTestTag = "action_toggle_view_mode",
-        listTestTag = "archive_view_mode_list",
-        gridTestTag = "archive_view_mode_grid",
-        listContentDescription = "List view",
-        gridContentDescription = "Grid view",
+        columnsPerRow = gridColumnsPerRow,
+        minColumns = MIN_FILES_GRID_COLUMNS,
+        maxColumns = MAX_FILES_GRID_COLUMNS,
+        onSelectListView = onSelectListView,
+        onSelectGridColumns = onSelectGridColumns,
+        buttonTestTag = "action_toggle_view_mode",
+        countTestTag = "archive_columns_per_row_count",
+        gridContentDescription = "$gridColumnsPerRow items per row",
       )
 
       IconButton(
@@ -1709,7 +1727,7 @@ private fun ArchiveActionPillRow(
 ) {
   ToolboxPillNavigationBar(
     barTestTag = "archive_pill_bar",
-    floatingButtonsCount = if (viewMode == FileViewMode.GRID) 2 else 1,
+    floatingButtonsCount = 1,
     pills = {
       ToolboxPillNavigationItem(
         selected = isAtRoot,
@@ -1754,18 +1772,6 @@ private fun ArchiveActionPillRow(
       )
     },
     floatingControls = {
-      if (viewMode == FileViewMode.GRID) {
-        ToolboxFloatingColumnsButton(
-          columnsPerRow = gridColumnsPerRow,
-          minColumns = MIN_FILES_GRID_COLUMNS,
-          maxColumns = MAX_FILES_GRID_COLUMNS,
-          onColumnsChange = onGridColumnsChange,
-          buttonTestTag = "archive_columns_per_row_button",
-          countTestTag = "archive_columns_per_row_count",
-          contentDescription = "$gridColumnsPerRow items per row",
-        )
-      }
-
       Box {
         Surface(
           onClick = onOpenSortMenu,

@@ -116,7 +116,7 @@ ToolboxTopBar(
     null
   },
   actions = {
-    // Tool-specific trailing controls (e.g. ViewModeSegmentedToggle, Sort, Capsules)
+    // Tool-specific trailing controls (e.g. ToolboxViewModeCycleButton, Sort, Capsules)
     // Placed BEFORE the far-right Search icon button
   },
   searchState = ToolboxTopBarSearchState(
@@ -241,7 +241,7 @@ AlertDialog(
 
 ---
 
-### 5.4 Lists, Grid Cards, Shared Pill Navigation Bar (`ToolboxPillNavigationBar` & `ToolboxPillNavigationItem`) & Floating Controls (`ToolboxFloatingColumnsButton` & `pinchToChangeColumns`)
+### 5.4 Lists, Grid Cards, Shared Pill Navigation Bar (`ToolboxPillNavigationBar` & `ToolboxPillNavigationItem`) & View Mode / Column Controls (`ToolboxViewModeCycleButton` & `pinchToChangeColumns`)
 - **Card Styling**: Use `CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))` with `RoundedCornerShape(12.dp)` to `14.dp`.
 - **Metadata**: Separate secondary metadata items using bullet points (`•` with `colorScheme.outline`).
 - **Unified Pill Navigation Bar (`ToolboxPillNavigationBar` & `ToolboxPillNavigationItem`)**:
@@ -252,11 +252,12 @@ AlertDialog(
 - **Floating Right-Edge Controls**:
   - Tools with secondary pill-bar controls (**Calculator**, **Gallery**, **Files**, **Archive**, **Music Player**, **Audio Recorder**, **Notes**, and **To Do**) pass them via the `floatingControls` slot (with `floatingButtonsCount` set to the number of `34.dp` circular buttons). `ToolboxPillNavigationBar` pins them at `Alignment.CenterEnd` (`padding(end = 12.dp)`, `zIndex(10f)`, `6.dp` horizontal spacing).
   - **Faded Edge into Background (`Modifier.fadingPillRowUnderFloatingControls` & `Modifier.pillBarFloatingControlsBackdrop`)**: Never allow scrolling pills/chips to be visible directly underneath or between the floating buttons. `ToolboxPillNavigationBar` automatically applies `.fadingPillRowUnderFloatingControls(...)` (offscreen `BlendMode.DstIn` horizontal alpha mask) before `.horizontalScroll(...)` on the pill `Row` and `.pillBarFloatingControlsBackdrop(backgroundColor = ...)` on the floating controls `Row` so pills smoothly dissolve into the background color across a `32.dp` feather zone right before the floating controls.
-  - **Changeable `# per row` Control (`ToolboxFloatingColumnsButton`)**: Whenever a tool is displaying a tile/grid/card layout, place `ToolboxFloatingColumnsButton` immediately to the left of the floating filter/sort/labels button (`[#] [Filter/Sort]`). It displays only the current column count in bold (`typography.labelLarge`, `FontWeight.Bold`, `colorScheme.onSurfaceVariant`); tapping cycles `columnsPerRow` from `minColumns` to `maxColumns` and wraps around.
+- **Toolbar View & Column Count Cycle Button (`ToolboxViewModeCycleButton`)**:
+  - In any tool with a list and grid view (**Gallery**, **Files**, **Archive**, **Music Player**, **Notes**), place `ToolboxViewModeCycleButton` in `ToolboxTopBar`'s `actions` slot (and do not render a separate items-per-row button in the pill bar). When in List view, it displays the list icon (`Icons.AutoMirrored.Filled.ViewList`); when in Grid/Card/Tile view, it displays the current column count (`2`, `3`, `4`, etc.). Pressing the button cycles through `List -> 2 -> 3 -> ... -> maxColumns -> List`.
   - **Pinch-to-Zoom (`Modifier.pinchToChangeColumns`)**: Attach `.pinchToChangeColumns(...)` to the grid content container so two-finger pinch-out (fewer columns, larger tiles) and pinch-in (more columns, smaller tiles) smoothly adjust `columnsPerRow` within the same range:
-    - **Gallery**, **Files** (Grid view), **Archive** (Grid view): `3..6` per row (default `3`).
-    - **Music Player** (Card view): `2..3` per row (default `2`).
-    - **Notes** (Grid view): `2..4` per row (default `2`).
+    - **Gallery** (default `3`-column Tile view), **Files** (default List view), **Archive** (default List view): `2..6` per row.
+    - **Music Player** (default List view): `2..3` per row (Card view default `2`).
+    - **Notes** (default `2`-column Grid view): `2..3` per row.
 
 ---
 

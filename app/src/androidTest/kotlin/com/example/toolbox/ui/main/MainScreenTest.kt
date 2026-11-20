@@ -1532,7 +1532,7 @@ class MainScreenTest {
       )
 
       // 4. Also verify tapping the APK in Grid view works identically
-      composeTestRule.onNodeWithTag("files_view_mode_grid").performClick()
+      composeTestRule.onNodeWithTag("action_toggle_view_mode").performClick()
       composeTestRule.waitForIdle()
 
       com.example.toolbox.ui.tools.FileManagerEngine.canInstallApksOverrideForTest = false
@@ -1585,7 +1585,7 @@ class MainScreenTest {
       composeTestRule.onNodeWithTag("mini_player_modal").assertDoesNotExist()
 
       // 2. Switch to Grid view and tap the audio file -> MiniAudioPlayerModal pops up
-      composeTestRule.onNodeWithTag("files_view_mode_grid").performClick()
+      composeTestRule.onNodeWithTag("action_toggle_view_mode").performClick()
       composeTestRule.waitForIdle()
 
       composeTestRule.onNodeWithTag("file_grid_item_voice_memo.wav").assertIsDisplayed()
@@ -1638,7 +1638,7 @@ class MainScreenTest {
       composeTestRule.onNodeWithTag("mini_video_player_modal").assertDoesNotExist()
 
       // 2. Switch to Grid view and tap the video file -> MiniVideoPlayerModal pops up
-      composeTestRule.onNodeWithTag("files_view_mode_grid").performClick()
+      composeTestRule.onNodeWithTag("action_toggle_view_mode").performClick()
       composeTestRule.waitForIdle()
 
       composeTestRule.onNodeWithTag("file_grid_item_demo_clip.mp4").assertIsDisplayed()

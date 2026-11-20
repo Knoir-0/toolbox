@@ -4,6 +4,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -325,7 +326,11 @@ class NotesScreenTest {
         n1Node.fetchSemanticsNode().boundsInRoot.left
     )
 
-    // 2. Switch to List View (1 column) and drag n2 down onto n3
+    // 2. Cycle 2-column Grid -> 3-column Grid -> List View (1 column) and drag n2 down onto n3
+    composeTestRule.onNodeWithTag("notes_columns_per_row_count").assertTextEquals("2")
+    composeTestRule.onNodeWithTag("notes_view_mode_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("notes_columns_per_row_count").assertTextEquals("3")
     composeTestRule.onNodeWithTag("notes_view_mode_toggle").performClick()
     composeTestRule.waitForIdle()
 

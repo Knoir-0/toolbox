@@ -692,6 +692,7 @@ fun NotesScreen(
           searchQuery = searchQuery,
           onSearchQueryChange = { searchQuery = it },
           isGridView = isGridView,
+          gridColumnsPerRow = gridColumnsPerRow,
           canUndo = canUndo,
           canRedo = canRedo,
           onToggleSearch = {
@@ -707,9 +708,25 @@ fun NotesScreen(
             selectedColorFilter = null
           },
           onToggleViewMode = {
-            val nextMode = !isGridView
-            isGridView = nextMode
-            repo.setGridView(nextMode)
+            if (!isGridView) {
+              isGridView = true
+              repo.setGridView(true)
+              updateGridColumnsPerRow(MIN_NOTES_GRID_COLUMNS)
+            } else if (gridColumnsPerRow < MAX_NOTES_GRID_COLUMNS) {
+              updateGridColumnsPerRow(gridColumnsPerRow + 1)
+            } else {
+              isGridView = false
+              repo.setGridView(false)
+            }
+          },
+          onSelectListView = {
+            isGridView = false
+            repo.setGridView(false)
+          },
+          onSelectGridColumns = { cols ->
+            isGridView = true
+            repo.setGridView(true)
+            updateGridColumnsPerRow(cols)
           },
           onUndo = ::undo,
           onRedo = ::redo,
@@ -1445,11 +1462,14 @@ private fun NotesHeaderTopBar(
   searchQuery: String,
   onSearchQueryChange: (String) -> Unit,
   isGridView: Boolean,
+  gridColumnsPerRow: Int = DEFAULT_NOTES_GRID_COLUMNS,
   canUndo: Boolean,
   canRedo: Boolean,
   onToggleSearch: () -> Unit,
   onCloseSearch: () -> Unit,
   onToggleViewMode: () -> Unit,
+  onSelectListView: () -> Unit = onToggleViewMode,
+  onSelectGridColumns: (Int) -> Unit = { onToggleViewMode() },
   onUndo: () -> Unit,
   onRedo: () -> Unit,
 ) {
@@ -1519,16 +1539,16 @@ private fun NotesHeaderTopBar(
         }
       }
 
-      ViewModeSegmentedToggle(
+      ToolboxViewModeCycleButton(
         isListView = !isGridView,
-        onSelectListView = { if (isGridView) onToggleViewMode() },
-        onSelectGridView = { if (!isGridView) onToggleViewMode() },
-        onToggle = onToggleViewMode,
-        toggleTestTag = "notes_view_mode_toggle",
-        listTestTag = "notes_view_mode_list",
-        gridTestTag = "notes_view_mode_grid",
-        listContentDescription = "List view",
-        gridContentDescription = "Grid view",
+        columnsPerRow = gridColumnsPerRow,
+        minColumns = MIN_NOTES_GRID_COLUMNS,
+        maxColumns = MAX_NOTES_GRID_COLUMNS,
+        onSelectListView = onSelectListView,
+        onSelectGridColumns = onSelectGridColumns,
+        buttonTestTag = "notes_view_mode_toggle",
+        countTestTag = "notes_columns_per_row_count",
+        gridContentDescription = "$gridColumnsPerRow notes per row",
       )
     },
   )
@@ -1861,7 +1881,7 @@ private fun NotesFilterChipsRow(
 ) {
   ToolboxPillNavigationBar(
     rowTestTag = "notes_filter_chips_row",
-    floatingButtonsCount = if (isGridView) 2 else 1,
+    floatingButtonsCount = 1,
     pills = {
       ToolboxPillNavigationItem(
         selected = activeFilter == NotesFilter.All,
@@ -1931,18 +1951,6 @@ private fun NotesFilterChipsRow(
       )
     },
     floatingControls = {
-      if (isGridView) {
-        ToolboxFloatingColumnsButton(
-          columnsPerRow = gridColumnsPerRow,
-          minColumns = MIN_NOTES_GRID_COLUMNS,
-          maxColumns = MAX_NOTES_GRID_COLUMNS,
-          onColumnsChange = onGridColumnsPerRowChange,
-          buttonTestTag = "notes_columns_per_row_button",
-          countTestTag = "notes_columns_per_row_count",
-          contentDescription = "$gridColumnsPerRow notes per row",
-        )
-      }
-
       Surface(
         onClick = onManageLabels,
         shape = CircleShape,

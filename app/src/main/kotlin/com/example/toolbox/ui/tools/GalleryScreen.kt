@@ -1646,6 +1646,7 @@ fun GalleryScreen(
         }) + indexingStatusSuffix,
         canNavigateBack = albumStack.isNotEmpty() || onNavigateBack != null,
         viewMode = viewMode,
+        albumsPerRow = albumsPerRow,
         isSelectionMode = isSelectionMode,
         selectedCount = selectedCount,
         totalCount = totalSelectableCount,
@@ -1717,10 +1718,17 @@ fun GalleryScreen(
         },
         onBack = { handleGalleryBack() },
         onToggleViewMode = {
-          val next = if (viewMode == GalleryViewMode.TILE) GalleryViewMode.LIST else GalleryViewMode.TILE
-          updateViewMode(next)
+          if (viewMode == GalleryViewMode.LIST) {
+            updateViewMode(GalleryViewMode.TILE)
+            updateAlbumsPerRow(MIN_ALBUMS_PER_ROW)
+          } else if (albumsPerRow < MAX_ALBUMS_PER_ROW) {
+            updateAlbumsPerRow(albumsPerRow + 1)
+          } else {
+            updateViewMode(GalleryViewMode.LIST)
+          }
         },
         onSelectViewMode = { updateViewMode(it) },
+        onAlbumsPerRowChange = { updateAlbumsPerRow(it) },
       )
 
       // Pill & Filter Controls Bar underneath the toolbar (shows Smart Tags when in search view, otherwise navigation pills)
@@ -2336,6 +2344,7 @@ private fun GalleryTopBar(
   subtext: String,
   canNavigateBack: Boolean,
   viewMode: GalleryViewMode,
+  albumsPerRow: Int = DEFAULT_ALBUMS_PER_ROW,
   isSelectionMode: Boolean = false,
   selectedCount: Int = 0,
   totalCount: Int = 0,
@@ -2357,6 +2366,7 @@ private fun GalleryTopBar(
   onBack: () -> Unit,
   onToggleViewMode: () -> Unit,
   onSelectViewMode: (GalleryViewMode) -> Unit,
+  onAlbumsPerRowChange: (Int) -> Unit = {},
 ) {
   val focusManager = LocalFocusManager.current
 
@@ -2609,16 +2619,19 @@ private fun GalleryTopBar(
       null
     },
     actions = {
-      ViewModeSegmentedToggle(
+      ToolboxViewModeCycleButton(
         isListView = viewMode == GalleryViewMode.LIST,
+        columnsPerRow = albumsPerRow,
+        minColumns = MIN_ALBUMS_PER_ROW,
+        maxColumns = MAX_ALBUMS_PER_ROW,
         onSelectListView = { onSelectViewMode(GalleryViewMode.LIST) },
-        onSelectGridView = { onSelectViewMode(GalleryViewMode.TILE) },
-        onToggle = onToggleViewMode,
-        toggleTestTag = "gallery_view_mode_toggle",
-        listTestTag = "gallery_list_view_button",
-        gridTestTag = "gallery_tile_view_button",
-        listContentDescription = "List view",
-        gridContentDescription = "Tile view",
+        onSelectGridColumns = { cols ->
+          onSelectViewMode(GalleryViewMode.TILE)
+          onAlbumsPerRowChange(cols)
+        },
+        buttonTestTag = "gallery_view_mode_toggle",
+        countTestTag = "gallery_albums_per_row_count",
+        gridContentDescription = "$albumsPerRow albums per row",
       )
     },
   )
@@ -2677,8 +2690,8 @@ private fun GalleryNavigationAndDensityBar(
 
   val maxHitSlopPx = with(density) { 24.dp.toPx() }
   val leftEdgeScrollZonePx = with(density) { 36.dp.toPx() }
-  val rightEdgeScrollZonePx = with(density) { (if (viewMode == GalleryViewMode.TILE) 152.dp else 112.dp).toPx() }
-  val floatingButtonsExcludeZonePx = with(density) { (if (viewMode == GalleryViewMode.TILE) 132.dp else 92.dp).toPx() }
+  val rightEdgeScrollZonePx = with(density) { 112.dp.toPx() }
+  val floatingButtonsExcludeZonePx = with(density) { 92.dp.toPx() }
   val edgeScrollStepPx = with(density) { 10.dp.toPx() }
 
   fun isGrantedFolder(folder: GalleryFolder): Boolean {
@@ -2692,11 +2705,7 @@ private fun GalleryNavigationAndDensityBar(
     }
   }
 
-  val floatingCount = when {
-    isSearchView -> 1
-    viewMode == GalleryViewMode.TILE -> 3
-    else -> 2
-  }
+  val floatingCount = if (isSearchView) 1 else 2
 
   ToolboxPillNavigationBar(
     barTestTag = "gallery_pill_bar",
@@ -3009,42 +3018,30 @@ private fun GalleryNavigationAndDensityBar(
     },
     floatingControls = {
       if (!isSearchView) {
-        if (viewMode == GalleryViewMode.TILE) {
-            ToolboxFloatingColumnsButton(
-              columnsPerRow = albumsPerRow,
-              minColumns = MIN_ALBUMS_PER_ROW,
-              maxColumns = MAX_ALBUMS_PER_ROW,
-              onColumnsChange = onAlbumsPerRowChange,
-              buttonTestTag = "gallery_density_indicator",
-              countTestTag = "gallery_albums_per_row_count",
-              contentDescription = "$albumsPerRow albums per row",
+        Surface(
+          onClick = onAddCustomFolder,
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surfaceContainerHigh,
+          tonalElevation = 3.dp,
+          shadowElevation = 4.dp,
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+          modifier = Modifier
+            .size(34.dp)
+            .testTag("gallery_add_storage_location_button"),
+        ) {
+          Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.testTag("add_folder_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.CreateNewFolder,
+              contentDescription = "Add storage location",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(18.dp),
             )
           }
-
-          Surface(
-            onClick = onAddCustomFolder,
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            tonalElevation = 3.dp,
-            shadowElevation = 4.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-            modifier = Modifier
-              .size(34.dp)
-              .testTag("gallery_add_storage_location_button"),
-          ) {
-            Box(
-              contentAlignment = Alignment.Center,
-              modifier = Modifier.testTag("add_folder_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.CreateNewFolder,
-                contentDescription = "Add storage location",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-              )
-            }
-          }
         }
+      }
 
         Box {
           Surface(

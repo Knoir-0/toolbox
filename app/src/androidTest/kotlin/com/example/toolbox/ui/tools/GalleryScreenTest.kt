@@ -122,7 +122,8 @@ class GalleryScreenTest {
     // 1. Default view is Tile View with 3 albums per row, and pill bar hides Download under scoped storage and re-appears with full files permission
     composeTestRule.onNodeWithTag("gallery_tile_grid").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("3")
-    composeTestRule.onNodeWithTag("gallery_density_indicator").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_view_mode_toggle").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_density_indicator").assertDoesNotExist()
     composeTestRule.onNodeWithTag("gallery_breadcrumb_root").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_folder_pill_DCIM").assertIsDisplayed().assertTextEquals("Camera")
     composeTestRule.onNodeWithTag("gallery_folder_pill_Pictures").assertIsDisplayed().assertTextEquals("Pictures")
@@ -232,7 +233,7 @@ class GalleryScreenTest {
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("6")
-    composeTestRule.onNodeWithTag("gallery_density_indicator").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_view_mode_toggle").assertIsDisplayed()
 
     // Verify all 6 un-nested albums from Pictures and DCIM are aligned on the same first row
     val firstTileTop = composeTestRule.onNodeWithTag("album_tile_Album_1", useUnmergedTree = true)
@@ -244,7 +245,7 @@ class GalleryScreenTest {
       kotlin.math.abs(firstTileTop - sixthTileTop) < 5f,
     )
 
-    // Pinch out (two fingers spreading apart) to adjust back down to 3 albums per row
+    // Pinch out (two fingers spreading apart) to adjust down to 2 albums per row
     composeTestRule.onNodeWithTag("gallery_content_container").performTouchInput {
       val center = this.center
       pinch(
@@ -257,7 +258,7 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("3")
+    composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("2")
   }
 
   @Test
@@ -287,8 +288,18 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // Switch to secondary List View
-    composeTestRule.onNodeWithTag("gallery_list_view_button").performClick()
+    // Cycle toolbar view button from default 3 -> 4 -> 5 -> 6 -> List View -> 2
+    composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("3")
+    composeTestRule.onNodeWithTag("gallery_view_mode_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("4")
+    composeTestRule.onNodeWithTag("gallery_view_mode_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("5")
+    composeTestRule.onNodeWithTag("gallery_view_mode_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("6")
+    composeTestRule.onNodeWithTag("gallery_view_mode_toggle").performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("gallery_list_view").assertIsDisplayed()
@@ -797,23 +808,19 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // Manual refresh option is removed from the toolbar, and sort option + per-row pill button are in the bar underneath
+    // Manual refresh option is removed from the toolbar, view/columns cycle button is in the toolbar, and sort option is in the pill bar underneath
     composeTestRule.onNodeWithTag("gallery_refresh_button").assertDoesNotExist()
     composeTestRule.onNodeWithTag("gallery_pill_bar").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("gallery_density_indicator").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_density_indicator").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("gallery_view_mode_toggle").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_sort_button").assertIsDisplayed()
 
     val headerBottom = composeTestRule.onNodeWithTag("gallery_header_title").fetchSemanticsNode().boundsInRoot.bottom
-    val densityBounds = composeTestRule.onNodeWithTag("gallery_density_indicator").fetchSemanticsNode().boundsInRoot
     val sortBounds = composeTestRule.onNodeWithTag("gallery_sort_button").fetchSemanticsNode().boundsInRoot
 
     assertTrue(
       "Expected sort button (${sortBounds.top}) to be in the bar underneath the toolbar ($headerBottom)",
       sortBounds.top >= headerBottom,
-    )
-    assertTrue(
-      "Expected per-row pill button (${densityBounds.right}) to be on the left of the sort button (${sortBounds.left})",
-      densityBounds.right <= sortBounds.left,
     )
 
     // Navigate into Camera album
@@ -1002,12 +1009,12 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // Before opening search, navigation breadcrumbs, add new folder, and items per row icon buttons are shown
+    // Before opening search, navigation breadcrumbs, add new folder, and toolbar view/columns button are shown
     composeTestRule.onNodeWithTag("gallery_breadcrumbs").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("gallery_density_indicator").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_view_mode_toggle").assertIsDisplayed()
     composeTestRule.onNodeWithTag("gallery_add_storage_location_button").assertIsDisplayed()
 
-    // Open toolbar search bar -> smart tags replace the navigation breadcrumbs in the pill toolbar, keeping the icon without 'Smart Tags:' text, and hiding add new folder and items per row icon buttons
+    // Open toolbar search bar -> smart tags replace the navigation breadcrumbs in the pill toolbar, keeping the icon without 'Smart Tags:' text, and hiding add new folder and toolbar view/columns button
     composeTestRule.onNodeWithTag("gallery_search_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("gallery_toolbar_search_bar").assertIsDisplayed()
@@ -1015,7 +1022,7 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("gallery_search_tags_icon").assertIsDisplayed()
     composeTestRule.onNodeWithText("Smart Tags:").assertDoesNotExist()
     composeTestRule.onNodeWithTag("gallery_breadcrumbs").assertDoesNotExist()
-    composeTestRule.onNodeWithTag("gallery_density_indicator").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("gallery_view_mode_toggle").assertDoesNotExist()
     composeTestRule.onNodeWithTag("gallery_add_storage_location_button").assertDoesNotExist()
     composeTestRule.onNodeWithTag("add_folder_button").assertDoesNotExist()
 
@@ -1278,11 +1285,8 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // 1. Add new storage location button is positioned between the grid rows option and the sort / group filter
-    val densityBounds = composeTestRule.onNodeWithTag("gallery_density_indicator")
-      .assertIsDisplayed()
-      .fetchSemanticsNode()
-      .boundsInRoot
+    // 1. Add new storage location button is positioned to the left of the sort / group filter (with no grid rows button in the pill bar)
+    composeTestRule.onNodeWithTag("gallery_density_indicator").assertDoesNotExist()
     val addStorageBounds = composeTestRule.onNodeWithTag("gallery_add_storage_location_button")
       .assertIsDisplayed()
       .fetchSemanticsNode()
@@ -1292,10 +1296,6 @@ class GalleryScreenTest {
       .fetchSemanticsNode()
       .boundsInRoot
 
-    assertTrue(
-      "Add storage location button (${addStorageBounds.left}) should be to the right of grid rows option (${densityBounds.right})",
-      densityBounds.right <= addStorageBounds.left + 4f,
-    )
     assertTrue(
       "Add storage location button (${addStorageBounds.right}) should be to the left of sort / group filter (${sortBounds.left})",
       addStorageBounds.right <= sortBounds.left + 4f,

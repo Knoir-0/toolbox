@@ -1459,6 +1459,7 @@ fun MusicPlayerScreen(
         isSearchActive = isSearchActive,
         searchQuery = searchQuery,
         viewMode = viewMode,
+        cardsPerRow = cardsPerRow,
         accentTint = animatedDominant,
         isSelectionMode = isSelectionMode,
         selectedCount = selectedItemKeys.size,
@@ -1554,11 +1555,22 @@ fun MusicPlayerScreen(
         },
         onSearchQueryChange = { searchQuery = it },
         onToggleViewMode = {
-          updateViewMode(viewMode.toggle())
+          if (viewMode == MusicViewMode.LIST) {
+            updateViewMode(MusicViewMode.CARD)
+            updateCardsPerRow(MIN_MUSIC_CARDS_PER_ROW)
+          } else if (cardsPerRow < MAX_MUSIC_CARDS_PER_ROW) {
+            updateCardsPerRow(cardsPerRow + 1)
+          } else {
+            updateViewMode(MusicViewMode.LIST)
+          }
           haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         },
         onSelectViewMode = { mode ->
           updateViewMode(mode)
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        },
+        onCardsPerRowChange = { cols ->
+          updateCardsPerRow(cols)
           haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         },
       )
@@ -2666,6 +2678,7 @@ private fun MusicPlayerTopBar(
   isSearchActive: Boolean,
   searchQuery: String,
   viewMode: MusicViewMode,
+  cardsPerRow: Int = DEFAULT_MUSIC_CARDS_PER_ROW,
   accentTint: Color,
   isSelectionMode: Boolean = false,
   selectedCount: Int = 0,
@@ -2686,6 +2699,7 @@ private fun MusicPlayerTopBar(
   onSearchQueryChange: (String) -> Unit,
   onToggleViewMode: () -> Unit,
   onSelectViewMode: (MusicViewMode) -> Unit,
+  onCardsPerRowChange: (Int) -> Unit = {},
 ) {
   val focusManager = LocalFocusManager.current
   val topBarColor = lerp(MaterialTheme.colorScheme.surface, accentTint, 0.12f)
@@ -2881,103 +2895,22 @@ private fun MusicPlayerTopBar(
       onSearchImeAction = { focusManager.clearFocus() },
     ),
     actions = {
-      ViewModeSegmentedToggle(
+      ToolboxViewModeCycleButton(
         isListView = viewMode == MusicViewMode.LIST,
+        columnsPerRow = cardsPerRow,
+        minColumns = MIN_MUSIC_CARDS_PER_ROW,
+        maxColumns = MAX_MUSIC_CARDS_PER_ROW,
         onSelectListView = { onSelectViewMode(MusicViewMode.LIST) },
-        onSelectGridView = { onSelectViewMode(MusicViewMode.CARD) },
-        onToggle = onToggleViewMode,
-        accentColor = accentTint,
-        toggleTestTag = "music_view_mode_toggle",
-        listTestTag = "music_view_mode_list",
-        gridTestTag = "music_view_mode_card",
-        listContentDescription = "List view",
-        gridContentDescription = "Card view",
+        onSelectGridColumns = { cols ->
+          onSelectViewMode(MusicViewMode.CARD)
+          onCardsPerRowChange(cols)
+        },
+        buttonTestTag = "music_view_mode_toggle",
+        countTestTag = "music_columns_per_row_count",
+        gridContentDescription = "$cardsPerRow cards per row",
       )
     },
   )
-}
-
-/**
- * Shared icon-only List / Card (or Grid / Tile) segmented view mode toggle used across tools.
- */
-@Composable
-internal fun ViewModeSegmentedToggle(
-  isListView: Boolean,
-  onSelectListView: () -> Unit,
-  onSelectGridView: () -> Unit,
-  onToggle: () -> Unit = {
-    if (isListView) onSelectGridView() else onSelectListView()
-  },
-  accentColor: Color = MaterialTheme.colorScheme.primary,
-  toggleTestTag: String? = null,
-  listTestTag: String? = null,
-  gridTestTag: String? = null,
-  listContentDescription: String = "List view",
-  gridContentDescription: String = "Card view",
-  modifier: Modifier = Modifier,
-) {
-  Surface(
-    shape = CircleShape,
-    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-    modifier = modifier
-      .clip(CircleShape)
-      .clickable(onClick = onToggle)
-      .then(if (toggleTestTag != null) Modifier.testTag(toggleTestTag) else Modifier),
-  ) {
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      modifier = Modifier.padding(2.dp),
-    ) {
-      val activeContainerColor = lerp(MaterialTheme.colorScheme.primaryContainer, accentColor, 0.25f)
-
-      Surface(
-        shape = CircleShape,
-        color = if (isListView) activeContainerColor else Color.Transparent,
-        modifier = Modifier
-          .clip(CircleShape)
-          .clickable {
-            if (isListView) onToggle() else onSelectListView()
-          }
-          .then(if (listTestTag != null) Modifier.testTag(listTestTag) else Modifier),
-      ) {
-        Box(
-          contentAlignment = Alignment.Center,
-          modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-        ) {
-          Icon(
-            imageVector = Icons.AutoMirrored.Filled.ViewList,
-            contentDescription = listContentDescription,
-            tint = if (isListView) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(16.dp),
-          )
-        }
-      }
-
-      Surface(
-        shape = CircleShape,
-        color = if (!isListView) activeContainerColor else Color.Transparent,
-        modifier = Modifier
-          .clip(CircleShape)
-          .clickable {
-            if (!isListView) onToggle() else onSelectGridView()
-          }
-          .then(if (gridTestTag != null) Modifier.testTag(gridTestTag) else Modifier),
-      ) {
-        Box(
-          contentAlignment = Alignment.Center,
-          modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-        ) {
-          Icon(
-            imageVector = Icons.Default.GridView,
-            contentDescription = gridContentDescription,
-            tint = if (!isListView) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(16.dp),
-          )
-        }
-      }
-    }
-  }
 }
 
 private fun MusicLibraryTab.iconVector() = when (this) {
@@ -3045,15 +2978,15 @@ private fun MusicCategoryAndViewBar(
 
   val maxHitSlopPx = with(density) { 24.dp.toPx() }
   val leftEdgeScrollZonePx = with(density) { 36.dp.toPx() }
-  val rightEdgeScrollZonePx = with(density) { (if (viewMode == MusicViewMode.CARD) 148.dp else 108.dp).toPx() }
-  val sortButtonExcludeZonePx = with(density) { (if (viewMode == MusicViewMode.CARD) 126.dp else 88.dp).toPx() }
+  val rightEdgeScrollZonePx = with(density) { 108.dp.toPx() }
+  val sortButtonExcludeZonePx = with(density) { 88.dp.toPx() }
   val edgeScrollStepPx = with(density) { 10.dp.toPx() }
 
   ToolboxPillNavigationBar(
     barTestTag = "music_category_bar",
     scrollState = scrollState,
     scrollEnabled = draggedTab == null,
-    floatingButtonsCount = if (viewMode == MusicViewMode.CARD) 3 else 2,
+    floatingButtonsCount = 2,
     backgroundColor = Color.Unspecified,
     modifier = Modifier
       .onGloballyPositioned { coords ->
@@ -3295,18 +3228,6 @@ private fun MusicCategoryAndViewBar(
       }
     },
     floatingControls = {
-      if (viewMode == MusicViewMode.CARD) {
-        ToolboxFloatingColumnsButton(
-          columnsPerRow = cardsPerRow,
-          minColumns = MIN_MUSIC_CARDS_PER_ROW,
-          maxColumns = MAX_MUSIC_CARDS_PER_ROW,
-          onColumnsChange = onCardsPerRowChange,
-          buttonTestTag = "music_columns_per_row_button",
-          countTestTag = "music_columns_per_row_count",
-          contentDescription = "$cardsPerRow cards per row",
-        )
-      }
-
       Surface(
         onClick = onAddCustomFolder,
         shape = CircleShape,

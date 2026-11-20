@@ -975,6 +975,7 @@ fun FilesScreen(
         searchQuery = searchQuery,
         storageInfoSubtext = headerSubtext,
         viewMode = viewMode,
+        gridColumnsPerRow = gridColumnsPerRow,
         isSelectionMode = isSelectionMode,
         selectedCount = selectedPaths.size,
         totalCount = processedItems.size,
@@ -1032,7 +1033,21 @@ fun FilesScreen(
         },
         onSearchQueryChange = { searchQuery = it },
         onToggleViewMode = {
-          viewMode = if (viewMode == FileViewMode.LIST) FileViewMode.GRID else FileViewMode.LIST
+          if (viewMode == FileViewMode.LIST) {
+            viewMode = FileViewMode.GRID
+            updateGridColumnsPerRow(MIN_FILES_GRID_COLUMNS)
+          } else if (gridColumnsPerRow < MAX_FILES_GRID_COLUMNS) {
+            updateGridColumnsPerRow(gridColumnsPerRow + 1)
+          } else {
+            viewMode = FileViewMode.LIST
+          }
+        },
+        onSelectListView = {
+          viewMode = FileViewMode.LIST
+        },
+        onSelectGridColumns = { cols ->
+          viewMode = FileViewMode.GRID
+          updateGridColumnsPerRow(cols)
         },
         onNavigateUp = { navigateUp() },
         canNavigateUp = canNavigateUp() || onNavigateBack != null,
@@ -1982,6 +1997,7 @@ private fun FilesHeader(
   searchQuery: String,
   storageInfoSubtext: String,
   viewMode: FileViewMode,
+  gridColumnsPerRow: Int = DEFAULT_FILES_GRID_COLUMNS,
   isSelectionMode: Boolean = false,
   selectedCount: Int = 0,
   totalCount: Int = 0,
@@ -1995,6 +2011,8 @@ private fun FilesHeader(
   onToggleSearch: () -> Unit,
   onSearchQueryChange: (String) -> Unit,
   onToggleViewMode: () -> Unit,
+  onSelectListView: () -> Unit = onToggleViewMode,
+  onSelectGridColumns: (Int) -> Unit = { onToggleViewMode() },
   onNavigateUp: () -> Unit,
   canNavigateUp: Boolean,
   singleSelectedFolder: File? = null,
@@ -2378,16 +2396,16 @@ private fun FilesHeader(
       null
     },
     actions = {
-      ViewModeSegmentedToggle(
+      ToolboxViewModeCycleButton(
         isListView = viewMode == FileViewMode.LIST,
-        onSelectListView = { if (viewMode != FileViewMode.LIST) onToggleViewMode() },
-        onSelectGridView = { if (viewMode == FileViewMode.LIST) onToggleViewMode() },
-        onToggle = onToggleViewMode,
-        toggleTestTag = "action_toggle_view_mode",
-        listTestTag = "files_view_mode_list",
-        gridTestTag = "files_view_mode_grid",
-        listContentDescription = "List view",
-        gridContentDescription = "Grid view",
+        columnsPerRow = gridColumnsPerRow,
+        minColumns = MIN_FILES_GRID_COLUMNS,
+        maxColumns = MAX_FILES_GRID_COLUMNS,
+        onSelectListView = onSelectListView,
+        onSelectGridColumns = onSelectGridColumns,
+        buttonTestTag = "action_toggle_view_mode",
+        countTestTag = "files_columns_per_row_count",
+        gridContentDescription = "$gridColumnsPerRow files per row",
       )
     },
   )
@@ -2420,7 +2438,7 @@ private fun StorageDevicePillRow(
 ) {
   ToolboxPillNavigationBar(
     barTestTag = "files_pill_bar",
-    floatingButtonsCount = if (viewMode == FileViewMode.GRID) 2 else 1,
+    floatingButtonsCount = 1,
     pills = {
       storageVolumes.forEach { volume ->
         val isSelected = if (hasCustomRoot && currentDirectory != null) {
@@ -2447,18 +2465,6 @@ private fun StorageDevicePillRow(
       }
     },
     floatingControls = {
-      if (viewMode == FileViewMode.GRID) {
-        ToolboxFloatingColumnsButton(
-          columnsPerRow = gridColumnsPerRow,
-          minColumns = MIN_FILES_GRID_COLUMNS,
-          maxColumns = MAX_FILES_GRID_COLUMNS,
-          onColumnsChange = onGridColumnsChange,
-          buttonTestTag = "files_columns_per_row_button",
-          countTestTag = "files_columns_per_row_count",
-          contentDescription = "$gridColumnsPerRow files per row",
-        )
-      }
-
       Box {
         Surface(
           onClick = onOpenSortMenu,

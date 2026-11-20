@@ -36,6 +36,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
@@ -483,55 +484,68 @@ fun ToolboxMultiSelectBarRow(
 }
 
 /**
- * Floating 34.dp circular button displaying the current number of items per row in tile/grid view,
- * styled identically to the floating sort/filter button and placed immediately to its left on the pill bar.
- * Tapping cycles the column count from [minColumns] up to [maxColumns] and wraps back to [minColumns].
+ * Toolbar button that cycles a tool's presentation mode through:
+ * List view ([Icons.AutoMirrored.Filled.ViewList]) -> [minColumns]-column grid -> ... -> [maxColumns]-column grid -> List view.
+ *
+ * When in List view ([isListView] == true), displays the list icon ([Icons.AutoMirrored.Filled.ViewList]).
+ * When in Grid/Card/Tile view ([isListView] == false), displays the current [columnsPerRow] count.
  */
 @Composable
-fun ToolboxFloatingColumnsButton(
+fun ToolboxViewModeCycleButton(
+  isListView: Boolean,
   columnsPerRow: Int,
-  minColumns: Int,
+  minColumns: Int = 2,
   maxColumns: Int,
-  onColumnsChange: (Int) -> Unit,
+  onSelectListView: () -> Unit,
+  onSelectGridColumns: (Int) -> Unit,
   modifier: Modifier = Modifier,
-  buttonTestTag: String = "floating_columns_button",
+  buttonTestTag: String = "action_toggle_view_mode",
   countTestTag: String? = null,
-  contentDescription: String = "$columnsPerRow per row",
+  listContentDescription: String = "List view",
+  gridContentDescription: String = "$columnsPerRow per row",
+  tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
 ) {
-  val cycleColumns = {
-    val next = if (columnsPerRow >= maxColumns) minColumns else columnsPerRow + 1
-    onColumnsChange(next)
+  val coercedColumns = columnsPerRow.coerceIn(minColumns, maxColumns)
+  val cycleViewMode = {
+    if (isListView) {
+      onSelectGridColumns(minColumns)
+    } else if (coercedColumns < maxColumns) {
+      onSelectGridColumns(coercedColumns + 1)
+    } else {
+      onSelectListView()
+    }
   }
 
   Box(
     modifier = modifier.testTag(buttonTestTag),
+    contentAlignment = Alignment.Center,
   ) {
-    Surface(
-      onClick = cycleColumns,
-      shape = CircleShape,
-      color = MaterialTheme.colorScheme.surfaceContainerHigh,
-      tonalElevation = 3.dp,
-      shadowElevation = 4.dp,
-      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+    IconButton(
+      onClick = cycleViewMode,
       modifier = Modifier
-        .size(34.dp)
         .then(
-          if (countTestTag != null) {
+          if (!isListView && countTestTag != null) {
             Modifier.testTag(countTestTag)
           } else {
             Modifier
           }
         )
         .semantics {
-          this.contentDescription = contentDescription
+          this.contentDescription = if (isListView) listContentDescription else gridContentDescription
         },
     ) {
-      Box(contentAlignment = Alignment.Center) {
+      if (isListView) {
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.ViewList,
+          contentDescription = null,
+          tint = tint,
+        )
+      } else {
         Text(
-          text = columnsPerRow.toString(),
-          style = MaterialTheme.typography.labelLarge,
+          text = coercedColumns.toString(),
+          style = MaterialTheme.typography.titleMedium,
           fontWeight = FontWeight.Bold,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          color = tint,
         )
       }
     }
