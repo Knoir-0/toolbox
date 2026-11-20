@@ -123,8 +123,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
@@ -177,6 +182,131 @@ import com.example.toolbox.ui.theme.isAutoAccentColorSetting
 import com.example.toolbox.ui.theme.isMusicPlayerThemeColorSetting
 import com.example.toolbox.ui.theme.parseHexColor
 import kotlin.math.roundToInt
+import kotlin.random.Random
+
+const val FEEDBACK_DEVIL_ANGEL_EASTER_EGG_CHANCE = 0.01f
+
+val DevilFeedbackIcon: ImageVector by lazy {
+  ImageVector.Builder(
+    name = "SettingsDevilFeedback",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+  ).apply {
+    // Left horn
+    path(fill = SolidColor(Color.Black)) {
+      moveTo(7.4f, 8.2f)
+      curveTo(5.6f, 6.2f, 4.4f, 3.8f, 4.8f, 2.2f)
+      curveTo(6.6f, 3.0f, 8.4f, 4.8f, 9.6f, 6.8f)
+      close()
+    }
+    // Right horn
+    path(fill = SolidColor(Color.Black)) {
+      moveTo(16.6f, 8.2f)
+      curveTo(18.4f, 6.2f, 19.6f, 3.8f, 19.2f, 2.2f)
+      curveTo(17.4f, 3.0f, 15.6f, 4.8f, 14.4f, 6.8f)
+      close()
+    }
+    // Devil head with slanted eyes and mischievous grin cutouts
+    path(
+      fill = SolidColor(Color.Black),
+      pathFillType = PathFillType.EvenOdd,
+    ) {
+      moveTo(12f, 6f)
+      curveTo(16.42f, 6f, 20f, 9.58f, 20f, 14f)
+      curveTo(20f, 18.42f, 16.42f, 22f, 12f, 22f)
+      curveTo(7.58f, 22f, 4f, 18.42f, 4f, 14f)
+      curveTo(4f, 9.58f, 7.58f, 6f, 12f, 6f)
+      close()
+      // Left slanted eye
+      moveTo(7.6f, 11.4f)
+      lineTo(10.8f, 12.8f)
+      lineTo(10.0f, 14.2f)
+      lineTo(7.2f, 13.0f)
+      close()
+      // Right slanted eye
+      moveTo(16.4f, 11.4f)
+      lineTo(16.8f, 13.0f)
+      lineTo(14.0f, 14.2f)
+      lineTo(13.2f, 12.8f)
+      close()
+      // Mischievous grin
+      moveTo(8.2f, 16.4f)
+      curveTo(9.4f, 18.2f, 14.6f, 18.2f, 15.8f, 16.4f)
+      lineTo(16.8f, 17.4f)
+      curveTo(15.0f, 19.8f, 9.0f, 19.8f, 7.2f, 17.4f)
+      close()
+    }
+  }.build()
+}
+
+val AngelFeedbackIcon: ImageVector by lazy {
+  ImageVector.Builder(
+    name = "SettingsAngelFeedback",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+  ).apply {
+    // Halo ring above head
+    path(
+      fill = SolidColor(Color.Black),
+      pathFillType = PathFillType.EvenOdd,
+    ) {
+      moveTo(12f, 1.5f)
+      curveTo(16.4f, 1.5f, 19.5f, 2.5f, 19.5f, 3.8f)
+      curveTo(19.5f, 5.1f, 16.4f, 6.1f, 12f, 6.1f)
+      curveTo(7.6f, 6.1f, 4.5f, 5.1f, 4.5f, 3.8f)
+      curveTo(4.5f, 2.5f, 7.6f, 1.5f, 12f, 1.5f)
+      close()
+      moveTo(12f, 2.9f)
+      curveTo(9.0f, 2.9f, 6.8f, 3.3f, 6.8f, 3.8f)
+      curveTo(6.8f, 4.3f, 9.0f, 4.7f, 12f, 4.7f)
+      curveTo(15.0f, 4.7f, 17.2f, 4.3f, 17.2f, 3.8f)
+      curveTo(17.2f, 3.3f, 15.0f, 2.9f, 12f, 2.9f)
+      close()
+    }
+    // Angel head with gentle eyes and smile cutouts
+    path(
+      fill = SolidColor(Color.Black),
+      pathFillType = PathFillType.EvenOdd,
+    ) {
+      moveTo(12f, 7f)
+      curveTo(16.14f, 7f, 19.5f, 10.36f, 19.5f, 14.5f)
+      curveTo(19.5f, 18.64f, 16.14f, 22f, 12f, 22f)
+      curveTo(7.86f, 22f, 4.5f, 18.64f, 4.5f, 14.5f)
+      curveTo(4.5f, 10.36f, 7.86f, 7f, 12f, 7f)
+      close()
+      // Left eye
+      moveTo(8.0f, 13.2f)
+      arcToRelative(1.2f, 1.2f, 0f, true, true, 2.4f, 0f)
+      arcToRelative(1.2f, 1.2f, 0f, true, true, -2.4f, 0f)
+      close()
+      // Right eye
+      moveTo(13.6f, 13.2f)
+      arcToRelative(1.2f, 1.2f, 0f, true, true, 2.4f, 0f)
+      arcToRelative(1.2f, 1.2f, 0f, true, true, -2.4f, 0f)
+      close()
+      // Gentle smile
+      moveTo(8.6f, 16.6f)
+      curveTo(9.8f, 18.2f, 14.2f, 18.2f, 15.4f, 16.6f)
+      lineTo(16.5f, 17.5f)
+      curveTo(14.8f, 19.6f, 9.2f, 19.6f, 7.5f, 17.5f)
+      close()
+    }
+  }.build()
+}
+
+fun shouldUseDevilAndAngelFeedbackIcons(
+  random: Random = Random.Default,
+): Boolean = random.nextFloat() < FEEDBACK_DEVIL_ANGEL_EASTER_EGG_CHANCE
+
+fun resolveReportBugButtonIcon(useDevilAndAngelIcons: Boolean): ImageVector =
+  if (useDevilAndAngelIcons) DevilFeedbackIcon else Icons.Default.BugReport
+
+fun resolveRequestFeatureButtonIcon(useDevilAndAngelIcons: Boolean): ImageVector =
+  if (useDevilAndAngelIcons) AngelFeedbackIcon else Icons.Default.Lightbulb
 
 data class ColorPreset(
   val name: String,
@@ -602,6 +732,7 @@ fun SettingsScreen(
   initialPermissionsExpanded: Boolean = false,
   initialBackupRestoreExpanded: Boolean = false,
   initialErrorLogsDialogVisible: Boolean = false,
+  feedbackIconsRandom: Random = Random.Default,
   onOpenUrl: ((String) -> Unit)? = null,
   onSelectTool: ((Tool) -> Unit)? = null,
 ) {
@@ -3478,7 +3609,17 @@ fun SettingsScreen(
       Text("Reset All Settings to Defaults")
     }
 
-    // Report a Bug & Request a Feature (side-by-side rounded buttons)
+    // Report a Bug & Request a Feature (side-by-side rounded buttons, 1% chance for devil & angel icons)
+    val useDevilAndAngelIcons = rememberSaveable {
+      shouldUseDevilAndAngelFeedbackIcons(feedbackIconsRandom)
+    }
+    val reportBugIcon = remember(useDevilAndAngelIcons) {
+      resolveReportBugButtonIcon(useDevilAndAngelIcons)
+    }
+    val requestFeatureIcon = remember(useDevilAndAngelIcons) {
+      resolveRequestFeatureButtonIcon(useDevilAndAngelIcons)
+    }
+
     Row(
       modifier = Modifier
         .fillMaxWidth()
@@ -3496,9 +3637,11 @@ fun SettingsScreen(
           .testTag("report_bug_button"),
       ) {
         Icon(
-          imageVector = Icons.Default.BugReport,
+          imageVector = reportBugIcon,
           contentDescription = null,
-          modifier = Modifier.size(18.dp),
+          modifier = Modifier
+            .size(18.dp)
+            .testTag(if (useDevilAndAngelIcons) "report_bug_devil_icon" else "report_bug_default_icon"),
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
@@ -3519,9 +3662,11 @@ fun SettingsScreen(
           .testTag("request_feature_button"),
       ) {
         Icon(
-          imageVector = Icons.Default.Lightbulb,
+          imageVector = requestFeatureIcon,
           contentDescription = null,
-          modifier = Modifier.size(18.dp),
+          modifier = Modifier
+            .size(18.dp)
+            .testTag(if (useDevilAndAngelIcons) "request_feature_angel_icon" else "request_feature_default_icon"),
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(

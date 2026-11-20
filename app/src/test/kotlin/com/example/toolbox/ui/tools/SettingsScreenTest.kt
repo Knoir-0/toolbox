@@ -1,5 +1,8 @@
 package com.example.toolbox.ui.tools
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.ui.graphics.Color
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS_MINUS_30
@@ -1097,5 +1100,42 @@ class SettingsScreenTest {
     assertEquals(1, highlighted.spanStyles.size)
     assertEquals(17, highlighted.spanStyles.first().start)
     assertEquals(25, highlighted.spanStyles.first().end)
+  }
+
+  @Test
+  fun feedbackButtons_haveOnePercentChanceForDevilAndAngelIcons() {
+    assertEquals(0.01f, FEEDBACK_DEVIL_ANGEL_EASTER_EGG_CHANCE)
+
+    // Under 1% threshold (< 0.01f) triggers devil and angel icons
+    val luckyRandom = object : kotlin.random.Random() {
+      override fun nextBits(bitCount: Int): Int = 0
+      override fun nextFloat(): Float = 0.005f
+    }
+    assertTrue(shouldUseDevilAndAngelFeedbackIcons(luckyRandom))
+
+    // At or above 1% threshold (>= 0.01f) keeps default icons
+    val boundaryRandom = object : kotlin.random.Random() {
+      override fun nextBits(bitCount: Int): Int = 0
+      override fun nextFloat(): Float = 0.01f
+    }
+    assertFalse(shouldUseDevilAndAngelFeedbackIcons(boundaryRandom))
+
+    val normalRandom = object : kotlin.random.Random() {
+      override fun nextBits(bitCount: Int): Int = 0
+      override fun nextFloat(): Float = 0.50f
+    }
+    assertFalse(shouldUseDevilAndAngelFeedbackIcons(normalRandom))
+
+    // Icon resolution maps Report a Bug -> Devil and Request a Feature -> Angel when active
+    assertEquals(DevilFeedbackIcon, resolveReportBugButtonIcon(useDevilAndAngelIcons = true))
+    assertEquals(AngelFeedbackIcon, resolveRequestFeatureButtonIcon(useDevilAndAngelIcons = true))
+    assertEquals(
+      Icons.Default.BugReport,
+      resolveReportBugButtonIcon(useDevilAndAngelIcons = false),
+    )
+    assertEquals(
+      Icons.Default.Lightbulb,
+      resolveRequestFeatureButtonIcon(useDevilAndAngelIcons = false),
+    )
   }
 }
