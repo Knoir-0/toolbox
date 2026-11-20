@@ -1825,6 +1825,7 @@ class MusicPlayerEngineTest {
         MusicGroupOption.ALBUM,
         MusicGroupOption.ARTIST,
         MusicGroupOption.GENRE,
+        MusicGroupOption.YEAR,
         MusicGroupOption.NONE,
       ),
       MusicPlayerEngine.availableGroupOptions(MusicLibraryTab.SONGS),
@@ -1834,6 +1835,7 @@ class MusicPlayerEngineTest {
         MusicGroupOption.ALBUM,
         MusicGroupOption.ARTIST,
         MusicGroupOption.GENRE,
+        MusicGroupOption.YEAR,
         MusicGroupOption.NONE,
       ),
       MusicPlayerEngine.availableGroupOptions(
@@ -1845,12 +1847,13 @@ class MusicPlayerEngineTest {
       listOf(
         MusicGroupOption.ARTIST,
         MusicGroupOption.GENRE,
+        MusicGroupOption.YEAR,
         MusicGroupOption.NONE,
       ),
       MusicPlayerEngine.availableGroupOptions(MusicLibraryTab.ALBUMS),
     )
 
-    // 2. Grouping songs by None, Album, Artist, and Genre
+    // 2. Grouping songs by None, Album, Artist, Genre, and Year
     val songsNone = MusicPlayerEngine.groupAndSortTracks(
       tracks = tracks,
       groupOption = MusicGroupOption.NONE,
@@ -1891,7 +1894,20 @@ class MusicPlayerEngineTest {
     assertEquals(tracks.size, songsByGenre.sumOf { it.tracks.size })
     assertTrue(songsByGenre.all { group -> group.tracks.all { it.genre == group.title } })
 
-    // 3. Grouping albums by None, Artist, and Genre
+    val songsByYear = MusicPlayerEngine.groupAndSortTracks(
+      tracks = tracks,
+      groupOption = MusicGroupOption.YEAR,
+      sortOrder = MusicSortOrder.TITLE_ASC,
+    )
+    assertTrue(songsByYear.size > 1)
+    assertEquals(
+      songsByYear.map { it.title.toInt() },
+      songsByYear.map { it.title.toInt() }.sortedDescending(),
+    )
+    assertEquals(tracks.size, songsByYear.sumOf { it.tracks.size })
+    assertTrue(songsByYear.all { group -> group.tracks.all { it.year.toString() == group.title } })
+
+    // 3. Grouping albums by None, Artist, Genre, and Year
     val albumsNone = MusicPlayerEngine.groupAndSortAlbums(
       albums = albums,
       groupOption = MusicGroupOption.NONE,
@@ -1918,6 +1934,19 @@ class MusicPlayerEngineTest {
     assertTrue(albumsByGenre.size > 1)
     assertEquals(albums.size, albumsByGenre.sumOf { it.albums.size })
     assertTrue(albumsByGenre.all { group -> group.albums.all { it.genre == group.title } })
+
+    val albumsByYear = MusicPlayerEngine.groupAndSortAlbums(
+      albums = albums,
+      groupOption = MusicGroupOption.YEAR,
+      sortOrder = MusicSortOrder.TITLE_ASC,
+    )
+    assertTrue(albumsByYear.size > 1)
+    assertEquals(
+      albumsByYear.map { it.title.toInt() },
+      albumsByYear.map { it.title.toInt() }.sortedDescending(),
+    )
+    assertEquals(albums.size, albumsByYear.sumOf { it.albums.size })
+    assertTrue(albumsByYear.all { group -> group.albums.all { it.year.toString() == group.title } })
 
     // 4. Session per-section group & sort persistence and coercion across sections
     val session = MusicPlaybackSession(

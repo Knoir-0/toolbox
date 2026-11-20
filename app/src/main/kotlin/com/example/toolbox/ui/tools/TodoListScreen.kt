@@ -2991,9 +2991,12 @@ private fun RoundedQuickAddBar(
       horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       if (title.isNotEmpty()) {
-        IconButton(
-          onClick = { onTitleChange("") },
-          modifier = Modifier.size(28.dp),
+        Box(
+          modifier = Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .clickable { onTitleChange("") },
+          contentAlignment = Alignment.Center,
         ) {
           Icon(
             imageVector = Icons.Default.Clear,
@@ -3004,8 +3007,7 @@ private fun RoundedQuickAddBar(
         }
       }
 
-      IconButton(
-        onClick = onToggleSchedule,
+      Box(
         modifier = Modifier
           .size(28.dp)
           .clip(CircleShape)
@@ -3016,7 +3018,9 @@ private fun RoundedQuickAddBar(
               Color.Transparent
             },
           )
+          .clickable(onClick = onToggleSchedule)
           .testTag("todo_schedule_button"),
+        contentAlignment = Alignment.Center,
       ) {
         Icon(
           imageVector = if (isScheduleOpen) Icons.Default.KeyboardArrowDown else Icons.Default.Schedule,
@@ -3031,12 +3035,13 @@ private fun RoundedQuickAddBar(
       }
 
       if (!isScheduleOpen) {
-        IconButton(
-          onClick = onOpenSavedTasks,
+        Box(
           modifier = Modifier
             .size(28.dp)
             .clip(CircleShape)
+            .clickable(onClick = onOpenSavedTasks)
             .testTag("todo_saved_tasks_button"),
+          contentAlignment = Alignment.Center,
         ) {
           Icon(
             imageVector = Icons.Default.Bookmarks,

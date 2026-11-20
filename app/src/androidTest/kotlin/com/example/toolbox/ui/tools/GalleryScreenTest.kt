@@ -505,16 +505,27 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("photo_viewer_current_title").assertTextEquals("photo_3.png")
 
     // 3. Swipe left to move to the next photo in the album (photo_2.png)
+    val scrollBarCenterX = previewScrollBarBounds.center.x
+    val thumb3Bounds = composeTestRule.onNodeWithTag("photo_viewer_preview_thumb_photo_3.png")
+      .fetchSemanticsNode().boundsInRoot
+    assertEquals(scrollBarCenterX, thumb3Bounds.center.x, 4f)
+
     composeTestRule.onNodeWithTag("photo_viewer_pager").performTouchInput {
       swipeLeft()
     }
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("photo_viewer_current_title").assertTextEquals("photo_2.png")
+    val thumb2Bounds = composeTestRule.onNodeWithTag("photo_viewer_preview_thumb_photo_2.png")
+      .fetchSemanticsNode().boundsInRoot
+    assertEquals(scrollBarCenterX, thumb2Bounds.center.x, 4f)
 
     // Tap a thumbnail in the bottom preview scroll bar to jump to photo_1.png
     composeTestRule.onNodeWithTag("photo_viewer_preview_thumb_photo_1.png").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("photo_viewer_current_title").assertTextEquals("photo_1.png")
+    val thumb1Bounds = composeTestRule.onNodeWithTag("photo_viewer_preview_thumb_photo_1.png")
+      .fetchSemanticsNode().boundsInRoot
+    assertEquals(scrollBarCenterX, thumb1Bounds.center.x, 4f)
 
     // 4. Tap on the image to dismiss both the top bar and bottom preview scroll bar, and tap again to bring them back
     composeTestRule.onNodeWithTag("photo_viewer_active_page").performClick()
@@ -549,6 +560,36 @@ class GalleryScreenTest {
       .text
     val zoomPercent = zoomLabelText.removeSuffix("%").toInt()
     assertTrue("Expected zoom percent > 100% after pinch-out, got $zoomPercent%", zoomPercent > 100)
+
+    // Tap zoom badge to reset back to 100%, then pinch in to zoom out below 100% (down to 50%)
+    composeTestRule.onNodeWithTag("photo_viewer_zoom_badge").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_viewer_zoom_label", useUnmergedTree = true).assertTextEquals("100%")
+
+    composeTestRule.onNodeWithTag("photo_viewer_active_page").performTouchInput {
+      val center = this.center
+      pinch(
+        start0 = Offset(center.x - 240f, center.y),
+        end0 = Offset(center.x - 60f, center.y),
+        start1 = Offset(center.x + 240f, center.y),
+        end1 = Offset(center.x + 60f, center.y),
+        durationMillis = 300L,
+      )
+    }
+    composeTestRule.waitForIdle()
+
+    val zoomOutLabelText = composeTestRule
+      .onNodeWithTag("photo_viewer_zoom_label", useUnmergedTree = true)
+      .fetchSemanticsNode()
+      .config[androidx.compose.ui.semantics.SemanticsProperties.Text]
+      .first()
+      .text
+    val zoomOutPercent = zoomOutLabelText.removeSuffix("%").toInt()
+    assertTrue("Expected zoom percent in 50..99% after pinch-in, got $zoomOutPercent%", zoomOutPercent in 50..99)
+
+    // Reset zoom to 100% before testing color picker
+    composeTestRule.onNodeWithTag("photo_viewer_zoom_badge").performClick()
+    composeTestRule.waitForIdle()
 
     // 6. Activate Color Picker tool in image viewer -> shows auto-focus circle & hex color pill for photo_1.png (RGB 200, 60, 60 = #C83C3C)
     composeTestRule.onNodeWithTag("photo_viewer_color_picker_button").assertIsDisplayed()
@@ -988,8 +1029,21 @@ class GalleryScreenTest {
 
     composeTestRule.onNodeWithTag("photo_tile_item_bakery_receipt.png").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_tile_item_trail_map.png").assertDoesNotExist()
+    // Smart tag bar is filtered by search text ("Sourdough" matches no tag names, and no tag is selected)
+    composeTestRule.onNodeWithTag("gallery_tag_filter_Receipt").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("gallery_tag_filter_Food").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("gallery_search_tags_empty_label").assertIsDisplayed()
 
-    // Clear text query and filter by automatic tag chip "Receipt"
+    // Clear text query and filter by automatic tag chip "Receipt", and verify typing search text filters the smart tag bar while keeping selected tag visible
+    composeTestRule.onNodeWithTag("gallery_search_clear").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_tag_filter_Receipt").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_tag_filter_Food").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_search_input").performTextInput("Rec")
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("gallery_tag_filter_Receipt").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("gallery_tag_filter_Food").assertDoesNotExist()
+
     composeTestRule.onNodeWithTag("gallery_search_clear").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("gallery_tag_filter_Receipt").performClick()

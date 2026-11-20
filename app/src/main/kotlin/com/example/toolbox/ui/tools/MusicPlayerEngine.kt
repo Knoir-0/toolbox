@@ -322,14 +322,15 @@ enum class MusicGroupOption(
   ALBUM("Album"),
   ARTIST("Artist"),
   GENRE("Genre"),
+  YEAR("Year"),
   NONE("None"),
   ;
 
   companion object {
     val DEFAULT: MusicGroupOption = NONE
 
-    val SONGS_OPTIONS: List<MusicGroupOption> = listOf(ALBUM, ARTIST, GENRE, NONE)
-    val ALBUMS_OPTIONS: List<MusicGroupOption> = listOf(ARTIST, GENRE, NONE)
+    val SONGS_OPTIONS: List<MusicGroupOption> = listOf(ALBUM, ARTIST, GENRE, YEAR, NONE)
+    val ALBUMS_OPTIONS: List<MusicGroupOption> = listOf(ARTIST, GENRE, YEAR, NONE)
 
     fun fromNameOrDefault(name: String?): MusicGroupOption {
       if (name.isNullOrBlank()) return DEFAULT
@@ -2558,8 +2559,8 @@ object MusicPlayerEngine {
 
   /**
    * Returns the available [MusicGroupOption]s for the given [selectedTab] or [selectedCustomFolderPath].
-   * - Songs view (including custom folder views): [MusicGroupOption.ALBUM], [MusicGroupOption.ARTIST], [MusicGroupOption.GENRE], [MusicGroupOption.NONE].
-   * - Albums view: [MusicGroupOption.ARTIST], [MusicGroupOption.GENRE], [MusicGroupOption.NONE].
+   * - Songs view (including custom folder views): [MusicGroupOption.ALBUM], [MusicGroupOption.ARTIST], [MusicGroupOption.GENRE], [MusicGroupOption.YEAR], [MusicGroupOption.NONE].
+   * - Albums view: [MusicGroupOption.ARTIST], [MusicGroupOption.GENRE], [MusicGroupOption.YEAR], [MusicGroupOption.NONE].
    * - Other views (Home, Playlists, Artists, Genres): empty list (sort only).
    */
   fun availableGroupOptions(
@@ -2845,7 +2846,7 @@ object MusicPlayerEngine {
   }
 
   /**
-   * Groups an already-sorted list of [tracks] according to [groupOption] (Album, Artist, Genre, or None).
+   * Groups an already-sorted list of [tracks] according to [groupOption] (Album, Artist, Genre, Year, or None).
    * When [groupOption] is [MusicGroupOption.NONE], returns a single group with an empty title.
    */
   fun groupTracks(
@@ -2857,7 +2858,8 @@ object MusicPlayerEngine {
       MusicGroupOption.NONE -> listOf(MusicTrackGroup(title = "", tracks = tracks))
       MusicGroupOption.ALBUM,
       MusicGroupOption.ARTIST,
-      MusicGroupOption.GENRE -> {
+      MusicGroupOption.GENRE,
+      MusicGroupOption.YEAR -> {
         val grouped = LinkedHashMap<String, MutableList<MusicTrack>>()
         val displayTitles = LinkedHashMap<String, String>()
         for (track in tracks) {
@@ -2865,6 +2867,7 @@ object MusicPlayerEngine {
             MusicGroupOption.ALBUM -> track.album.trim().ifBlank { "Unknown Album" }
             MusicGroupOption.ARTIST -> track.artist.trim().ifBlank { "Unknown Artist" }
             MusicGroupOption.GENRE -> track.genre.trim().ifBlank { "Unknown Genre" }
+            MusicGroupOption.YEAR -> if (track.year > 0) track.year.toString() else "Unknown Year"
             MusicGroupOption.NONE -> ""
           }
           val normKey = rawLabel.lowercase(Locale.ROOT)
@@ -2873,14 +2876,21 @@ object MusicPlayerEngine {
           }
           grouped.getOrPut(normKey) { mutableListOf() }.add(track)
         }
-        grouped.entries
+        val groupList = grouped.entries
           .map { (normKey, groupTracks) ->
             MusicTrackGroup(
               title = displayTitles[normKey] ?: normKey,
               tracks = groupTracks,
             )
           }
-          .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+        if (groupOption == MusicGroupOption.YEAR) {
+          groupList.sortedWith(
+            compareByDescending<MusicTrackGroup> { it.title.toIntOrNull() ?: 0 }
+              .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title },
+          )
+        } else {
+          groupList.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+        }
       }
     }
   }
@@ -2905,7 +2915,7 @@ object MusicPlayerEngine {
   }
 
   /**
-   * Groups an already-sorted list of [albums] according to [groupOption] (Artist, Genre, or None).
+   * Groups an already-sorted list of [albums] according to [groupOption] (Artist, Genre, Year, or None).
    * When [groupOption] is [MusicGroupOption.NONE] (or unsupported), returns a single group with an empty title.
    */
   fun groupAlbums(
@@ -2917,13 +2927,15 @@ object MusicPlayerEngine {
       MusicGroupOption.NONE,
       MusicGroupOption.ALBUM -> listOf(MusicAlbumGroup(title = "", albums = albums))
       MusicGroupOption.ARTIST,
-      MusicGroupOption.GENRE -> {
+      MusicGroupOption.GENRE,
+      MusicGroupOption.YEAR -> {
         val grouped = LinkedHashMap<String, MutableList<MusicAlbum>>()
         val displayTitles = LinkedHashMap<String, String>()
         for (album in albums) {
           val rawLabel = when (groupOption) {
             MusicGroupOption.ARTIST -> album.artist.trim().ifBlank { "Unknown Artist" }
             MusicGroupOption.GENRE -> album.genre.trim().ifBlank { "Unknown Genre" }
+            MusicGroupOption.YEAR -> if (album.year > 0) album.year.toString() else "Unknown Year"
             else -> ""
           }
           val normKey = rawLabel.lowercase(Locale.ROOT)
@@ -2932,14 +2944,21 @@ object MusicPlayerEngine {
           }
           grouped.getOrPut(normKey) { mutableListOf() }.add(album)
         }
-        grouped.entries
+        val groupList = grouped.entries
           .map { (normKey, groupAlbums) ->
             MusicAlbumGroup(
               title = displayTitles[normKey] ?: normKey,
               albums = groupAlbums,
             )
           }
-          .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+        if (groupOption == MusicGroupOption.YEAR) {
+          groupList.sortedWith(
+            compareByDescending<MusicAlbumGroup> { it.title.toIntOrNull() ?: 0 }
+              .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title },
+          )
+        } else {
+          groupList.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+        }
       }
     }
   }

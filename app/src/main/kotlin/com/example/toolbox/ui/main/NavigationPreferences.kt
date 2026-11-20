@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.LocalInspectionMode
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,6 +36,8 @@ const val PREF_KEY_TOOL_USAGE = "tool_usage"
 const val PREF_KEY_PERMISSION_STATES = "permission_states"
 const val PREF_KEY_PERMISSION_USAGE = "permission_usage"
 const val PREF_KEY_LAST_OPENED_TOOL = "last_opened_tool"
+const val PREF_KEY_ERROR_LOGS = "error_logs"
+const val MAX_ERROR_LOG_ENTRIES = 100
 
 const val DEFAULT_THEME_COLOR_SYSTEM = "SYSTEM"
 const val FALLBACK_THEME_COLOR_HEX = "#8E66A6"
@@ -231,6 +234,112 @@ data class PermissionToolUsageStat(
 }
 
 /**
+ * Formats an error log timestamp (`timestampMs`) in `yyyy-MM-dd HH:mm:ss` format,
+ * or `"Unknown"` if `<= 0L`.
+ */
+fun formatErrorLogTimestamp(timestampMs: Long): String {
+  if (timestampMs <= 0L) return "Unknown"
+  val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+  return sdf.format(Date(timestampMs))
+}
+
+/**
+ * Represents a single recorded application or tool error in the Toolbox error log.
+ * Up to [MAX_ERROR_LOG_ENTRIES] (100) recent errors are retained.
+ */
+data class ErrorLogEntry(
+  val id: String = UUID.randomUUID().toString(),
+  val timestampMs: Long = System.currentTimeMillis(),
+  val message: String,
+  val source: String = "Toolbox",
+  val details: String = "",
+) {
+  val formattedTimestamp: String
+    get() = formatErrorLogTimestamp(timestampMs)
+
+  fun toFormattedText(): String = buildString {
+    append("[$formattedTimestamp] [$source] $message")
+    if (details.isNotBlank()) {
+      append("\n")
+      append(details.trim())
+    }
+  }
+
+  fun toJson(): JSONObject = JSONObject().apply {
+    put("id", id)
+    put("timestamp_ms", timestampMs)
+    put("message", message)
+    put("source", source)
+    put("details", details)
+  }
+
+  companion object {
+    fun fromJson(json: JSONObject): ErrorLogEntry {
+      return ErrorLogEntry(
+        id = json.optString("id", "").ifBlank { UUID.randomUUID().toString() },
+        timestampMs = json.optLong("timestamp_ms", 0L),
+        message = json.optString("message", ""),
+        source = json.optString("source", "Toolbox").ifBlank { "Toolbox" },
+        details = json.optString("details", ""),
+      )
+    }
+
+    fun fromThrowable(
+      throwable: Throwable,
+      source: String = "Toolbox",
+      customMessage: String? = null,
+      timestampMs: Long = System.currentTimeMillis(),
+    ): ErrorLogEntry {
+      val msg = customMessage?.takeIf { it.isNotBlank() }
+        ?: throwable.message?.takeIf { it.isNotBlank() }
+        ?: throwable::class.java.simpleName.ifBlank { "Unexpected error" }
+      val stackSummary = throwable.stackTraceToString().lineSequence().take(12).joinToString("\n")
+      return ErrorLogEntry(
+        timestampMs = timestampMs,
+        message = msg,
+        source = source,
+        details = stackSummary,
+      )
+    }
+  }
+}
+
+/**
+ * Parses a JSON array string into a list of [ErrorLogEntry] items, keeping up to the last
+ * [MAX_ERROR_LOG_ENTRIES] (100) entries.
+ */
+fun parseErrorLogs(rawString: String?): List<ErrorLogEntry> {
+  if (rawString.isNullOrBlank()) return emptyList()
+  return try {
+    val array = JSONArray(rawString)
+    val logs = mutableListOf<ErrorLogEntry>()
+    for (i in 0 until array.length()) {
+      val obj = array.optJSONObject(i) ?: continue
+      val entry = ErrorLogEntry.fromJson(obj)
+      if (entry.message.isNotBlank()) {
+        logs.add(entry)
+      }
+    }
+    logs.takeLast(MAX_ERROR_LOG_ENTRIES)
+  } catch (_: Exception) {
+    emptyList()
+  }
+}
+
+/**
+ * Serializes a list of [ErrorLogEntry] items into a JSON array string, keeping up to the last
+ * [MAX_ERROR_LOG_ENTRIES] (100) entries.
+ */
+fun serializeErrorLogs(logs: List<ErrorLogEntry>): String {
+  val trimmed = logs.takeLast(MAX_ERROR_LOG_ENTRIES)
+  val array = JSONArray()
+  trimmed.forEach { entry ->
+    array.put(entry.toJson())
+  }
+  return array.toString()
+}
+
+/**
  * Observable bridge state for Music Player theme and App Permission settings so
  * [com.example.toolbox.ui.theme.ToolboxTheme] and tool screens stay synchronized.
  */
@@ -239,9 +348,79 @@ object NavigationPreferencesBridge {
   var musicPlayerThemeEnabled by mutableStateOf(DEFAULT_MUSIC_PLAYER_THEME_ENABLED)
   var musicPlayerColorOption by mutableStateOf(DEFAULT_MUSIC_PLAYER_COLOR_OPTION)
   var permissionGrantStates by mutableStateOf(AppPermission.entries.associateWith { true })
+  var errorLogs by mutableStateOf<List<ErrorLogEntry>>(emptyList())
+  var activeRepository: NavigationPreferencesRepository? = null
 
   fun isPermissionGranted(permission: AppPermission): Boolean =
     permissionGrantStates[permission] != false
+}
+
+/**
+ * Global helper for recording errors across the application while keeping up to the last
+ * [MAX_ERROR_LOG_ENTRIES] (100) errors.
+ */
+object ErrorLogManager {
+  fun logError(
+    message: String,
+    source: String = "Toolbox",
+    details: String = "",
+    timestampMs: Long = System.currentTimeMillis(),
+    context: Context? = null,
+  ) {
+    val entry = ErrorLogEntry(
+      timestampMs = timestampMs,
+      message = message,
+      source = source,
+      details = details,
+    )
+    logError(entry, context)
+  }
+
+  fun logError(
+    throwable: Throwable,
+    source: String = "Toolbox",
+    customMessage: String? = null,
+    timestampMs: Long = System.currentTimeMillis(),
+    context: Context? = null,
+  ) {
+    val entry = ErrorLogEntry.fromThrowable(
+      throwable = throwable,
+      source = source,
+      customMessage = customMessage,
+      timestampMs = timestampMs,
+    )
+    logError(entry, context)
+  }
+
+  fun logError(
+    entry: ErrorLogEntry,
+    context: Context? = null,
+  ) {
+    val repo = NavigationPreferencesBridge.activeRepository
+      ?: context?.let { DefaultNavigationPreferencesRepository(it.applicationContext ?: it) }
+    if (repo != null) {
+      repo.logError(entry)
+    } else {
+      NavigationPreferencesBridge.errorLogs =
+        (NavigationPreferencesBridge.errorLogs + entry).takeLast(MAX_ERROR_LOG_ENTRIES)
+    }
+  }
+
+  fun getErrorLogs(context: Context? = null): List<ErrorLogEntry> {
+    val repo = NavigationPreferencesBridge.activeRepository
+      ?: context?.let { DefaultNavigationPreferencesRepository(it.applicationContext ?: it) }
+    return repo?.getErrorLogs() ?: NavigationPreferencesBridge.errorLogs
+  }
+
+  fun clearErrorLogs(context: Context? = null) {
+    val repo = NavigationPreferencesBridge.activeRepository
+      ?: context?.let { DefaultNavigationPreferencesRepository(it.applicationContext ?: it) }
+    if (repo != null) {
+      repo.clearErrorLogs()
+    } else {
+      NavigationPreferencesBridge.errorLogs = emptyList()
+    }
+  }
 }
 
 val DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
@@ -722,6 +901,49 @@ interface NavigationPreferencesRepository {
   fun setLastOpenedTool(tool: Tool?) {}
   val lastOpenedToolFlow: StateFlow<Tool?>
     get() = MutableStateFlow(getLastOpenedTool()).asStateFlow()
+
+  fun getErrorLogs(): List<ErrorLogEntry> = emptyList()
+  fun setErrorLogs(logs: List<ErrorLogEntry>) {}
+  fun logError(
+    message: String,
+    source: String = "Toolbox",
+    details: String = "",
+    timestampMs: Long = System.currentTimeMillis(),
+  ) {
+    if (message.isBlank()) return
+    logError(
+      ErrorLogEntry(
+        timestampMs = timestampMs,
+        message = message,
+        source = source.ifBlank { "Toolbox" },
+        details = details,
+      )
+    )
+  }
+  fun logError(entry: ErrorLogEntry) {
+    if (entry.message.isBlank()) return
+    setErrorLogs((getErrorLogs() + entry).takeLast(MAX_ERROR_LOG_ENTRIES))
+  }
+  fun logError(
+    throwable: Throwable,
+    source: String = "Toolbox",
+    customMessage: String? = null,
+    timestampMs: Long = System.currentTimeMillis(),
+  ) {
+    logError(
+      ErrorLogEntry.fromThrowable(
+        throwable = throwable,
+        source = source.ifBlank { "Toolbox" },
+        customMessage = customMessage,
+        timestampMs = timestampMs,
+      )
+    )
+  }
+  fun clearErrorLogs() {
+    setErrorLogs(emptyList())
+  }
+  val errorLogsFlow: StateFlow<List<ErrorLogEntry>>
+    get() = MutableStateFlow(getErrorLogs()).asStateFlow()
 }
 
 /**
@@ -791,8 +1013,13 @@ class DefaultNavigationPreferencesRepository(
   private val _lastOpenedToolFlow = MutableStateFlow(getLastOpenedTool())
   override val lastOpenedToolFlow: StateFlow<Tool?> = _lastOpenedToolFlow.asStateFlow()
 
+  private val _errorLogsFlow = MutableStateFlow(getErrorLogs())
+  override val errorLogsFlow: StateFlow<List<ErrorLogEntry>> = _errorLogsFlow.asStateFlow()
+
   init {
     NavigationPreferencesBridge.permissionGrantStates = _permissionGrantStatesFlow.value
+    NavigationPreferencesBridge.errorLogs = _errorLogsFlow.value
+    NavigationPreferencesBridge.activeRepository = this
   }
 
   override fun getToolsPerRow(): Int {
@@ -1125,6 +1352,28 @@ class DefaultNavigationPreferencesRepository(
     }
     _lastOpenedToolFlow.value = tool
   }
+
+  override fun getErrorLogs(): List<ErrorLogEntry> {
+    val raw = sharedPreferences.getString(PREF_KEY_ERROR_LOGS, null)
+    return parseErrorLogs(raw)
+  }
+
+  override fun setErrorLogs(logs: List<ErrorLogEntry>) {
+    val trimmed = logs.filter { it.message.isNotBlank() }.takeLast(MAX_ERROR_LOG_ENTRIES)
+    if (trimmed.isEmpty()) {
+      sharedPreferences.edit().remove(PREF_KEY_ERROR_LOGS).apply()
+    } else {
+      sharedPreferences.edit().putString(PREF_KEY_ERROR_LOGS, serializeErrorLogs(trimmed)).apply()
+    }
+    _errorLogsFlow.value = trimmed
+    NavigationPreferencesBridge.errorLogs = trimmed
+  }
+
+  override fun clearErrorLogs() {
+    sharedPreferences.edit().remove(PREF_KEY_ERROR_LOGS).apply()
+    _errorLogsFlow.value = emptyList()
+    NavigationPreferencesBridge.errorLogs = emptyList()
+  }
 }
 
 /**
@@ -1155,6 +1404,7 @@ class InMemoryNavigationPreferencesRepository(
   initialPermissionStates: Map<AppPermission, Boolean> = AppPermission.entries.associateWith { true },
   initialPermissionUsage: Map<AppPermission, Map<Tool, PermissionToolUsageStat>> = emptyMap(),
   initialLastOpenedTool: Tool? = null,
+  initialErrorLogs: List<ErrorLogEntry> = emptyList(),
 ) : NavigationPreferencesRepository {
   private val _toolsPerRowFlow = MutableStateFlow(coerceToolsPerRow(initialToolsPerRow))
   override val toolsPerRowFlow: StateFlow<Int> = _toolsPerRowFlow.asStateFlow()
@@ -1216,8 +1466,15 @@ class InMemoryNavigationPreferencesRepository(
   private val _lastOpenedToolFlow = MutableStateFlow(initialLastOpenedTool)
   override val lastOpenedToolFlow: StateFlow<Tool?> = _lastOpenedToolFlow.asStateFlow()
 
+  private val _errorLogsFlow = MutableStateFlow(
+    initialErrorLogs.filter { it.message.isNotBlank() }.takeLast(MAX_ERROR_LOG_ENTRIES)
+  )
+  override val errorLogsFlow: StateFlow<List<ErrorLogEntry>> = _errorLogsFlow.asStateFlow()
+
   init {
     NavigationPreferencesBridge.permissionGrantStates = _permissionGrantStatesFlow.value
+    NavigationPreferencesBridge.errorLogs = _errorLogsFlow.value
+    NavigationPreferencesBridge.activeRepository = this
   }
 
   override fun getToolsPerRow(): Int = _toolsPerRowFlow.value
@@ -1385,6 +1642,19 @@ class InMemoryNavigationPreferencesRepository(
 
   override fun setLastOpenedTool(tool: Tool?) {
     _lastOpenedToolFlow.value = tool
+  }
+
+  override fun getErrorLogs(): List<ErrorLogEntry> = _errorLogsFlow.value
+
+  override fun setErrorLogs(logs: List<ErrorLogEntry>) {
+    val trimmed = logs.filter { it.message.isNotBlank() }.takeLast(MAX_ERROR_LOG_ENTRIES)
+    _errorLogsFlow.value = trimmed
+    NavigationPreferencesBridge.errorLogs = trimmed
+  }
+
+  override fun clearErrorLogs() {
+    _errorLogsFlow.value = emptyList()
+    NavigationPreferencesBridge.errorLogs = emptyList()
   }
 }
 

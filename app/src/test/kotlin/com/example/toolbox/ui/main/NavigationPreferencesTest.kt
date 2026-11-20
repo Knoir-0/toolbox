@@ -981,6 +981,39 @@ class NavigationPreferencesTest {
     assertEquals(3, restoredMusicPrefs.getInt(com.example.toolbox.ui.tools.PREF_KEY_MUSIC_CARDS_PER_ROW, 2))
     assertEquals(true, restoredMusicPrefs.getBoolean(com.example.toolbox.ui.tools.PREF_KEY_MUSIC_INCLUDE_SAMPLES, false))
   }
+
+  @Test
+  fun defaultNavigationPreferencesRepository_persistsUpToLast100ErrorLogs() {
+    val fakePrefs = FakeSharedPreferences()
+    val repo = DefaultNavigationPreferencesRepository(fakePrefs)
+
+    assertTrue(repo.getErrorLogs().isEmpty())
+
+    for (i in 1..110) {
+      repo.logError(
+        message = "Error entry $i",
+        source = "Tool-$i",
+        details = "Stack trace $i",
+        timestampMs = 1_700_000_000_000L + i,
+      )
+    }
+
+    val logs = repo.getErrorLogs()
+    assertEquals(MAX_ERROR_LOG_ENTRIES, logs.size)
+    assertEquals("Error entry 11", logs.first().message)
+    assertEquals("Error entry 110", logs.last().message)
+
+    // Verify persistence across repository reload
+    val reloadedRepo = DefaultNavigationPreferencesRepository(fakePrefs)
+    val reloadedLogs = reloadedRepo.getErrorLogs()
+    assertEquals(MAX_ERROR_LOG_ENTRIES, reloadedLogs.size)
+    assertEquals("Error entry 11", reloadedLogs.first().message)
+    assertEquals("Error entry 110", reloadedLogs.last().message)
+
+    reloadedRepo.clearErrorLogs()
+    assertTrue(reloadedRepo.getErrorLogs().isEmpty())
+    assertTrue(DefaultNavigationPreferencesRepository(fakePrefs).getErrorLogs().isEmpty())
+  }
 }
 
 /**

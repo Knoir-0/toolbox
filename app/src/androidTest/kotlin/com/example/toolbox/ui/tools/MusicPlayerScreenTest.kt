@@ -1268,7 +1268,7 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("music_sort_option_random").performClick()
     composeTestRule.waitForIdle()
 
-    // 2. Switch to Songs view: sort filter changes into Group & Sort filter with Album, Artist, Genre, None
+    // 2. Switch to Songs view: sort filter changes into Group & Sort filter with Album, Artist, Genre, Year, None
     composeTestRule.onNodeWithTag("music_tab_SONGS").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("music_sort_button").performClick()
@@ -1279,6 +1279,7 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("music_group_option_album").assertIsDisplayed()
     composeTestRule.onNodeWithTag("music_group_option_artist").assertIsDisplayed()
     composeTestRule.onNodeWithTag("music_group_option_genre").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_group_option_year").assertIsDisplayed()
     composeTestRule.onNodeWithTag("music_group_option_none").assertIsDisplayed()
 
     // Select grouping by Album in Songs view
@@ -1303,7 +1304,15 @@ class MusicPlayerScreenTest {
     assertEquals(MusicGroupOption.GENRE, session.groupOption)
     composeTestRule.onNodeWithTag("music_group_header_jazz").assertIsDisplayed()
 
-    // 3. Switch to Albums view: Group & Sort filter allows grouping by Artist or Genre (not Album)
+    // Select grouping by Year in Songs view
+    composeTestRule.onNodeWithTag("music_sort_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_group_option_year").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(MusicGroupOption.YEAR, session.groupOption)
+    composeTestRule.onNodeWithTag("music_group_header_2026").assertIsDisplayed()
+
+    // 3. Switch to Albums view: Group & Sort filter allows grouping by Artist, Genre, or Year (not Album)
     composeTestRule.onNodeWithTag("music_tab_ALBUMS").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("music_sort_button").performClick()
@@ -1314,6 +1323,7 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("music_group_option_album").assertDoesNotExist()
     composeTestRule.onNodeWithTag("music_group_option_artist").assertIsDisplayed()
     composeTestRule.onNodeWithTag("music_group_option_genre").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_group_option_year").assertIsDisplayed()
     composeTestRule.onNodeWithTag("music_group_option_none").assertIsDisplayed()
 
     // Select grouping by Artist in Albums view
@@ -1329,5 +1339,13 @@ class MusicPlayerScreenTest {
     composeTestRule.waitForIdle()
     assertEquals(MusicGroupOption.GENRE, session.groupOption)
     composeTestRule.onNodeWithTag("music_group_header_jazz").assertIsDisplayed()
+
+    // Select grouping by Year in Albums view
+    composeTestRule.onNodeWithTag("music_sort_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("music_group_option_year").performClick()
+    composeTestRule.waitForIdle()
+    assertEquals(MusicGroupOption.YEAR, session.groupOption)
+    composeTestRule.onNodeWithTag("music_group_header_2026").assertIsDisplayed()
   }
 }

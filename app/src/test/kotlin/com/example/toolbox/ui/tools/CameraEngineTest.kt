@@ -490,7 +490,7 @@ class CameraEngineTest {
     assertEquals("Vision", CameraCaptureMode.VISION.displayName)
     assertEquals("VISION", CameraCaptureMode.VISION.shortLabel)
 
-    assertEquals(0.85f, MIN_VISION_CONFIDENCE_THRESHOLD)
+    assertEquals(0.80f, MIN_VISION_CONFIDENCE_THRESHOLD)
     assertEquals(GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD, MIN_VISION_CONFIDENCE_THRESHOLD)
 
     val rawTags = CameraVisionSamplePreset.BOTANICAL.sampleTags
@@ -500,12 +500,12 @@ class CameraEngineTest {
       inferenceLatencyMs = 18L,
       sourceDescription = "Indoor Monstera Plant",
     )
-    // Plant (96.2%), Flowerpot (89.1%), and Leaf (86.4% nested sub-region with moderate overlap) are >= 85% and kept.
+    // Plant (96.2%), Flowerpot (89.1%), and Leaf (86.4% nested sub-region with moderate overlap) are >= 80% and kept.
     // Houseplant (91.4%) has an identical duplicate box to Plant (96.2%) and is suppressed.
-    // Room (58.2%) and Furniture (39.4%) are below 85% and are hidden.
+    // Room (58.2%) and Furniture (39.4%) are below 80% and are hidden.
     assertEquals(3, standardResult.tags.size)
     assertEquals(listOf("Plant", "Flowerpot", "Leaf"), standardResult.tags.map { it.label })
-    assertTrue(standardResult.tags.all { it.confidence >= 0.85f && it.boundingBox != null })
+    assertTrue(standardResult.tags.all { it.confidence >= 0.80f && it.boundingBox != null })
     assertEquals(6, standardResult.allCandidateTags.size)
     assertEquals(3, standardResult.galleryPassingCount)
     assertEquals("Plant", standardResult.topTag?.label)
@@ -565,7 +565,7 @@ class CameraEngineTest {
     assertTrue(primaryBox.left >= 0.04f && primaryBox.right <= 0.96f)
     assertTrue(primaryBox.width >= 0.12f && primaryBox.height >= 0.10f)
 
-    // Filtering with linked 85% Gallery threshold keeps the 3 non-overlapping >= 85% tags
+    // Filtering with linked 80% Gallery threshold keeps the 3 non-overlapping >= 80% tags
     val galleryStrictResult = standardResult.withThreshold(CameraVisionThresholdPreset.GALLERY_80.minConfidence)
     assertEquals(3, galleryStrictResult.tags.size)
     assertTrue(galleryStrictResult.tags.all { it.passesGalleryThreshold })
@@ -578,7 +578,7 @@ class CameraEngineTest {
     val report = galleryStrictResult.formatSummaryReport()
     assertTrue(report.contains("ML Kit Vision Tagging Report (Indoor Monstera Plant)"))
     assertTrue(report.contains("Plant: 96.2%"))
-    assertTrue(report.contains("[GALLERY ≥85%]"))
+    assertTrue(report.contains("[GALLERY ≥80%]"))
 
     // Verify generic/abstract ontology labels are blocked and verbose ML Kit classes map to canonical nouns
     assertTrue(CameraEngine.isBlockedGenericVisionLabel("Font"))

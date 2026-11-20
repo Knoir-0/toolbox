@@ -1,11 +1,14 @@
 package com.example.toolbox.ui.tools
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -36,6 +39,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -43,6 +47,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.AddToHomeScreen
@@ -55,6 +60,7 @@ import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FileDownload
@@ -126,6 +132,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -139,8 +148,11 @@ import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
 import com.example.toolbox.ui.main.DEFAULT_DATA_BACKUP_FILENAME
 import com.example.toolbox.ui.main.DEFAULT_SETTINGS_BACKUP_FILENAME
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
+import com.example.toolbox.ui.main.ErrorLogEntry
+import com.example.toolbox.ui.main.ErrorLogManager
 import com.example.toolbox.ui.main.FALLBACK_THEME_COLOR_HEX
 import com.example.toolbox.ui.main.InMemoryNavigationPreferencesRepository
+import com.example.toolbox.ui.main.MAX_ERROR_LOG_ENTRIES
 import com.example.toolbox.ui.main.MAX_TOOLS_PER_ROW
 import com.example.toolbox.ui.main.MIN_TOOLS_PER_ROW
 import com.example.toolbox.ui.main.NavigationPreferencesRepository
@@ -207,7 +219,13 @@ fun openExternalUrl(context: Context, url: String) {
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     context.startActivity(intent)
-  } catch (_: Exception) {
+  } catch (e: Exception) {
+    ErrorLogManager.logError(
+      throwable = e,
+      source = "Settings",
+      customMessage = "Unable to open external link: $url",
+      context = context,
+    )
     Toast.makeText(context, "Unable to open link", Toast.LENGTH_SHORT).show()
   }
 }
@@ -246,8 +264,328 @@ fun openAppPermissionSystemSettings(context: Context, permission: AppPermission)
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     context.startActivity(appDetailsIntent)
-  } catch (_: Throwable) {
+  } catch (e: Throwable) {
+    ErrorLogManager.logError(
+      throwable = e,
+      source = "Settings",
+      customMessage = "Unable to open system permission settings for ${permission.title}",
+      context = context,
+    )
     Toast.makeText(context, "Unable to open system permission settings", Toast.LENGTH_SHORT).show()
+  }
+}
+
+fun filterErrorLogs(
+  logs: List<ErrorLogEntry>,
+  query: String,
+): List<ErrorLogEntry> {
+  val trimmed = query.trim()
+  if (trimmed.isEmpty()) return logs
+  return logs.filter { entry ->
+    entry.message.contains(trimmed, ignoreCase = true) ||
+      entry.source.contains(trimmed, ignoreCase = true) ||
+      entry.details.contains(trimmed, ignoreCase = true) ||
+      entry.formattedTimestamp.contains(trimmed, ignoreCase = true)
+  }
+}
+
+fun highlightErrorLogText(
+  text: String,
+  query: String,
+  highlightBackground: Color,
+  highlightContent: Color,
+): AnnotatedString {
+  val trimmed = query.trim()
+  if (trimmed.isEmpty() || text.isEmpty()) {
+    return AnnotatedString(text)
+  }
+  return buildAnnotatedString {
+    append(text)
+    var searchStart = 0
+    while (searchStart < text.length) {
+      val matchIndex = text.indexOf(trimmed, startIndex = searchStart, ignoreCase = true)
+      if (matchIndex < 0) break
+      val matchEnd = (matchIndex + trimmed.length).coerceAtMost(text.length)
+      addStyle(
+        style = SpanStyle(
+          background = highlightBackground,
+          color = highlightContent,
+          fontWeight = FontWeight.Bold,
+        ),
+        start = matchIndex,
+        end = matchEnd,
+      )
+      searchStart = matchEnd
+    }
+  }
+}
+
+fun copyErrorLogEntryToClipboard(context: Context, entry: ErrorLogEntry): String {
+  val formatted = entry.toFormattedText()
+  try {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    clipboard?.setPrimaryClip(ClipData.newPlainText("Toolbox Error Log", formatted))
+    Toast.makeText(context, "Error copied to clipboard", Toast.LENGTH_SHORT).show()
+  } catch (_: Exception) {}
+  return formatted
+}
+
+@Composable
+fun ErrorLogsFullScreenView(
+  errorLogs: List<ErrorLogEntry>,
+  onNavigateBack: () -> Unit,
+  onClearErrorLogs: () -> Unit,
+  modifier: Modifier = Modifier,
+  onCopyEntry: ((ErrorLogEntry, String) -> Unit)? = null,
+) {
+  val context = LocalContext.current
+  var isSearchActive by rememberSaveable { mutableStateOf(false) }
+  var searchQuery by rememberSaveable { mutableStateOf("") }
+
+  val recentErrorLogs = remember(errorLogs) {
+    errorLogs.takeLast(MAX_ERROR_LOG_ENTRIES).asReversed()
+  }
+  val filteredErrorLogs = remember(recentErrorLogs, searchQuery) {
+    filterErrorLogs(recentErrorLogs, searchQuery)
+  }
+
+  BackHandler {
+    if (isSearchActive) {
+      isSearchActive = false
+      searchQuery = ""
+    } else {
+      onNavigateBack()
+    }
+  }
+
+  Column(
+    modifier = modifier
+      .fillMaxSize()
+      .background(MaterialTheme.colorScheme.background)
+      .testTag("error_logs_screen"),
+  ) {
+    ToolboxTopBar(
+      title = "Error Logs",
+      subtext = if (searchQuery.isNotBlank()) {
+        "${filteredErrorLogs.size} of ${recentErrorLogs.size} errors matching"
+      } else {
+        "${recentErrorLogs.size} of $MAX_ERROR_LOG_ENTRIES errors recorded"
+      },
+      icon = Icons.Default.BugReport,
+      onNavigateBack = {
+        isSearchActive = false
+        searchQuery = ""
+        onNavigateBack()
+      },
+      backContentDescription = "Back",
+      backButtonTestTag = "action_navigate_back",
+      additionalBackButtonTestTag = "error_logs_back_button",
+      titleTestTag = "error_logs_title",
+      subtextTestTag = "error_logs_count_text",
+      searchState = ToolboxTopBarSearchState(
+        isActive = isSearchActive,
+        query = searchQuery,
+        onQueryChange = { searchQuery = it },
+        onOpenSearch = { isSearchActive = true },
+        onCloseSearch = {
+          isSearchActive = false
+          searchQuery = ""
+        },
+        onClearQuery = { searchQuery = "" },
+        placeholder = "Search error logs...",
+      ),
+    )
+
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = 20.dp, vertical = 16.dp)
+        .testTag("error_logs_list"),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      if (filteredErrorLogs.isEmpty()) {
+        Card(
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+          ),
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("error_logs_empty_state"),
+        ) {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            Text(
+              text = if (recentErrorLogs.isEmpty()) "No errors logged" else "No matching errors",
+              style = MaterialTheme.typography.titleSmall,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+              text = if (recentErrorLogs.isEmpty()) {
+                "Up to the last $MAX_ERROR_LOG_ENTRIES errors encountered in Toolbox will appear here."
+              } else {
+                "No error logs match \"${searchQuery.trim()}\"."
+              },
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+      } else {
+        val highlightBackground = MaterialTheme.colorScheme.primaryContainer
+        val highlightContent = MaterialTheme.colorScheme.onPrimaryContainer
+
+        filteredErrorLogs.forEachIndexed { index, entry ->
+          Card(
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("error_log_card_$index"),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            ),
+            border = BorderStroke(
+              1.dp,
+              MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            ),
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp)
+                .testTag("error_log_entry_$index"),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp),
+                ) {
+                  Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                  ) {
+                    Text(
+                      text = entry.source,
+                      style = MaterialTheme.typography.labelSmall,
+                      fontWeight = FontWeight.SemiBold,
+                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                  }
+                  Text(
+                    text = entry.formattedTimestamp,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+
+                OutlinedButton(
+                  onClick = {
+                    val copiedText = copyErrorLogEntryToClipboard(context, entry)
+                    onCopyEntry?.invoke(entry, copiedText)
+                  },
+                  shape = CircleShape,
+                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                  modifier = Modifier
+                    .height(30.dp)
+                    .testTag("copy_error_log_button_$index"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.ContentCopy,
+                    contentDescription = "Copy error",
+                    modifier = Modifier.size(14.dp),
+                  )
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text(
+                    text = "Copy",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                  )
+                }
+              }
+
+              SelectionContainer(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .testTag("error_log_selectable_text_$index"),
+              ) {
+                Column(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                  Text(
+                    text = highlightErrorLogText(
+                      text = entry.message,
+                      query = searchQuery,
+                      highlightBackground = highlightBackground,
+                      highlightContent = highlightContent,
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.testTag("error_log_message_$index"),
+                  )
+                  if (entry.details.isNotBlank()) {
+                    Text(
+                      text = highlightErrorLogText(
+                        text = entry.details,
+                        query = searchQuery,
+                        highlightBackground = highlightBackground,
+                        highlightContent = highlightContent,
+                      ),
+                      style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                      fontFamily = FontFamily.Monospace,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      modifier = Modifier.testTag("error_log_details_$index"),
+                    )
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (recentErrorLogs.isNotEmpty()) {
+        OutlinedButton(
+          onClick = onClearErrorLogs,
+          shape = CircleShape,
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("clear_error_logs_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.RestartAlt,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+          )
+          Spacer(modifier = Modifier.width(8.dp))
+          Text("Clear Error Logs")
+        }
+      }
+
+      Spacer(modifier = Modifier.height(24.dp))
+    }
   }
 }
 
@@ -256,11 +594,14 @@ fun openAppPermissionSystemSettings(context: Context, permission: AppPermission)
 fun SettingsScreen(
   modifier: Modifier = Modifier,
   preferencesRepository: NavigationPreferencesRepository = rememberNavigationPreferencesRepository(),
+  initialSortingExpanded: Boolean = false,
   initialVisibilityExpanded: Boolean = false,
   initialCollapsedCategories: Set<ToolCategory> = remember { ToolCategory.entries.toSet() },
   initialThemeColorExpanded: Boolean = false,
   initialAccentColorExpanded: Boolean = false,
   initialPermissionsExpanded: Boolean = false,
+  initialBackupRestoreExpanded: Boolean = false,
+  initialErrorLogsDialogVisible: Boolean = false,
   onOpenUrl: ((String) -> Unit)? = null,
   onSelectTool: ((Tool) -> Unit)? = null,
 ) {
@@ -278,10 +619,24 @@ fun SettingsScreen(
   val toolsPerRow by preferencesRepository.toolsPerRowFlow.collectAsState()
   val permissionGrantStates by preferencesRepository.permissionGrantStatesFlow.collectAsState()
   val permissionUsageStats by preferencesRepository.permissionUsageStatsFlow.collectAsState()
+  val errorLogs by preferencesRepository.errorLogsFlow.collectAsState()
 
+  var isSortingExpanded by rememberSaveable { mutableStateOf(initialSortingExpanded) }
   var isThemeColorExpanded by rememberSaveable { mutableStateOf(initialThemeColorExpanded) }
   var isAccentColorExpanded by rememberSaveable { mutableStateOf(initialAccentColorExpanded) }
   var isPermissionsExpanded by rememberSaveable { mutableStateOf(initialPermissionsExpanded) }
+  var isBackupRestoreExpanded by rememberSaveable { mutableStateOf(initialBackupRestoreExpanded) }
+  var showErrorLogsDialog by rememberSaveable { mutableStateOf(initialErrorLogsDialogVisible) }
+
+  if (showErrorLogsDialog) {
+    ErrorLogsFullScreenView(
+      errorLogs = errorLogs,
+      onNavigateBack = { showErrorLogsDialog = false },
+      onClearErrorLogs = { preferencesRepository.clearErrorLogs() },
+      modifier = modifier,
+    )
+    return
+  }
 
   var customHexInput by rememberSaveable(themeColor) {
     mutableStateOf(
@@ -321,129 +676,132 @@ fun SettingsScreen(
         .testTag("settings_screen"),
       verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-      // Section 1: Toolbox Default Sorting
-    Card(
-      modifier = Modifier
-        .fillMaxWidth()
-        .testTag("toolbox_sorting_card"),
-      colors = CardDefaults.cardColors(
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-      ),
-      shape = RoundedCornerShape(16.dp),
-    ) {
-      Column(
-        modifier = Modifier.padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-      ) {
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          Icon(
-            imageVector = Icons.AutoMirrored.Filled.Sort,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
-          )
-          Text(
-            text = "Default Sorting",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-          )
+      // Section 1: Toolbox Default Sorting (Collapsible)
+      val sortingSummary = remember(toolSorting, toolSortOrder, categorySorting, categoryToolSorting, toolsPerRow) {
+        val sortModeLabel = when (toolSorting) {
+          ToolSortingOption.USER_CHOICE -> "Manual"
+          ToolSortingOption.TOOL_CATEGORIES -> {
+            val catOrder = when (categorySorting) {
+              CategorySortingOption.MANUAL -> "Manual"
+              CategorySortingOption.ALPHABETICAL -> "Alpha"
+              CategorySortingOption.USAGE -> "Usage"
+            }
+            "Categories ($catOrder)"
+          }
+          ToolSortingOption.USAGE -> "Usage"
+          ToolSortingOption.ALPHABETICAL -> {
+            val dir = if (toolSortOrder == ToolSortOrder.ASCENDING) "A–Z" else "Z–A"
+            "Alphabetical ($dir)"
+          }
         }
+        "$sortModeLabel • $toolsPerRow per row"
+      }
 
-        Text(
-          text = "Choose how tools are ordered and paginated in the navigation panel",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        SingleChoiceSegmentedButtonRow(
-          modifier = Modifier.fillMaxWidth(),
+      Card(
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("toolbox_sorting_card"),
+        colors = CardDefaults.cardColors(
+          containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
+        shape = RoundedCornerShape(16.dp),
+      ) {
+        Column(
+          modifier = Modifier.padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-          val sortingOptions = listOf(
-            Triple(ToolSortingOption.USER_CHOICE, "Manual", Icons.Default.TouchApp),
-            Triple(ToolSortingOption.TOOL_CATEGORIES, "Categories", Icons.Default.Category),
-            Triple(ToolSortingOption.USAGE, "Usage", Icons.AutoMirrored.Filled.TrendingUp),
-            Triple(ToolSortingOption.ALPHABETICAL, "Alpha", Icons.Default.SortByAlpha),
-          )
-
-          sortingOptions.forEachIndexed { index, (option, label, icon) ->
-            SegmentedButton(
-              selected = toolSorting == option,
-              onClick = { preferencesRepository.setToolSorting(option) },
-              shape = SegmentedButtonDefaults.itemShape(index = index, count = sortingOptions.size),
-              icon = {},
-              contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
-              modifier = Modifier
-                .testTag("sorting_option_${option.name.lowercase()}")
-                .then(if (option == ToolSortingOption.ALPHABETICAL) Modifier.testTag("sorting_option_alpha") else Modifier),
+          // Collapsible Header Row
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .clip(RoundedCornerShape(8.dp))
+              .clickable { isSortingExpanded = !isSortingExpanded }
+              .testTag("toolbox_sorting_toggle")
+              .testTag("default_sorting_toggle"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              modifier = Modifier.weight(1f),
             ) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-              ) {
-                Icon(
-                  imageVector = icon,
-                  contentDescription = null,
-                  modifier = Modifier.size(14.dp),
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.Sort,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+              )
+              Column {
+                Text(
+                  text = "Default Sorting",
+                  style = MaterialTheme.typography.titleMedium,
+                  fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                  text = label,
-                  style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
-                  maxLines = 1,
+                  text = sortingSummary,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.testTag("default_sorting_summary"),
                 )
               }
             }
-          }
-        }
 
-        AnimatedVisibility(
-          visible = toolSorting == ToolSortingOption.TOOL_CATEGORIES,
-          enter = expandVertically() + fadeIn(),
-          exit = shrinkVertically() + fadeOut(),
-        ) {
-          Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            val sortingRotationAngle by animateFloatAsState(
+              targetValue = if (isSortingExpanded) 180f else 0f,
+              label = "default_sorting_chevron",
+            )
+
+            IconButton(
+              onClick = { isSortingExpanded = !isSortingExpanded },
+            ) {
+              Icon(
+                imageVector = Icons.Default.ExpandMore,
+                contentDescription = if (isSortingExpanded) "Collapse default sorting" else "Expand default sorting",
+                modifier = Modifier.rotate(sortingRotationAngle),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+
+          AnimatedVisibility(
+            visible = isSortingExpanded,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
           ) {
-            // Category Order Pill Selector
             Column(
-              modifier = Modifier.fillMaxWidth(),
-              verticalArrangement = Arrangement.spacedBy(4.dp),
+              verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
               Text(
-                text = "Category order",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
+                text = "Choose how tools are ordered and paginated in the navigation panel",
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
 
               SingleChoiceSegmentedButtonRow(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .testTag("category_sorting_selector"),
+                modifier = Modifier.fillMaxWidth(),
               ) {
-                val categoryOptions = listOf(
-                  Triple(CategorySortingOption.MANUAL, "Manual", Icons.Default.TouchApp),
-                  Triple(CategorySortingOption.ALPHABETICAL, "Alpha", Icons.Default.SortByAlpha),
-                  Triple(CategorySortingOption.USAGE, "Usage", Icons.AutoMirrored.Filled.TrendingUp),
+                val sortingOptions = listOf(
+                  Triple(ToolSortingOption.USER_CHOICE, "Manual", Icons.Default.TouchApp),
+                  Triple(ToolSortingOption.TOOL_CATEGORIES, "Categories", Icons.Default.Category),
+                  Triple(ToolSortingOption.USAGE, "Usage", Icons.AutoMirrored.Filled.TrendingUp),
+                  Triple(ToolSortingOption.ALPHABETICAL, "Alpha", Icons.Default.SortByAlpha),
                 )
 
-                categoryOptions.forEachIndexed { index, (option, label, icon) ->
+                sortingOptions.forEachIndexed { index, (option, label, icon) ->
                   SegmentedButton(
-                    selected = categorySorting == option,
-                    onClick = { preferencesRepository.setCategorySorting(option) },
-                    shape = SegmentedButtonDefaults.itemShape(index = index, count = categoryOptions.size),
+                    selected = toolSorting == option,
+                    onClick = { preferencesRepository.setToolSorting(option) },
+                    shape = SegmentedButtonDefaults.itemShape(index = index, count = sortingOptions.size),
                     icon = {},
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
                     modifier = Modifier
-                      .testTag("category_sorting_${option.name.lowercase()}")
-                      .then(if (option == CategorySortingOption.ALPHABETICAL) Modifier.testTag("category_sorting_alpha") else Modifier),
+                      .testTag("sorting_option_${option.name.lowercase()}")
+                      .then(if (option == ToolSortingOption.ALPHABETICAL) Modifier.testTag("sorting_option_alpha") else Modifier),
                   ) {
                     Row(
                       verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(3.dp),
+                      horizontalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                       Icon(
                         imageVector = icon,
@@ -452,7 +810,7 @@ fun SettingsScreen(
                       )
                       Text(
                         text = label,
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
                         maxLines = 1,
                       )
                     }
@@ -460,268 +818,332 @@ fun SettingsScreen(
                 }
               }
 
-              Text(
-                text = when (categorySorting) {
-                  CategorySortingOption.MANUAL -> "Categories appear in standard predefined order."
-                  CategorySortingOption.ALPHABETICAL -> "Categories appear alphabetically from A to Z."
-                  CategorySortingOption.USAGE -> "Categories appear with your most frequently used categories first."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-              )
-            }
-
-            // Tools Within Categories Order Pill Selector
-            Column(
-              modifier = Modifier.fillMaxWidth(),
-              verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-              Text(
-                text = "Tools within categories",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-
-              SingleChoiceSegmentedButtonRow(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .testTag("category_tool_sorting_selector"),
+              AnimatedVisibility(
+                visible = toolSorting == ToolSortingOption.TOOL_CATEGORIES,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
               ) {
-                val toolOptions = listOf(
-                  Triple(CategoryToolSortingOption.MANUAL, "Manual", Icons.Default.TouchApp),
-                  Triple(CategoryToolSortingOption.ALPHABETICAL, "Alpha", Icons.Default.SortByAlpha),
-                  Triple(CategoryToolSortingOption.USAGE, "Usage", Icons.AutoMirrored.Filled.TrendingUp),
-                )
-
-                toolOptions.forEachIndexed { index, (option, label, icon) ->
-                  SegmentedButton(
-                    selected = categoryToolSorting == option,
-                    onClick = { preferencesRepository.setCategoryToolSorting(option) },
-                    shape = SegmentedButtonDefaults.itemShape(index = index, count = toolOptions.size),
-                    icon = {},
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
-                    modifier = Modifier
-                      .testTag("category_tool_sorting_${option.name.lowercase()}")
-                      .then(if (option == CategoryToolSortingOption.ALPHABETICAL) Modifier.testTag("category_tool_sorting_alpha") else Modifier),
-                  ) {
-                    Row(
-                      verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(3.dp),
-                    ) {
-                      Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp),
-                      )
-                      Text(
-                        text = label,
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                        maxLines = 1,
-                      )
-                    }
-                  }
-                }
-              }
-
-              Text(
-                text = when (categoryToolSorting) {
-                  CategoryToolSortingOption.MANUAL -> "Tools within each category appear in manual order. Touch and hold a tool to drag and drop it within its category."
-                  CategoryToolSortingOption.ALPHABETICAL -> "Tools within each category appear alphabetically from A to Z."
-                  CategoryToolSortingOption.USAGE -> "Tools within each category appear with your most used tools first."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-              )
-            }
-          }
-        }
-
-        AnimatedVisibility(
-          visible = toolSorting == ToolSortingOption.ALPHABETICAL,
-          enter = expandVertically() + fadeIn(),
-          exit = shrinkVertically() + fadeOut(),
-        ) {
-          Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            SingleChoiceSegmentedButtonRow(
-              modifier = Modifier
-                .fillMaxWidth()
-                .testTag("alphabetical_sort_order_selector"),
-            ) {
-              val sortOrders = listOf(
-                Triple(ToolSortOrder.ASCENDING, "Ascending", Icons.Default.ArrowUpward),
-                Triple(ToolSortOrder.DESCENDING, "Descending", Icons.Default.ArrowDownward),
-              )
-
-              sortOrders.forEachIndexed { index, (order, label, icon) ->
-                SegmentedButton(
-                  selected = toolSortOrder == order,
-                  onClick = { preferencesRepository.setToolSortOrder(order) },
-                  shape = SegmentedButtonDefaults.itemShape(index = index, count = sortOrders.size),
-                  icon = {},
-                  contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                  modifier = Modifier.testTag("sort_order_${order.name.lowercase()}"),
+                Column(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                  Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                  // Category Order Pill Selector
+                  Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                   ) {
-                    Icon(
-                      imageVector = icon,
-                      contentDescription = null,
-                      modifier = Modifier.size(14.dp),
-                    )
                     Text(
-                      text = label,
-                      style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                      maxLines = 1,
+                      text = "Category order",
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = FontWeight.SemiBold,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    SingleChoiceSegmentedButtonRow(
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("category_sorting_selector"),
+                    ) {
+                      val categoryOptions = listOf(
+                        Triple(CategorySortingOption.MANUAL, "Manual", Icons.Default.TouchApp),
+                        Triple(CategorySortingOption.ALPHABETICAL, "Alpha", Icons.Default.SortByAlpha),
+                        Triple(CategorySortingOption.USAGE, "Usage", Icons.AutoMirrored.Filled.TrendingUp),
+                      )
+
+                      categoryOptions.forEachIndexed { index, (option, label, icon) ->
+                        SegmentedButton(
+                          selected = categorySorting == option,
+                          onClick = { preferencesRepository.setCategorySorting(option) },
+                          shape = SegmentedButtonDefaults.itemShape(index = index, count = categoryOptions.size),
+                          icon = {},
+                          contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
+                          modifier = Modifier
+                            .testTag("category_sorting_${option.name.lowercase()}")
+                            .then(if (option == CategorySortingOption.ALPHABETICAL) Modifier.testTag("category_sorting_alpha") else Modifier),
+                        ) {
+                          Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                          ) {
+                            Icon(
+                              imageVector = icon,
+                              contentDescription = null,
+                              modifier = Modifier.size(14.dp),
+                            )
+                            Text(
+                              text = label,
+                              style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                              maxLines = 1,
+                            )
+                          }
+                        }
+                      }
+                    }
+
+                    Text(
+                      text = when (categorySorting) {
+                        CategorySortingOption.MANUAL -> "Categories appear in standard predefined order."
+                        CategorySortingOption.ALPHABETICAL -> "Categories appear alphabetically from A to Z."
+                        CategorySortingOption.USAGE -> "Categories appear with your most frequently used categories first."
+                      },
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.primary,
+                    )
+                  }
+
+                  // Tools Within Categories Order Pill Selector
+                  Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                  ) {
+                    Text(
+                      text = "Tools within categories",
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = FontWeight.SemiBold,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    SingleChoiceSegmentedButtonRow(
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("category_tool_sorting_selector"),
+                    ) {
+                      val toolOptions = listOf(
+                        Triple(CategoryToolSortingOption.MANUAL, "Manual", Icons.Default.TouchApp),
+                        Triple(CategoryToolSortingOption.ALPHABETICAL, "Alpha", Icons.Default.SortByAlpha),
+                        Triple(CategoryToolSortingOption.USAGE, "Usage", Icons.AutoMirrored.Filled.TrendingUp),
+                      )
+
+                      toolOptions.forEachIndexed { index, (option, label, icon) ->
+                        SegmentedButton(
+                          selected = categoryToolSorting == option,
+                          onClick = { preferencesRepository.setCategoryToolSorting(option) },
+                          shape = SegmentedButtonDefaults.itemShape(index = index, count = toolOptions.size),
+                          icon = {},
+                          contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
+                          modifier = Modifier
+                            .testTag("category_tool_sorting_${option.name.lowercase()}")
+                            .then(if (option == CategoryToolSortingOption.ALPHABETICAL) Modifier.testTag("category_tool_sorting_alpha") else Modifier),
+                        ) {
+                          Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                          ) {
+                            Icon(
+                              imageVector = icon,
+                              contentDescription = null,
+                              modifier = Modifier.size(14.dp),
+                            )
+                            Text(
+                              text = label,
+                              style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                              maxLines = 1,
+                            )
+                          }
+                        }
+                      }
+                    }
+
+                    Text(
+                      text = when (categoryToolSorting) {
+                        CategoryToolSortingOption.MANUAL -> "Tools within each category appear in manual order. Touch and hold a tool to drag and drop it within its category."
+                        CategoryToolSortingOption.ALPHABETICAL -> "Tools within each category appear alphabetically from A to Z."
+                        CategoryToolSortingOption.USAGE -> "Tools within each category appear with your most used tools first."
+                      },
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.primary,
                     )
                   }
                 }
               }
-            }
 
-            Text(
-              text = if (toolSortOrder == ToolSortOrder.ASCENDING) {
-                "Tools will appear alphabetically from A to Z."
-              } else {
-                "Tools will appear reverse alphabetically from Z to A."
-              },
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.primary,
-            )
-          }
-        }
+              AnimatedVisibility(
+                visible = toolSorting == ToolSortingOption.ALPHABETICAL,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
+              ) {
+                Column(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                  SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .testTag("alphabetical_sort_order_selector"),
+                  ) {
+                    val sortOrders = listOf(
+                      Triple(ToolSortOrder.ASCENDING, "Ascending", Icons.Default.ArrowUpward),
+                      Triple(ToolSortOrder.DESCENDING, "Descending", Icons.Default.ArrowDownward),
+                    )
 
-        if (toolSorting == ToolSortingOption.USAGE) {
-          Text(
-            text = "Tools will appear with your most frequently used tools first.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.primary,
-          )
-        }
+                    sortOrders.forEachIndexed { index, (order, label, icon) ->
+                      SegmentedButton(
+                        selected = toolSortOrder == order,
+                        onClick = { preferencesRepository.setToolSortOrder(order) },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = sortOrders.size),
+                        icon = {},
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                        modifier = Modifier.testTag("sort_order_${order.name.lowercase()}"),
+                      ) {
+                        Row(
+                          verticalAlignment = Alignment.CenterVertically,
+                          horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                          Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                          )
+                          Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                            maxLines = 1,
+                          )
+                        }
+                      }
+                    }
+                  }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                  Text(
+                    text = if (toolSortOrder == ToolSortOrder.ASCENDING) {
+                      "Tools will appear alphabetically from A to Z."
+                    } else {
+                      "Tools will appear reverse alphabetically from Z to A."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                  )
+                }
+              }
 
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            Icon(
-              imageVector = Icons.Default.GridView,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(20.dp),
-            )
-            Text(
-              text = "Tools per row",
-              style = MaterialTheme.typography.titleSmall,
-              fontWeight = FontWeight.SemiBold,
-            )
-          }
-          Text(
-            text = "$toolsPerRow",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.ExtraBold,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.testTag("settings_tools_per_row_count"),
-          )
-        }
-
-        Text(
-          text = if (toolSorting == ToolSortingOption.TOOL_CATEGORIES) {
-            "Small categories will share a single row when their combined tool count fits within this setting."
-          } else {
-            "Number of tool icons displayed per row in the toolbox panel."
-          },
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        val coercedToolsPerRow = coerceToolsPerRow(toolsPerRow)
-        val stops = (MIN_TOOLS_PER_ROW..MAX_TOOLS_PER_ROW).toList()
-        val activeColor = MaterialTheme.colorScheme.primary
-        val inactiveColor = MaterialTheme.colorScheme.surfaceVariant
-        val activeDotColor = MaterialTheme.colorScheme.onPrimary
-        val inactiveDotColor = MaterialTheme.colorScheme.onSurfaceVariant
-
-        Slider(
-          value = coercedToolsPerRow.toFloat(),
-          onValueChange = { newValue ->
-            preferencesRepository.setToolsPerRow(coerceToolsPerRow(newValue.roundToInt()))
-          },
-          valueRange = MIN_TOOLS_PER_ROW.toFloat()..MAX_TOOLS_PER_ROW.toFloat(),
-          steps = MAX_TOOLS_PER_ROW - MIN_TOOLS_PER_ROW - 1,
-          modifier = Modifier
-            .fillMaxWidth()
-            .height(32.dp)
-            .testTag("settings_tools_per_row_slider"),
-          thumb = {
-            Surface(
-              modifier = Modifier.size(20.dp),
-              shape = CircleShape,
-              color = MaterialTheme.colorScheme.primary,
-              shadowElevation = 3.dp,
-            ) {}
-          },
-          track = { sliderState ->
-            Canvas(
-              modifier = Modifier
-                .fillMaxWidth()
-                .height(12.dp),
-            ) {
-              val trackStroke = 6.dp.toPx()
-              val dotRadius = 3.5.dp.toPx()
-              val centerY = size.height / 2f
-              val fraction = (sliderState.value - MIN_TOOLS_PER_ROW) /
-                (MAX_TOOLS_PER_ROW - MIN_TOOLS_PER_ROW).toFloat()
-              val activeEndX = size.width * fraction.coerceIn(0f, 1f)
-
-              // Inactive track
-              drawLine(
-                color = inactiveColor,
-                start = Offset(0f, centerY),
-                end = Offset(size.width, centerY),
-                strokeWidth = trackStroke,
-                cap = StrokeCap.Round,
-              )
-              // Active track
-              drawLine(
-                color = activeColor,
-                start = Offset(0f, centerY),
-                end = Offset(activeEndX, centerY),
-                strokeWidth = trackStroke,
-                cap = StrokeCap.Round,
-              )
-              // Dots for 3, 4, 5, 6
-              stops.forEachIndexed { index, stop ->
-                val stopFraction = index.toFloat() / (stops.size - 1).toFloat()
-                val dotX = size.width * stopFraction
-                val isReached = stop <= coercedToolsPerRow
-                drawCircle(
-                  color = if (isReached) activeDotColor else inactiveDotColor,
-                  radius = dotRadius,
-                  center = Offset(dotX, centerY),
+              if (toolSorting == ToolSortingOption.USAGE) {
+                Text(
+                  text = "Tools will appear with your most frequently used tools first.",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.primary,
                 )
               }
+
+              HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.GridView,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                  )
+                  Text(
+                    text = "Tools per row",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                  )
+                }
+                Text(
+                  text = "$toolsPerRow",
+                  style = MaterialTheme.typography.titleSmall,
+                  fontWeight = FontWeight.ExtraBold,
+                  color = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.testTag("settings_tools_per_row_count"),
+                )
+              }
+
+              Text(
+                text = if (toolSorting == ToolSortingOption.TOOL_CATEGORIES) {
+                  "Small categories will share a single row when their combined tool count fits within this setting."
+                } else {
+                  "Number of tool icons displayed per row in the toolbox panel."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+
+              val coercedToolsPerRow = coerceToolsPerRow(toolsPerRow)
+              val stops = (MIN_TOOLS_PER_ROW..MAX_TOOLS_PER_ROW).toList()
+              val activeColor = MaterialTheme.colorScheme.primary
+              val inactiveColor = MaterialTheme.colorScheme.surfaceVariant
+              val activeDotColor = MaterialTheme.colorScheme.onPrimary
+              val inactiveDotColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+              Slider(
+                value = coercedToolsPerRow.toFloat(),
+                onValueChange = { newValue ->
+                  preferencesRepository.setToolsPerRow(coerceToolsPerRow(newValue.roundToInt()))
+                },
+                valueRange = MIN_TOOLS_PER_ROW.toFloat()..MAX_TOOLS_PER_ROW.toFloat(),
+                steps = MAX_TOOLS_PER_ROW - MIN_TOOLS_PER_ROW - 1,
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .height(32.dp)
+                  .testTag("settings_tools_per_row_slider"),
+                thumb = {
+                  Surface(
+                    modifier = Modifier.size(20.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary,
+                    shadowElevation = 3.dp,
+                  ) {}
+                },
+                track = { sliderState ->
+                  Canvas(
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .height(12.dp),
+                  ) {
+                    val trackStroke = 6.dp.toPx()
+                    val dotRadius = 3.5.dp.toPx()
+                    val centerY = size.height / 2f
+                    val fraction = (sliderState.value - MIN_TOOLS_PER_ROW) /
+                      (MAX_TOOLS_PER_ROW - MIN_TOOLS_PER_ROW).toFloat()
+                    val activeEndX = size.width * fraction.coerceIn(0f, 1f)
+
+                    // Inactive track
+                    drawLine(
+                      color = inactiveColor,
+                      start = Offset(0f, centerY),
+                      end = Offset(size.width, centerY),
+                      strokeWidth = trackStroke,
+                      cap = StrokeCap.Round,
+                    )
+                    // Active track
+                    drawLine(
+                      color = activeColor,
+                      start = Offset(0f, centerY),
+                      end = Offset(activeEndX, centerY),
+                      strokeWidth = trackStroke,
+                      cap = StrokeCap.Round,
+                    )
+                    // Dots for 3, 4, 5, 6
+                    stops.forEachIndexed { index, stop ->
+                      val stopFraction = index.toFloat() / (stops.size - 1).toFloat()
+                      val dotX = size.width * stopFraction
+                      val isReached = stop <= coercedToolsPerRow
+                      drawCircle(
+                        color = if (isReached) activeDotColor else inactiveDotColor,
+                        radius = dotRadius,
+                        center = Offset(dotX, centerY),
+                      )
+                    }
+                  }
+                },
+                colors = SliderDefaults.colors(
+                  thumbColor = MaterialTheme.colorScheme.primary,
+                  activeTrackColor = MaterialTheme.colorScheme.primary,
+                  inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+                ),
+              )
             }
-          },
-          colors = SliderDefaults.colors(
-            thumbColor = MaterialTheme.colorScheme.primary,
-            activeTrackColor = MaterialTheme.colorScheme.primary,
-            inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant,
-          ),
-        )
+          }
+        }
       }
-    }
 
     // Section 2: Theme Mode
     Card(
@@ -2718,7 +3140,12 @@ fun SettingsScreen(
           }
           backupRestoreStatus = "Settings backed up successfully."
           Toast.makeText(context, "Settings backed up to file", Toast.LENGTH_SHORT).show()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+          preferencesRepository.logError(
+            throwable = e,
+            source = "Settings",
+            customMessage = "Failed to export settings to file.",
+          )
           backupRestoreStatus = "Failed to export settings to file."
           Toast.makeText(context, "Failed to backup settings", Toast.LENGTH_SHORT).show()
         }
@@ -2752,10 +3179,19 @@ fun SettingsScreen(
             backupRestoreStatus = "Settings restored successfully."
             Toast.makeText(context, "Settings restored from file", Toast.LENGTH_SHORT).show()
           } else {
+            preferencesRepository.logError(
+              message = "Invalid or unrecognized settings backup file.",
+              source = "Settings",
+            )
             backupRestoreStatus = "Invalid or unrecognized settings backup file."
             Toast.makeText(context, "Invalid settings backup file", Toast.LENGTH_SHORT).show()
           }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+          preferencesRepository.logError(
+            throwable = e,
+            source = "Settings",
+            customMessage = "Failed to read settings backup file.",
+          )
           backupRestoreStatus = "Failed to read settings backup file."
           Toast.makeText(context, "Failed to restore settings", Toast.LENGTH_SHORT).show()
         }
@@ -2773,7 +3209,12 @@ fun SettingsScreen(
           }
           dataBackupRestoreStatus = "Data backed up successfully."
           Toast.makeText(context, "Data backed up to file", Toast.LENGTH_SHORT).show()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+          preferencesRepository.logError(
+            throwable = e,
+            source = "Settings",
+            customMessage = "Failed to export data to file.",
+          )
           dataBackupRestoreStatus = "Failed to export data to file."
           Toast.makeText(context, "Failed to backup data", Toast.LENGTH_SHORT).show()
         }
@@ -2793,10 +3234,19 @@ fun SettingsScreen(
             dataBackupRestoreStatus = "Data restored successfully."
             Toast.makeText(context, "Data restored from file", Toast.LENGTH_SHORT).show()
           } else {
+            preferencesRepository.logError(
+              message = "Invalid or unrecognized data backup file.",
+              source = "Settings",
+            )
             dataBackupRestoreStatus = "Invalid or unrecognized data backup file."
             Toast.makeText(context, "Invalid data backup file", Toast.LENGTH_SHORT).show()
           }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+          preferencesRepository.logError(
+            throwable = e,
+            source = "Settings",
+            customMessage = "Failed to read data backup file.",
+          )
           dataBackupRestoreStatus = "Failed to read data backup file."
           Toast.makeText(context, "Failed to restore data", Toast.LENGTH_SHORT).show()
         }
@@ -2806,7 +3256,8 @@ fun SettingsScreen(
     Card(
       modifier = Modifier
         .fillMaxWidth()
-        .testTag("settings_backup_restore_card"),
+        .testTag("settings_backup_restore_card")
+        .testTag("backup_restore_card"),
       colors = CardDefaults.cardColors(
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
       ),
@@ -2816,147 +3267,194 @@ fun SettingsScreen(
         modifier = Modifier.padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
+        // Collapsible Header Row
         Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { isBackupRestoreExpanded = !isBackupRestoreExpanded }
+            .testTag("settings_backup_restore_toggle")
+            .testTag("backup_restore_toggle"),
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-          Icon(
-            imageVector = Icons.Default.SaveAlt,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f),
+          ) {
+            Icon(
+              imageVector = Icons.Default.SaveAlt,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(20.dp),
+            )
+            Column {
+              Text(
+                text = "Backup & Restore",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+              )
+              Text(
+                text = "Export or import settings and tool data as JSON",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("backup_restore_summary"),
+              )
+            }
+          }
+
+          val backupRestoreRotationAngle by animateFloatAsState(
+            targetValue = if (isBackupRestoreExpanded) 180f else 0f,
+            label = "backup_restore_chevron",
           )
-          Text(
-            text = "Backup & Restore",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-          )
+
+          IconButton(
+            onClick = { isBackupRestoreExpanded = !isBackupRestoreExpanded },
+          ) {
+            Icon(
+              imageVector = Icons.Default.ExpandMore,
+              contentDescription = if (isBackupRestoreExpanded) "Collapse backup and restore" else "Expand backup and restore",
+              modifier = Modifier.rotate(backupRestoreRotationAngle),
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
         }
 
-        // Settings Backup & Restore
-        Text(
-          text = "Settings",
-          style = MaterialTheme.typography.titleSmall,
-          fontWeight = FontWeight.SemiBold,
-          color = MaterialTheme.colorScheme.onSurface,
-        )
-
-        Text(
-          text = "Save your current settings to a JSON file or restore settings from a previous backup.",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        AnimatedVisibility(
+          visible = isBackupRestoreExpanded,
+          enter = expandVertically() + fadeIn(),
+          exit = shrinkVertically() + fadeOut(),
         ) {
-          OutlinedButton(
-            onClick = {
-              backupDocumentLauncher.launch(DEFAULT_SETTINGS_BACKUP_FILENAME)
-            },
-            modifier = Modifier
-              .weight(1f)
-              .testTag("backup_settings_button"),
+          Column(
+            verticalArrangement = Arrangement.spacedBy(12.dp),
           ) {
-            Icon(
-              imageVector = Icons.Default.FileUpload,
-              contentDescription = null,
-              modifier = Modifier.size(18.dp),
+            // Settings Backup & Restore
+            Text(
+              text = "Settings",
+              style = MaterialTheme.typography.titleSmall,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurface,
             )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Backup")
-          }
 
-          OutlinedButton(
-            onClick = {
-              restoreDocumentLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
-            },
-            modifier = Modifier
-              .weight(1f)
-              .testTag("restore_settings_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.FileDownload,
-              contentDescription = null,
-              modifier = Modifier.size(18.dp),
+            Text(
+              text = "Save your current settings to a JSON file or restore settings from a previous backup.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Restore")
-          }
-        }
 
-        backupRestoreStatus?.let { statusMessage ->
-          Text(
-            text = statusMessage,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.testTag("backup_restore_status"),
-          )
-        }
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+              OutlinedButton(
+                onClick = {
+                  backupDocumentLauncher.launch(DEFAULT_SETTINGS_BACKUP_FILENAME)
+                },
+                modifier = Modifier
+                  .weight(1f)
+                  .testTag("backup_settings_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.FileUpload,
+                  contentDescription = null,
+                  modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Backup")
+              }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+              OutlinedButton(
+                onClick = {
+                  restoreDocumentLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+                },
+                modifier = Modifier
+                  .weight(1f)
+                  .testTag("restore_settings_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.FileDownload,
+                  contentDescription = null,
+                  modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Restore")
+              }
+            }
 
-        // Data Backup & Restore
-        Text(
-          text = "Data",
-          style = MaterialTheme.typography.titleSmall,
-          fontWeight = FontWeight.SemiBold,
-          color = MaterialTheme.colorScheme.onSurface,
-        )
+            backupRestoreStatus?.let { statusMessage ->
+              Text(
+                text = statusMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.testTag("backup_restore_status"),
+              )
+            }
 
-        Text(
-          text = "Save your tool data (notes, tasks, custom recipes, plant schedule, saved dice rolls, custom tunings, progressions, and music playlists/favorites/stats) to a JSON file or restore data from a previous backup.",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-          OutlinedButton(
-            onClick = {
-              backupDataDocumentLauncher.launch(DEFAULT_DATA_BACKUP_FILENAME)
-            },
-            modifier = Modifier
-              .weight(1f)
-              .testTag("backup_data_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.FileUpload,
-              contentDescription = null,
-              modifier = Modifier.size(18.dp),
+            // Data Backup & Restore
+            Text(
+              text = "Data",
+              style = MaterialTheme.typography.titleSmall,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurface,
             )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Backup")
-          }
 
-          OutlinedButton(
-            onClick = {
-              restoreDataDocumentLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
-            },
-            modifier = Modifier
-              .weight(1f)
-              .testTag("restore_data_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.FileDownload,
-              contentDescription = null,
-              modifier = Modifier.size(18.dp),
+            Text(
+              text = "Save your tool data (notes, tasks, custom recipes, plant schedule, saved dice rolls, custom tunings, progressions, and music playlists/favorites/stats) to a JSON file or restore data from a previous backup.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Restore")
-          }
-        }
 
-        dataBackupRestoreStatus?.let { statusMessage ->
-          Text(
-            text = statusMessage,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.testTag("data_backup_restore_status"),
-          )
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+              OutlinedButton(
+                onClick = {
+                  backupDataDocumentLauncher.launch(DEFAULT_DATA_BACKUP_FILENAME)
+                },
+                modifier = Modifier
+                  .weight(1f)
+                  .testTag("backup_data_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.FileUpload,
+                  contentDescription = null,
+                  modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Backup")
+              }
+
+              OutlinedButton(
+                onClick = {
+                  restoreDataDocumentLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+                },
+                modifier = Modifier
+                  .weight(1f)
+                  .testTag("restore_data_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.FileDownload,
+                  contentDescription = null,
+                  modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Restore")
+              }
+            }
+
+            dataBackupRestoreStatus?.let { statusMessage ->
+              Text(
+                text = statusMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.testTag("data_backup_restore_status"),
+              )
+            }
+          }
         }
       }
     }
@@ -3034,6 +3532,25 @@ fun SettingsScreen(
       }
     }
 
+    // Error Logs button at the bottom
+    OutlinedButton(
+      onClick = {
+        showErrorLogsDialog = true
+      },
+      shape = CircleShape,
+      modifier = Modifier
+        .fillMaxWidth()
+        .testTag("error_logs_button"),
+    ) {
+      Icon(
+        imageVector = Icons.Default.BugReport,
+        contentDescription = null,
+        modifier = Modifier.size(18.dp),
+      )
+      Spacer(modifier = Modifier.width(8.dp))
+      Text("Error Logs")
+    }
+
     if (showResetConfirmDialog) {
       AlertDialog(
         onDismissRequest = { showResetConfirmDialog = false },
@@ -3089,10 +3606,12 @@ fun SettingsScreen(
               customAccentHexInput = ""
               selectedHarmonyMode = HarmonyMode.ANALOGOUS
               collapsedCategories = ToolCategory.entries.toSet()
+              isSortingExpanded = false
               isToolSettingsExpanded = false
               isPermissionsExpanded = false
               isThemeColorExpanded = false
               isAccentColorExpanded = false
+              isBackupRestoreExpanded = false
               backupRestoreStatus = null
               dataBackupRestoreStatus = null
               showResetConfirmDialog = false

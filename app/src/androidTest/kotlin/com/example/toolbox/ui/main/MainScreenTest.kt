@@ -13,7 +13,9 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeLeft
@@ -437,8 +439,12 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
     composeTestRule.waitForIdle()
 
-    // Verify settings screen shows Default Sorting card with both options
+    // Verify settings screen shows Default Sorting card (collapsed by default) and expand it
     composeTestRule.onNodeWithTag("toolbox_sorting_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("toolbox_sorting_toggle").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("sorting_option_user_choice").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("toolbox_sorting_toggle").performClick()
+    composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("sorting_option_user_choice").assertIsDisplayed()
     composeTestRule.onNodeWithTag("sorting_option_tool_categories").assertIsDisplayed()
 
@@ -632,11 +638,17 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
     composeTestRule.waitForIdle()
 
-    // Tool visibility card and Permissions card are displayed and collapsed by default
+    // Default Sorting, Tool visibility, Permissions, and Backup & Restore cards are collapsed by default
+    composeTestRule.onNodeWithTag("toolbox_sorting_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("toolbox_sorting_toggle").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("sorting_option_user_choice").assertDoesNotExist()
     composeTestRule.onNodeWithTag("tool_visibility_card").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tool_visibility_toggle").assertIsDisplayed()
     composeTestRule.onNodeWithTag("permissions_card").assertExists()
     composeTestRule.onNodeWithTag("permissions_toggle").assertExists()
+    composeTestRule.onNodeWithTag("settings_backup_restore_card").assertExists()
+    composeTestRule.onNodeWithTag("settings_backup_restore_toggle").assertExists()
+    composeTestRule.onNodeWithTag("backup_settings_button").assertDoesNotExist()
 
     // Initially collapsed: category headers and permission cards do not exist
     composeTestRule.onNodeWithTag("category_header_math_and_measurement").assertDoesNotExist()
@@ -671,6 +683,10 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
+    composeTestRule.waitForIdle()
+
+    // Expand Default Sorting section (collapsed by default)
+    composeTestRule.onNodeWithTag("toolbox_sorting_toggle").performClick()
     composeTestRule.waitForIdle()
 
     // Alphabetical sort option button is displayed with "Alpha" text
@@ -716,6 +732,10 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithTag("tool_item_SETTINGS").performClick()
+    composeTestRule.waitForIdle()
+
+    // Expand Default Sorting section (collapsed by default)
+    composeTestRule.onNodeWithTag("toolbox_sorting_toggle").performClick()
     composeTestRule.waitForIdle()
 
     // Category sorting pill selector is not visible initially in manual mode
@@ -1634,5 +1654,73 @@ class MainScreenTest {
     } finally {
       tempDir.deleteRecursively()
     }
+  }
+
+  @Test
+  fun settingsScreen_errorLogsButtonAtBottom_opensErrorLogsFullPageViewAndKeepsLast100Errors() {
+    val repo = InMemoryNavigationPreferencesRepository()
+    for (i in 1..105) {
+      repo.logError(
+        message = "Logged error #$i",
+        source = "Settings",
+        details = "Trace #$i",
+        timestampMs = 1_763_400_000_000L + i * 1_000L,
+      )
+    }
+    assertEquals(100, repo.getErrorLogs().size)
+
+    setTestContent {
+      com.example.toolbox.ui.tools.SettingsScreen(
+        preferencesRepository = repo,
+      )
+    }
+    composeTestRule.waitForIdle()
+
+    // Scroll to the bottom of SettingsScreen and click the Error Logs button
+    composeTestRule.onNodeWithTag("error_logs_button").performScrollTo()
+    composeTestRule.onNodeWithTag("error_logs_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("error_logs_button").performClick()
+    composeTestRule.waitForIdle()
+
+    // Full-page Error Logs view opens with toolbar containing back button, title (Error Logs), and search button
+    composeTestRule.onNodeWithTag("error_logs_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("action_navigate_back").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("error_logs_title").assertTextEquals("Error Logs")
+    composeTestRule.onNodeWithTag("action_toggle_search").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("error_logs_count_text").assertTextEquals("100 of 100 errors recorded")
+
+    // Errors are displayed on cards with selectable/highlightable text and a Copy button on each card
+    composeTestRule.onNodeWithTag("error_log_card_0").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("copy_error_log_button_0").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("error_log_selectable_text_0").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Logged error #105").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Logged error #6").assertExists()
+    composeTestRule.onNodeWithText("Logged error #1").assertDoesNotExist()
+    composeTestRule.onNodeWithText("Logged error #5").assertDoesNotExist()
+
+    // Click the copy button on the first error card
+    composeTestRule.onNodeWithTag("copy_error_log_button_0").performClick()
+    composeTestRule.waitForIdle()
+
+    // Click the toolbar search button and filter for "#105"
+    composeTestRule.onNodeWithTag("action_toggle_search").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("search_input").performTextInput("#105")
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("error_logs_count_text").assertTextEquals("1 of 100 errors matching")
+    composeTestRule.onNodeWithText("Logged error #105").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Logged error #104").assertDoesNotExist()
+
+    // Close search
+    composeTestRule.onNodeWithTag("action_close_search").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("error_logs_count_text").assertTextEquals("100 of 100 errors recorded")
+
+    // Navigate back to the main Settings screen via the toolbar back button
+    composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("error_logs_screen").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("settings_screen").assertIsDisplayed()
   }
 }

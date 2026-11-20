@@ -166,7 +166,7 @@ import kotlinx.coroutines.withContext
  *   built-in sample image.
  * - When an image file is active (passed via [initialFile] / [initialPhoto] from Files or Gallery,
  *   or selected in-tool), renders the full black-background Image Viewer with horizontal paging
- *   across sibling images in the folder, pinch-to-zoom (`100%..500%`), dismissible top/bottom
+ *   across sibling images in the folder, pinch-to-zoom (`50%..500%`), dismissible top/bottom
  *   translucent overlay bars, OCR/QR/Smart Tag recognition inspector, interactive camera-style
  *   color picker reticle with hex pill link to the Colors tool, one-tap Edit link to Image Editor,
  *   Share, Delete confirmation, and bottom thumbnail preview strip.
@@ -584,6 +584,7 @@ internal fun ImageViewerContent(
   onOpenColorPicker: (String) -> Unit = {},
 ) {
   val context = LocalContext.current
+  val density = LocalDensity.current
   val haptic = LocalHapticFeedback.current
 
   val effTopInset = if (applySystemInsets) topSystemInset else 0.dp
@@ -623,17 +624,18 @@ internal fun ImageViewerContent(
   var selectedOverlayTag by rememberSaveable { mutableStateOf<String?>(null) }
   var topBarHeightPx by remember { mutableIntStateOf(0) }
   var bottomBarHeightPx by remember { mutableIntStateOf(0) }
+  var previewBarWidthPx by remember { mutableIntStateOf(0) }
 
   // Videos play automatically and muted by default in the viewer
   var isVideoPlaying by rememberSaveable(initialPhoto.path) { mutableStateOf(true) }
   var isVideoMuted by rememberSaveable(initialPhoto.path) { mutableStateOf(true) }
 
-  // Current active page's zoom scale (1f..5f)
-  var currentZoomScale by remember { mutableFloatStateOf(MIN_PHOTO_ZOOM) }
+  // Current active page's zoom scale (0.5f..5f)
+  var currentZoomScale by remember { mutableFloatStateOf(DEFAULT_PHOTO_ZOOM) }
 
   // Reset zoom, active tag box overlay, and auto-play muted when swiping to a different photo/video
   LaunchedEffect(pagerState.currentPage) {
-    currentZoomScale = MIN_PHOTO_ZOOM
+    currentZoomScale = DEFAULT_PHOTO_ZOOM
     selectedOverlayTag = null
     isVideoPlaying = true
     isVideoMuted = true
@@ -641,7 +643,16 @@ internal fun ImageViewerContent(
       if (viewerPhotos[pagerState.currentPage].isVideo) {
         isColorPickerActive = false
       }
-      previewListState.animateScrollToItem(pagerState.currentPage)
+    }
+  }
+
+  // Center the active photo's thumbnail in the bottom preview scroll bar
+  LaunchedEffect(pagerState.currentPage, previewBarWidthPx) {
+    if (viewerPhotos.isNotEmpty() && pagerState.currentPage in viewerPhotos.indices && previewBarWidthPx > 0) {
+      previewListState.animateScrollToItem(
+        index = pagerState.currentPage,
+        scrollOffset = 0,
+      )
     }
   }
 
@@ -720,7 +731,7 @@ internal fun ImageViewerContent(
         indexEntry = if (isCurrentPage) currentIndexEntry else photoIndexMap[pagePhoto.path],
         safeTopInsetPx = if (showPreviewBar) topBarHeightPx else 0,
         safeBottomInsetPx = if (showPreviewBar) bottomBarHeightPx else 0,
-        zoomScale = if (isCurrentPage) currentZoomScale else MIN_PHOTO_ZOOM,
+        zoomScale = if (isCurrentPage) currentZoomScale else DEFAULT_PHOTO_ZOOM,
         onZoomScaleChange = { updatedZoom ->
           if (isCurrentPage) {
             currentZoomScale = updatedZoom
@@ -804,7 +815,7 @@ internal fun ImageViewerContent(
           color = Color.White.copy(alpha = 0.16f),
           modifier = Modifier
             .clip(RoundedCornerShape(14.dp))
-            .clickable { currentZoomScale = MIN_PHOTO_ZOOM }
+            .clickable { currentZoomScale = DEFAULT_PHOTO_ZOOM }
             .testTag("photo_viewer_zoom_badge"),
         ) {
           Text(
@@ -1127,11 +1138,20 @@ internal fun ImageViewerContent(
               }
             }
 
+            val selectedThumbHalfDp = 32.dp
+            val horizontalCenterPaddingDp = with(density) {
+              if (previewBarWidthPx > 0) {
+                (previewBarWidthPx.toDp() / 2f - selectedThumbHalfDp).coerceAtLeast(16.dp)
+              } else {
+                16.dp
+              }
+            }
+
             LazyRow(
               state = previewListState,
               contentPadding = PaddingValues(
-                start = effStartInset + 16.dp,
-                end = effEndInset + 16.dp,
+                start = maxOf(effStartInset + 16.dp, horizontalCenterPaddingDp),
+                end = maxOf(effEndInset + 16.dp, horizontalCenterPaddingDp),
                 top = 6.dp,
                 bottom = effBottomInset + 12.dp,
               ),
@@ -1139,6 +1159,7 @@ internal fun ImageViewerContent(
               verticalAlignment = Alignment.CenterVertically,
               modifier = Modifier
                 .fillMaxWidth()
+                .onSizeChanged { previewBarWidthPx = it.width }
                 .heightIn(min = 64.dp + 6.dp + effBottomInset + 12.dp)
                 .testTag("photo_viewer_preview_scroll_bar"),
             ) {

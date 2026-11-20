@@ -5201,7 +5201,7 @@ private fun ArtistsTabContent(
 }
 
 /**
- * Collapsible section header displaying a group title (Album, Artist, or Genre) with item count badge
+ * Collapsible section header displaying a group title (Album, Artist, Genre, or Year) with item count badge
  * and expand/collapse chevron in the Songs and Albums views, styled like the Files tool.
  */
 @Composable

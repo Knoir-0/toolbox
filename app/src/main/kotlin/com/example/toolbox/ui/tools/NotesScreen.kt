@@ -2526,7 +2526,7 @@ private fun NotesQuickCaptureBar(
     Row(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(start = 16.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+        .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.SpaceBetween,
     ) {
@@ -2535,7 +2535,7 @@ private fun NotesQuickCaptureBar(
           .weight(1f)
           .clip(RoundedCornerShape(20.dp))
           .clickable(onClick = onTakeTextNote)
-          .padding(vertical = 10.dp)
+          .padding(vertical = 4.dp)
           .testTag("take_a_note_button"),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -2564,17 +2564,24 @@ private fun NotesQuickCaptureBar(
             modifier = Modifier.size(18.dp),
           )
         }
-        Text(
-          text = "Take a note...",
-          style = MaterialTheme.typography.bodyLarge,
-          fontWeight = FontWeight.Medium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Box(
+          modifier = Modifier
+            .weight(1f)
+            .padding(vertical = 6.dp),
+          contentAlignment = Alignment.CenterStart,
+        ) {
+          Text(
+            text = "Take a note...",
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
       }
 
       Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
         Box(
           modifier = Modifier
@@ -3132,6 +3139,7 @@ private fun ChecklistItemInputRow(
   onAddItem: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val inputFocusRequester = remember { FocusRequester() }
   val trimmed = text.trim()
   val canAdd = trimmed.isNotEmpty()
   val submit = {
@@ -3139,57 +3147,117 @@ private fun ChecklistItemInputRow(
       onAddItem(trimmed)
     }
   }
-  Row(
-    modifier = modifier.fillMaxWidth(),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  Surface(
+    shape = RoundedCornerShape(28.dp),
+    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    border = BorderStroke(
+      width = 1.dp,
+      color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+    ),
+    modifier = modifier
+      .fillMaxWidth()
+      .testTag("editor_checklist_input_card"),
   ) {
-    OutlinedTextField(
-      value = text,
-      onValueChange = onTextChange,
-      placeholder = { Text("List item...") },
-      singleLine = true,
-      shape = CircleShape,
-      trailingIcon = {
-        if (text.isNotEmpty()) {
-          IconButton(
-            onClick = { onTextChange("") },
-            modifier = Modifier.size(28.dp),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Clear,
-              contentDescription = "Clear list item input",
-              modifier = Modifier.size(16.dp),
-            )
-          }
-        }
-      },
-      keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-      keyboardActions = KeyboardActions(onDone = { submit() }),
+    Row(
       modifier = Modifier
-        .weight(1f)
-        .testTag("editor_new_checklist_input"),
-    )
-
-    FilledIconButton(
-      onClick = submit,
-      enabled = canAdd,
-      shape = CircleShape,
-      colors = IconButtonDefaults.filledIconButtonColors(
-        containerColor = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary,
-        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-      ),
-      modifier = Modifier
-        .size(56.dp)
-        .testTag("editor_add_checklist_item"),
+        .fillMaxWidth()
+        .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-      Icon(
-        imageVector = Icons.Default.Add,
-        contentDescription = "Add list item",
-        modifier = Modifier.size(24.dp),
-      )
+      Row(
+        modifier = Modifier
+          .weight(1f)
+          .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .background(
+              if (canAdd) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.primaryContainer
+              },
+            )
+            .clickable {
+              if (canAdd) {
+                submit()
+              } else {
+                inputFocusRequester.requestFocus()
+              }
+            }
+            .testTag("editor_add_checklist_item"),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = "Add list item",
+            tint = if (canAdd) {
+              MaterialTheme.colorScheme.onPrimary
+            } else {
+              MaterialTheme.colorScheme.onPrimaryContainer
+            },
+            modifier = Modifier.size(18.dp),
+          )
+        }
+
+        BasicTextField(
+          value = text,
+          onValueChange = onTextChange,
+          textStyle = MaterialTheme.typography.bodyLarge.copy(
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+          ),
+          cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+          singleLine = true,
+          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+          keyboardActions = KeyboardActions(onDone = { submit() }),
+          decorationBox = { innerTextField ->
+            Box(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
+              contentAlignment = Alignment.CenterStart,
+            ) {
+              if (text.isEmpty()) {
+                Text(
+                  text = "List item...",
+                  style = MaterialTheme.typography.bodyLarge,
+                  fontWeight = FontWeight.Medium,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+              innerTextField()
+            }
+          },
+          modifier = Modifier
+            .weight(1f)
+            .focusRequester(inputFocusRequester)
+            .testTag("editor_new_checklist_input"),
+        )
+      }
+
+      if (text.isNotEmpty()) {
+        Box(
+          modifier = Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .clickable { onTextChange("") },
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Clear,
+            contentDescription = "Clear list item input",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
     }
   }
 }

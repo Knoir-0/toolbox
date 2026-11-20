@@ -498,4 +498,49 @@ class NotesScreenTest {
 
     composeTestRule.onNodeWithTag("notes_selection_top_bar").assertIsNotDisplayed()
   }
+
+  @Test
+  fun notesScreen_quickCaptureBarMatchesTodoQuickAddBarSize() {
+    val notesRepo = InMemoryNotesRepository()
+    val todoRepo = InMemoryTodoListRepository()
+    var showTodo = androidx.compose.runtime.mutableStateOf(false)
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        if (showTodo.value) {
+          TodoListScreen(repository = todoRepo)
+        } else {
+          NotesScreen(repository = notesRepo)
+        }
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    val notesBarBounds = composeTestRule.onNodeWithTag("notes_quick_capture_card").fetchSemanticsNode().boundsInRoot
+
+    // Open checklist add-note view and verify list item input matches Take a note bar height
+    // and places the 28.dp add button inside the input to the left of the text field
+    composeTestRule.onNodeWithTag("new_checklist_button").performClick()
+    composeTestRule.waitForIdle()
+
+    val checklistInputCardBounds = composeTestRule.onNodeWithTag("editor_checklist_input_card").fetchSemanticsNode().boundsInRoot
+    val checklistAddBtnBounds = composeTestRule.onNodeWithTag("editor_add_checklist_item").fetchSemanticsNode().boundsInRoot
+    val checklistTextInputBounds = composeTestRule.onNodeWithTag("editor_new_checklist_input").fetchSemanticsNode().boundsInRoot
+
+    assertEquals(notesBarBounds.height, checklistInputCardBounds.height, 1f)
+    assertTrue(checklistAddBtnBounds.left >= checklistInputCardBounds.left)
+    assertTrue(checklistAddBtnBounds.right <= checklistTextInputBounds.left)
+    assertTrue(checklistAddBtnBounds.top >= checklistInputCardBounds.top)
+    assertTrue(checklistAddBtnBounds.bottom <= checklistInputCardBounds.bottom)
+
+    composeTestRule.runOnIdle {
+      showTodo.value = true
+    }
+    composeTestRule.waitForIdle()
+
+    val todoBarBounds = composeTestRule.onNodeWithTag("todo_quick_add_card").fetchSemanticsNode().boundsInRoot
+
+    assertEquals(todoBarBounds.width, notesBarBounds.width, 1f)
+    assertEquals(todoBarBounds.height, notesBarBounds.height, 1f)
+  }
 }

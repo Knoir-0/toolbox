@@ -212,8 +212,9 @@ class GalleryEngineTest {
     assertEquals(4, GalleryEngine.calculatePinchAlbumsPerRow(6, 1.60f))
     assertEquals(3, GalleryEngine.calculatePinchAlbumsPerRow(6, 2.00f))
 
-    // Individual photo viewer pinch-to-zoom clamps between 1f and 5f
-    assertEquals(1f, GalleryEngine.calculatePhotoZoom(1f, 0.5f))
+    // Individual photo viewer pinch-to-zoom clamps between 0.5f and 5f
+    assertEquals(0.5f, GalleryEngine.calculatePhotoZoom(1f, 0.5f))
+    assertEquals(0.5f, GalleryEngine.calculatePhotoZoom(0.6f, 0.5f))
     assertEquals(2.5f, GalleryEngine.calculatePhotoZoom(1f, 2.5f))
     assertEquals(5f, GalleryEngine.calculatePhotoZoom(2f, 4f))
   }
@@ -609,7 +610,7 @@ class GalleryEngineTest {
 
   @Test
   fun indexSinglePhoto_andDeriveAutoTags_extractsOcrTextVisualLabelsAndSmartTags() = runBlocking {
-    assertEquals(0.85f, GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD)
+    assertEquals(0.80f, GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD)
     assertEquals(MIN_VISION_CONFIDENCE_THRESHOLD, GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD)
     GalleryEngine.clearPhotoIndexCache()
     val screenshotsDir = File(tempRootDir, "Pictures/Screenshots").apply { mkdirs() }
@@ -768,12 +769,33 @@ class GalleryEngineTest {
     assertEquals(1, tagFilterSearch.matchingPhotos.size)
     assertEquals("dinner_receipt.png", tagFilterSearch.matchingPhotos.single().name)
 
-    // 4. Available auto-tags list is ordered and contains both photos' tags
-    val availableTagNames = GalleryEngine.extractAvailableAutoTags(
+    // 4. Available auto-tags list is ordered and contains both photos' tags, and search query filters tag chips while keeping any selected tag visible
+    val availableTags = GalleryEngine.extractAvailableAutoTags(
       photos = allPhotos,
       indexMap = indexMap,
-    ).map { it.first }
+    )
+    val availableTagNames = availableTags.map { it.first }
     assertTrue(availableTagNames.containsAll(listOf("Receipt", "QR Code", "Wi-Fi", "Food", "Text")))
+
+    val filteredByName = GalleryEngine.filterAutoTagsForSearch(
+      availableTags = availableTags,
+      searchQuery = "rec",
+    ).map { it.first }
+    assertEquals(listOf("Receipt"), filteredByName)
+
+    val filteredWithSelected = GalleryEngine.filterAutoTagsForSearch(
+      availableTags = availableTags,
+      searchQuery = "wifi",
+      selectedTag = "Receipt",
+    ).map { it.first }
+    assertEquals(listOf("Receipt"), filteredWithSelected)
+
+    val filteredMatchingPlusSelected = GalleryEngine.filterAutoTagsForSearch(
+      availableTags = availableTags,
+      searchQuery = "wi-fi",
+      selectedTag = "Receipt",
+    ).map { it.first }
+    assertEquals(listOf("Receipt", "Wi-Fi"), filteredMatchingPlusSelected)
   }
 
   @Test

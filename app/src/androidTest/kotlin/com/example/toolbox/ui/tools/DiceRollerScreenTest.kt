@@ -83,8 +83,90 @@ class DiceRollerScreenTest {
     composeTestRule.onNodeWithText("Fireball").performClick()
     composeTestRule.waitForIdle()
 
-    // Sheet should be dismissed
+    // Sheet should be dismissed and label displayed top center on the hero card
     composeTestRule.onNodeWithTag("saved_rolls_sheet").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("dice_roller_hero_label").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Fireball").assertIsDisplayed()
+  }
+
+  @OptIn(ExperimentalMaterial3Api::class)
+  @Test
+  fun testToolbarSpellSearch_rollsSpellDisplaysTopCenterLabelAndPrefillsSaveDialog() {
+    val savedList = mutableListOf<SavedDiceRoll>()
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        DiceRollerScreen(
+          initialSheetValue = SheetValue.PartiallyExpanded,
+          initialHistory = emptyList(),
+          initialSavedRolls = savedList,
+          onSaveRolls = { updated ->
+            savedList.clear()
+            savedList.addAll(updated)
+          },
+        )
+      }
+    }
+
+    // 1. Verify top toolbar and search button are displayed
+    composeTestRule.onNodeWithTag("dice_roller_top_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Dice Roller").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("toggle_search_bar_button").assertIsDisplayed()
+
+    // 2. Tap search button to switch to D&D spell search view
+    composeTestRule.onNodeWithTag("toggle_search_bar_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("toolbar_search_bar").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("dice_roller_spell_search_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("dice_roller_hero_card").assertDoesNotExist()
+
+    // 3. Common spells are displayed; filter by "Magic" and tap on "Magic Missile"
+    composeTestRule.onNodeWithText("Fireball").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Magic Missile").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("spell_search_input").performTextInput("Magic")
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Magic Missile").assertIsDisplayed().performClick()
+    composeTestRule.waitForIdle()
+
+    // 4. Verify returned to roll view, rolled the spell (3d4 + 3), and label is displayed top center on hero card
+    composeTestRule.onNodeWithTag("dice_roller_spell_search_view").assertDoesNotExist()
+    val heroCard = composeTestRule.onNodeWithTag("dice_roller_hero_card")
+    val heroLabel = composeTestRule.onNodeWithTag("dice_roller_hero_label")
+    heroCard.assertIsDisplayed()
+    heroLabel.assertIsDisplayed()
+    composeTestRule.onNodeWithText("Magic Missile").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Roll 3d4 + 3").assertIsDisplayed()
+
+    val heroBounds = heroCard.getUnclippedBoundsInRoot()
+    val labelBounds = heroLabel.getUnclippedBoundsInRoot()
+    val heroCenterX = (heroBounds.left + heroBounds.right) / 2
+    val labelCenterX = (labelBounds.left + labelBounds.right) / 2
+    val heroCenterY = (heroBounds.top + heroBounds.bottom) / 2
+    val labelCenterY = (labelBounds.top + labelBounds.bottom) / 2
+
+    // Label is horizontally centered and in the top portion of the hero card
+    assertTrue(
+      "Label should be horizontally centered on hero card",
+      kotlin.math.abs(heroCenterX.value - labelCenterX.value) < 12f,
+    )
+    assertTrue(
+      "Label should be in the top portion of hero card",
+      labelCenterY < heroCenterY,
+    )
+
+    // 5. Hitting the Save button prefills the save dialog with the roll label
+    composeTestRule.onNodeWithTag("dice_roller_save_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithText("Save Roll").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Magic Missile").assertIsDisplayed()
+
+    // Confirming save immediately saves with the prefilled label
+    composeTestRule.onNodeWithTag("save_roll_confirm_button").performClick()
+    composeTestRule.waitForIdle()
+
+    assertTrue(savedList.any { it.name == "Magic Missile" && it.notation == "3d4 + 3" })
   }
 
   @OptIn(ExperimentalMaterial3Api::class)

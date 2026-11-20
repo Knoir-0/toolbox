@@ -2,6 +2,7 @@ package com.example.toolbox.ui.tools
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -47,19 +48,23 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Bookmarks
+import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SwapVert
@@ -174,6 +179,429 @@ enum class HistorySortOrder(val label: String) {
   LOWEST_TOTAL("Lowest"),
 }
 
+enum class DndSpellCategory(val displayName: String) {
+  DAMAGE("Damage"),
+  HEALING("Healing"),
+  BUFF_UTILITY("Buff & Utility"),
+}
+
+data class DndSpell(
+  val id: String,
+  val name: String,
+  val level: Int,
+  val school: String,
+  val category: DndSpellCategory,
+  val dieType: DieType,
+  val diceCount: Int,
+  val modifier: Int = 0,
+  val damageType: String,
+  val description: String,
+) {
+  val levelLabel: String
+    get() = when (level) {
+      0 -> "Cantrip"
+      1 -> "1st Level"
+      2 -> "2nd Level"
+      3 -> "3rd Level"
+      else -> "${level}th Level"
+    }
+
+  val notation: String
+    get() {
+      val base = "${diceCount}${dieType.label}"
+      val modSuffix = when {
+        modifier > 0 -> " + $modifier"
+        modifier < 0 -> " - ${-modifier}"
+        else -> ""
+      }
+      return "$base$modSuffix"
+    }
+
+  fun matches(query: String): Boolean {
+    val terms = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    if (terms.isEmpty()) return true
+    val haystack =
+      "$name $levelLabel $school ${category.displayName} $notation ${notation.replace(" ", "")} $damageType $description"
+        .lowercase()
+    return terms.all { haystack.contains(it) }
+  }
+}
+
+object DndSpellCatalog {
+  val COMMON_SPELLS: List<DndSpell> = listOf(
+    DndSpell(
+      id = "fireball",
+      name = "Fireball",
+      level = 3,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D6,
+      diceCount = 8,
+      modifier = 0,
+      damageType = "Fire",
+      description = "A bright streak flashes to a point within range and blossoms into a fiery explosion.",
+    ),
+    DndSpell(
+      id = "magic_missile",
+      name = "Magic Missile",
+      level = 1,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D4,
+      diceCount = 3,
+      modifier = 3,
+      damageType = "Force",
+      description = "Three glowing darts of magical force unerringly strike targets of your choice.",
+    ),
+    DndSpell(
+      id = "cure_wounds",
+      name = "Cure Wounds",
+      level = 1,
+      school = "Evocation",
+      category = DndSpellCategory.HEALING,
+      dieType = DieType.D8,
+      diceCount = 1,
+      modifier = 3,
+      damageType = "Healing",
+      description = "A creature you touch regains hit points imbued with positive energy.",
+    ),
+    DndSpell(
+      id = "eldritch_blast",
+      name = "Eldritch Blast",
+      level = 0,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D10,
+      diceCount = 1,
+      modifier = 0,
+      damageType = "Force",
+      description = "A beam of crackling arcane energy streaks toward a creature within range.",
+    ),
+    DndSpell(
+      id = "healing_word",
+      name = "Healing Word",
+      level = 1,
+      school = "Evocation",
+      category = DndSpellCategory.HEALING,
+      dieType = DieType.D4,
+      diceCount = 1,
+      modifier = 3,
+      damageType = "Healing",
+      description = "A creature of your choice that you can see within range regains hit points.",
+    ),
+    DndSpell(
+      id = "guiding_bolt",
+      name = "Guiding Bolt",
+      level = 1,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D6,
+      diceCount = 4,
+      modifier = 0,
+      damageType = "Radiant",
+      description = "A flash of mystical light streaks toward a creature, granting advantage on the next attack.",
+    ),
+    DndSpell(
+      id = "lightning_bolt",
+      name = "Lightning Bolt",
+      level = 3,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D6,
+      diceCount = 8,
+      modifier = 0,
+      damageType = "Lightning",
+      description = "A stroke of electrical energy forming a 100-foot line blasts out from you.",
+    ),
+    DndSpell(
+      id = "sacred_flame",
+      name = "Sacred Flame",
+      level = 0,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D8,
+      diceCount = 1,
+      modifier = 0,
+      damageType = "Radiant",
+      description = "Flame-like radiance descends on a creature that you can see within range.",
+    ),
+    DndSpell(
+      id = "thunderwave",
+      name = "Thunderwave",
+      level = 1,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D8,
+      diceCount = 2,
+      modifier = 0,
+      damageType = "Thunder",
+      description = "A wave of thunderous force sweeps out from you in a 15-foot cube.",
+    ),
+    DndSpell(
+      id = "inflict_wounds",
+      name = "Inflict Wounds",
+      level = 1,
+      school = "Necromancy",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D10,
+      diceCount = 3,
+      modifier = 0,
+      damageType = "Necrotic",
+      description = "A melee spell attack delivering devastating dark necrotic energy on contact.",
+    ),
+    DndSpell(
+      id = "fire_bolt",
+      name = "Fire Bolt",
+      level = 0,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D10,
+      diceCount = 1,
+      modifier = 0,
+      damageType = "Fire",
+      description = "You hurl a mote of fire at a creature or object within range.",
+    ),
+    DndSpell(
+      id = "toll_the_dead",
+      name = "Toll the Dead",
+      level = 0,
+      school = "Necromancy",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D12,
+      diceCount = 1,
+      modifier = 0,
+      damageType = "Necrotic",
+      description = "Dolorous bell tones fill the air around a wounded target for necrotic damage.",
+    ),
+    DndSpell(
+      id = "burning_hands",
+      name = "Burning Hands",
+      level = 1,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D6,
+      diceCount = 3,
+      modifier = 0,
+      damageType = "Fire",
+      description = "A thin sheet of flames shoots forth from your outstretched fingertips.",
+    ),
+    DndSpell(
+      id = "scorching_ray",
+      name = "Scorching Ray",
+      level = 2,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D6,
+      diceCount = 6,
+      modifier = 0,
+      damageType = "Fire",
+      description = "Three rays of searing fire are hurled at one or several targets.",
+    ),
+    DndSpell(
+      id = "spiritual_weapon",
+      name = "Spiritual Weapon",
+      level = 2,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D8,
+      diceCount = 1,
+      modifier = 3,
+      damageType = "Force",
+      description = "A floating spectral weapon strikes a creature within 5 feet of it.",
+    ),
+    DndSpell(
+      id = "shatter",
+      name = "Shatter",
+      level = 2,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D8,
+      diceCount = 3,
+      modifier = 0,
+      damageType = "Thunder",
+      description = "A sudden loud ringing noise erupts from a point of your choice.",
+    ),
+    DndSpell(
+      id = "bless",
+      name = "Bless",
+      level = 1,
+      school = "Enchantment",
+      category = DndSpellCategory.BUFF_UTILITY,
+      dieType = DieType.D4,
+      diceCount = 1,
+      modifier = 0,
+      damageType = "Bonus",
+      description = "Blessed allies add a d4 bonus to attack rolls and saving throws.",
+    ),
+    DndSpell(
+      id = "guidance",
+      name = "Guidance",
+      level = 0,
+      school = "Divination",
+      category = DndSpellCategory.BUFF_UTILITY,
+      dieType = DieType.D4,
+      diceCount = 1,
+      modifier = 0,
+      damageType = "Bonus",
+      description = "A willing creature rolls a d4 and adds the number to one ability check.",
+    ),
+    DndSpell(
+      id = "sleep",
+      name = "Sleep",
+      level = 1,
+      school = "Enchantment",
+      category = DndSpellCategory.BUFF_UTILITY,
+      dieType = DieType.D8,
+      diceCount = 5,
+      modifier = 0,
+      damageType = "Hit Points",
+      description = "Sends creatures into a magical slumber up to the total hit points rolled.",
+    ),
+    DndSpell(
+      id = "chromatic_orb",
+      name = "Chromatic Orb",
+      level = 1,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D8,
+      diceCount = 3,
+      modifier = 0,
+      damageType = "Elemental",
+      description = "A 4-inch sphere of elemental energy is hurled at a target creature.",
+    ),
+    DndSpell(
+      id = "prayer_of_healing",
+      name = "Prayer of Healing",
+      level = 2,
+      school = "Evocation",
+      category = DndSpellCategory.HEALING,
+      dieType = DieType.D8,
+      diceCount = 2,
+      modifier = 3,
+      damageType = "Healing",
+      description = "Up to six creatures of your choice regain hit points from a soothing prayer.",
+    ),
+    DndSpell(
+      id = "spirit_guardians",
+      name = "Spirit Guardians",
+      level = 3,
+      school = "Conjuration",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D8,
+      diceCount = 3,
+      modifier = 0,
+      damageType = "Radiant",
+      description = "Protective spirits flit around you to a distance of 15 feet.",
+    ),
+    DndSpell(
+      id = "mass_healing_word",
+      name = "Mass Healing Word",
+      level = 3,
+      school = "Evocation",
+      category = DndSpellCategory.HEALING,
+      dieType = DieType.D4,
+      diceCount = 1,
+      modifier = 3,
+      damageType = "Healing",
+      description = "Words of restoration heal up to six creatures that you can see.",
+    ),
+    DndSpell(
+      id = "vicious_mockery",
+      name = "Vicious Mockery",
+      level = 0,
+      school = "Enchantment",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D4,
+      diceCount = 1,
+      modifier = 0,
+      damageType = "Psychic",
+      description = "A string of insults laced with subtle enchantments deals psychic damage.",
+    ),
+    DndSpell(
+      id = "blight",
+      name = "Blight",
+      level = 4,
+      school = "Necromancy",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D8,
+      diceCount = 8,
+      modifier = 0,
+      damageType = "Necrotic",
+      description = "Necromantic energy washes over a creature, draining moisture and vitality.",
+    ),
+    DndSpell(
+      id = "cone_of_cold",
+      name = "Cone of Cold",
+      level = 5,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D8,
+      diceCount = 8,
+      modifier = 0,
+      damageType = "Cold",
+      description = "A blast of freezing air erupts from your hands in a 60-foot cone.",
+    ),
+    DndSpell(
+      id = "mass_cure_wounds",
+      name = "Mass Cure Wounds",
+      level = 5,
+      school = "Evocation",
+      category = DndSpellCategory.HEALING,
+      dieType = DieType.D8,
+      diceCount = 3,
+      modifier = 3,
+      damageType = "Healing",
+      description = "A wave of healing energy washes out from a point of your choice.",
+    ),
+    DndSpell(
+      id = "disintegrate",
+      name = "Disintegrate",
+      level = 6,
+      school = "Transmutation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D6,
+      diceCount = 10,
+      modifier = 40,
+      damageType = "Force",
+      description = "A thin green ray springs from your pointing finger to a target within range.",
+    ),
+    DndSpell(
+      id = "chain_lightning",
+      name = "Chain Lightning",
+      level = 6,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D8,
+      diceCount = 10,
+      modifier = 0,
+      damageType = "Lightning",
+      description = "A bolt of arcing electricity strikes a target and leaps to up to three others.",
+    ),
+    DndSpell(
+      id = "meteor_swarm",
+      name = "Meteor Swarm",
+      level = 9,
+      school = "Evocation",
+      category = DndSpellCategory.DAMAGE,
+      dieType = DieType.D6,
+      diceCount = 20,
+      modifier = 0,
+      damageType = "Fire",
+      description = "Blazing orbs of fire plummet to the ground at four distinct points you can see.",
+    ),
+  )
+
+  fun searchSpells(
+    query: String = "",
+    category: DndSpellCategory? = null,
+    catalog: List<DndSpell> = COMMON_SPELLS,
+  ): List<DndSpell> {
+    return catalog.filter { spell ->
+      (category == null || spell.category == category) && spell.matches(query)
+    }
+  }
+}
+
 data class DiceRollResult(
   val id: Long,
   val dieType: DieType,
@@ -183,6 +611,7 @@ data class DiceRollResult(
   val keptRolls: List<Int>,
   val droppedRolls: List<Int> = emptyList(),
   val total: Int,
+  val label: String? = null,
 ) {
   val notation: String
     get() {
@@ -354,8 +783,36 @@ internal fun DiceRollerScreen(
   var modifierValue by rememberSaveable { mutableIntStateOf(0) }
   var rollMode by rememberSaveable { mutableStateOf(RollMode.NORMAL) }
   var rollCounter by rememberSaveable { mutableIntStateOf(0) }
+  var currentRollLabel by rememberSaveable { mutableStateOf<String?>(null) }
   var showSaveDialog by rememberSaveable { mutableStateOf(false) }
   var showSavedRollsSheet by rememberSaveable { mutableStateOf(false) }
+
+  // Top Toolbar Search state for D&D Spells
+  var isSearchActive by rememberSaveable { mutableStateOf(false) }
+  var searchQuery by rememberSaveable { mutableStateOf("") }
+  var selectedSpellCategoryName by rememberSaveable { mutableStateOf<String?>(null) }
+  val selectedSpellCategory = remember(selectedSpellCategoryName) {
+    selectedSpellCategoryName?.let { name ->
+      DndSpellCategory.entries.firstOrNull { it.name == name }
+    }
+  }
+
+  fun closeSearch() {
+    isSearchActive = false
+    searchQuery = ""
+    selectedSpellCategoryName = null
+  }
+
+  BackHandler(enabled = isSearchActive) {
+    closeSearch()
+  }
+
+  val matchingSpells = remember(searchQuery, selectedSpellCategory) {
+    DndSpellCatalog.searchSpells(
+      query = searchQuery,
+      category = selectedSpellCategory,
+    )
+  }
 
   val savedRolls = remember {
     mutableStateListOf<SavedDiceRoll>().apply {
@@ -403,6 +860,7 @@ internal fun DiceRollerScreen(
         keptRolls = kept,
         droppedRolls = dropped,
         total = total,
+        label = currentRollLabel,
       ),
     )
   }
@@ -412,6 +870,7 @@ internal fun DiceRollerScreen(
     diceCount = savedRoll.diceCount
     modifierValue = savedRoll.modifier
     rollMode = savedRoll.rollMode
+    currentRollLabel = savedRoll.name
 
     rollCounter++
     val kept: List<Int>
@@ -446,6 +905,33 @@ internal fun DiceRollerScreen(
         keptRolls = kept,
         droppedRolls = dropped,
         total = total,
+        label = savedRoll.name,
+      ),
+    )
+  }
+
+  fun rollSpell(spell: DndSpell) {
+    selectedDie = spell.dieType
+    diceCount = spell.diceCount
+    modifierValue = spell.modifier
+    rollMode = RollMode.NORMAL
+    currentRollLabel = spell.name
+
+    rollCounter++
+    val kept = List(spell.diceCount) { Random.nextInt(1, spell.dieType.sides + 1) }
+    val total = kept.sum() + spell.modifier
+    history.add(
+      0,
+      DiceRollResult(
+        id = rollCounter.toLong(),
+        dieType = spell.dieType,
+        diceCount = spell.diceCount,
+        modifier = spell.modifier,
+        rollMode = RollMode.NORMAL,
+        keptRolls = kept,
+        droppedRolls = emptyList(),
+        total = total,
+        label = spell.name,
       ),
     )
   }
@@ -476,249 +962,312 @@ internal fun DiceRollerScreen(
   val isSheetExpanded = sheetState.currentValue == SheetValue.Expanded ||
     sheetState.targetValue == SheetValue.Expanded
 
-  BottomSheetScaffold(
-    modifier = modifier.fillMaxSize(),
-    scaffoldState = scaffoldState,
-    sheetPeekHeight = sheetPeekHeight,
-    sheetShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-    sheetContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-    sheetTonalElevation = 6.dp,
-    sheetShadowElevation = 12.dp,
-    sheetDragHandle = null,
-    containerColor = MaterialTheme.colorScheme.background,
-    sheetContent = {
-      RollHistorySheetContent(
-        history = history,
-        isExpanded = isSheetExpanded,
-        peekHeight = sheetPeekHeight,
-        onToggleSheet = {
-          coroutineScope.launch {
-            if (sheetState.currentValue == SheetValue.Expanded) {
-              sheetState.partialExpand()
-            } else {
-              sheetState.expand()
-            }
-          }
-        },
-        onClearHistory = { history.clear() },
-      )
-    },
+  Column(
+    modifier = modifier
+      .fillMaxSize()
+      .background(MaterialTheme.colorScheme.background)
+      .testTag("dice_roller_screen"),
   ) {
-    Box(modifier = Modifier.fillMaxSize()) {
-      Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.SpaceBetween,
-      ) {
-        // Upper Area: Central Result Display
-        Box(
-          modifier = Modifier
-            .fillMaxWidth()
-            .weight(1f)
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-          contentAlignment = Alignment.Center,
-        ) {
-          val latestRoll = history.firstOrNull()
-          RollResultHero(
-            latestRoll = latestRoll,
-            selectedDie = selectedDie,
-            diceCount = diceCount,
-            modifierValue = modifierValue,
-            currentNotation = currentNotation,
-            onTapToRoll = ::performRoll,
-            modifier = Modifier.fillMaxWidth(),
-          )
-        }
+    ToolboxTopBar(
+      title = "Dice Roller",
+      subtext = "Polyhedral dice & D&D spell roller",
+      icon = Icons.Default.Casino,
+      modifier = Modifier.testTag("dice_roller_top_bar"),
+      searchState = ToolboxTopBarSearchState(
+        isActive = isSearchActive,
+        query = searchQuery,
+        onQueryChange = { searchQuery = it },
+        onOpenSearch = { isSearchActive = true },
+        onCloseSearch = { closeSearch() },
+        placeholder = "Search D&D spells (e.g. Fireball, Cure Wounds)...",
+        searchContentDescription = "Search",
+        closeContentDescription = "Close search",
+        clearContentDescription = "Clear search",
+        toggleButtonTestTag = "toggle_search_bar_button",
+        searchBarTestTag = "toolbar_search_bar",
+        closeButtonTestTag = "close_search_button",
+        inputTestTag = "spell_search_input",
+        clearButtonTestTag = "spell_search_clear",
+      ),
+    )
 
-        // Bottom Fixed Controls: Roll Mode, Die Selector, Dice Count, Modifier, and Roll Button right above the History Panel
-        Surface(
-          modifier = Modifier.fillMaxWidth(),
-          color = MaterialTheme.colorScheme.surfaceContainerLow,
-          tonalElevation = 2.dp,
-          shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-        ) {
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+    if (isSearchActive) {
+      DndSpellSearchView(
+        allSpellsCount = DndSpellCatalog.COMMON_SPELLS.size,
+        query = searchQuery,
+        selectedCategory = selectedSpellCategory,
+        matchingSpells = matchingSpells,
+        onSelectCategory = { category ->
+          selectedSpellCategoryName = category?.name
+        },
+        onSelectSpell = { spell ->
+          closeSearch()
+          rollSpell(spell)
+        },
+        modifier = Modifier
+          .fillMaxWidth()
+          .weight(1f),
+      )
+    } else {
+      BottomSheetScaffold(
+        modifier = Modifier
+          .fillMaxWidth()
+          .weight(1f),
+        scaffoldState = scaffoldState,
+        sheetPeekHeight = sheetPeekHeight,
+        sheetShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        sheetContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        sheetTonalElevation = 6.dp,
+        sheetShadowElevation = 12.dp,
+        sheetDragHandle = null,
+        containerColor = MaterialTheme.colorScheme.background,
+        sheetContent = {
+          RollHistorySheetContent(
+            history = history,
+            isExpanded = isSheetExpanded,
+            peekHeight = sheetPeekHeight,
+            onToggleSheet = {
+              coroutineScope.launch {
+                if (sheetState.currentValue == SheetValue.Expanded) {
+                  sheetState.partialExpand()
+                } else {
+                  sheetState.expand()
+                }
+              }
+            },
+            onClearHistory = { history.clear() },
+          )
+        },
+      ) {
+        Box(modifier = Modifier.fillMaxSize()) {
           Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(
-                start = 16.dp,
-                end = 16.dp,
-                top = 10.dp,
-                bottom = 10.dp + sheetPeekHeight,
-              ),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.SpaceBetween,
           ) {
-            AnimatedVisibility(visible = selectedDie == DieType.D20 && diceCount == 1) {
-              SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                RollMode.entries.forEachIndexed { index, mode ->
-                  SegmentedButton(
-                    selected = rollMode == mode,
-                    onClick = { rollMode = mode },
-                    shape = SegmentedButtonDefaults.itemShape(
-                      index = index,
-                      count = RollMode.entries.size,
+            // Upper Area: Central Result Display
+            Box(
+              modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+              contentAlignment = Alignment.Center,
+            ) {
+              val latestRoll = history.firstOrNull()
+              val visibleHeroLabel = if (showSaveDialog || showSavedRollsSheet) {
+                null
+              } else {
+                currentRollLabel ?: latestRoll?.label
+              }
+              RollResultHero(
+                latestRoll = latestRoll,
+                selectedDie = selectedDie,
+                diceCount = diceCount,
+                modifierValue = modifierValue,
+                currentNotation = currentNotation,
+                rollLabel = visibleHeroLabel,
+                onTapToRoll = ::performRoll,
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .testTag("dice_roller_hero_card"),
+              )
+            }
+
+            // Bottom Fixed Controls: Roll Mode, Die Selector, Dice Count, Modifier, and Roll Button right above the History Panel
+            Surface(
+              modifier = Modifier.fillMaxWidth(),
+              color = MaterialTheme.colorScheme.surfaceContainerLow,
+              tonalElevation = 2.dp,
+              shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            ) {
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = 10.dp,
+                    bottom = 10.dp + sheetPeekHeight,
+                  ),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+              ) {
+                AnimatedVisibility(visible = selectedDie == DieType.D20 && diceCount == 1) {
+                  SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    RollMode.entries.forEachIndexed { index, mode ->
+                      SegmentedButton(
+                        selected = rollMode == mode,
+                        onClick = { rollMode = mode },
+                        shape = SegmentedButtonDefaults.itemShape(
+                          index = index,
+                          count = RollMode.entries.size,
+                        ),
+                      ) {
+                        Text(mode.label)
+                      }
+                    }
+                  }
+                }
+
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                  val totalDice = DieType.entries.size
+                  val targetSpacing = if (maxWidth < 320.dp) 2.dp else 4.dp
+                  val maxButtonSize = 40.dp
+                  val calculatedSize = (maxWidth - (targetSpacing * (totalDice - 1))) / totalDice
+                  val buttonSize = minOf(maxButtonSize, calculatedSize)
+                  val spacing = if (totalDice > 1) {
+                    minOf(targetSpacing, (maxWidth - (buttonSize * totalDice)) / (totalDice - 1))
+                  } else {
+                    targetSpacing
+                  }
+
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(spacing, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                  ) {
+                    DieType.entries.forEach { die ->
+                      DieSelectionButton(
+                        die = die,
+                        isSelected = die == selectedDie,
+                        onClick = { selectedDie = die },
+                        size = buttonSize,
+                      )
+                    }
+                  }
+                }
+
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                  StepperCard(
+                    label = "Dice Count",
+                    inlinePrefix = "Count",
+                    valueText = "${diceCount}${selectedDie.label}",
+                    onDecrement = { if (diceCount > 1) diceCount-- },
+                    onIncrement = { if (diceCount < 20) diceCount++ },
+                    modifier = Modifier.weight(1f),
+                  )
+                  StepperCard(
+                    label = "Modifier",
+                    inlinePrefix = "Mod",
+                    valueText = if (modifierValue >= 0) "+$modifierValue" else "$modifierValue",
+                    onDecrement = { if (modifierValue > -20) modifierValue-- },
+                    onIncrement = { if (modifierValue < 40) modifierValue++ },
+                    modifier = Modifier.weight(1f),
+                  )
+                }
+
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  // Load button: load (folder open) icon, rounded corners, no text
+                  FilledTonalIconButton(
+                    onClick = { showSavedRollsSheet = true },
+                    modifier = Modifier
+                      .size(56.dp)
+                      .semantics { contentDescription = "Load saved rolls" }
+                      .testTag("dice_roller_load_button"),
+                    shape = CircleShape,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                      containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                      contentColor = MaterialTheme.colorScheme.primary,
                     ),
                   ) {
-                    Text(mode.label)
+                    Icon(
+                      imageVector = Icons.Default.FolderOpen,
+                      contentDescription = "Load saved rolls",
+                      modifier = Modifier.size(24.dp),
+                    )
+                  }
+
+                  // Roll button: rounded corners
+                  Button(
+                    onClick = ::performRoll,
+                    modifier = Modifier
+                      .weight(1f)
+                      .height(56.dp)
+                      .testTag("dice_roller_roll_button"),
+                    shape = CircleShape,
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp),
+                  ) {
+                    PolyhedralDieIcon(
+                      dieType = selectedDie,
+                      color = LocalContentColor.current,
+                      modifier = Modifier
+                        .padding(end = 8.dp)
+                        .size(22.dp),
+                    )
+                    Text(
+                      text = "Roll $currentNotation",
+                      style = MaterialTheme.typography.titleMedium,
+                      fontWeight = FontWeight.Bold,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                    )
+                  }
+
+                  // Save button: floppy disk icon, rounded corners, no text
+                  FilledTonalIconButton(
+                    onClick = { showSaveDialog = true },
+                    modifier = Modifier
+                      .size(56.dp)
+                      .semantics { contentDescription = "Save roll" }
+                      .testTag("dice_roller_save_button"),
+                    shape = CircleShape,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                      containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                      contentColor = MaterialTheme.colorScheme.primary,
+                    ),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.Save,
+                      contentDescription = "Save roll",
+                      modifier = Modifier.size(24.dp),
+                    )
                   }
                 }
               }
             }
+          }
 
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-              val totalDice = DieType.entries.size
-              val targetSpacing = if (maxWidth < 320.dp) 2.dp else 4.dp
-              val maxButtonSize = 40.dp
-              val calculatedSize = (maxWidth - (targetSpacing * (totalDice - 1))) / totalDice
-              val buttonSize = minOf(maxButtonSize, calculatedSize)
-              val spacing = if (totalDice > 1) {
-                minOf(targetSpacing, (maxWidth - (buttonSize * totalDice)) / (totalDice - 1))
-              } else {
-                targetSpacing
-              }
-
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(spacing, Alignment.CenterHorizontally),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                DieType.entries.forEach { die ->
-                  DieSelectionButton(
-                    die = die,
-                    isSelected = die == selectedDie,
-                    onClick = { selectedDie = die },
-                    size = buttonSize,
-                  )
-                }
-              }
-            }
-
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-              StepperCard(
-                label = "Dice Count",
-                inlinePrefix = "Count",
-                valueText = "${diceCount}${selectedDie.label}",
-                onDecrement = { if (diceCount > 1) diceCount-- },
-                onIncrement = { if (diceCount < 20) diceCount++ },
-                modifier = Modifier.weight(1f),
-              )
-              StepperCard(
-                label = "Modifier",
-                inlinePrefix = "Mod",
-                valueText = if (modifierValue >= 0) "+$modifierValue" else "$modifierValue",
-                onDecrement = { if (modifierValue > -20) modifierValue-- },
-                onIncrement = { if (modifierValue < 40) modifierValue++ },
-                modifier = Modifier.weight(1f),
-              )
-            }
-
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              // Load button: load (folder open) icon, rounded corners, no text
-              FilledTonalIconButton(
-                onClick = { showSavedRollsSheet = true },
-                modifier = Modifier
-                  .size(56.dp)
-                  .semantics { contentDescription = "Load saved rolls" }
-                  .testTag("dice_roller_load_button"),
-                shape = CircleShape,
-                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                  containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                  contentColor = MaterialTheme.colorScheme.primary,
-                ),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.FolderOpen,
-                  contentDescription = "Load saved rolls",
-                  modifier = Modifier.size(24.dp),
-                )
-              }
-
-              // Roll button: rounded corners
-              Button(
-                onClick = ::performRoll,
-                modifier = Modifier
-                  .weight(1f)
-                  .height(56.dp)
-                  .testTag("dice_roller_roll_button"),
-                shape = CircleShape,
-                elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp),
-              ) {
-                PolyhedralDieIcon(
-                  dieType = selectedDie,
-                  color = LocalContentColor.current,
-                  modifier = Modifier
-                    .padding(end = 8.dp)
-                    .size(22.dp),
-                )
-                Text(
-                  text = "Roll $currentNotation",
-                  style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.Bold,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                )
-              }
-
-              // Save button: floppy disk icon, rounded corners, no text
-              FilledTonalIconButton(
-                onClick = { showSaveDialog = true },
-                modifier = Modifier
-                  .size(56.dp)
-                  .semantics { contentDescription = "Save roll" }
-                  .testTag("dice_roller_save_button"),
-                shape = CircleShape,
-                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                  containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                  contentColor = MaterialTheme.colorScheme.primary,
-                ),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Save,
-                  contentDescription = "Save roll",
-                  modifier = Modifier.size(24.dp),
-                )
-              }
-            }
+          // Scrim overlay behind history sheet when expanded
+          androidx.compose.animation.AnimatedVisibility(
+            visible = isSheetExpanded,
+            enter = fadeIn(tween(250)),
+            exit = fadeOut(tween(200)),
+          ) {
+            Box(
+              modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.5f))
+                .pointerInput(Unit) {
+                  detectTapGestures {
+                    coroutineScope.launch {
+                      sheetState.partialExpand()
+                    }
+                  }
+                },
+            )
           }
         }
-      }
-
-      // Scrim overlay behind history sheet when expanded
-      AnimatedVisibility(
-        visible = isSheetExpanded,
-        enter = fadeIn(tween(250)),
-        exit = fadeOut(tween(200)),
-      ) {
-        Box(
-          modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.5f))
-            .pointerInput(Unit) {
-              detectTapGestures {
-                coroutineScope.launch {
-                  sheetState.partialExpand()
-                }
-              }
-            },
-        )
       }
     }
   }
 
   if (showSaveDialog) {
+    val activeLabelForSave = currentRollLabel ?: history.firstOrNull()?.label
     SaveRollDialog(
       dieType = selectedDie,
       diceCount = diceCount,
       modifierValue = modifierValue,
       rollMode = effectiveRollMode,
       currentNotation = currentNotation,
+      initialName = activeLabelForSave.orEmpty(),
       onDismiss = { showSaveDialog = false },
       onSave = { name ->
         val newSavedRoll = SavedDiceRoll(
@@ -731,6 +1280,9 @@ internal fun DiceRollerScreen(
         )
         savedRolls.add(0, newSavedRoll)
         onSaveRolls(savedRolls.toList())
+        if (currentRollLabel != null || history.isNotEmpty()) {
+          currentRollLabel = name
+        }
         showSaveDialog = false
       },
     )
@@ -753,16 +1305,229 @@ internal fun DiceRollerScreen(
 }
 
 @Composable
+private fun DndSpellSearchView(
+  allSpellsCount: Int,
+  query: String,
+  selectedCategory: DndSpellCategory?,
+  matchingSpells: List<DndSpell>,
+  onSelectCategory: (DndSpellCategory?) -> Unit,
+  onSelectSpell: (DndSpell) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    color = MaterialTheme.colorScheme.background,
+    modifier = modifier
+      .fillMaxSize()
+      .testTag("catalog_search_overlay"),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .testTag("dice_roller_spell_search_view"),
+    ) {
+      ToolboxPillNavigationBar(
+        rowTestTag = "spell_category_pills",
+      ) {
+        ToolboxPillNavigationItem(
+          selected = selectedCategory == null,
+          onClick = { onSelectCategory(null) },
+          label = "All ($allSpellsCount)",
+          testTag = "spell_category_chip_ALL",
+        )
+        DndSpellCategory.entries.forEach { category ->
+          val isSelected = selectedCategory == category
+          val categoryIcon = when (category) {
+            DndSpellCategory.DAMAGE -> Icons.Default.LocalFireDepartment
+            DndSpellCategory.HEALING -> Icons.Default.Favorite
+            DndSpellCategory.BUFF_UTILITY -> Icons.Default.AutoAwesome
+          }
+          ToolboxPillNavigationItem(
+            selected = isSelected,
+            onClick = { onSelectCategory(if (isSelected) null else category) },
+            leadingIcon = categoryIcon,
+            label = category.displayName,
+            testTag = "spell_category_chip_${category.name}",
+          )
+        }
+      }
+
+      LazyColumn(
+        modifier = Modifier
+          .fillMaxSize()
+          .weight(1f)
+          .testTag("spell_search_results_list"),
+        contentPadding = PaddingValues(
+          start = 16.dp,
+          top = 12.dp,
+          end = 16.dp,
+          bottom = 24.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        item(key = "spells_header") {
+          Column {
+            Text(
+              text = when {
+                query.isNotBlank() -> "Search Results (${matchingSpells.size})"
+                selectedCategory != null -> "${selectedCategory.displayName} Spells (${matchingSpells.size})"
+                else -> "Common D&D Spells (${matchingSpells.size})"
+              },
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+              text = "Tap a spell to return to the roller and roll it immediately",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+
+        if (matchingSpells.isEmpty()) {
+          item(key = "spells_empty") {
+            Card(
+              shape = RoundedCornerShape(14.dp),
+              colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+              ),
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("spell_search_empty_card"),
+            ) {
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Text(
+                  text = if (query.isNotBlank()) {
+                    "No spells found matching \"$query\""
+                  } else {
+                    "No matching spells"
+                  },
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                  text = "Try searching by spell name (e.g. Fireball, Cure Wounds, Magic Missile), damage type, or dice notation.",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  textAlign = TextAlign.Center,
+                )
+              }
+            }
+          }
+        } else {
+          items(
+            items = matchingSpells,
+            key = { it.id },
+          ) { spell ->
+            Card(
+              modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .clickable { onSelectSpell(spell) }
+                .testTag("spell_card_${spell.id}"),
+              shape = RoundedCornerShape(14.dp),
+              colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+              ),
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Box(
+                  modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  PolyhedralDieIcon(
+                    dieType = spell.dieType,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp),
+                  )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                  Text(
+                    text = spell.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                  )
+                  Text(
+                    text = "${spell.levelLabel} • ${spell.school} • ${spell.damageType}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                  Text(
+                    text = spell.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+
+                Spacer(modifier = Modifier.width(10.dp))
+
+                Surface(
+                  shape = RoundedCornerShape(20.dp),
+                  color = MaterialTheme.colorScheme.primaryContainer,
+                  border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                ) {
+                  Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                  ) {
+                    PolyhedralDieIcon(
+                      dieType = spell.dieType,
+                      color = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.size(14.dp),
+                    )
+                    Text(
+                      text = spell.notation,
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = FontWeight.Bold,
+                      color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
 private fun SaveRollDialog(
   dieType: DieType,
   diceCount: Int,
   modifierValue: Int,
   rollMode: RollMode,
   currentNotation: String,
+  initialName: String = "",
   onDismiss: () -> Unit,
   onSave: (name: String) -> Unit,
 ) {
-  var rollName by rememberSaveable { mutableStateOf("") }
+  var rollName by rememberSaveable(initialName) { mutableStateOf(initialName) }
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -1144,11 +1909,13 @@ internal fun RollResultHero(
   diceCount: Int = 1,
   modifierValue: Int = 0,
   currentNotation: String,
+  rollLabel: String? = latestRoll?.label,
   onTapToRoll: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val isNat20 = latestRoll?.isNatural20 == true
   val isNat1 = latestRoll?.isNatural1 == true
+  val displayLabel = rollLabel
 
   val containerColor = when {
     isNat20 -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
@@ -1263,13 +2030,12 @@ internal fun RollResultHero(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(if (isCompactDie) 6.dp else 8.dp),
       ) {
-        // Top Header: Notation Pill + Mode / Crit Badges
-        Row(
+        // Top Header: Notation Pill (Start) + Optional Roll Label (Top Center) + Mode / Crit Badges (End)
+        Box(
           modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
         ) {
           Surface(
+            modifier = Modifier.align(Alignment.CenterStart),
             shape = RoundedCornerShape(50),
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.75f),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
@@ -1293,53 +2059,81 @@ internal fun RollResultHero(
             }
           }
 
-          when {
-            isNat20 -> {
-              Badge(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-              ) {
-                Text(
-                  text = "★ CRITICAL HIT · NAT 20!",
-                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.ExtraBold,
-                )
-              }
-            }
-            isNat1 -> {
-              Badge(
-                containerColor = MaterialTheme.colorScheme.error,
-                contentColor = MaterialTheme.colorScheme.onError,
-              ) {
-                Text(
-                  text = "✦ CRITICAL MISS · NAT 1!",
-                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.ExtraBold,
-                )
-              }
-            }
-            latestRoll != null && latestRoll.rollMode != RollMode.NORMAL -> {
-              Badge(
-                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-              ) {
-                Text(
-                  text = latestRoll.rollMode.label.uppercase(),
-                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = FontWeight.Bold,
-                )
-              }
-            }
-            else -> {
+          if (!displayLabel.isNullOrBlank()) {
+            Surface(
+              modifier = Modifier
+                .align(Alignment.Center)
+                .padding(horizontal = 68.dp)
+                .semantics(mergeDescendants = true) {}
+                .testTag("dice_roller_hero_label"),
+              shape = RoundedCornerShape(50),
+              color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
+              border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+            ) {
               Text(
-                text = if (latestRoll == null) "TAP TO ROLL" else "ROLL #${latestRoll.id}",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = displayLabel,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
               )
+            }
+          }
+
+          Box(
+            modifier = Modifier.align(Alignment.CenterEnd),
+          ) {
+            when {
+              isNat20 -> {
+                Badge(
+                  containerColor = MaterialTheme.colorScheme.primary,
+                  contentColor = MaterialTheme.colorScheme.onPrimary,
+                ) {
+                  Text(
+                    text = "★ CRITICAL HIT · NAT 20!",
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                  )
+                }
+              }
+              isNat1 -> {
+                Badge(
+                  containerColor = MaterialTheme.colorScheme.error,
+                  contentColor = MaterialTheme.colorScheme.onError,
+                ) {
+                  Text(
+                    text = "✦ CRITICAL MISS · NAT 1!",
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                  )
+                }
+              }
+              latestRoll != null && latestRoll.rollMode != RollMode.NORMAL -> {
+                Badge(
+                  containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                  contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                ) {
+                  Text(
+                    text = latestRoll.rollMode.label.uppercase(),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                  )
+                }
+              }
+              else -> {
+                Text(
+                  text = if (latestRoll == null) "TAP TO ROLL" else "ROLL #${latestRoll.id}",
+                  style = MaterialTheme.typography.labelSmall,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
             }
           }
         }

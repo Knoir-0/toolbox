@@ -65,7 +65,8 @@ const val MIN_ALBUMS_PER_ROW = 3
 const val MAX_ALBUMS_PER_ROW = 6
 const val DEFAULT_ALBUMS_PER_ROW = 3
 
-const val MIN_PHOTO_ZOOM = 1f
+const val MIN_PHOTO_ZOOM = 0.5f
+const val DEFAULT_PHOTO_ZOOM = 1f
 const val MAX_PHOTO_ZOOM = 5f
 
 const val DEFAULT_VIDEO_PREVIEW_PLAY_DURATION_MS = 4_500L
@@ -640,7 +641,7 @@ object GalleryEngine {
   }
 
   /**
-   * Calculates the updated zoom scale (`1f..5f`) for an individual photo in the viewer from a pinch
+   * Calculates the updated zoom scale (`0.5f..5f`) for an individual photo in the viewer from a pinch
    * gesture [zoomChange].
    */
   fun calculatePhotoZoom(currentZoom: Float, zoomChange: Float): Float {
@@ -3108,7 +3109,7 @@ object GalleryEngine {
   // =========================================================================
 
   const val GALLERY_INDEX_CACHE_FILE_NAME = "gallery_smart_index_v2.json"
-  const val DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD = 0.85f
+  const val DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD = 0.80f
   private const val PNG_TEXT_KEYWORD_OCR = "OCR_TEXT"
   private const val PNG_TEXT_KEYWORD_LABELS = "IMAGE_LABELS"
 
@@ -3928,6 +3929,24 @@ object GalleryEngine {
           .thenBy(String.CASE_INSENSITIVE_ORDER) { it.key }
       )
       .map { it.key to it.value }
+  }
+
+  /**
+   * Filters [availableTags] by [searchQuery] (matching the tag name case-insensitively), while
+   * keeping any currently [selectedTag] visible even if its name does not match [searchQuery].
+   */
+  fun filterAutoTagsForSearch(
+    availableTags: List<Pair<String, Int>>,
+    searchQuery: String,
+    selectedTag: String? = null,
+  ): List<Pair<String, Int>> {
+    val query = searchQuery.trim()
+    if (query.isEmpty()) return availableTags
+    val activeSelectedTag = selectedTag?.trim()?.takeIf { it.isNotEmpty() }
+    return availableTags.filter { (tag, _) ->
+      tag.contains(query, ignoreCase = true) ||
+        (activeSelectedTag != null && tag.equals(activeSelectedTag, ignoreCase = true))
+    }
   }
 
   /**

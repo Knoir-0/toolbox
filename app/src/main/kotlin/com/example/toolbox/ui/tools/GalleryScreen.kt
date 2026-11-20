@@ -1212,6 +1212,14 @@ fun GalleryScreen(
     GalleryEngine.extractAvailableAutoTags(allScopePhotos, photoIndexMap)
   }
 
+  val filteredAutoTags: List<Pair<String, Int>> = remember(availableAutoTags, searchQuery, selectedTagFilter) {
+    GalleryEngine.filterAutoTagsForSearch(
+      availableTags = availableAutoTags,
+      searchQuery = searchQuery,
+      selectedTag = selectedTagFilter,
+    )
+  }
+
   val hasActiveSearchQueryOrTag = isSearchActive && (searchQuery.isNotBlank() || selectedTagFilter != null)
 
   val searchResult: GallerySearchResult = remember(
@@ -1729,7 +1737,8 @@ fun GalleryScreen(
         showSortMenu = showSortMenu,
         isSortGroupSavedForFolder = isSortGroupSavedForFolder,
         isSearchView = isSearchActive && !isSelectionMode,
-        availableTags = availableAutoTags,
+        availableTags = filteredAutoTags,
+        hasAnyDetectedTags = availableAutoTags.isNotEmpty(),
         selectedTag = selectedTagFilter,
         isIndexing = isIndexingPhotos,
         indexedCount = indexedProgressCount,
@@ -2631,6 +2640,7 @@ private fun GalleryNavigationAndDensityBar(
   isSortGroupSavedForFolder: Boolean = false,
   isSearchView: Boolean = false,
   availableTags: List<Pair<String, Int>> = emptyList(),
+  hasAnyDetectedTags: Boolean = availableTags.isNotEmpty(),
   selectedTag: String? = null,
   isIndexing: Boolean = false,
   indexedCount: Int = 0,
@@ -2815,10 +2825,10 @@ private fun GalleryNavigationAndDensityBar(
 
           if (availableTags.isEmpty()) {
             Text(
-              text = if (isIndexing && totalCount > 0) {
-                "Scanning photos ($indexedCount/$totalCount)…"
-              } else {
-                "No tags detected yet"
+              text = when {
+                isIndexing && totalCount > 0 -> "Scanning photos ($indexedCount/$totalCount)…"
+                hasAnyDetectedTags -> "No matching tags"
+                else -> "No tags detected yet"
               },
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,

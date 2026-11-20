@@ -93,6 +93,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -109,6 +110,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -1006,7 +1008,7 @@ fun GuitarTunerScreen(
 }
 
 @Composable
-private fun GuitarTunerContent(
+internal fun GuitarTunerContent(
   selectedPreset: GuitarTuningPreset,
   onSelectPreset: (GuitarTuningPreset) -> Unit,
   favoritePresets: Set<GuitarTuningPreset>,
@@ -1107,6 +1109,7 @@ private fun GuitarTunerContent(
       }
 
       Card(
+        modifier = Modifier.testTag("tuner_gauge_card"),
         shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(
           containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -1154,6 +1157,7 @@ private fun GuitarTunerContent(
                   },
                   style = MaterialTheme.typography.labelLarge,
                   fontWeight = FontWeight.Bold,
+                  maxLines = 1,
                 )
               }
             }
@@ -1167,6 +1171,7 @@ private fun GuitarTunerContent(
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
               )
             }
           }
@@ -1183,55 +1188,92 @@ private fun GuitarTunerContent(
           // Central Note & Frequency Readout
           Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
           ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+              modifier = Modifier.weight(1f),
+              horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
               Text(
                 text = "TARGET",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
               )
               Text(
                 text = String.format("%.2f Hz", activeString.frequencyHz),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
+                maxLines = 1,
               )
             }
 
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-              if (isSignalActive) {
+            Box(
+              modifier = Modifier.weight(1f),
+              contentAlignment = Alignment.Center,
+            ) {
+              // Invisible height anchor so showing/hiding the detected note never shifts layout
+              Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                  .alpha(0f)
+                  .clearAndSetSemantics {},
+              ) {
                 Text(
-                  text = activeString.noteName,
-                  modifier = Modifier.testTag("detected_note"),
+                  text = "W#",
                   style = MaterialTheme.typography.displaySmall,
                   fontWeight = FontWeight.Black,
-                  color = if (isInTune) statusColor else MaterialTheme.colorScheme.onSurface,
+                  maxLines = 1,
                 )
-                val centsFormatted = if (centsOffset >= 0.05f) {
-                  "+${centsOffset.roundToInt()} ¢"
-                } else {
-                  "${centsOffset.roundToInt()} ¢"
-                }
                 Text(
-                  text = centsFormatted,
+                  text = "+00 ¢",
                   style = MaterialTheme.typography.labelLarge,
                   fontWeight = FontWeight.Bold,
-                  color = statusColor,
+                  maxLines = 1,
                 )
+              }
+
+              if (isSignalActive) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                  Text(
+                    text = activeString.noteName,
+                    modifier = Modifier.testTag("detected_note"),
+                    style = MaterialTheme.typography.displaySmall,
+                    fontWeight = FontWeight.Black,
+                    color = if (isInTune) statusColor else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                  )
+                  val centsFormatted = if (centsOffset >= 0.05f) {
+                    "+${centsOffset.roundToInt()} ¢"
+                  } else {
+                    "${centsOffset.roundToInt()} ¢"
+                  }
+                  Text(
+                    text = centsFormatted,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = statusColor,
+                    maxLines = 1,
+                  )
+                }
               }
             }
 
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+              modifier = Modifier.weight(1f),
+              horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
               Text(
                 text = "CURRENT",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
               )
               Text(
                 text = if (isSignalActive) String.format("%.2f Hz", detectedFrequencyHz) else "--",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
+                maxLines = 1,
               )
             }
           }
@@ -1242,6 +1284,7 @@ private fun GuitarTunerContent(
     // 2. Auto-Detected Guitar Strings Card (6th to 1st string)
     item(key = "guitar_strings_card") {
       Card(
+        modifier = Modifier.testTag("guitar_strings_card"),
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
           containerColor = MaterialTheme.colorScheme.surfaceContainerLow,

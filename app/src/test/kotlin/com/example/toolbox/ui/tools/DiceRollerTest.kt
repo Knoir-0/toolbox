@@ -104,4 +104,23 @@ class DiceRollerTest {
     val restoredHighMod = SavedDiceRoll.fromJson(highModObj)
     assertEquals(40, restoredHighMod.modifier)
   }
+
+  @Test
+  fun dndSpellCatalog_searchesCommonSpellsAndFormatsNotation() {
+    val allSpells = DndSpellCatalog.searchSpells()
+    assertTrue(allSpells.isNotEmpty())
+
+    val fireballResults = DndSpellCatalog.searchSpells(query = "Fireball")
+    assertEquals(1, fireballResults.size)
+    val fireball = fireballResults.first()
+    assertEquals("Fireball", fireball.name)
+    assertEquals(DieType.D6, fireball.dieType)
+    assertEquals(8, fireball.diceCount)
+    assertEquals(0, fireball.modifier)
+    assertEquals("8d6", fireball.notation)
+
+    val healingSpells = DndSpellCatalog.searchSpells(category = DndSpellCategory.HEALING)
+    assertTrue(healingSpells.any { it.name == "Cure Wounds" })
+    assertTrue(healingSpells.all { it.category == DndSpellCategory.HEALING })
+  }
 }

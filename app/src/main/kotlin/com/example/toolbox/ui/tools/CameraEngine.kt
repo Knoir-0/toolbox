@@ -234,13 +234,13 @@ enum class CameraNightMode(
 }
 
 /**
- * Shared minimum confidence threshold (`85%`) linked across both Camera Vision and Gallery ML Kit tagging.
+ * Shared minimum confidence threshold (`80%`) linked across both Camera Vision and Gallery ML Kit tagging.
  */
 const val MIN_VISION_CONFIDENCE_THRESHOLD = GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD
 
 /**
  * Confidence threshold presets for live ML Kit Image Labeling in [CameraCaptureMode.VISION] mode.
- * Linked with Gallery smart auto-tagging so anything lower than 85% confidence
+ * Linked with Gallery smart auto-tagging so anything lower than 80% confidence
  * ([MIN_VISION_CONFIDENCE_THRESHOLD] / [GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD]) is hidden.
  */
 enum class CameraVisionThresholdPreset(
@@ -250,10 +250,10 @@ enum class CameraVisionThresholdPreset(
   val description: String,
 ) {
   STANDARD_65(
-    label = "≥85% Standard",
-    shortLabel = "≥85%",
+    label = "≥80% Standard",
+    shortLabel = "≥80%",
     minConfidence = MIN_VISION_CONFIDENCE_THRESHOLD,
-    description = "Linked Camera & Gallery ML Kit minimum confidence threshold (85% minimum)",
+    description = "Linked Camera & Gallery ML Kit minimum confidence threshold (80% minimum)",
   ),
   HIGH_70(
     label = "≥90% High",
@@ -262,10 +262,10 @@ enum class CameraVisionThresholdPreset(
     description = "High-confidence visual scene and object labels (90%)",
   ),
   GALLERY_80(
-    label = "≥85% Gallery",
-    shortLabel = "≥85% Gallery",
+    label = "≥80% Gallery",
+    shortLabel = "≥80% Gallery",
     minConfidence = GalleryEngine.DEFAULT_ML_KIT_LABEL_CONFIDENCE_THRESHOLD,
-    description = "Exact confidence threshold linked with Gallery smart auto-tagging (85%)",
+    description = "Exact confidence threshold linked with Gallery smart auto-tagging (80%)",
   ),
   ;
 
@@ -616,7 +616,7 @@ enum class CameraVisionSamplePreset(
 
 /**
  * Represents a live or snapshot ML Kit Vision tagging analysis result in [CameraCaptureMode.VISION] mode.
- * Only tags with confidence >= 50% ([MIN_VISION_CONFIDENCE_THRESHOLD]) are included in [tags].
+ * Only tags with confidence >= 80% ([MIN_VISION_CONFIDENCE_THRESHOLD]) are included in [tags].
  */
 data class CameraVisionAnalysisResult(
   val id: String,

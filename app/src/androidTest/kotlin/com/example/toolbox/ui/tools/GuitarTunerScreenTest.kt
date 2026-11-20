@@ -1,6 +1,9 @@
 package com.example.toolbox.ui.tools
 
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -10,6 +13,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import com.example.toolbox.ui.theme.ToolboxTheme
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -113,5 +117,65 @@ class GuitarTunerScreenTest {
 
     composeTestRule.onNodeWithTag("catalog_search_overlay").assertDoesNotExist()
     composeTestRule.onNodeWithText("DADGAD • D A D G A D").assertIsDisplayed()
+  }
+
+  @Test
+  fun togglingNoteDetection_doesNotShiftLayout() {
+    var signalActive by mutableStateOf(false)
+    val preset = GuitarTuningPreset.STANDARD
+    val activeString = preset.strings.first()
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        GuitarTunerContent(
+          selectedPreset = preset,
+          onSelectPreset = {},
+          favoritePresets = emptySet(),
+          onToggleFavorite = {},
+          filteredPresets = GuitarTuningPreset.entries,
+          filterFavoritesOnly = false,
+          selectedCategory = null,
+          onToggleFavoritesFilter = {},
+          onSelectCategory = {},
+          onOpenSearch = {},
+          activeString = activeString,
+          selectedStringIndex = 0,
+          onPlayReferenceString = {},
+          centsOffset = 4.2f,
+          detectedFrequencyHz = 82.61,
+          isSignalActive = signalActive,
+          hasMicPermission = true,
+          onRequestMicPermission = {},
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("detected_note").assertDoesNotExist()
+    val gaugeBoundsWhenHidden =
+      composeTestRule.onNodeWithTag("tuner_gauge_card").fetchSemanticsNode().boundsInRoot
+    val stringsBoundsWhenHidden =
+      composeTestRule.onNodeWithTag("guitar_strings_card").fetchSemanticsNode().boundsInRoot
+    val targetBoundsWhenHidden =
+      composeTestRule.onNodeWithText("TARGET").fetchSemanticsNode().boundsInRoot
+    val currentBoundsWhenHidden =
+      composeTestRule.onNodeWithText("CURRENT").fetchSemanticsNode().boundsInRoot
+
+    // Unhide note display
+    composeTestRule.runOnIdle { signalActive = true }
+    composeTestRule.onNodeWithTag("detected_note").assertIsDisplayed()
+
+    val gaugeBoundsWhenVisible =
+      composeTestRule.onNodeWithTag("tuner_gauge_card").fetchSemanticsNode().boundsInRoot
+    val stringsBoundsWhenVisible =
+      composeTestRule.onNodeWithTag("guitar_strings_card").fetchSemanticsNode().boundsInRoot
+    val targetBoundsWhenVisible =
+      composeTestRule.onNodeWithText("TARGET").fetchSemanticsNode().boundsInRoot
+    val currentBoundsWhenVisible =
+      composeTestRule.onNodeWithText("CURRENT").fetchSemanticsNode().boundsInRoot
+
+    assertEquals(gaugeBoundsWhenHidden, gaugeBoundsWhenVisible)
+    assertEquals(stringsBoundsWhenHidden, stringsBoundsWhenVisible)
+    assertEquals(targetBoundsWhenHidden, targetBoundsWhenVisible)
+    assertEquals(currentBoundsWhenHidden, currentBoundsWhenVisible)
   }
 }

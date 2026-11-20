@@ -1015,4 +1015,87 @@ class SettingsScreenTest {
     assertFalse(com.example.toolbox.ui.main.importDataFromJson("not-json", targetRepos))
     assertFalse(com.example.toolbox.ui.main.importDataFromJson("{\"unrelated_key\": 123}", targetRepos))
   }
+
+  @Test
+  fun errorLogs_keepsUpToLast100ErrorsAndSupportsClear() {
+    val repo = InMemoryNavigationPreferencesRepository()
+    assertEquals(100, com.example.toolbox.ui.main.MAX_ERROR_LOG_ENTRIES)
+    assertTrue(repo.getErrorLogs().isEmpty())
+
+    // Log 105 errors sequentially
+    for (i in 1..105) {
+      repo.logError(
+        message = "Error #$i",
+        source = "Settings",
+        details = "Detail for error $i",
+        timestampMs = 1_763_400_000_000L + i * 1_000L,
+      )
+    }
+
+    val logs = repo.getErrorLogs()
+    assertEquals(100, logs.size)
+    assertEquals(100, repo.errorLogsFlow.value.size)
+
+    // Only the last 100 errors (Error #6 .. Error #105) are retained; oldest 5 are evicted
+    assertEquals("Error #6", logs.first().message)
+    assertEquals("Error #105", logs.last().message)
+    assertFalse(logs.any { it.message == "Error #1" })
+    assertFalse(logs.any { it.message == "Error #5" })
+
+    // Logging a throwable also caps at 100 entries
+    repo.logError(
+      throwable = IllegalStateException("Throwable failure"),
+      source = "Files",
+      timestampMs = 1_763_400_200_000L,
+    )
+    val updatedLogs = repo.getErrorLogs()
+    assertEquals(100, updatedLogs.size)
+    assertEquals("Error #7", updatedLogs.first().message)
+    assertEquals("Throwable failure", updatedLogs.last().message)
+    assertEquals("Files", updatedLogs.last().source)
+    assertTrue(updatedLogs.last().details.contains("IllegalStateException"))
+
+    // Clearing error logs empties the list
+    repo.clearErrorLogs()
+    assertTrue(repo.getErrorLogs().isEmpty())
+    assertTrue(repo.errorLogsFlow.value.isEmpty())
+  }
+
+  @Test
+  fun errorLogs_filterAndHighlightHelpers_matchAndHighlightQuerySpans() {
+    val entries = listOf(
+      com.example.toolbox.ui.main.ErrorLogEntry(
+        id = "1",
+        timestampMs = 1_763_400_000_000L,
+        message = "Failed to export settings to file",
+        source = "Settings",
+        details = "IOException: Permission denied",
+      ),
+      com.example.toolbox.ui.main.ErrorLogEntry(
+        id = "2",
+        timestampMs = 1_763_400_060_000L,
+        message = "Audio decoder error",
+        source = "Music",
+        details = "IllegalStateException: codec reset",
+      ),
+    )
+
+    assertEquals(2, filterErrorLogs(entries, "").size)
+    assertEquals(1, filterErrorLogs(entries, "permission").size)
+    assertEquals("1", filterErrorLogs(entries, "permission").first().id)
+    assertEquals(1, filterErrorLogs(entries, "music").size)
+    assertEquals("2", filterErrorLogs(entries, "music").first().id)
+    assertTrue(filterErrorLogs(entries, "nonexistent_term").isEmpty())
+
+    val highlighted = highlightErrorLogText(
+      text = "Failed to export settings to file",
+      query = "settings",
+      highlightBackground = Color.Yellow,
+      highlightContent = Color.Black,
+    )
+    assertEquals("Failed to export settings to file", highlighted.text)
+    assertEquals(1, highlighted.spanStyles.size)
+    assertEquals(17, highlighted.spanStyles.first().start)
+    assertEquals(25, highlighted.spanStyles.first().end)
+  }
 }
