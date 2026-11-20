@@ -70,6 +70,7 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.SaveAlt
@@ -3113,42 +3114,65 @@ fun SettingsScreen(
                         )
                       }
 
-                      if (isGranted) {
-                        OutlinedButton(
+                      Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                      ) {
+                        IconButton(
                           onClick = {
-                            preferencesRepository.revokePermission(permission)
-                            if (!isInspection && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                              try {
-                                context.revokeSelfPermissionsOnKill(permission.manifestPermissions)
-                              } catch (_: Throwable) {}
+                            if (!isInspection) {
+                              openAppPermissionSystemSettings(context, permission)
                             }
                           },
-                          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                           modifier = Modifier
-                            .testTag("permission_toggle_$permKey")
-                            .testTag("permission_revoke_$permKey"),
+                            .size(32.dp)
+                            .testTag("permission_system_settings_$permKey"),
                         ) {
-                          Text(
-                            text = "Revoke",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
+                          Icon(
+                            imageVector = Icons.Default.OpenInNew,
+                            contentDescription = "Open system settings for ${permission.title}",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
                           )
                         }
-                      } else {
-                        Button(
-                          onClick = {
-                            preferencesRepository.grantPermission(permission)
-                          },
-                          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                          modifier = Modifier
-                            .testTag("permission_toggle_$permKey")
-                            .testTag("permission_grant_$permKey"),
-                        ) {
-                          Text(
-                            text = "Grant",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                          )
+
+                        if (isGranted) {
+                          OutlinedButton(
+                            onClick = {
+                              preferencesRepository.revokePermission(permission)
+                              if (!isInspection && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                try {
+                                  context.revokeSelfPermissionsOnKill(permission.manifestPermissions)
+                                } catch (_: Throwable) {}
+                              }
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier
+                              .testTag("permission_toggle_$permKey")
+                              .testTag("permission_revoke_$permKey"),
+                          ) {
+                            Text(
+                              text = "Revoke",
+                              style = MaterialTheme.typography.labelSmall,
+                              fontWeight = FontWeight.SemiBold,
+                            )
+                          }
+                        } else {
+                          Button(
+                            onClick = {
+                              preferencesRepository.grantPermission(permission)
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier
+                              .testTag("permission_toggle_$permKey")
+                              .testTag("permission_grant_$permKey"),
+                          ) {
+                            Text(
+                              text = "Grant",
+                              style = MaterialTheme.typography.labelSmall,
+                              fontWeight = FontWeight.SemiBold,
+                            )
+                          }
                         }
                       }
                     }

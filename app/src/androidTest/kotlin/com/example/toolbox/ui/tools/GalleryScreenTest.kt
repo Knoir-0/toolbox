@@ -219,7 +219,7 @@ class GalleryScreenTest {
     // Starts at 3 albums per row
     composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("3")
 
-    // Pinch in (two fingers moving closer together) to adjust all the way up to 6 albums per row
+    // Pinch in (two fingers moving closer together) to adjust all the way up to 5 albums per row
     composeTestRule.onNodeWithTag("gallery_content_container").performTouchInput {
       val center = this.center
       pinch(
@@ -232,20 +232,20 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("6")
+    composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("5")
     composeTestRule.onNodeWithTag("gallery_view_mode_toggle").assertIsDisplayed()
 
-    // Verify all 6 un-nested albums from Pictures and DCIM are aligned on the same first row
-    val firstTileTop = composeTestRule.onNodeWithTag("album_tile_Album_1", useUnmergedTree = true)
+    // Verify 5 un-nested albums from Pictures and DCIM are aligned on the same first row
+    val firstTileTop = composeTestRule.onNodeWithTag("album_tile_Album_2", useUnmergedTree = true)
       .fetchSemanticsNode().boundsInRoot.top
-    val sixthTileTop = composeTestRule.onNodeWithTag("album_tile_Album_6", useUnmergedTree = true)
+    val fifthTileTop = composeTestRule.onNodeWithTag("album_tile_Album_6", useUnmergedTree = true)
       .fetchSemanticsNode().boundsInRoot.top
     assertTrue(
-      "Expected Album_1 and Album_6 to be on the same row when set to 6 per row",
-      kotlin.math.abs(firstTileTop - sixthTileTop) < 5f,
+      "Expected Album_2 and Album_6 to be on the same row when set to 5 per row",
+      kotlin.math.abs(firstTileTop - fifthTileTop) < 5f,
     )
 
-    // Pinch out (two fingers spreading apart) to adjust down to 2 albums per row
+    // Pinch out (two fingers spreading apart) to adjust all the way down into List view, then pinch in slightly to 2 albums per row
     composeTestRule.onNodeWithTag("gallery_content_container").performTouchInput {
       val center = this.center
       pinch(
@@ -254,6 +254,21 @@ class GalleryScreenTest {
         start1 = Offset(center.x + 40f, center.y),
         end1 = Offset(center.x + 320f, center.y),
         durationMillis = 300L,
+      )
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("gallery_list_view").assertIsDisplayed()
+
+    // Pinch in slightly (one step: 120 -> 90, zoom = 0.75 <= 0.82) to transition from List view to 2 albums per row
+    composeTestRule.onNodeWithTag("gallery_content_container").performTouchInput {
+      val center = this.center
+      pinch(
+        start0 = Offset(center.x - 120f, center.y),
+        end0 = Offset(center.x - 90f, center.y),
+        start1 = Offset(center.x + 120f, center.y),
+        end1 = Offset(center.x + 90f, center.y),
+        durationMillis = 200L,
       )
     }
     composeTestRule.waitForIdle()
@@ -288,7 +303,7 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // Cycle toolbar view button from default 3 -> 4 -> 5 -> 6 -> List View -> 2
+    // Cycle toolbar view button from default 3 -> 4 -> 5 -> List View -> 2
     composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("3")
     composeTestRule.onNodeWithTag("gallery_view_mode_toggle").performClick()
     composeTestRule.waitForIdle()
@@ -296,9 +311,6 @@ class GalleryScreenTest {
     composeTestRule.onNodeWithTag("gallery_view_mode_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("5")
-    composeTestRule.onNodeWithTag("gallery_view_mode_toggle").performClick()
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("6")
     composeTestRule.onNodeWithTag("gallery_view_mode_toggle").performClick()
     composeTestRule.waitForIdle()
 
@@ -762,7 +774,7 @@ class GalleryScreenTest {
       horizontalGapPx <= 16f,
     )
 
-    // Pinch to zoom out from 3 pictures per row up to 6 pictures per row
+    // Pinch to zoom out from 3 pictures per row up to 5 pictures per row
     composeTestRule.onNodeWithTag("gallery_content_container").performTouchInput {
       val center = this.center
       pinch(
@@ -775,14 +787,14 @@ class GalleryScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("6")
+    composeTestRule.onNodeWithTag("gallery_albums_per_row_count").assertTextEquals("5")
     val rowFirstTop = composeTestRule.onNodeWithTag("photo_tile_pic_6.png", useUnmergedTree = true)
       .fetchSemanticsNode().boundsInRoot.top
-    val rowSixthTop = composeTestRule.onNodeWithTag("photo_tile_pic_1.png", useUnmergedTree = true)
+    val rowFifthTop = composeTestRule.onNodeWithTag("photo_tile_pic_2.png", useUnmergedTree = true)
       .fetchSemanticsNode().boundsInRoot.top
     assertTrue(
-      "Expected all 6 pictures on the same row when zoomed out to 6 per row",
-      kotlin.math.abs(rowFirstTop - rowSixthTop) < 5f,
+      "Expected 5 pictures on the same row when zoomed out to 5 per row",
+      kotlin.math.abs(rowFirstTop - rowFifthTop) < 5f,
     )
   }
 
@@ -1254,6 +1266,34 @@ class GalleryScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("album_tile_item_Camera").assertIsDisplayed()
     composeTestRule.onNodeWithTag("album_tile_item_Vacation").assertDoesNotExist()
+  }
+
+  @Test
+  fun fullFilesPermission_showsDownloadAsAlbumInAlbumsView_withoutDownloadPill() {
+    val dcimCameraDir = File(testRootDir, "DCIM/Camera").apply { mkdirs() }
+    val downloadDir = File(testRootDir, "Download").apply { mkdirs() }
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(dcimCameraDir, "dcim_photo.png"),
+      lastModifiedMs = 5_000_000L,
+    )
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(downloadDir, "downloaded_photo.png"),
+      lastModifiedMs = 6_000_000L,
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialHasFullFilesPermission = true,
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Download navigation pill must NOT appear, while Download appears as an album in the Albums view
+    composeTestRule.onNodeWithTag("gallery_folder_pill_Download").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("album_tile_item_Download").assertIsDisplayed()
   }
 
   @Test

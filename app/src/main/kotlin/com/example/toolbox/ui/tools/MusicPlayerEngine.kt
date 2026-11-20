@@ -181,7 +181,9 @@ data class PreferredMusicAppLink(
   val isInstalled: Boolean = false,
 )
 
-val DEFAULT_MUSIC_FOLDER_NAMES: List<String> = listOf("Music", "Audio", "Recordings", "Download")
+val DEFAULT_SCOPED_MUSIC_FOLDER_NAMES: List<String> = listOf("Music", "Audio", "Recordings")
+val FULL_FILES_DEFAULT_MUSIC_FOLDER_NAMES: List<String> = listOf("Music", "Audio", "Recordings", "Download")
+val DEFAULT_MUSIC_FOLDER_NAMES: List<String> = FULL_FILES_DEFAULT_MUSIC_FOLDER_NAMES
 val SINGLE_ALBUM_FOLDER_NAMES: Set<String> = setOf("Audio", "Recordings")
 
 /**
@@ -3041,6 +3043,16 @@ object MusicPlayerEngine {
   }
 
   /**
+   * Checks whether the app currently has the full files access permission (`MANAGE_EXTERNAL_STORAGE`
+   * on Android 11+ / `READ_EXTERNAL_STORAGE` on older versions) and [AppPermission.STORAGE] is enabled.
+   */
+  fun hasFullFilesPermission(context: Context): Boolean {
+    return com.example.toolbox.ui.main.NavigationPreferencesBridge.isPermissionGranted(
+      com.example.toolbox.ui.main.AppPermission.STORAGE
+    ) && FileManagerEngine.hasStoragePermission(context)
+  }
+
+  /**
    * Checks whether [track] belongs to [folder] (matching either its [MusicFolder.customAbsolutePath]
    * or its relative [MusicFolder.displayPath] under [rootDirectory]).
    */
@@ -3057,13 +3069,22 @@ object MusicPlayerEngine {
       trackPath.startsWith("$folderPath/", ignoreCase = true) ||
       file.parentFile?.name?.equals(folder.folderName, ignoreCase = true) == true
   }
+
   fun resolveDefaultMusicDirectories(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
+    hasFullFilesPermission: Boolean = true,
   ): List<File> {
-    val defaults = DEFAULT_MUSIC_FOLDER_NAMES.map { File(rootDirectory, it) }.toMutableList()
-    val downloadsDir = File(rootDirectory, "Downloads")
-    if (downloadsDir.exists() && downloadsDir.isDirectory) {
-      defaults.add(downloadsDir)
+    val folderNames = if (hasFullFilesPermission) {
+      FULL_FILES_DEFAULT_MUSIC_FOLDER_NAMES
+    } else {
+      DEFAULT_SCOPED_MUSIC_FOLDER_NAMES
+    }
+    val defaults = folderNames.map { File(rootDirectory, it) }.toMutableList()
+    if (hasFullFilesPermission) {
+      val downloadsDir = File(rootDirectory, "Downloads")
+      if (downloadsDir.exists() && downloadsDir.isDirectory) {
+        defaults.add(downloadsDir)
+      }
     }
     return defaults
   }
@@ -4528,17 +4549,18 @@ object MusicPlayerEngine {
     initialDirectory: File?,
     includeSamples: Boolean,
     additionalDirectories: List<File> = emptyList(),
+    hasFullFilesPermission: Boolean = true,
   ): String {
     val targetDirs = if (initialDirectory != null) {
       listOf(initialDirectory) + additionalDirectories
     } else {
-      resolveDefaultMusicDirectories(rootDirectory) + additionalDirectories
+      resolveDefaultMusicDirectories(rootDirectory, hasFullFilesPermission) + additionalDirectories
     }.distinctBy { it.absolutePath }
     val dirStamp = targetDirs.joinToString("|") { dir ->
       val mod = if (dir.exists()) dir.lastModified() else -1L
       "${dir.absolutePath}@$mod"
     }
-    return "$dirStamp|samples=$includeSamples"
+    return "$dirStamp|samples=$includeSamples|fullFiles=$hasFullFilesPermission"
   }
 
   /**
@@ -4550,8 +4572,9 @@ object MusicPlayerEngine {
     initialDirectory: File? = null,
     includeSamples: Boolean = false,
     additionalDirectories: List<File> = emptyList(),
+    hasFullFilesPermission: Boolean = true,
   ): List<MusicTrack>? {
-    val key = libraryCacheKey(rootDirectory, initialDirectory, includeSamples, additionalDirectories)
+    val key = libraryCacheKey(rootDirectory, initialDirectory, includeSamples, additionalDirectories, hasFullFilesPermission)
     synchronized(metadataCacheLock) {
       return libraryTracksCache[key]
     }
@@ -4559,9 +4582,9 @@ object MusicPlayerEngine {
 
   /**
    * Resolves the full library of tracks from [initialDirectory] (if provided) or the default
-   * `/Music`, `/Audio`, `/Recordings`, and `/Download` folders under [rootDirectory] plus any
-   * [additionalDirectories] (user-added custom folders), combining or falling back to
-   * [DEFAULT_SAMPLE_TRACKS] when [includeSamples] is enabled.
+   * `/Music`, `/Audio`, `/Recordings` (and `/Download` when [hasFullFilesPermission] is `true`) folders
+   * under [rootDirectory] plus any [additionalDirectories] (user-added custom folders), combining or
+   * falling back to [DEFAULT_SAMPLE_TRACKS] when [includeSamples] is enabled.
    */
   fun loadLibraryTracks(
     rootDirectory: File = FileManagerEngine.getUserRootDirectory(),
@@ -4570,6 +4593,7 @@ object MusicPlayerEngine {
     inspectMetadataRetriever: Boolean = true,
     deferAlbumArt: Boolean = true,
     additionalDirectories: List<File> = emptyList(),
+    hasFullFilesPermission: Boolean = true,
   ): List<MusicTrack> {
     if (trackIndexDiskCacheFile != null) {
       loadTrackIndexCacheFromDisk(trackIndexDiskCacheFile)
@@ -4577,7 +4601,7 @@ object MusicPlayerEngine {
     val targetDirs = if (initialDirectory != null) {
       listOf(initialDirectory) + additionalDirectories
     } else {
-      resolveDefaultMusicDirectories(rootDirectory) + additionalDirectories
+      resolveDefaultMusicDirectories(rootDirectory, hasFullFilesPermission) + additionalDirectories
     }.distinctBy { it.absolutePath }
     val localTracks = scanMusicDirectories(
       directories = targetDirs,
@@ -4590,7 +4614,7 @@ object MusicPlayerEngine {
       includeSamples -> DEFAULT_SAMPLE_TRACKS
       else -> emptyList()
     }
-    val key = libraryCacheKey(rootDirectory, initialDirectory, includeSamples, additionalDirectories)
+    val key = libraryCacheKey(rootDirectory, initialDirectory, includeSamples, additionalDirectories, hasFullFilesPermission)
     synchronized(metadataCacheLock) {
       if (inspectMetadataRetriever || libraryTracksCache[key] == null) {
         libraryTracksCache[key] = result
@@ -4613,6 +4637,7 @@ object MusicPlayerEngine {
     inspectMetadataRetriever: Boolean = true,
     deferAlbumArt: Boolean = true,
     additionalDirectories: List<File> = emptyList(),
+    hasFullFilesPermission: Boolean = true,
   ): List<MusicTrack> = withContext(Dispatchers.IO) {
     ensureActive()
     loadLibraryTracks(
@@ -4622,6 +4647,7 @@ object MusicPlayerEngine {
       inspectMetadataRetriever = inspectMetadataRetriever,
       deferAlbumArt = deferAlbumArt,
       additionalDirectories = additionalDirectories,
+      hasFullFilesPermission = hasFullFilesPermission,
     )
   }
 
@@ -11129,6 +11155,22 @@ class MusicPlaybackSession(
   var isLoadingLibrary by mutableStateOf(false)
     internal set
 
+  var hasFullFilesPermission by mutableStateOf(
+    !isInspection && appContext != null && MusicPlayerEngine.hasFullFilesPermission(appContext)
+  )
+    internal set
+
+  fun syncFullFilesPermissionState() {
+    if (isInspection || appContext == null) return
+    val current = MusicPlayerEngine.hasFullFilesPermission(appContext)
+    if (current != hasFullFilesPermission) {
+      hasFullFilesPermission = current
+      if (isMusicFolderGranted) {
+        reloadLibraryTracksForGrantedFolders()
+      }
+    }
+  }
+
   private fun resolveAdditionalCustomFolderDirectories(): List<File> =
     customFolders.map { MusicPlayerEngine.resolveDirectoryForFolder(it) }
 
@@ -11147,17 +11189,20 @@ class MusicPlaybackSession(
         initialDirectory = initialDirectory,
         includeSamples = includeSamples,
         additionalDirectories = additionalDirs,
+        hasFullFilesPermission = hasFullFilesPermission,
       ) ?: emptyList()
       else -> MusicPlayerEngine.getCachedLibraryTracks(
         initialDirectory = initialDirectory,
         includeSamples = includeSamples,
         additionalDirectories = additionalDirs,
+        hasFullFilesPermission = hasFullFilesPermission,
       ) ?: MusicPlayerEngine.loadLibraryTracks(
         initialDirectory = initialDirectory,
         includeSamples = includeSamples,
         inspectMetadataRetriever = false,
         deferAlbumArt = true,
         additionalDirectories = additionalDirs,
+        hasFullFilesPermission = hasFullFilesPermission,
       )
     }
     allTracks = initialLoaded
@@ -11206,6 +11251,7 @@ class MusicPlaybackSession(
         inspectMetadataRetriever = false,
         deferAlbumArt = true,
         additionalDirectories = additionalDirs,
+        hasFullFilesPermission = hasFullFilesPermission,
       )
       applyLoadedLibraryTracks(loaded)
     } else {
@@ -11270,17 +11316,20 @@ class MusicPlaybackSession(
           initialDirectory = initialDirectory,
           includeSamples = includeSamples,
           additionalDirectories = additionalDirs,
+          hasFullFilesPermission = hasFullFilesPermission,
         ) ?: allTracks
         else -> MusicPlayerEngine.getCachedLibraryTracks(
           initialDirectory = initialDirectory,
           includeSamples = includeSamples,
           additionalDirectories = additionalDirs,
+          hasFullFilesPermission = hasFullFilesPermission,
         ) ?: MusicPlayerEngine.loadLibraryTracks(
           initialDirectory = initialDirectory,
           includeSamples = includeSamples,
           inspectMetadataRetriever = false,
           deferAlbumArt = true,
           additionalDirectories = additionalDirs,
+          hasFullFilesPermission = hasFullFilesPermission,
         )
       }
       val activeId = currentTrack?.id
@@ -11350,6 +11399,8 @@ class MusicPlaybackSession(
 
   private fun startAsyncLibraryLoadAndArtworkPrefetch() {
     if (isInspection || appContext == null || !isMusicFolderGranted) return
+    val fullFilesGranted = MusicPlayerEngine.hasFullFilesPermission(appContext)
+    hasFullFilesPermission = fullFilesGranted
     libraryLoadJob?.cancel()
     libraryLoadJob = scope.launch {
       val explicitTracks = configuredInitialTracks
@@ -11370,6 +11421,7 @@ class MusicPlaybackSession(
               inspectMetadataRetriever = false,
               deferAlbumArt = true,
               additionalDirectories = additionalDirs,
+              hasFullFilesPermission = fullFilesGranted,
             )
             if (fastLoaded.isNotEmpty()) {
               val fastComputed = withContext(backgroundCoroutineContext) {
@@ -11386,6 +11438,7 @@ class MusicPlaybackSession(
             inspectMetadataRetriever = true,
             deferAlbumArt = true,
             additionalDirectories = additionalDirs,
+            hasFullFilesPermission = fullFilesGranted,
           )
           val fullComputed = withContext(backgroundCoroutineContext) {
             computeFullLibraryState(loaded)

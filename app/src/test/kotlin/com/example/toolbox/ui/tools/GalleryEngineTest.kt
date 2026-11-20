@@ -182,7 +182,7 @@ class GalleryEngineTest {
     assertEquals(GalleryViewMode.LIST, GalleryViewMode.fromNameOrDefault("LIST"))
     assertEquals(3, DEFAULT_ALBUMS_PER_ROW)
     assertEquals(2, MIN_ALBUMS_PER_ROW)
-    assertEquals(6, MAX_ALBUMS_PER_ROW)
+    assertEquals(5, MAX_ALBUMS_PER_ROW)
 
     // Content background behind albums and photos is pure white in light mode and pure black in dark mode
     assertEquals(Color.White, GalleryEngine.resolveContentBackgroundColor(ThemeMode.LIGHT, systemInDarkTheme = false))
@@ -194,24 +194,24 @@ class GalleryEngineTest {
   }
 
   @Test
-  fun coerceAlbumsPerRow_andPinchCalculation_adjustBetweenTwoAndSix() {
+  fun coerceAlbumsPerRow_andPinchCalculation_adjustBetweenTwoAndFive() {
     assertEquals(2, GalleryEngine.coerceAlbumsPerRow(1))
     assertEquals(2, GalleryEngine.coerceAlbumsPerRow(2))
     assertEquals(3, GalleryEngine.coerceAlbumsPerRow(3))
     assertEquals(4, GalleryEngine.coerceAlbumsPerRow(4))
     assertEquals(5, GalleryEngine.coerceAlbumsPerRow(5))
-    assertEquals(6, GalleryEngine.coerceAlbumsPerRow(6))
-    assertEquals(6, GalleryEngine.coerceAlbumsPerRow(9))
+    assertEquals(5, GalleryEngine.coerceAlbumsPerRow(6))
+    assertEquals(5, GalleryEngine.coerceAlbumsPerRow(9))
 
-    // Pinching in (zoom < 1f) increases albums per row from 3 up to 6
+    // Pinching in (zoom < 1f) increases albums per row from 3 up to 5
     assertEquals(4, GalleryEngine.calculatePinchAlbumsPerRow(3, 0.75f))
     assertEquals(5, GalleryEngine.calculatePinchAlbumsPerRow(3, 0.58f))
-    assertEquals(6, GalleryEngine.calculatePinchAlbumsPerRow(3, 0.40f))
+    assertEquals(5, GalleryEngine.calculatePinchAlbumsPerRow(3, 0.40f))
 
-    // Pinching out (zoom > 1f) decreases albums per row from 6 down to 2
-    assertEquals(5, GalleryEngine.calculatePinchAlbumsPerRow(6, 1.30f))
-    assertEquals(4, GalleryEngine.calculatePinchAlbumsPerRow(6, 1.60f))
-    assertEquals(3, GalleryEngine.calculatePinchAlbumsPerRow(6, 2.00f))
+    // Pinching out (zoom > 1f) decreases albums per row from 5 down to 2
+    assertEquals(4, GalleryEngine.calculatePinchAlbumsPerRow(5, 1.30f))
+    assertEquals(3, GalleryEngine.calculatePinchAlbumsPerRow(5, 1.60f))
+    assertEquals(2, GalleryEngine.calculatePinchAlbumsPerRow(5, 2.00f))
     assertEquals(2, GalleryEngine.calculatePinchAlbumsPerRow(3, 1.30f))
 
     // Individual photo viewer pinch-to-zoom clamps between 0.5f and 5f
@@ -1141,16 +1141,19 @@ class GalleryEngineTest {
     val parsedPills = GalleryEngine.parseFolderPills(serializedPills, hasFullFilesPermission = false)
     assertEquals(reordered, parsedPills)
 
-    // When full files permission is granted, Download re-appears in the folder pills
+    // Download is never shown as a folder navigation pill (it appears as an album in the Albums view when full files permission is granted)
     val parsedWithFullFiles = GalleryEngine.parseFolderPills(serializedPills, hasFullFilesPermission = true)
-    assertEquals(listOf("Screenshots", "DCIM", "Pictures", "Download"), parsedWithFullFiles.map { it.folderName })
+    assertEquals(listOf("Screenshots", "DCIM", "Pictures"), parsedWithFullFiles.map { it.folderName })
     assertEquals(
       listOf("Screenshots", "DCIM", "Pictures"),
       GalleryEngine.filterFolderPillsForPermission(parsedWithFullFiles, hasFullFilesPermission = false).map { it.folderName },
     )
     assertEquals(
-      listOf("Screenshots", "DCIM", "Pictures", "Download"),
-      GalleryEngine.filterFolderPillsForPermission(reordered, hasFullFilesPermission = true).map { it.folderName },
+      listOf("Screenshots", "DCIM", "Pictures"),
+      GalleryEngine.filterFolderPillsForPermission(
+        reordered + GalleryDefaultFolder.DOWNLOADS.toGalleryFolder(),
+        hasFullFilesPermission = true,
+      ).map { it.folderName },
     )
 
     // Removing a custom folder removes it while preserving default folders

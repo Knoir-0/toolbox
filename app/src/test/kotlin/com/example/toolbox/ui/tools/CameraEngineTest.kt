@@ -213,6 +213,12 @@ class CameraEngineTest {
     val resolvedCustom = CameraEngine.resolveDirectoryInput("/Photos/Snaps", userRoot = fakeRoot)
     assertEquals(File(fakeRoot, "Photos/Snaps").absolutePath, resolvedCustom.absolutePath)
     assertEquals("/Photos/Snaps", CameraEngine.formatDirectoryDisplayPath(resolvedCustom, fakeRoot))
+
+    val resolvedFromTree = CameraEngine.resolveDisplayPathFromTreeUriString(
+      rawUriString = "content://com.android.externalstorage.documents/tree/primary%3ADCIM%2FCamera",
+      userRoot = fakeRoot,
+    )
+    assertEquals("/DCIM/Camera", resolvedFromTree)
   }
 
   @Test

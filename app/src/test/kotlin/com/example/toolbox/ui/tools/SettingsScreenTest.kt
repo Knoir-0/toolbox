@@ -770,6 +770,15 @@ class SettingsScreenTest {
       assertEquals(0L, repo.getLastPermissionUsedTimestamp(perm))
       assertTrue(perm.toolsUsingPermission.isNotEmpty())
     }
+    assertEquals(
+      listOf(
+        Tool.FILES,
+        Tool.GALLERY,
+        Tool.AUDIO_RECORDER,
+        Tool.MUSIC,
+      ),
+      com.example.toolbox.ui.main.AppPermission.STORAGE.toolsUsingPermission,
+    )
 
     // 2. Recording permission usage for specific tools updates counts and timestamps
     val t1 = 1_763_400_000_000L

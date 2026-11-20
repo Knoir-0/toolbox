@@ -361,21 +361,38 @@ fun FilesScreen(
   }
 
   // Permission handling for reading storage/emulated/0
-  var hasPermission by remember {
+  val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+  val storagePermissionSettingGranted = com.example.toolbox.ui.main.NavigationPreferencesBridge.isPermissionGranted(
+    com.example.toolbox.ui.main.AppPermission.STORAGE
+  )
+  var systemHasPermission by remember(context, isInspection) {
     mutableStateOf(isInspection || FileManagerEngine.hasStoragePermission(context))
   }
+  DisposableEffect(lifecycleOwner, context, isInspection) {
+    val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+      if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME && !isInspection) {
+        systemHasPermission = FileManagerEngine.hasStoragePermission(context)
+        storageRevision++
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+    }
+  }
+  val hasPermission = isInspection || (storagePermissionSettingGranted && systemHasPermission)
 
   val manageStorageLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.StartActivityForResult()
   ) {
-    hasPermission = FileManagerEngine.hasStoragePermission(context)
+    systemHasPermission = FileManagerEngine.hasStoragePermission(context)
     storageRevision++
   }
 
   val legacyPermissionLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.RequestPermission()
   ) { isGranted ->
-    hasPermission = isGranted
+    systemHasPermission = isGranted
     storageRevision++
   }
 
@@ -386,6 +403,20 @@ fun FilesScreen(
   }
 
   fun requestStoragePermission() {
+    if (!storagePermissionSettingGranted) {
+      com.example.toolbox.ui.main.NavigationPreferencesBridge.activeRepository?.grantPermission(
+        com.example.toolbox.ui.main.AppPermission.STORAGE
+      ) ?: run {
+        com.example.toolbox.ui.main.NavigationPreferencesBridge.permissionGrantStates =
+          com.example.toolbox.ui.main.NavigationPreferencesBridge.permissionGrantStates +
+            (com.example.toolbox.ui.main.AppPermission.STORAGE to true)
+      }
+      if (FileManagerEngine.hasStoragePermission(context)) {
+        systemHasPermission = true
+        storageRevision++
+        return
+      }
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       try {
         val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
@@ -1247,11 +1278,28 @@ fun FilesScreen(
           .weight(1f)
           .fillMaxWidth()
           .pinchToChangeColumns(
-            enabled = viewMode == FileViewMode.GRID,
+            enabled = true,
+            isListView = viewMode == FileViewMode.LIST,
             columnsPerRow = gridColumnsPerRow,
             minColumns = MIN_FILES_GRID_COLUMNS,
             maxColumns = MAX_FILES_GRID_COLUMNS,
-            onColumnsChange = { updateGridColumnsPerRow(it) },
+            onColumnsChange = { cols ->
+              val wasListView = viewMode == FileViewMode.LIST
+              val previousCols = gridColumnsPerRow
+              if (wasListView) {
+                viewMode = FileViewMode.GRID
+              }
+              updateGridColumnsPerRow(cols)
+              if (wasListView || previousCols != gridColumnsPerRow) {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              }
+            },
+            onSelectListView = {
+              if (viewMode != FileViewMode.LIST) {
+                viewMode = FileViewMode.LIST
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              }
+            },
           ),
       ) {
         if (processedItems.isEmpty()) {

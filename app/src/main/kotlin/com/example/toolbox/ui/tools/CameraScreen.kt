@@ -92,6 +92,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Exposure
 import androidx.compose.material.icons.filled.FiberManualRecord
@@ -3803,6 +3804,7 @@ private fun CameraFolderAndFormatDialog(
   onDismiss: () -> Unit,
   onConfirm: (String, CameraPhotoFormat, Boolean) -> Unit,
 ) {
+  val context = LocalContext.current
   val focusRequester = remember { FocusRequester() }
   var textFieldValue by remember {
     mutableStateOf(
@@ -3814,6 +3816,33 @@ private fun CameraFolderAndFormatDialog(
   }
   var selectedFormat by remember { mutableStateOf(currentFormat) }
   var mirrorFrontEnabled by remember { mutableStateOf(mirrorFront) }
+
+  val folderPickerLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.StartActivityForResult(),
+  ) { result ->
+    if (result.resultCode == android.app.Activity.RESULT_OK) {
+      val treeUri = result.data?.data
+      if (treeUri != null) {
+        try {
+          val takeFlags = (result.data?.flags ?: 0) and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+          val effectiveFlags = if (takeFlags != 0) {
+            takeFlags
+          } else {
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+          }
+          context.contentResolver.takePersistableUriPermission(treeUri, effectiveFlags)
+        } catch (_: Throwable) {}
+        val resolvedPath = CameraEngine.resolveDisplayPathFromTreeUri(treeUri)
+        if (!resolvedPath.isNullOrBlank()) {
+          textFieldValue = TextFieldValue(
+            text = resolvedPath,
+            selection = TextRange(0, resolvedPath.length),
+          )
+        }
+      }
+    }
+  }
 
   LaunchedEffect(Unit) {
     try {
@@ -4049,7 +4078,7 @@ private fun CameraFolderAndFormatDialog(
           )
         }
 
-        // Quick Folder Presets
+        // Quick Folder Presets + Scoped Storage Folder Picker
         Row(
           modifier = Modifier
             .fillMaxWidth()
@@ -4071,6 +4100,29 @@ private fun CameraFolderAndFormatDialog(
               modifier = Modifier.testTag("camera_folder_preset_${preset.trimStart('/').replace('/', '_')}"),
             )
           }
+          FilterChip(
+            selected = false,
+            onClick = {
+              try {
+                folderPickerLauncher.launch(
+                  CameraEngine.createFolderAccessIntent(
+                    context = context,
+                    currentDisplayPath = textFieldValue.text.ifBlank { DEFAULT_CAMERA_FOLDER_DISPLAY },
+                  )
+                )
+              } catch (_: Throwable) {}
+            },
+            label = { Text("Choose Folder") },
+            leadingIcon = {
+              Icon(
+                imageVector = Icons.Default.CreateNewFolder,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+              )
+            },
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.testTag("camera_choose_scoped_folder_chip"),
+          )
         }
 
         // Rounded Folder Path Input Field

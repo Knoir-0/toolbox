@@ -2147,6 +2147,110 @@ object CameraEngine {
   }
 
   /**
+   * Creates the Android system prompt [android.content.Intent] (`Intent.ACTION_OPEN_DOCUMENT_TREE`)
+   * scoped to [currentDisplayPath] (defaulting to `/DCIM/Camera`) so the user can pick or grant
+   * scoped storage access to a camera save folder.
+   */
+  fun createFolderAccessIntent(
+    context: Context? = null,
+    currentDisplayPath: String = DEFAULT_CAMERA_FOLDER_DISPLAY,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): android.content.Intent {
+    val cleanSubpath = currentDisplayPath.trim().trim('/').ifEmpty { DEFAULT_CAMERA_FOLDER_SUBPATH }
+    try {
+      val targetDir = File(userRoot, cleanSubpath)
+      if (!targetDir.exists()) {
+        targetDir.mkdirs()
+      }
+    } catch (_: Throwable) {}
+
+    val docId = "primary:$cleanSubpath"
+    val initialUri = try {
+      android.provider.DocumentsContract.buildDocumentUri(
+        "com.android.externalstorage.documents",
+        docId,
+      )
+    } catch (_: Throwable) {
+      android.net.Uri.parse(
+        "content://com.android.externalstorage.documents/document/primary%3A${cleanSubpath.replace("/", "%2F")}"
+      )
+    }
+    val baseIntent = if (context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      try {
+        val storageManager = context.getSystemService(Context.STORAGE_SERVICE) as? android.os.storage.StorageManager
+        storageManager?.primaryStorageVolume?.createOpenDocumentTreeIntent()
+      } catch (_: Throwable) {
+        null
+      }
+    } else {
+      null
+    } ?: android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT_TREE)
+
+    return baseIntent.apply {
+      action = android.content.Intent.ACTION_OPEN_DOCUMENT_TREE
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, initialUri)
+      }
+      addFlags(
+        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+          android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+          android.content.Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+          android.content.Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+      )
+    }
+  }
+
+  /**
+   * Resolves a user-friendly display path (such as `/DCIM/Camera` or `/Pictures/Camera`) from a
+   * SAF tree/document [android.net.Uri] or raw URI string.
+   */
+  fun resolveDisplayPathFromTreeUri(
+    uri: android.net.Uri?,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): String? {
+    if (uri == null) return null
+    val resolved = GalleryEngine.resolveCustomFolderFromTreeUri(uri, userRoot) ?: return null
+    val cleanDisplay = resolved.displayPath.trim()
+    return if (cleanDisplay.isEmpty()) {
+      DEFAULT_CAMERA_FOLDER_DISPLAY
+    } else if (cleanDisplay.startsWith("/")) {
+      cleanDisplay
+    } else {
+      "/$cleanDisplay"
+    }
+  }
+
+  fun resolveDisplayPathFromTreeUriString(
+    rawUriString: String?,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): String? {
+    if (rawUriString.isNullOrBlank()) return null
+    val decoded = try {
+      java.net.URLDecoder.decode(rawUriString.trim(), "UTF-8")
+    } catch (_: Throwable) {
+      rawUriString.trim()
+    }
+    if (decoded.startsWith("file://", ignoreCase = true)) {
+      val path = decoded.removePrefix("file://")
+      return formatDirectoryDisplayPath(File(path), userRoot)
+    }
+    val rawDocId = decoded.substringAfterLast("/tree/", "").ifEmpty {
+      decoded.substringAfterLast("/document/", "")
+    }.ifEmpty {
+      decoded
+    }
+    val cleanedSubpath = rawDocId
+      .substringAfter(':', rawDocId)
+      .trim()
+      .trim('/')
+    return if (cleanedSubpath.isEmpty()) {
+      DEFAULT_CAMERA_FOLDER_DISPLAY
+    } else {
+      "/$cleanedSubpath"
+    }
+  }
+
+  /**
    * Returns `true` if [file] is a supported video file.
    */
   fun isVideoFile(file: File): Boolean {

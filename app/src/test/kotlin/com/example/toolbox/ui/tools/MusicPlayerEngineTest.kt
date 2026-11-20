@@ -436,11 +436,26 @@ class MusicPlayerEngineTest {
         initialDirectory = null,
         includeSamples = false,
         inspectMetadataRetriever = false,
+        hasFullFilesPermission = true,
       )
       assertEquals(6, libraryTracks.size)
       assertEquals(
         setOf("MusicSong", "AudioRecording", "NestedAudioClip", "VoiceNote1", "VoiceNote2", "DownloadedClip"),
         libraryTracks.map { it.title }.toSet(),
+      )
+
+      // When hasFullFilesPermission is false (scoped storage only), /Download is hidden/excluded
+      val scopedOnlyTracks = MusicPlayerEngine.loadLibraryTracks(
+        rootDirectory = tempDir,
+        initialDirectory = null,
+        includeSamples = false,
+        inspectMetadataRetriever = false,
+        hasFullFilesPermission = false,
+      )
+      assertEquals(5, scopedOnlyTracks.size)
+      assertEquals(
+        setOf("MusicSong", "AudioRecording", "NestedAudioClip", "VoiceNote1", "VoiceNote2"),
+        scopedOnlyTracks.map { it.title }.toSet(),
       )
 
       // Audio and Recordings folders (including nested subfolders and mixed artists) are each treated as a single album

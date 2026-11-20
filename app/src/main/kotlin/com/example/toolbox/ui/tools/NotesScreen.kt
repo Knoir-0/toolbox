@@ -816,11 +816,25 @@ fun NotesScreen(
           .weight(1f)
           .fillMaxWidth()
           .pinchToChangeColumns(
-            enabled = isGridView,
+            enabled = true,
+            isListView = !isGridView,
             columnsPerRow = gridColumnsPerRow,
             minColumns = MIN_NOTES_GRID_COLUMNS,
             maxColumns = MAX_NOTES_GRID_COLUMNS,
-            onColumnsChange = { updateGridColumnsPerRow(it) },
+            onColumnsChange = { cols ->
+              if (!isGridView) {
+                isGridView = true
+                repo.setGridView(true)
+              }
+              updateGridColumnsPerRow(cols)
+            },
+            onSelectListView = {
+              if (isGridView) {
+                isGridView = false
+                repo.setGridView(false)
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              }
+            },
           ),
       ) {
         if (filteredResult.isEmpty) {

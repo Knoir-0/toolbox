@@ -353,12 +353,12 @@ fun GalleryScreen(
   val hasFullFilesPermission: Boolean = initialHasFullFilesPermission
     ?: (!isInspection && storagePermissionSettingGranted && systemHasFullFilesPermission)
 
-  // Ordered list of navigation folder pills (defaults + any custom folders added via scoped storage; "Albums" is always fixed to the front)
-  // Downloads is hidden under scoped storage and re-appears when full files permission is granted.
+  // Ordered list of navigation folder pills (defaults + any custom folders added via scoped storage; "Albums" is always fixed to the front).
+  // Download is never shown as a folder pill — when full files permission is granted, it appears as an album in the Albums view.
   var rawFolderPills by remember(isInspection) {
     mutableStateOf(
-      if (isInspection) FULL_FILES_DEFAULT_GALLERY_FOLDERS
-      else GalleryEngine.getFolderPills(context, hasFullFilesPermission = true)
+      if (isInspection) DEFAULT_GALLERY_FOLDERS
+      else GalleryEngine.getFolderPills(context, hasFullFilesPermission = false)
     )
   }
   val folderPills: List<GalleryFolder> = remember(rawFolderPills, hasFullFilesPermission) {
@@ -398,7 +398,15 @@ fun GalleryScreen(
   val grantedFolders: List<GalleryFolder> = remember(folderPills, effectiveGrantedFolderPaths) {
     folderPills.filter { isFolderGranted(it) }
   }
-  val hasAnyGrantedFolder = grantedFolders.isNotEmpty() || initialFolders != null
+  val isDownloadsGranted = remember(effectiveGrantedFolderPaths, hasFullFilesPermission) {
+    hasFullFilesPermission ||
+      effectiveGrantedFolderPaths.any {
+        it.equals(GalleryDefaultFolder.DOWNLOADS.displayPath, ignoreCase = true) ||
+          it.equals("Download", ignoreCase = true) ||
+          it.equals("Downloads", ignoreCase = true)
+      }
+  }
+  val hasAnyGrantedFolder = grantedFolders.isNotEmpty() || isDownloadsGranted || initialFolders != null
 
   // Folder display path for which the in-app permission view is currently displayed after tapping a locked folder pill or its lock icon
   var pendingPermissionFolderPath by rememberSaveable {
@@ -507,12 +515,13 @@ fun GalleryScreen(
     refreshTrigger++
   }
 
-  // Load un-nested root contents across all granted folders (Pictures and DCIM merged as if they were the same folder)
+  // Load un-nested root contents across all granted folders (Pictures and DCIM merged as if they were the same folder, plus Download as an album when full files permission is granted)
   val baseRootContents = remember(
     effectiveRootDir,
     initialFolders,
     additionalFolderPaths,
     grantedFolders,
+    isDownloadsGranted,
     hasAnyGrantedFolder,
     refreshTrigger,
     isInspection,
@@ -593,13 +602,17 @@ fun GalleryScreen(
         if (grantedDirs.none { existing -> existing.absolutePath.equals(dir.absolutePath, ignoreCase = true) }) {
           grantedDirs.add(dir)
         }
-        if (folder.defaultFolder == GalleryDefaultFolder.DOWNLOADS) {
-          val pluralDownloads = File(effectiveRootDir, "Downloads")
-          if (pluralDownloads.exists() && pluralDownloads.isDirectory &&
-            grantedDirs.none { existing -> existing.absolutePath.equals(pluralDownloads.absolutePath, ignoreCase = true) }
-          ) {
-            grantedDirs.add(pluralDownloads)
-          }
+      }
+      if (isDownloadsGranted) {
+        val downloadDir = File(effectiveRootDir, GalleryDefaultFolder.DOWNLOADS.folderName)
+        if (grantedDirs.none { existing -> existing.absolutePath.equals(downloadDir.absolutePath, ignoreCase = true) }) {
+          grantedDirs.add(downloadDir)
+        }
+        val pluralDownloads = File(effectiveRootDir, "Downloads")
+        if (pluralDownloads.exists() && pluralDownloads.isDirectory &&
+          grantedDirs.none { existing -> existing.absolutePath.equals(pluralDownloads.absolutePath, ignoreCase = true) }
+        ) {
+          grantedDirs.add(pluralDownloads)
         }
       }
       val nonNoMediaAdditionalPaths = additionalFolderPaths.filterNot { rawPath ->
@@ -1816,7 +1829,7 @@ fun GalleryScreen(
         systemInDarkTheme = LocalIsDarkTheme.current,
       )
 
-      // Main Content Area (Tile View with pinch-to-zoom 3..6 per row, List View, or Scoped Storage Permission / Locked View)
+      // Main Content Area (Tile View with pinch-to-zoom 2..5 per row <-> List View, or Scoped Storage Permission / Locked View)
       Box(
         modifier = Modifier
           .weight(1f)
@@ -1824,11 +1837,28 @@ fun GalleryScreen(
           .background(contentBackgroundColor)
           .testTag("gallery_content_container")
           .pinchToChangeColumns(
-            enabled = viewMode == GalleryViewMode.TILE,
+            enabled = true,
+            isListView = viewMode == GalleryViewMode.LIST,
             columnsPerRow = albumsPerRow,
             minColumns = MIN_ALBUMS_PER_ROW,
             maxColumns = MAX_ALBUMS_PER_ROW,
-            onColumnsChange = { updateAlbumsPerRow(it) },
+            onColumnsChange = { cols ->
+              val wasListView = viewMode == GalleryViewMode.LIST
+              if (wasListView) {
+                updateViewMode(GalleryViewMode.TILE)
+              }
+              val previousCols = albumsPerRow
+              updateAlbumsPerRow(cols)
+              if (wasListView && previousCols == cols) {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              }
+            },
+            onSelectListView = {
+              if (viewMode != GalleryViewMode.LIST) {
+                updateViewMode(GalleryViewMode.LIST)
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              }
+            },
           ),
       ) {
         if (folderAwaitingPermission != null) {

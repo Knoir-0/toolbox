@@ -886,8 +886,12 @@ fun MusicPlayerScreen(
       if (isInspection) true else MusicPlayerEngine.isSystemMediaListenerEnabled(context)
     )
   }
-  LaunchedEffect(context, isInspection) {
+  val storagePermissionSettingGranted = com.example.toolbox.ui.main.NavigationPreferencesBridge.isPermissionGranted(
+    com.example.toolbox.ui.main.AppPermission.STORAGE
+  )
+  LaunchedEffect(context, isInspection, storagePermissionSettingGranted) {
     if (!isInspection) {
+      session.syncFullFilesPermissionState()
       isSystemMediaListenerEnabled = MusicPlayerEngine.isSystemMediaListenerEnabled(context)
       MusicPlayerEngine.syncExternalSystemMediaSessions(context)
     }
@@ -898,6 +902,7 @@ fun MusicPlayerScreen(
     } else {
       val observer = LifecycleEventObserver { _, event ->
         if (event == Lifecycle.Event.ON_RESUME) {
+          session.syncFullFilesPermissionState()
           isSystemMediaListenerEnabled = MusicPlayerEngine.isSystemMediaListenerEnabled(context)
           MusicPlayerEngine.syncExternalSystemMediaSessions(context)
         }
@@ -1654,11 +1659,23 @@ fun MusicPlayerScreen(
           .weight(1f)
           .fillMaxWidth()
           .pinchToChangeColumns(
-            enabled = isMusicFolderGranted && viewMode == MusicViewMode.CARD,
+            enabled = isMusicFolderGranted,
+            isListView = viewMode == MusicViewMode.LIST,
             columnsPerRow = cardsPerRow,
             minColumns = MIN_MUSIC_CARDS_PER_ROW,
             maxColumns = MAX_MUSIC_CARDS_PER_ROW,
-            onColumnsChange = { updateCardsPerRow(it) },
+            onColumnsChange = { cols ->
+              if (viewMode == MusicViewMode.LIST) {
+                updateViewMode(MusicViewMode.CARD)
+              }
+              updateCardsPerRow(cols)
+            },
+            onSelectListView = {
+              if (viewMode != MusicViewMode.LIST) {
+                updateViewMode(MusicViewMode.LIST)
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              }
+            },
           ),
       ) {
         when {

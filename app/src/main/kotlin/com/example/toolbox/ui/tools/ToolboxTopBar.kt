@@ -39,6 +39,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
@@ -82,6 +83,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.delay
 
@@ -488,7 +490,8 @@ fun ToolboxMultiSelectBarRow(
  * List view ([Icons.AutoMirrored.Filled.ViewList]) -> [minColumns]-column grid -> ... -> [maxColumns]-column grid -> List view.
  *
  * When in List view ([isListView] == true), displays the list icon ([Icons.AutoMirrored.Filled.ViewList]).
- * When in Grid/Card/Tile view ([isListView] == false), displays the current [columnsPerRow] count.
+ * When in Grid/Card/Tile view ([isListView] == false), displays the current [columnsPerRow] count centered inside
+ * an underlaid [Icons.Default.Fullscreen] corner-bracket frame.
  */
 @Composable
 fun ToolboxViewModeCycleButton(
@@ -541,37 +544,63 @@ fun ToolboxViewModeCycleButton(
           tint = tint,
         )
       } else {
-        Text(
-          text = coercedColumns.toString(),
-          style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold,
-          color = tint,
-        )
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.Fullscreen,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(26.dp),
+          )
+          Text(
+            text = coercedColumns.toString(),
+            style = MaterialTheme.typography.labelSmall.copy(
+              fontSize = 11.sp,
+              lineHeight = 11.sp,
+            ),
+            fontWeight = FontWeight.ExtraBold,
+            color = tint,
+          )
+        }
       }
     }
   }
 }
 
 /**
- * Pinch-to-zoom gesture modifier that adjusts the number of tiles per row between [minColumns] and [maxColumns].
- * Pinching in (two fingers moving closer together) increases the number of columns per row;
- * pinching out (two fingers spreading apart) decreases the number of columns per row.
+ * Pinch-to-zoom gesture modifier that adjusts the number of tiles per row between [minColumns] and [maxColumns],
+ * and optionally transitions seamlessly between List view (1 column) and Grid view ([minColumns]..[maxColumns] columns)
+ * when [onSelectListView] is provided.
+ *
+ * - Pinching in (two fingers moving closer together) transitions from List view (1 column) into a [minColumns]-column
+ *   Grid view, and further pinching in increases the number of columns per row up to [maxColumns].
+ * - Pinching out (two fingers spreading apart) decreases the number of columns per row down to [minColumns],
+ *   and further pinching out transitions into List view (1 column) when [onSelectListView] is provided.
  */
 @Composable
 fun Modifier.pinchToChangeColumns(
-  enabled: Boolean,
+  enabled: Boolean = true,
+  isListView: Boolean = false,
   columnsPerRow: Int,
   minColumns: Int,
   maxColumns: Int,
   onColumnsChange: (Int) -> Unit,
+  onSelectListView: (() -> Unit)? = null,
 ): Modifier {
+  val currentIsListView by rememberUpdatedState(isListView)
   val currentColumnsState by rememberUpdatedState(columnsPerRow)
   val currentOnColumnsChange by rememberUpdatedState(onColumnsChange)
+  val currentOnSelectListView by rememberUpdatedState(onSelectListView)
   return this.pointerInput(enabled, minColumns, maxColumns) {
     if (!enabled) return@pointerInput
     awaitEachGesture {
       var cumulativeZoom = 1f
-      var liveColumns = currentColumnsState
+      val supportsListTransition = currentOnSelectListView != null
+      val minSlot = if (supportsListTransition) 1 else minColumns
+      var liveSlot = if (supportsListTransition && currentIsListView) {
+        1
+      } else {
+        currentColumnsState.coerceIn(minColumns, maxColumns)
+      }
       var multiTouchStarted = false
 
       do {
@@ -581,28 +610,45 @@ fun Modifier.pinchToChangeColumns(
           if (!multiTouchStarted) {
             multiTouchStarted = true
             cumulativeZoom = 1f
-            liveColumns = currentColumnsState
+            liveSlot = if (currentOnSelectListView != null && currentIsListView) {
+              1
+            } else {
+              currentColumnsState.coerceIn(minColumns, maxColumns)
+            }
           }
           val zoomChange = event.calculateZoom()
           if (zoomChange != 1f && zoomChange > 0f && !zoomChange.isNaN()) {
             cumulativeZoom *= zoomChange
 
-            // Pinching in (fingers moving closer, zoom < 1f) -> increase items per row up to maxColumns
+            // Pinching in (fingers moving closer, zoom < 1f) -> transition List (1) -> minColumns -> ... -> maxColumns
             while (cumulativeZoom <= 0.82f) {
-              val next = (liveColumns + 1).coerceIn(minColumns, maxColumns)
-              if (next != liveColumns) {
-                liveColumns = next
-                currentOnColumnsChange(next)
+              val nextSlot = if (liveSlot < minColumns) {
+                minColumns
+              } else {
+                (liveSlot + 1).coerceIn(minColumns, maxColumns)
+              }
+              if (nextSlot != liveSlot) {
+                liveSlot = nextSlot
+                currentOnColumnsChange(nextSlot)
               }
               cumulativeZoom /= 0.82f
             }
 
-            // Pinching out (fingers spreading apart, zoom > 1f) -> decrease items per row down to minColumns
+            // Pinching out (fingers spreading apart, zoom > 1f) -> decrease maxColumns -> ... -> minColumns -> List (1)
+            val effectiveMinSlot = if (currentOnSelectListView != null) 1 else minColumns
             while (cumulativeZoom >= 1.22f) {
-              val next = (liveColumns - 1).coerceIn(minColumns, maxColumns)
-              if (next != liveColumns) {
-                liveColumns = next
-                currentOnColumnsChange(next)
+              val nextSlot = if (liveSlot <= minColumns) {
+                effectiveMinSlot
+              } else {
+                (liveSlot - 1).coerceIn(minColumns, maxColumns)
+              }
+              if (nextSlot != liveSlot) {
+                liveSlot = nextSlot
+                if (nextSlot < minColumns) {
+                  currentOnSelectListView?.invoke()
+                } else {
+                  currentOnColumnsChange(nextSlot)
+                }
               }
               cumulativeZoom /= 1.22f
             }

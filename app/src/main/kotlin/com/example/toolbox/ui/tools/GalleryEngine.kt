@@ -62,7 +62,7 @@ const val DEFAULT_PICTURES_FOLDER_DISPLAY = "/Pictures"
 const val DEFAULT_GALLERY_DOWNLOADS_FOLDER_DISPLAY = "/Download"
 
 const val MIN_ALBUMS_PER_ROW = 2
-const val MAX_ALBUMS_PER_ROW = 6
+const val MAX_ALBUMS_PER_ROW = 5
 const val DEFAULT_ALBUMS_PER_ROW = 3
 
 const val MIN_PHOTO_ZOOM = 0.5f
@@ -616,7 +616,7 @@ object GalleryEngine {
   }
 
   /**
-   * Coerces an albums-per-row count into the valid range [MIN_ALBUMS_PER_ROW]..[MAX_ALBUMS_PER_ROW] (3..6).
+   * Coerces an albums-per-row count into the valid range [MIN_ALBUMS_PER_ROW]..[MAX_ALBUMS_PER_ROW] (2..5).
    */
   fun coerceAlbumsPerRow(count: Int): Int {
     return count.coerceIn(MIN_ALBUMS_PER_ROW, MAX_ALBUMS_PER_ROW)
@@ -767,10 +767,10 @@ object GalleryEngine {
   }
 
   /**
-   * Calculates the updated albums-per-row count (3..6) from a pinch gesture [zoomFactor].
+   * Calculates the updated albums-per-row count (2..5) from a pinch gesture [zoomFactor].
    *
-   * - Pinching in (`zoomFactor < 1f`, fingers moving together) shrinks tiles to show MORE albums per row (up to 6).
-   * - Pinching out (`zoomFactor > 1f`, fingers moving apart) enlarges tiles to show FEWER albums per row (down to 3).
+   * - Pinching in (`zoomFactor < 1f`, fingers moving together) shrinks tiles to show MORE albums per row (up to 5).
+   * - Pinching out (`zoomFactor > 1f`, fingers moving apart) enlarges tiles to show FEWER albums per row (down to 2).
    */
   fun calculatePinchAlbumsPerRow(currentPerRow: Int, zoomFactor: Float): Int {
     val current = coerceAlbumsPerRow(currentPerRow)
@@ -926,24 +926,21 @@ object GalleryEngine {
   }
 
   /**
-   * Filters or augments [folders] based on whether [hasFullFilesPermission] is granted:
-   * - When `false` (scoped storage only), hides the `Download` default folder since Android scoped
-   *   storage (`ACTION_OPEN_DOCUMENT_TREE`) does not allow granting access to the `Download` root.
-   * - When `true` (full files permission granted), ensures `Download` re-appears in the folder pills.
+   * Filters [folders] for navigation pills:
+   * - `Download` ([GalleryDefaultFolder.DOWNLOADS]) is never shown as a folder navigation pill in
+   *   Gallery (it appears as an album in the Albums view when [hasFullFilesPermission] is `true`).
+   * - Ensures the default navigation pills (`DCIM` / Camera and `Pictures`) are present.
    */
   fun filterFolderPillsForPermission(
     folders: List<GalleryFolder>,
-    hasFullFilesPermission: Boolean,
+    @Suppress("UNUSED_PARAMETER") hasFullFilesPermission: Boolean = false,
   ): List<GalleryFolder> {
-    return if (hasFullFilesPermission) {
-      val existingPaths = folders.map { it.displayPath.lowercase(Locale.ROOT) }.toSet()
-      val missingDefaults = FULL_FILES_DEFAULT_GALLERY_FOLDERS.filter {
-        it.displayPath.lowercase(Locale.ROOT) !in existingPaths
-      }
-      folders + missingDefaults
-    } else {
-      folders.filterNot { it.defaultFolder?.requiresFullFilesPermission == true }
+    val withoutDownloads = folders.filterNot { it.defaultFolder == GalleryDefaultFolder.DOWNLOADS }
+    val existingPaths = withoutDownloads.map { it.displayPath.lowercase(Locale.ROOT) }.toSet()
+    val missingDefaults = DEFAULT_GALLERY_FOLDERS.filter {
+      it.displayPath.lowercase(Locale.ROOT) !in existingPaths
     }
+    return withoutDownloads + missingDefaults
   }
 
   /**
@@ -1369,15 +1366,17 @@ object GalleryEngine {
 
   /**
    * Serializes an ordered list of [GalleryFolder] pills into a persistent string.
+   * `Download` is excluded from navigation pills because it is displayed as an album in the Albums view.
    */
   fun serializeFolderPills(
     folders: List<GalleryFolder>,
-    hasFullFilesPermission: Boolean = false,
+    @Suppress("UNUSED_PARAMETER") hasFullFilesPermission: Boolean = false,
   ): String {
-    val defaultPills = if (hasFullFilesPermission) FULL_FILES_DEFAULT_GALLERY_FOLDERS else DEFAULT_GALLERY_FOLDERS
+    val defaultPills = DEFAULT_GALLERY_FOLDERS
     val seenPaths = mutableSetOf<String>()
     val deduplicated = mutableListOf<GalleryFolder>()
     for (folder in folders) {
+      if (folder.defaultFolder == GalleryDefaultFolder.DOWNLOADS) continue
       val normKey = folder.displayPath.trim().lowercase(Locale.ROOT)
       if (normKey.isNotEmpty() && seenPaths.add(normKey)) {
         deduplicated.add(folder)
@@ -1401,14 +1400,14 @@ object GalleryEngine {
 
   /**
    * Parses a serialized folder pills string into an ordered list of [GalleryFolder]s,
-   * preserving the saved order and ensuring all default folders (`DCIM`, `Pictures`, and `Download`
-   * when [hasFullFilesPermission] is `true`) are included.
+   * preserving the saved order and ensuring all default folder pills (`DCIM` and `Pictures`)
+   * are included while excluding `Download` (which appears as an album in the Albums view).
    */
   fun parseFolderPills(
     rawString: String?,
-    hasFullFilesPermission: Boolean = false,
+    @Suppress("UNUSED_PARAMETER") hasFullFilesPermission: Boolean = false,
   ): List<GalleryFolder> {
-    val defaultPills = if (hasFullFilesPermission) FULL_FILES_DEFAULT_GALLERY_FOLDERS else DEFAULT_GALLERY_FOLDERS
+    val defaultPills = DEFAULT_GALLERY_FOLDERS
     if (rawString.isNullOrBlank()) return defaultPills
     val seenPaths = mutableSetOf<String>()
     val parsed = mutableListOf<GalleryFolder>()
@@ -1444,7 +1443,7 @@ object GalleryEngine {
         }
       }
       if (folder != null) {
-        if (!hasFullFilesPermission && folder.defaultFolder?.requiresFullFilesPermission == true) {
+        if (folder.defaultFolder == GalleryDefaultFolder.DOWNLOADS) {
           continue
         }
         val normKey = folder.displayPath.lowercase(Locale.ROOT)

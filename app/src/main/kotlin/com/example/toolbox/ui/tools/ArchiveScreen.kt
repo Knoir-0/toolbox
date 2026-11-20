@@ -772,11 +772,28 @@ fun ArchiveScreen(
             .weight(1f)
             .fillMaxWidth()
             .pinchToChangeColumns(
-              enabled = viewMode == FileViewMode.GRID,
+              enabled = true,
+              isListView = viewMode == FileViewMode.LIST,
               columnsPerRow = gridColumnsPerRow,
               minColumns = MIN_FILES_GRID_COLUMNS,
               maxColumns = MAX_FILES_GRID_COLUMNS,
-              onColumnsChange = { updateGridColumnsPerRow(it) },
+              onColumnsChange = { cols ->
+                val wasListView = viewMode == FileViewMode.LIST
+                val previousCols = gridColumnsPerRow
+                if (wasListView) {
+                  viewMode = FileViewMode.GRID
+                }
+                updateGridColumnsPerRow(cols)
+                if (wasListView || previousCols != gridColumnsPerRow) {
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
+              },
+              onSelectListView = {
+                if (viewMode != FileViewMode.LIST) {
+                  viewMode = FileViewMode.LIST
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
+              },
             ),
         ) {
           if (processedEntries.isEmpty()) {
