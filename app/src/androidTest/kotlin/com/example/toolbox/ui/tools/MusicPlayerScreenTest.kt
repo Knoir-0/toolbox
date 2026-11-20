@@ -1035,6 +1035,48 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("expanded_player_sleep_button").assertDoesNotExist()
     composeTestRule.onNodeWithTag("music_queue_panel_toggle").assertDoesNotExist()
 
+    // Verify space is reserved for the speed / sleep controls row and seek bar row
+    val visibleSeekRowBounds = composeTestRule.onNodeWithTag("expanded_player_seek_row").fetchSemanticsNode().boundsInRoot
+    val speedSleepRowBounds = composeTestRule.onNodeWithTag("expanded_player_speed_sleep_row").fetchSemanticsNode().boundsInRoot
+    val playPauseBoundsWithSeek = composeTestRule.onNodeWithTag("expanded_player_play_pause_button").fetchSemanticsNode().boundsInRoot
+    assertTrue(visibleSeekRowBounds.height > 0f)
+    assertTrue(speedSleepRowBounds.height > 0f)
+
+    // When external media has unknown duration (0ms) and exposes custom actions, seek slider is hidden
+    // with its row space reserved, and custom actions appear in the Shuffle (left) and Repeat (right) slots
+    composeTestRule.runOnIdle {
+      MusicPlayerEngine.updateExternalSystemMediaFromMetadata(
+        title = "Veridis Quo",
+        artist = "Daft Punk",
+        album = "Discovery",
+        genre = "French House",
+        sourcePackage = "com.spotify.music",
+        sourceAppName = "Spotify",
+        isPlaying = false,
+        notificationColorRgb = 0x1DB954,
+        durationMs = 0L,
+        positionMs = 0L,
+        customActions = listOf(
+          SystemMediaCustomAction(action = "spotify_shuffle", label = "Shuffle On"),
+          SystemMediaCustomAction(action = "spotify_like", label = "Add to Liked Songs"),
+        ),
+      )
+    }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("expanded_player_seek_slider").assertDoesNotExist()
+    val reservedSeekRowBounds = composeTestRule.onNodeWithTag("expanded_player_seek_row").fetchSemanticsNode().boundsInRoot
+    val playPauseBoundsWithoutSeek = composeTestRule.onNodeWithTag("expanded_player_play_pause_button").fetchSemanticsNode().boundsInRoot
+    assertEquals(visibleSeekRowBounds.height, reservedSeekRowBounds.height, 1f)
+    assertEquals(playPauseBoundsWithSeek.top, playPauseBoundsWithoutSeek.top, 1f)
+
+    composeTestRule.onNodeWithTag("expanded_player_external_action_left").assertIsDisplayed().performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("CUSTOM:spotify_shuffle", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
+
+    composeTestRule.onNodeWithTag("expanded_player_external_action_right").assertIsDisplayed().performClick()
+    composeTestRule.waitForIdle()
+    assertEquals("CUSTOM:spotify_like", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
+
     // 4. Transport buttons in expanded player control external Android system media session
     composeTestRule.onNodeWithTag("expanded_player_play_pause_button").performClick()
     composeTestRule.waitForIdle()

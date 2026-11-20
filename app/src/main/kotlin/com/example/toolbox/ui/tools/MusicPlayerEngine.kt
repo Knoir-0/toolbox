@@ -7173,6 +7173,7 @@ object MusicPlayerEngine {
     canSeek: Boolean = durationMs > 0L,
     canSkipNext: Boolean = true,
     canSkipPrevious: Boolean = true,
+    customActions: List<SystemMediaCustomAction> = emptyList(),
   ): SystemMediaPlayingInfo {
     return applyExternalSystemMediaMetadata(
       title = title,
@@ -7191,6 +7192,7 @@ object MusicPlayerEngine {
       canSeek = canSeek,
       canSkipNext = canSkipNext,
       canSkipPrevious = canSkipPrevious,
+      customActions = customActions,
       fromSystemSync = false,
     )
   }
@@ -7212,6 +7214,7 @@ object MusicPlayerEngine {
     canSeek: Boolean = durationMs > 0L,
     canSkipNext: Boolean = true,
     canSkipPrevious: Boolean = true,
+    customActions: List<SystemMediaCustomAction> = emptyList(),
     fromSystemSync: Boolean = false,
   ): SystemMediaPlayingInfo {
     val safeArtwork = normalizeExternalArtworkBitmap(artworkBitmap)
@@ -7247,6 +7250,7 @@ object MusicPlayerEngine {
       canSeek = canSeek && safeDuration > 0L,
       canSkipNext = canSkipNext,
       canSkipPrevious = canSkipPrevious,
+      customActions = customActions,
     )
     if (isIgnoredPhoneOrCallSystemMediaInfo(info)) {
       if (isIgnoredPhoneOrCallSystemMediaInfo(externalSystemMediaInfo)) {
@@ -7271,6 +7275,7 @@ object MusicPlayerEngine {
     val artworkBitmap: Bitmap?,
     val sessionToken: MediaSession.Token?,
     val contentIntent: PendingIntent? = null,
+    val customActions: List<SystemMediaCustomAction> = emptyList(),
     val postedAtMs: Long = System.currentTimeMillis(),
   )
 
@@ -7448,6 +7453,98 @@ object MusicPlayerEngine {
     } catch (_: Throwable) {
       null
     }
+  }
+
+  private val STANDARD_TRANSPORT_NOTIFICATION_ACTION_TITLES = setOf(
+    "play",
+    "pause",
+    "play/pause",
+    "play / pause",
+    "next",
+    "skip next",
+    "next track",
+    "skip to next",
+    "previous",
+    "prev",
+    "skip previous",
+    "previous track",
+    "skip to previous",
+    "stop",
+    "fast forward",
+    "rewind",
+  )
+
+  internal fun extractNotificationCustomActions(
+    context: Context,
+    notification: Notification,
+  ): List<SystemMediaCustomAction> {
+    val rawActions = notification.actions ?: return emptyList()
+    if (rawActions.isEmpty()) return emptyList()
+    val result = mutableListOf<SystemMediaCustomAction>()
+    for ((index, notifAction) in rawActions.withIndex()) {
+      if (notifAction == null) continue
+      val title = try { notifAction.title?.toString()?.trim().orEmpty() } catch (_: Throwable) { "" }
+      val normalized = title.lowercase(Locale.ROOT)
+      if (normalized in STANDARD_TRANSPORT_NOTIFICATION_ACTION_TITLES) continue
+      // In a standard 5-button MediaStyle notification where compact slots are [1, 2, 3],
+      // skip indices 1..3 even if localized titles differ.
+      val compactIndices = try {
+        notification.extras?.getIntArray(Notification.EXTRA_COMPACT_ACTIONS)
+      } catch (_: Throwable) {
+        null
+      }
+      if (rawActions.size >= 5 && compactIndices != null && compactIndices.size == 3 && index in compactIndices) {
+        continue
+      }
+      val iconBmp = try {
+        notifAction.getIcon()?.loadDrawable(context)?.let { drawableToBitmap(it, targetSizePx = 64) }
+      } catch (_: Throwable) {
+        null
+      }
+      val slug = normalized.replace(Regex("[^a-z0-9]+"), "_").trim('_').ifBlank { "$index" }
+      result.add(
+        SystemMediaCustomAction(
+          action = "notif_action_${index}_$slug",
+          label = title.ifBlank { "Action ${index + 1}" },
+          iconBitmap = iconBmp,
+          pendingIntent = notifAction.actionIntent,
+        )
+      )
+    }
+    return result
+  }
+
+  internal fun loadExternalCustomActionIconBitmap(
+    context: Context,
+    packageName: String,
+    iconResId: Int,
+  ): Bitmap? {
+    if (packageName.isBlank() || iconResId == 0) return null
+    val cacheKey = "action_icon:$packageName|$iconResId"
+    synchronized(externalMediaCacheLock) {
+      externalFallbackArtworkCache[cacheKey]?.takeIf { !it.isRecycled }?.let { return it }
+    }
+    val loaded = try {
+      val fromIcon = try {
+        Icon.createWithResource(packageName, iconResId).loadDrawable(context)
+      } catch (_: Throwable) {
+        null
+      }
+      val drawable = fromIcon ?: try {
+        context.packageManager.getResourcesForApplication(packageName).getDrawable(iconResId, null)
+      } catch (_: Throwable) {
+        null
+      }
+      drawable?.let { drawableToBitmap(it, targetSizePx = 64) }
+    } catch (_: Throwable) {
+      null
+    }
+    if (loaded != null) {
+      synchronized(externalMediaCacheLock) {
+        externalFallbackArtworkCache[cacheKey] = loaded
+      }
+    }
+    return loaded
   }
 
   internal fun loadArtworkBitmapFromUri(
@@ -8033,6 +8130,7 @@ object MusicPlayerEngine {
             isPlaying = latestNotif.isOngoing || systemMusicStreamActive,
             artworkBitmap = artBmp,
             notificationColorRgb = latestNotif.colorRgb,
+            customActions = latestNotif.customActions,
             fromSystemSync = true,
           )
           return
@@ -8243,6 +8341,31 @@ object MusicPlayerEngine {
         ?: (if (cachedNotif?.colorRgb == null) loadAppIconBitmap(context, chosen.packageName) else null)
 
       val appLabel = resolveAppLabel(context, chosen.packageName)
+      val notifCustomActions = cachedNotif?.customActions.orEmpty()
+      val customActionsFromPlaybackState = try {
+        pbState?.customActions.orEmpty().mapIndexedNotNull { idx, ca ->
+          val actId = ca?.action?.toString()?.trim().orEmpty()
+          val actName = ca?.name?.toString()?.trim().orEmpty().ifBlank { actId }
+          if (actId.isBlank() && actName.isBlank()) {
+            null
+          } else {
+            val iconRes = ca.icon
+            val iconBmp = loadExternalCustomActionIconBitmap(context, chosen.packageName, iconRes)
+              ?: notifCustomActions.getOrNull(idx)?.iconBitmap
+            SystemMediaCustomAction(
+              action = actId.ifBlank { actName },
+              label = actName.ifBlank { actId },
+              iconResId = iconRes,
+              iconBitmap = iconBmp,
+              extras = ca.extras,
+              pendingIntent = notifCustomActions.getOrNull(idx)?.pendingIntent,
+            )
+          }
+        }
+      } catch (_: Throwable) {
+        emptyList()
+      }
+      val resolvedCustomActions = customActionsFromPlaybackState.ifEmpty { notifCustomActions }
 
       applyExternalSystemMediaMetadata(
         title = title.ifBlank { appLabel },
@@ -8261,6 +8384,7 @@ object MusicPlayerEngine {
         canSeek = canSeek,
         canSkipNext = canSkipNext,
         canSkipPrevious = canSkipPrevious,
+        customActions = resolvedCustomActions,
         fromSystemSync = true,
       )
     } catch (_: Throwable) {}
@@ -8503,6 +8627,64 @@ object MusicPlayerEngine {
       return true
     }
     return dispatched
+  }
+
+  /**
+   * Returns `true` if [customAction] represents an active/toggled-on state (such as `"Shuffle On"`,
+   * `"Smart Shuffle"`, `"Repeat All"`, `"Repeat One"`, `"Unfavorite"`, `"Liked"`, etc.).
+   */
+  fun isExternalCustomActionHighlighted(customAction: SystemMediaCustomAction): Boolean {
+    val combined = "${customAction.action} ${customAction.label}".lowercase(Locale.ROOT)
+    if (
+      combined.contains("off") ||
+      combined.contains("disable") ||
+      combined.contains("add to fav") ||
+      combined.contains("unliked")
+    ) {
+      return false
+    }
+    return combined.contains("shuffle on") ||
+      combined.contains("smart shuffle") ||
+      combined.contains("repeat all") ||
+      combined.contains("repeat one") ||
+      combined.contains("repeat 1") ||
+      combined.contains("unfavorite") ||
+      combined.contains("remove from fav") ||
+      combined.contains("favorited") ||
+      combined.contains("liked")
+  }
+
+  /**
+   * Triggers an extra [SystemMediaCustomAction] on the active external Android system media player
+   * session (via [MediaController.TransportControls.sendCustomAction] or the notification action's
+   * [PendingIntent]).
+   */
+  fun triggerExternalSystemMediaCustomAction(
+    customAction: SystemMediaCustomAction,
+    context: Context? = monitoredAppContext,
+  ): Boolean {
+    externalSystemMediaLastDispatchedAction = "CUSTOM:${customAction.action}"
+    var dispatched = false
+    val controller = resolveActiveExternalController(context)
+    if (controller != null && customAction.action.isNotBlank() && !customAction.action.startsWith("notif_action_")) {
+      try {
+        controller.transportControls.sendCustomAction(customAction.action, customAction.extras)
+        dispatched = true
+      } catch (_: Throwable) {}
+    }
+    if (!dispatched && customAction.pendingIntent != null) {
+      try {
+        customAction.pendingIntent.send()
+        dispatched = true
+      } catch (_: Throwable) {}
+    }
+    val appCtx = context?.applicationContext ?: context ?: monitoredAppContext
+    if (appCtx != null) {
+      try {
+        mainHandler.postDelayed({ syncExternalSystemMediaSessions(appCtx) }, 180L)
+      } catch (_: Throwable) {}
+    }
+    return dispatched || externalSystemMediaInfo != null
   }
 
   /**
@@ -12928,6 +13110,20 @@ data class SystemMediaControlState(
 )
 
 /**
+ * An extra action button exposed by an external Android media player session
+ * (via [PlaybackState.CustomAction] on its [MediaSession] or via non-transport
+ * [Notification.Action] items on its media notification).
+ */
+data class SystemMediaCustomAction(
+  val action: String,
+  val label: String,
+  val iconResId: Int = 0,
+  val iconBitmap: Bitmap? = null,
+  val extras: Bundle? = null,
+  val pendingIntent: PendingIntent? = null,
+)
+
+/**
  * Metadata and extracted [AlbumArtPalette] for whichever media session is currently active in the
  * Android system media player (either the built-in Toolbox Music Player or an external media app).
  */
@@ -12949,6 +13145,7 @@ data class SystemMediaPlayingInfo(
   val canSeek: Boolean = false,
   val canSkipNext: Boolean = true,
   val canSkipPrevious: Boolean = true,
+  val customActions: List<SystemMediaCustomAction> = emptyList(),
 )
 
 /**
@@ -13075,6 +13272,7 @@ class ToolboxMediaListenerService : NotificationListenerService() {
       val colorRgb = notification.color.takeIf { it != 0 }
       val artworkBitmap = MusicPlayerEngine.extractNotificationArtworkBitmap(applicationContext, notification)
       val sessionToken = MusicPlayerEngine.extractNotificationMediaSessionToken(notification)
+      val customActions = MusicPlayerEngine.extractNotificationCustomActions(applicationContext, notification)
 
       MusicPlayerEngine.CachedExternalMediaNotification(
         packageName = pkg,
@@ -13086,6 +13284,7 @@ class ToolboxMediaListenerService : NotificationListenerService() {
         artworkBitmap = artworkBitmap,
         sessionToken = sessionToken,
         contentIntent = notification.contentIntent,
+        customActions = customActions,
         postedAtMs = sbn.postTime.takeIf { it > 0L } ?: System.currentTimeMillis(),
       )
     } catch (_: Throwable) {

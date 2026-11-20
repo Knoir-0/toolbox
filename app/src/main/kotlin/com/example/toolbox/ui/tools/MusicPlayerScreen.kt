@@ -188,6 +188,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.rotate
@@ -200,6 +201,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -2294,6 +2296,11 @@ fun MusicPlayerScreen(
           onOpenExternalApp = {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             MusicPlayerEngine.openExternalSystemMediaApp(context)
+          },
+          onTriggerExternalCustomAction = { customAction ->
+            isControllingExternalMedia = true
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            MusicPlayerEngine.triggerExternalSystemMediaCustomAction(customAction, context)
           },
           onNavigateToArtist = {
             if (ext == null && currentTrack != null) {
@@ -8887,6 +8894,7 @@ private fun ExpandedMusicPlayerOverlay(
   isSystemMediaListenerEnabled: Boolean = true,
   onGrantSystemMediaAccess: (() -> Unit)? = null,
   onOpenExternalApp: (() -> Unit)? = null,
+  onTriggerExternalCustomAction: (SystemMediaCustomAction) -> Unit = {},
   onNavigateToArtist: () -> Unit,
   onNavigateToAlbum: () -> Unit,
 ) {
@@ -9284,48 +9292,68 @@ private fun ExpandedMusicPlayerOverlay(
           }
 
           // 4. Seek Slider (SlimDotSlider per DESIGN_LANGUAGE.md) + Elapsed / Total Time
-          if (!isExternal || durationMs > 0L) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-              MusicSlimDotSlider(
-                value = seekFraction,
-                onValueChange = onSeekChange,
-                onValueChangeFinished = onSeekFinished,
-                accentColor = accentColor,
-                inactiveColor = Color.White.copy(alpha = 0.25f),
+          // Always reserve the row space even when hidden for external media with unknown duration.
+          val isSeekBarVisible = !isExternal || durationMs > 0L
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("expanded_player_seek_row"),
+          ) {
+            if (isSeekBarVisible) {
+              Column(modifier = Modifier.fillMaxWidth()) {
+                MusicSlimDotSlider(
+                  value = seekFraction,
+                  onValueChange = onSeekChange,
+                  onValueChangeFinished = onSeekFinished,
+                  accentColor = accentColor,
+                  inactiveColor = Color.White.copy(alpha = 0.25f),
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("expanded_player_seek_slider"),
+                )
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                  Text(
+                    text = AudioRecorderEngine.formatDurationMs(currentPositionMs),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color.White.copy(alpha = 0.82f),
+                    modifier = Modifier.testTag("expanded_player_current_time"),
+                  )
+                  Text(
+                    text = AudioRecorderEngine.formatDurationMs(durationMs),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color.White.copy(alpha = 0.82f),
+                    modifier = Modifier.testTag("expanded_player_total_time"),
+                  )
+                }
+              }
+            } else {
+              Column(
                 modifier = Modifier
                   .fillMaxWidth()
-                  .testTag("expanded_player_seek_slider"),
-              )
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                  .alpha(0f)
+                  .clearAndSetSemantics {},
               ) {
+                Spacer(modifier = Modifier.height(28.dp))
                 Text(
-                  text = AudioRecorderEngine.formatDurationMs(currentPositionMs),
+                  text = "00:00",
                   style = MaterialTheme.typography.labelSmall,
                   fontFamily = FontFamily.Monospace,
-                  color = Color.White.copy(alpha = 0.82f),
-                  modifier = Modifier.testTag("expanded_player_current_time"),
-                )
-                Text(
-                  text = AudioRecorderEngine.formatDurationMs(durationMs),
-                  style = MaterialTheme.typography.labelSmall,
-                  fontFamily = FontFamily.Monospace,
-                  color = Color.White.copy(alpha = 0.82f),
-                  modifier = Modifier.testTag("expanded_player_total_time"),
                 )
               }
             }
           }
 
-          // 5. Primary Transport Controls (Shuffle, Previous, Play/Pause, Next, Repeat)
+          // 5. Primary Transport Controls (Shuffle / External Action 1, Previous, Play/Pause, Next, Repeat / External Action 2)
+          val externalLeftAction = externalMedia?.customActions?.getOrNull(0)
+          val externalRightAction = externalMedia?.customActions?.getOrNull(1)
           Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = if (isExternal) {
-              Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally)
-            } else {
-              Arrangement.SpaceBetween
-            },
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
           ) {
             if (!isExternal) {
@@ -9345,6 +9373,15 @@ private fun ExpandedMusicPlayerOverlay(
                   modifier = Modifier.size(22.dp),
                 )
               }
+            } else if (externalLeftAction != null) {
+              ExternalCustomActionButton(
+                customAction = externalLeftAction,
+                accentColor = accentColor,
+                testTag = "expanded_player_external_action_left",
+                onClick = { onTriggerExternalCustomAction(externalLeftAction) },
+              )
+            } else {
+              Spacer(modifier = Modifier.size(40.dp))
             }
 
             IconButton(
@@ -9414,75 +9451,107 @@ private fun ExpandedMusicPlayerOverlay(
                   modifier = Modifier.size(22.dp),
                 )
               }
+            } else if (externalRightAction != null) {
+              ExternalCustomActionButton(
+                customAction = externalRightAction,
+                accentColor = accentColor,
+                testTag = "expanded_player_external_action_right",
+                onClick = { onTriggerExternalCustomAction(externalRightAction) },
+              )
+            } else {
+              Spacer(modifier = Modifier.size(40.dp))
             }
           }
 
-          // 6. Secondary Utility Bar: Speed & Sleep Timer (hidden when controlling external Android system media)
-          if (!isExternal) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              Surface(
-                shape = CircleShape,
-                color = Color.White.copy(alpha = 0.14f),
-                modifier = Modifier
-                  .clip(CircleShape)
-                  .clickable(onClick = onCycleSpeed)
-                  .testTag("expanded_player_speed_button"),
+          // 6. Secondary Utility Bar: Speed & Sleep Timer
+          // Hidden when controlling external Android system media, while reserving the row space.
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("expanded_player_speed_sleep_row"),
+          ) {
+            if (!isExternal) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically,
               ) {
-                Row(
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(6.dp),
-                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                Surface(
+                  shape = CircleShape,
+                  color = Color.White.copy(alpha = 0.14f),
+                  modifier = Modifier
+                    .clip(CircleShape)
+                    .clickable(onClick = onCycleSpeed)
+                    .testTag("expanded_player_speed_button"),
                 ) {
-                  Icon(
-                    imageVector = Icons.Default.Speed,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(16.dp),
-                  )
-                  Text(
-                    text = "${playbackSpeed}x",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White,
-                  )
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.Speed,
+                      contentDescription = null,
+                      tint = Color.White,
+                      modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                      text = "${playbackSpeed}x",
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = FontWeight.SemiBold,
+                      color = Color.White,
+                    )
+                  }
+                }
+
+                Surface(
+                  shape = CircleShape,
+                  color = if (sleepTimerPreset != SleepTimerPreset.OFF) accentColor.copy(alpha = 0.28f)
+                  else Color.White.copy(alpha = 0.14f),
+                  modifier = Modifier
+                    .clip(CircleShape)
+                    .clickable(onClick = onCycleSleepTimer)
+                    .testTag("expanded_player_sleep_button"),
+                ) {
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.Timer,
+                      contentDescription = null,
+                      tint = Color.White,
+                      modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                      text = if (sleepTimerPreset == SleepTimerPreset.OFF) {
+                        "Sleep"
+                      } else {
+                        AudioRecorderEngine.formatDurationMs(sleepRemainingMs)
+                      },
+                      style = MaterialTheme.typography.labelMedium,
+                      fontWeight = FontWeight.SemiBold,
+                      color = Color.White,
+                    )
+                  }
                 }
               }
-
-              Surface(
-                shape = CircleShape,
-                color = if (sleepTimerPreset != SleepTimerPreset.OFF) accentColor.copy(alpha = 0.28f)
-                else Color.White.copy(alpha = 0.14f),
+            } else {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
-                  .clip(CircleShape)
-                  .clickable(onClick = onCycleSleepTimer)
-                  .testTag("expanded_player_sleep_button"),
+                  .fillMaxWidth()
+                  .padding(vertical = 6.dp)
+                  .alpha(0f)
+                  .clearAndSetSemantics {},
               ) {
-                Row(
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(6.dp),
-                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                ) {
-                  Icon(
-                    imageVector = Icons.Default.Timer,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(16.dp),
-                  )
-                  Text(
-                    text = if (sleepTimerPreset == SleepTimerPreset.OFF) {
-                      "Sleep"
-                    } else {
-                      AudioRecorderEngine.formatDurationMs(sleepRemainingMs)
-                    },
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White,
-                  )
-                }
+                Spacer(modifier = Modifier.size(16.dp))
+                Text(
+                  text = "1.0x",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.SemiBold,
+                )
               }
             }
           }
@@ -9509,6 +9578,80 @@ private fun ExpandedMusicPlayerOverlay(
         }
       }
     }
+  }
+}
+
+@Composable
+private fun ExternalCustomActionButton(
+  customAction: SystemMediaCustomAction,
+  accentColor: Color,
+  testTag: String,
+  onClick: () -> Unit,
+) {
+  val isHighlighted = MusicPlayerEngine.isExternalCustomActionHighlighted(customAction)
+  val tintColor = if (isHighlighted) accentColor else Color.White.copy(alpha = 0.7f)
+  val imageBitmap = remember(customAction.iconBitmap) {
+    customAction.iconBitmap?.takeIf { !it.isRecycled }?.asImageBitmap()
+  }
+  IconButton(
+    onClick = onClick,
+    colors = IconButtonDefaults.iconButtonColors(
+      containerColor = if (isHighlighted) accentColor.copy(alpha = 0.25f) else Color.Transparent,
+    ),
+    modifier = Modifier
+      .size(40.dp)
+      .testTag(testTag),
+  ) {
+    if (imageBitmap != null) {
+      Image(
+        bitmap = imageBitmap,
+        contentDescription = customAction.label,
+        colorFilter = ColorFilter.tint(tintColor),
+        contentScale = ContentScale.Fit,
+        modifier = Modifier.size(22.dp),
+      )
+    } else {
+      Icon(
+        imageVector = resolveExternalCustomActionVector(customAction, isHighlighted),
+        contentDescription = customAction.label,
+        tint = tintColor,
+        modifier = Modifier.size(22.dp),
+      )
+    }
+  }
+}
+
+private fun resolveExternalCustomActionVector(
+  customAction: SystemMediaCustomAction,
+  isHighlighted: Boolean,
+): androidx.compose.ui.graphics.vector.ImageVector {
+  val combined = "${customAction.action} ${customAction.label}".lowercase(Locale.ROOT)
+  return when {
+    combined.contains("smart") && combined.contains("shuffle") -> Icons.Default.AutoAwesome
+    combined.contains("shuffle") || combined.contains("random") -> Icons.Default.Shuffle
+    combined.contains("repeat_one") || combined.contains("repeat one") || combined.contains("repeat 1") -> Icons.Default.RepeatOne
+    combined.contains("repeat") || combined.contains("loop") -> Icons.Default.Repeat
+    combined.contains("dislike") ||
+      combined.contains("thumb_down") ||
+      combined.contains("thumbs_down") ||
+      combined.contains("thumbs down") ||
+      combined.contains("ban") ||
+      combined.contains("hide") -> Icons.Default.RemoveCircleOutline
+    combined.contains("favorite") ||
+      combined.contains("fav") ||
+      combined.contains("star") ||
+      combined.contains("heart") ||
+      combined.contains("like") ||
+      combined.contains("love") ||
+      combined.contains("thumb_up") ||
+      combined.contains("thumbs_up") ||
+      combined.contains("thumbs up") -> if (isHighlighted) Icons.Default.Star else Icons.Default.StarBorder
+    combined.contains("speed") || combined.contains("rate") -> Icons.Default.Speed
+    combined.contains("sleep") || combined.contains("timer") -> Icons.Default.Timer
+    combined.contains("queue") || combined.contains("playlist") -> Icons.AutoMirrored.Filled.QueueMusic
+    combined.contains("add") || combined.contains("plus") -> Icons.Default.Add
+    combined.contains("share") -> Icons.Default.Share
+    else -> Icons.Default.Tune
   }
 }
 
