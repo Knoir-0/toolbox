@@ -428,6 +428,7 @@ val DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
   Tool.METRONOME,
   Tool.COLOR_PICKER,
   Tool.OBD2_SCANNER,
+  Tool.ELEMENTS,
 )
 
 private val LEGACY_DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
@@ -1888,6 +1889,7 @@ val TOOL_DATA_SHARED_PREFERENCES_NAMES: List<String> = listOf(
   com.example.toolbox.ui.tools.AUDIO_RECORDER_PREFS_NAME,
   com.example.toolbox.ui.tools.CAMERA_PREFS_NAME,
   com.example.toolbox.ui.tools.FILE_CONVERTER_PREFS_NAME,
+  com.example.toolbox.ui.tools.ELEMENTS_PREFS_NAME,
   "files_tool_preferences",
 )
 

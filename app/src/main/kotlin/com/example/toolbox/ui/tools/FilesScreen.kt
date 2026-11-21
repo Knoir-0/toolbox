@@ -649,6 +649,11 @@ fun FilesScreen(
       )
       return
     }
+    if (!chooseApp && FileManagerEngine.isTextFile(file)) {
+      fileForTextEdit = processedItems.firstOrNull { it.path == file.absolutePath }
+        ?: FileManagerEngine.toFileItem(file)
+      return
+    }
     if (onOpenFile != null) {
       onOpenFile(file, chooseApp)
     } else {
@@ -1947,6 +1952,9 @@ fun FilesScreen(
           }
           if (activeVideoPlaybackFile?.absolutePath == item.path) {
             activeVideoPlaybackFile = null
+          }
+          if (fileForTextEdit?.path == item.path) {
+            fileForTextEdit = null
           }
           refreshTrigger++
           fileToDelete = null
@@ -3476,12 +3484,6 @@ private fun FileActionMenu(
         )
       } else if (FileManagerEngine.isTextFile(item.file)) {
         DropdownMenuItem(
-          text = { Text("Edit / View") },
-          leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-          onClick = onOpenText,
-          modifier = Modifier.testTag("action_edit_text"),
-        )
-        DropdownMenuItem(
           text = { Text("Add Note") },
           leadingIcon = { Icon(Icons.AutoMirrored.Filled.StickyNote2, contentDescription = null) },
           onClick = onSaveToNotes,
@@ -4851,118 +4853,182 @@ internal fun TextEditorDialog(
   onSaved: () -> Unit,
 ) {
   val context = LocalContext.current
-  var textContent by remember {
+  var textContent by remember(file.absolutePath) {
     mutableStateOf(FileManagerEngine.readTextContent(file) ?: "")
   }
-  var originalContent by remember {
+  var originalContent by remember(file.absolutePath) {
     mutableStateOf(textContent)
   }
-  var isSaving by remember { mutableStateOf(false) }
+  var isSaving by remember(file.absolutePath) { mutableStateOf(false) }
   val hasChanges = textContent != originalContent
+  val formatBadge = remember(file.name) {
+    file.extension.uppercase(Locale.ROOT).ifEmpty { "TXT" }
+  }
+  val sizeFormatted = remember(file.absolutePath, textContent, hasChanges) {
+    val byteCount = if (file.exists() && !hasChanges) {
+      file.length()
+    } else {
+      textContent.toByteArray(Charsets.UTF_8).size.toLong()
+    }
+    FileManagerEngine.formatFileSize(byteCount)
+  }
+  val statusText = if (hasChanges) "Unsaved changes*" else "Saved"
 
   Dialog(
     onDismissRequest = onDismiss,
     properties = DialogProperties(usePlatformDefaultWidth = false),
   ) {
     Surface(
-      modifier = Modifier
-        .fillMaxSize()
-        .padding(12.dp),
       shape = RoundedCornerShape(28.dp),
       color = MaterialTheme.colorScheme.surfaceContainerHigh,
       tonalElevation = 6.dp,
+      shadowElevation = 8.dp,
+      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 24.dp, vertical = 24.dp)
+        .testTag("text_editor_modal"),
     ) {
-      Column(modifier = Modifier.fillMaxSize()) {
-        // Top Toolbar
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 20.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        // Modal Header: Icon Badge + File Name & Metadata/Status + Close Button
         Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+          modifier = Modifier.fillMaxWidth(),
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(12.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-          Box(
+          Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+          ) {
+            Box(
+              modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = if (FileManagerEngine.isCodeFile(file)) Icons.Default.Code else Icons.Default.Description,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp),
+              )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = file.name,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("text_editor_modal_title"),
+              )
+              Text(
+                text = "$formatBadge • $sizeFormatted • $statusText",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (hasChanges) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("text_editor_modal_subtitle"),
+              )
+            }
+          }
+
+          IconButton(
+            onClick = onDismiss,
             modifier = Modifier
-              .size(44.dp)
-              .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center,
+              .size(32.dp)
+              .testTag("text_editor_close_button"),
           ) {
             Icon(
-              imageVector = Icons.Default.Description,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(24.dp),
+              imageVector = Icons.Default.Close,
+              contentDescription = "Close",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(20.dp),
             )
-          }
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = file.name,
-              style = MaterialTheme.typography.titleLarge,
-              fontWeight = FontWeight.Bold,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-              text = if (hasChanges) "Unsaved changes*" else "Saved",
-              style = MaterialTheme.typography.bodySmall,
-              color = if (hasChanges) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-
-          Button(
-            onClick = {
-              isSaving = true
-              if (FileManagerEngine.writeTextContent(file, textContent)) {
-                originalContent = textContent
-                onSaved()
-                Toast.makeText(context, "Saved ${file.name}", Toast.LENGTH_SHORT).show()
-              } else {
-                Toast.makeText(context, "Error saving file", Toast.LENGTH_SHORT).show()
-              }
-              isSaving = false
-            },
-            enabled = hasChanges && !isSaving,
-            shape = CircleShape,
-          ) {
-            Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Save")
-          }
-
-          IconButton(onClick = onDismiss) {
-            Icon(Icons.Default.Close, contentDescription = "Close")
           }
         }
 
-        HorizontalDivider()
-
-        // Editor Body
+        // Editor Body (resizes to fit content, or scrolls if there is too much content)
         OutlinedTextField(
           value = textContent,
           onValueChange = { textContent = it },
+          shape = RoundedCornerShape(14.dp),
+          minLines = 1,
+          maxLines = 14,
           modifier = Modifier
-            .weight(1f)
             .fillMaxWidth()
-            .padding(12.dp),
+            .weight(1f, fill = false)
+            .heightIn(max = 340.dp)
+            .testTag("text_editor_input"),
           textStyle = MaterialTheme.typography.bodyMedium.copy(
             fontFamily = FontFamily.Monospace,
           ),
           placeholder = { Text("Enter text here...") },
         )
 
-        // Footer info bar
+        // Bottom Action Bar
         Row(
           modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .testTag("text_editor_action_bar"),
+          verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.SpaceBetween,
         ) {
           val lines = textContent.lines().size
           val chars = textContent.length
-          Text("$lines lines • $chars characters", style = MaterialTheme.typography.labelSmall)
-          Text(FileManagerEngine.formatFileSize(file.length()), style = MaterialTheme.typography.labelSmall)
+          Text(
+            text = "$lines lines • $chars characters",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+              .weight(1f)
+              .padding(end = 8.dp)
+              .testTag("text_editor_stats"),
+          )
+
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            TextButton(
+              onClick = onDismiss,
+              shape = CircleShape,
+              modifier = Modifier.testTag("text_editor_cancel_button"),
+            ) {
+              Text("Cancel")
+            }
+
+            Button(
+              onClick = {
+                isSaving = true
+                if (FileManagerEngine.writeTextContent(file, textContent)) {
+                  originalContent = textContent
+                  onSaved()
+                  Toast.makeText(context, "Saved ${file.name}", Toast.LENGTH_SHORT).show()
+                } else {
+                  Toast.makeText(context, "Error saving file", Toast.LENGTH_SHORT).show()
+                }
+                isSaving = false
+              },
+              enabled = hasChanges && !isSaving,
+              shape = CircleShape,
+              modifier = Modifier.testTag("text_editor_save_button"),
+            ) {
+              Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+              Spacer(modifier = Modifier.width(6.dp))
+              Text("Save")
+            }
+          }
         }
       }
     }

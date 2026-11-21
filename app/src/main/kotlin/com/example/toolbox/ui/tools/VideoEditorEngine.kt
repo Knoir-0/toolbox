@@ -466,27 +466,29 @@ object VideoEditorEngine {
   }
 
   /**
-   * Resolves a non-colliding output file inside [outputDir].
+   * Resolves a non-colliding output file inside [outputDir] using the `_edited_1` / `_edited_2`
+   * collision postfix pattern.
    */
   fun resolveOutputFile(
     outputDir: File,
     desiredStem: String,
     extension: String,
     sourceFile: File? = null,
+    forceEditedPostfix: Boolean = false,
   ): File {
+    val cleanExt = extension.trim().removePrefix(".").lowercase(Locale.ROOT).ifBlank { "mp4" }
     val safeStem = desiredStem
       .replace(Regex("[\\\\/:*?\"<>|]"), "_")
       .trim()
-      .removeSuffix(".$extension")
+      .removeSuffix(".$cleanExt")
       .ifBlank { "edited_video" }
-    val cleanExt = extension.trim().removePrefix(".").lowercase(Locale.ROOT).ifBlank { "mp4" }
-    var candidate = File(outputDir, "$safeStem.$cleanExt")
-    var index = 1
-    while (candidate.exists() || (sourceFile != null && candidate.absolutePath == sourceFile.absolutePath)) {
-      candidate = File(outputDir, "${safeStem}_$index.$cleanExt")
-      index++
-    }
-    return candidate
+    return FileConverterEngine.resolveOutputFileWithExtension(
+      outputDir = outputDir,
+      desiredStem = safeStem,
+      extension = cleanExt,
+      sourceFile = sourceFile,
+      forceEditedPostfix = forceEditedPostfix,
+    )
   }
 
   /**

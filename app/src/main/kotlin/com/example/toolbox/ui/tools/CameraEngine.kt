@@ -81,7 +81,91 @@ const val MAX_CAMERA_ZOOM = 8.0f
 const val MIN_CAMERA_EXPOSURE_EV = -2.0f
 const val MAX_CAMERA_EXPOSURE_EV = 2.0f
 
+/**
+ * Duration (`5000ms` = 5 seconds) for which a manual tap-to-focus override locks focus
+ * before automatically returning to ML Kit object detection smart autofocus.
+ */
+const val MANUAL_FOCUS_OVERRIDE_DURATION_MS = 5000L
+
 val CAMERA_ZOOM_PRESETS: List<Float> = listOf(1.0f, 2.0f, 3.0f, 5.0f)
+
+/**
+ * Indicates whether the active camera focus target is driven by default continuous autofocus,
+ * ML Kit Object Detection smart autofocus, or a 5-second manual user override.
+ */
+enum class CameraFocusSource(
+  val displayName: String,
+  val shortLabel: String,
+) {
+  CONTINUOUS_AUTO(
+    displayName = "Continuous Autofocus",
+    shortLabel = "AF",
+  ),
+  ML_OBJECT_AUTO(
+    displayName = "Smart Object Autofocus",
+    shortLabel = "Smart AF",
+  ),
+  MANUAL_OVERRIDE(
+    displayName = "Manual Focus Override",
+    shortLabel = "Manual",
+  ),
+}
+
+/**
+ * Raw candidate object bounding box and classification metadata produced by ML Kit Object Detection
+ * for evaluating smart autofocus targets.
+ */
+data class RawDetectedObjectForFocus(
+  val boundingBox: CameraVisionBoundingBox,
+  val trackingId: Int? = null,
+  val label: String? = null,
+  val confidence: Float = 0f,
+)
+
+/**
+ * Represents a resolved focus target in normalized viewfinder coordinates (`0.0f..1.0f`),
+ * either automatically tracked from an ML Kit `DetectedObject` ([CameraFocusSource.ML_OBJECT_AUTO])
+ * or manually pinned by the user for [MANUAL_FOCUS_OVERRIDE_DURATION_MS] ([CameraFocusSource.MANUAL_OVERRIDE]).
+ */
+data class CameraSmartFocusTarget(
+  val normX: Float,
+  val normY: Float,
+  val boundingBox: CameraVisionBoundingBox? = null,
+  val trackingId: Int? = null,
+  val categoryLabel: String? = null,
+  val confidence: Float = 0f,
+  val source: CameraFocusSource = CameraFocusSource.ML_OBJECT_AUTO,
+  val timestampMs: Long = System.currentTimeMillis(),
+) {
+  val clampedX: Float get() = normX.coerceIn(0.08f, 0.92f)
+  val clampedY: Float get() = normY.coerceIn(0.08f, 0.92f)
+  val isManualOverride: Boolean get() = source == CameraFocusSource.MANUAL_OVERRIDE
+  val isSmartObjectFocus: Boolean get() = source == CameraFocusSource.ML_OBJECT_AUTO
+  val badgeLabel: String
+    get() = when (source) {
+      CameraFocusSource.MANUAL_OVERRIDE -> "Manual • 5s"
+      CameraFocusSource.ML_OBJECT_AUTO -> {
+        val cleanLabel = categoryLabel?.takeIf { it.isNotBlank() }
+        if (cleanLabel != null) "Smart AF • $cleanLabel" else "Smart AF"
+      }
+      CameraFocusSource.CONTINUOUS_AUTO -> "AF"
+    }
+}
+
+/**
+ * Sensor-array pixel coordinates (`left`, `top`, `right`, `bottom`) and metering weight (`1..1000`)
+ * used to build a Camera2 `MeteringRectangle` for `CONTROL_AF_REGIONS` and `CONTROL_AE_REGIONS`.
+ */
+data class CameraSensorMeteringRegion(
+  val left: Int,
+  val top: Int,
+  val right: Int,
+  val bottom: Int,
+  val weight: Int = 1000,
+) {
+  val width: Int get() = (right - left).coerceAtLeast(1)
+  val height: Int get() = (bottom - top).coerceAtLeast(1)
+}
 
 /**
  * Capture modes supported by the Camera tool.
@@ -6001,6 +6085,420 @@ object CameraEngine {
     } catch (_: Throwable) {
       null
     }
+  }
+
+  /**
+   * Returns `true` if a manual tap-to-focus override started at [manualFocusTimestampMs]
+   * is still active at [nowMs] within [overrideDurationMs] (defaults to [MANUAL_FOCUS_OVERRIDE_DURATION_MS] = 5000ms).
+   */
+  fun isManualFocusOverrideActive(
+    manualFocusTimestampMs: Long,
+    nowMs: Long = System.currentTimeMillis(),
+    overrideDurationMs: Long = MANUAL_FOCUS_OVERRIDE_DURATION_MS,
+  ): Boolean {
+    if (manualFocusTimestampMs <= 0L || overrideDurationMs <= 0L) return false
+    val elapsed = nowMs - manualFocusTimestampMs
+    return elapsed in 0L until overrideDurationMs
+  }
+
+  /**
+   * Returns the remaining duration in milliseconds for an active manual focus override,
+   * or `0L` if the 5-second override has expired.
+   */
+  fun remainingManualFocusOverrideMs(
+    manualFocusTimestampMs: Long,
+    nowMs: Long = System.currentTimeMillis(),
+    overrideDurationMs: Long = MANUAL_FOCUS_OVERRIDE_DURATION_MS,
+  ): Long {
+    if (!isManualFocusOverrideActive(manualFocusTimestampMs, nowMs, overrideDurationMs)) return 0L
+    return (overrideDurationMs - (nowMs - manualFocusTimestampMs)).coerceIn(0L, overrideDurationMs)
+  }
+
+  /**
+   * Creates a manual focus override target pinned at normalized viewfinder coordinates ([normX], [normY]).
+   */
+  fun createManualFocusTarget(
+    normX: Float,
+    normY: Float,
+    timestampMs: Long = System.currentTimeMillis(),
+  ): CameraSmartFocusTarget {
+    val cx = normX.coerceIn(0.08f, 0.92f)
+    val cy = normY.coerceIn(0.08f, 0.92f)
+    val halfSize = 0.08f
+    val box = CameraVisionBoundingBox(
+      left = (cx - halfSize).coerceIn(0.02f, 0.90f),
+      top = (cy - halfSize).coerceIn(0.02f, 0.90f),
+      right = (cx + halfSize).coerceIn(0.10f, 0.98f),
+      bottom = (cy + halfSize).coerceIn(0.10f, 0.98f),
+    )
+    return CameraSmartFocusTarget(
+      normX = cx,
+      normY = cy,
+      boundingBox = box,
+      source = CameraFocusSource.MANUAL_OVERRIDE,
+      timestampMs = timestampMs,
+    )
+  }
+
+  /**
+   * Resolves the currently active camera focus target:
+   * - If [manualTarget] is non-null and its 5-second override window ([overrideDurationMs]) has not expired at [nowMs],
+   *   returns [manualTarget] with [CameraFocusSource.MANUAL_OVERRIDE].
+   * - Otherwise, falls back to [smartAutoTarget] (driven by ML Kit Object Detection).
+   */
+  fun resolveActiveFocusTarget(
+    manualTarget: CameraSmartFocusTarget?,
+    smartAutoTarget: CameraSmartFocusTarget?,
+    nowMs: Long = System.currentTimeMillis(),
+    overrideDurationMs: Long = MANUAL_FOCUS_OVERRIDE_DURATION_MS,
+  ): CameraSmartFocusTarget? {
+    if (manualTarget != null && isManualFocusOverrideActive(manualTarget.timestampMs, nowMs, overrideDurationMs)) {
+      return manualTarget.copy(source = CameraFocusSource.MANUAL_OVERRIDE)
+    }
+    return smartAutoTarget?.copy(source = CameraFocusSource.ML_OBJECT_AUTO)
+  }
+
+  /**
+   * Scores an ML Kit [RawDetectedObjectForFocus] candidate for smart autofocus priority.
+   * Balances viewfinder center proximity, foreground subject prominence, classification confidence,
+   * and temporal tracking stability with [previousTarget].
+   */
+  fun scoreObjectForSmartAutofocus(
+    candidate: RawDetectedObjectForFocus,
+    previousTarget: CameraSmartFocusTarget? = null,
+  ): Float {
+    val box = candidate.boundingBox
+    if (box.width < 0.04f || box.height < 0.04f || box.area < 0.0020f || box.area > 0.92f) {
+      return -1f
+    }
+    val dx = box.centerX - 0.5f
+    val dy = box.centerY - 0.5f
+    val distSq = dx * dx + dy * dy
+    // Center proximity score (1.0 at exact center, smoothly tapering toward edges)
+    val centerScore = (1f - distSq * 1.8f).coerceIn(0.15f, 1.0f)
+
+    // Subject size prominence: sweet spot is 5%..45% of frame area
+    val area = box.area
+    val sizeScore = when {
+      area < 0.02f -> (area / 0.02f) * 0.5f
+      area <= 0.45f -> 0.5f + ((area - 0.02f) / 0.43f) * 0.5f
+      else -> (1f - ((area - 0.45f) / 0.50f)).coerceIn(0.25f, 0.85f)
+    }
+
+    val confidenceBonus = candidate.confidence.coerceIn(0f, 1f) * 0.28f
+
+    // Temporal tracking stability bonus to avoid focus hunting between similar objects
+    var trackingBonus = 0f
+    if (previousTarget != null && previousTarget.source == CameraFocusSource.ML_OBJECT_AUTO) {
+      if (candidate.trackingId != null && candidate.trackingId == previousTarget.trackingId) {
+        trackingBonus += 0.25f
+      }
+      val prevBox = previousTarget.boundingBox
+      if (prevBox != null) {
+        val iou = box.intersectionOverUnion(prevBox)
+        trackingBonus += iou * 0.18f
+      } else {
+        val pdx = box.centerX - previousTarget.normX
+        val pdy = box.centerY - previousTarget.normY
+        val pDistSq = pdx * pdx + pdy * pdy
+        if (pDistSq < 0.04f) {
+          trackingBonus += 0.12f
+        }
+      }
+    }
+
+    return centerScore * 0.48f + sizeScore * 0.34f + confidenceBonus + trackingBonus
+  }
+
+  /**
+   * Selects the optimal smart autofocus target from a list of ML Kit detected objects ([objects]),
+   * applying temporal smoothing when tracking the same object across consecutive frames.
+   */
+  fun selectSmartAutofocusTargetFromObjects(
+    objects: List<RawDetectedObjectForFocus>,
+    previousTarget: CameraSmartFocusTarget? = null,
+    timestampMs: Long = System.currentTimeMillis(),
+  ): CameraSmartFocusTarget? {
+    if (objects.isEmpty()) return null
+    var bestCandidate: RawDetectedObjectForFocus? = null
+    var bestScore = -1f
+
+    for (candidate in objects) {
+      val score = scoreObjectForSmartAutofocus(candidate, previousTarget)
+      if (score > bestScore) {
+        bestScore = score
+        bestCandidate = candidate
+      }
+    }
+
+    val winner = bestCandidate ?: return null
+    if (bestScore < 0f) return null
+
+    val coercedBox = winner.boundingBox.coerceNormalized()
+    var targetX = coercedBox.centerX.coerceIn(0.08f, 0.92f)
+    var targetY = coercedBox.centerY.coerceIn(0.08f, 0.92f)
+    var finalBox = coercedBox
+
+    // Smooth small frame-to-frame jitter when locked onto the same object
+    if (previousTarget != null && previousTarget.source == CameraFocusSource.ML_OBJECT_AUTO) {
+      val sameTrack = (winner.trackingId != null && winner.trackingId == previousTarget.trackingId) ||
+        (previousTarget.boundingBox != null && coercedBox.intersectionOverUnion(previousTarget.boundingBox) >= 0.45f)
+      if (sameTrack) {
+        val moveDistSq = (targetX - previousTarget.normX).pow(2) + (targetY - previousTarget.normY).pow(2)
+        if (moveDistSq < 0.0004f) {
+          // Sub-2% micro-jitter: hold steady
+          targetX = previousTarget.normX
+          targetY = previousTarget.normY
+          finalBox = previousTarget.boundingBox ?: coercedBox
+        } else if (moveDistSq < 0.0225f) {
+          // Smoothly blend towards new position (65% new, 35% previous)
+          targetX = (previousTarget.normX * 0.35f + targetX * 0.65f).coerceIn(0.08f, 0.92f)
+          targetY = (previousTarget.normY * 0.35f + targetY * 0.65f).coerceIn(0.08f, 0.92f)
+          val prevB = previousTarget.boundingBox
+          if (prevB != null) {
+            finalBox = CameraVisionBoundingBox(
+              left = prevB.left * 0.35f + coercedBox.left * 0.65f,
+              top = prevB.top * 0.35f + coercedBox.top * 0.65f,
+              right = prevB.right * 0.35f + coercedBox.right * 0.65f,
+              bottom = prevB.bottom * 0.35f + coercedBox.bottom * 0.65f,
+            ).coerceNormalized()
+          }
+        }
+      }
+    }
+
+    val cleanedLabel = winner.label?.let { raw ->
+      normalizeAndFilterMlKitLabel(raw) ?: raw.trim().replaceFirstChar {
+        if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString()
+      }.takeIf { !isBlockedGenericVisionLabel(it) }
+    }
+
+    return CameraSmartFocusTarget(
+      normX = targetX,
+      normY = targetY,
+      boundingBox = finalBox,
+      trackingId = winner.trackingId,
+      categoryLabel = cleanedLabel,
+      confidence = winner.confidence.coerceIn(0f, 1f),
+      source = CameraFocusSource.ML_OBJECT_AUTO,
+      timestampMs = timestampMs,
+    )
+  }
+
+  /**
+   * Selects a smart autofocus target from localized [CameraVisionTag] items (with bounding boxes).
+   */
+  fun selectSmartAutofocusTargetFromVisionTags(
+    tags: List<CameraVisionTag>,
+    previousTarget: CameraSmartFocusTarget? = null,
+    timestampMs: Long = System.currentTimeMillis(),
+  ): CameraSmartFocusTarget? {
+    val candidates = tags.mapNotNull { tag ->
+      val box = tag.boundingBox ?: return@mapNotNull null
+      if (isBlockedGenericVisionLabel(tag.label)) return@mapNotNull null
+      RawDetectedObjectForFocus(
+        boundingBox = box,
+        trackingId = if (tag.index >= 0) tag.index else null,
+        label = tag.label,
+        confidence = tag.confidenceClamped,
+      )
+    }
+    return selectSmartAutofocusTargetFromObjects(
+      objects = candidates,
+      previousTarget = previousTarget,
+      timestampMs = timestampMs,
+    )
+  }
+
+  /**
+   * Extracts the primary smart autofocus target from a [CameraVisionAnalysisResult].
+   */
+  fun selectSmartAutofocusTargetFromVisionResult(
+    result: CameraVisionAnalysisResult?,
+    previousTarget: CameraSmartFocusTarget? = null,
+    timestampMs: Long = System.currentTimeMillis(),
+  ): CameraSmartFocusTarget? {
+    if (result == null) return null
+    val sourceTags = result.tags.ifEmpty { result.allCandidateTags }
+    return selectSmartAutofocusTargetFromVisionTags(
+      tags = sourceTags,
+      previousTarget = previousTarget,
+      timestampMs = timestampMs,
+    )
+  }
+
+  /**
+   * Runs on-device Google ML Kit Object Detection (`com.google.mlkit.vision.objects.ObjectDetection`)
+   * on [bitmap] to locate physical objects and determine the optimal smart autofocus target.
+   * When ML Kit detects multiple objects, prioritizes central, prominent subjects with temporal stability.
+   */
+  suspend fun detectSmartFocusObjectWithMlKit(
+    bitmap: Bitmap,
+    rotationDegrees: Int = 0,
+    previousTarget: CameraSmartFocusTarget? = null,
+    fallbackToSalientRegion: Boolean = true,
+    analyzedAtMs: Long = System.currentTimeMillis(),
+  ): CameraSmartFocusTarget? {
+    if (bitmap.width <= 16 || bitmap.height <= 16) return null
+    return try {
+      val orientedBitmap = orientBitmapIfNeeded(bitmap, rotationDegrees)
+      val bw = orientedBitmap.width
+      val bh = orientedBitmap.height
+      if (bw <= 16 || bh <= 16) return null
+
+      val objectDetectorOptions = ObjectDetectorOptions.Builder()
+        .setDetectorMode(ObjectDetectorOptions.SINGLE_IMAGE_MODE)
+        .enableMultipleObjects()
+        .enableClassification()
+        .build()
+      val objectDetector = ObjectDetection.getClient(objectDetectorOptions)
+      val inputImage = InputImage.fromBitmap(orientedBitmap, 0)
+
+      val detectedObjects: List<DetectedObject> = try {
+        suspendCancellableCoroutine { continuation ->
+          objectDetector.process(inputImage)
+            .addOnSuccessListener { results ->
+              if (continuation.isActive) {
+                continuation.resume(results.orEmpty())
+              }
+            }
+            .addOnFailureListener {
+              if (continuation.isActive) {
+                continuation.resume(emptyList())
+              }
+            }
+        }
+      } catch (_: Throwable) {
+        emptyList()
+      } finally {
+        try {
+          objectDetector.close()
+        } catch (_: Throwable) {}
+      }
+
+      val mlKitCandidates = detectedObjects.mapNotNull { obj ->
+        val rect = obj.boundingBox
+        val left = (rect.left.toFloat() / bw.toFloat()).coerceIn(0f, 1f)
+        val top = (rect.top.toFloat() / bh.toFloat()).coerceIn(0f, 1f)
+        val right = (rect.right.toFloat() / bw.toFloat()).coerceIn(0f, 1f)
+        val bottom = (rect.bottom.toFloat() / bh.toFloat()).coerceIn(0f, 1f)
+        val box = CameraVisionBoundingBox(left, top, right, bottom)
+        if (box.width < 0.04f || box.height < 0.04f || box.area > 0.92f) {
+          null
+        } else {
+          val topLabel = obj.labels.maxByOrNull { it.confidence }
+          RawDetectedObjectForFocus(
+            boundingBox = box,
+            trackingId = obj.trackingId,
+            label = topLabel?.text,
+            confidence = topLabel?.confidence ?: 0.75f,
+          )
+        }
+      }
+
+      if (mlKitCandidates.isNotEmpty()) {
+        return selectSmartAutofocusTargetFromObjects(
+          objects = mlKitCandidates,
+          previousTarget = previousTarget,
+          timestampMs = analyzedAtMs,
+        )
+      }
+
+      if (fallbackToSalientRegion) {
+        val salientBoxes = extractSalientRegionsFromBitmap(orientedBitmap, maxRegions = 3)
+        if (salientBoxes.isNotEmpty()) {
+          val salientCandidates = salientBoxes.mapIndexed { idx, box ->
+            RawDetectedObjectForFocus(
+              boundingBox = box,
+              trackingId = idx + 1,
+              label = null,
+              confidence = (0.82f - idx * 0.08f).coerceAtLeast(0.60f),
+            )
+          }
+          return selectSmartAutofocusTargetFromObjects(
+            objects = salientCandidates,
+            previousTarget = previousTarget,
+            timestampMs = analyzedAtMs,
+          )
+        }
+      }
+      null
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  /**
+   * Maps a normalized viewfinder [CameraSmartFocusTarget] (`0.0f..1.0f`) into sensor active-array
+   * pixel coordinates ([CameraSensorMeteringRegion]) for Camera2 `CONTROL_AF_REGIONS` and `CONTROL_AE_REGIONS`,
+   * accounting for [sensorOrientationDegrees], [lensFacing], [mirrorFront], and digital [zoom].
+   */
+  fun computeSensorMeteringRegion(
+    sensorWidth: Int,
+    sensorHeight: Int,
+    target: CameraSmartFocusTarget,
+    sensorOrientationDegrees: Int = 90,
+    lensFacing: CameraLensFacing = CameraLensFacing.BACK,
+    mirrorFront: Boolean = false,
+    zoom: Float = 1.0f,
+    weight: Int = 1000,
+  ): CameraSensorMeteringRegion? {
+    if (sensorWidth <= 16 || sensorHeight <= 16) return null
+    val clampedZoom = coerceZoom(zoom)
+
+    // Un-mirror and un-zoom viewfinder coordinates into full sensor stream normalized space
+    var vfX = target.clampedX
+    val vfY = target.clampedY
+    if (lensFacing == CameraLensFacing.FRONT && mirrorFront) {
+      vfX = 1f - vfX
+    }
+    val unzoomedX = (0.5f + (vfX - 0.5f) / clampedZoom).coerceIn(0.04f, 0.96f)
+    val unzoomedY = (0.5f + (vfY - 0.5f) / clampedZoom).coerceIn(0.04f, 0.96f)
+
+    val normOrientation = ((sensorOrientationDegrees % 360) + 360) % 360
+    val (sensorCenterX, sensorCenterY) = when (normOrientation) {
+      90 -> Pair(unzoomedY, (1f - unzoomedX).coerceIn(0f, 1f))
+      180 -> Pair((1f - unzoomedX).coerceIn(0f, 1f), (1f - unzoomedY).coerceIn(0f, 1f))
+      270 -> {
+        val sx = (1f - unzoomedY).coerceIn(0f, 1f)
+        val sy = if (lensFacing == CameraLensFacing.FRONT) (1f - unzoomedX).coerceIn(0f, 1f) else unzoomedX
+        Pair(sx, sy)
+      }
+      else -> Pair(unzoomedX, unzoomedY)
+    }
+
+    val box = target.boundingBox
+    val (normHalfW, normHalfH) = if (box != null && !target.isManualOverride) {
+      // Focus tightly on the core 55% of the detected object's bounding box
+      val rawHalfW = (box.width * 0.275f / clampedZoom).coerceIn(0.05f, 0.22f)
+      val rawHalfH = (box.height * 0.275f / clampedZoom).coerceIn(0.05f, 0.22f)
+      if (normOrientation == 90 || normOrientation == 270) {
+        Pair(rawHalfH, rawHalfW)
+      } else {
+        Pair(rawHalfW, rawHalfH)
+      }
+    } else {
+      val spotHalf = (0.075f / clampedZoom).coerceIn(0.04f, 0.12f)
+      Pair(spotHalf, spotHalf)
+    }
+
+    val cxPx = (sensorCenterX * sensorWidth).roundToInt()
+    val cyPx = (sensorCenterY * sensorHeight).roundToInt()
+    val halfWPx = (normHalfW * sensorWidth).roundToInt().coerceAtLeast(8)
+    val halfHPx = (normHalfH * sensorHeight).roundToInt().coerceAtLeast(8)
+
+    val left = (cxPx - halfWPx).coerceIn(0, sensorWidth - 16)
+    val top = (cyPx - halfHPx).coerceIn(0, sensorHeight - 16)
+    val right = (cxPx + halfWPx).coerceIn(left + 16, sensorWidth)
+    val bottom = (cyPx + halfHPx).coerceIn(top + 16, sensorHeight)
+
+    return CameraSensorMeteringRegion(
+      left = left,
+      top = top,
+      right = right,
+      bottom = bottom,
+      weight = weight.coerceIn(1, 1000),
+    )
   }
 }
 

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.RestaurantMenu
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsRemote
@@ -202,6 +203,11 @@ enum class Tool(
     icon = Icons.Default.DirectionsCar,
     category = ToolCategory.REMOTES_AND_DEVICES,
   ),
+  ELEMENTS(
+    title = "Elements",
+    icon = Icons.Default.Science,
+    category = ToolCategory.MATH_AND_MEASUREMENT,
+  ),
   SEARCH(
     title = "Search",
     icon = Icons.Default.Search,
@@ -220,6 +226,7 @@ enum class Tool(
     val MUSIC_PLAYER: Tool get() = MUSIC
     val RECIPE_BOOK: Tool get() = RECIPES
     val OBD2: Tool get() = OBD2_SCANNER
+    val PERIODIC_TABLE: Tool get() = ELEMENTS
   }
 }
 

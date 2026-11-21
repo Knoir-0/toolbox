@@ -430,4 +430,42 @@ class CameraScreenTest {
     composeTestRule.waitForIdle()
     assertEquals("0", prefs.getString(PREF_KEY_CAMERA_ID, null))
   }
+
+  @Test
+  fun cameraScreen_usesMlKitSmartObjectAutofocus_andAllows5SecondManualFocusOverride() {
+    composeTestRule.setContent {
+      ToolboxTheme {
+        CameraScreen(initialDirectory = tempCameraDir)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // 1. By default, smart ML Kit object detection autofocus is active
+    composeTestRule.onNodeWithTag("camera_smart_af_indicator").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_focus_mode_badge").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_focus_indicator").assertDoesNotExist()
+
+    // 2. Tap viewfinder to manually focus and override smart autofocus for 5 seconds
+    composeTestRule.onNodeWithTag("camera_viewfinder_box").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_focus_indicator").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_focus_color_pill").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_manual_focus_badge_text", useUnmergedTree = true)
+      .assertTextEquals("Manual • 5s")
+    composeTestRule.onNodeWithTag("camera_smart_af_indicator").assertDoesNotExist()
+
+    // 3. Advance clock by 3.5 seconds (past the old 2.8s duration, still within the 5s override window):
+    // manual focus override must still be active
+    composeTestRule.mainClock.advanceTimeBy(3500L)
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_focus_indicator").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_smart_af_indicator").assertDoesNotExist()
+
+    // 4. Advance clock past the 5-second (5000ms) manual override window:
+    // manual focus expires and camera automatically returns to ML Kit smart object autofocus
+    composeTestRule.mainClock.advanceTimeBy(1600L)
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_focus_indicator").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_smart_af_indicator").assertIsDisplayed()
+  }
 }

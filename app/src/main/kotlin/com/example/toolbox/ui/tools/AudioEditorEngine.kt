@@ -1493,6 +1493,7 @@ object AudioEditorEngine {
     format: AudioExportFormat,
     overwriteExisting: Boolean = false,
     metadata: AudioMetadataTags = AudioMetadataTags(),
+    sourceFile: File? = null,
   ): Result<File> = withContext(Dispatchers.IO) {
     try {
       val cleanMetadata = metadata.sanitized()
@@ -1508,6 +1509,7 @@ object AudioEditorEngine {
             outputDir = outDir,
             desiredStem = desiredStem,
             targetFormat = ConvertibleFormat.WAV,
+            sourceFile = sourceFile,
           )
         }
         return@withContext if (writeWavFile(buffer, targetWav, cleanMetadata)) {
@@ -1516,6 +1518,18 @@ object AudioEditorEngine {
           Result.failure(IllegalStateException("Failed to write WAV file."))
         }
       }
+
+      val resolvedTargetFile = if (overwriteExisting) {
+        File(outDir, "$desiredStem.${format.extension}")
+      } else {
+        FileConverterEngine.resolveOutputFile(
+          outputDir = outDir,
+          desiredStem = desiredStem,
+          targetFormat = format.convertibleFormat,
+          sourceFile = sourceFile,
+        )
+      }
+      val resolvedStem = FileConverterEngine.extractFileStem(resolvedTargetFile.name)
 
       val tempWav = File.createTempFile("audio_editor_export_", ".wav", context.cacheDir)
       try {
@@ -1527,7 +1541,7 @@ object AudioEditorEngine {
           sourceFile = tempWav,
           targetFormat = format.convertibleFormat,
           outputDir = convertDir,
-          desiredStem = if (overwriteExisting) "overwrite_stage_${System.nanoTime()}" else desiredStem,
+          desiredStem = if (overwriteExisting) "overwrite_stage_${System.nanoTime()}" else resolvedStem,
           context = context,
         )
         val stagedFile = convResult.outputFile

@@ -156,16 +156,6 @@ fun AudioEditorScreen(
   val isInspectionMode = LocalInspectionMode.current
   val coroutineScope = rememberCoroutineScope()
 
-  val audioDirectory = remember(initialDirectory, initialFile, isInspectionMode) {
-    initialDirectory
-      ?: initialFile?.parentFile
-      ?: if (isInspectionMode) {
-        File("/storage/emulated/0/Audio")
-      } else {
-        AudioRecorderEngine.getDefaultAudioDirectory(context)
-      }
-  }
-
   val resolvedInitialBuffer = remember(initialBuffer, initialFile) {
     initialBuffer ?: initialFile?.let { file ->
       AudioEditorEngine.readWavFile(file)
@@ -195,6 +185,21 @@ fun AudioEditorScreen(
   var sourceFile by remember(initialFile) { mutableStateOf<File?>(initialFile) }
   var sourceFileName by remember(initialFile, initialFileName) {
     mutableStateOf(initialFile?.name ?: initialFileName)
+  }
+  val cacheImportDirPath = remember(context) {
+    File(context.cacheDir, "converter_imports").absolutePath
+  }
+  val audioDirectory = remember(initialDirectory, sourceFile, initialFile, isInspectionMode) {
+    sourceFile?.parentFile?.takeIf { dir ->
+      dir.absolutePath != cacheImportDirPath && ((dir.exists() && dir.canWrite()) || isInspectionMode)
+    }
+      ?: initialDirectory
+      ?: initialFile?.parentFile
+      ?: if (isInspectionMode) {
+        File("/storage/emulated/0/Audio")
+      } else {
+        AudioRecorderEngine.getDefaultAudioDirectory(context)
+      }
   }
   var statusBannerText by remember { mutableStateOf<String?>(null) }
   var isBusy by remember { mutableStateOf(false) }
@@ -1103,6 +1108,7 @@ fun AudioEditorScreen(
             format = resolvedFormat,
             overwriteExisting = overwriteOriginal && sourceFile != null,
             metadata = effectiveMetadata,
+            sourceFile = sourceFile,
           )
           isBusy = false
           result.onSuccess { savedFile ->
@@ -1132,10 +1138,11 @@ fun AudioEditorScreen(
             }
             sourceFile = savedFile
             sourceFileName = savedFile.name
+            val folderLabel = savedFile.parentFile?.let { AudioRecorderEngine.formatDirectoryDisplayPath(it) } ?: "/Audio"
             statusBannerText = if (overwriteOriginal) {
               "Saved edits directly to ${savedFile.name}"
             } else {
-              "Saved ${savedFile.name} to /Audio"
+              "Saved ${savedFile.name} to $folderLabel"
             }
             Toast.makeText(
               context,
@@ -2609,12 +2616,19 @@ private fun AudioExportDialog(
   val canOverwriteOriginal = originalSourceFile != null
   var overwriteOriginal by remember(canOverwriteOriginal) { mutableStateOf(false) }
 
-  val initialStem = remember(initialFileName) {
-    val base = FileConverterEngine.extractFileStem(initialFileName)
-    if (base.endsWith("_edited")) base else "${base}_edited"
-  }
   val defaultFormat = remember(initialFileName) {
     AudioExportFormat.fromFileName(initialFileName)
+  }
+  val initialStem = remember(initialFileName, outputDirectory, defaultFormat, originalSourceFile) {
+    val base = FileConverterEngine.extractFileStem(initialFileName)
+    val resolved = FileConverterEngine.resolveOutputFileWithExtension(
+      outputDir = outputDirectory,
+      desiredStem = base,
+      extension = defaultFormat.extension,
+      sourceFile = originalSourceFile,
+      forceEditedPostfix = true,
+    )
+    FileConverterEngine.extractFileStem(resolved.name)
   }
   var selectedFormat by remember(defaultFormat) { mutableStateOf(defaultFormat) }
   var textFieldValue by remember(initialStem) {

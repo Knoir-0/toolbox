@@ -850,9 +850,63 @@ object FileConverterEngine {
     return if (dotIndex > 0) trimmed.substring(0, dotIndex) else trimmed.ifEmpty { "converted_file" }
   }
 
+  private val EDITED_POSTFIX_REGEX = Regex("""^(.*)_edited(?:_(\d+))?$""", RegexOption.IGNORE_CASE)
+
+  /**
+   * Computes the next stem using the `_edited_1` / `_edited_2` collision postfix pattern.
+   * If [stem] already ends with `_edited_N`, increments `N` to `N + 1` (or `_edited` -> `_edited_1`).
+   * Otherwise appends `_edited_1`.
+   */
+  fun nextEditedStem(stem: String): String {
+    val sanitized = stem
+      .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+      .trim()
+      .ifEmpty { "file" }
+    val match = EDITED_POSTFIX_REGEX.matchEntire(sanitized)
+    return if (match != null) {
+      val base = match.groupValues[1].ifEmpty { "file" }
+      val currentNumber = match.groupValues[2].toIntOrNull() ?: 0
+      "${base}_edited_${currentNumber + 1}"
+    } else {
+      "${sanitized}_edited_1"
+    }
+  }
+
+  /**
+   * Builds a safe output file in [outputDir] with [desiredStem] and [extension], avoiding
+   * overwriting [sourceFile] or existing files by adding/incrementing the `_edited_1` / `_edited_2`
+   * postfix when needed.
+   */
+  fun resolveOutputFileWithExtension(
+    outputDir: File,
+    desiredStem: String,
+    extension: String,
+    sourceFile: File? = null,
+    forceEditedPostfix: Boolean = false,
+  ): File {
+    val cleanExt = extension.trim().removePrefix(".").lowercase(Locale.ROOT).ifEmpty { "dat" }
+    val sanitizedStem = desiredStem
+      .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+      .trim()
+      .removeSuffix(".$cleanExt")
+      .ifEmpty { "converted" }
+
+    var currentStem = if (forceEditedPostfix) {
+      nextEditedStem(sanitizedStem)
+    } else {
+      sanitizedStem
+    }
+    var candidate = File(outputDir, "$currentStem.$cleanExt")
+    while (candidate.exists() || (sourceFile != null && candidate.absolutePath == sourceFile.absolutePath)) {
+      currentStem = nextEditedStem(currentStem)
+      candidate = File(outputDir, "$currentStem.$cleanExt")
+    }
+    return candidate
+  }
+
   /**
    * Builds a safe output file in [outputDir] with [desiredStem] and [targetFormat], avoiding
-   * overwriting the source file or existing files by appending `(1)`, `(2)`, etc. when needed.
+   * overwriting the source file or existing files by appending `_edited_1`, `_edited_2`, etc. when needed.
    */
   fun resolveOutputFile(
     outputDir: File,
@@ -860,18 +914,12 @@ object FileConverterEngine {
     targetFormat: ConvertibleFormat,
     sourceFile: File? = null,
   ): File {
-    val sanitizedStem = desiredStem
-      .replace(Regex("[\\\\/:*?\"<>|]"), "_")
-      .trim()
-      .ifEmpty { "converted" }
-    val ext = targetFormat.extension
-    var candidate = File(outputDir, "$sanitizedStem.$ext")
-    var counter = 1
-    while (candidate.exists() || (sourceFile != null && candidate.absolutePath == sourceFile.absolutePath)) {
-      candidate = File(outputDir, "${sanitizedStem}_$counter.$ext")
-      counter++
-    }
-    return candidate
+    return resolveOutputFileWithExtension(
+      outputDir = outputDir,
+      desiredStem = desiredStem,
+      extension = targetFormat.extension,
+      sourceFile = sourceFile,
+    )
   }
 
   /**
@@ -1347,7 +1395,7 @@ object FileConverterEngine {
     }
   }
 
-  private fun encodeBitmapToFile(
+  fun encodeBitmapToFile(
     bitmap: Bitmap,
     outputFile: File,
     targetFormat: ConvertibleFormat,

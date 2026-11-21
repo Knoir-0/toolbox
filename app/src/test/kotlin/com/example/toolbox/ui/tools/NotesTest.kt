@@ -108,6 +108,44 @@ class NotesTest {
     val deletedChecked = NotesEngine.deleteCheckedItems(note)
     assertEquals(1, deletedChecked.checklistItems.size)
     assertEquals("Dishes", deletedChecked.checklistItems[0].text)
+
+    // Suggest checked items when typing in checklists
+    val suggestions = NotesEngine.getCheckedItemSuggestions(note, "laun")
+    assertEquals(listOf("Laundry"), suggestions.map { it.text })
+
+    // Selecting a suggested checked item restores (unchecks) it
+    val restoredFromNewInput = NotesEngine.applyCheckedItemSuggestion(note, "c2")
+    assertEquals(2, restoredFromNewInput.uncheckedItems.size)
+    assertEquals(listOf("Dishes", "Laundry"), restoredFromNewInput.uncheckedItems.map { it.text })
+    assertEquals(listOf("Vacuum"), restoredFromNewInput.checkedItems.map { it.text })
+
+    // Selecting a suggested checked item while editing an existing unchecked item replaces it
+    val typingNote = note.copy(
+      checklistItems = note.checklistItems + NoteChecklistItem(id = "c4", text = "Vac", isChecked = false),
+    )
+    val restoredInPlace = NotesEngine.applyCheckedItemSuggestion(
+      note = typingNote,
+      checkedItemId = "c3",
+      replacingUncheckedItemId = "c4",
+    )
+    assertEquals(listOf("Dishes", "Vacuum"), restoredInPlace.uncheckedItems.map { it.text })
+    assertEquals(listOf("Laundry"), restoredInPlace.checkedItems.map { it.text })
+
+    // Pasting a list with return characters parses into multiple checklist items
+    val parsedItems = NotesEngine.parseChecklistItems("Apples\nBananas\r\n\r\n- Cherries\n• Dates")
+    assertEquals(listOf("Apples", "Bananas", "Cherries", "Dates"), parsedItems.map { it.text })
+    assertTrue(parsedItems.all { !it.isChecked })
+
+    // Pasting a multi-line list into an existing checklist item splits it in place
+    val splitInPlace = NotesEngine.updateChecklistItemText(
+      note = note,
+      itemId = "c1",
+      updatedText = "Dishes\nMop floor\nWipe counters",
+    )
+    assertEquals(
+      listOf("Dishes", "Mop floor", "Wipe counters"),
+      splitInPlace.uncheckedItems.map { it.text },
+    )
   }
 
   @Test

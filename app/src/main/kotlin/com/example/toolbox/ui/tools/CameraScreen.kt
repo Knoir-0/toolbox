@@ -18,6 +18,7 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
 import android.net.Uri
@@ -565,14 +566,27 @@ fun CameraScreen(
     selectCameraDevice(nextDevice)
   }
 
-  // Tap-to-focus indicator state (normalized 0f..1f coordinates) & center-radius sampled hex color
+  // Smart ML Kit Object Detection Autofocus & 5-second Manual Focus Override state
+  var smartAutoFocusTarget by remember {
+    mutableStateOf(
+      CameraEngine.selectSmartAutofocusTargetFromVisionTags(
+        tags = visionSamplePreset.sampleTags,
+      )
+    )
+  }
+  var manualFocusTarget by remember { mutableStateOf<CameraSmartFocusTarget?>(null) }
   var focusPointNormalized by remember { mutableStateOf<Offset?>(null) }
   var focusSampledColorHex by remember { mutableStateOf<String?>(null) }
   var focusTriggerCounter by remember { mutableIntStateOf(0) }
   var inlineColorPickerHex by rememberSaveable { mutableStateOf<String?>(null) }
 
+  val activeFocusTarget = remember(manualFocusTarget, smartAutoFocusTarget) {
+    manualFocusTarget ?: smartAutoFocusTarget
+  }
+
   fun openColorInColorsTool(hex: String) {
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    manualFocusTarget = null
     focusPointNormalized = null
     if (onOpenColorPicker != null) {
       onOpenColorPicker(hex)
@@ -581,9 +595,12 @@ fun CameraScreen(
     }
   }
 
+  // Manual tap-to-focus overrides smart ML Kit autofocus for 5 seconds (MANUAL_FOCUS_OVERRIDE_DURATION_MS)
+  // before automatically returning to smart object detection autofocus.
   LaunchedEffect(focusTriggerCounter) {
-    if (focusPointNormalized != null) {
-      delay(2800L)
+    if (manualFocusTarget != null || focusPointNormalized != null) {
+      delay(MANUAL_FOCUS_OVERRIDE_DURATION_MS)
+      manualFocusTarget = null
       focusPointNormalized = null
     }
   }
@@ -881,6 +898,50 @@ fun CameraScreen(
       )
     } catch (_: Throwable) {
       null
+    }
+  }
+
+  // Continuous live frame ML Kit Object Detection for Smart Autofocus across camera modes.
+  // Pauses automatic focus target updates while a 5-second manual focus override is active.
+  LaunchedEffect(
+    activeTextureView,
+    selectedCamera.cameraId,
+    zoomLevel,
+    lensFacing,
+    mirrorFrontCamera,
+    manualFocusTarget,
+  ) {
+    if (isInspection || manualFocusTarget != null) {
+      return@LaunchedEffect
+    }
+    while (isActive && manualFocusTarget == null) {
+      val alignedFrame = captureTransformedAnalysisBitmap(maxEdgePx = 480)
+      if (alignedFrame != null && alignedFrame.width > 32 && alignedFrame.height > 32) {
+        val detectedTarget = withContext(Dispatchers.Default) {
+          CameraEngine.detectSmartFocusObjectWithMlKit(
+            bitmap = alignedFrame,
+            previousTarget = smartAutoFocusTarget,
+            fallbackToSalientRegion = true,
+          )
+        }
+        if (detectedTarget != null && manualFocusTarget == null) {
+          smartAutoFocusTarget = detectedTarget
+        }
+      }
+      delay(400L)
+    }
+  }
+
+  // Keep smart autofocus target synced with detected Vision objects when not in a manual override
+  LaunchedEffect(latestVisionResult, manualFocusTarget) {
+    if (manualFocusTarget == null && latestVisionResult != null) {
+      val fromVision = CameraEngine.selectSmartAutofocusTargetFromVisionResult(
+        result = latestVisionResult,
+        previousTarget = smartAutoFocusTarget,
+      )
+      if (fromVision != null) {
+        smartAutoFocusTarget = fromVision
+      }
     }
   }
 
@@ -1536,7 +1597,9 @@ fun CameraScreen(
               showFiltersBar = false
               val normX = (tapOffset.x / size.width.toFloat()).coerceIn(0.08f, 0.92f)
               val normY = (tapOffset.y / size.height.toFloat()).coerceIn(0.08f, 0.92f)
-              focusPointNormalized = Offset(normX, normY)
+              val manualTarget = CameraEngine.createManualFocusTarget(normX = normX, normY = normY)
+              manualFocusTarget = manualTarget
+              focusPointNormalized = Offset(manualTarget.clampedX, manualTarget.clampedY)
               val tv = activeTextureView
               val rawFrame = try {
                 if (tv != null && tv.isAvailable) tv.getBitmap(320, 320) else null
@@ -1578,6 +1641,8 @@ fun CameraScreen(
             exposureEv = exposureEv,
             flashMode = flashMode,
             mirrorFront = mirrorFrontCamera,
+            captureMode = captureMode,
+            focusTarget = activeFocusTarget,
             onTextureViewReady = { tv -> activeTextureView = tv },
             modifier = Modifier.fillMaxSize(),
           )
@@ -1655,108 +1720,17 @@ fun CameraScreen(
           )
         }
 
-        // Tap-to-Focus Reticle Indicator & Sampled Center-Radius Hex Color Pill
-        val activeFocusPoint = focusPointNormalized
-        if (activeFocusPoint != null) {
-          val focusRingColor = MaterialTheme.colorScheme.tertiary
-          val activeHex = focusSampledColorHex ?: CameraEngine.sampleSyntheticFocusColorHex(
-            normX = activeFocusPoint.x,
-            normY = activeFocusPoint.y,
-            lensFacing = lensFacing,
-            filter = colorFilter,
-            exposureEv = exposureEv,
-          )
-          val swatchColor = remember(activeHex) {
-            val rgb = ColorMath.parseHex(activeHex)
-            if (rgb != null) {
-              Color(red = rgb.first, green = rgb.second, blue = rgb.third)
-            } else {
-              focusRingColor
-            }
-          }
-          var measuredPillWidthPx by remember { mutableIntStateOf(0) }
-
-          BoxWithConstraints(
-            modifier = Modifier
-              .fillMaxSize()
-              .testTag("camera_focus_indicator"),
-          ) {
-            val boxW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
-            val boxH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
-            val cx = boxW * activeFocusPoint.x
-            val cy = boxH * activeFocusPoint.y
-            val radiusPx = with(density) { 32.dp.toPx() }
-            val gapPx = with(density) { 6.dp.toPx() }
-            val edgeMarginPx = with(density) { 8.dp.toPx() }
-            val fallbackPillWidthPx = with(density) { 86.dp.toPx() }
-            val effectivePillW = if (measuredPillWidthPx > 0) measuredPillWidthPx.toFloat() else fallbackPillWidthPx
-            val pillLeftPx = (cx - effectivePillW / 2f).coerceIn(
-              edgeMarginPx,
-              (boxW - effectivePillW - edgeMarginPx).coerceAtLeast(edgeMarginPx),
-            )
-            val pillTopPx = (cy + radiusPx + gapPx).coerceIn(
-              edgeMarginPx,
-              (boxH - with(density) { 36.dp.toPx() }).coerceAtLeast(edgeMarginPx),
-            )
-
-            Canvas(modifier = Modifier.fillMaxSize()) {
-              drawCircle(
-                color = focusRingColor,
-                radius = radiusPx,
-                center = Offset(cx, cy),
-                style = Stroke(width = 2.dp.toPx()),
-              )
-              drawCircle(
-                color = swatchColor,
-                radius = 4.dp.toPx(),
-                center = Offset(cx, cy),
-              )
-            }
-
-            // Hex Color Pill below the auto-focus circle (styled like Music Player track details color pills)
-            Surface(
-              shape = CircleShape,
-              color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.82f),
-              border = BorderStroke(1.dp, swatchColor.copy(alpha = 0.65f)),
-              modifier = Modifier
-                .onSizeChanged { measuredPillWidthPx = it.width }
-                .offset {
-                  IntOffset(
-                    x = pillLeftPx.roundToInt(),
-                    y = pillTopPx.roundToInt(),
-                  )
-                }
-                .clip(CircleShape)
-                .clickable { openColorInColorsTool(activeHex) }
-                .testTag("camera_focus_color_pill"),
-            ) {
-              Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-              ) {
-                Box(
-                  modifier = Modifier
-                    .size(12.dp)
-                    .clip(CircleShape)
-                    .background(swatchColor)
-                    .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), CircleShape)
-                    .testTag("camera_focus_color_swatch"),
-                )
-                Spacer(modifier = Modifier.width(5.dp))
-                Text(
-                  text = activeHex,
-                  style = MaterialTheme.typography.labelSmall,
-                  fontFamily = FontFamily.Monospace,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.onSurface,
-                  maxLines = 1,
-                  modifier = Modifier.testTag("camera_focus_color_hex_text"),
-                )
-              }
-            }
-          }
-        }
+        // Smart ML Kit Object Detection Autofocus & 5s Manual Tap-to-Focus Override Overlay
+        CameraFocusReticleOverlay(
+          smartAutoFocusTarget = smartAutoFocusTarget,
+          manualFocusTarget = manualFocusTarget,
+          focusPointNormalized = focusPointNormalized,
+          focusSampledColorHex = focusSampledColorHex,
+          lensFacing = lensFacing,
+          colorFilter = colorFilter,
+          exposureEv = exposureEv,
+          onOpenColorInColorsTool = { hex -> openColorInColorsTool(hex) },
+        )
 
         // Self-Timer Countdown Overlay
         if (isCountingDown) {
@@ -3336,6 +3310,8 @@ private fun HardwareCamera2Preview(
   exposureEv: Float,
   flashMode: CameraFlashMode,
   mirrorFront: Boolean,
+  captureMode: CameraCaptureMode,
+  focusTarget: CameraSmartFocusTarget?,
   onTextureViewReady: (TextureView?) -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -3347,6 +3323,7 @@ private fun HardwareCamera2Preview(
   var activeCharacteristics by remember { mutableStateOf<CameraCharacteristics?>(null) }
   var activePreviewSize by remember { mutableStateOf(Pair(1440, 1080)) }
   var activeSensorOrientation by remember { mutableIntStateOf(90) }
+  var lastAppliedManualOverride by remember { mutableStateOf(false) }
   var surfaceReadyTrigger by remember { mutableIntStateOf(0) }
   var isLifecycleResumed by remember {
     mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
@@ -3415,8 +3392,8 @@ private fun HardwareCamera2Preview(
     applyCenterCropTransform(tv)
   }
 
-  // Update repeating request when zoom, exposure, or flash changes
-  LaunchedEffect(zoomLevel, exposureEv, flashMode, captureSession, previewBuilder) {
+  // Update repeating request when zoom, exposure, flash, or smart/manual focus target changes
+  LaunchedEffect(zoomLevel, exposureEv, flashMode, captureMode, focusTarget, captureSession, previewBuilder) {
     val session = captureSession ?: return@LaunchedEffect
     val builder = previewBuilder ?: return@LaunchedEffect
     val chars = activeCharacteristics
@@ -3441,7 +3418,7 @@ private fun HardwareCamera2Preview(
         }
       }
 
-      // Apply exposure compensation if supported
+      // Apply exposure compensation and smart ML Kit / manual autofocus metering regions if supported
       if (chars != null) {
         val evRange: Range<Int>? = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
         if (evRange != null && evRange.upper > evRange.lower) {
@@ -3450,6 +3427,71 @@ private fun HardwareCamera2Preview(
           val targetSteps = (evRange.lower + normalized * (evRange.upper - evRange.lower)).roundToInt()
             .coerceIn(evRange.lower, evRange.upper)
           builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, targetSteps)
+        }
+
+        val activeArray = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+        val maxAfRegions = chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
+        val maxAeRegions = chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0
+        val availableAfModes = chars.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+
+        if (activeArray != null && focusTarget != null) {
+          val sensorRegion = CameraEngine.computeSensorMeteringRegion(
+            sensorWidth = activeArray.width(),
+            sensorHeight = activeArray.height(),
+            target = focusTarget,
+            sensorOrientationDegrees = activeSensorOrientation,
+            lensFacing = lensFacing,
+            mirrorFront = mirrorFront,
+            zoom = zoomLevel,
+            weight = MeteringRectangle.METERING_WEIGHT_MAX,
+          )
+          if (sensorRegion != null) {
+            val meteringRect = MeteringRectangle(
+              activeArray.left + sensorRegion.left,
+              activeArray.top + sensorRegion.top,
+              sensorRegion.width,
+              sensorRegion.height,
+              sensorRegion.weight,
+            )
+            if (maxAfRegions > 0) {
+              builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(meteringRect))
+            }
+            if (maxAeRegions > 0) {
+              builder.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(meteringRect))
+            }
+          }
+        }
+
+        val isManual = focusTarget?.isManualOverride == true
+        val continuousMode = if (
+          captureMode == CameraCaptureMode.VIDEO &&
+          CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO in availableAfModes
+        ) {
+          CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+        } else if (CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE in availableAfModes) {
+          CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+        } else if (CaptureRequest.CONTROL_AF_MODE_AUTO in availableAfModes) {
+          CaptureRequest.CONTROL_AF_MODE_AUTO
+        } else {
+          null
+        }
+
+        if (isManual && CaptureRequest.CONTROL_AF_MODE_AUTO in availableAfModes) {
+          builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+          builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
+          session.capture(builder.build(), null, null)
+          builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+          lastAppliedManualOverride = true
+        } else {
+          if (lastAppliedManualOverride) {
+            builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_CANCEL)
+            session.capture(builder.build(), null, null)
+            builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+            lastAppliedManualOverride = false
+          }
+          if (continuousMode != null) {
+            builder.set(CaptureRequest.CONTROL_AF_MODE, continuousMode)
+          }
         }
       }
 
@@ -5713,6 +5755,258 @@ private fun executeScannedCodePrimaryAction(
       text = code.primaryCopyValue,
       isInspection = isInspection,
     )
+  }
+}
+
+/**
+ * Renders either the Smart ML Kit Object Detection Autofocus indicator (`camera_smart_af_indicator`)
+ * or the 5-second Manual Tap-to-Focus Override indicator (`camera_focus_indicator`) with its
+ * center-radius sampled hex color pill (`camera_focus_color_pill`).
+ */
+@Composable
+private fun CameraFocusReticleOverlay(
+  smartAutoFocusTarget: CameraSmartFocusTarget?,
+  manualFocusTarget: CameraSmartFocusTarget?,
+  focusPointNormalized: Offset?,
+  focusSampledColorHex: String?,
+  lensFacing: CameraLensFacing,
+  colorFilter: CameraColorFilter,
+  exposureEv: Float,
+  onOpenColorInColorsTool: (String) -> Unit,
+) {
+  val density = LocalDensity.current
+  val activeFocusPoint = focusPointNormalized
+  if (activeFocusPoint != null) {
+    val focusRingColor = MaterialTheme.colorScheme.tertiary
+    val activeHex = focusSampledColorHex ?: CameraEngine.sampleSyntheticFocusColorHex(
+      normX = activeFocusPoint.x,
+      normY = activeFocusPoint.y,
+      lensFacing = lensFacing,
+      filter = colorFilter,
+      exposureEv = exposureEv,
+    )
+    val swatchColor = remember(activeHex) {
+      val rgb = ColorMath.parseHex(activeHex)
+      if (rgb != null) {
+        Color(red = rgb.first, green = rgb.second, blue = rgb.third)
+      } else {
+        focusRingColor
+      }
+    }
+    var measuredPillWidthPx by remember { mutableIntStateOf(0) }
+    var measuredModeBadgeWidthPx by remember { mutableIntStateOf(0) }
+
+    BoxWithConstraints(
+      modifier = Modifier
+        .fillMaxSize()
+        .testTag("camera_focus_indicator"),
+    ) {
+      val boxW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+      val boxH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+      val cx = boxW * activeFocusPoint.x
+      val cy = boxH * activeFocusPoint.y
+      val radiusPx = with(density) { 32.dp.toPx() }
+      val gapPx = with(density) { 6.dp.toPx() }
+      val edgeMarginPx = with(density) { 8.dp.toPx() }
+      val fallbackPillWidthPx = with(density) { 86.dp.toPx() }
+      val effectivePillW = if (measuredPillWidthPx > 0) measuredPillWidthPx.toFloat() else fallbackPillWidthPx
+      val pillLeftPx = (cx - effectivePillW / 2f).coerceIn(
+        edgeMarginPx,
+        (boxW - effectivePillW - edgeMarginPx).coerceAtLeast(edgeMarginPx),
+      )
+      val pillTopPx = (cy + radiusPx + gapPx).coerceIn(
+        edgeMarginPx,
+        (boxH - with(density) { 36.dp.toPx() }).coerceAtLeast(edgeMarginPx),
+      )
+      val fallbackBadgeWidthPx = with(density) { 84.dp.toPx() }
+      val effectiveBadgeW = if (measuredModeBadgeWidthPx > 0) {
+        measuredModeBadgeWidthPx.toFloat()
+      } else {
+        fallbackBadgeWidthPx
+      }
+      val badgeLeftPx = (cx - effectiveBadgeW / 2f).coerceIn(
+        edgeMarginPx,
+        (boxW - effectiveBadgeW - edgeMarginPx).coerceAtLeast(edgeMarginPx),
+      )
+      val badgeTopPx = (cy - radiusPx - with(density) { 26.dp.toPx() } - gapPx).coerceIn(
+        edgeMarginPx,
+        (boxH - with(density) { 36.dp.toPx() }).coerceAtLeast(edgeMarginPx),
+      )
+
+      Canvas(modifier = Modifier.fillMaxSize()) {
+        drawCircle(
+          color = focusRingColor,
+          radius = radiusPx,
+          center = Offset(cx, cy),
+          style = Stroke(width = 2.dp.toPx()),
+        )
+        drawCircle(
+          color = swatchColor,
+          radius = 4.dp.toPx(),
+          center = Offset(cx, cy),
+        )
+      }
+
+      // 5s Manual Focus Override Badge above the focus ring
+      Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.88f),
+        border = BorderStroke(1.dp, focusRingColor.copy(alpha = 0.7f)),
+        modifier = Modifier
+          .onSizeChanged { measuredModeBadgeWidthPx = it.width }
+          .offset {
+            IntOffset(
+              x = badgeLeftPx.roundToInt(),
+              y = badgeTopPx.roundToInt(),
+            )
+          }
+          .testTag("camera_focus_mode_badge"),
+      ) {
+        Text(
+          text = manualFocusTarget?.badgeLabel ?: "Manual • 5s",
+          style = MaterialTheme.typography.labelSmall,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onTertiaryContainer,
+          maxLines = 1,
+          modifier = Modifier
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+            .testTag("camera_manual_focus_badge_text"),
+        )
+      }
+
+      // Hex Color Pill below the auto-focus circle
+      Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.82f),
+        border = BorderStroke(1.dp, swatchColor.copy(alpha = 0.65f)),
+        modifier = Modifier
+          .onSizeChanged { measuredPillWidthPx = it.width }
+          .offset {
+            IntOffset(
+              x = pillLeftPx.roundToInt(),
+              y = pillTopPx.roundToInt(),
+            )
+          }
+          .clip(CircleShape)
+          .clickable { onOpenColorInColorsTool(activeHex) }
+          .testTag("camera_focus_color_pill"),
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.Center,
+        ) {
+          Box(
+            modifier = Modifier
+              .size(12.dp)
+              .clip(CircleShape)
+              .background(swatchColor)
+              .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), CircleShape)
+              .testTag("camera_focus_color_swatch"),
+          )
+          Spacer(modifier = Modifier.width(5.dp))
+          Text(
+            text = activeHex,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            modifier = Modifier.testTag("camera_focus_color_hex_text"),
+          )
+        }
+      }
+    }
+  } else if (manualFocusTarget == null && smartAutoFocusTarget != null) {
+    val smartAfColor = MaterialTheme.colorScheme.primary
+    var measuredSmartBadgeWidthPx by remember { mutableIntStateOf(0) }
+
+    BoxWithConstraints(
+      modifier = Modifier
+        .fillMaxSize()
+        .testTag("camera_smart_af_indicator"),
+    ) {
+      val boxW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+      val boxH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+      val cx = boxW * smartAutoFocusTarget.clampedX
+      val cy = boxH * smartAutoFocusTarget.clampedY
+      val radiusPx = with(density) { 28.dp.toPx() }
+      val bracketHalfPx = with(density) { 38.dp.toPx() }
+      val armLenPx = with(density) { 12.dp.toPx() }
+      val gapPx = with(density) { 6.dp.toPx() }
+      val edgeMarginPx = with(density) { 8.dp.toPx() }
+      val fallbackBadgeWidthPx = with(density) { 96.dp.toPx() }
+      val effectiveBadgeW = if (measuredSmartBadgeWidthPx > 0) {
+        measuredSmartBadgeWidthPx.toFloat()
+      } else {
+        fallbackBadgeWidthPx
+      }
+      val badgeLeftPx = (cx - effectiveBadgeW / 2f).coerceIn(
+        edgeMarginPx,
+        (boxW - effectiveBadgeW - edgeMarginPx).coerceAtLeast(edgeMarginPx),
+      )
+      val badgeTopPx = (cy - bracketHalfPx - with(density) { 28.dp.toPx() } - gapPx).coerceIn(
+        edgeMarginPx,
+        (boxH - with(density) { 36.dp.toPx() }).coerceAtLeast(edgeMarginPx),
+      )
+
+      Canvas(modifier = Modifier.fillMaxSize()) {
+        val strokePx = 1.75.dp.toPx()
+        val bracketStrokePx = 2.5.dp.toPx()
+        val left = (cx - bracketHalfPx).coerceIn(edgeMarginPx, size.width - edgeMarginPx)
+        val right = (cx + bracketHalfPx).coerceIn(left + 16f, size.width - edgeMarginPx)
+        val top = (cy - bracketHalfPx).coerceIn(edgeMarginPx, size.height - edgeMarginPx)
+        val bottom = (cy + bracketHalfPx).coerceIn(top + 16f, size.height - edgeMarginPx)
+
+        // Corner tracking brackets around detected ML Kit object focus point
+        drawLine(smartAfColor, Offset(left, top + armLenPx), Offset(left, top), bracketStrokePx, StrokeCap.Round)
+        drawLine(smartAfColor, Offset(left, top), Offset(left + armLenPx, top), bracketStrokePx, StrokeCap.Round)
+        drawLine(smartAfColor, Offset(right - armLenPx, top), Offset(right, top), bracketStrokePx, StrokeCap.Round)
+        drawLine(smartAfColor, Offset(right, top), Offset(right, top + armLenPx), bracketStrokePx, StrokeCap.Round)
+        drawLine(smartAfColor, Offset(left, bottom - armLenPx), Offset(left, bottom), bracketStrokePx, StrokeCap.Round)
+        drawLine(smartAfColor, Offset(left, bottom), Offset(left + armLenPx, bottom), bracketStrokePx, StrokeCap.Round)
+        drawLine(smartAfColor, Offset(right - armLenPx, bottom), Offset(right, bottom), bracketStrokePx, StrokeCap.Round)
+        drawLine(smartAfColor, Offset(right, bottom - armLenPx), Offset(right, bottom), bracketStrokePx, StrokeCap.Round)
+
+        drawCircle(
+          color = smartAfColor.copy(alpha = 0.85f),
+          radius = radiusPx,
+          center = Offset(cx, cy),
+          style = Stroke(width = strokePx),
+        )
+        drawCircle(
+          color = smartAfColor,
+          radius = 3.5.dp.toPx(),
+          center = Offset(cx, cy),
+        )
+      }
+
+      Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.82f),
+        border = BorderStroke(1.dp, smartAfColor.copy(alpha = 0.65f)),
+        modifier = Modifier
+          .onSizeChanged { measuredSmartBadgeWidthPx = it.width }
+          .offset {
+            IntOffset(
+              x = badgeLeftPx.roundToInt(),
+              y = badgeTopPx.roundToInt(),
+            )
+          }
+          .testTag("camera_focus_mode_badge"),
+      ) {
+        Text(
+          text = smartAutoFocusTarget.badgeLabel,
+          style = MaterialTheme.typography.labelSmall,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onSurface,
+          maxLines = 1,
+          modifier = Modifier
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .testTag("camera_smart_af_badge_text"),
+        )
+      }
+    }
   }
 }
 

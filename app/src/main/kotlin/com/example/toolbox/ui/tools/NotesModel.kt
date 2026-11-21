@@ -416,31 +416,80 @@ object NotesEngine {
   }
 
   /**
+   * Parses [rawText] into one or more [NoteChecklistItem]s by splitting on return/newline
+   * characters (`\r\n`, `\n`, or `\r`), trimming whitespace and optional list/checkbox prefixes,
+   * and filtering out blank lines.
+   */
+  fun parseChecklistItems(rawText: String): List<NoteChecklistItem> {
+    return rawText
+      .split(Regex("\\r\\n|\\n|\\r"))
+      .mapNotNull { rawLine ->
+        val line = rawLine.trim()
+        if (line.isEmpty()) {
+          null
+        } else {
+          when {
+            line.startsWith("[x] ", ignoreCase = true) -> {
+              val itemText = line.substring(4).trim()
+              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = true) else null
+            }
+            line.startsWith("[ ] ") -> {
+              val itemText = line.substring(4).trim()
+              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = false) else null
+            }
+            line.startsWith("- ") || line.startsWith("* ") || line.startsWith("• ") -> {
+              val itemText = line.substring(2).trim()
+              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = false) else null
+            }
+            else -> NoteChecklistItem(text = line, isChecked = false)
+          }
+        }
+      }
+  }
+
+  /**
+   * Updates the text of the checklist item with [itemId] in [note]. If [updatedText] contains
+   * return/newline characters from a multi-line paste, splits it into multiple checklist items in place.
+   */
+  fun updateChecklistItemText(
+    note: NoteItem,
+    itemId: String,
+    updatedText: String,
+  ): NoteItem {
+    if (!updatedText.contains('\n') && !updatedText.contains('\r')) {
+      return note.copy(
+        checklistItems = note.checklistItems.map {
+          if (it.id == itemId) it.copy(text = updatedText) else it
+        },
+      )
+    }
+
+    val parsed = parseChecklistItems(updatedText)
+    val updatedList = mutableListOf<NoteChecklistItem>()
+    for (item in note.checklistItems) {
+      if (item.id == itemId) {
+        if (parsed.isEmpty()) {
+          updatedList.add(item.copy(text = ""))
+        } else {
+          updatedList.add(item.copy(text = parsed.first().text))
+          parsed.drop(1).forEach { extra ->
+            updatedList.add(extra.copy(isChecked = item.isChecked))
+          }
+        }
+      } else {
+        updatedList.add(item)
+      }
+    }
+    return note.copy(checklistItems = updatedList)
+  }
+
+  /**
    * Converts a [NoteItem] between plain text mode and interactive checklist mode.
    */
   fun toggleChecklistMode(note: NoteItem): NoteItem {
     return if (!note.isChecklist) {
       // Plain text -> Checklist: split non-blank lines into checklist items
-      val lines = note.content
-        .lines()
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
-      val items = if (lines.isEmpty()) {
-        emptyList()
-      } else {
-        lines.map { line ->
-          when {
-            line.startsWith("[x] ", ignoreCase = true) ->
-              NoteChecklistItem(text = line.substring(4).trim(), isChecked = true)
-            line.startsWith("[ ] ") ->
-              NoteChecklistItem(text = line.substring(4).trim(), isChecked = false)
-            line.startsWith("- ") || line.startsWith("* ") || line.startsWith("• ") ->
-              NoteChecklistItem(text = line.substring(2).trim(), isChecked = false)
-            else ->
-              NoteChecklistItem(text = line, isChecked = false)
-          }
-        }
-      }
+      val items = parseChecklistItems(note.content)
       note.copy(
         isChecklist = true,
         checklistItems = items,
@@ -497,6 +546,56 @@ object NotesEngine {
     return note.copy(
       checklistItems = note.checklistItems.filter { !it.isChecked },
     )
+  }
+
+  /**
+   * Returns checked items in [note] whose text matches [query] (case-insensitive),
+   * prioritizing prefix matches followed by substring matches.
+   */
+  fun getCheckedItemSuggestions(
+    note: NoteItem,
+    query: String,
+  ): List<NoteChecklistItem> {
+    val trimmed = query.trim()
+    if (trimmed.isEmpty()) return emptyList()
+    val matching = note.checkedItems.filter { item ->
+      val itemText = item.text.trim()
+      itemText.isNotEmpty() && itemText.contains(trimmed, ignoreCase = true)
+    }.distinctBy { it.text.trim().lowercase(Locale.US) }
+
+    val (prefixMatches, containsMatches) = matching.partition { item ->
+      item.text.trim().startsWith(trimmed, ignoreCase = true)
+    }
+    return prefixMatches + containsMatches
+  }
+
+  /**
+   * Restores (unchecks) a checked checklist item with [checkedItemId] back to the unchecked list.
+   * When [replacingUncheckedItemId] is provided, replaces that unchecked item's text with the
+   * suggested checked item's text and removes the checked item from the checked list.
+   */
+  fun applyCheckedItemSuggestion(
+    note: NoteItem,
+    checkedItemId: String,
+    replacingUncheckedItemId: String? = null,
+  ): NoteItem {
+    val target = note.checkedItems.firstOrNull { it.id == checkedItemId } ?: return note
+    val updatedItems = if (replacingUncheckedItemId != null) {
+      note.checklistItems
+        .filterNot { it.id == checkedItemId }
+        .map { item ->
+          if (item.id == replacingUncheckedItemId) {
+            item.copy(text = target.text, isChecked = false)
+          } else {
+            item
+          }
+        }
+    } else {
+      note.checklistItems.map { item ->
+        if (item.id == checkedItemId) item.copy(isChecked = false) else item
+      }
+    }
+    return note.copy(checklistItems = updatedItems)
   }
 
   /**

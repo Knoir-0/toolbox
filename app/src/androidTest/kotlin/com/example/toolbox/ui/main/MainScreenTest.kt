@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -16,6 +18,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeLeft
@@ -1330,9 +1333,10 @@ class MainScreenTest {
       composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("files_screen").assertIsDisplayed()
 
-      // 3. Text/Markdown file menu shows Add Note (without Import to To Do), and single-item Copy populates Paste bar
+      // 3. Text/Markdown file menu shows Add Note (without Edit / View or Import to To Do), and single-item Copy populates Paste bar
       composeTestRule.onNodeWithTag("file_options_checklist.md").performClick()
       composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("action_edit_text").assertDoesNotExist()
       composeTestRule.onNodeWithTag("action_save_to_notes").assertIsDisplayed()
       composeTestRule.onNodeWithTag("action_import_to_todo").assertDoesNotExist()
       composeTestRule.onNodeWithTag("action_copy").performClick()
@@ -1722,5 +1726,97 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("error_logs_screen").assertDoesNotExist()
     composeTestRule.onNodeWithTag("settings_screen").assertIsDisplayed()
+  }
+
+  @Test
+  fun filesTool_tappingTextFile_opensAlignedTextEditorModalWithBottomSaveActionBar_resizesToContent_andOmitsEditViewFromMenu() {
+    val tempDir = java.io.File(composeTestRule.activity.cacheDir, "text_modal_test_${System.currentTimeMillis()}").apply {
+      mkdirs()
+    }
+    try {
+      val shortFile = java.io.File(tempDir, "short.txt").apply {
+        writeText("Single line note")
+      }
+      val mediumFile = java.io.File(tempDir, "medium.md").apply {
+        writeText((1..6).joinToString("\n") { "Medium line $it" })
+      }
+      val longFile = java.io.File(tempDir, "long.log").apply {
+        writeText((1..40).joinToString("\n") { "Long log entry line #$it with details" })
+      }
+
+      setTestContent {
+        com.example.toolbox.ui.tools.FilesScreen(initialDirectory = tempDir)
+      }
+      composeTestRule.waitForIdle()
+
+      // 1. Context menu on text file does not contain "Edit / View" option
+      composeTestRule.onNodeWithTag("file_options_short.txt").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("action_edit_text").assertDoesNotExist()
+      composeTestRule.onNodeWithText("Edit / View").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("action_save_to_notes").assertIsDisplayed()
+      // Dismiss context menu by tapping the file item or back
+      composeTestRule.runOnUiThread {
+        composeTestRule.activity.onBackPressedDispatcher.onBackPressed()
+      }
+      composeTestRule.waitForIdle()
+
+      // 2. Tap short text file -> opens TextEditorDialog modal by default
+      composeTestRule.onNodeWithTag("file_item_short.txt").performClick()
+      composeTestRule.waitForIdle()
+
+      val modalNode = composeTestRule.onNodeWithTag("text_editor_modal")
+      val inputNode = composeTestRule.onNodeWithTag("text_editor_input")
+      val actionBarNode = composeTestRule.onNodeWithTag("text_editor_action_bar")
+      val saveButtonNode = composeTestRule.onNodeWithTag("text_editor_save_button")
+
+      modalNode.assertIsDisplayed()
+      composeTestRule.onNodeWithTag("text_editor_modal_title").assertTextEquals("short.txt")
+      inputNode.assertIsDisplayed()
+      actionBarNode.assertIsDisplayed()
+      saveButtonNode.assertIsDisplayed()
+      saveButtonNode.assertIsNotEnabled()
+
+      // Verify Save button is inside the bottom action bar below the text editor input
+      val inputBoundsShort = inputNode.fetchSemanticsNode().boundsInRoot
+      val saveBoundsShort = saveButtonNode.fetchSemanticsNode().boundsInRoot
+      val shortModalHeight = modalNode.fetchSemanticsNode().boundsInRoot.height
+      assertTrue(saveBoundsShort.top >= inputBoundsShort.bottom)
+
+      // Edit text and save via the bottom Save button
+      inputNode.performTextReplacement("Updated short line")
+      composeTestRule.waitForIdle()
+      saveButtonNode.assertIsEnabled()
+      saveButtonNode.performClick()
+      composeTestRule.waitForIdle()
+      assertEquals("Updated short line", shortFile.readText())
+      saveButtonNode.assertIsNotEnabled()
+
+      // Close modal
+      composeTestRule.onNodeWithTag("text_editor_close_button").performClick()
+      composeTestRule.waitForIdle()
+      modalNode.assertDoesNotExist()
+
+      // 3. Tap medium text file (6 lines) -> modal resizes taller than 1-line modal
+      composeTestRule.onNodeWithTag("file_item_medium.md").performClick()
+      composeTestRule.waitForIdle()
+      val mediumModalHeight = composeTestRule.onNodeWithTag("text_editor_modal").fetchSemanticsNode().boundsInRoot.height
+      assertTrue(mediumModalHeight > shortModalHeight)
+
+      composeTestRule.onNodeWithTag("text_editor_cancel_button").performClick()
+      composeTestRule.waitForIdle()
+
+      // 4. Tap long text file (40 lines) -> modal grows up to max cap (does not fill entire screen) and scrolls
+      composeTestRule.onNodeWithTag("file_item_long.log").performClick()
+      composeTestRule.waitForIdle()
+      val longModalHeight = composeTestRule.onNodeWithTag("text_editor_modal").fetchSemanticsNode().boundsInRoot.height
+      assertTrue(longModalHeight > mediumModalHeight)
+      composeTestRule.onNodeWithTag("text_editor_save_button").assertIsDisplayed()
+
+      composeTestRule.onNodeWithTag("text_editor_close_button").performClick()
+      composeTestRule.waitForIdle()
+    } finally {
+      tempDir.deleteRecursively()
+    }
   }
 }

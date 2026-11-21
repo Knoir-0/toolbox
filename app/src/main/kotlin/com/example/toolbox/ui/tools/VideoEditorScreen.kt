@@ -804,8 +804,19 @@ fun VideoEditorScreen(
 
   // Export Settings Dialog
   if (showExportDialog && currentMetadata != null) {
+    val cacheImportDirPath = remember(context) {
+      File(context.cacheDir, "converter_imports").absolutePath
+    }
+    val resolvedOutputDir = remember(currentMetadata.file, initialDirectory, isInspectionMode) {
+      currentMetadata.file.parentFile?.takeIf { dir ->
+        dir.absolutePath != cacheImportDirPath && ((dir.exists() && dir.canWrite()) || isInspectionMode)
+      }
+        ?: initialDirectory
+        ?: VideoEditorEngine.getDefaultExportDirectory(context)
+    }
     ExportVideoDialog(
       metadata = currentMetadata,
+      outputDirectory = resolvedOutputDir,
       editState = editState,
       initialOptions = exportOptions,
       onDismiss = { showExportDialog = false },
@@ -816,11 +827,10 @@ fun VideoEditorScreen(
         exportProgress = 0.02f
 
         val job = coroutineScope.launch {
-          val outDir = VideoEditorEngine.getDefaultExportDirectory(context)
           val result = VideoEditorEngine.exportVideo(
             context = context,
             sourceFile = currentMetadata.file,
-            outputDir = outDir,
+            outputDir = resolvedOutputDir,
             desiredStem = chosenStem,
             metadata = currentMetadata,
             editState = editState,
@@ -2663,15 +2673,25 @@ private fun RecentVideoExportBanner(
 @Composable
 private fun ExportVideoDialog(
   metadata: VideoMetadata,
+  outputDirectory: File,
   editState: VideoEditState,
   initialOptions: VideoExportOptions,
   onDismiss: () -> Unit,
   onConfirmExport: (String, VideoExportOptions) -> Unit,
 ) {
-  val defaultStem = remember(metadata.file.name) {
-    "${VideoEditorEngine.extractFileStem(metadata.file.name)}_edited"
+  var options by remember { mutableStateOf(initialOptions) }
+  val defaultStem = remember(metadata.file, outputDirectory, initialOptions.format) {
+    val base = VideoEditorEngine.extractFileStem(metadata.file.name)
+    val resolved = VideoEditorEngine.resolveOutputFile(
+      outputDir = outputDirectory,
+      desiredStem = base,
+      extension = initialOptions.format.extension,
+      sourceFile = metadata.file,
+      forceEditedPostfix = true,
+    )
+    VideoEditorEngine.extractFileStem(resolved.name)
   }
-  var fileNameField by remember {
+  var fileNameField by remember(defaultStem) {
     mutableStateOf(
       TextFieldValue(
         text = defaultStem,
@@ -2679,7 +2699,6 @@ private fun ExportVideoDialog(
       )
     )
   }
-  var options by remember { mutableStateOf(initialOptions) }
   val focusRequester = remember { FocusRequester() }
 
   LaunchedEffect(Unit) {

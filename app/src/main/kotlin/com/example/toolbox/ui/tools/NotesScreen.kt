@@ -124,6 +124,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -140,6 +141,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -162,8 +164,10 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -595,7 +599,6 @@ fun NotesScreen(
         val bottomInRoot = (coords.positionInRoot().y + coords.size.height).roundToInt()
         rootBottomInsetPx = (rootHeight - bottomInRoot).coerceAtLeast(0)
       }
-      .padding(bottom = extraImeBottomPadding)
       .testTag("notes_screen"),
   ) {
     val activeSingleNote = editingNote
@@ -603,6 +606,7 @@ fun NotesScreen(
       SingleNoteView(
         initialNote = activeSingleNote,
         availableLabels = allLabels,
+        imeBottomPadding = extraImeBottomPadding,
         onSaveAndDismiss = { updatedDraft, newlyCreatedLabels ->
           val updatedNotes = NotesEngine.saveOrDiscardNote(notes, updatedDraft)
           val mergedLabels = (savedLabels + newlyCreatedLabels)
@@ -639,7 +643,11 @@ fun NotesScreen(
         },
       )
     } else {
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(bottom = extraImeBottomPadding),
+    ) {
       // 1. Standard Tool Header or Multi-Selection Action Toolbar
       if (isSelectionMode) {
         NotesSelectionTopBar(
@@ -2837,23 +2845,8 @@ private fun AddNoteSlideUpPanel(
         autoFocusTitle = autoFocusTitle,
         minContentLines = 3,
         showInlineChecklistInput = true,
-        showEditedTimestampBeforeInlineChecklistInput = true,
         onChecklistDragActiveChange = { isChecklistDragActive = it },
       )
-
-      if (!draft.isChecklist) {
-        Box(
-          modifier = Modifier.fillMaxWidth(),
-          contentAlignment = Alignment.CenterEnd,
-        ) {
-          Text(
-            text = "Edited ${NotesEngine.formatTimestamp(draft.updatedAt)}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.testTag("editor_timestamp"),
-          )
-        }
-      }
 
       NoteColorPickerSection(
         selectedColor = draft.color,
@@ -2873,9 +2866,23 @@ private fun AddNoteSlideUpPanel(
       modifier = Modifier
         .fillMaxWidth()
         .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp),
-      horizontalArrangement = Arrangement.End,
+      horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically,
     ) {
+      IconButton(
+        onClick = onDiscard,
+        modifier = Modifier
+          .size(28.dp)
+          .testTag("add_note_cancel_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Close,
+          contentDescription = "Discard note",
+          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.size(18.dp),
+        )
+      }
+
       FilledIconButton(
         onClick = onSaveAndDismiss,
         shape = CircleShape,
@@ -2905,6 +2912,7 @@ private fun AddNoteSlideUpPanel(
 private fun SingleNoteView(
   initialNote: NoteItem,
   availableLabels: List<String>,
+  imeBottomPadding: androidx.compose.ui.unit.Dp = 0.dp,
   onSaveAndDismiss: (NoteItem, List<String>) -> Unit,
   onMoveToTrash: (String) -> Unit,
   onDeletePermanently: (String) -> Unit,
@@ -2914,6 +2922,19 @@ private fun SingleNoteView(
   var draft by remember(initialNote.id) { mutableStateOf(initialNote) }
   var newlyCreatedLabels by remember(initialNote.id) { mutableStateOf(listOf<String>()) }
   var newChecklistItemText by remember(initialNote.id) { mutableStateOf("") }
+  var focusContentAtEndAction by remember(initialNote.id) { mutableStateOf<(() -> Unit)?>(null) }
+  val checklistInputFocusRequester = remember { FocusRequester() }
+  val keyboardController = LocalSoftwareKeyboardController.current
+  val handleEmptySpaceTap: () -> Unit = {
+    if (draft.isChecklist) {
+      if (!draft.isTrashed) {
+        runCatching { checklistInputFocusRequester.requestFocus() }
+        keyboardController?.show()
+      }
+    } else {
+      focusContentAtEndAction?.invoke()
+    }
+  }
 
   BackHandler {
     onSaveAndDismiss(draft, newlyCreatedLabels)
@@ -3067,26 +3088,47 @@ private fun SingleNoteView(
     )
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-    Column(
+    Box(
       modifier = Modifier
         .weight(1f)
         .fillMaxWidth()
-        .verticalScroll(rememberScrollState())
-        .padding(horizontal = 16.dp, vertical = 12.dp),
+        .clickable(
+          interactionSource = remember { MutableInteractionSource() },
+          indication = null,
+          onClick = handleEmptySpaceTap,
+        )
+        .testTag("single_note_editor_empty_space"),
     ) {
-      NoteEditorContent(
-        draft = draft,
-        onDraftChange = { draft = it },
-        autoFocusTitle = false,
-        minContentLines = 5,
-        showInlineChecklistInput = false,
-        showEditedTimestampBeforeInlineChecklistInput = false,
-      )
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .verticalScroll(rememberScrollState())
+          .padding(
+            start = 16.dp,
+            end = 16.dp,
+            top = 12.dp,
+            bottom = 12.dp + imeBottomPadding,
+          ),
+      ) {
+        NoteEditorContent(
+          draft = draft,
+          onDraftChange = { draft = it },
+          autoFocusTitle = false,
+          minContentLines = 1,
+          showInlineChecklistInput = false,
+          onProvideFocusContentAtEnd = { focusContentAtEndAction = it },
+        )
+      }
     }
 
     Box(
       modifier = Modifier
         .fillMaxWidth()
+        .clickable(
+          interactionSource = remember { MutableInteractionSource() },
+          indication = null,
+          onClick = handleEmptySpaceTap,
+        )
         .padding(horizontal = 16.dp, vertical = 6.dp),
       contentAlignment = Alignment.CenterEnd,
     ) {
@@ -3110,11 +3152,21 @@ private fun SingleNoteView(
           text = newChecklistItemText,
           onTextChange = { newChecklistItemText = it },
           onAddItem = { itemText ->
-            draft = draft.copy(
-              checklistItems = draft.checklistItems + NoteChecklistItem(text = itemText),
-            )
+            val parsedItems = NotesEngine.parseChecklistItems(itemText)
+            if (parsedItems.isNotEmpty()) {
+              draft = draft.copy(
+                checklistItems = draft.checklistItems + parsedItems,
+              )
+            }
             newChecklistItemText = ""
           },
+          checkedSuggestions = NotesEngine.getCheckedItemSuggestions(draft, newChecklistItemText),
+          onSelectCheckedSuggestion = { suggestedItem ->
+            draft = NotesEngine.applyCheckedItemSuggestion(draft, suggestedItem.id)
+            newChecklistItemText = ""
+          },
+          suggestionsAbove = true,
+          inputFocusRequester = checklistInputFocusRequester,
           modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -3159,9 +3211,12 @@ private fun ChecklistItemInputRow(
   text: String,
   onTextChange: (String) -> Unit,
   onAddItem: (String) -> Unit,
+  checkedSuggestions: List<NoteChecklistItem> = emptyList(),
+  onSelectCheckedSuggestion: (NoteChecklistItem) -> Unit = {},
+  suggestionsAbove: Boolean = false,
+  inputFocusRequester: FocusRequester = remember { FocusRequester() },
   modifier: Modifier = Modifier,
 ) {
-  val inputFocusRequester = remember { FocusRequester() }
   val trimmed = text.trim()
   val canAdd = trimmed.isNotEmpty()
   val submit = {
@@ -3169,114 +3224,194 @@ private fun ChecklistItemInputRow(
       onAddItem(trimmed)
     }
   }
+  Column(
+    modifier = modifier.fillMaxWidth(),
+    verticalArrangement = Arrangement.spacedBy(6.dp),
+  ) {
+    if (suggestionsAbove && checkedSuggestions.isNotEmpty()) {
+      CheckedChecklistSuggestionsList(
+        suggestions = checkedSuggestions,
+        onSelectSuggestion = onSelectCheckedSuggestion,
+      )
+    }
+
+    Surface(
+      shape = RoundedCornerShape(28.dp),
+      color = MaterialTheme.colorScheme.surfaceContainerHigh,
+      tonalElevation = 6.dp,
+      border = BorderStroke(
+        width = 1.dp,
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+      ),
+      modifier = Modifier
+        .fillMaxWidth()
+        .testTag("editor_checklist_input_card"),
+    ) {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Row(
+          modifier = Modifier
+            .weight(1f)
+            .padding(vertical = 4.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Box(
+            modifier = Modifier
+              .size(28.dp)
+              .clip(CircleShape)
+              .background(
+                if (canAdd) {
+                  MaterialTheme.colorScheme.primary
+                } else {
+                  MaterialTheme.colorScheme.primaryContainer
+                },
+              )
+              .clickable {
+                if (canAdd) {
+                  submit()
+                } else {
+                  inputFocusRequester.requestFocus()
+                }
+              }
+              .testTag("editor_add_checklist_item"),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Add,
+              contentDescription = "Add list item",
+              tint = if (canAdd) {
+                MaterialTheme.colorScheme.onPrimary
+              } else {
+                MaterialTheme.colorScheme.onPrimaryContainer
+              },
+              modifier = Modifier.size(18.dp),
+            )
+          }
+
+          BasicTextField(
+            value = text,
+            onValueChange = onTextChange,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(
+              fontWeight = FontWeight.Medium,
+              color = MaterialTheme.colorScheme.onSurface,
+            ),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { submit() }),
+            decorationBox = { innerTextField ->
+              Box(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(vertical = 6.dp),
+                contentAlignment = Alignment.CenterStart,
+              ) {
+                if (text.isEmpty()) {
+                  Text(
+                    text = "List item...",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+                innerTextField()
+              }
+            },
+            modifier = Modifier
+              .weight(1f)
+              .focusRequester(inputFocusRequester)
+              .testTag("editor_new_checklist_input"),
+          )
+        }
+
+        if (text.isNotEmpty()) {
+          Box(
+            modifier = Modifier
+              .size(28.dp)
+              .clip(CircleShape)
+              .clickable { onTextChange("") },
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Clear,
+              contentDescription = "Clear list item input",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(18.dp),
+            )
+          }
+        }
+      }
+    }
+
+    if (!suggestionsAbove && checkedSuggestions.isNotEmpty()) {
+      CheckedChecklistSuggestionsList(
+        suggestions = checkedSuggestions,
+        onSelectSuggestion = onSelectCheckedSuggestion,
+      )
+    }
+  }
+}
+
+@Composable
+private fun CheckedChecklistSuggestionsList(
+  suggestions: List<NoteChecklistItem>,
+  onSelectSuggestion: (NoteChecklistItem) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  if (suggestions.isEmpty()) return
   Surface(
-    shape = RoundedCornerShape(28.dp),
-    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    tonalElevation = 6.dp,
+    shape = RoundedCornerShape(16.dp),
+    color = MaterialTheme.colorScheme.surfaceContainer,
+    tonalElevation = 3.dp,
     border = BorderStroke(
       width = 1.dp,
       color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
     ),
     modifier = modifier
       .fillMaxWidth()
-      .testTag("editor_checklist_input_card"),
+      .testTag("editor_checked_suggestions"),
   ) {
-    Row(
+    Column(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
+        .padding(vertical = 4.dp),
     ) {
-      Row(
-        modifier = Modifier
-          .weight(1f)
-          .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        Box(
+      suggestions.forEach { item ->
+        Row(
           modifier = Modifier
-            .size(28.dp)
-            .clip(CircleShape)
-            .background(
-              if (canAdd) {
-                MaterialTheme.colorScheme.primary
-              } else {
-                MaterialTheme.colorScheme.primaryContainer
-              },
-            )
-            .clickable {
-              if (canAdd) {
-                submit()
-              } else {
-                inputFocusRequester.requestFocus()
-              }
-            }
-            .testTag("editor_add_checklist_item"),
-          contentAlignment = Alignment.Center,
+            .fillMaxWidth()
+            .clickable { onSelectSuggestion(item) }
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .testTag("editor_checked_suggestion_${item.id}"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
           Icon(
-            imageVector = Icons.Default.Add,
-            contentDescription = "Add list item",
-            tint = if (canAdd) {
-              MaterialTheme.colorScheme.onPrimary
-            } else {
-              MaterialTheme.colorScheme.onPrimaryContainer
-            },
+            imageVector = Icons.Default.CheckBox,
+            contentDescription = "Restore checked item ${item.text}",
+            tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(18.dp),
           )
-        }
-
-        BasicTextField(
-          value = text,
-          onValueChange = onTextChange,
-          textStyle = MaterialTheme.typography.bodyLarge.copy(
+          Text(
+            text = item.text,
+            style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurface,
-          ),
-          cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-          singleLine = true,
-          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-          keyboardActions = KeyboardActions(onDone = { submit() }),
-          decorationBox = { innerTextField ->
-            Box(
-              modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 6.dp),
-              contentAlignment = Alignment.CenterStart,
-            ) {
-              if (text.isEmpty()) {
-                Text(
-                  text = "List item...",
-                  style = MaterialTheme.typography.bodyLarge,
-                  fontWeight = FontWeight.Medium,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-              innerTextField()
-            }
-          },
-          modifier = Modifier
-            .weight(1f)
-            .focusRequester(inputFocusRequester)
-            .testTag("editor_new_checklist_input"),
-        )
-      }
-
-      if (text.isNotEmpty()) {
-        Box(
-          modifier = Modifier
-            .size(28.dp)
-            .clip(CircleShape)
-            .clickable { onTextChange("") },
-          contentAlignment = Alignment.Center,
-        ) {
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+          )
           Icon(
-            imageVector = Icons.Default.Clear,
-            contentDescription = "Clear list item input",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
+            imageVector = Icons.Default.Add,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(16.dp),
           )
         }
       }
@@ -3356,8 +3491,8 @@ private fun NoteEditorContent(
   autoFocusTitle: Boolean,
   minContentLines: Int = 5,
   showInlineChecklistInput: Boolean = true,
-  showEditedTimestampBeforeInlineChecklistInput: Boolean = false,
   onChecklistDragActiveChange: (Boolean) -> Unit = {},
+  onProvideFocusContentAtEnd: ((() -> Unit) -> Unit)? = null,
 ) {
   var newChecklistItemText by remember(draft.id) { mutableStateOf("") }
   var isCheckedSectionExpanded by remember(draft.id) { mutableStateOf(true) }
@@ -3421,7 +3556,38 @@ private fun NoteEditorContent(
   }
 
   val titleFocusRequester = remember { FocusRequester() }
+  val contentFocusRequester = remember { FocusRequester() }
   val keyboardController = LocalSoftwareKeyboardController.current
+  var contentFieldValue by remember(draft.id) {
+    mutableStateOf(
+      TextFieldValue(
+        text = draft.content,
+        selection = TextRange(draft.content.length),
+      ),
+    )
+  }
+  if (contentFieldValue.text != draft.content) {
+    contentFieldValue = contentFieldValue.copy(
+      text = draft.content,
+      selection = TextRange(draft.content.length),
+    )
+  }
+  val focusContentAtEnd = remember(draft.id, contentFocusRequester, keyboardController) {
+    {
+      val liveDraft = currentDraft
+      if (!liveDraft.isChecklist) {
+        contentFieldValue = TextFieldValue(
+          text = liveDraft.content,
+          selection = TextRange(liveDraft.content.length),
+        )
+        runCatching { contentFocusRequester.requestFocus() }
+        keyboardController?.show()
+      }
+    }
+  }
+  SideEffect {
+    onProvideFocusContentAtEnd?.invoke(focusContentAtEnd)
+  }
 
   LaunchedEffect(autoFocusTitle, draft.id) {
     if (autoFocusTitle) {
@@ -3504,13 +3670,7 @@ private fun NoteEditorContent(
                 )
               },
               onTextChange = { updatedText ->
-                onDraftChange(
-                  draft.copy(
-                    checklistItems = draft.checklistItems.map {
-                      if (it.id == item.id) it.copy(text = updatedText) else it
-                    },
-                  ),
-                )
+                onDraftChange(NotesEngine.updateChecklistItemText(draft, item.id, updatedText))
               },
               onDelete = {
                 onDraftChange(
@@ -3519,22 +3679,16 @@ private fun NoteEditorContent(
                   ),
                 )
               },
-            )
-          }
-        }
-
-        if (showEditedTimestampBeforeInlineChecklistInput && showInlineChecklistInput) {
-          Box(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(top = 4.dp, bottom = 2.dp),
-            contentAlignment = Alignment.CenterEnd,
-          ) {
-            Text(
-              text = "Edited ${NotesEngine.formatTimestamp(draft.updatedAt)}",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier.testTag("editor_timestamp"),
+              checkedSuggestions = NotesEngine.getCheckedItemSuggestions(draft, item.text),
+              onSelectCheckedSuggestion = { suggestedItem ->
+                onDraftChange(
+                  NotesEngine.applyCheckedItemSuggestion(
+                    note = draft,
+                    checkedItemId = suggestedItem.id,
+                    replacingUncheckedItemId = item.id,
+                  ),
+                )
+              },
             )
           }
         }
@@ -3545,11 +3699,19 @@ private fun NoteEditorContent(
             text = newChecklistItemText,
             onTextChange = { newChecklistItemText = it },
             onAddItem = { itemText ->
-              onDraftChange(
-                draft.copy(
-                  checklistItems = draft.checklistItems + NoteChecklistItem(text = itemText),
-                ),
-              )
+              val parsedItems = NotesEngine.parseChecklistItems(itemText)
+              if (parsedItems.isNotEmpty()) {
+                onDraftChange(
+                  draft.copy(
+                    checklistItems = draft.checklistItems + parsedItems,
+                  ),
+                )
+              }
+              newChecklistItemText = ""
+            },
+            checkedSuggestions = NotesEngine.getCheckedItemSuggestions(draft, newChecklistItemText),
+            onSelectCheckedSuggestion = { suggestedItem ->
+              onDraftChange(NotesEngine.applyCheckedItemSuggestion(draft, suggestedItem.id))
               newChecklistItemText = ""
             },
           )
@@ -3648,13 +3810,7 @@ private fun NoteEditorContent(
                     )
                   },
                   onTextChange = { updatedText ->
-                    onDraftChange(
-                      draft.copy(
-                        checklistItems = draft.checklistItems.map {
-                          if (it.id == item.id) it.copy(text = updatedText) else it
-                        },
-                      ),
-                    )
+                    onDraftChange(NotesEngine.updateChecklistItemText(draft, item.id, updatedText))
                   },
                   onDelete = {
                     onDraftChange(
@@ -3671,8 +3827,13 @@ private fun NoteEditorContent(
       }
     } else {
       BasicTextField(
-        value = draft.content,
-        onValueChange = { onDraftChange(draft.copy(content = it)) },
+        value = contentFieldValue,
+        onValueChange = { updatedValue ->
+          contentFieldValue = updatedValue
+          if (updatedValue.text != draft.content) {
+            onDraftChange(draft.copy(content = updatedValue.text))
+          }
+        },
         textStyle = MaterialTheme.typography.bodyLarge.copy(
           color = MaterialTheme.colorScheme.onSurface,
         ),
@@ -3684,7 +3845,7 @@ private fun NoteEditorContent(
               .fillMaxWidth()
               .padding(vertical = 4.dp),
           ) {
-            if (draft.content.isEmpty()) {
+            if (contentFieldValue.text.isEmpty()) {
               Text(
                 text = "Take a note...",
                 style = MaterialTheme.typography.bodyLarge,
@@ -3696,6 +3857,7 @@ private fun NoteEditorContent(
         },
         modifier = Modifier
           .fillMaxWidth()
+          .focusRequester(contentFocusRequester)
           .testTag("editor_content_input"),
       )
     }
@@ -3881,136 +4043,163 @@ private fun ChecklistEditorRow(
   onToggleChecked: () -> Unit,
   onTextChange: (String) -> Unit,
   onDelete: () -> Unit,
+  checkedSuggestions: List<NoteChecklistItem> = emptyList(),
+  onSelectCheckedSuggestion: (NoteChecklistItem) -> Unit = {},
 ) {
   val currentOnDragHandlePressedChange by rememberUpdatedState(onDragHandlePressedChange)
   val currentOnStartDrag by rememberUpdatedState(onStartDrag)
   val currentOnDrag by rememberUpdatedState(onDrag)
   val currentOnEndDrag by rememberUpdatedState(onEndDrag)
+  var isInputFocused by remember(item.id) { mutableStateOf(false) }
+  var hasTypedWhileFocused by remember(item.id) { mutableStateOf(false) }
 
-  Surface(
-    shape = CircleShape,
-    color = if (isBeingDragged) {
-      MaterialTheme.colorScheme.surfaceContainerHigh
-    } else {
-      Color.Transparent
-    },
-    tonalElevation = if (isBeingDragged) 4.dp else 0.dp,
-    border = if (isBeingDragged) {
-      BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
-    } else {
-      null
-    },
-    modifier = Modifier
-      .fillMaxWidth()
-      .zIndex(if (isBeingDragged) 2f else 0f)
-      .graphicsLayer {
-        translationY = if (isBeingDragged) dragOffsetY else 0f
-      }
-      .onGloballyPositioned { coords ->
-        val height = coords.size.height.toFloat()
-        if (height > 0f) {
-          onHeightMeasured(height)
-        }
-      }
-      .testTag("editor_checklist_row_${item.id}"),
-  ) {
-    Row(
+  Column(modifier = Modifier.fillMaxWidth()) {
+    Surface(
+      shape = CircleShape,
+      color = if (isBeingDragged) {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+      } else {
+        Color.Transparent
+      },
+      tonalElevation = if (isBeingDragged) 4.dp else 0.dp,
+      border = if (isBeingDragged) {
+        BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+      } else {
+        null
+      },
       modifier = Modifier
         .fillMaxWidth()
-        .padding(start = 8.dp, end = 6.dp, top = 0.dp, bottom = 0.dp),
-      verticalAlignment = Alignment.CenterVertically,
+        .zIndex(if (isBeingDragged) 2f else 0f)
+        .graphicsLayer {
+          translationY = if (isBeingDragged) dragOffsetY else 0f
+        }
+        .onGloballyPositioned { coords ->
+          val height = coords.size.height.toFloat()
+          if (height > 0f) {
+            onHeightMeasured(height)
+          }
+        }
+        .testTag("editor_checklist_row_${item.id}"),
     ) {
-      Box(
+      Row(
         modifier = Modifier
-          .size(28.dp)
-          .clip(CircleShape)
-          .pointerInput(item.id) {
-            awaitPointerEventScope {
-              while (true) {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                currentOnDragHandlePressedChange(event.changes.any { it.pressed })
-              }
-            }
-          }
-          .pointerInput(item.id) {
-            var draggingThis = false
-            try {
-              detectDragGestures(
-                onDragStart = {
-                  draggingThis = true
-                  currentOnStartDrag()
-                },
-                onDrag = { change, dragAmount ->
-                  change.consume()
-                  currentOnDrag(dragAmount.y)
-                },
-                onDragEnd = {
-                  draggingThis = false
-                  currentOnDragHandlePressedChange(false)
-                  currentOnEndDrag()
-                },
-                onDragCancel = {
-                  draggingThis = false
-                  currentOnDragHandlePressedChange(false)
-                  currentOnEndDrag()
-                },
-              )
-            } finally {
-              if (draggingThis) {
-                currentOnDragHandlePressedChange(false)
-                currentOnEndDrag()
-              }
-            }
-          }
-          .testTag("editor_checklist_drag_${item.id}"),
-        contentAlignment = Alignment.Center,
+          .fillMaxWidth()
+          .padding(start = 8.dp, end = 6.dp, top = 0.dp, bottom = 0.dp),
+        verticalAlignment = Alignment.CenterVertically,
       ) {
-        Icon(
-          imageVector = Icons.Default.DragHandle,
-          contentDescription = "Drag to reorder item",
-          tint = if (isBeingDragged) {
-            MaterialTheme.colorScheme.primary
-          } else {
-            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-          },
-          modifier = Modifier.size(16.dp),
-        )
-      }
+        Box(
+          modifier = Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .pointerInput(item.id) {
+              awaitPointerEventScope {
+                while (true) {
+                  val event = awaitPointerEvent(PointerEventPass.Initial)
+                  currentOnDragHandlePressedChange(event.changes.any { it.pressed })
+                }
+              }
+            }
+            .pointerInput(item.id) {
+              var draggingThis = false
+              try {
+                detectDragGestures(
+                  onDragStart = {
+                    draggingThis = true
+                    currentOnStartDrag()
+                  },
+                  onDrag = { change, dragAmount ->
+                    change.consume()
+                    currentOnDrag(dragAmount.y)
+                  },
+                  onDragEnd = {
+                    draggingThis = false
+                    currentOnDragHandlePressedChange(false)
+                    currentOnEndDrag()
+                  },
+                  onDragCancel = {
+                    draggingThis = false
+                    currentOnDragHandlePressedChange(false)
+                    currentOnEndDrag()
+                  },
+                )
+              } finally {
+                if (draggingThis) {
+                  currentOnDragHandlePressedChange(false)
+                  currentOnEndDrag()
+                }
+              }
+            }
+            .testTag("editor_checklist_drag_${item.id}"),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.DragHandle,
+            contentDescription = "Drag to reorder item",
+            tint = if (isBeingDragged) {
+              MaterialTheme.colorScheme.primary
+            } else {
+              MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+            },
+            modifier = Modifier.size(16.dp),
+          )
+        }
 
-      Checkbox(
-        checked = item.isChecked,
-        onCheckedChange = { onToggleChecked() },
-        modifier = Modifier
-          .size(32.dp)
-          .testTag("editor_checkbox_${item.id}"),
-      )
-      BasicTextField(
-        value = item.text,
-        onValueChange = onTextChange,
-        textStyle = MaterialTheme.typography.bodyLarge.copy(
-          color = if (item.isChecked) {
-            MaterialTheme.colorScheme.onSurfaceVariant
-          } else {
-            MaterialTheme.colorScheme.onSurface
-          },
-          textDecoration = if (item.isChecked) TextDecoration.LineThrough else TextDecoration.None,
-        ),
-        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-        modifier = Modifier
-          .weight(1f)
-          .padding(horizontal = 4.dp, vertical = 4.dp),
-      )
-      IconButton(
-        onClick = onDelete,
-        modifier = Modifier.size(28.dp),
-      ) {
-        Icon(
-          imageVector = Icons.Default.Close,
-          contentDescription = "Remove item",
-          tint = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.size(16.dp),
+        Checkbox(
+          checked = item.isChecked,
+          onCheckedChange = { onToggleChecked() },
+          modifier = Modifier
+            .size(32.dp)
+            .testTag("editor_checkbox_${item.id}"),
         )
+        BasicTextField(
+          value = item.text,
+          onValueChange = { updated ->
+            hasTypedWhileFocused = true
+            onTextChange(updated)
+          },
+          textStyle = MaterialTheme.typography.bodyLarge.copy(
+            color = if (item.isChecked) {
+              MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+              MaterialTheme.colorScheme.onSurface
+            },
+            textDecoration = if (item.isChecked) TextDecoration.LineThrough else TextDecoration.None,
+          ),
+          cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+          modifier = Modifier
+            .weight(1f)
+            .onFocusChanged { focusState ->
+              isInputFocused = focusState.isFocused
+              if (!focusState.isFocused) {
+                hasTypedWhileFocused = false
+              }
+            }
+            .padding(horizontal = 4.dp, vertical = 4.dp)
+            .testTag("editor_checklist_text_${item.id}"),
+        )
+        IconButton(
+          onClick = onDelete,
+          modifier = Modifier.size(28.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = "Remove item",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp),
+          )
+        }
       }
+    }
+
+    if (!item.isChecked && isInputFocused && hasTypedWhileFocused && checkedSuggestions.isNotEmpty()) {
+      CheckedChecklistSuggestionsList(
+        suggestions = checkedSuggestions,
+        onSelectSuggestion = { suggestedItem ->
+          hasTypedWhileFocused = false
+          onSelectCheckedSuggestion(suggestedItem)
+        },
+        modifier = Modifier.padding(start = 36.dp, end = 6.dp, top = 2.dp, bottom = 4.dp),
+      )
     }
   }
 }

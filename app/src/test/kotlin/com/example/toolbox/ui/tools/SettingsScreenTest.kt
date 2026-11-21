@@ -389,6 +389,7 @@ class SettingsScreenTest {
     assertEquals(ToolCategory.AUDIO_AND_SOUND, Tool.MUSIC.category)
     assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.PDF_VIEWER.category)
     assertEquals(ToolCategory.REMOTES_AND_DEVICES, Tool.OBD2_SCANNER.category)
+    assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.ELEMENTS.category)
     assertEquals(ToolCategory.SYSTEM, Tool.SEARCH.category)
     assertEquals(ToolCategory.SYSTEM, Tool.SETTINGS.category)
   }

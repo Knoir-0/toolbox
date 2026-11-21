@@ -124,6 +124,7 @@ import com.example.toolbox.ui.tools.ChordBookScreen
 import com.example.toolbox.ui.tools.ColorPickerScreen
 import com.example.toolbox.ui.tools.DecibelMeterScreen
 import com.example.toolbox.ui.tools.DiceRollerScreen
+import com.example.toolbox.ui.tools.ElementsScreen
 import com.example.toolbox.ui.tools.FileConverterScreen
 import com.example.toolbox.ui.tools.FilesScreen
 import com.example.toolbox.ui.tools.GalleryScreen
@@ -2677,6 +2678,11 @@ fun ToolContentView(
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.OBD2_SCANNER -> Obd2ScannerScreen(
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.ELEMENTS -> ElementsScreen(
+        onOpenCalculator = onOpenCalculator,
+        onOpenUnitConverter = onOpenUnitConverter,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.SEARCH -> SearchScreen(

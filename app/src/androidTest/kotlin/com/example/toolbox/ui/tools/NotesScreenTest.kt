@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -51,7 +52,7 @@ class NotesScreenTest {
     composeTestRule.onNodeWithTag("editor_title_input").assertIsFocused()
     composeTestRule.onNodeWithTag("editor_title_input").performTextInput("Trail Mix Recipe")
     composeTestRule.onNodeWithTag("editor_content_input").performTextInput("Almonds, cashews, dark chocolate")
-    composeTestRule.onNodeWithTag("editor_timestamp").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("editor_timestamp").assertDoesNotExist()
     composeTestRule.onNodeWithTag("editor_color_PEACH").performClick()
     composeTestRule.onNodeWithTag("new_pin_note_button").performClick()
     composeTestRule.onNodeWithTag("editor_toggle_label_picker").performClick()
@@ -61,13 +62,29 @@ class NotesScreenTest {
     composeTestRule.onNodeWithTag("editor_add_label_confirm").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("editor_label_chip_snacks").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("add_note_confirm_button").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("add_note_confirm_button").performClick()
+    val cancelButtonNode = composeTestRule.onNodeWithTag("add_note_cancel_button")
+    val confirmButtonNode = composeTestRule.onNodeWithTag("add_note_confirm_button")
+    cancelButtonNode.assertIsDisplayed()
+    confirmButtonNode.assertIsDisplayed()
+    val cancelBounds = cancelButtonNode.fetchSemanticsNode().boundsInRoot
+    val confirmBounds = confirmButtonNode.fetchSemanticsNode().boundsInRoot
+    assertTrue("Cancel button should be to the left of confirm button", cancelBounds.right < confirmBounds.left)
+    confirmButtonNode.performClick()
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithText("Trail Mix Recipe").assertIsDisplayed()
     composeTestRule.onNodeWithText("Almonds, cashews, dark chocolate").assertIsDisplayed()
     composeTestRule.onNodeWithTag("notes_section_pinned").assertIsDisplayed()
+
+    // Tapping the bottom-left X button in the add note view discards the draft and closes the panel
+    composeTestRule.onNodeWithTag("take_a_note_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("add_note_panel").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("editor_title_input").performTextInput("Discarded Draft")
+    composeTestRule.onNodeWithTag("add_note_cancel_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("add_note_panel").assertIsNotDisplayed()
+    composeTestRule.onNodeWithText("Discarded Draft").assertDoesNotExist()
   }
 
   @Test
@@ -109,6 +126,20 @@ class NotesScreenTest {
     composeTestRule.onNodeWithTag("editor_content_input").assertIsDisplayed()
     composeTestRule.onNodeWithTag("single_note_timestamp").assertIsDisplayed()
     composeTestRule.onNodeWithTag("single_note_bottom_color_bar").assertIsDisplayed()
+    val singleNoteBoundsBefore = composeTestRule.onNodeWithTag("single_note_view").fetchSemanticsNode().boundsInRoot
+    val colorBarBoundsBefore = composeTestRule.onNodeWithTag("single_note_bottom_color_bar").fetchSemanticsNode().boundsInRoot
+    assertEquals(singleNoteBoundsBefore.bottom, colorBarBoundsBefore.bottom, 1f)
+
+    // Tapping in the empty space below the note content focuses the content field with cursor at the end
+    composeTestRule.onNodeWithTag("single_note_editor_empty_space").performTouchInput {
+      click(androidx.compose.ui.geometry.Offset(centerX, bottom - 20f))
+    }
+    composeTestRule.waitForIdle()
+    val contentNode = composeTestRule.onNodeWithTag("editor_content_input")
+    contentNode.assertIsFocused()
+    val selection = contentNode.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.TextSelectionRange]
+    assertEquals(androidx.compose.ui.text.TextRange("25g starter, 50g water, 50g flour".length), selection)
+
     composeTestRule.onNodeWithTag("editor_label_chip_baking").assertIsDisplayed()
     composeTestRule.onNodeWithTag("editor_color_SAGE").performClick()
     composeTestRule.onNodeWithTag("editor_pin_button").performClick()
@@ -161,6 +192,36 @@ class NotesScreenTest {
     composeTestRule.waitForIdle()
 
     composeTestRule.onNodeWithText("+ 1 checked item").assertIsDisplayed()
+
+    // Open the checklist note, type in the checklist input, and verify checked item 'Oat milk' is suggested
+    composeTestRule.onNodeWithTag("note_card_chk-1").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("single_note_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("editor_checked_suggestions").assertDoesNotExist()
+
+    composeTestRule.onNodeWithTag("editor_new_checklist_input").performTextInput("Oat")
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("editor_checked_suggestions").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("editor_checked_suggestion_item-1").assertIsDisplayed()
+
+    // Tapping the suggested checked item unchecks (restores) it and clears the input
+    composeTestRule.onNodeWithTag("editor_checked_suggestion_item-1").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("editor_checked_suggestions").assertDoesNotExist()
+
+    // Pasting a list with return characters into the new item input and adding it parses into multiple checklist items
+    composeTestRule.onNodeWithTag("editor_new_checklist_input").performTextInput("Apples\nBananas\nCherries")
+    composeTestRule.onNodeWithTag("editor_add_checklist_item").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("single_note_back_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithText("Oat milk").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Apples").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Bananas").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Cherries").assertIsDisplayed()
+    composeTestRule.onNodeWithText("+ 1 checked item").assertDoesNotExist()
   }
 
   @Test

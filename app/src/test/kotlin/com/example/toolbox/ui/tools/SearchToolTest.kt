@@ -145,6 +145,9 @@ class SearchToolTest {
 
     val formatResults = SearchEngine.search("FLAC")
     assertTrue(formatResults.any { it.tool == Tool.FILE_CONVERTER && it.resultType == SearchResultType.FILE_FORMAT })
+
+    val elementResults = SearchEngine.search("Uranium")
+    assertTrue(elementResults.any { it.tool == Tool.ELEMENTS && it.resultType == SearchResultType.CHEMICAL_ELEMENT })
   }
 
   @Test

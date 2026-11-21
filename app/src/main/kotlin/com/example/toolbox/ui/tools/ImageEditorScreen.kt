@@ -9,10 +9,12 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.RectF
 import android.media.ExifInterface
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -191,6 +193,10 @@ fun ImageEditorScreen(
   var originalMetadata by remember(resolvedInitialMetadata) { mutableStateOf(resolvedInitialMetadata) }
   var currentMetadata by remember(resolvedInitialMetadata) { mutableStateOf(resolvedInitialMetadata) }
   var draftMetadata by remember(resolvedInitialMetadata) { mutableStateOf(resolvedInitialMetadata) }
+  var sourceFile by remember(initialFile?.absolutePath) { mutableStateOf<File?>(initialFile) }
+  var sourceFileName by remember(initialFile?.absolutePath) {
+    mutableStateOf(initialFile?.name ?: "image.png")
+  }
 
   val history = remember { ImageEditorHistory<ImageEditSnapshot>() }
   var historyVersion by remember { mutableIntStateOf(0) }
@@ -228,12 +234,31 @@ fun ImageEditorScreen(
     if (uri != null) {
       val loaded = decodeBitmapFromUri(context, uri)
       if (loaded != null) {
-        val loadedMeta = ImageMetadataOperations.readImageMetadataFromUri(context, uri)
+        val resolvedFile = resolveRealFileFromUri(context, uri)
+        val loadedMeta = if (resolvedFile != null && resolvedFile.exists()) {
+          ImageMetadataOperations.readImageMetadata(resolvedFile)
+        } else {
+          ImageMetadataOperations.readImageMetadataFromUri(context, uri)
+        }
+        val queriedName = resolvedFile?.name ?: run {
+          var name: String? = null
+          try {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+              if (c.moveToFirst()) {
+                val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0) name = c.getString(idx)
+              }
+            }
+          } catch (_: Throwable) {}
+          name ?: "image.png"
+        }
         originalBitmap = loaded
         currentBitmap = loaded
         originalMetadata = loadedMeta
         currentMetadata = loadedMeta
         draftMetadata = loadedMeta
+        sourceFile = resolvedFile
+        sourceFileName = queriedName
         history.clear()
         historyVersion++
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -345,6 +370,8 @@ fun ImageEditorScreen(
           originalMetadata = ImageMetadata()
           currentMetadata = ImageMetadata()
           draftMetadata = ImageMetadata()
+          sourceFile = null
+          sourceFileName = "image.png"
           history.clear()
           historyVersion++
         }
@@ -354,17 +381,32 @@ fun ImageEditorScreen(
           val effectiveMeta = draftMetadata.sanitized()
           currentMetadata = effectiveMeta
           draftMetadata = effectiveMeta
-          initialFile?.let { file ->
-            if (file.exists()) {
-              ImageMetadataOperations.writeImageMetadata(file, effectiveMeta)
-            }
-          }
-          val uri = saveBitmapToGallery(context, bmp, effectiveMeta)
-          if (uri != null) {
-            Toast.makeText(context, "Image saved to Photos!", Toast.LENGTH_SHORT).show()
+          val savedFile = saveEditedBitmapToOriginalLocation(
+            context = context,
+            bitmap = bmp,
+            sourceFile = sourceFile,
+            sourceFileName = sourceFileName,
+            metadata = effectiveMeta,
+          )
+          if (savedFile != null) {
+            sourceFile = savedFile
+            sourceFileName = savedFile.name
+            Toast.makeText(context, "Saved ${savedFile.name}", Toast.LENGTH_SHORT).show()
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
           } else {
-            Toast.makeText(context, "Saved image to storage", Toast.LENGTH_SHORT).show()
+            val uri = saveBitmapToGallery(
+              context = context,
+              bitmap = bmp,
+              metadata = effectiveMeta,
+              sourceFile = sourceFile,
+              sourceFileName = sourceFileName,
+            )
+            if (uri != null) {
+              Toast.makeText(context, "Image saved to Photos!", Toast.LENGTH_SHORT).show()
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            } else {
+              Toast.makeText(context, "Saved image to storage", Toast.LENGTH_SHORT).show()
+            }
           }
         }
       },
@@ -390,6 +432,8 @@ fun ImageEditorScreen(
           originalMetadata = sampleMeta
           currentMetadata = sampleMeta
           draftMetadata = sampleMeta
+          sourceFile = sampleFile
+          sourceFileName = sampleFile.name
           history.clear()
           historyVersion++
           haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -421,7 +465,7 @@ fun ImageEditorScreen(
           history.push(ImageEditSnapshot(bmp, currentMetadata))
           currentMetadata = clean
           draftMetadata = clean
-          initialFile?.let { file ->
+          sourceFile?.let { file ->
             if (file.exists()) {
               ImageMetadataOperations.writeImageMetadata(file, clean)
             }
@@ -2670,13 +2714,93 @@ fun decodeBitmapFromUri(context: Context, uri: Uri, maxDimension: Int = 2048): B
   }
 }
 
+fun saveEditedBitmapToOriginalLocation(
+  context: Context,
+  bitmap: Bitmap,
+  sourceFile: File?,
+  sourceFileName: String = sourceFile?.name ?: "image.png",
+  metadata: ImageMetadata = ImageMetadata(),
+): File? {
+  val cleanMeta = metadata.sanitized()
+  val rawExt = sourceFile?.extension?.takeIf { it.isNotBlank() }
+    ?: sourceFileName.substringAfterLast('.', "").takeIf { it.isNotBlank() }
+    ?: "png"
+  val targetFormat = ConvertibleFormat.fromExtension(rawExt)
+    ?.takeIf { it.category == ConversionMediaCategory.IMAGE }
+    ?: ConvertibleFormat.PNG
+  val outExtension = rawExt.lowercase(Locale.ROOT).takeIf {
+    it in targetFormat.allExtensions
+  } ?: targetFormat.extension
+
+  val desiredStem = FileConverterEngine.extractFileStem(sourceFile?.name ?: sourceFileName)
+  val targetDir = sourceFile?.parentFile?.takeIf { (it.exists() || it.mkdirs()) && it.canWrite() }
+    ?: run {
+      val root = FileManagerEngine.getUserRootDirectory()
+      val picturesDir = File(root, "Pictures/Toolbox")
+      if ((picturesDir.exists() || picturesDir.mkdirs()) && picturesDir.canWrite()) {
+        picturesDir
+      } else {
+        File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: context.filesDir, "Toolbox").apply {
+          mkdirs()
+        }
+      }
+    }
+
+  val outputFile = FileConverterEngine.resolveOutputFileWithExtension(
+    outputDir = targetDir,
+    desiredStem = desiredStem,
+    extension = outExtension,
+    sourceFile = sourceFile,
+    forceEditedPostfix = sourceFile != null,
+  )
+
+  return try {
+    val encoded = FileConverterEngine.encodeBitmapToFile(bitmap, outputFile, targetFormat) ||
+      FileOutputStream(outputFile).use { out ->
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+      }
+    if (!encoded || !outputFile.exists() || outputFile.length() == 0L) {
+      return null
+    }
+    if (!cleanMeta.isEmpty) {
+      ImageMetadataOperations.writeImageMetadata(outputFile, cleanMeta)
+    }
+    try {
+      MediaScannerConnection.scanFile(
+        context,
+        arrayOf(outputFile.absolutePath),
+        arrayOf(targetFormat.mimeType),
+        null,
+      )
+    } catch (_: Throwable) {}
+    outputFile
+  } catch (e: Exception) {
+    e.printStackTrace()
+    null
+  }
+}
+
 fun saveBitmapToGallery(
   context: Context,
   bitmap: Bitmap,
   metadata: ImageMetadata = ImageMetadata(),
+  sourceFile: File? = null,
+  sourceFileName: String? = null,
 ): Uri? {
+  saveEditedBitmapToOriginalLocation(
+    context = context,
+    bitmap = bitmap,
+    sourceFile = sourceFile,
+    sourceFileName = sourceFile?.name ?: sourceFileName ?: "image.png",
+    metadata = metadata,
+  )?.let { savedFile ->
+    return Uri.fromFile(savedFile)
+  }
+
   val cleanMeta = metadata.sanitized()
-  val filename = "Toolbox_${System.currentTimeMillis()}.png"
+  val stem = FileConverterEngine.extractFileStem(sourceFile?.name ?: sourceFileName ?: "Toolbox")
+  val nextStem = FileConverterEngine.nextEditedStem(stem)
+  val filename = "$nextStem.png"
   val values = ContentValues().apply {
     put(MediaStore.Images.Media.DISPLAY_NAME, filename)
     put(MediaStore.Images.Media.MIME_TYPE, "image/png")

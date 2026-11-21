@@ -1,9 +1,14 @@
 package com.example.toolbox.ui.tools
 
+import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -484,8 +489,22 @@ fun FileConverterScreen(
           item {
             val dstFormat = selectedTargetFormat
             val stem = FileConverterEngine.extractFileStem(currentFile.name)
-            val targetDir = currentFile.parentFile?.takeIf { it.exists() && it.canWrite() } ?: fallbackConvertedDir
-            val previewOutputName = if (dstFormat != null) "$stem.${dstFormat.extension}" else currentFile.name
+            val cacheImportDirPath = remember(context) {
+              File(context.cacheDir, "converter_imports").absolutePath
+            }
+            val targetDir = currentFile.parentFile?.takeIf { dir ->
+              dir.absolutePath != cacheImportDirPath && (dir.exists() && dir.canWrite() || isInspection)
+            } ?: fallbackConvertedDir
+            val previewOutputName = if (dstFormat != null) {
+              FileConverterEngine.resolveOutputFile(
+                outputDir = targetDir,
+                desiredStem = stem,
+                targetFormat = dstFormat,
+                sourceFile = currentFile,
+              ).name
+            } else {
+              currentFile.name
+            }
 
             Column(
               modifier = Modifier
@@ -998,7 +1017,231 @@ private fun categoryIcon(category: ConversionMediaCategory?): ImageVector {
   }
 }
 
+/**
+ * Resolves the underlying real filesystem [File] for a `file://` or `content://` [uri] when possible.
+ */
+internal fun resolveRealFileFromUri(context: Context, uri: Uri): File? {
+  try {
+    if ("file".equals(uri.scheme, ignoreCase = true)) {
+      val path = uri.path
+      if (!path.isNullOrBlank()) {
+        val f = File(path)
+        if (f.exists() && f.isFile) return f
+      }
+    }
+
+    val contentResolver = context.contentResolver
+    val rootDir = FileManagerEngine.getUserRootDirectory()
+
+    // 1. DocumentsContract URI resolution
+    if (DocumentsContract.isDocumentUri(context, uri)) {
+      val docId = DocumentsContract.getDocumentId(uri)
+      when (uri.authority) {
+        "com.android.externalstorage.documents" -> {
+          val split = docId.split(":", limit = 2)
+          val type = split.getOrNull(0).orEmpty()
+          val rel = split.getOrNull(1).orEmpty()
+          if ("primary".equals(type, ignoreCase = true)) {
+            val candidate = File(rootDir, rel)
+            if (candidate.exists() && candidate.isFile) return candidate
+          } else if (type.isNotEmpty()) {
+            val secondary = File("/storage/$type", rel)
+            if (secondary.exists() && secondary.isFile) return secondary
+          }
+        }
+        "com.android.providers.downloads.documents" -> {
+          if (docId.startsWith("raw:")) {
+            val rawFile = File(docId.removePrefix("raw:"))
+            if (rawFile.exists() && rawFile.isFile) return rawFile
+          }
+          val idLong = docId.removePrefix("msf:").toLongOrNull()
+          if (idLong != null) {
+            val publicDownloads = listOf(
+              "content://downloads/public_downloads",
+              "content://downloads/my_downloads",
+            )
+            for (base in publicDownloads) {
+              try {
+                val downloadUri = ContentUris.withAppendedId(Uri.parse(base), idLong)
+                @Suppress("DEPRECATION")
+                contentResolver.query(
+                  downloadUri,
+                  arrayOf(MediaStore.MediaColumns.DATA),
+                  null,
+                  null,
+                  null,
+                )?.use { c ->
+                  if (c.moveToFirst()) {
+                    val idx = c.getColumnIndex(MediaStore.MediaColumns.DATA)
+                    if (idx >= 0) {
+                      val dataPath = c.getString(idx)
+                      if (!dataPath.isNullOrBlank()) {
+                        val f = File(dataPath)
+                        if (f.exists() && f.isFile) return f
+                      }
+                    }
+                  }
+                }
+              } catch (_: Throwable) {}
+            }
+          }
+        }
+        "com.android.providers.media.documents" -> {
+          val split = docId.split(":", limit = 2)
+          val type = split.getOrNull(0).orEmpty()
+          val idStr = split.getOrNull(1).orEmpty()
+          val contentUri: Uri? = when (type) {
+            "image" -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            "video" -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            "audio" -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            else -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+              MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+            } else {
+              MediaStore.Files.getContentUri("external")
+            }
+          }
+          if (contentUri != null && idStr.isNotEmpty()) {
+            @Suppress("DEPRECATION")
+            val projection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+              arrayOf(
+                MediaStore.MediaColumns.DATA,
+                MediaStore.MediaColumns.RELATIVE_PATH,
+                MediaStore.MediaColumns.DISPLAY_NAME,
+              )
+            } else {
+              arrayOf(
+                MediaStore.MediaColumns.DATA,
+                MediaStore.MediaColumns.DISPLAY_NAME,
+              )
+            }
+            contentResolver.query(
+              contentUri,
+              projection,
+              "${MediaStore.MediaColumns._ID}=?",
+              arrayOf(idStr),
+              null,
+            )?.use { c ->
+              if (c.moveToFirst()) {
+                @Suppress("DEPRECATION")
+                val dataIdx = c.getColumnIndex(MediaStore.MediaColumns.DATA)
+                if (dataIdx >= 0) {
+                  val dataPath = c.getString(dataIdx)
+                  if (!dataPath.isNullOrBlank()) {
+                    val f = File(dataPath)
+                    if (f.exists() && f.isFile) return f
+                  }
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                  val relIdx = c.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
+                  val nameIdx = c.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME)
+                  val relPath = if (relIdx >= 0) c.getString(relIdx) else null
+                  val dispName = if (nameIdx >= 0) c.getString(nameIdx) else null
+                  if (!relPath.isNullOrBlank() && !dispName.isNullOrBlank()) {
+                    val f = File(File(rootDir, relPath), dispName)
+                    if (f.exists() && f.isFile) return f
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Direct MediaStore / ContentProvider query for DATA or RELATIVE_PATH + DISPLAY_NAME
+    @Suppress("DEPRECATION")
+    val projection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      arrayOf(
+        MediaStore.MediaColumns.DATA,
+        MediaStore.MediaColumns.RELATIVE_PATH,
+        MediaStore.MediaColumns.DISPLAY_NAME,
+      )
+    } else {
+      arrayOf(
+        MediaStore.MediaColumns.DATA,
+        MediaStore.MediaColumns.DISPLAY_NAME,
+      )
+    }
+    var displayName: String? = null
+    try {
+      contentResolver.query(uri, projection, null, null, null)?.use { c ->
+        if (c.moveToFirst()) {
+          @Suppress("DEPRECATION")
+          val dataIdx = c.getColumnIndex(MediaStore.MediaColumns.DATA)
+          if (dataIdx >= 0) {
+            val dataPath = c.getString(dataIdx)
+            if (!dataPath.isNullOrBlank()) {
+              val f = File(dataPath)
+              if (f.exists() && f.isFile) return f
+            }
+          }
+          val nameIdx = c.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME)
+          if (nameIdx >= 0) {
+            displayName = c.getString(nameIdx)
+          }
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val relIdx = c.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
+            val relPath = if (relIdx >= 0) c.getString(relIdx) else null
+            val dispName = displayName
+            if (!relPath.isNullOrBlank() && !dispName.isNullOrBlank()) {
+              val f = File(File(rootDir, relPath), dispName)
+              if (f.exists() && f.isFile) return f
+            }
+          }
+        }
+      }
+    } catch (_: Throwable) {}
+
+    // 3. Fallback: inspect URI path segments for embedded storage paths (e.g. FileProvider or raw path)
+    val rawPath = uri.path.orEmpty()
+    if (rawPath.contains("/storage/emulated/0/")) {
+      val sub = rawPath.substringAfter("/storage/emulated/0/")
+      val candidate = File(rootDir, sub)
+      if (candidate.exists() && candidate.isFile) return candidate
+    }
+    if (rawPath.contains("primary:")) {
+      val sub = rawPath.substringAfter("primary:")
+      val candidate = File(rootDir, sub)
+      if (candidate.exists() && candidate.isFile) return candidate
+    }
+
+    // 4. If we at least got a displayName, check common user directories for an exact match
+    if (displayName.isNullOrBlank()) {
+      contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+        if (c.moveToFirst()) {
+          val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+          if (idx >= 0) displayName = c.getString(idx)
+        }
+      }
+    }
+    val targetName = displayName?.substringAfterLast('/')?.trim()
+    if (!targetName.isNullOrBlank()) {
+      val commonFolders = listOf(
+        Environment.DIRECTORY_DOWNLOADS,
+        Environment.DIRECTORY_PICTURES,
+        Environment.DIRECTORY_DCIM,
+        "DCIM/Camera",
+        Environment.DIRECTORY_MOVIES,
+        Environment.DIRECTORY_MUSIC,
+        "Audio",
+        Environment.DIRECTORY_DOCUMENTS,
+      )
+      for (folder in commonFolders) {
+        val candidate = File(File(rootDir, folder), targetName)
+        if (candidate.exists() && candidate.isFile) return candidate
+      }
+    }
+  } catch (_: Throwable) {}
+  return null
+}
+
 internal fun copyUriToTempSourceFile(context: Context, uri: Uri): File? {
+  // First try resolving the real underlying file on storage so edits/conversions save back to its original location
+  resolveRealFileFromUri(context, uri)?.let { realFile ->
+    if (realFile.canRead()) {
+      return realFile
+    }
+  }
   return try {
     val contentResolver = context.contentResolver
     var displayName: String? = null

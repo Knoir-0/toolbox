@@ -4862,7 +4862,23 @@ private fun ScheduleTaskPanel(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          IconButton(
+            onClick = onDismiss,
+            modifier = Modifier
+              .size(28.dp)
+              .testTag("todo_schedule_cancel_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Close,
+              contentDescription = "Cancel",
+              tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.size(18.dp),
+            )
+          }
           if (isExistingScheduled) {
             TextButton(
               onClick = onUnschedule,
@@ -4879,34 +4895,23 @@ private fun ScheduleTaskPanel(
               )
             }
           }
-          TextButton(
-            onClick = onDismiss,
-            shape = CircleShape,
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-            modifier = Modifier
-              .height(28.dp)
-              .testTag("todo_schedule_cancel_button"),
-          ) {
-            Text(
-              text = "Cancel",
-              style = MaterialTheme.typography.labelMedium,
-            )
-          }
         }
 
-        Button(
+        FilledIconButton(
           onClick = onConfirmSchedule,
           shape = CircleShape,
-          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+          colors = IconButtonDefaults.filledIconButtonColors(
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+          ),
           modifier = Modifier
-            .height(28.dp)
+            .size(28.dp)
             .testTag("todo_schedule_confirm_button"),
         ) {
-          Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-          Spacer(modifier = Modifier.width(6.dp))
-          Text(
-            text = if (isExistingScheduled) "Reschedule" else "Schedule",
-            style = MaterialTheme.typography.labelMedium,
+          Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = if (isExistingScheduled) "Reschedule" else "Schedule",
+            modifier = Modifier.size(18.dp),
           )
         }
       }

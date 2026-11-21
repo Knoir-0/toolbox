@@ -67,6 +67,52 @@ class FileConverterEngineTest {
   }
 
   @Test
+  fun resolveOutputFile_andNextEditedStem_usesEdited1Edited2PatternAndIncrementsExistingPostfix() {
+    assertEquals("photo_edited_1", FileConverterEngine.nextEditedStem("photo"))
+    assertEquals("photo_edited_1", FileConverterEngine.nextEditedStem("photo_edited"))
+    assertEquals("photo_edited_2", FileConverterEngine.nextEditedStem("photo_edited_1"))
+    assertEquals("photo_edited_3", FileConverterEngine.nextEditedStem("photo_edited_2"))
+
+    val srcPng = File(tempDir, "report.png").apply { writeText("png") }
+    // No collision for report.jpg -> keeps original stem
+    val firstJpg = FileConverterEngine.resolveOutputFile(
+      outputDir = tempDir,
+      desiredStem = "report",
+      targetFormat = ConvertibleFormat.JPG,
+      sourceFile = srcPng,
+    )
+    assertEquals("report.jpg", firstJpg.name)
+    firstJpg.writeText("jpg1")
+
+    // Collision on report.jpg -> report_edited_1.jpg
+    val secondJpg = FileConverterEngine.resolveOutputFile(
+      outputDir = tempDir,
+      desiredStem = "report",
+      targetFormat = ConvertibleFormat.JPG,
+      sourceFile = srcPng,
+    )
+    assertEquals("report_edited_1.jpg", secondJpg.name)
+    secondJpg.writeText("jpg2")
+
+    // Converting report_edited_1.jpg or report.png again -> report_edited_2.jpg
+    val thirdFromOriginal = FileConverterEngine.resolveOutputFile(
+      outputDir = tempDir,
+      desiredStem = "report",
+      targetFormat = ConvertibleFormat.JPG,
+      sourceFile = srcPng,
+    )
+    assertEquals("report_edited_2.jpg", thirdFromOriginal.name)
+
+    val thirdFromEdited = FileConverterEngine.resolveOutputFile(
+      outputDir = tempDir,
+      desiredStem = "report_edited_1",
+      targetFormat = ConvertibleFormat.JPG,
+      sourceFile = secondJpg,
+    )
+    assertEquals("report_edited_2.jpg", thirdFromEdited.name)
+  }
+
+  @Test
   fun capabilityMap_coversAllFormatsAndPrefersNativeWhereSupported() {
     val map = FileConverterEngine.CONVERSION_CAPABILITY_MAP
     assertTrue("Should have over 200 total conversion routes", FileConverterEngine.totalConversionRoutesCount >= 200)

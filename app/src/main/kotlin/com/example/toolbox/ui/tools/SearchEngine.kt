@@ -51,6 +51,7 @@ enum class SearchResultType(val label: String) {
   DECIBEL_LEVEL("Noise Level"),
   COLOR_SWATCH("Color Swatch"),
   OBD2_DTC("Trouble Code"),
+  CHEMICAL_ELEMENT("Chemical Element"),
   FILE_FORMAT("File Format"),
   MUSIC_TRACK("Music Track"),
   AUDIO_RECORDING("Audio Format"),
@@ -365,6 +366,14 @@ object SearchEngine {
       keywords = listOf("obd2", "obd", "car", "automotive", "dtc", "check engine", "trouble code", "elm327", "rpm", "coolant", "vin", "emissions", "p0420", "p0300"),
       sampleQueries = listOf("P0420", "P0300", "OBD2"),
     ),
+    Tool.ELEMENTS to ToolSearchMetadata(
+      tool = Tool.ELEMENTS,
+      summary = "Interactive 118-element IUPAC Periodic Table, Bohr shell diagrams & molar mass calculator",
+      description = "Explore all 118 chemical elements on an interactive 18-group Periodic Table with Bohr electron shell models, dynamic temperature phase simulator, category/phase filtering, and chemical formula molar mass calculator.",
+      capabilities = listOf("18-Column Interactive Periodic Table (Elements 1–118)", "2D Bohr Electron Shell Diagrams & Orbital Configurations", "Dynamic Temperature Phase Simulator (0–6000 K)", "Chemical Formula Molar Mass & Mass % Calculator", "Category, Phase & Favorites Filtering"),
+      keywords = listOf("elements", "periodic table", "chemistry", "atom", "atomic number", "atomic mass", "molar mass", "electron configuration", "bohr", "noble gas", "alkali", "transition metal", "lanthanide", "actinide", "halogen", "hydrogen", "carbon", "oxygen", "gold", "iron", "uranium"),
+      sampleQueries = listOf("Gold", "Uranium", "Elements"),
+    ),
     Tool.SEARCH to ToolSearchMetadata(
       tool = Tool.SEARCH,
       summary = "Universal search across all tools, calculators, converters, user data & catalogs",
@@ -465,6 +474,7 @@ object SearchEngine {
     allResults.addAll(searchDecibelCatalog(normalizedQuery, tokens))
     allResults.addAll(searchColorSwatchesAndHarmonies(normalizedQuery, tokens))
     allResults.addAll(searchObd2Catalog(rawTrimmed, normalizedQuery, tokens))
+    allResults.addAll(searchElementsCatalog(normalizedQuery, tokens))
     allResults.addAll(searchFileConverterFormats(normalizedQuery, tokens))
     allResults.addAll(searchMusicTracks(normalizedQuery, tokens))
     allResults.addAll(searchAudioRecorderCatalog(normalizedQuery, tokens))
@@ -1858,6 +1868,45 @@ object SearchEngine {
     }
 
     return results
+  }
+
+  private fun searchElementsCatalog(
+    normalizedQuery: String,
+    tokens: List<String>,
+  ): List<SearchResultItem> {
+    return PeriodicTableEngine.ALL_ELEMENTS.mapNotNull { element ->
+      val score = scoreTextMatch(
+        normalizedQuery = normalizedQuery,
+        tokens = tokens,
+        primaryText = "${element.name} (${element.symbol}) — Element #${element.atomicNumber}",
+        secondaryText = "${element.category.label} • ${element.formattedAtomicMass} • ${element.electronConfiguration}",
+        keywordsText = "periodic table element chemistry atom ${element.standardPhase.label} ${element.discoveredBy} ${element.summary}",
+        baseWeight = 130,
+      )
+      if (score <= 0) return@mapNotNull null
+
+      SearchResultItem(
+        id = "chemical_element_${element.atomicNumber}",
+        title = "${element.name} (${element.symbol}) — #${element.atomicNumber}",
+        subtitle = "${element.category.label} • ${element.formattedAtomicMass} • ${element.standardPhase.label}",
+        snippet = "Config: ${element.electronConfiguration} • ${element.summary}",
+        badgeLabel = "Element #${element.atomicNumber}",
+        tool = Tool.ELEMENTS,
+        resultType = SearchResultType.CHEMICAL_ELEMENT,
+        score = score,
+        copyableValue = "${element.name} (${element.symbol}): ${element.formattedAtomicMass}",
+        detailRows = listOf(
+          SearchResultDetailRow("Element", "${element.name} (${element.symbol})"),
+          SearchResultDetailRow("Atomic Number", element.atomicNumber.toString()),
+          SearchResultDetailRow("Atomic Mass", element.formattedAtomicMass),
+          SearchResultDetailRow("Category", element.category.label),
+          SearchResultDetailRow("Period & Group", "Period ${element.period} • ${element.groupLabel}"),
+          SearchResultDetailRow("Electron Config", element.electronConfiguration),
+          SearchResultDetailRow("Phase at STP", element.standardPhase.label),
+          SearchResultDetailRow("Discovered", "${element.discoveryYear} (${element.discoveredBy})"),
+        ),
+      )
+    }
   }
 
   private fun searchFileConverterFormats(

@@ -831,4 +831,150 @@ class CameraEngineTest {
     val step5 = CameraEngine.nextSystemCamera(catalog, step4.cameraId)
     assertEquals("0", step5.cameraId)
   }
+
+  @Test
+  fun smartObjectAutofocus_andManual5sFocusOverride_prioritizeObjectsAndRespect5SecondOverrideWindow() {
+    assertEquals(5000L, MANUAL_FOCUS_OVERRIDE_DURATION_MS)
+
+    // 1. ML Kit Object Detection candidate scoring prioritizes prominent central subjects over peripheral specks or background boxes
+    val peripheralTinySpeck = RawDetectedObjectForFocus(
+      boundingBox = CameraVisionBoundingBox(0.02f, 0.02f, 0.08f, 0.08f),
+      trackingId = 10,
+      label = "Label",
+      confidence = 0.65f,
+    )
+    val centralSubject = RawDetectedObjectForFocus(
+      boundingBox = CameraVisionBoundingBox(0.28f, 0.26f, 0.72f, 0.70f),
+      trackingId = 42,
+      label = "Plant",
+      confidence = 0.94f,
+    )
+    val offCenterSecondary = RawDetectedObjectForFocus(
+      boundingBox = CameraVisionBoundingBox(0.62f, 0.58f, 0.90f, 0.86f),
+      trackingId = 77,
+      label = "Flowerpot",
+      confidence = 0.85f,
+    )
+    val hugeBackground = RawDetectedObjectForFocus(
+      boundingBox = CameraVisionBoundingBox(0.0f, 0.0f, 0.99f, 0.99f),
+      trackingId = 99,
+      label = "Room",
+      confidence = 0.95f,
+    )
+
+    // Huge background (> 92% area) is rejected with negative score
+    assertTrue(CameraEngine.scoreObjectForSmartAutofocus(hugeBackground) < 0f)
+
+    val selectedTarget = CameraEngine.selectSmartAutofocusTargetFromObjects(
+      objects = listOf(peripheralTinySpeck, offCenterSecondary, centralSubject, hugeBackground),
+      previousTarget = null,
+      timestampMs = 1000L,
+    )
+    assertNotNull(selectedTarget)
+    assertEquals(CameraFocusSource.ML_OBJECT_AUTO, selectedTarget!!.source)
+    assertTrue(selectedTarget.isSmartObjectFocus)
+    assertFalse(selectedTarget.isManualOverride)
+    assertEquals(42, selectedTarget.trackingId)
+    assertEquals("Plant", selectedTarget.categoryLabel)
+    assertEquals("Smart AF • Plant", selectedTarget.badgeLabel)
+    assertEquals(0.50f, selectedTarget.normX, 0.01f)
+    assertEquals(0.48f, selectedTarget.normY, 0.01f)
+
+    // 2. Temporal stability & jitter smoothing when tracking the same object across consecutive frames
+    val microJitterFrame = RawDetectedObjectForFocus(
+      boundingBox = CameraVisionBoundingBox(0.285f, 0.265f, 0.725f, 0.705f),
+      trackingId = 42,
+      label = "Plant",
+      confidence = 0.93f,
+    )
+    val stabilizedTarget = CameraEngine.selectSmartAutofocusTargetFromObjects(
+      objects = listOf(microJitterFrame),
+      previousTarget = selectedTarget,
+      timestampMs = 1350L,
+    )
+    assertNotNull(stabilizedTarget)
+    // Micro-jitter (< 2% movement) holds steady at previous coordinates
+    assertEquals(selectedTarget.normX, stabilizedTarget!!.normX, 0.001f)
+    assertEquals(selectedTarget.normY, stabilizedTarget.normY, 0.001f)
+
+    // 3. Manual tap-to-focus override for 5 seconds (5000ms) before returning to smart autofocus
+    val tapTimeMs = 2000L
+    val manualTarget = CameraEngine.createManualFocusTarget(
+      normX = 0.78f,
+      normY = 0.32f,
+      timestampMs = tapTimeMs,
+    )
+    assertEquals(CameraFocusSource.MANUAL_OVERRIDE, manualTarget.source)
+    assertTrue(manualTarget.isManualOverride)
+    assertFalse(manualTarget.isSmartObjectFocus)
+    assertEquals("Manual • 5s", manualTarget.badgeLabel)
+
+    // At t = 2000ms (0s elapsed), manual override is active with 5000ms remaining
+    assertTrue(CameraEngine.isManualFocusOverrideActive(tapTimeMs, nowMs = 2000L))
+    assertEquals(5000L, CameraEngine.remainingManualFocusOverrideMs(tapTimeMs, nowMs = 2000L))
+    val resolvedAt0s = CameraEngine.resolveActiveFocusTarget(
+      manualTarget = manualTarget,
+      smartAutoTarget = selectedTarget,
+      nowMs = 2000L,
+    )
+    assertEquals(CameraFocusSource.MANUAL_OVERRIDE, resolvedAt0s?.source)
+    assertEquals(0.78f, resolvedAt0s?.normX ?: 0f, 0.001f)
+    assertEquals(0.32f, resolvedAt0s?.normY ?: 0f, 0.001f)
+
+    // At t = 5500ms (3.5s elapsed — past the old 2.8s timeout, still within 5s window), manual override is STILL active
+    assertTrue(CameraEngine.isManualFocusOverrideActive(tapTimeMs, nowMs = 5500L))
+    assertEquals(1500L, CameraEngine.remainingManualFocusOverrideMs(tapTimeMs, nowMs = 5500L))
+    val resolvedAt3_5s = CameraEngine.resolveActiveFocusTarget(
+      manualTarget = manualTarget,
+      smartAutoTarget = selectedTarget,
+      nowMs = 5500L,
+    )
+    assertEquals(CameraFocusSource.MANUAL_OVERRIDE, resolvedAt3_5s?.source)
+    assertEquals(0.78f, resolvedAt3_5s?.normX ?: 0f, 0.001f)
+
+    // At t = 6999ms (4.999s elapsed), manual override is STILL active
+    assertTrue(CameraEngine.isManualFocusOverrideActive(tapTimeMs, nowMs = 6999L))
+    assertEquals(1L, CameraEngine.remainingManualFocusOverrideMs(tapTimeMs, nowMs = 6999L))
+
+    // At t = 7000ms (5.0s elapsed), manual override expires and automatically returns to ML Kit smart object autofocus
+    assertFalse(CameraEngine.isManualFocusOverrideActive(tapTimeMs, nowMs = 7000L))
+    assertEquals(0L, CameraEngine.remainingManualFocusOverrideMs(tapTimeMs, nowMs = 7000L))
+    val resolvedAfter5s = CameraEngine.resolveActiveFocusTarget(
+      manualTarget = manualTarget,
+      smartAutoTarget = selectedTarget,
+      nowMs = 7000L,
+    )
+    assertNotNull(resolvedAfter5s)
+    assertEquals(CameraFocusSource.ML_OBJECT_AUTO, resolvedAfter5s?.source)
+    assertEquals(selectedTarget.normX, resolvedAfter5s?.normX ?: 0f, 0.001f)
+    assertEquals(selectedTarget.normY, resolvedAfter5s?.normY ?: 0f, 0.001f)
+    assertEquals("Plant", resolvedAfter5s?.categoryLabel)
+
+    // 4. Camera2 sensor metering region calculation for smart object bounding boxes and manual focus points
+    val smartMetering = CameraEngine.computeSensorMeteringRegion(
+      sensorWidth = 4000,
+      sensorHeight = 3000,
+      target = selectedTarget,
+      sensorOrientationDegrees = 90,
+      lensFacing = CameraLensFacing.BACK,
+      zoom = 1.0f,
+    )
+    assertNotNull(smartMetering)
+    assertTrue(smartMetering!!.left >= 0 && smartMetering.right <= 4000)
+    assertTrue(smartMetering.top >= 0 && smartMetering.bottom <= 3000)
+    assertTrue(smartMetering.width >= 16 && smartMetering.height >= 16)
+    assertEquals(1000, smartMetering.weight)
+
+    val manualMetering = CameraEngine.computeSensorMeteringRegion(
+      sensorWidth = 4000,
+      sensorHeight = 3000,
+      target = manualTarget,
+      sensorOrientationDegrees = 90,
+      lensFacing = CameraLensFacing.BACK,
+      zoom = 2.0f,
+    )
+    assertNotNull(manualMetering)
+    assertTrue(manualMetering!!.left >= 0 && manualMetering.right <= 4000)
+    assertTrue(manualMetering.top >= 0 && manualMetering.bottom <= 3000)
+  }
 }

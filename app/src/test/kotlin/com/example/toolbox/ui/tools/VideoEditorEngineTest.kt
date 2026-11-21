@@ -64,22 +64,32 @@ class VideoEditorEngineTest {
     val tempDir = Files.createTempDirectory("video_resolve_test").toFile()
     try {
       val src = File(tempDir, "clip.mp4").apply { writeText("source") }
-      // Same name as sourceFile must auto-increment so source is never overwritten
+      // Same name as sourceFile must auto-increment using _edited_1 / _edited_2 so source is never overwritten
       val resolvedSameAsSource = VideoEditorEngine.resolveOutputFile(
         outputDir = tempDir,
         desiredStem = "clip",
         extension = "mp4",
         sourceFile = src,
       )
-      assertEquals("clip_1.mp4", resolvedSameAsSource.name)
+      assertEquals("clip_edited_1.mp4", resolvedSameAsSource.name)
+      resolvedSameAsSource.writeText("first edit")
 
-      File(tempDir, "edited.mp4").writeText("existing")
-      val resolvedCollision = VideoEditorEngine.resolveOutputFile(
+      // Next collision increments _edited_1 -> _edited_2
+      val resolvedSecond = VideoEditorEngine.resolveOutputFile(
         outputDir = tempDir,
-        desiredStem = "edited",
+        desiredStem = "clip",
+        extension = "mp4",
+        sourceFile = src,
+      )
+      assertEquals("clip_edited_2.mp4", resolvedSecond.name)
+
+      // When desiredStem already has _edited_1 and it exists, increments to _edited_2
+      val resolvedFromEdited = VideoEditorEngine.resolveOutputFile(
+        outputDir = tempDir,
+        desiredStem = "clip_edited_1",
         extension = "mp4",
       )
-      assertEquals("edited_1.mp4", resolvedCollision.name)
+      assertEquals("clip_edited_2.mp4", resolvedFromEdited.name)
     } finally {
       tempDir.deleteRecursively()
     }
