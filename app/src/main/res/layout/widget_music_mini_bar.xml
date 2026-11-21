@@ -1,53 +1,42 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/widget_mini_root"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:padding="2dp">
+    android:layout_height="match_parent">
 
-    <ImageView
-        android:id="@+id/widget_mini_background"
+    <FrameLayout
+        android:id="@+id/widget_mini_root"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:contentDescription="@null"
-        android:scaleType="fitXY"
-        android:src="@drawable/bg_music_widget_mini_bar" />
+        android:layout_height="70dp"
+        android:layout_gravity="center_vertical"
+        android:background="@drawable/bg_music_widget_mini_bar"
+        android:clipToOutline="true">
 
-    <LinearLayout
-        android:id="@+id/widget_mini_content"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="vertical">
-
-        <ProgressBar
-            android:id="@+id/widget_mini_progress_bar"
-            style="?android:attr/progressBarStyleHorizontal"
+        <ImageView
+            android:id="@+id/widget_mini_background"
             android:layout_width="match_parent"
-            android:layout_height="3dp"
-            android:layout_marginStart="12dp"
-            android:layout_marginEnd="12dp"
-            android:max="1000"
-            android:progress="0"
-            android:progressDrawable="@drawable/bg_music_widget_progress" />
+            android:layout_height="match_parent"
+            android:contentDescription="@null"
+            android:scaleType="fitXY"
+            android:src="@drawable/bg_music_widget_mini_bar" />
 
         <LinearLayout
             android:id="@+id/widget_mini_row"
             android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
+            android:layout_height="match_parent"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="10dp"
-            android:paddingTop="6dp"
+            android:paddingStart="0dp"
+            android:paddingTop="0dp"
             android:paddingEnd="10dp"
-            android:paddingBottom="6dp">
+            android:paddingBottom="0dp">
 
             <ImageView
                 android:id="@+id/widget_mini_album_art"
-                android:layout_width="44dp"
-                android:layout_height="44dp"
+                android:layout_width="70dp"
+                android:layout_height="match_parent"
+                android:adjustViewBounds="true"
                 android:contentDescription="Album Art"
-                android:scaleType="fitXY"
+                android:scaleType="fitCenter"
                 android:src="@drawable/bg_music_widget_artwork_placeholder" />
 
             <LinearLayout
@@ -83,8 +72,8 @@
 
             <ImageView
                 android:id="@+id/widget_mini_favorite_button"
-                android:layout_width="32dp"
-                android:layout_height="32dp"
+                android:layout_width="38dp"
+                android:layout_height="38dp"
                 android:background="?android:attr/selectableItemBackgroundBorderless"
                 android:contentDescription="Favorite"
                 android:padding="7dp"
@@ -94,8 +83,8 @@
 
             <ImageView
                 android:id="@+id/widget_mini_prev_button"
-                android:layout_width="34dp"
-                android:layout_height="34dp"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
                 android:background="?android:attr/selectableItemBackgroundBorderless"
                 android:contentDescription="Previous track"
                 android:padding="6dp"
@@ -105,8 +94,8 @@
 
             <FrameLayout
                 android:id="@+id/widget_mini_play_pause_container"
-                android:layout_width="38dp"
-                android:layout_height="38dp"
+                android:layout_width="46dp"
+                android:layout_height="46dp"
                 android:layout_marginStart="2dp"
                 android:layout_marginEnd="2dp">
 
@@ -124,7 +113,7 @@
                     android:layout_height="match_parent"
                     android:background="?android:attr/selectableItemBackgroundBorderless"
                     android:contentDescription="Play"
-                    android:padding="9dp"
+                    android:padding="10dp"
                     android:scaleType="centerInside"
                     android:src="@drawable/ic_media_play"
                     android:tint="#FF101018" />
@@ -132,8 +121,8 @@
 
             <ImageView
                 android:id="@+id/widget_mini_next_button"
-                android:layout_width="34dp"
-                android:layout_height="34dp"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
                 android:background="?android:attr/selectableItemBackgroundBorderless"
                 android:contentDescription="Next track"
                 android:padding="6dp"
@@ -141,5 +130,5 @@
                 android:src="@drawable/ic_media_skip_next"
                 android:tint="#FFFFFFFF" />
         </LinearLayout>
-    </LinearLayout>
+    </FrameLayout>
 </FrameLayout>

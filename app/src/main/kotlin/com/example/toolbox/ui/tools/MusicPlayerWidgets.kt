@@ -6,35 +6,44 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
+import android.util.SizeF
 import android.view.View
 import android.widget.RemoteViews
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import com.example.toolbox.R
+import java.util.Locale
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
  * Snapshot of the playback, artwork, palette, and transport state rendered by the two
  * Music Player Home Screen AppWidgets:
- * 1. [MusicMiniBarWidgetProvider] — Single-bar mini player widget (similar to the collapsed mini player)
+ * 1. [MusicMiniBarWidgetProvider] — Single-bar mini player widget (full-height left-aligned rounded album art,
+ *    track title & subtitle, favorite star, and large transport controls, without a seek bar)
  * 2. [MusicAlbumArtWidgetProvider] — Album art widget with the favorite star overlaid at the bottom-right
- *    of the album art, track title & artist, and the full 5 playback controls below it
+ *    of the album art, track title & artist, and the full 5 playback controls below it (extracting the
+ *    left and right playback buttons from the Android system media player when external media is active)
  */
 @Immutable
 data class MusicPlayerWidgetState(
@@ -73,6 +82,12 @@ data class MusicPlayerWidgetState(
   val repeatHighlightBgArgb: Int,
   val isRepeatHighlighted: Boolean,
   val artworkBitmap: Bitmap?,
+  val leftCustomAction: SystemMediaCustomAction? = null,
+  val rightCustomAction: SystemMediaCustomAction? = null,
+  val leftCustomActionIconBitmap: Bitmap? = null,
+  val rightCustomActionIconBitmap: Bitmap? = null,
+  val isLeftControlVisible: Boolean = true,
+  val isRightControlVisible: Boolean = true,
 )
 
 /**
@@ -82,6 +97,11 @@ data class MusicPlayerWidgetState(
 object MusicPlayerWidgets {
 
   const val ACTION_WIDGET_REFRESH = "com.example.toolbox.music.ACTION_WIDGET_REFRESH"
+
+  const val MINI_BAR_HEIGHT_DP = 70f
+  const val MINI_BAR_CORNER_RADIUS_DP = 16f
+  const val ALBUM_WIDGET_CORNER_RADIUS_DP = 16f
+  const val ALBUM_ART_CORNER_RADIUS_DP = 16f
 
   private const val OVERLAY_FAVORITE_BG_ARGB = 0x73000000 // Color.Black.copy(alpha = 0.45f)
   private const val INACTIVE_CONTROL_TINT_ARGB = 0xB3FFFFFF.toInt() // Color.White.copy(alpha = 0.7f)
@@ -122,6 +142,78 @@ object MusicPlayerWidgets {
   fun resolvePlayPauseContentArgb(accentColor: Color): Int {
     val perceivedLuma = accentColor.red * 0.299f + accentColor.green * 0.587f + accentColor.blue * 0.114f
     return if (perceivedLuma > 0.55f) DARK_PLAY_ICON_TINT_ARGB else LIGHT_PLAY_ICON_TINT_ARGB
+  }
+
+  /**
+   * Maps an external Android system media [SystemMediaCustomAction] to a vector drawable resource,
+   * matching `resolveExternalCustomActionVector` in `MusicPlayerScreen.kt`.
+   */
+  fun resolveExternalCustomActionIconRes(
+    customAction: SystemMediaCustomAction,
+    isHighlighted: Boolean,
+  ): Int {
+    val combined = "${customAction.action} ${customAction.label}".lowercase(Locale.ROOT)
+    return when {
+      combined.contains("smart") && combined.contains("shuffle") -> R.drawable.ic_media_shuffle_smart
+      combined.contains("shuffle") || combined.contains("random") ->
+        if (isHighlighted) R.drawable.ic_media_shuffle_on else R.drawable.ic_media_shuffle_off
+      combined.contains("repeat_one") || combined.contains("repeat one") || combined.contains("repeat 1") ->
+        R.drawable.ic_media_repeat_one
+      combined.contains("repeat") || combined.contains("loop") ->
+        if (isHighlighted) R.drawable.ic_media_repeat_all else R.drawable.ic_media_repeat_off
+      combined.contains("dislike") ||
+        combined.contains("thumb_down") ||
+        combined.contains("thumbs_down") ||
+        combined.contains("thumbs down") ||
+        combined.contains("ban") ||
+        combined.contains("hide") -> R.drawable.ic_media_dislike
+      combined.contains("favorite") ||
+        combined.contains("fav") ||
+        combined.contains("star") ||
+        combined.contains("heart") ||
+        combined.contains("like") ||
+        combined.contains("love") ||
+        combined.contains("thumb_up") ||
+        combined.contains("thumbs_up") ||
+        combined.contains("thumbs up") ->
+        if (isHighlighted) R.drawable.ic_media_favorite_on else R.drawable.ic_media_favorite_off
+      combined.contains("speed") || combined.contains("rate") -> R.drawable.ic_media_speed
+      combined.contains("sleep") || combined.contains("timer") -> R.drawable.ic_media_timer
+      combined.contains("queue") || combined.contains("playlist") -> R.drawable.ic_media_queue
+      combined.contains("add") || combined.contains("plus") -> R.drawable.ic_media_add
+      combined.contains("share") -> R.drawable.ic_media_share
+      else -> R.drawable.ic_media_tune
+    }
+  }
+
+  /**
+   * Renders a tinted copy of an external custom action icon [Bitmap] so it displays with the
+   * active accent or inactive white tint inside a Home Screen AppWidget [RemoteViews].
+   */
+  fun renderTintedActionIconBitmap(
+    sourceBitmap: Bitmap?,
+    tintArgb: Int,
+    targetSizePx: Int = 64,
+  ): Bitmap? {
+    val valid = sourceBitmap?.takeIf { !it.isRecycled && it.width > 0 && it.height > 0 } ?: return null
+    val safeSize = targetSizePx.coerceIn(24, 192)
+    return try {
+      val out = Bitmap.createBitmap(safeSize, safeSize, Bitmap.Config.ARGB_8888)
+      val canvas = Canvas(out)
+      val scale = min(safeSize / valid.width.toFloat(), safeSize / valid.height.toFloat())
+      val dw = valid.width * scale
+      val dh = valid.height * scale
+      val left = (safeSize - dw) * 0.5f
+      val top = (safeSize - dh) * 0.5f
+      val dst = RectF(left, top, left + dw, top + dh)
+      val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+        colorFilter = PorterDuffColorFilter(tintArgb, PorterDuff.Mode.SRC_IN)
+      }
+      canvas.drawBitmap(valid, null, dst, paint)
+      out
+    } catch (_: Throwable) {
+      valid
+    }
   }
 
   private fun loadPersistedFavoriteIds(context: Context?): Set<String> {
@@ -174,8 +266,16 @@ object MusicPlayerWidgets {
   fun resolveWidgetState(
     context: Context? = null,
     session: MusicPlaybackSession? = MusicPlayerEngine.getActivePlaybackSession()?.takeIf { !it.isReleased },
-    externalMedia: SystemMediaPlayingInfo? = MusicPlayerEngine.externalSystemMediaInfo
-      ?.takeUnless { MusicPlayerEngine.isIgnoredPhoneOrCallSystemMediaInfo(it, context) },
+    externalMedia: SystemMediaPlayingInfo? = run {
+      val internalActive = session?.let { it.isPlaying && it.currentTrack != null } == true
+      if (!internalActive && context != null && MusicPlayerEngine.externalSystemMediaInfo == null && MusicPlayerEngine.isMusicPlayingOverride != true) {
+        try {
+          MusicPlayerEngine.syncExternalSystemMediaSessions(context)
+        } catch (_: Throwable) {}
+      }
+      MusicPlayerEngine.externalSystemMediaInfo
+        ?.takeUnless { MusicPlayerEngine.isIgnoredPhoneOrCallSystemMediaInfo(it, context) }
+    },
     decodeArtwork: Boolean = true,
   ): MusicPlayerWidgetState {
     val internalPlaying = session?.let { it.isPlaying && it.currentTrack != null } == true
@@ -210,6 +310,42 @@ object MusicPlayerWidgets {
       val leftHighlighted = leftAction != null && MusicPlayerEngine.isExternalCustomActionHighlighted(leftAction)
       val rightHighlighted = rightAction != null && MusicPlayerEngine.isExternalCustomActionHighlighted(rightAction)
 
+      val leftIconBitmap = leftAction?.let { action ->
+        action.iconBitmap?.takeIf { !it.isRecycled }
+          ?: if (context != null && action.iconResId != 0) {
+            MusicPlayerEngine.loadExternalCustomActionIconBitmap(
+              context,
+              externalMedia.sourcePackage.ifBlank { context.packageName },
+              action.iconResId,
+            )
+          } else {
+            null
+          }
+      }
+      val rightIconBitmap = rightAction?.let { action ->
+        action.iconBitmap?.takeIf { !it.isRecycled }
+          ?: if (context != null && action.iconResId != 0) {
+            MusicPlayerEngine.loadExternalCustomActionIconBitmap(
+              context,
+              externalMedia.sourcePackage.ifBlank { context.packageName },
+              action.iconResId,
+            )
+          } else {
+            null
+          }
+      }
+
+      val leftIconRes = if (leftAction != null) {
+        resolveExternalCustomActionIconRes(leftAction, leftHighlighted)
+      } else {
+        R.drawable.ic_media_shuffle_off
+      }
+      val rightIconRes = if (rightAction != null) {
+        resolveExternalCustomActionIconRes(rightAction, rightHighlighted)
+      } else {
+        R.drawable.ic_media_repeat_off
+      }
+
       return MusicPlayerWidgetState(
         track = null,
         trackId = null,
@@ -235,17 +371,23 @@ object MusicPlayerWidgets {
         miniFavoriteTintArgb = MINI_INACTIVE_FAVORITE_TINT_ARGB,
         albumOverlayFavoriteTintArgb = LIGHT_PLAY_ICON_TINT_ARGB,
         albumOverlayFavoriteBgArgb = OVERLAY_FAVORITE_BG_ARGB,
-        shuffleIconRes = R.drawable.ic_media_shuffle_off,
+        shuffleIconRes = leftIconRes,
         shuffleContentDescription = leftAction?.label ?: MusicShuffleMode.OFF.displayName,
         shuffleTintArgb = if (leftHighlighted) accentArgb else INACTIVE_CONTROL_TINT_ARGB,
         shuffleHighlightBgArgb = highlightBgArgb,
         isShuffleHighlighted = leftHighlighted,
-        repeatIconRes = R.drawable.ic_media_repeat_off,
+        repeatIconRes = rightIconRes,
         repeatContentDescription = rightAction?.label ?: MusicRepeatMode.OFF.displayName,
         repeatTintArgb = if (rightHighlighted) accentArgb else INACTIVE_CONTROL_TINT_ARGB,
         repeatHighlightBgArgb = highlightBgArgb,
         isRepeatHighlighted = rightHighlighted,
         artworkBitmap = externalMedia.artworkBitmap,
+        leftCustomAction = leftAction,
+        rightCustomAction = rightAction,
+        leftCustomActionIconBitmap = leftIconBitmap,
+        rightCustomActionIconBitmap = rightIconBitmap,
+        isLeftControlVisible = leftAction != null,
+        isRightControlVisible = rightAction != null,
       )
     }
 
@@ -339,6 +481,12 @@ object MusicPlayerWidgets {
       repeatHighlightBgArgb = highlightBgArgb,
       isRepeatHighlighted = isRepeatHighlighted,
       artworkBitmap = artworkBitmap,
+      leftCustomAction = null,
+      rightCustomAction = null,
+      leftCustomActionIconBitmap = null,
+      rightCustomActionIconBitmap = null,
+      isLeftControlVisible = true,
+      isRightControlVisible = true,
     )
   }
 
@@ -387,9 +535,62 @@ object MusicPlayerWidgets {
   }
 
   /**
+   * Resolves the current widget dimensions in `dp` from [AppWidgetManager] options, accounting for
+   * Android 12+ `OPTION_APPWIDGET_SIZES` and portrait (`MIN_WIDTH` x `MAX_HEIGHT`) vs landscape
+   * (`MAX_WIDTH` x `MIN_HEIGHT`) bounds so background bitmaps match the view's aspect ratio and
+   * corner radii remain evenly rounded.
+   */
+  internal fun resolveWidgetSizeDp(
+    context: Context,
+    options: Bundle?,
+    defaultWidthDp: Float,
+    defaultHeightDp: Float,
+  ): Pair<Float, Float> {
+    if (options == null) return defaultWidthDp to defaultHeightDp
+    val isLandscape = try {
+      context.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    } catch (_: Throwable) {
+      false
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      val sizes = try {
+        @Suppress("DEPRECATION")
+        options.getParcelableArrayList<SizeF>(AppWidgetManager.OPTION_APPWIDGET_SIZES)
+      } catch (_: Throwable) {
+        null
+      }
+      if (!sizes.isNullOrEmpty()) {
+        val chosen = if (isLandscape) {
+          sizes.maxByOrNull { it.width }
+        } else {
+          sizes.minByOrNull { it.width }
+        }
+        if (chosen != null && chosen.width > 0f && chosen.height > 0f) {
+          return chosen.width to chosen.height
+        }
+      }
+    }
+    val minW = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0)
+    val maxW = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, 0)
+    val minH = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0)
+    val maxH = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0)
+    val widthDp = if (isLandscape) {
+      (if (maxW > 0) maxW else minW).takeIf { it > 0 }?.toFloat() ?: defaultWidthDp
+    } else {
+      (if (minW > 0) minW else maxW).takeIf { it > 0 }?.toFloat() ?: defaultWidthDp
+    }
+    val heightDp = if (isLandscape) {
+      (if (minH > 0) minH else maxH).takeIf { it > 0 }?.toFloat() ?: defaultHeightDp
+    } else {
+      (if (maxH > 0) maxH else minH).takeIf { it > 0 }?.toFloat() ?: defaultHeightDp
+    }
+    return widthDp to heightDp
+  }
+
+  /**
    * Renders the rounded card background [Bitmap] for the single-bar Mini Player widget, matching
    * `CollapsedMiniMusicPlayer`:
-   * - `18dp` rounded corners
+   * - Evenly rounded `18dp` corners
    * - Horizontal gradient from `darkSurfaceColor` to `lerp(dominantColor, Color(0xFF14141F), 0.38f)`
    * - `1dp` border in `accentColor.copy(alpha = 0.4f)`
    */
@@ -400,8 +601,8 @@ object MusicPlayerWidgets {
     cornerRadiusPx: Float = 36f,
     borderWidthPx: Float = 2f,
   ): Bitmap? {
-    val safeW = widthPx.coerceIn(120, 960)
-    val safeH = heightPx.coerceIn(48, 320)
+    val safeW = widthPx.coerceIn(120, 1600)
+    val safeH = heightPx.coerceIn(48, 600)
     return try {
       val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
       val canvas = Canvas(bitmap)
@@ -414,6 +615,7 @@ object MusicPlayerWidgets {
 
       val halfStroke = borderWidthPx * 0.5f
       val rect = RectF(halfStroke, halfStroke, w - halfStroke, h - halfStroke)
+      val evenCornerRadius = min(cornerRadiusPx, min(rect.width(), rect.height()) * 0.5f)
 
       val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -427,14 +629,14 @@ object MusicPlayerWidgets {
           Shader.TileMode.CLAMP,
         )
       }
-      canvas.drawRoundRect(rect, cornerRadiusPx, cornerRadiusPx, fillPaint)
+      canvas.drawRoundRect(rect, evenCornerRadius, evenCornerRadius, fillPaint)
 
       val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = borderWidthPx
         color = borderColor
       }
-      canvas.drawRoundRect(rect, cornerRadiusPx, cornerRadiusPx, borderPaint)
+      canvas.drawRoundRect(rect, evenCornerRadius, evenCornerRadius, borderPaint)
 
       bitmap
     } catch (_: Throwable) {
@@ -445,20 +647,19 @@ object MusicPlayerWidgets {
   /**
    * Renders the rounded card background [Bitmap] for the Album Art & 5 Playback Controls widget,
    * matching `ExpandedMusicPlayerOverlay`:
-   * - `24dp` rounded corners
+   * - `16dp` rounded corners
    * - 3-stop vertical gradient: `lerp(dominantColor, Color(0xFF12121A), 0.25f)`,
    *   `lerp(secondaryColor, Color(0xFF0E0E16), 0.45f)`, `deepBackgroundColor`
-   * - `1dp` border in `accentColor.copy(alpha = 0.4f)`
    */
   fun renderAlbumArtWidgetBackgroundBitmap(
     palette: AlbumArtPalette,
     widthPx: Int = 480,
     heightPx: Int = 540,
-    cornerRadiusPx: Float = 48f,
-    borderWidthPx: Float = 2f,
+    cornerRadiusPx: Float = 32f,
+    borderWidthPx: Float = 0f,
   ): Bitmap? {
-    val safeW = widthPx.coerceIn(120, 720)
-    val safeH = heightPx.coerceIn(120, 720)
+    val safeW = widthPx.coerceIn(120, 1600)
+    val safeH = heightPx.coerceIn(120, 1600)
     return try {
       val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
       val canvas = Canvas(bitmap)
@@ -468,10 +669,10 @@ object MusicPlayerWidgets {
       val topColor = colorToArgb(lerp(palette.dominantColor, Color(0xFF12121A), 0.25f))
       val midColor = colorToArgb(lerp(palette.secondaryColor, Color(0xFF0E0E16), 0.45f))
       val bottomColor = colorToArgb(palette.deepBackgroundColor)
-      val borderColor = colorToArgb(palette.accentColor, alphaOverride = 0.42f)
 
-      val halfStroke = borderWidthPx * 0.5f
+      val halfStroke = borderWidthPx.coerceAtLeast(0f) * 0.5f
       val rect = RectF(halfStroke, halfStroke, w - halfStroke, h - halfStroke)
+      val evenCornerRadius = min(cornerRadiusPx, min(rect.width(), rect.height()) * 0.5f)
 
       val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -485,14 +686,17 @@ object MusicPlayerWidgets {
           Shader.TileMode.CLAMP,
         )
       }
-      canvas.drawRoundRect(rect, cornerRadiusPx, cornerRadiusPx, fillPaint)
+      canvas.drawRoundRect(rect, evenCornerRadius, evenCornerRadius, fillPaint)
 
-      val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = borderWidthPx
-        color = borderColor
+      if (borderWidthPx > 0f) {
+        val borderColor = colorToArgb(palette.accentColor, alphaOverride = 0.42f)
+        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+          style = Paint.Style.STROKE
+          strokeWidth = borderWidthPx
+          color = borderColor
+        }
+        canvas.drawRoundRect(rect, evenCornerRadius, evenCornerRadius, borderPaint)
       }
-      canvas.drawRoundRect(rect, cornerRadiusPx, cornerRadiusPx, borderPaint)
 
       bitmap
     } catch (_: Throwable) {
@@ -501,7 +705,7 @@ object MusicPlayerWidgets {
   }
 
   /**
-   * Renders a center-cropped, rounded-corner album art [Bitmap] (with optional subtle white border)
+   * Renders a center-cropped, evenly rounded-corner album art [Bitmap] (with optional subtle white border)
    * suitable for `RemoteViews.setImageViewBitmap` on all Android versions.
    */
   fun renderRoundedAlbumArtBitmap(
@@ -512,8 +716,8 @@ object MusicPlayerWidgets {
     cornerRadiusPx: Float,
     borderWidthPx: Float = 0f,
   ): Bitmap? {
-    val safeW = widthPx.coerceIn(48, 512)
-    val safeH = heightPx.coerceIn(48, 512)
+    val safeW = widthPx.coerceIn(48, 1024)
+    val safeH = heightPx.coerceIn(48, 1024)
     return try {
       val output = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
       val canvas = Canvas(output)
@@ -521,6 +725,7 @@ object MusicPlayerWidgets {
       val h = safeH.toFloat()
       val halfStroke = borderWidthPx * 0.5f
       val rect = RectF(halfStroke, halfStroke, w - halfStroke, h - halfStroke)
+      val evenCornerRadius = min(cornerRadiusPx, min(rect.width(), rect.height()) * 0.5f)
 
       val validSource = sourceBitmap?.takeIf { !it.isRecycled && it.width > 0 && it.height > 0 }
       if (validSource != null) {
@@ -537,7 +742,7 @@ object MusicPlayerWidgets {
           style = Paint.Style.FILL
           this.shader = shader
         }
-        canvas.drawRoundRect(rect, cornerRadiusPx, cornerRadiusPx, artPaint)
+        canvas.drawRoundRect(rect, evenCornerRadius, evenCornerRadius, artPaint)
       } else {
         val domArgb = colorToArgb(palette.dominantColor)
         val secArgb = colorToArgb(palette.secondaryColor)
@@ -553,7 +758,7 @@ object MusicPlayerWidgets {
             Shader.TileMode.CLAMP,
           )
         }
-        canvas.drawRoundRect(rect, cornerRadiusPx, cornerRadiusPx, bgPaint)
+        canvas.drawRoundRect(rect, evenCornerRadius, evenCornerRadius, bgPaint)
       }
 
       if (borderWidthPx > 0f) {
@@ -562,7 +767,7 @@ object MusicPlayerWidgets {
           strokeWidth = borderWidthPx
           color = 0x40FFFFFF // Color.White.copy(alpha = 0.25f)
         }
-        canvas.drawRoundRect(rect, cornerRadiusPx, cornerRadiusPx, borderPaint)
+        canvas.drawRoundRect(rect, evenCornerRadius, evenCornerRadius, borderPaint)
       }
 
       output
@@ -610,8 +815,13 @@ object MusicPlayerWidgets {
   }
 
   /**
-   * Builds the [RemoteViews] for the single-bar Mini Player widget ([MusicMiniBarWidgetProvider]),
-   * modeled after `CollapsedMiniMusicPlayer`.
+   * Builds the [RemoteViews] for the single-bar Mini Player widget ([MusicMiniBarWidgetProvider]):
+   * - Evenly rounded corners (`18dp` radius)
+   * - Album art taking the full height of the bar, aligned all the way to the left, with corners
+   *   rounded using the exact same radius as the bar corners so it fits seamlessly
+   * - No seek bar display
+   * - Track title and artist/album subtitle
+   * - Enlarged Favorite, Previous, Play/Pause, and Next controls
    */
   fun buildMiniBarRemoteViews(
     context: Context,
@@ -625,34 +835,45 @@ object MusicPlayerWidgets {
       2f
     }
 
-    val minWidthDp = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 280)?.takeIf { it > 0 } ?: 280
-    val minHeightDp = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 64)?.takeIf { it > 0 } ?: 64
-    val bgWidthPx = (minWidthDp * density).roundToInt().coerceIn(240, 800)
-    val bgHeightPx = (minHeightDp * density).roundToInt().coerceIn(72, 240)
+    val (widthDp, _) = resolveWidgetSizeDp(
+      context = context,
+      options = options,
+      defaultWidthDp = 280f,
+      defaultHeightDp = MINI_BAR_HEIGHT_DP,
+    )
+    val heightDp = MINI_BAR_HEIGHT_DP
+    val rawWidthPx = (widthDp * density).coerceAtLeast(160f)
+    val rawHeightPx = (heightDp * density).coerceAtLeast(48f)
+    val maxDimPx = 1200f
+    val scaleFactor = if (rawWidthPx > maxDimPx) maxDimPx / rawWidthPx else 1f
+    val bgWidthPx = (rawWidthPx * scaleFactor).roundToInt().coerceAtLeast(160)
+    val bgHeightPx = (rawHeightPx * scaleFactor).roundToInt().coerceAtLeast(48)
+    val barCornerRadiusPx = MINI_BAR_CORNER_RADIUS_DP * density * scaleFactor
 
     renderMiniBarBackgroundBitmap(
       palette = state.palette,
       widthPx = bgWidthPx,
       heightPx = bgHeightPx,
-      cornerRadiusPx = 18f * density,
-      borderWidthPx = max(1f, 1f * density),
+      cornerRadiusPx = barCornerRadiusPx,
+      borderWidthPx = max(1f, 1f * density * scaleFactor),
     )?.let { bgBmp ->
       views.setImageViewBitmap(R.id.widget_mini_background, bgBmp)
     }
 
-    val thumbSizePx = (44f * density).roundToInt().coerceIn(64, 192)
+    // Album art takes the full height of the bar (1:1 square of bgHeightPx x bgHeightPx)
+    // and its corners are rounded with the exact same radius as the bar corners.
+    val thumbSizePx = bgHeightPx
     renderRoundedAlbumArtBitmap(
       sourceBitmap = state.artworkBitmap,
       palette = state.palette,
       widthPx = thumbSizePx,
       heightPx = thumbSizePx,
-      cornerRadiusPx = 10f * density,
+      cornerRadiusPx = barCornerRadiusPx,
       borderWidthPx = 0f,
     )?.let { artBmp ->
       views.setImageViewBitmap(R.id.widget_mini_album_art, artBmp)
     }
 
-    views.setProgressBar(R.id.widget_mini_progress_bar, 1000, state.progressPermille, false)
     views.setTextViewText(R.id.widget_mini_title, state.title)
     views.setTextViewText(R.id.widget_mini_subtitle, state.miniBarSubtitle)
 
@@ -727,7 +948,8 @@ object MusicPlayerWidgets {
    * - Album art at top
    * - Favorite star overlaid at the bottom-right corner of the album art
    * - Track title and artist/album below the album art
-   * - Full 5 playback controls (Shuffle, Previous, Play/Pause, Next, Repeat) below
+   * - Full 5 playback controls below (Shuffle / External Left Action, Previous, Play/Pause, Next,
+   *   Repeat / External Right Action)
    */
   fun buildAlbumArtRemoteViews(
     context: Context,
@@ -741,34 +963,42 @@ object MusicPlayerWidgets {
       2f
     }
 
-    val minWidthDp = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 240)?.takeIf { it > 0 } ?: 240
-    val minHeightDp = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 260)?.takeIf { it > 0 } ?: 260
-    val bgWidthPx = (minWidthDp * density).roundToInt().coerceIn(220, 640)
-    val bgHeightPx = (minHeightDp * density).roundToInt().coerceIn(240, 680)
+    val (widthDp, heightDp) = resolveWidgetSizeDp(
+      context = context,
+      options = options,
+      defaultWidthDp = 240f,
+      defaultHeightDp = 260f,
+    )
+    val rawWidthPx = (widthDp * density).coerceAtLeast(200f)
+    val rawHeightPx = (heightDp * density).coerceAtLeast(220f)
+    val maxDimPx = 1200f
+    val maxRaw = max(rawWidthPx, rawHeightPx)
+    val scaleFactor = if (maxRaw > maxDimPx) maxDimPx / maxRaw else 1f
+    val bgWidthPx = (rawWidthPx * scaleFactor).roundToInt().coerceAtLeast(200)
+    val bgHeightPx = (rawHeightPx * scaleFactor).roundToInt().coerceAtLeast(220)
 
     renderAlbumArtWidgetBackgroundBitmap(
       palette = state.palette,
       widthPx = bgWidthPx,
       heightPx = bgHeightPx,
-      cornerRadiusPx = 24f * density,
-      borderWidthPx = max(1f, 1f * density),
+      cornerRadiusPx = ALBUM_WIDGET_CORNER_RADIUS_DP * density * scaleFactor,
+      borderWidthPx = 0f,
     )?.let { bgBmp ->
       views.setImageViewBitmap(R.id.widget_album_background, bgBmp)
     }
 
-    // Estimate the album art container dimensions (widget size minus padding, text row, and 5-button row)
-    val artWidthDp = (minWidthDp - 28).coerceAtLeast(120)
-    val artHeightDp = (minHeightDp - 124).coerceAtLeast(100)
-    val artWidthPx = (artWidthDp * density).roundToInt().coerceIn(140, 440)
-    val artHeightPx = (artHeightDp * density).roundToInt().coerceIn(120, 440)
+    // Render the album art as a strict 1:1 square fixed to the top with 8dp spacing on all sides
+    val displayedArtSizeDp = (widthDp - 16f).coerceAtLeast(100f)
+    val artSizePx = max(bgWidthPx, bgHeightPx).coerceIn(480, 1440)
+    val artPxPerDp = artSizePx.toFloat() / displayedArtSizeDp
 
     renderRoundedAlbumArtBitmap(
       sourceBitmap = state.artworkBitmap,
       palette = state.palette,
-      widthPx = artWidthPx,
-      heightPx = artHeightPx,
-      cornerRadiusPx = 20f * density,
-      borderWidthPx = max(1.5f, 1.5f * density),
+      widthPx = artSizePx,
+      heightPx = artSizePx,
+      cornerRadiusPx = ALBUM_ART_CORNER_RADIUS_DP * artPxPerDp,
+      borderWidthPx = max(1.5f, 1.5f * artPxPerDp),
     )?.let { artBmp ->
       views.setImageViewBitmap(R.id.widget_album_art, artBmp)
     }
@@ -796,23 +1026,37 @@ object MusicPlayerWidgets {
     views.setTextViewText(R.id.widget_album_title, state.title)
     views.setTextViewText(R.id.widget_album_subtitle, buildAlbumWidgetSubtitleText(state))
 
-    // 1. Shuffle Control
-    views.setViewVisibility(
-      R.id.widget_album_shuffle_bg,
-      if (state.isShuffleHighlighted) View.VISIBLE else View.INVISIBLE,
-    )
-    views.setInt(R.id.widget_album_shuffle_bg, "setColorFilter", state.shuffleHighlightBgArgb)
-    views.setImageViewResource(R.id.widget_album_shuffle_button, state.shuffleIconRes)
-    views.setInt(R.id.widget_album_shuffle_button, "setColorFilter", state.shuffleTintArgb)
-    views.setContentDescription(R.id.widget_album_shuffle_button, state.shuffleContentDescription)
-    views.setOnClickPendingIntent(
-      R.id.widget_album_shuffle_button,
-      buildWidgetActionPendingIntent(
-        context,
-        MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE,
-        REQUEST_CODE_ALBUM_SHUFFLE,
-      ),
-    )
+    val iconSizePx = (24f * density).roundToInt().coerceIn(32, 96)
+
+    // 1. Left Control: Shuffle (internal) or Extracted Left Custom Action (external Android system media player)
+    if (!state.isLeftControlVisible) {
+      views.setViewVisibility(R.id.widget_album_shuffle_container, View.INVISIBLE)
+      views.setViewVisibility(R.id.widget_album_shuffle_bg, View.INVISIBLE)
+    } else {
+      views.setViewVisibility(R.id.widget_album_shuffle_container, View.VISIBLE)
+      views.setViewVisibility(
+        R.id.widget_album_shuffle_bg,
+        if (state.isShuffleHighlighted) View.VISIBLE else View.INVISIBLE,
+      )
+      views.setInt(R.id.widget_album_shuffle_bg, "setColorFilter", state.shuffleHighlightBgArgb)
+      val leftCustomBmp = state.leftCustomActionIconBitmap?.takeIf { !it.isRecycled }
+      if (leftCustomBmp != null) {
+        val tintedLeft = renderTintedActionIconBitmap(leftCustomBmp, state.shuffleTintArgb, iconSizePx)
+        views.setImageViewBitmap(R.id.widget_album_shuffle_button, tintedLeft ?: leftCustomBmp)
+      } else {
+        views.setImageViewResource(R.id.widget_album_shuffle_button, state.shuffleIconRes)
+      }
+      views.setInt(R.id.widget_album_shuffle_button, "setColorFilter", state.shuffleTintArgb)
+      views.setContentDescription(R.id.widget_album_shuffle_button, state.shuffleContentDescription)
+      views.setOnClickPendingIntent(
+        R.id.widget_album_shuffle_button,
+        buildWidgetActionPendingIntent(
+          context,
+          MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE,
+          REQUEST_CODE_ALBUM_SHUFFLE,
+        ),
+      )
+    }
 
     // 2. Previous Control
     views.setImageViewResource(R.id.widget_album_prev_button, R.drawable.ic_media_skip_previous)
@@ -854,23 +1098,35 @@ object MusicPlayerWidgets {
       ),
     )
 
-    // 5. Repeat Control
-    views.setViewVisibility(
-      R.id.widget_album_repeat_bg,
-      if (state.isRepeatHighlighted) View.VISIBLE else View.INVISIBLE,
-    )
-    views.setInt(R.id.widget_album_repeat_bg, "setColorFilter", state.repeatHighlightBgArgb)
-    views.setImageViewResource(R.id.widget_album_repeat_button, state.repeatIconRes)
-    views.setInt(R.id.widget_album_repeat_button, "setColorFilter", state.repeatTintArgb)
-    views.setContentDescription(R.id.widget_album_repeat_button, state.repeatContentDescription)
-    views.setOnClickPendingIntent(
-      R.id.widget_album_repeat_button,
-      buildWidgetActionPendingIntent(
-        context,
-        MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT,
-        REQUEST_CODE_ALBUM_REPEAT,
-      ),
-    )
+    // 5. Right Control: Repeat (internal) or Extracted Right Custom Action (external Android system media player)
+    if (!state.isRightControlVisible) {
+      views.setViewVisibility(R.id.widget_album_repeat_container, View.INVISIBLE)
+      views.setViewVisibility(R.id.widget_album_repeat_bg, View.INVISIBLE)
+    } else {
+      views.setViewVisibility(R.id.widget_album_repeat_container, View.VISIBLE)
+      views.setViewVisibility(
+        R.id.widget_album_repeat_bg,
+        if (state.isRepeatHighlighted) View.VISIBLE else View.INVISIBLE,
+      )
+      views.setInt(R.id.widget_album_repeat_bg, "setColorFilter", state.repeatHighlightBgArgb)
+      val rightCustomBmp = state.rightCustomActionIconBitmap?.takeIf { !it.isRecycled }
+      if (rightCustomBmp != null) {
+        val tintedRight = renderTintedActionIconBitmap(rightCustomBmp, state.repeatTintArgb, iconSizePx)
+        views.setImageViewBitmap(R.id.widget_album_repeat_button, tintedRight ?: rightCustomBmp)
+      } else {
+        views.setImageViewResource(R.id.widget_album_repeat_button, state.repeatIconRes)
+      }
+      views.setInt(R.id.widget_album_repeat_button, "setColorFilter", state.repeatTintArgb)
+      views.setContentDescription(R.id.widget_album_repeat_button, state.repeatContentDescription)
+      views.setOnClickPendingIntent(
+        R.id.widget_album_repeat_button,
+        buildWidgetActionPendingIntent(
+          context,
+          MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT,
+          REQUEST_CODE_ALBUM_REPEAT,
+        ),
+      )
+    }
 
     // Tapping the widget background, album art, or song text opens the expanded Music Player
     val openIntent = buildOpenMusicPlayerPendingIntent(context, REQUEST_CODE_ALBUM_OPEN)
@@ -898,6 +1154,11 @@ object MusicPlayerWidgets {
 
     val existingSession = MusicPlayerEngine.getActivePlaybackSession()?.takeIf { !it.isReleased }
     val internalPlaying = existingSession?.let { it.isPlaying && it.currentTrack != null } == true
+    if (!internalPlaying && context != null && MusicPlayerEngine.externalSystemMediaInfo == null && MusicPlayerEngine.isMusicPlayingOverride != true) {
+      try {
+        MusicPlayerEngine.syncExternalSystemMediaSessions(context)
+      } catch (_: Throwable) {}
+    }
     val external = MusicPlayerEngine.externalSystemMediaInfo
       ?.takeUnless { MusicPlayerEngine.isIgnoredPhoneOrCallSystemMediaInfo(it, context) }
 
@@ -990,27 +1251,14 @@ object MusicPlayerWidgets {
   }
 
   /**
-   * Updates only the progress bar on any active [MusicMiniBarWidgetProvider] instances during
-   * 1-second playback progress ticks without re-rendering full bitmaps.
+   * No-op because the Mini Player widget no longer displays a seek/progress bar.
    */
+  @Suppress("UNUSED_PARAMETER")
   fun updateMiniBarProgressOnly(
     context: Context?,
     progressPermille: Int,
   ) {
-    val appCtx = context?.applicationContext ?: context ?: return
-    try {
-      val manager = AppWidgetManager.getInstance(appCtx) ?: return
-      val miniComponent = ComponentName(appCtx, MusicMiniBarWidgetProvider::class.java)
-      val miniIds = manager.getAppWidgetIds(miniComponent) ?: return
-      if (miniIds.isEmpty()) return
-      val clamped = progressPermille.coerceIn(0, 1000)
-      val partialViews = RemoteViews(appCtx.packageName, R.layout.widget_music_mini_bar).apply {
-        setProgressBar(R.id.widget_mini_progress_bar, 1000, clamped, false)
-      }
-      for (id in miniIds) {
-        manager.partiallyUpdateAppWidget(id, partialViews)
-      }
-    } catch (_: Throwable) {}
+    // Seek bar display was removed from the mini widget.
   }
 
   /**
@@ -1068,9 +1316,9 @@ object MusicPlayerWidgets {
 
 /**
  * First Music Player Home Screen AppWidget:
- * Single-bar mini player widget, styled after the collapsed mini player in the Music Player tool,
- * featuring a top progress bar, rounded album art thumbnail, song title & artist/album subtitle,
- * favorite star toggle, previous, circular accent play/pause button, and next controls.
+ * Single-bar mini player widget featuring evenly rounded corners, full-height left-aligned album art
+ * with matching corner radius, song title & artist/album subtitle, favorite star toggle, and large
+ * previous, circular accent play/pause, and next controls (without a seek bar).
  */
 class MusicMiniBarWidgetProvider : AppWidgetProvider() {
   override fun onUpdate(
@@ -1102,8 +1350,9 @@ class MusicMiniBarWidgetProvider : AppWidgetProvider() {
 /**
  * Second Music Player Home Screen AppWidget:
  * Album art widget with the star for favoriting overlaid at the bottom-right corner of the album art,
- * track title & artist below the album art, and the full 5 playback controls (Shuffle, Previous,
- * Play/Pause, Next, Repeat) at the bottom, styled after the expanded Music Player tool.
+ * track title & artist below the album art, and the full 5 playback controls at the bottom (extracting
+ * the left and right custom playback buttons from the Android system media player when controlling
+ * external media).
  */
 class MusicAlbumArtWidgetProvider : AppWidgetProvider() {
   override fun onUpdate(

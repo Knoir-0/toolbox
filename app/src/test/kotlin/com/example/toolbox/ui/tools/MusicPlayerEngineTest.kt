@@ -2736,7 +2736,16 @@ class MusicPlayerEngineTest {
       assertEquals(tracks[0].id, prevTrackState.trackId)
 
       // 7. When internal session is paused and an external Android media player is active, widgets reflect external media
+      //    and extract the left and right playback buttons from the Android system media player
       assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_PAUSE))
+      val externalLeftAction = SystemMediaCustomAction(
+        action = "com.spotify.music.ACTION_SHUFFLE_SMART",
+        label = "Smart Shuffle",
+      )
+      val externalRightAction = SystemMediaCustomAction(
+        action = "com.spotify.music.ACTION_LIKE",
+        label = "Liked",
+      )
       val externalInfo = MusicPlayerEngine.updateExternalSystemMediaFromMetadata(
         title = "Digital Love",
         artist = "Daft Punk",
@@ -2746,6 +2755,7 @@ class MusicPlayerEngineTest {
         isPlaying = true,
         durationMs = 200_000L,
         positionMs = 50_000L,
+        customActions = listOf(externalLeftAction, externalRightAction),
       )
       val externalWidgetState = MusicPlayerWidgets.resolveWidgetState(
         context = null,
@@ -2760,6 +2770,22 @@ class MusicPlayerEngineTest {
       assertEquals("Discovery", externalWidgetState.album)
       assertEquals("Daft Punk • Discovery • Spotify", externalWidgetState.miniBarSubtitle)
       assertTrue(externalWidgetState.progressPermille in 240..300)
+      assertTrue(externalWidgetState.isLeftControlVisible)
+      assertTrue(externalWidgetState.isRightControlVisible)
+      assertEquals(externalLeftAction, externalWidgetState.leftCustomAction)
+      assertEquals(externalRightAction, externalWidgetState.rightCustomAction)
+      assertEquals("Smart Shuffle", externalWidgetState.shuffleContentDescription)
+      assertEquals("Liked", externalWidgetState.repeatContentDescription)
+      assertTrue(externalWidgetState.isShuffleHighlighted)
+      assertTrue(externalWidgetState.isRepeatHighlighted)
+      assertEquals(com.example.toolbox.R.drawable.ic_media_shuffle_smart, externalWidgetState.shuffleIconRes)
+      assertEquals(com.example.toolbox.R.drawable.ic_media_favorite_on, externalWidgetState.repeatIconRes)
+
+      // 8. Clicking the left and right playback buttons in the big widget dispatches the extracted external custom actions
+      assertTrue(MusicPlayerWidgets.handleWidgetAction(null, MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE))
+      assertEquals("CUSTOM:com.spotify.music.ACTION_SHUFFLE_SMART", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
+      assertTrue(MusicPlayerWidgets.handleWidgetAction(null, MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT))
+      assertEquals("CUSTOM:com.spotify.music.ACTION_LIKE", MusicPlayerEngine.externalSystemMediaLastDispatchedAction)
     } finally {
       session.release()
       MusicPlayerEngine.resetPlaybackSession()

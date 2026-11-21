@@ -1446,12 +1446,12 @@ class MusicPlayerScreenTest {
       assertTrue(state.isPlaying)
       assertEquals(tracks[0].title, state.title)
 
-      // Widget 1: Single bar widget, similar to the collapsed mini player
+      // Widget 1: Single bar widget, with no seek bar, full-height left-aligned album art, and larger playback controls
       val miniHost = android.widget.FrameLayout(context)
       val miniRemoteViews = MusicPlayerWidgets.buildMiniBarRemoteViews(context, state)
       val miniRoot = miniRemoteViews.apply(context, miniHost)
 
-      val miniProgress = miniRoot.findViewById<android.widget.ProgressBar>(com.example.toolbox.R.id.widget_mini_progress_bar)
+      val miniRow = miniRoot.findViewById<android.widget.LinearLayout>(com.example.toolbox.R.id.widget_mini_row)
       val miniArt = miniRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_mini_album_art)
       val miniTitle = miniRoot.findViewById<android.widget.TextView>(com.example.toolbox.R.id.widget_mini_title)
       val miniSubtitle = miniRoot.findViewById<android.widget.TextView>(com.example.toolbox.R.id.widget_mini_subtitle)
@@ -1460,9 +1460,17 @@ class MusicPlayerScreenTest {
       val miniPlayPause = miniRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_mini_play_pause_button)
       val miniNext = miniRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_mini_next_button)
 
-      assertNotNull(miniProgress)
-      assertEquals(500, miniProgress.progress)
+      // Verify no ProgressBar exists inside the mini widget
+      assertEquals(0, (0 until (miniRoot as android.view.ViewGroup).childCount).count {
+        miniRoot.getChildAt(it) is android.widget.ProgressBar
+      })
+      assertNotNull(miniRow)
+      assertEquals(0, miniRow.paddingStart)
+      assertEquals(0, miniRow.paddingTop)
+      assertEquals(0, miniRow.paddingBottom)
       assertNotNull(miniArt)
+      assertEquals(android.view.ViewGroup.LayoutParams.MATCH_PARENT, miniArt.layoutParams.height)
+      assertTrue(miniArt.adjustViewBounds)
       assertEquals(tracks[0].title, miniTitle.text.toString())
       assertEquals("${tracks[0].artist} • ${tracks[0].album}", miniSubtitle.text.toString())
       assertEquals(android.view.View.VISIBLE, miniFav.visibility)
@@ -1501,9 +1509,6 @@ class MusicPlayerScreenTest {
         favLp.gravity and (android.view.Gravity.VERTICAL_GRAVITY_MASK or android.view.Gravity.RELATIVE_HORIZONTAL_GRAVITY_MASK),
       )
       assertEquals("Favorite", albumFavButton.contentDescription.toString())
-
-      // Verify no ProgressBar exists inside the second widget
-      org.junit.Assert.assertNull(albumRoot.findViewById<android.widget.ProgressBar>(com.example.toolbox.R.id.widget_mini_progress_bar))
 
       // Verify title, artist/album, and full 5 playback controls
       assertEquals(tracks[0].title, albumTitle.text.toString())

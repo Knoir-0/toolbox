@@ -7524,6 +7524,9 @@ object MusicPlayerEngine {
       if (rawActions.size >= 5 && compactIndices != null && compactIndices.size == 3 && index in compactIndices) {
         continue
       }
+      if (rawActions.size == 5 && title.isBlank() && index in 1..3) {
+        continue
+      }
       val iconBmp = try {
         notifAction.getIcon()?.loadDrawable(context)?.let { drawableToBitmap(it, targetSizePx = 64) }
       } catch (_: Throwable) {
@@ -7894,6 +7897,8 @@ object MusicPlayerEngine {
       val artBitmap = findLocalOrMediaStoreArtworkBitmap(context, title, artist, album, albumId)
         ?: loadAppIconBitmap(context, senderPkg)
       val nowElapsed = safeElapsedRealtimeMs()
+      val preservedCustomActions = activeMediaNotifications[senderPkg]?.customActions?.takeIf { it.isNotEmpty() }
+        ?: previous?.customActions.orEmpty()
       val info = applyExternalSystemMediaMetadata(
         title = title.ifBlank { appLabel },
         artist = artist,
@@ -7903,6 +7908,7 @@ object MusicPlayerEngine {
         isPlaying = playing,
         artworkBitmap = artBitmap,
         positionUpdateElapsedRealtimeMs = nowElapsed,
+        customActions = preservedCustomActions,
         fromSystemSync = true,
       )
       lastBroadcastReceivedElapsedMs = nowElapsed
@@ -8393,7 +8399,18 @@ object MusicPlayerEngine {
       } catch (_: Throwable) {
         emptyList()
       }
-      val resolvedCustomActions = customActionsFromPlaybackState.ifEmpty { notifCustomActions }
+      val resolvedCustomActions = when {
+        customActionsFromPlaybackState.size >= 2 || notifCustomActions.isEmpty() ->
+          customActionsFromPlaybackState.ifEmpty { notifCustomActions }
+        customActionsFromPlaybackState.isEmpty() -> notifCustomActions
+        else -> {
+          val first = customActionsFromPlaybackState.first()
+          val extraNotifActions = notifCustomActions.filterNot {
+            it.label.equals(first.label, ignoreCase = true) || it.action.equals(first.action, ignoreCase = true)
+          }
+          customActionsFromPlaybackState + extraNotifActions
+        }
+      }
 
       applyExternalSystemMediaMetadata(
         title = title.ifBlank { appLabel },
