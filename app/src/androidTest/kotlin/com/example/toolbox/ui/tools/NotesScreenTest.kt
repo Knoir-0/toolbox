@@ -600,13 +600,16 @@ class NotesScreenTest {
     assertTrue(checklistAddBtnBounds.bottom <= checklistInputCardBounds.bottom)
 
     composeTestRule.runOnIdle {
+      todoRepo.saveTasks(listOf(TodoItem(id = "task-1", title = "Match height test")))
       showTodo.value = true
     }
     composeTestRule.waitForIdle()
 
     val todoBarBounds = composeTestRule.onNodeWithTag("todo_quick_add_card").fetchSemanticsNode().boundsInRoot
+    val todoItemBounds = composeTestRule.onNodeWithTag("todo_item_card_task-1").fetchSemanticsNode().boundsInRoot
 
     assertEquals(todoBarBounds.width, notesBarBounds.width, 1f)
     assertEquals(todoBarBounds.height, notesBarBounds.height, 1f)
+    assertEquals(todoBarBounds.height, todoItemBounds.height, 1f)
   }
 }

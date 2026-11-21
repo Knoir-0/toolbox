@@ -161,6 +161,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -298,7 +301,7 @@ fun TodoListScreen(
     }
   }
   val taskSpacingPx = with(density) { 8.dp.toPx() }
-  val defaultTaskHeightPx = with(density) { 64.dp.toPx() }
+  val defaultTaskHeightPx = with(density) { 52.dp.toPx() }
   val taskMaxOverscrollPx = with(density) { 12.dp.toPx() }
   val subtaskSpacingPx = with(density) { 6.dp.toPx() }
   val defaultSubtaskHeightPx = with(density) { 40.dp.toPx() }
@@ -312,6 +315,29 @@ fun TodoListScreen(
   var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
   // Check midnight reset periodically / on resume
+  val lifecycleOwner = LocalLifecycleOwner.current
+  androidx.compose.runtime.DisposableEffect(lifecycleOwner, repo) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_RESUME) {
+        val latestTasks = repo.loadTasks()
+        val latestCompletedToday = repo.getCompletedTodayCount(getTodayDateKey())
+        val latestCompletedTasks = repo.loadCompletedTasks(getTodayDateKey())
+        if (latestTasks != tasks ||
+          latestCompletedToday != completedTodayCount ||
+          latestCompletedTasks != completedTasks
+        ) {
+          tasks = latestTasks
+          completedTodayCount = latestCompletedToday
+          completedTasks = latestCompletedTasks
+        }
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+    }
+  }
+
   LaunchedEffect(Unit) {
     completedTodayCount = repo.getCompletedTodayCount(getTodayDateKey())
     completedTasks = repo.loadCompletedTasks(getTodayDateKey())
@@ -381,6 +407,7 @@ fun TodoListScreen(
     repo.setCompletedTodayCount(updatedCompletedToday, getTodayDateKey())
     repo.saveCompletedTasks(updatedCompletedTasks, getTodayDateKey())
     syncAlarmsForTaskUpdate(previousTasks, updatedTasks)
+    TodoListWidgets.updateAllWidgets(context)
   }
 
   fun applySnapshot(nextSnapshot: TodoHistorySnapshot) {
@@ -409,6 +436,7 @@ fun TodoListScreen(
     repo.setCompletedTodayCount(previousState.completedToday, getTodayDateKey())
     repo.saveCompletedTasks(previousState.completedTasks, getTodayDateKey())
     syncAlarmsForTaskUpdate(previousTasks, previousState.tasks)
+    TodoListWidgets.updateAllWidgets(context)
   }
 
   fun redo() {
@@ -429,6 +457,7 @@ fun TodoListScreen(
     repo.setCompletedTodayCount(nextState.completedToday, getTodayDateKey())
     repo.saveCompletedTasks(nextState.completedTasks, getTodayDateKey())
     syncAlarmsForTaskUpdate(previousTasks, nextState.tasks)
+    TodoListWidgets.updateAllWidgets(context)
   }
 
   fun completeTask(task: TodoItem) {
@@ -678,6 +707,7 @@ fun TodoListScreen(
       redoStack = emptyList()
       historyVersion += 1
       repo.saveTasks(tasks)
+      TodoListWidgets.updateAllWidgets(context)
     }
   }
 
@@ -757,6 +787,7 @@ fun TodoListScreen(
       redoStack = emptyList()
       historyVersion += 1
       repo.saveTasks(tasks)
+      TodoListWidgets.updateAllWidgets(context)
     }
   }
 
@@ -2040,7 +2071,7 @@ private fun TaskCardContent(
         modifier = Modifier
           .fillMaxWidth()
           .height(IntrinsicSize.Min)
-          .heightIn(min = 60.dp)
+          .heightIn(min = 52.dp)
           .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
@@ -2178,7 +2209,7 @@ private fun TaskCardContent(
               Box(
                 modifier = Modifier
                   .fillMaxSize()
-                  .padding(vertical = 12.dp, horizontal = 4.dp),
+                  .padding(vertical = 10.dp, horizontal = 4.dp),
                 contentAlignment = Alignment.CenterStart,
               ) {
                 innerTextField()
@@ -2187,7 +2218,7 @@ private fun TaskCardContent(
             modifier = Modifier
               .weight(1f)
               .fillMaxHeight()
-              .heightIn(min = 60.dp)
+              .heightIn(min = 52.dp)
               .focusRequester(focusRequester)
               .onFocusChanged { focusState ->
                 if (focusState.isFocused) {
@@ -2203,7 +2234,7 @@ private fun TaskCardContent(
             modifier = Modifier
               .weight(1f)
               .fillMaxHeight()
-              .heightIn(min = 60.dp)
+              .heightIn(min = 52.dp)
               .clip(RoundedCornerShape(8.dp))
               .combinedClickable(
                 onClick = {
@@ -2223,7 +2254,7 @@ private fun TaskCardContent(
                   currentOnToggleSelection()
                 },
               )
-              .padding(vertical = 12.dp, horizontal = 4.dp)
+              .padding(vertical = 10.dp, horizontal = 4.dp)
               .testTag("todo_item_title_${task.id}"),
             verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
           ) {
@@ -3514,10 +3545,13 @@ private fun CompletedTaskCard(
     Column(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(horizontal = 12.dp, vertical = 10.dp),
+        .padding(horizontal = 12.dp),
     ) {
       Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+          .fillMaxWidth()
+          .heightIn(min = 52.dp)
+          .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
         if (isSelectionMode) {
@@ -3678,7 +3712,7 @@ private fun CompletedTaskCard(
         Column(
           modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 32.dp, top = 8.dp),
+            .padding(start = 32.dp, bottom = 10.dp),
           verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
           task.subtasks.forEach { subtask ->
@@ -4153,7 +4187,7 @@ private fun SavedTasksSheet(
               Box(
                 modifier = Modifier
                   .fillMaxWidth()
-                  .padding(vertical = 10.dp),
+                  .padding(vertical = 6.dp),
                 contentAlignment = Alignment.CenterStart,
               ) {
                 if (newTemplateText.isEmpty()) {
@@ -4169,14 +4203,18 @@ private fun SavedTasksSheet(
             },
             modifier = Modifier
               .weight(1f)
+              .padding(vertical = 4.dp)
               .focusRequester(templateFocusRequester)
               .testTag("todo_save_template_input"),
           )
 
           if (newTemplateText.isNotEmpty()) {
-            IconButton(
-              onClick = { newTemplateText = "" },
-              modifier = Modifier.size(36.dp),
+            Box(
+              modifier = Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .clickable { newTemplateText = "" },
+              contentAlignment = Alignment.Center,
             ) {
               Icon(
                 imageVector = Icons.Default.Clear,
@@ -4250,7 +4288,8 @@ private fun SavedTasksSheet(
               Row(
                 modifier = Modifier
                   .fillMaxWidth()
-                  .padding(horizontal = 14.dp, vertical = 12.dp),
+                  .heightIn(min = 52.dp)
+                  .padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
               ) {
                 Box(

@@ -166,4 +166,12 @@ class HomeScreenShortcutsTest {
       resolveStandaloneTaskIconVector(standaloneTool = Tool.FILES, initialFolder = "/storage/emulated/0/Download"),
     )
   }
+
+  @Test
+  fun parseNotesQuickCaptureMode_parsesNoteAndChecklistModes() {
+    assertEquals("note", NOTES_QUICK_CAPTURE_NOTE)
+    assertEquals("checklist", NOTES_QUICK_CAPTURE_CHECKLIST)
+    assertEquals("extra_notes_quick_capture_mode", EXTRA_NOTES_QUICK_CAPTURE_MODE)
+    assertNull(parseNotesQuickCaptureMode(null))
+  }
 }

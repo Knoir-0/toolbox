@@ -15,6 +15,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import com.example.toolbox.ui.main.EXTRA_EXPAND_MUSIC_PLAYER
+import com.example.toolbox.ui.main.EXTRA_NOTES_QUICK_CAPTURE_MODE
+import com.example.toolbox.ui.main.NOTES_QUICK_CAPTURE_CHECKLIST
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.createFolderShortcutIntent
 import com.example.toolbox.ui.main.createStandaloneToolIntent
@@ -22,12 +24,14 @@ import com.example.toolbox.ui.main.findExistingStandaloneAppTask
 import com.example.toolbox.ui.main.isSameStandaloneTarget
 import com.example.toolbox.ui.main.parseExpandMusicPlayer
 import com.example.toolbox.ui.main.parseFolderShortcut
+import com.example.toolbox.ui.main.parseNotesQuickCaptureMode
 import com.example.toolbox.ui.main.parseStandaloneTool
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
 import com.example.toolbox.ui.main.syncPinnedHomeScreenShortcuts
 import com.example.toolbox.ui.main.syncStandaloneTaskDescription
 import com.example.toolbox.ui.theme.ToolboxTheme
 import com.example.toolbox.ui.tools.MusicPlayerEngine
+import com.example.toolbox.ui.tools.NotesEngine
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -43,9 +47,11 @@ class MainActivity : ComponentActivity() {
     val parsedTool = parseStandaloneTool(intent)
     val parsedFolder = parseFolderShortcut(intent)
     val expandMusicPlayer = parseExpandMusicPlayer(intent)
+    val notesQuickCaptureMode = parseNotesQuickCaptureMode(intent)
     val resolvedTool = when {
       parsedFolder != null -> parsedTool ?: Tool.FILES
       expandMusicPlayer -> parsedTool ?: Tool.MUSIC
+      notesQuickCaptureMode != null -> parsedTool ?: Tool.NOTES
       else -> parsedTool
     }
     if (resolvedTool != null || parsedFolder != null) {
@@ -58,6 +64,11 @@ class MainActivity : ComponentActivity() {
       if (existingTask != null) {
         if (expandMusicPlayer) {
           MusicPlayerEngine.requestExpandFullPlayer()
+        }
+        if (notesQuickCaptureMode != null) {
+          NotesEngine.requestQuickCapture(
+            isChecklist = notesQuickCaptureMode == NOTES_QUICK_CAPTURE_CHECKLIST,
+          )
         }
         try {
           existingTask.moveToFront()
@@ -73,6 +84,11 @@ class MainActivity : ComponentActivity() {
     expandMusicPlayerState.value = expandMusicPlayer
     if (expandMusicPlayer) {
       MusicPlayerEngine.requestExpandFullPlayer()
+    }
+    if (notesQuickCaptureMode != null) {
+      NotesEngine.requestQuickCapture(
+        isChecklist = notesQuickCaptureMode == NOTES_QUICK_CAPTURE_CHECKLIST,
+      )
     }
     syncStandaloneTaskDescription(
       activity = this,
@@ -138,9 +154,11 @@ class MainActivity : ComponentActivity() {
     val parsedFolder = parseFolderShortcut(intent)
     val parsedTool = parseStandaloneTool(intent)
     val expandMusicPlayer = parseExpandMusicPlayer(intent)
+    val notesQuickCaptureMode = parseNotesQuickCaptureMode(intent)
     val incomingTool = when {
       parsedFolder != null -> parsedTool ?: Tool.FILES
       expandMusicPlayer -> parsedTool ?: Tool.MUSIC
+      notesQuickCaptureMode != null -> parsedTool ?: Tool.NOTES
       else -> parsedTool
     }
     if ((incomingTool != null || parsedFolder != null) &&
@@ -153,6 +171,11 @@ class MainActivity : ComponentActivity() {
     ) {
       if (expandMusicPlayer) {
         MusicPlayerEngine.requestExpandFullPlayer()
+      }
+      if (notesQuickCaptureMode != null) {
+        NotesEngine.requestQuickCapture(
+          isChecklist = notesQuickCaptureMode == NOTES_QUICK_CAPTURE_CHECKLIST,
+        )
       }
       val existingTask = findExistingStandaloneAppTask(
         context = this,
@@ -176,6 +199,9 @@ class MainActivity : ComponentActivity() {
             if (expandMusicPlayer) {
               putExtra(EXTRA_EXPAND_MUSIC_PLAYER, true)
             }
+            if (notesQuickCaptureMode != null) {
+              putExtra(EXTRA_NOTES_QUICK_CAPTURE_MODE, notesQuickCaptureMode)
+            }
           }
         }
         startActivity(launchIntent)
@@ -193,6 +219,12 @@ class MainActivity : ComponentActivity() {
       standaloneToolState.value = parsedTool ?: Tool.MUSIC
       expandMusicPlayerState.value = true
       MusicPlayerEngine.requestExpandFullPlayer()
+    } else if (notesQuickCaptureMode != null) {
+      initialFolderState.value = null
+      standaloneToolState.value = parsedTool ?: Tool.NOTES
+      NotesEngine.requestQuickCapture(
+        isChecklist = notesQuickCaptureMode == NOTES_QUICK_CAPTURE_CHECKLIST,
+      )
     } else if (parsedTool != null) {
       initialFolderState.value = null
       standaloneToolState.value = parsedTool

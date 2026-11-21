@@ -69,6 +69,7 @@ Consistent rounding gives Toolbox its signature modern, friendly, and cohesive a
 
 - **Dialogs**: `RoundedCornerShape(28.dp)` (`MaterialTheme.shapes.extraLarge`)
 - **Bottom Sheets / Drawers**: `RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)`
+- **Home Screen AppWidgets (All Widgets)**: `16.dp` corner radius (`16f * density` in rendered background bitmaps), with `android:id="@android:id/background"` and `android:clipToOutline="true"` on the full-bleed `16.dp`-rounded root `FrameLayout` (so Android 12+ launchers opt out of `28.dp` `system_app_widget_background_radius` clipping), and the `1.dp` border stroke inset by `strokeInset = max(borderWidthPx * 1.25f, 1.5f)` with corner radius `cornerRadiusPx + borderWidthPx` so the outline never appears cut off at the rounded corners
 - **Device & Category Pills / Filter Chips**: `RoundedCornerShape(20.dp)` (enforced via `ToolboxPillNavigationItem`)
 - **Item Cards (Lists & Grids)**: `RoundedCornerShape(12.dp)` to `RoundedCornerShape(14.dp)`
 - **Text Input Fields (`OutlinedTextField`)**: `RoundedCornerShape(14.dp)` or `RoundedCornerShape(16.dp)`
@@ -345,4 +346,27 @@ Tools with searchable catalogs, presets, or collections (such as **Files**, **Mu
    - Provide a trailing star toggle (`Icons.Default.Star` tinted with `colorScheme.primary` when favorited; `Icons.Default.StarBorder` tinted with `colorScheme.onSurfaceVariant` when unfavorited) on both catalog search cards and in-tool item/preset lists.
    - Related tools that operate on the same preset catalog (such as **Guitar Tuner** and **Chord Book**) share a unified favorite tunings repository so favoriting a tuning in one tool immediately surfaces it in the other.
    - In tools with an active preset or instrument configuration (e.g., **Guitar Tuner**), place the browsable/filterable preset list below the primary interactive display so quick-tapping any item immediately switches the active preset with haptic feedback, while favorited items can be filtered or surfaced at the top.
+
+---
+
+### 5.8 Home Screen AppWidgets Pattern
+All Home Screen AppWidgets (including the unified responsive **Music Player** widget—which automatically switches between **Mini Bar**, **Medium Player**, and **Album Art** views based on widget dimensions—and **To Do List**) must adhere to the following visual and structural conventions:
+
+1. **Standard `16.dp` Outer Corner Radius**:
+   - Every widget root container and rendered background `Bitmap` must use a **`16.dp` corner radius** (`<corners android:radius="16dp" />` in the preview XML `<shape>` drawable and `16f * density` in any dynamically rendered `Canvas.drawRoundRect` background bitmap).
+   - Edge-aligned media thumbnails inside a widget (such as the left-aligned album art in the **Mini Bar** and **Medium Player** views or the top album art in the **Album Art** view) must also use a `16.dp` corner radius so they sit flush with the widget corners.
+2. **Non-Clipped `1.dp` Outer Outline (`@android:id/background` Launcher Opt-Out + Inset Stroke)**:
+   - Give the widget card `FrameLayout` `android:id="@android:id/background"`, `android:background="@drawable/bg_..."` (`<corners android:radius="16dp" />`), and `android:clipToOutline="true"`. On Android 12+ launchers (`RoundedCornerEnforcement.hasAppWidgetOptedOut`), this opts the widget out of the launcher's `28.dp` `system_app_widget_background_radius` clip mask—which would otherwise slice off the 4 corners of a `16.dp` outline—and clips to the widget's own `16.dp` outline instead.
+   - The unified **Music Player** widget (`MusicAlbumArtWidgetProvider`, `music_album_art_widget_info.xml`) switches views automatically based on widget height (`resolveWidgetViewStyleForSize`):
+     - **Mini Bar view** (`heightDp < 100dp`, card height `72.dp` / `MINI_BAR_HEIGHT_DP = 72f`): Single-row bar with left-aligned square album art, song info, favorite star, and Previous / Play-Pause / Next controls.
+     - **Medium Player view** (`100dp <= heightDp < 180dp`, default `4x2`, card height `112.dp` / `MEDIUM_WIDGET_HEIGHT_DP = 112f`): Two-row horizontal card with left-aligned square album art, song info & favorite star on the top row, and the full 5 playback controls below it.
+     - **Album Art view** (`heightDp >= 180dp`): Vertical card with top square album art, bottom-right overlaid favorite star, song info, and the full 5 playback controls below it.
+   - When drawing the `1.dp` border stroke in `Canvas.drawRoundRect`, inset the stroke rectangle by `strokeInset = max(borderWidthPx * 1.25f, 1.5f)` (`RectF(strokeInset, strokeInset, w - strokeInset, h - strokeInset)`) and use corner radius `cornerRadiusPx + borderWidthPx` so the entire stroke thickness stays strictly inside the `16.dp` `ViewOutlineProvider` curve even when `scaleType="fitXY"` slightly adjusts the bitmap's aspect ratio.
+   - In the **Mini Bar** and **Medium Player** views, where the `1:1` square album art occupies the full height on the left (`x in 0..h`), apply a horizontal `LinearGradient` to the border stroke that smoothly fades the outline to transparent as it approaches the album art.
+3. **Theme & Dynamic Palette Synchronization**:
+   - Widgets must dynamically resolve their colors from the user's active theme settings (`ThemeMode`, Material You dynamic colors, custom seed/accent colors, or active Music Player album-art palette) and refresh immediately whenever underlying tool state changes.
+4. **Inner Cards, Badges & Floating Controls**:
+   - List items inside scrollable widget collections (such as task cards in **To Do List**) use `14.dp` rounded corners (`<corners android:radius="14dp" />`).
+   - Header icon badges, task check circles, transport buttons, and floating action buttons (FABs) inside widgets use circular (`oval`) backgrounds matching the app's `CircleShape` tokens.
+
 

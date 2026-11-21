@@ -1,0 +1,263 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <FrameLayout
+        android:id="@android:id/background"
+        android:layout_width="match_parent"
+        android:layout_height="112dp"
+        android:layout_gravity="center_vertical"
+        android:background="@drawable/bg_music_widget_medium"
+        android:clipToOutline="true">
+
+        <ImageView
+            android:id="@+id/widget_medium_background"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@null"
+            android:scaleType="fitXY"
+            android:src="@drawable/bg_music_widget_medium" />
+
+        <LinearLayout
+            android:id="@+id/widget_medium_row"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="0dp"
+            android:paddingTop="0dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="0dp">
+
+            <ImageView
+                android:id="@+id/widget_medium_album_art"
+                android:layout_width="112dp"
+                android:layout_height="match_parent"
+                android:adjustViewBounds="true"
+                android:contentDescription="Album Art"
+                android:scaleType="fitCenter"
+                android:src="@drawable/bg_music_widget_artwork_placeholder" />
+
+            <LinearLayout
+                android:id="@+id/widget_medium_right_column"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:gravity="center_vertical"
+                android:orientation="vertical"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp">
+
+                <LinearLayout
+                    android:id="@+id/widget_medium_info_row"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <LinearLayout
+                        android:id="@+id/widget_medium_text_container"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="6dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/widget_medium_title"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:text="Neon Horizon"
+                            android:textColor="#FFFFFFFF"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/widget_medium_subtitle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:text="Aurora Synth • Midnight Odyssey"
+                            android:textColor="#C7FFFFFF"
+                            android:textSize="12.5sp" />
+                    </LinearLayout>
+
+                    <FrameLayout
+                        android:id="@+id/widget_medium_favorite_container"
+                        android:layout_width="36dp"
+                        android:layout_height="36dp">
+
+                        <ImageView
+                            android:id="@+id/widget_medium_favorite_bg"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:contentDescription="@null"
+                            android:src="@drawable/bg_music_widget_circle"
+                            android:tint="#404CC9F0"
+                            android:visibility="invisible" />
+
+                        <ImageView
+                            android:id="@+id/widget_medium_favorite_button"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:background="?android:attr/selectableItemBackgroundBorderless"
+                            android:contentDescription="Favorite"
+                            android:padding="7dp"
+                            android:scaleType="centerInside"
+                            android:src="@drawable/ic_media_favorite_off"
+                            android:tint="#CCFFFFFF" />
+                    </FrameLayout>
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/widget_medium_controls_row"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <FrameLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1">
+
+                        <FrameLayout
+                            android:id="@+id/widget_medium_shuffle_container"
+                            android:layout_width="38dp"
+                            android:layout_height="38dp"
+                            android:layout_gravity="center">
+
+                            <ImageView
+                                android:id="@+id/widget_medium_shuffle_bg"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:contentDescription="@null"
+                                android:src="@drawable/bg_music_widget_circle"
+                                android:tint="#404CC9F0"
+                                android:visibility="invisible" />
+
+                            <ImageView
+                                android:id="@+id/widget_medium_shuffle_button"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:background="?android:attr/selectableItemBackgroundBorderless"
+                                android:contentDescription="Shuffle Off"
+                                android:padding="7dp"
+                                android:scaleType="centerInside"
+                                android:src="@drawable/ic_media_shuffle_off"
+                                android:tint="#B3FFFFFF" />
+                        </FrameLayout>
+                    </FrameLayout>
+
+                    <FrameLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1">
+
+                        <ImageView
+                            android:id="@+id/widget_medium_prev_button"
+                            android:layout_width="40dp"
+                            android:layout_height="40dp"
+                            android:layout_gravity="center"
+                            android:background="?android:attr/selectableItemBackgroundBorderless"
+                            android:contentDescription="Previous track"
+                            android:padding="6dp"
+                            android:scaleType="centerInside"
+                            android:src="@drawable/ic_media_skip_previous"
+                            android:tint="#FFFFFFFF" />
+                    </FrameLayout>
+
+                    <FrameLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1.2">
+
+                        <FrameLayout
+                            android:id="@+id/widget_medium_play_pause_container"
+                            android:layout_width="48dp"
+                            android:layout_height="48dp"
+                            android:layout_gravity="center">
+
+                            <ImageView
+                                android:id="@+id/widget_medium_play_pause_bg"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:contentDescription="@null"
+                                android:src="@drawable/bg_music_widget_circle"
+                                android:tint="#FF4CC9F0" />
+
+                            <ImageView
+                                android:id="@+id/widget_medium_play_pause_button"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:background="?android:attr/selectableItemBackgroundBorderless"
+                                android:contentDescription="Play"
+                                android:padding="11dp"
+                                android:scaleType="centerInside"
+                                android:src="@drawable/ic_media_play"
+                                android:tint="#FF101018" />
+                        </FrameLayout>
+                    </FrameLayout>
+
+                    <FrameLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1">
+
+                        <ImageView
+                            android:id="@+id/widget_medium_next_button"
+                            android:layout_width="40dp"
+                            android:layout_height="40dp"
+                            android:layout_gravity="center"
+                            android:background="?android:attr/selectableItemBackgroundBorderless"
+                            android:contentDescription="Next track"
+                            android:padding="6dp"
+                            android:scaleType="centerInside"
+                            android:src="@drawable/ic_media_skip_next"
+                            android:tint="#FFFFFFFF" />
+                    </FrameLayout>
+
+                    <FrameLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1">
+
+                        <FrameLayout
+                            android:id="@+id/widget_medium_repeat_container"
+                            android:layout_width="38dp"
+                            android:layout_height="38dp"
+                            android:layout_gravity="center">
+
+                            <ImageView
+                                android:id="@+id/widget_medium_repeat_bg"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:contentDescription="@null"
+                                android:src="@drawable/bg_music_widget_circle"
+                                android:tint="#404CC9F0"
+                                android:visibility="invisible" />
+
+                            <ImageView
+                                android:id="@+id/widget_medium_repeat_button"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:background="?android:attr/selectableItemBackgroundBorderless"
+                                android:contentDescription="Repeat Off"
+                                android:padding="7dp"
+                                android:scaleType="centerInside"
+                                android:src="@drawable/ic_media_repeat_off"
+                                android:tint="#B3FFFFFF" />
+                        </FrameLayout>
+                    </FrameLayout>
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+    </FrameLayout>
+</FrameLayout>

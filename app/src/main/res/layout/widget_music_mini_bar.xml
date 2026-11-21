@@ -4,9 +4,9 @@
     android:layout_height="match_parent">
 
     <FrameLayout
-        android:id="@+id/widget_mini_root"
+        android:id="@android:id/background"
         android:layout_width="match_parent"
-        android:layout_height="70dp"
+        android:layout_height="72dp"
         android:layout_gravity="center_vertical"
         android:background="@drawable/bg_music_widget_mini_bar"
         android:clipToOutline="true">
@@ -32,7 +32,7 @@
 
             <ImageView
                 android:id="@+id/widget_mini_album_art"
-                android:layout_width="70dp"
+                android:layout_width="72dp"
                 android:layout_height="match_parent"
                 android:adjustViewBounds="true"
                 android:contentDescription="Album Art"
@@ -70,16 +70,31 @@
                     android:textSize="12sp" />
             </LinearLayout>
 
-            <ImageView
-                android:id="@+id/widget_mini_favorite_button"
+            <FrameLayout
+                android:id="@+id/widget_mini_favorite_container"
                 android:layout_width="38dp"
-                android:layout_height="38dp"
-                android:background="?android:attr/selectableItemBackgroundBorderless"
-                android:contentDescription="Favorite"
-                android:padding="7dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/ic_media_favorite_off"
-                android:tint="#CCFFFFFF" />
+                android:layout_height="38dp">
+
+                <ImageView
+                    android:id="@+id/widget_mini_favorite_bg"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:src="@drawable/bg_music_widget_circle"
+                    android:tint="#404CC9F0"
+                    android:visibility="invisible" />
+
+                <ImageView
+                    android:id="@+id/widget_mini_favorite_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Favorite"
+                    android:padding="7dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_media_favorite_off"
+                    android:tint="#CCFFFFFF" />
+            </FrameLayout>
 
             <ImageView
                 android:id="@+id/widget_mini_prev_button"

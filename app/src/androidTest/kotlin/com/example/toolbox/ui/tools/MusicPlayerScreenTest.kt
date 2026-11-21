@@ -1419,21 +1419,26 @@ class MusicPlayerScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // 1. Both AppWidgetProviders are registered in Android's AppWidgetManager
+    // 1. Unified responsive Music Player AppWidgetProvider is registered in Android's AppWidgetManager
     val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(context)
     val installedProviders = appWidgetManager.installedProviders
       .filter { it.provider.packageName == context.packageName }
     val providerClasses = installedProviders.map { it.provider.className }.toSet()
     assertTrue(
-      "Expected MusicMiniBarWidgetProvider to be registered in AppWidgetManager",
-      MusicMiniBarWidgetProvider::class.java.name in providerClasses,
-    )
-    assertTrue(
       "Expected MusicAlbumArtWidgetProvider to be registered in AppWidgetManager",
       MusicAlbumArtWidgetProvider::class.java.name in providerClasses,
     )
+    assertFalse(
+      "Expected separate MusicMiniBarWidgetProvider not to be registered in AppWidgetManager",
+      MusicMiniBarWidgetProvider::class.java.name in providerClasses,
+    )
+    assertFalse(
+      "Expected separate MusicMediumWidgetProvider not to be registered in AppWidgetManager",
+      MusicMediumWidgetProvider::class.java.name in providerClasses,
+    )
 
-    // 2. Start playing the first track and verify both RemoteViews inflate and render all required controls
+    // 2. Start playing the first track and verify responsive RemoteViews switches between Mini Bar,
+    //    Medium, and Album Art views based on widget dimensions
     assertTrue(MusicPlayerWidgets.handleWidgetAction(context, MusicPlayerEngine.ACTION_MEDIA_PLAY))
     composeTestRule.waitForIdle()
 
@@ -1446,9 +1451,41 @@ class MusicPlayerScreenTest {
       assertTrue(state.isPlaying)
       assertEquals(tracks[0].title, state.title)
 
-      // Widget 1: Single bar widget, with no seek bar, full-height left-aligned album art, and larger playback controls
+      val miniOptions = android.os.Bundle().apply {
+        putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 280)
+        putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, 280)
+        putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 72)
+        putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 72)
+      }
+      val mediumOptions = android.os.Bundle().apply {
+        putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 280)
+        putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, 280)
+        putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 112)
+        putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 112)
+      }
+      val albumOptions = android.os.Bundle().apply {
+        putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 260)
+        putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, 260)
+        putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 260)
+        putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 260)
+      }
+
+      assertEquals(
+        MusicWidgetViewStyle.MINI_BAR,
+        MusicPlayerWidgets.resolveWidgetViewStyle(context, miniOptions),
+      )
+      assertEquals(
+        MusicWidgetViewStyle.MEDIUM,
+        MusicPlayerWidgets.resolveWidgetViewStyle(context, mediumOptions),
+      )
+      assertEquals(
+        MusicWidgetViewStyle.ALBUM_ART,
+        MusicPlayerWidgets.resolveWidgetViewStyle(context, albumOptions),
+      )
+
+      // View 1 (Mini Bar size): Single bar widget, with no seek bar, full-height left-aligned album art, and larger playback controls
       val miniHost = android.widget.FrameLayout(context)
-      val miniRemoteViews = MusicPlayerWidgets.buildMiniBarRemoteViews(context, state)
+      val miniRemoteViews = MusicPlayerWidgets.buildResponsiveMusicWidgetRemoteViews(context, state, miniOptions)
       val miniRoot = miniRemoteViews.apply(context, miniHost)
 
       val miniRow = miniRoot.findViewById<android.widget.LinearLayout>(com.example.toolbox.R.id.widget_mini_row)
@@ -1479,10 +1516,51 @@ class MusicPlayerScreenTest {
       assertEquals("Pause", miniPlayPause.contentDescription.toString())
       assertEquals("Next track", miniNext.contentDescription.toString())
 
-      // Widget 2: Album art with favorite star overlaid at bottom-right of album art,
+      // View 2 (Medium size): Medium player view, similar to mini bar (full-height left-aligned album art),
+      // with song info & favorite star on top row and the full 5 playback controls underneath song info
+      val mediumHost = android.widget.FrameLayout(context)
+      val mediumRemoteViews = MusicPlayerWidgets.buildResponsiveMusicWidgetRemoteViews(context, state, mediumOptions)
+      val mediumRoot = mediumRemoteViews.apply(context, mediumHost)
+
+      val mediumRow = mediumRoot.findViewById<android.widget.LinearLayout>(com.example.toolbox.R.id.widget_medium_row)
+      val mediumArt = mediumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_medium_album_art)
+      val mediumRightColumn = mediumRoot.findViewById<android.widget.LinearLayout>(com.example.toolbox.R.id.widget_medium_right_column)
+      val mediumInfoRow = mediumRoot.findViewById<android.widget.LinearLayout>(com.example.toolbox.R.id.widget_medium_info_row)
+      val mediumTitle = mediumRoot.findViewById<android.widget.TextView>(com.example.toolbox.R.id.widget_medium_title)
+      val mediumSubtitle = mediumRoot.findViewById<android.widget.TextView>(com.example.toolbox.R.id.widget_medium_subtitle)
+      val mediumFav = mediumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_medium_favorite_button)
+      val mediumControlsRow = mediumRoot.findViewById<android.widget.LinearLayout>(com.example.toolbox.R.id.widget_medium_controls_row)
+      val mediumShuffle = mediumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_medium_shuffle_button)
+      val mediumPrev = mediumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_medium_prev_button)
+      val mediumPlayPause = mediumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_medium_play_pause_button)
+      val mediumNext = mediumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_medium_next_button)
+      val mediumRepeat = mediumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_medium_repeat_button)
+
+      assertNotNull(mediumRow)
+      assertEquals(0, mediumRow.paddingStart)
+      assertNotNull(mediumArt)
+      assertEquals(android.view.ViewGroup.LayoutParams.MATCH_PARENT, mediumArt.layoutParams.height)
+      assertTrue(mediumArt.adjustViewBounds)
+      assertNotNull(mediumRightColumn)
+      assertEquals(android.widget.LinearLayout.VERTICAL, mediumRightColumn.orientation)
+      // Verify song info row is on top and playback controls row is underneath it inside mediumRightColumn
+      assertEquals(mediumInfoRow, mediumRightColumn.getChildAt(0))
+      assertEquals(mediumControlsRow, mediumRightColumn.getChildAt(1))
+      assertEquals(tracks[0].title, mediumTitle.text.toString())
+      assertEquals("${tracks[0].artist} • ${tracks[0].album}", mediumSubtitle.text.toString())
+      assertEquals(android.view.View.VISIBLE, mediumFav.visibility)
+      assertEquals("Favorite", mediumFav.contentDescription.toString())
+      assertEquals(5, mediumControlsRow.childCount)
+      assertEquals("Shuffle Off", mediumShuffle.contentDescription.toString())
+      assertEquals("Previous track", mediumPrev.contentDescription.toString())
+      assertEquals("Pause", mediumPlayPause.contentDescription.toString())
+      assertEquals("Next track", mediumNext.contentDescription.toString())
+      assertEquals("Repeat Off", mediumRepeat.contentDescription.toString())
+
+      // View 3 (Album Art size): Album art with favorite star overlaid at bottom-right of album art,
       // track title & artist, and the full 5 playback controls below (no progress bar)
       val albumHost = android.widget.FrameLayout(context)
-      val albumRemoteViews = MusicPlayerWidgets.buildAlbumArtRemoteViews(context, state)
+      val albumRemoteViews = MusicPlayerWidgets.buildResponsiveMusicWidgetRemoteViews(context, state, albumOptions)
       val albumRoot = albumRemoteViews.apply(context, albumHost)
 
       val albumArtContainer = albumRoot.findViewById<android.widget.FrameLayout>(com.example.toolbox.R.id.widget_album_art_container)
@@ -1546,6 +1624,20 @@ class MusicPlayerScreenTest {
       assertEquals("Shuffle", albumShuffle.contentDescription.toString())
       assertEquals(android.view.View.VISIBLE, albumRepeatBg.visibility)
       assertEquals("Repeat All", albumRepeat.contentDescription.toString())
+
+      val mediumHost = android.widget.FrameLayout(context)
+      val mediumRoot = MusicPlayerWidgets.buildMediumRemoteViews(context, updatedState).apply(context, mediumHost)
+      val mediumFavButton = mediumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_medium_favorite_button)
+      val mediumShuffleBg = mediumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_medium_shuffle_bg)
+      val mediumShuffle = mediumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_medium_shuffle_button)
+      val mediumRepeatBg = mediumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_medium_repeat_bg)
+      val mediumRepeat = mediumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_medium_repeat_button)
+
+      assertEquals("Unfavorite", mediumFavButton.contentDescription.toString())
+      assertEquals(android.view.View.VISIBLE, mediumShuffleBg.visibility)
+      assertEquals("Shuffle", mediumShuffle.contentDescription.toString())
+      assertEquals(android.view.View.VISIBLE, mediumRepeatBg.visibility)
+      assertEquals("Repeat All", mediumRepeat.contentDescription.toString())
     }
   }
 }

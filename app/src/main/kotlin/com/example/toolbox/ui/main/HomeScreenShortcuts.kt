@@ -35,6 +35,9 @@ import java.io.File
 const val EXTRA_STANDALONE_TOOL = "extra_standalone_tool"
 const val EXTRA_FOLDER_PATH = "extra_folder_path"
 const val EXTRA_EXPAND_MUSIC_PLAYER = "extra_expand_music_player"
+const val EXTRA_NOTES_QUICK_CAPTURE_MODE = "extra_notes_quick_capture_mode"
+const val NOTES_QUICK_CAPTURE_NOTE = "note"
+const val NOTES_QUICK_CAPTURE_CHECKLIST = "checklist"
 
 const val STANDALONE_SHORTCUT_INTENT_FLAGS =
   Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -268,6 +271,35 @@ fun findExistingStandaloneAppTask(
 fun parseExpandMusicPlayer(intent: Intent?): Boolean {
   return intent?.getBooleanExtra(EXTRA_EXPAND_MUSIC_PLAYER, false) == true ||
     intent?.data?.getQueryParameter("expand_player")?.equals("true", ignoreCase = true) == true
+}
+
+/**
+ * Parses the requested Notes quick-capture mode ([NOTES_QUICK_CAPTURE_NOTE] or
+ * [NOTES_QUICK_CAPTURE_CHECKLIST]) from an incoming [Intent], or `null` if none was requested.
+ */
+fun parseNotesQuickCaptureMode(intent: Intent?): String? {
+  val raw = intent?.getStringExtra(EXTRA_NOTES_QUICK_CAPTURE_MODE)
+    ?: intent?.data?.getQueryParameter("notes_mode")
+    ?: return null
+  return when {
+    raw.equals(NOTES_QUICK_CAPTURE_NOTE, ignoreCase = true) -> NOTES_QUICK_CAPTURE_NOTE
+    raw.equals(NOTES_QUICK_CAPTURE_CHECKLIST, ignoreCase = true) -> NOTES_QUICK_CAPTURE_CHECKLIST
+    else -> null
+  }
+}
+
+/**
+ * Creates an [Intent] that launches [Tool.NOTES] directly into creating a new text note
+ * ([isChecklist] = `false`) or a new checklist note ([isChecklist] = `true`).
+ */
+fun createNotesQuickCaptureIntent(
+  context: Context,
+  isChecklist: Boolean,
+): Intent {
+  val mode = if (isChecklist) NOTES_QUICK_CAPTURE_CHECKLIST else NOTES_QUICK_CAPTURE_NOTE
+  return createStandaloneToolIntent(context, Tool.NOTES).apply {
+    putExtra(EXTRA_NOTES_QUICK_CAPTURE_MODE, mode)
+  }
 }
 
 /**

@@ -52,6 +52,8 @@ import androidx.compose.material.icons.filled.BakeryDining
 import androidx.compose.material.icons.filled.BreakfastDining
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -126,6 +128,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -139,6 +142,12 @@ fun RecipeCategory.icon(): ImageVector = when (this) {
     RecipeCategory.SIDES_AND_SNACKS -> Icons.Default.LunchDining
     RecipeCategory.BAKING_AND_DESSERTS -> Icons.Default.BakeryDining
     RecipeCategory.SAUCES_AND_DRINKS -> Icons.Default.LocalCafe
+}
+
+fun MealTimeOfDay.icon(): ImageVector = when (this) {
+    MealTimeOfDay.BREAKFAST -> Icons.Default.BreakfastDining
+    MealTimeOfDay.LUNCH -> Icons.Default.LunchDining
+    MealTimeOfDay.DINNER -> Icons.Default.DinnerDining
 }
 
 internal class RecipeCardActionDispatcher(
@@ -172,7 +181,8 @@ private fun formatRecipePlainText(recipe: RecipeItem): String {
 @Composable
 fun RecipeBookScreen(
     modifier: Modifier = Modifier,
-    repository: RecipeBookRepository? = null
+    repository: RecipeBookRepository? = null,
+    initialMealTime: MealTimeOfDay? = null
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -190,17 +200,17 @@ fun RecipeBookScreen(
 
     var isSearchActive by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
-    var selectedSearchCategoryName by rememberSaveable { mutableStateOf<String?>(null) }
-    val selectedSearchCategory = selectedSearchCategoryName?.let {
+    var selectedCategoryName by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedCategory = selectedCategoryName?.let {
         runCatching { RecipeCategory.valueOf(it) }.getOrNull()
     }
-    val searchFocusRequester = remember { FocusRequester() }
 
-    // Main book filtering state
-    var filterFavoritesOnly by rememberSaveable { mutableStateOf(false) }
-    var selectedBookCategoryName by rememberSaveable { mutableStateOf<String?>(null) }
-    val selectedBookCategory = selectedBookCategoryName?.let {
-        runCatching { RecipeCategory.valueOf(it) }.getOrNull()
+    var selectedMealTimeName by rememberSaveable {
+        mutableStateOf((initialMealTime ?: MealTimeOfDay.current()).name)
+    }
+    val selectedMealTime = remember(selectedMealTimeName) {
+        runCatching { MealTimeOfDay.valueOf(selectedMealTimeName) }
+            .getOrElse { MealTimeOfDay.current() }
     }
 
     // Multi-selection state (Section 5.5 of DESIGN_LANGUAGE.md)
@@ -220,6 +230,11 @@ fun RecipeBookScreen(
     fun persistSaved(updated: List<RecipeItem>) {
         savedRecipes = updated
         repo.saveSavedRecipes(updated)
+        val remainingIds = updated.filter { it.isFavorite }.map { it.id }.toSet()
+        selectedIds = selectedIds.intersect(remainingIds)
+        if (updated.none { it.isFavorite }) {
+            isSelectionMode = false
+        }
     }
 
     fun persistCustomCatalog(updated: List<RecipeItem>) {
@@ -233,40 +248,77 @@ fun RecipeBookScreen(
         showMultiSelectOverflow = false
     }
 
+    fun closeSearch() {
+        isSearchActive = false
+        searchQuery = ""
+        selectedCategoryName = null
+        keyboardController?.hide()
+    }
+
     BackHandler(enabled = isFabExpanded || isSelectionMode || isSearchActive) {
         when {
             isFabExpanded -> isFabExpanded = false
             isSelectionMode -> exitSelectionMode()
-            isSearchActive -> {
-                isSearchActive = false
-                searchQuery = ""
-                selectedSearchCategoryName = null
-                keyboardController?.hide()
-            }
+            isSearchActive -> closeSearch()
         }
     }
 
-    val matchingCatalogRecipes = remember(allCatalog, searchQuery, selectedSearchCategory) {
+    val matchingCatalogRecipes = remember(allCatalog, searchQuery, selectedCategory) {
         RecipeBookEngine.searchRecipes(
             catalog = allCatalog,
             query = searchQuery,
-            category = selectedSearchCategory
+            category = selectedCategory
         )
+    }
+
+    val favoriteRecipes = remember(savedRecipes) {
+        RecipeBookEngine.getFavoriteRecipes(savedRecipes)
+    }
+
+    val favoriteRecipeIds = remember(favoriteRecipes) {
+        favoriteRecipes.map { it.id }.toSet()
     }
 
     val savedRecipeIds = remember(savedRecipes) {
         savedRecipes.map { it.id }.toSet()
     }
 
-    val favoriteCount = remember(savedRecipes) {
-        savedRecipes.count { it.isFavorite }
+    val favoriteCount = favoriteRecipes.size
+
+    val filteredFavoriteRecipes = remember(favoriteRecipes, selectedCategory) {
+        if (selectedCategory == null) {
+            favoriteRecipes
+        } else {
+            favoriteRecipes.filter { it.category == selectedCategory }
+        }
     }
 
-    val filteredBookRecipes = remember(savedRecipes, filterFavoritesOnly, selectedBookCategory) {
-        savedRecipes.filter { recipe ->
-            (!filterFavoritesOnly || recipe.isFavorite) &&
-                (selectedBookCategory == null || recipe.category == selectedBookCategory)
+    val mealSuggestions = remember(selectedMealTime, savedRecipes, allCatalog) {
+        RecipeBookEngine.suggestRecipesForMealTime(
+            mealTime = selectedMealTime,
+            savedRecipes = savedRecipes,
+            catalog = allCatalog,
+            maxCount = 3
+        )
+    }
+
+    fun toggleRecipeFavoriteInBook(recipe: RecipeItem) {
+        val existing = savedRecipes.firstOrNull { it.id == recipe.id }
+        val updated = when {
+            existing == null -> RecipeBookEngine.addRecipeToBook(
+                savedRecipes,
+                recipe.copy(isFavorite = true)
+            )
+            existing.isFavorite -> RecipeBookEngine.removeRecipeFromBook(
+                savedRecipes,
+                recipe.id
+            )
+            else -> RecipeBookEngine.updateSavedRecipe(
+                savedRecipes,
+                existing.copy(isFavorite = true)
+            )
         }
+        persistSaved(updated)
     }
 
     fun openDuplicateRecipeModal(recipe: RecipeItem) {
@@ -326,21 +378,11 @@ fun RecipeBookScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             // ==================== TOP TOOLBAR ====================
-            val subtitleText = if (savedRecipes.isEmpty()) {
-                "${allCatalog.size} preloaded recipes ready to search"
-            } else if (favoriteCount > 0) {
-                "${savedRecipes.size} saved • $favoriteCount favorite${if (favoriteCount == 1) "" else "s"}"
-            } else {
-                "${savedRecipes.size} saved recipes"
-            }
-            val selectableRecipes = if (savedRecipes.isNotEmpty()) {
-                savedRecipes
-            } else {
-                allCatalog.take(6)
-            }
+            val subtitleText = "$favoriteCount favorite${if (favoriteCount == 1) "" else "s"} • ${selectedMealTime.displayName} focus"
+            val selectableRecipes = favoriteRecipes
             val allSelected = selectableRecipes.isNotEmpty() &&
                 selectableRecipes.all { it.id in selectedIds }
-            val deletableSelected = savedRecipes.filter { it.id in selectedIds }
+            val deletableSelected = favoriteRecipes.filter { it.id in selectedIds }
 
             ToolboxTopBar(
                 title = "Recipes",
@@ -459,32 +501,6 @@ fun RecipeBookScreen(
                                         )
                                     }
                                     DropdownMenuItem(
-                                        text = { Text("Toggle Favorite") },
-                                        leadingIcon = {
-                                            Icon(Icons.Default.Star, contentDescription = null)
-                                        },
-                                        enabled = selectedIds.isNotEmpty(),
-                                        onClick = {
-                                            showMultiSelectOverflow = false
-                                            var updated = savedRecipes
-                                            selectedIds.forEach { id ->
-                                                if (updated.any { it.id == id }) {
-                                                    updated = RecipeBookEngine.toggleFavoriteRecipe(updated, id)
-                                                } else {
-                                                    val catalogRecipe = allCatalog.firstOrNull { it.id == id }
-                                                    if (catalogRecipe != null) {
-                                                        updated = RecipeBookEngine.addRecipeToBook(
-                                                            updated,
-                                                            catalogRecipe.copy(isFavorite = true)
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                            persistSaved(updated)
-                                            exitSelectionMode()
-                                        }
-                                    )
-                                    DropdownMenuItem(
                                         text = { Text("Remove Selected") },
                                         leadingIcon = {
                                             Icon(
@@ -520,12 +536,7 @@ fun RecipeBookScreen(
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         isSearchActive = true
                     },
-                    onCloseSearch = {
-                        isSearchActive = false
-                        searchQuery = ""
-                        selectedSearchCategoryName = null
-                        keyboardController?.hide()
-                    },
+                    onCloseSearch = { closeSearch() },
                     placeholder = "Search recipes, ingredients, tags...",
                     searchContentDescription = "Search Recipe Catalog",
                     toggleButtonTestTag = "toggle_search_bar_button",
@@ -536,120 +547,122 @@ fun RecipeBookScreen(
                 )
             )
 
+            // Recipe Category Filter Pill Bar underneath the toolbar (mirrors PlantTypeFilterPillBar)
+            RecipeCategoryFilterPillBar(
+                selectedCategory = selectedCategory,
+                onSelectCategory = { category ->
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    selectedCategoryName = category?.name
+                }
+            )
+
             // ==================== CONTENT AREA + SEARCH OVERLAY ====================
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .weight(1f)
             ) {
-                // Main Recipe Book Content
-                MainRecipeBookContent(
-                    savedRecipes = savedRecipes,
-                    filteredRecipes = filteredBookRecipes,
-                    allCatalog = allCatalog,
-                    savedRecipeIds = savedRecipeIds,
-                    favoriteCount = favoriteCount,
-                    filterFavoritesOnly = filterFavoritesOnly,
-                    selectedBookCategory = selectedBookCategory,
-                    isSelectionMode = isSelectionMode,
-                    selectedIds = selectedIds,
-                    onToggleFavoritesFilter = {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        filterFavoritesOnly = !filterFavoritesOnly
-                    },
-                    onSelectBookCategory = { category ->
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        selectedBookCategoryName =
-                            if (selectedBookCategory == category) null else category?.name
-                    },
-                    onOpenSearchCatalog = {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        isSearchActive = true
-                    },
-                    onOpenCustomCreator = {
-                        initialCustomName = ""
-                        isCreatingCustom = true
-                    },
-                    onQuickAddStarterRecipe = { recipe ->
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        persistSaved(
-                            RecipeBookEngine.toggleRecipeInBook(
-                                savedRecipes,
-                                recipe.copy(isFavorite = true)
-                            )
+                // Main Scrollable Tool Content (mirrors PlantScheduleScreen LazyColumn layout)
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("saved_recipes_list"),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        top = 14.dp,
+                        end = 16.dp,
+                        bottom = 88.dp // Extra bottom padding for FAB
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    // 1. Time-of-Day Meal Suggestions Card (at the top, inspired by MonthActivitySummaryCard in Plants)
+                    item(key = "meal_time_suggestions_card") {
+                        MealTimeSuggestionsCard(
+                            suggestionsResult = mealSuggestions,
+                            favoriteRecipeIds = favoriteRecipeIds,
+                            onSelectMealTime = { nextMealTime ->
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                selectedMealTimeName = nextMealTime.name
+                            },
+                            onInspectRecipe = { recipe ->
+                                inspectingRecipe = recipe
+                            },
+                            onToggleFavoriteRecipe = { recipe ->
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                toggleRecipeFavoriteInBook(recipe)
+                            }
                         )
-                    },
-                    onClickRecipe = { recipe ->
-                        if (isSelectionMode) {
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            selectedIds = if (recipe.id in selectedIds) {
-                                selectedIds - recipe.id
-                            } else {
-                                selectedIds + recipe.id
-                            }
-                            if (selectedIds.isEmpty()) {
-                                isSelectionMode = false
-                            }
-                        } else {
-                            inspectingRecipe = recipe
-                        }
-                    },
-                    onLongClickRecipe = { recipe ->
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        if (!isSelectionMode) {
-                            isSelectionMode = true
-                            selectedIds = setOf(recipe.id)
-                        } else {
-                            selectedIds = if (recipe.id in selectedIds) {
-                                selectedIds - recipe.id
-                            } else {
-                                selectedIds + recipe.id
-                            }
-                        }
-                    },
-                    onToggleFavorite = { recipe ->
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        persistSaved(RecipeBookEngine.toggleFavoriteRecipe(savedRecipes, recipe.id))
-                    },
-                    onEditRecipe = { recipe ->
-                        editingRecipe = recipe
-                    },
-                    onRemoveRecipe = { recipe ->
-                        pendingDeleteRecipes = listOf(recipe)
                     }
-                )
+
+                    // 2. Favorite Recipes Main List Card (inspired by YearViewScheduleCard in Plants)
+                    item(key = "favorite_recipes_main_card") {
+                        FavoriteRecipesScheduleCard(
+                            favoriteRecipes = filteredFavoriteRecipes,
+                            totalFavoriteCount = favoriteCount,
+                            selectedCategory = selectedCategory,
+                            isSelectionMode = isSelectionMode,
+                            selectedIds = selectedIds,
+                            onClickRecipe = { recipe ->
+                                if (isSelectionMode) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    selectedIds = if (recipe.id in selectedIds) {
+                                        selectedIds - recipe.id
+                                    } else {
+                                        selectedIds + recipe.id
+                                    }
+                                    if (selectedIds.isEmpty()) {
+                                        isSelectionMode = false
+                                    }
+                                } else {
+                                    inspectingRecipe = recipe
+                                }
+                            },
+                            onLongClickRecipe = { recipe ->
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                if (!isSelectionMode) {
+                                    isSelectionMode = true
+                                    selectedIds = setOf(recipe.id)
+                                } else {
+                                    selectedIds = if (recipe.id in selectedIds) {
+                                        selectedIds - recipe.id
+                                    } else {
+                                        selectedIds + recipe.id
+                                    }
+                                }
+                            },
+                            onToggleFavorite = { recipe ->
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                toggleRecipeFavoriteInBook(recipe)
+                            },
+                            onEditRecipe = { recipe ->
+                                editingRecipe = recipe
+                            },
+                            onRemoveRecipe = { recipe ->
+                                pendingDeleteRecipes = listOf(recipe)
+                            },
+                            onBrowseCatalog = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                isSearchActive = true
+                            }
+                        )
+                    }
+                }
 
                 // Animated Search Overlay (Mirrors PlantScheduleScreen CatalogSearchOverlay)
                 androidx.compose.animation.AnimatedVisibility(
-                    visible = isSearchActive,
-                    enter = expandVertically(
-                        expandFrom = Alignment.Top,
-                        animationSpec = tween(250)
-                    ) + fadeIn(tween(200)),
-                    exit = shrinkVertically(
-                        shrinkTowards = Alignment.Top,
-                        animationSpec = tween(200)
-                    ) + fadeOut(tween(150))
+                    visible = isSearchActive && !isSelectionMode,
+                    enter = fadeIn(animationSpec = tween(200)) + expandVertically(expandFrom = Alignment.Top),
+                    exit = fadeOut(animationSpec = tween(180)) + shrinkVertically(shrinkTowards = Alignment.Top),
+                    modifier = Modifier.fillMaxSize()
                 ) {
                     RecipeCatalogSearchOverlay(
                         query = searchQuery,
-                        selectedCategory = selectedSearchCategory,
-                        onSelectCategory = { cat ->
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            selectedSearchCategoryName =
-                                if (selectedSearchCategory == cat) null else cat?.name
-                        },
+                        selectedCategory = selectedCategory,
                         matchingRecipes = matchingCatalogRecipes,
-                        allCatalogCount = allCatalog.size,
-                        savedRecipeIds = savedRecipeIds,
+                        favoriteRecipeIds = favoriteRecipeIds,
                         onToggleRecipe = { recipe ->
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            persistSaved(
-                                RecipeBookEngine.toggleRecipeInBook(
-                                    savedRecipes,
-                                    recipe.copy(isFavorite = true)
-                                )
-                            )
+                            toggleRecipeFavoriteInBook(recipe)
                         },
                         onInspectRecipe = { recipe ->
                             inspectingRecipe = recipe
@@ -777,27 +790,24 @@ fun RecipeBookScreen(
         val currentSavedVersion = savedRecipes.firstOrNull { it.id == recipe.id } ?: recipe
         RecipeDetailDialog(
             recipe = currentSavedVersion,
-            isSavedInBook = isSaved,
+            isSavedInBook = isSaved && currentSavedVersion.isFavorite,
             onDismiss = { inspectingRecipe = null },
             onToggleSaved = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                persistSaved(
-                    RecipeBookEngine.toggleRecipeInBook(
-                        savedRecipes,
-                        currentSavedVersion.copy(isFavorite = true)
-                    )
-                )
+                toggleRecipeFavoriteInBook(currentSavedVersion)
+                inspectingRecipe = if (currentSavedVersion.isFavorite && isSaved) {
+                    currentSavedVersion.copy(isFavorite = false)
+                } else {
+                    currentSavedVersion.copy(isFavorite = true)
+                }
             },
             onToggleFavorite = {
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                if (isSaved) {
-                    val updated = RecipeBookEngine.toggleFavoriteRecipe(savedRecipes, currentSavedVersion.id)
-                    persistSaved(updated)
-                    inspectingRecipe = updated.firstOrNull { it.id == currentSavedVersion.id }
+                toggleRecipeFavoriteInBook(currentSavedVersion)
+                inspectingRecipe = if (currentSavedVersion.isFavorite && isSaved) {
+                    currentSavedVersion.copy(isFavorite = false)
                 } else {
-                    val addedFav = currentSavedVersion.copy(isFavorite = !currentSavedVersion.isFavorite)
-                    persistSaved(RecipeBookEngine.addRecipeToBook(savedRecipes, addedFav))
-                    inspectingRecipe = addedFav
+                    currentSavedVersion.copy(isFavorite = true)
                 }
             },
             onEditRecipe = {
@@ -819,8 +829,9 @@ fun RecipeBookScreen(
             },
             onConfirm = { created ->
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                persistCustomCatalog(customCatalog + created)
-                persistSaved(RecipeBookEngine.addRecipeToBook(savedRecipes, created))
+                val favCreated = created.copy(isFavorite = true)
+                persistCustomCatalog(customCatalog + favCreated)
+                persistSaved(RecipeBookEngine.addRecipeToBook(savedRecipes, favCreated))
                 isCreatingCustom = false
                 prefillRecipe = null
             }
@@ -834,16 +845,17 @@ fun RecipeBookScreen(
             onDismiss = { editingRecipe = null },
             onConfirm = { updated ->
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                if (savedRecipes.any { it.id == updated.id }) {
-                    persistSaved(RecipeBookEngine.updateSavedRecipe(savedRecipes, updated))
+                val favUpdated = updated.copy(isFavorite = true)
+                if (savedRecipes.any { it.id == favUpdated.id }) {
+                    persistSaved(RecipeBookEngine.updateSavedRecipe(savedRecipes, favUpdated))
                 } else {
-                    persistSaved(RecipeBookEngine.addRecipeToBook(savedRecipes, updated))
+                    persistSaved(RecipeBookEngine.addRecipeToBook(savedRecipes, favUpdated))
                 }
-                if (updated.isCustom) {
-                    val updatedCustom = if (customCatalog.any { it.id == updated.id }) {
-                        customCatalog.map { if (it.id == updated.id) updated else it }
+                if (favUpdated.isCustom) {
+                    val updatedCustom = if (customCatalog.any { it.id == favUpdated.id }) {
+                        customCatalog.map { if (it.id == favUpdated.id) favUpdated else it }
                     } else {
-                        customCatalog + updated
+                        customCatalog + favUpdated
                     }
                     persistCustomCatalog(updatedCustom)
                 }
@@ -975,128 +987,613 @@ private fun RecipeMiniFab(
 }
 
 @Composable
-private fun RecipeCatalogSearchOverlay(
-    query: String,
+private fun RecipeCategoryFilterPillBar(
     selectedCategory: RecipeCategory?,
-    onSelectCategory: (RecipeCategory?) -> Unit,
-    matchingRecipes: List<RecipeItem>,
-    allCatalogCount: Int,
-    savedRecipeIds: Set<String>,
-    onToggleRecipe: (RecipeItem) -> Unit,
-    onInspectRecipe: (RecipeItem) -> Unit,
-    onCreateCustomWithName: (String) -> Unit
+    onSelectCategory: (RecipeCategory?) -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .testTag("catalog_search_overlay")
+    ToolboxPillNavigationBar(
+        barTestTag = "recipe_category_filter_bar",
+        rowTestTag = "catalog_category_pills",
     ) {
-        // Category Filter Chips Bar (Section 5.4 & 5.7)
-        ToolboxPillNavigationBar(
-            rowTestTag = "catalog_category_pills",
-        ) {
+        ToolboxPillNavigationItem(
+            selected = selectedCategory == null,
+            onClick = { onSelectCategory(null) },
+            label = "All",
+            testTag = "category_chip_ALL",
+        )
+        RecipeCategory.entries.forEach { category ->
+            val isSelected = selectedCategory == category
             ToolboxPillNavigationItem(
-                selected = selectedCategory == null,
-                onClick = { onSelectCategory(null) },
-                label = "All ($allCatalogCount)",
-                testTag = "category_chip_ALL",
+                selected = isSelected,
+                onClick = {
+                    onSelectCategory(if (isSelected) null else category)
+                },
+                leadingIcon = category.icon(),
+                label = category.displayName,
+                testTag = "category_chip_${category.name}",
             )
-            RecipeCategory.entries.forEach { category ->
-                ToolboxPillNavigationItem(
-                    selected = selectedCategory == category,
-                    onClick = { onSelectCategory(category) },
-                    leadingIcon = category.icon(),
-                    label = category.displayName,
-                    testTag = "category_chip_${category.name}",
-                )
-            }
         }
+    }
+}
 
-        LazyColumn(
+@Composable
+private fun MealTimeSuggestionsCard(
+    suggestionsResult: MealTimeSuggestionsResult,
+    favoriteRecipeIds: Set<String>,
+    onSelectMealTime: (MealTimeOfDay) -> Unit,
+    onInspectRecipe: (RecipeItem) -> Unit,
+    onToggleFavoriteRecipe: (RecipeItem) -> Unit
+) {
+    val mealTime = suggestionsResult.mealTime
+    val prevMeal = mealTime.previous()
+    val nextMeal = mealTime.next()
+
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("meal_time_suggestions_card")
+    ) {
+        Column(
             modifier = Modifier
-                .fillMaxSize()
-                .testTag("catalog_results_section"),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+            // Top Chevron Header Row (mirrors MonthActivitySummaryCard in Plants)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                IconButton(
+                    onClick = { onSelectMealTime(prevMeal) },
+                    modifier = Modifier
+                        .size(36.dp)
+                        .testTag("prev_meal_time_button")
                 ) {
-                    val headerTitle = when {
-                        query.isNotBlank() -> "Search Results (${matchingRecipes.size})"
-                        selectedCategory != null -> "${selectedCategory.displayName} (${matchingRecipes.size})"
-                        else -> "Recipe Catalog (${matchingRecipes.size})"
-                    }
+                    Icon(
+                        imageVector = Icons.Default.ChevronLeft,
+                        contentDescription = "Previous meal (${prevMeal.displayName})",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.weight(1f)
+                ) {
                     Text(
-                        text = headerTitle,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
+                        text = "${mealTime.displayName} Suggestions",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "Tap ★ to save to your recipes",
-                        style = MaterialTheme.typography.labelSmall,
+                        text = if (suggestionsResult.isFromFavorites) {
+                            "From your favorites • ${mealTime.timeWindowLabel}"
+                        } else {
+                            "From recipe book • ${mealTime.timeWindowLabel}"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                IconButton(
+                    onClick = { onSelectMealTime(nextMeal) },
+                    modifier = Modifier
+                        .size(36.dp)
+                        .testTag("next_meal_time_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = "Next meal (${nextMeal.displayName})",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
-            if (matchingRecipes.isEmpty()) {
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-                        )
+            // Quick-Switch Meal Time Segment Row (Breakfast, Lunch, Dinner)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("meal_time_selector_row"),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                MealTimeOfDay.entries.forEach { option ->
+                    val isSelected = option == mealTime
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surface
+                        },
+                        border = BorderStroke(
+                            width = 1.dp,
+                            color = if (isSelected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            }
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { onSelectMealTime(option) }
+                            .testTag("meal_time_tab_${option.name}")
                     ) {
-                        Column(
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = option.icon(),
+                                contentDescription = null,
+                                tint = if (isSelected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = option.displayName,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Suggested Recipes Container (Primary/Theme colored when from Favorites, Tertiary/Accent when from Recipe Book)
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = if (suggestionsResult.isFromFavorites) {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                } else {
+                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.35f)
+                },
+                border = BorderStroke(
+                    width = 1.dp,
+                    color = if (suggestionsResult.isFromFavorites) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                    } else {
+                        MaterialTheme.colorScheme.tertiary.copy(alpha = 0.35f)
+                    }
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("meal_suggestions_list")
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (suggestionsResult.isFromFavorites) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.tertiary
+                                    }
+                                )
+                        )
+                        Text(
+                            text = if (suggestionsResult.isFromFavorites) {
+                                "Suggested from Favorites"
+                            } else {
+                                "Suggested from Recipe Book"
+                            },
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (suggestionsResult.isFromFavorites) {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onTertiaryContainer
+                            },
+                            modifier = Modifier.testTag("meal_suggestions_source_label")
+                        )
+                    }
+
+                    suggestionsResult.recipes.forEach { recipe ->
+                        val isFavorite = recipe.id in favoriteRecipeIds
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                            border = BorderStroke(
+                                width = 0.5.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            ),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(20.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onInspectRecipe(recipe) }
+                                .testTag("suggested_recipe_item_${recipe.id}")
                         ) {
-                            Text(
-                                text = "No recipes found matching \"$query\"",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "Create a custom recipe with your own ingredients and steps.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            FilledTonalButton(
-                                onClick = { onCreateCustomWithName(query.trim()) },
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.testTag("create_custom_from_search_button")
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Add,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Create \"${query.trim()}\"")
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (isFavorite) {
+                                                MaterialTheme.colorScheme.primaryContainer
+                                            } else {
+                                                MaterialTheme.colorScheme.secondaryContainer
+                                            }
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = recipe.category.icon(),
+                                        contentDescription = null,
+                                        tint = if (isFavorite) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSecondaryContainer
+                                        },
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = recipe.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${recipe.subtitle} • ${recipe.formattedTotalTime()} • ${recipe.servings} servings",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { onToggleFavoriteRecipe(recipe) },
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .testTag("suggested_favorite_button_${recipe.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = if (isFavorite) {
+                                            Icons.Default.Star
+                                        } else {
+                                            Icons.Default.StarBorder
+                                        },
+                                        contentDescription = if (isFavorite) {
+                                            "Remove ${recipe.name} from Favorites"
+                                        } else {
+                                            "Add ${recipe.name} to Favorites"
+                                        },
+                                        tint = if (isFavorite) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FavoriteRecipesScheduleCard(
+    favoriteRecipes: List<RecipeItem>,
+    totalFavoriteCount: Int,
+    selectedCategory: RecipeCategory?,
+    isSelectionMode: Boolean,
+    selectedIds: Set<String>,
+    onClickRecipe: (RecipeItem) -> Unit,
+    onLongClickRecipe: (RecipeItem) -> Unit,
+    onToggleFavorite: (RecipeItem) -> Unit,
+    onEditRecipe: (RecipeItem) -> Unit,
+    onRemoveRecipe: (RecipeItem) -> Unit,
+    onBrowseCatalog: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("favorite_recipes_card")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Card Header (mirrors YearViewScheduleCard in Plants)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Star,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Favorite Recipes",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Tap any recipe to cook • Long-press to multi-select",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            if (favoriteRecipes.isEmpty()) {
+                // Empty Favorites State (mirrors schedule_empty_state in Plants)
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("favorites_empty_state")
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = selectedCategory?.icon() ?: Icons.Default.RestaurantMenu,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Text(
+                            text = if (selectedCategory != null && totalFavoriteCount > 0) {
+                                "No favorite ${selectedCategory.displayName.lowercase()} recipes"
+                            } else {
+                                "No favorite recipes yet"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (selectedCategory != null && totalFavoriteCount > 0) {
+                                "You have no favorite ${selectedCategory.displayName.lowercase()} recipes yet. Browse the recipe book to star some or select another category above."
+                            } else {
+                                "Star recipes from today's suggestions above or browse the recipe book catalog to build your personal favorites list."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                        OutlinedButton(
+                            onClick = onBrowseCatalog,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.testTag("browse_recipe_catalog_button")
+                        ) {
+                            Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Browse Recipe Book")
+                        }
+                    }
+                }
             } else {
-                items(matchingRecipes, key = { "catalog_${it.id}" }) { recipe ->
-                    val isAlreadyAdded = recipe.id in savedRecipeIds
-                    CatalogRecipeResultCard(
-                        recipe = recipe,
-                        isAlreadyAdded = isAlreadyAdded,
-                        onToggle = { onToggleRecipe(recipe) },
-                        onInspect = { onInspectRecipe(recipe) }
-                    )
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("favorite_recipes_list")
+                ) {
+                    favoriteRecipes.forEach { recipe ->
+                        val isSelected = recipe.id in selectedIds
+                        SavedRecipeCard(
+                            recipe = recipe,
+                            isSelectionMode = isSelectionMode,
+                            isSelected = isSelected,
+                            onClick = { onClickRecipe(recipe) },
+                            onLongClick = { onLongClickRecipe(recipe) },
+                            onToggleFavorite = { onToggleFavorite(recipe) },
+                            onEdit = { onEditRecipe(recipe) },
+                            onRemove = { onRemoveRecipe(recipe) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecipeCatalogSearchOverlay(
+    query: String,
+    selectedCategory: RecipeCategory?,
+    matchingRecipes: List<RecipeItem>,
+    favoriteRecipeIds: Set<String>,
+    onToggleRecipe: (RecipeItem) -> Unit,
+    onInspectRecipe: (RecipeItem) -> Unit,
+    onCreateCustomWithName: (String) -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.background,
+        modifier = Modifier
+            .fillMaxSize()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            )
+            .testTag("catalog_search_overlay")
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f)
+                    .testTag("catalog_results_section"),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    top = 12.dp,
+                    end = 16.dp,
+                    bottom = 88.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                item(key = "catalog_header") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            val headerTitle = when {
+                                query.isNotBlank() -> "Search Results (${matchingRecipes.size})"
+                                selectedCategory != null -> "${selectedCategory.displayName} (${matchingRecipes.size})"
+                                else -> "Recipe Catalog (${matchingRecipes.size})"
+                            }
+                            Text(
+                                text = headerTitle,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Tap ★ to add recipes to your favorites list",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                if (matchingRecipes.isEmpty()) {
+                    item(key = "catalog_empty") {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "No recipes found matching \"$query\"",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Create a custom recipe with your own ingredients and steps.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                                FilledTonalButton(
+                                    onClick = { onCreateCustomWithName(query.trim()) },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.testTag("create_custom_from_search_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Create \"${query.trim()}\"")
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    items(matchingRecipes, key = { "catalog_${it.id}" }) { recipe ->
+                        val isAlreadyAdded = recipe.id in favoriteRecipeIds
+                        CatalogRecipeResultCard(
+                            recipe = recipe,
+                            isAlreadyAdded = isAlreadyAdded,
+                            onToggle = { onToggleRecipe(recipe) },
+                            onInspect = { onInspectRecipe(recipe) }
+                        )
+                    }
                 }
             }
         }
@@ -1351,176 +1848,6 @@ private fun CatalogRecipeResultCard(
                                 }
                             )
                         }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun MainRecipeBookContent(
-    savedRecipes: List<RecipeItem>,
-    filteredRecipes: List<RecipeItem>,
-    allCatalog: List<RecipeItem>,
-    savedRecipeIds: Set<String>,
-    favoriteCount: Int,
-    filterFavoritesOnly: Boolean,
-    selectedBookCategory: RecipeCategory?,
-    isSelectionMode: Boolean,
-    selectedIds: Set<String>,
-    onToggleFavoritesFilter: () -> Unit,
-    onSelectBookCategory: (RecipeCategory?) -> Unit,
-    onOpenSearchCatalog: () -> Unit,
-    onOpenCustomCreator: () -> Unit,
-    onQuickAddStarterRecipe: (RecipeItem) -> Unit,
-    onClickRecipe: (RecipeItem) -> Unit,
-    onLongClickRecipe: (RecipeItem) -> Unit,
-    onToggleFavorite: (RecipeItem) -> Unit,
-    onEditRecipe: (RecipeItem) -> Unit,
-    onRemoveRecipe: (RecipeItem) -> Unit
-) {
-    if (savedRecipes.isEmpty()) {
-        val featuredStarters = remember(allCatalog) {
-            allCatalog.take(6)
-        }
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .testTag("empty_recipe_book_content"),
-            contentPadding = PaddingValues(
-                start = 16.dp,
-                top = 16.dp,
-                end = 16.dp,
-                bottom = 88.dp // Extra bottom padding for FAB
-            ),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Popular Recipes to Get Started",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    TextButton(onClick = onOpenSearchCatalog) {
-                        Text("View All (${allCatalog.size})")
-                    }
-                }
-            }
-
-            items(featuredStarters, key = { "starter_${it.id}" }) { recipe ->
-                CatalogRecipeResultCard(
-                    recipe = recipe,
-                    isAlreadyAdded = recipe.id in savedRecipeIds,
-                    isSelectionMode = isSelectionMode,
-                    isSelected = recipe.id in selectedIds,
-                    onToggle = { onQuickAddStarterRecipe(recipe) },
-                    onInspect = { onClickRecipe(recipe) },
-                    onLongClick = { onLongClickRecipe(recipe) }
-                )
-            }
-        }
-    } else {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Book Filter Bar
-            val presentCategories = remember(savedRecipes) {
-                RecipeCategory.entries.filter { cat ->
-                    savedRecipes.any { it.category == cat }
-                }
-            }
-            ToolboxPillNavigationBar(
-                rowTestTag = "book_filter_row",
-            ) {
-                ToolboxPillNavigationItem(
-                    selected = !filterFavoritesOnly && selectedBookCategory == null,
-                    onClick = {
-                        if (filterFavoritesOnly) onToggleFavoritesFilter()
-                        onSelectBookCategory(null)
-                    },
-                    label = "All (${savedRecipes.size})",
-                    testTag = "book_filter_all",
-                )
-                ToolboxPillNavigationItem(
-                    selected = filterFavoritesOnly,
-                    onClick = onToggleFavoritesFilter,
-                    leadingIcon = if (filterFavoritesOnly) {
-                        Icons.Default.Star
-                    } else {
-                        Icons.Default.StarBorder
-                    },
-                    label = "Favorites ($favoriteCount)",
-                    testTag = "book_filter_favorites",
-                )
-                presentCategories.forEach { cat ->
-                    ToolboxPillNavigationItem(
-                        selected = selectedBookCategory == cat,
-                        onClick = { onSelectBookCategory(cat) },
-                        leadingIcon = cat.icon(),
-                        label = cat.displayName,
-                        testTag = "book_filter_category_${cat.name}",
-                    )
-                }
-            }
-
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .testTag("saved_recipes_list"),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                if (filteredRecipes.isEmpty()) {
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(20.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    text = "No saved recipes match the active filter",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                TextButton(
-                                    onClick = {
-                                        if (filterFavoritesOnly) onToggleFavoritesFilter()
-                                        onSelectBookCategory(null)
-                                    }
-                                ) {
-                                    Text("Show All Saved Recipes")
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    items(filteredRecipes, key = { "saved_${it.id}" }) { recipe ->
-                        val isSelected = recipe.id in selectedIds
-                        SavedRecipeCard(
-                            recipe = recipe,
-                            isSelectionMode = isSelectionMode,
-                            isSelected = isSelected,
-                            onClick = { onClickRecipe(recipe) },
-                            onLongClick = { onLongClickRecipe(recipe) },
-                            onToggleFavorite = { onToggleFavorite(recipe) },
-                            onEdit = { onEditRecipe(recipe) },
-                            onRemove = { onRemoveRecipe(recipe) }
-                        )
                     }
                 }
             }
@@ -2634,7 +2961,7 @@ private fun RecipeEditorDialog(
                         instructions = parsedInstructions,
                         tags = templateRecipe?.tags ?: setOf("Custom"),
                         notes = notesText.trim(),
-                        isFavorite = initialRecipe?.isFavorite ?: false,
+                        isFavorite = initialRecipe?.isFavorite ?: true,
                         isCustom = initialRecipe?.isCustom ?: true
                     )
                     onConfirm(result)

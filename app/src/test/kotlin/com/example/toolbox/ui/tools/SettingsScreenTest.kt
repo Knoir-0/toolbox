@@ -1148,4 +1148,22 @@ class SettingsScreenTest {
       resolveRequestFeatureButtonIcon(useDevilAndAngelIcons = false),
     )
   }
+
+  @Test
+  fun licenseText_containsFullGplV3LicenseAndSupportsSearchHighlighting() {
+    assertEquals("GNU General Public License v3.0", TOOLBOX_LICENSE_TITLE)
+    assertTrue(TOOLBOX_LICENSE_TEXT.contains("GNU GENERAL PUBLIC LICENSE"))
+    assertTrue(TOOLBOX_LICENSE_TEXT.contains("Version 3, 29 June 2007"))
+    assertTrue(TOOLBOX_LICENSE_TEXT.contains("TERMS AND CONDITIONS"))
+    assertTrue(TOOLBOX_LICENSE_TEXT.contains("END OF TERMS AND CONDITIONS"))
+
+    val highlighted = highlightErrorLogText(
+      text = TOOLBOX_LICENSE_TEXT,
+      query = "Preamble",
+      highlightBackground = Color.Yellow,
+      highlightContent = Color.Black,
+    )
+    assertEquals(TOOLBOX_LICENSE_TEXT, highlighted.text)
+    assertTrue(highlighted.spanStyles.isNotEmpty())
+  }
 }

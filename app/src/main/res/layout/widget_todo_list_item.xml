@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_todo_item_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_todo_widget_item">
+
+    <LinearLayout
+        android:id="@+id/widget_todo_item_row"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:minHeight="48dp"
+        android:orientation="horizontal"
+        android:paddingStart="10dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp">
+
+        <!-- Check Circle to Complete Task (No Drag Handle / No Reordering) -->
+        <FrameLayout
+            android:id="@+id/widget_todo_item_check_container"
+            android:layout_width="34dp"
+            android:layout_height="34dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless">
+
+            <ImageView
+                android:id="@+id/widget_todo_item_check_circle"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="Complete task"
+                android:padding="5dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_todo_widget_circle_unchecked"
+                android:tint="#FF968E99" />
+        </FrameLayout>
+
+        <!-- Task Title, Notes / Subtasks Preview & Schedule Info -->
+        <LinearLayout
+            android:id="@+id/widget_todo_item_text_container"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/widget_todo_item_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:text="Task title"
+                android:textColor="#FFE7E1E6"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/widget_todo_item_subtitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:text=""
+                android:textColor="#FFCDC4CF"
+                android:textSize="11.5sp"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- Subtask Count Pill Badge (if task has subtasks) -->
+        <TextView
+            android:id="@+id/widget_todo_item_subtask_badge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_todo_widget_pill"
+            android:paddingStart="8dp"
+            android:paddingTop="3dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="3dp"
+            android:text="0/0"
+            android:textColor="#FFF3DAFF"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+    </LinearLayout>
+</FrameLayout>

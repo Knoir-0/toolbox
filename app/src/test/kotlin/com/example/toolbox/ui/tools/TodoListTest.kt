@@ -809,4 +809,191 @@ class TodoListTest {
     assertEquals(listOf("task-1", "sub-1", "task-2"), afterRedo!!.tasks.map { it.id })
     assertEquals(listOf("sub-2"), afterRedo.tasks[0].subtasks.map { it.id })
   }
+
+  @Test
+  fun todoListWidgets_resolvesStateCompletesTasksWithUndoToastAndOpensNotesQuickCapture() {
+    assertEquals(16f, TodoListWidgets.WIDGET_CORNER_RADIUS_DP, 0.001f)
+    assertEquals(16f, MusicPlayerWidgets.MINI_BAR_CORNER_RADIUS_DP, 0.001f)
+    assertEquals(72f, MusicPlayerWidgets.MINI_BAR_HEIGHT_DP, 0.001f)
+    assertEquals(16f, MusicPlayerWidgets.MEDIUM_WIDGET_CORNER_RADIUS_DP, 0.001f)
+    assertEquals(112f, MusicPlayerWidgets.MEDIUM_WIDGET_HEIGHT_DP, 0.001f)
+    assertEquals(16f, MusicPlayerWidgets.ALBUM_WIDGET_CORNER_RADIUS_DP, 0.001f)
+    assertEquals(
+      MusicWidgetViewStyle.MINI_BAR,
+      MusicPlayerWidgets.resolveWidgetViewStyleForSize(280f, 72f),
+    )
+    assertEquals(
+      MusicWidgetViewStyle.MEDIUM,
+      MusicPlayerWidgets.resolveWidgetViewStyleForSize(280f, 112f),
+    )
+    assertEquals(
+      MusicWidgetViewStyle.ALBUM_ART,
+      MusicPlayerWidgets.resolveWidgetViewStyleForSize(260f, 240f),
+    )
+
+    // Verify external system media left custom action replaces the star button in widget state
+    val externalWithLeftAction = SystemMediaPlayingInfo(
+      sourcePackage = "com.spotify.music",
+      sourceAppName = "Spotify",
+      title = "Starlight Drive",
+      artist = "Nova Pulse",
+      album = "Horizons",
+      isExternalApp = true,
+      isPlaying = true,
+      durationMs = 210_000L,
+      positionMs = 45_000L,
+      positionUpdateElapsedRealtimeMs = 0L,
+      playbackSpeed = 1f,
+      artworkBitmap = null,
+      palette = MusicPlayerEngine.resolveTrackPalette(null),
+      customActions = listOf(
+        SystemMediaCustomAction(
+          action = "com.spotify.mobile.android.ui.widget.ACTION_TOGGLE_SHUFFLE_ON",
+          label = "Shuffle On",
+          iconResId = 0,
+        ),
+      ),
+    )
+    val externalStateWithLeft = MusicPlayerWidgets.resolveWidgetState(
+      context = null,
+      session = null,
+      externalMedia = externalWithLeftAction,
+      decodeArtwork = false,
+    )
+    assertTrue(externalStateWithLeft.isExternalMedia)
+    assertTrue(externalStateWithLeft.isLeftControlVisible)
+    assertTrue(externalStateWithLeft.isShuffleHighlighted)
+    assertEquals("Shuffle On", externalStateWithLeft.shuffleContentDescription)
+
+    val externalWithoutLeftAction = externalWithLeftAction.copy(customActions = emptyList())
+    val externalStateWithoutLeft = MusicPlayerWidgets.resolveWidgetState(
+      context = null,
+      session = null,
+      externalMedia = externalWithoutLeftAction,
+      decodeArtwork = false,
+    )
+    assertTrue(externalStateWithoutLeft.isExternalMedia)
+    assertFalse(externalStateWithoutLeft.isLeftControlVisible)
+    TodoListWidgets.clearUndoRecord()
+    val now = 1_760_000_000_000L
+    val todayKey = getTodayDateKey(now)
+    val task1 = TodoItem(
+      id = "w-task-1",
+      title = "Order bench power supply leads",
+      notes = "Banana plug to alligator clip",
+      subtasks = listOf(
+        TodoSubTask(id = "sub-1", title = "Red 1m", isCompleted = true),
+        TodoSubTask(id = "sub-2", title = "Black 1m", isCompleted = false),
+      ),
+    )
+    val task2 = TodoItem(
+      id = "w-task-2",
+      title = "Calibrate oscilloscope probe",
+      scheduledAtMillis = now + 2 * 3_600_000L, // Within 24h horizon -> visible in widget
+    )
+    val taskBeyondHorizon = TodoItem(
+      id = "w-task-future",
+      title = "Annual lab audit",
+      scheduledAtMillis = now + 5 * MAIN_TASKS_SCHEDULE_HORIZON_MILLIS, // > 24h -> hidden from main widget list
+    )
+    val repo = InMemoryTodoListRepository(
+      initialTasks = listOf(task1, task2, taskBeyondHorizon),
+      completedDate = todayKey,
+      completedCount = 1,
+    )
+
+    // 1. Initial widget state lists visible tasks, formats subtitles & subtask badges, and hides undo toast
+    val initialState = TodoListWidgets.resolveWidgetState(
+      context = null,
+      repository = repo,
+      nowMillis = now,
+    )
+    assertEquals(listOf("w-task-1", "w-task-2"), initialState.visibleTasks.map { it.id })
+    assertEquals(2, initialState.totalVisibleCount)
+    assertEquals(1, initialState.completedTodayCount)
+    assertEquals("2 tasks • 1 completed today", initialState.headerSubtitle)
+    assertFalse(initialState.isUndoToastVisible)
+    assertNull(initialState.pendingUndoRecord)
+    assertEquals("1/2", TodoListWidgets.formatSubtaskBadgeText(task1))
+    assertNull(TodoListWidgets.formatSubtaskBadgeText(task2))
+    assertTrue(TodoListWidgets.buildTaskItemSubtitle(task1, now).contains("Banana plug to alligator clip"))
+
+    // 2. Completing a task via check circle moves it to completed, increments today count, and activates undo toast
+    val afterComplete = TodoListWidgets.completeTaskFromWidget(
+      context = null,
+      taskId = "w-task-1",
+      repository = repo,
+      nowMillis = now,
+      showSystemToast = false,
+    )
+    assertNotNull(afterComplete)
+    val stateAfterComplete = TodoListWidgets.resolveWidgetState(
+      context = null,
+      repository = repo,
+      nowMillis = now + 1_000L,
+    )
+    assertEquals(listOf("w-task-2"), stateAfterComplete.visibleTasks.map { it.id })
+    assertEquals(2, stateAfterComplete.completedTodayCount)
+    assertEquals("1 task • 2 completed today", stateAfterComplete.headerSubtitle)
+    assertTrue(stateAfterComplete.isUndoToastVisible)
+    assertEquals("Completed \"Order bench power supply leads\"", stateAfterComplete.undoToastMessage)
+    assertNotNull(stateAfterComplete.pendingUndoRecord)
+
+    // Verify TodoWidgetUndoRecord JSON round-trip
+    val undoJson = stateAfterComplete.pendingUndoRecord!!.toJson()
+    val restoredUndoRecord = TodoWidgetUndoRecord.fromJson(undoJson)
+    assertNotNull(restoredUndoRecord)
+    assertEquals("w-task-1", restoredUndoRecord!!.completedTaskId)
+    assertEquals(3, restoredUndoRecord.preCompletionSnapshot.tasks.size)
+
+    // 3. Undoing task completion from the widget toast restores the task & reverts the daily completion counter
+    val afterUndo = TodoListWidgets.undoLastCompletedTaskFromWidget(
+      context = null,
+      repository = repo,
+      nowMillis = now + 2_000L,
+      showSystemToast = false,
+    )
+    assertNotNull(afterUndo)
+    val stateAfterUndo = TodoListWidgets.resolveWidgetState(
+      context = null,
+      repository = repo,
+      nowMillis = now + 2_500L,
+    )
+    assertEquals(listOf("w-task-1", "w-task-2"), stateAfterUndo.visibleTasks.map { it.id })
+    assertEquals(1, stateAfterUndo.completedTodayCount)
+    assertFalse(stateAfterUndo.isUndoToastVisible)
+    assertNull(stateAfterUndo.pendingUndoRecord)
+
+    // 4. Undo toast automatically expires after UNDO_TOAST_DURATION_MS
+    TodoListWidgets.completeTaskFromWidget(
+      context = null,
+      taskId = "w-task-2",
+      repository = repo,
+      nowMillis = now,
+      showSystemToast = false,
+    )
+    val expiredState = TodoListWidgets.resolveWidgetState(
+      context = null,
+      repository = repo,
+      nowMillis = now + TodoListWidgets.UNDO_TOAST_DURATION_MS + 500L,
+    )
+    assertFalse(expiredState.isUndoToastVisible)
+    assertNull(expiredState.pendingUndoRecord)
+
+    // 5. Plus (+) and Checklist FAB actions request opening Notes tool to take a new note or checklist
+    NotesEngine.consumePendingQuickCaptureRequest()
+    assertNull(NotesEngine.pendingQuickCaptureRequest)
+
+    NotesEngine.requestQuickCapture(isChecklist = false)
+    val noteRequest = NotesEngine.consumePendingQuickCaptureRequest()
+    assertNotNull(noteRequest)
+    assertFalse(noteRequest!!.isChecklist)
+    assertNull(NotesEngine.pendingQuickCaptureRequest)
+
+    NotesEngine.requestQuickCapture(isChecklist = true)
+    val checklistRequest = NotesEngine.consumePendingQuickCaptureRequest()
+    assertNotNull(checklistRequest)
+    assertTrue(checklistRequest!!.isChecklist)
+    assertNull(NotesEngine.pendingQuickCaptureRequest)
+  }
 }

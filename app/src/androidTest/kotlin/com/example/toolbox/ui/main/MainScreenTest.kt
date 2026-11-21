@@ -1726,6 +1726,29 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("error_logs_screen").assertDoesNotExist()
     composeTestRule.onNodeWithTag("settings_screen").assertIsDisplayed()
+
+    // Verify License button is positioned below Error Logs button and opens the License view
+    composeTestRule.onNodeWithTag("error_logs_button").performScrollTo()
+    composeTestRule.onNodeWithTag("license_button").performScrollTo()
+    val errorLogsBounds = composeTestRule.onNodeWithTag("error_logs_button").fetchSemanticsNode().boundsInRoot
+    val licenseBounds = composeTestRule.onNodeWithTag("license_button").fetchSemanticsNode().boundsInRoot
+    assertTrue(licenseBounds.top >= errorLogsBounds.bottom)
+
+    composeTestRule.onNodeWithTag("license_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("license_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("license_title").assertTextEquals("License")
+    composeTestRule.onNodeWithTag("license_subtext").assertTextEquals("GNU General Public License v3.0")
+    composeTestRule.onNodeWithTag("license_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("copy_license_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("license_text").assertIsDisplayed()
+
+    // Navigate back from License view to Settings
+    composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("license_screen").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("settings_screen").assertIsDisplayed()
   }
 
   @Test

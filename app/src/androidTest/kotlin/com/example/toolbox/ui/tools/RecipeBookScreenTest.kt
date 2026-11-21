@@ -60,7 +60,7 @@ class RecipeBookScreenTest {
 
     @Test
     fun recipeBookScreen_inspectRecipe_scalesServingsAndShowsSteps() {
-        val pancakes = RecipeBookEngine.BUILT_IN_RECIPES.first { it.id == "fluffy_pancakes" }
+        val pancakes = RecipeBookEngine.BUILT_IN_RECIPES.first { it.id == "fluffy_pancakes" }.copy(isFavorite = true)
         val repo = InMemoryRecipeBookRepository(initialSaved = listOf(pancakes))
         composeTestRule.setContent {
             ToolboxTheme {
@@ -81,7 +81,7 @@ class RecipeBookScreenTest {
 
     @Test
     fun recipeBookScreen_longPressSavedRecipe_entersMultiSelectMode() {
-        val pancakes = RecipeBookEngine.BUILT_IN_RECIPES.first { it.id == "fluffy_pancakes" }
+        val pancakes = RecipeBookEngine.BUILT_IN_RECIPES.first { it.id == "fluffy_pancakes" }.copy(isFavorite = true)
         val repo = InMemoryRecipeBookRepository(initialSaved = listOf(pancakes))
         composeTestRule.setContent {
             ToolboxTheme {
@@ -98,7 +98,7 @@ class RecipeBookScreenTest {
 
     @Test
     fun duplicateRecipeFromContextMenu_opensAddRecipeModalPrefilledWithRecipe() {
-        val pancakes = RecipeBookEngine.BUILT_IN_RECIPES.first { it.id == "fluffy_pancakes" }
+        val pancakes = RecipeBookEngine.BUILT_IN_RECIPES.first { it.id == "fluffy_pancakes" }.copy(isFavorite = true)
         val repo = InMemoryRecipeBookRepository(initialSaved = listOf(pancakes))
         composeTestRule.setContent {
             ToolboxTheme {
@@ -121,6 +121,38 @@ class RecipeBookScreenTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("Blueberry Pancakes").assertIsDisplayed()
-        assertTrue(repo.getSavedRecipes().any { it.name == "Blueberry Pancakes" && it.isCustom })
+        assertTrue(repo.getSavedRecipes().any { it.name == "Blueberry Pancakes" && it.isCustom && it.isFavorite })
+    }
+
+    @Test
+    fun recipeBookScreen_showsMealTimeSuggestionsCardAndOnlyFavoritesInMainList() {
+        val favPancakes = RecipeBookEngine.BUILT_IN_RECIPES.first { it.id == "fluffy_pancakes" }.copy(isFavorite = true)
+        val nonFavSalmon = RecipeBookEngine.BUILT_IN_RECIPES.first { it.id == "pan_seared_salmon" }.copy(isFavorite = false)
+        val repo = InMemoryRecipeBookRepository(initialSaved = listOf(favPancakes, nonFavSalmon))
+
+        composeTestRule.setContent {
+            ToolboxTheme {
+                RecipeBookScreen(
+                    repository = repo,
+                    initialMealTime = MealTimeOfDay.BREAKFAST
+                )
+            }
+        }
+
+        // Top meal suggestions card is displayed and shows suggestions from favorites
+        composeTestRule.onNodeWithTag("meal_time_suggestions_card").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Breakfast Suggestions").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Suggested from Favorites").assertIsDisplayed()
+
+        // Main list only contains favorites
+        composeTestRule.onNodeWithTag("saved_recipe_card_fluffy_pancakes").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("saved_recipe_card_pan_seared_salmon").assertDoesNotExist()
+
+        // Can cycle meal time to Lunch and Dinner
+        composeTestRule.onNodeWithTag("meal_time_tab_LUNCH").performClick()
+        composeTestRule.onNodeWithText("Lunch Suggestions").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("meal_time_tab_DINNER").performClick()
+        composeTestRule.onNodeWithText("Dinner Suggestions").assertIsDisplayed()
     }
 }

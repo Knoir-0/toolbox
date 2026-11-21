@@ -2,6 +2,9 @@ package com.example.toolbox.ui.tools
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -366,6 +369,31 @@ class SharedPreferencesNotesRepository(
  * Pure business logic for creating, editing, converting, filtering, and organizing notes.
  */
 object NotesEngine {
+
+  data class PendingQuickCaptureRequest(
+    val isChecklist: Boolean,
+    val requestId: Long = System.nanoTime(),
+  )
+
+  var pendingQuickCaptureRequest by mutableStateOf<PendingQuickCaptureRequest?>(null)
+    private set
+
+  /**
+   * Requests that [NotesScreen] immediately open its new-note creation panel in either text note
+   * mode ([isChecklist] = `false`) or checklist mode ([isChecklist] = `true`).
+   */
+  fun requestQuickCapture(isChecklist: Boolean) {
+    pendingQuickCaptureRequest = PendingQuickCaptureRequest(isChecklist = isChecklist)
+  }
+
+  /**
+   * Consumes any pending quick-capture request after [NotesScreen] opens the creation panel.
+   */
+  fun consumePendingQuickCaptureRequest(): PendingQuickCaptureRequest? {
+    val current = pendingQuickCaptureRequest
+    pendingQuickCaptureRequest = null
+    return current
+  }
 
   /**
    * Formats a timestamp into a concise human-readable label (e.g. "Oct 14" or "3:45 PM" if today).

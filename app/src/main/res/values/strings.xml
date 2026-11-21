@@ -2,6 +2,10 @@
     <string name="app_name">Toolbox</string>
     <string name="music_widget_mini_bar_label">Music Mini Player</string>
     <string name="music_widget_mini_bar_description">Single-bar mini player with album art, song info, favorite star, and playback controls</string>
+    <string name="music_widget_medium_label">Music Medium Player</string>
+    <string name="music_widget_medium_description">Medium player with full-height album art, song info &amp; favorite star, and full 5 playback controls below</string>
     <string name="music_widget_album_art_label">Music Player</string>
-    <string name="music_widget_album_art_description">Album art with overlaid favorite star, song info, and full 5 playback controls</string>
+    <string name="music_widget_album_art_description">Responsive music player that automatically adapts between Mini Bar, Medium Player, and Album Art views as you resize it</string>
+    <string name="todo_widget_label">To Do List</string>
+    <string name="todo_widget_description">Scrollable To-Do task list with completion check circles, undo toast, and quick Note &amp; Checklist FABs</string>
 </resources>

@@ -179,6 +179,7 @@ object CrossToolActions {
     )
     existing.add(0, created)
     repo.saveTasks(existing)
+    TodoListWidgets.updateAllWidgets(context)
     if (showToast) {
       val subSuffix = if (subItems.isNotEmpty()) " (${subItems.size} subtasks)" else ""
       Toast.makeText(context, "Added \"${created.title}\"$subSuffix to To Do", Toast.LENGTH_SHORT).show()
@@ -202,6 +203,9 @@ object CrossToolActions {
   fun importFileToTodo(context: Context, file: File, showToast: Boolean = true): TodoItem? {
     val repo = SharedPreferencesTodoListRepository(context)
     val imported = FileManagerEngine.importFileToTodoList(file, repo)
+    if (imported != null) {
+      TodoListWidgets.updateAllWidgets(context)
+    }
     if (showToast) {
       if (imported != null) {
         val subCount = imported.subtasks.size

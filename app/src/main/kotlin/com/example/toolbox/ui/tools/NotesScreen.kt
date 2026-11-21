@@ -266,6 +266,8 @@ internal val LocalNoteCardActions = compositionLocalOf { NoteCardActionDispatche
 fun NotesScreen(
   modifier: Modifier = Modifier,
   repository: NotesRepository? = null,
+  initialOpenAddNote: Boolean = false,
+  initialAddChecklistMode: Boolean = false,
 ) {
   val context = LocalContext.current
   val haptic = LocalHapticFeedback.current
@@ -303,12 +305,37 @@ fun NotesScreen(
   val isSelectionMode = selectedNoteIds.isNotEmpty()
 
   // Slide-up Add Note state (from the bottom "Take a note..." bar)
-  var isAddNoteOpen by remember { mutableStateOf(false) }
-  var addingNoteDraft by remember { mutableStateOf(NoteItem()) }
+  var isAddNoteOpen by remember { mutableStateOf(initialOpenAddNote) }
+  var addingNoteDraft by remember {
+    mutableStateOf(
+      NoteItem(
+        isChecklist = initialOpenAddNote && initialAddChecklistMode,
+        checklistItems = emptyList(),
+      ),
+    )
+  }
   var addingNoteNewLabels by remember { mutableStateOf(listOf<String>()) }
 
   // Single Note View state (when tapping an existing note on the board)
   var editingNote by remember { mutableStateOf<NoteItem?>(null) }
+
+  LaunchedEffect(initialOpenAddNote, initialAddChecklistMode, NotesEngine.pendingQuickCaptureRequest) {
+    val pending = NotesEngine.consumePendingQuickCaptureRequest()
+    if (pending != null || initialOpenAddNote) {
+      val openChecklist = pending?.isChecklist ?: initialAddChecklistMode
+      editingNote = null
+      selectedNoteIds = emptySet()
+      if (activeFilter == NotesFilter.Trash) {
+        activeFilter = NotesFilter.All
+      }
+      addingNoteNewLabels = emptyList()
+      addingNoteDraft = NoteItem(
+        isChecklist = openChecklist,
+        checklistItems = emptyList(),
+      )
+      isAddNoteOpen = true
+    }
+  }
 
   // Dialog states
   var showManageLabelsDialog by remember { mutableStateOf(false) }

@@ -194,4 +194,68 @@ class RecipeBookTest {
         assertNotNull(repo.getSavedRecipes().firstOrNull())
         assertEquals("Grandma's Lasagna", repo.getCustomCatalogRecipes().first().name)
     }
+
+    @Test
+    fun mealTimeOfDay_fromHourOfDay_mapsBreakfastLunchAndDinner() {
+        assertEquals(MealTimeOfDay.BREAKFAST, MealTimeOfDay.fromHourOfDay(5))
+        assertEquals(MealTimeOfDay.BREAKFAST, MealTimeOfDay.fromHourOfDay(8))
+        assertEquals(MealTimeOfDay.BREAKFAST, MealTimeOfDay.fromHourOfDay(10))
+
+        assertEquals(MealTimeOfDay.LUNCH, MealTimeOfDay.fromHourOfDay(11))
+        assertEquals(MealTimeOfDay.LUNCH, MealTimeOfDay.fromHourOfDay(13))
+        assertEquals(MealTimeOfDay.LUNCH, MealTimeOfDay.fromHourOfDay(15))
+
+        assertEquals(MealTimeOfDay.DINNER, MealTimeOfDay.fromHourOfDay(16))
+        assertEquals(MealTimeOfDay.DINNER, MealTimeOfDay.fromHourOfDay(20))
+        assertEquals(MealTimeOfDay.DINNER, MealTimeOfDay.fromHourOfDay(2))
+    }
+
+    @Test
+    fun suggestRecipesForMealTime_prefersFavoritesAndFallsBackToRecipeBookWhenNoFavorites() {
+        val catalog = RecipeBookEngine.BUILT_IN_RECIPES
+
+        // 1. When no favorites exist, suggestions come from the recipe book catalog
+        val fallbackBreakfast = RecipeBookEngine.suggestRecipesForMealTime(
+            mealTime = MealTimeOfDay.BREAKFAST,
+            savedRecipes = emptyList(),
+            catalog = catalog,
+            maxCount = 3
+        )
+        assertFalse(fallbackBreakfast.isFromFavorites)
+        assertEquals(3, fallbackBreakfast.recipes.size)
+        assertTrue(fallbackBreakfast.recipes.all { it.category == RecipeCategory.BREAKFAST })
+
+        // 2. When favorites exist, suggestions prioritize matching favorites
+        val favShakshuka = catalog.first { it.id == "shakshuka" }.copy(isFavorite = true)
+        val favSalmon = catalog.first { it.id == "pan_seared_salmon" }.copy(isFavorite = true)
+        val nonFavPancakes = catalog.first { it.id == "fluffy_pancakes" }.copy(isFavorite = false)
+
+        val favBreakfast = RecipeBookEngine.suggestRecipesForMealTime(
+            mealTime = MealTimeOfDay.BREAKFAST,
+            savedRecipes = listOf(favShakshuka, favSalmon, nonFavPancakes),
+            catalog = catalog,
+            maxCount = 3
+        )
+        assertTrue(favBreakfast.isFromFavorites)
+        assertEquals("shakshuka", favBreakfast.recipes.first().id)
+
+        val favDinner = RecipeBookEngine.suggestRecipesForMealTime(
+            mealTime = MealTimeOfDay.DINNER,
+            savedRecipes = listOf(favShakshuka, favSalmon, nonFavPancakes),
+            catalog = catalog,
+            maxCount = 3
+        )
+        assertTrue(favDinner.isFromFavorites)
+        assertEquals("pan_seared_salmon", favDinner.recipes.first().id)
+    }
+
+    @Test
+    fun getFavoriteRecipes_filtersMainListToOnlyFavorites() {
+        val pancakes = RecipeBookEngine.BUILT_IN_RECIPES.first { it.id == "fluffy_pancakes" }.copy(isFavorite = true)
+        val salmon = RecipeBookEngine.BUILT_IN_RECIPES.first { it.id == "pan_seared_salmon" }.copy(isFavorite = false)
+
+        val favorites = RecipeBookEngine.getFavoriteRecipes(listOf(pancakes, salmon))
+        assertEquals(1, favorites.size)
+        assertEquals("fluffy_pancakes", favorites.first().id)
+    }
 }

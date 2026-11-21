@@ -4,9 +4,90 @@ import android.content.Context
 import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Calendar
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+/**
+ * Represents the meal periods of the day (Breakfast, Lunch, Dinner),
+ * used for time-of-day recipe suggestions at the top of the Recipes screen.
+ */
+enum class MealTimeOfDay(
+    val displayName: String,
+    val timeWindowLabel: String,
+    val primaryCategories: Set<RecipeCategory>,
+    val secondaryCategories: Set<RecipeCategory>
+) {
+    BREAKFAST(
+        displayName = "Breakfast",
+        timeWindowLabel = "Morning • 5 AM – 11 AM",
+        primaryCategories = setOf(RecipeCategory.BREAKFAST),
+        secondaryCategories = setOf(
+            RecipeCategory.BAKING_AND_DESSERTS,
+            RecipeCategory.SAUCES_AND_DRINKS
+        )
+    ),
+    LUNCH(
+        displayName = "Lunch",
+        timeWindowLabel = "Midday • 11 AM – 4 PM",
+        primaryCategories = setOf(
+            RecipeCategory.SOUPS_AND_SALADS,
+            RecipeCategory.SIDES_AND_SNACKS,
+            RecipeCategory.PASTA_AND_GRAINS
+        ),
+        secondaryCategories = setOf(
+            RecipeCategory.MAINS,
+            RecipeCategory.SAUCES_AND_DRINKS
+        )
+    ),
+    DINNER(
+        displayName = "Dinner",
+        timeWindowLabel = "Evening • 4 PM – Late",
+        primaryCategories = setOf(
+            RecipeCategory.MAINS,
+            RecipeCategory.PASTA_AND_GRAINS,
+            RecipeCategory.SOUPS_AND_SALADS
+        ),
+        secondaryCategories = setOf(
+            RecipeCategory.SIDES_AND_SNACKS,
+            RecipeCategory.BAKING_AND_DESSERTS
+        )
+    );
+
+    fun previous(): MealTimeOfDay = when (this) {
+        BREAKFAST -> DINNER
+        LUNCH -> BREAKFAST
+        DINNER -> LUNCH
+    }
+
+    fun next(): MealTimeOfDay = when (this) {
+        BREAKFAST -> LUNCH
+        LUNCH -> DINNER
+        DINNER -> BREAKFAST
+    }
+
+    companion object {
+        fun fromHourOfDay(hourOfDay: Int): MealTimeOfDay {
+            val normalized = ((hourOfDay % 24) + 24) % 24
+            return when (normalized) {
+                in 5..10 -> BREAKFAST
+                in 11..15 -> LUNCH
+                else -> DINNER
+            }
+        }
+
+        fun current(): MealTimeOfDay {
+            return fromHourOfDay(Calendar.getInstance().get(Calendar.HOUR_OF_DAY))
+        }
+    }
+}
+
+data class MealTimeSuggestionsResult(
+    val mealTime: MealTimeOfDay,
+    val recipes: List<RecipeItem>,
+    val isFromFavorites: Boolean
+)
 
 enum class RecipeCategory(val displayName: String) {
     BREAKFAST("Breakfast"),
@@ -2381,6 +2462,78 @@ object RecipeBookEngine {
         return currentSaved.map {
             if (it.id == recipeId) it.copy(isFavorite = !it.isFavorite) else it
         }
+    }
+
+    /**
+     * Returns only the favorite recipes from [savedRecipes].
+     */
+    fun getFavoriteRecipes(savedRecipes: List<RecipeItem>): List<RecipeItem> {
+        return savedRecipes.filter { it.isFavorite }
+    }
+
+    /**
+     * Checks whether [recipe] is a match for [mealTime] based on its [RecipeCategory] or tags.
+     */
+    fun isRecipeMatchingMealTime(recipe: RecipeItem, mealTime: MealTimeOfDay): Boolean {
+        if (recipe.category in mealTime.primaryCategories) return true
+        val lowerTags = recipe.tags.map { it.lowercase(Locale.US) }
+        return when (mealTime) {
+            MealTimeOfDay.BREAKFAST -> lowerTags.any { it == "breakfast" || it == "brunch" }
+            MealTimeOfDay.LUNCH -> lowerTags.any { it == "lunch" || it == "salad" || it == "quick" }
+            MealTimeOfDay.DINNER -> lowerTags.any { it == "dinner" || it == "comfort-food" || it == "one-pot" || it == "one-pan" }
+        }
+    }
+
+    /**
+     * Suggests recipes for [mealTime] (Breakfast, Lunch, or Dinner), prioritizing [savedRecipes]
+     * marked as favorites, and falling back to [catalog] (or non-favorite saved recipes + catalog)
+     * when no favorites exist.
+     */
+    fun suggestRecipesForMealTime(
+        mealTime: MealTimeOfDay,
+        savedRecipes: List<RecipeItem>,
+        catalog: List<RecipeItem> = BUILT_IN_RECIPES,
+        maxCount: Int = 3
+    ): MealTimeSuggestionsResult {
+        val safeMax = maxCount.coerceAtLeast(1)
+        val favorites = getFavoriteRecipes(savedRecipes)
+        val hasFavorites = favorites.isNotEmpty()
+        val matchingFavorites = favorites.filter { recipe ->
+            isRecipeMatchingMealTime(recipe, mealTime) ||
+                recipe.category in mealTime.secondaryCategories
+        }
+        val useFavoritesPool = hasFavorites && matchingFavorites.isNotEmpty()
+        val sourcePool = if (useFavoritesPool) {
+            favorites
+        } else {
+            (savedRecipes + catalog).distinctBy { it.id }
+        }
+
+        val ranked = sourcePool.sortedWith(
+            compareBy<RecipeItem> { recipe ->
+                when {
+                    recipe.category in mealTime.primaryCategories -> 0
+                    isRecipeMatchingMealTime(recipe, mealTime) -> 1
+                    recipe.category in mealTime.secondaryCategories -> 2
+                    else -> 3
+                }
+            }.thenBy { recipe ->
+                // Prefer favorites first if falling back to combined pool
+                if (recipe.isFavorite) 0 else 1
+            }.thenBy { recipe ->
+                // Prefer recipes with explicit meal tag first within same category tier
+                val lowerTags = recipe.tags.map { it.lowercase(Locale.US) }
+                val mealTag = mealTime.displayName.lowercase(Locale.US)
+                if (mealTag in lowerTags) 0 else 1
+            }.thenBy { it.totalTimeMinutes }
+                .thenBy { it.name }
+        )
+
+        return MealTimeSuggestionsResult(
+            mealTime = mealTime,
+            recipes = ranked.take(safeMax),
+            isFromFavorites = useFavoritesPool
+        )
     }
 
     private val LEADING_QUANTITY_REGEX =

@@ -4,7 +4,7 @@
     android:description="@string/music_widget_mini_bar_description"
     android:initialLayout="@layout/widget_music_mini_bar"
     android:minWidth="250dp"
-    android:minHeight="48dp"
+    android:minHeight="72dp"
     android:minResizeWidth="180dp"
     android:minResizeHeight="40dp"
     android:previewLayout="@layout/widget_music_mini_bar"
