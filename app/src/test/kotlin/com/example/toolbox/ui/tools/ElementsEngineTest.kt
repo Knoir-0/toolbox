@@ -166,4 +166,64 @@ class ElementsEngineTest {
     assertEquals("0 °C", ElementTempUnit.CELSIUS.formatKelvin(273.15))
     assertEquals("—", ElementTempUnit.CELSIUS.formatKelvin(null))
   }
+
+  @Test
+  fun tableZoomAndGridMetrics_defaultsToFullDeviceWidthAndSupportsPinchZoomInAndOut() {
+    assertEquals(1.0f, PeriodicTableEngine.DEFAULT_TABLE_ZOOM, 1e-4f)
+    assertEquals(1.0f, PeriodicTableEngine.MIN_TABLE_ZOOM, 1e-4f)
+    assertEquals(4.0f, PeriodicTableEngine.MAX_TABLE_ZOOM, 1e-4f)
+
+    // Pinch to zoom in (zoomChange > 1f) and clamp at MAX_TABLE_ZOOM
+    val zoomedIn = PeriodicTableEngine.calculateTableZoom(PeriodicTableEngine.DEFAULT_TABLE_ZOOM, 2.2f)
+    assertEquals(2.2f, zoomedIn, 1e-4f)
+    assertEquals(
+      PeriodicTableEngine.MAX_TABLE_ZOOM,
+      PeriodicTableEngine.calculateTableZoom(zoomedIn, 3.0f),
+      1e-4f,
+    )
+
+    // Pinch to zoom out (zoomChange < 1f) and clamp at MIN_TABLE_ZOOM (full device width)
+    val zoomedOut = PeriodicTableEngine.calculateTableZoom(zoomedIn, 0.5f)
+    assertEquals(1.1f, zoomedOut, 1e-4f)
+    assertEquals(
+      PeriodicTableEngine.DEFAULT_TABLE_ZOOM,
+      PeriodicTableEngine.calculateTableZoom(zoomedOut, 0.4f),
+      1e-4f,
+    )
+
+    // Grid metrics at default zoom fit all 18 columns + period column across the full device width
+    val viewportWidthPx = 1080
+    val defaultMetrics = PeriodicTableEngine.calculateTableGridMetrics(
+      viewportWidthPx = viewportWidthPx,
+      zoom = PeriodicTableEngine.DEFAULT_TABLE_ZOOM,
+      horizontalPaddingPx = 12,
+    )
+    assertEquals(viewportWidthPx, defaultMetrics.tableWidthPx)
+    assertTrue(
+      "Expected 18-column contentWidthPx (${defaultMetrics.contentWidthPx}) to fit within viewport ($viewportWidthPx)",
+      defaultMetrics.contentWidthPx <= viewportWidthPx,
+    )
+    assertTrue(
+      "Expected 18-column table to span nearly the full device width (${defaultMetrics.contentWidthPx} vs $viewportWidthPx)",
+      defaultMetrics.contentWidthPx >= viewportWidthPx - 48,
+    )
+
+    // Zooming in scales tile dimensions and total table width up; zooming out scales them back down
+    val zoomedInMetrics = PeriodicTableEngine.calculateTableGridMetrics(
+      viewportWidthPx = viewportWidthPx,
+      zoom = 2.5f,
+      horizontalPaddingPx = 12,
+    )
+    assertTrue(zoomedInMetrics.tileWidthPx > defaultMetrics.tileWidthPx)
+    assertTrue(zoomedInMetrics.tileHeightPx > defaultMetrics.tileHeightPx)
+    assertTrue(zoomedInMetrics.tableWidthPx > defaultMetrics.tableWidthPx)
+
+    val zoomedPartiallyOutMetrics = PeriodicTableEngine.calculateTableGridMetrics(
+      viewportWidthPx = viewportWidthPx,
+      zoom = 1.5f,
+      horizontalPaddingPx = 12,
+    )
+    assertTrue(zoomedPartiallyOutMetrics.tileWidthPx in (defaultMetrics.tileWidthPx + 1) until zoomedInMetrics.tileWidthPx)
+    assertTrue(zoomedPartiallyOutMetrics.tableWidthPx in (defaultMetrics.tableWidthPx + 1) until zoomedInMetrics.tableWidthPx)
+  }
 }

@@ -577,6 +577,7 @@ fun CameraScreen(
   var manualFocusTarget by remember { mutableStateOf<CameraSmartFocusTarget?>(null) }
   var focusPointNormalized by remember { mutableStateOf<Offset?>(null) }
   var focusSampledColorHex by remember { mutableStateOf<String?>(null) }
+  var smartFocusSampledColorHex by remember { mutableStateOf<String?>(null) }
   var focusTriggerCounter by remember { mutableIntStateOf(0) }
   var inlineColorPickerHex by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -926,6 +927,14 @@ fun CameraScreen(
         }
         if (detectedTarget != null && manualFocusTarget == null) {
           smartAutoFocusTarget = detectedTarget
+          smartFocusSampledColorHex = CameraEngine.sampleCenterRadiusColorHexFromBitmap(
+            bitmap = alignedFrame,
+            normX = detectedTarget.clampedX,
+            normY = detectedTarget.clampedY,
+            radiusPx = 6,
+            filter = colorFilter,
+            exposureEv = exposureEv,
+          )
         }
       }
       delay(400L)
@@ -1552,33 +1561,32 @@ fun CameraScreen(
   var topOverlayHeightPx by remember { mutableStateOf(0) }
   val density = LocalDensity.current
 
-  Box(
+  BoxWithConstraints(
     modifier = modifier
       .fillMaxSize()
       .background(Color.Black)
       .testTag("camera_screen"),
   ) {
+    val containerW = maxWidth
+    val containerH = maxHeight
+
+    val (frameW, frameH) = remember(containerW, containerH, aspectRatio) {
+      val (w, h) = CameraEngine.calculateViewfinderDimensions(
+        availableWidth = containerW.value,
+        availableHeight = containerH.value,
+        aspectRatio = aspectRatio,
+      )
+      Pair(w.dp, h.dp)
+    }
+
     // 1. Full-Viewport Camera Stage (shrinks with black bars when aspect ratio does not match screen)
-    BoxWithConstraints(
+    Box(
       modifier = Modifier
         .fillMaxSize()
-        .zIndex(if (focusPointNormalized != null) 2f else 0f)
         .background(Color.Black)
         .testTag("camera_viewfinder_stage"),
       contentAlignment = Alignment.Center,
     ) {
-      val containerW = maxWidth
-      val containerH = maxHeight
-
-      val (frameW, frameH) = remember(containerW, containerH, aspectRatio) {
-        val (w, h) = CameraEngine.calculateViewfinderDimensions(
-          availableWidth = containerW.value,
-          availableHeight = containerH.value,
-          aspectRatio = aspectRatio,
-        )
-        Pair(w.dp, h.dp)
-      }
-
       Box(
         modifier = Modifier
           .size(width = frameW, height = frameH)
@@ -1593,8 +1601,6 @@ fun CameraScreen(
           }
           .pointerInput(colorFilter, exposureEv, lensFacing) {
             detectTapGestures { tapOffset ->
-              showAdjustmentsPanel = false
-              showFiltersBar = false
               val normX = (tapOffset.x / size.width.toFloat()).coerceIn(0.08f, 0.92f)
               val normY = (tapOffset.y / size.height.toFloat()).coerceIn(0.08f, 0.92f)
               val manualTarget = CameraEngine.createManualFocusTarget(normX = normX, normY = normY)
@@ -1720,18 +1726,6 @@ fun CameraScreen(
           )
         }
 
-        // Smart ML Kit Object Detection Autofocus & 5s Manual Tap-to-Focus Override Overlay
-        CameraFocusReticleOverlay(
-          smartAutoFocusTarget = smartAutoFocusTarget,
-          manualFocusTarget = manualFocusTarget,
-          focusPointNormalized = focusPointNormalized,
-          focusSampledColorHex = focusSampledColorHex,
-          lensFacing = lensFacing,
-          colorFilter = colorFilter,
-          exposureEv = exposureEv,
-          onOpenColorInColorsTool = { hex -> openColorInColorsTool(hex) },
-        )
-
         // Self-Timer Countdown Overlay
         if (isCountingDown) {
           Surface(
@@ -1763,6 +1757,26 @@ fun CameraScreen(
           )
         }
       }
+    }
+
+    // Transparent Autofocus Reticle & Color Pill Overlay (rendered without elevating the opaque viewfinder stage above camera controls)
+    Box(
+      modifier = Modifier
+        .size(width = frameW, height = frameH)
+        .align(Alignment.Center)
+        .zIndex(1f),
+    ) {
+      CameraFocusReticleOverlay(
+        smartAutoFocusTarget = smartAutoFocusTarget,
+        manualFocusTarget = manualFocusTarget,
+        focusPointNormalized = focusPointNormalized,
+        focusSampledColorHex = focusSampledColorHex,
+        smartFocusSampledColorHex = smartFocusSampledColorHex,
+        lensFacing = lensFacing,
+        colorFilter = colorFilter,
+        exposureEv = exposureEv,
+        onOpenColorInColorsTool = { hex -> openColorInColorsTool(hex) },
+      )
     }
 
     // 2. Top Controls Overlay (Translucent Header + Permission Banner + Status/Telemetry Pills)
@@ -2063,12 +2077,119 @@ fun CameraScreen(
           )
         }
       }
+    }
 
-      // Detected System Cameras Pill Selector Bar (separated into Back and Front selector bars, showing the bar for the active facing mode)
+    // 3. Bottom Controls Overlay (Floating Night Mode Icon + Smooth Zoom Slider + Device Camera Selector + Expandable Sliders/Filters + Translucent Control Deck)
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .align(Alignment.BottomCenter)
+        .testTag("camera_bottom_overlay"),
+      horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+      // Floating Night Mode Icon Button (Auto / On / Off) fixed to the left + Smooth Zoom Slider taking the rest of the width
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 12.dp)
+          .padding(bottom = 6.dp)
+          .testTag("camera_zoom_selector_row"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        val nightContainerColor by animateColorAsState(
+          targetValue = when (nightMode) {
+            CameraNightMode.ON -> MaterialTheme.colorScheme.primaryContainer
+            CameraNightMode.AUTO -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.88f)
+            CameraNightMode.OFF -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f)
+          },
+          label = "NightModeButtonContainerColor",
+        )
+        val nightContentColor by animateColorAsState(
+          targetValue = when (nightMode) {
+            CameraNightMode.ON -> MaterialTheme.colorScheme.onPrimaryContainer
+            CameraNightMode.AUTO -> MaterialTheme.colorScheme.onSecondaryContainer
+            CameraNightMode.OFF -> MaterialTheme.colorScheme.onSurfaceVariant
+          },
+          label = "NightModeButtonContentColor",
+        )
+
+        Surface(
+          shape = CircleShape,
+          color = nightContainerColor,
+          modifier = Modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .clickable(enabled = !isCountingDown) {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              updateNightMode(nightMode.next())
+            }
+            .testTag("camera_night_mode_button")
+            .semantics {
+              contentDescription = nightMode.displayName
+            },
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = Icons.Default.NightsStay,
+              contentDescription = null,
+              tint = nightContentColor,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+        }
+
+        // Smooth Zoom Slider taking the rest of the width next to the night mode icon
+        Surface(
+          shape = RoundedCornerShape(24.dp),
+          color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f),
+          modifier = Modifier
+            .weight(1f)
+            .height(38.dp)
+            .testTag("camera_zoom_slider_container"),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxSize()
+              .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Default.ZoomIn,
+              contentDescription = "Zoom",
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(18.dp),
+            )
+            CameraSlimDotSlider(
+              value = zoomLevel,
+              onValueChange = { zoomLevel = CameraEngine.coerceZoom(it) },
+              valueRange = MIN_CAMERA_ZOOM..MAX_CAMERA_ZOOM,
+              modifier = Modifier
+                .weight(1f)
+                .testTag("camera_zoom_slider"),
+            )
+            Text(
+              text = CameraEngine.formatZoomLabel(zoomLevel),
+              style = MaterialTheme.typography.labelSmall,
+              fontFamily = FontFamily.Monospace,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
+              textAlign = TextAlign.End,
+              modifier = Modifier
+                .width(38.dp)
+                .testTag("camera_zoom_value_text"),
+            )
+          }
+        }
+      }
+
+      // Detected System Cameras Pill Selector Bar (below the zoom selector, separated into Back and Front selector bars)
       Box(
         modifier = Modifier
           .fillMaxWidth()
           .padding(horizontal = 12.dp)
+          .padding(bottom = 6.dp)
           .testTag("camera_lens_selector_row"),
         contentAlignment = Alignment.Center,
       ) {
@@ -2148,120 +2269,6 @@ fun CameraScreen(
           }
         }
       }
-    }
-
-    // 3. Bottom Controls Overlay (Floating Night Mode + Zoom Presets + Expandable Sliders/Filters + Translucent Control Deck)
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .align(Alignment.BottomCenter)
-        .testTag("camera_bottom_overlay"),
-      horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-      // Floating Night Mode Icon Button (Auto / On / Off) to the left of Zoom Preset Pills (1x, 2x, 3x, 5x)
-      Row(
-        modifier = Modifier.padding(bottom = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        val nightContainerColor by animateColorAsState(
-          targetValue = when (nightMode) {
-            CameraNightMode.ON -> MaterialTheme.colorScheme.primaryContainer
-            CameraNightMode.AUTO -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.88f)
-            CameraNightMode.OFF -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f)
-          },
-          label = "NightModeButtonContainerColor",
-        )
-        val nightContentColor by animateColorAsState(
-          targetValue = when (nightMode) {
-            CameraNightMode.ON -> MaterialTheme.colorScheme.onPrimaryContainer
-            CameraNightMode.AUTO -> MaterialTheme.colorScheme.onSecondaryContainer
-            CameraNightMode.OFF -> MaterialTheme.colorScheme.onSurfaceVariant
-          },
-          label = "NightModeButtonContentColor",
-        )
-
-        Surface(
-          shape = RoundedCornerShape(24.dp),
-          color = nightContainerColor,
-          modifier = Modifier
-            .height(42.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .clickable(enabled = !isCountingDown) {
-              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-              updateNightMode(nightMode.next())
-            }
-            .testTag("camera_night_mode_button")
-            .semantics {
-              contentDescription = nightMode.displayName
-            },
-        ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-          ) {
-            Icon(
-              imageVector = Icons.Default.NightsStay,
-              contentDescription = null,
-              tint = nightContentColor,
-              modifier = Modifier.size(16.dp),
-            )
-            Text(
-              text = nightMode.shortLabel,
-              style = MaterialTheme.typography.labelSmall,
-              fontWeight = if (nightMode != CameraNightMode.OFF) FontWeight.ExtraBold else FontWeight.Medium,
-              color = nightContentColor,
-              modifier = Modifier.testTag("camera_night_mode_label"),
-            )
-          }
-        }
-
-        // Zoom Preset Pills (1x, 2x, 3x, 5x)
-        Row(
-          modifier = Modifier
-            .clip(RoundedCornerShape(24.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f))
-            .padding(horizontal = 6.dp, vertical = 4.dp)
-            .testTag("zoom_presets_row"),
-          horizontalArrangement = Arrangement.spacedBy(4.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          CAMERA_ZOOM_PRESETS.forEach { preset ->
-            val isSelected = kotlin.math.abs(zoomLevel - preset) < 0.15f
-            val presetLabel = "${preset.toInt()}x"
-            Surface(
-              shape = CircleShape,
-              color = if (isSelected) {
-                MaterialTheme.colorScheme.primaryContainer
-              } else {
-                Color.Transparent
-              },
-              modifier = Modifier
-                .size(34.dp)
-                .clip(CircleShape)
-                .clickable {
-                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                  zoomLevel = preset
-                }
-                .testTag("zoom_preset_${preset.toInt()}x"),
-            ) {
-              Box(contentAlignment = Alignment.Center) {
-                Text(
-                  text = presetLabel,
-                  style = MaterialTheme.typography.labelSmall,
-                  fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
-                  color = if (isSelected) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                  } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                  },
-                )
-              }
-            }
-          }
-        }
-      }
 
       // Translucent Bottom Control Deck (Expandable Panels + Mode Tabs + Shutter Row)
       Surface(
@@ -2273,11 +2280,11 @@ fun CameraScreen(
         Column(
           modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
           horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.spacedBy(10.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          // Expandable Pro Sliders Panel (Fine Zoom & Exposure Compensation with SlimDotSlider)
+          // Expandable Pro Sliders Panel (Exposure Compensation with SlimDotSlider)
           AnimatedVisibility(
             visible = showAdjustmentsPanel,
             enter = expandVertically() + fadeIn(),
@@ -2298,45 +2305,6 @@ fun CameraScreen(
                   .padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
               ) {
-                // Fine Zoom Slider
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                  Icon(
-                    imageVector = Icons.Default.ZoomIn,
-                    contentDescription = "Zoom",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp),
-                  )
-                  Text(
-                    text = "Zoom",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.width(64.dp),
-                  )
-                  CameraSlimDotSlider(
-                    value = zoomLevel,
-                    onValueChange = { zoomLevel = CameraEngine.coerceZoom(it) },
-                    valueRange = MIN_CAMERA_ZOOM..MAX_CAMERA_ZOOM,
-                    modifier = Modifier
-                      .weight(1f)
-                      .testTag("camera_zoom_slider"),
-                  )
-                  Text(
-                    text = CameraEngine.formatZoomLabel(zoomLevel),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.End,
-                    modifier = Modifier
-                      .width(44.dp)
-                      .testTag("camera_zoom_value_text"),
-                  )
-                }
-
                 // Exposure Compensation Slider
                 Row(
                   modifier = Modifier.fillMaxWidth(),
@@ -4951,8 +4919,8 @@ private fun ScannedNoteResultCard(
     Column(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(horizontal = 14.dp, vertical = 10.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
+        .padding(horizontal = 12.dp, vertical = 8.dp),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -5027,7 +4995,7 @@ private fun ScannedNoteResultCard(
               text = document.bodyContent.ifBlank { document.rawText },
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 3,
+              maxLines = 2,
               overflow = TextOverflow.Ellipsis,
               modifier = Modifier.testTag("note_scanner_detected_content"),
             )
@@ -5153,8 +5121,8 @@ private fun DetectedScanResultCard(
     Column(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(horizontal = 14.dp, vertical = 10.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
+        .padding(horizontal = 12.dp, vertical = 8.dp),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -5759,9 +5727,10 @@ private fun executeScannedCodePrimaryAction(
 }
 
 /**
- * Renders either the Smart ML Kit Object Detection Autofocus indicator (`camera_smart_af_indicator`)
- * or the 5-second Manual Tap-to-Focus Override indicator (`camera_focus_indicator`) with its
- * center-radius sampled hex color pill (`camera_focus_color_pill`).
+ * Renders the autofocus indicator (`camera_smart_af_indicator` for Smart ML Kit Object Detection
+ * Autofocus, or `camera_focus_indicator` during a 5-second Manual Tap-to-Focus Override) with the
+ * normal autofocus appearance: focus ring, center color dot, and center-radius sampled hex color
+ * pill (`camera_focus_color_pill`), without a box or label badge.
  */
 @Composable
 private fun CameraFocusReticleOverlay(
@@ -5769,16 +5738,26 @@ private fun CameraFocusReticleOverlay(
   manualFocusTarget: CameraSmartFocusTarget?,
   focusPointNormalized: Offset?,
   focusSampledColorHex: String?,
+  smartFocusSampledColorHex: String?,
   lensFacing: CameraLensFacing,
   colorFilter: CameraColorFilter,
   exposureEv: Float,
   onOpenColorInColorsTool: (String) -> Unit,
 ) {
   val density = LocalDensity.current
+  val isManualFocus = focusPointNormalized != null
   val activeFocusPoint = focusPointNormalized
+    ?: if (manualFocusTarget == null && smartAutoFocusTarget != null) {
+      Offset(smartAutoFocusTarget.clampedX, smartAutoFocusTarget.clampedY)
+    } else {
+      null
+    }
+
   if (activeFocusPoint != null) {
+    val indicatorTag = if (isManualFocus) "camera_focus_indicator" else "camera_smart_af_indicator"
     val focusRingColor = MaterialTheme.colorScheme.tertiary
-    val activeHex = focusSampledColorHex ?: CameraEngine.sampleSyntheticFocusColorHex(
+    val sampledHex = if (isManualFocus) focusSampledColorHex else smartFocusSampledColorHex
+    val activeHex = sampledHex ?: CameraEngine.sampleSyntheticFocusColorHex(
       normX = activeFocusPoint.x,
       normY = activeFocusPoint.y,
       lensFacing = lensFacing,
@@ -5794,12 +5773,11 @@ private fun CameraFocusReticleOverlay(
       }
     }
     var measuredPillWidthPx by remember { mutableIntStateOf(0) }
-    var measuredModeBadgeWidthPx by remember { mutableIntStateOf(0) }
 
     BoxWithConstraints(
       modifier = Modifier
         .fillMaxSize()
-        .testTag("camera_focus_indicator"),
+        .testTag(indicatorTag),
     ) {
       val boxW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
       val boxH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
@@ -5818,20 +5796,6 @@ private fun CameraFocusReticleOverlay(
         edgeMarginPx,
         (boxH - with(density) { 36.dp.toPx() }).coerceAtLeast(edgeMarginPx),
       )
-      val fallbackBadgeWidthPx = with(density) { 84.dp.toPx() }
-      val effectiveBadgeW = if (measuredModeBadgeWidthPx > 0) {
-        measuredModeBadgeWidthPx.toFloat()
-      } else {
-        fallbackBadgeWidthPx
-      }
-      val badgeLeftPx = (cx - effectiveBadgeW / 2f).coerceIn(
-        edgeMarginPx,
-        (boxW - effectiveBadgeW - edgeMarginPx).coerceAtLeast(edgeMarginPx),
-      )
-      val badgeTopPx = (cy - radiusPx - with(density) { 26.dp.toPx() } - gapPx).coerceIn(
-        edgeMarginPx,
-        (boxH - with(density) { 36.dp.toPx() }).coerceAtLeast(edgeMarginPx),
-      )
 
       Canvas(modifier = Modifier.fillMaxSize()) {
         drawCircle(
@@ -5844,33 +5808,6 @@ private fun CameraFocusReticleOverlay(
           color = swatchColor,
           radius = 4.dp.toPx(),
           center = Offset(cx, cy),
-        )
-      }
-
-      // 5s Manual Focus Override Badge above the focus ring
-      Surface(
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.88f),
-        border = BorderStroke(1.dp, focusRingColor.copy(alpha = 0.7f)),
-        modifier = Modifier
-          .onSizeChanged { measuredModeBadgeWidthPx = it.width }
-          .offset {
-            IntOffset(
-              x = badgeLeftPx.roundToInt(),
-              y = badgeTopPx.roundToInt(),
-            )
-          }
-          .testTag("camera_focus_mode_badge"),
-      ) {
-        Text(
-          text = manualFocusTarget?.badgeLabel ?: "Manual • 5s",
-          style = MaterialTheme.typography.labelSmall,
-          fontWeight = FontWeight.Bold,
-          color = MaterialTheme.colorScheme.onTertiaryContainer,
-          maxLines = 1,
-          modifier = Modifier
-            .padding(horizontal = 8.dp, vertical = 3.dp)
-            .testTag("camera_manual_focus_badge_text"),
         )
       }
 
@@ -5915,96 +5852,6 @@ private fun CameraFocusReticleOverlay(
             modifier = Modifier.testTag("camera_focus_color_hex_text"),
           )
         }
-      }
-    }
-  } else if (manualFocusTarget == null && smartAutoFocusTarget != null) {
-    val smartAfColor = MaterialTheme.colorScheme.primary
-    var measuredSmartBadgeWidthPx by remember { mutableIntStateOf(0) }
-
-    BoxWithConstraints(
-      modifier = Modifier
-        .fillMaxSize()
-        .testTag("camera_smart_af_indicator"),
-    ) {
-      val boxW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
-      val boxH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
-      val cx = boxW * smartAutoFocusTarget.clampedX
-      val cy = boxH * smartAutoFocusTarget.clampedY
-      val radiusPx = with(density) { 28.dp.toPx() }
-      val bracketHalfPx = with(density) { 38.dp.toPx() }
-      val armLenPx = with(density) { 12.dp.toPx() }
-      val gapPx = with(density) { 6.dp.toPx() }
-      val edgeMarginPx = with(density) { 8.dp.toPx() }
-      val fallbackBadgeWidthPx = with(density) { 96.dp.toPx() }
-      val effectiveBadgeW = if (measuredSmartBadgeWidthPx > 0) {
-        measuredSmartBadgeWidthPx.toFloat()
-      } else {
-        fallbackBadgeWidthPx
-      }
-      val badgeLeftPx = (cx - effectiveBadgeW / 2f).coerceIn(
-        edgeMarginPx,
-        (boxW - effectiveBadgeW - edgeMarginPx).coerceAtLeast(edgeMarginPx),
-      )
-      val badgeTopPx = (cy - bracketHalfPx - with(density) { 28.dp.toPx() } - gapPx).coerceIn(
-        edgeMarginPx,
-        (boxH - with(density) { 36.dp.toPx() }).coerceAtLeast(edgeMarginPx),
-      )
-
-      Canvas(modifier = Modifier.fillMaxSize()) {
-        val strokePx = 1.75.dp.toPx()
-        val bracketStrokePx = 2.5.dp.toPx()
-        val left = (cx - bracketHalfPx).coerceIn(edgeMarginPx, size.width - edgeMarginPx)
-        val right = (cx + bracketHalfPx).coerceIn(left + 16f, size.width - edgeMarginPx)
-        val top = (cy - bracketHalfPx).coerceIn(edgeMarginPx, size.height - edgeMarginPx)
-        val bottom = (cy + bracketHalfPx).coerceIn(top + 16f, size.height - edgeMarginPx)
-
-        // Corner tracking brackets around detected ML Kit object focus point
-        drawLine(smartAfColor, Offset(left, top + armLenPx), Offset(left, top), bracketStrokePx, StrokeCap.Round)
-        drawLine(smartAfColor, Offset(left, top), Offset(left + armLenPx, top), bracketStrokePx, StrokeCap.Round)
-        drawLine(smartAfColor, Offset(right - armLenPx, top), Offset(right, top), bracketStrokePx, StrokeCap.Round)
-        drawLine(smartAfColor, Offset(right, top), Offset(right, top + armLenPx), bracketStrokePx, StrokeCap.Round)
-        drawLine(smartAfColor, Offset(left, bottom - armLenPx), Offset(left, bottom), bracketStrokePx, StrokeCap.Round)
-        drawLine(smartAfColor, Offset(left, bottom), Offset(left + armLenPx, bottom), bracketStrokePx, StrokeCap.Round)
-        drawLine(smartAfColor, Offset(right - armLenPx, bottom), Offset(right, bottom), bracketStrokePx, StrokeCap.Round)
-        drawLine(smartAfColor, Offset(right, bottom - armLenPx), Offset(right, bottom), bracketStrokePx, StrokeCap.Round)
-
-        drawCircle(
-          color = smartAfColor.copy(alpha = 0.85f),
-          radius = radiusPx,
-          center = Offset(cx, cy),
-          style = Stroke(width = strokePx),
-        )
-        drawCircle(
-          color = smartAfColor,
-          radius = 3.5.dp.toPx(),
-          center = Offset(cx, cy),
-        )
-      }
-
-      Surface(
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.82f),
-        border = BorderStroke(1.dp, smartAfColor.copy(alpha = 0.65f)),
-        modifier = Modifier
-          .onSizeChanged { measuredSmartBadgeWidthPx = it.width }
-          .offset {
-            IntOffset(
-              x = badgeLeftPx.roundToInt(),
-              y = badgeTopPx.roundToInt(),
-            )
-          }
-          .testTag("camera_focus_mode_badge"),
-      ) {
-        Text(
-          text = smartAutoFocusTarget.badgeLabel,
-          style = MaterialTheme.typography.labelSmall,
-          fontWeight = FontWeight.Bold,
-          color = MaterialTheme.colorScheme.onSurface,
-          maxLines = 1,
-          modifier = Modifier
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .testTag("camera_smart_af_badge_text"),
-        )
       }
     }
   }

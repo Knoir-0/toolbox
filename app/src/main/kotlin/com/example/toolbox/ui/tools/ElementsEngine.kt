@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 const val ELEMENTS_PREFS_NAME = "elements_tool_preferences"
 private const val PREF_KEY_FAVORITE_ATOMIC_NUMBERS = "favorite_atomic_numbers"
@@ -286,6 +287,24 @@ class SharedPreferencesElementsRepository(
 }
 
 /**
+ * Computed layout metrics (in pixels) for the 18-column Periodic Table grid at a given
+ * viewport width and zoom multiplier.
+ *
+ * At [PeriodicTableEngine.DEFAULT_TABLE_ZOOM] (`1.0f`), the full 18-group table + period badge
+ * column fits within [viewportWidthPx] across the full device width.
+ */
+data class PeriodicTableGridMetrics(
+  val viewportWidthPx: Int,
+  val tableWidthPx: Int,
+  val contentWidthPx: Int,
+  val horizontalPaddingPx: Int,
+  val periodColumnWidthPx: Int,
+  val tileWidthPx: Int,
+  val tileHeightPx: Int,
+  val tileSpacingPx: Int,
+)
+
+/**
  * Core engine and complete IUPAC 118-element database for the Periodic Table of Elements tool.
  */
 object PeriodicTableEngine {
@@ -293,6 +312,17 @@ object PeriodicTableEngine {
   const val STP_TEMPERATURE_K = 298.15
   const val MIN_SIMULATOR_TEMP_K = 0f
   const val MAX_SIMULATOR_TEMP_K = 6000f
+
+  const val DEFAULT_TABLE_ZOOM = 1.0f
+  const val MIN_TABLE_ZOOM = 1.0f
+  const val MAX_TABLE_ZOOM = 4.0f
+
+  const val BASE_TILE_WIDTH_DP = 52f
+  const val BASE_TILE_HEIGHT_DP = 58f
+  const val BASE_TILE_SPACING_DP = 3f
+  const val BASE_PERIOD_COLUMN_WIDTH_DP = 22f
+  const val BASE_TABLE_CONTENT_WIDTH_DP =
+    BASE_PERIOD_COLUMN_WIDTH_DP + (18f * BASE_TILE_WIDTH_DP) + (18f * BASE_TILE_SPACING_DP) // 1012f
 
   val ALL_ELEMENTS: List<ChemicalElement> = listOf(
     // ==================== PERIOD 1 ====================
@@ -1647,4 +1677,65 @@ object PeriodicTableEngine {
     "Fe2O3" to "Iron(III) Oxide",
     "CuSO4·5H2O" to "Copper(II) Sulfate Pentahydrate",
   )
+
+  /**
+   * Applies a multiplicative pinch [zoomChange] to [currentZoom], clamped within
+   * [MIN_TABLE_ZOOM] (`1.0f`, full device width) and [MAX_TABLE_ZOOM] (`4.0f`).
+   */
+  fun calculateTableZoom(currentZoom: Float, zoomChange: Float): Float {
+    val base = currentZoom.coerceIn(MIN_TABLE_ZOOM, MAX_TABLE_ZOOM)
+    if (zoomChange <= 0f || zoomChange.isNaN()) return base
+    return (base * zoomChange).coerceIn(MIN_TABLE_ZOOM, MAX_TABLE_ZOOM)
+  }
+
+  /**
+   * Computes pixel dimensions for the 18-column Periodic Table grid so that at
+   * [DEFAULT_TABLE_ZOOM] (`1.0f`) the entire 18-column table + period column spans the full
+   * [viewportWidthPx] without overflowing, and scales monotonically as [zoom] increases.
+   */
+  fun calculateTableGridMetrics(
+    viewportWidthPx: Int,
+    zoom: Float = DEFAULT_TABLE_ZOOM,
+    horizontalPaddingPx: Int = 0,
+  ): PeriodicTableGridMetrics {
+    val clampedZoom = zoom.coerceIn(MIN_TABLE_ZOOM, MAX_TABLE_ZOOM)
+    val safeViewportWidthPx = viewportWidthPx.coerceAtLeast(19)
+    val safePaddingPx = horizontalPaddingPx.coerceAtLeast(0).coerceAtMost(safeViewportWidthPx / 8)
+    val baseContentWidthPx = (safeViewportWidthPx - 2 * safePaddingPx).coerceAtLeast(19)
+
+    val baseSpacingPx =
+      ((baseContentWidthPx * BASE_TILE_SPACING_DP) / BASE_TABLE_CONTENT_WIDTH_DP)
+        .roundToInt()
+        .coerceAtLeast(1)
+    val basePeriodWidthPx =
+      ((baseContentWidthPx * BASE_PERIOD_COLUMN_WIDTH_DP) / BASE_TABLE_CONTENT_WIDTH_DP)
+        .roundToInt()
+        .coerceAtLeast(1)
+    val baseTileWidthPx =
+      ((baseContentWidthPx - basePeriodWidthPx - 18 * baseSpacingPx) / 18)
+        .coerceAtLeast(1)
+    val baseTileHeightPx =
+      ((baseTileWidthPx * BASE_TILE_HEIGHT_DP) / BASE_TILE_WIDTH_DP)
+        .roundToInt()
+        .coerceAtLeast(1)
+
+    val tileWidthPx = (baseTileWidthPx * clampedZoom).roundToInt().coerceAtLeast(1)
+    val tileHeightPx = (baseTileHeightPx * clampedZoom).roundToInt().coerceAtLeast(1)
+    val periodColumnWidthPx = (basePeriodWidthPx * clampedZoom).roundToInt().coerceAtLeast(1)
+    val tileSpacingPx = (baseSpacingPx * clampedZoom).roundToInt().coerceAtLeast(1)
+
+    val contentWidthPx = periodColumnWidthPx + (18 * tileWidthPx) + (18 * tileSpacingPx)
+    val tableWidthPx = maxOf(safeViewportWidthPx, contentWidthPx + (2 * safePaddingPx))
+
+    return PeriodicTableGridMetrics(
+      viewportWidthPx = safeViewportWidthPx,
+      tableWidthPx = tableWidthPx,
+      contentWidthPx = contentWidthPx,
+      horizontalPaddingPx = safePaddingPx,
+      periodColumnWidthPx = periodColumnWidthPx,
+      tileWidthPx = tileWidthPx,
+      tileHeightPx = tileHeightPx,
+      tileSpacingPx = tileSpacingPx,
+    )
+  }
 }

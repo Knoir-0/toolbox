@@ -14,9 +14,13 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -76,6 +80,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -87,7 +92,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
@@ -901,6 +909,7 @@ private fun PeriodicTableInteractiveContent(
 ) {
   val horizontalScrollState = rememberScrollState()
   val verticalScrollState = rememberScrollState()
+  var tableZoom by rememberSaveable { mutableFloatStateOf(PeriodicTableEngine.DEFAULT_TABLE_ZOOM) }
 
   Column(
     modifier = Modifier
@@ -931,7 +940,7 @@ private fun PeriodicTableInteractiveContent(
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(
-        text = "18-Group IUPAC Periodic Table (Tap tile to select, double-tap/Info for details)",
+        text = "18-Group IUPAC Periodic Table (Pinch to zoom, tap tile to select, double-tap/Info for details)",
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
@@ -939,7 +948,38 @@ private fun PeriodicTableInteractiveContent(
         modifier = Modifier.weight(1f),
       )
 
-      Spacer(modifier = Modifier.width(8.dp))
+      Spacer(modifier = Modifier.width(6.dp))
+
+      // Zoom scale badge (tap to reset back to 100% full-device-width fit)
+      Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = if (tableZoom > PeriodicTableEngine.DEFAULT_TABLE_ZOOM + 0.01f) {
+          MaterialTheme.colorScheme.secondaryContainer
+        } else {
+          MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        },
+        modifier = Modifier
+          .clip(RoundedCornerShape(14.dp))
+          .clickable { tableZoom = PeriodicTableEngine.DEFAULT_TABLE_ZOOM }
+          .testTag("periodic_table_zoom_badge"),
+      ) {
+        Text(
+          text = "${(tableZoom * 100).roundToInt()}%",
+          style = MaterialTheme.typography.labelSmall,
+          fontFamily = FontFamily.Monospace,
+          fontWeight = FontWeight.Bold,
+          color = if (tableZoom > PeriodicTableEngine.DEFAULT_TABLE_ZOOM + 0.01f) {
+            MaterialTheme.colorScheme.onSecondaryContainer
+          } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+          },
+          modifier = Modifier
+            .padding(horizontal = 7.dp, vertical = 4.dp)
+            .testTag("periodic_table_zoom_label"),
+        )
+      }
+
+      Spacer(modifier = Modifier.width(4.dp))
 
       Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         ElementsColorMode.entries.forEach { mode ->
@@ -972,196 +1012,289 @@ private fun PeriodicTableInteractiveContent(
       }
     }
 
-    // 3. 2D Horizontally Scrollable 18-Column Periodic Table Grid
-    val tileWidth = 52.dp
-    val tileHeight = 58.dp
-    val tileSpacing = 3.dp
-    val periodColumnWidth = 22.dp
-
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .horizontalScroll(horizontalScrollState)
-        .padding(horizontal = 12.dp)
-        .testTag("periodic_table_grid"),
-      verticalArrangement = Arrangement.spacedBy(tileSpacing),
+    // 3. 2D Pinch-to-Zoom & Horizontally Scrollable 18-Column Periodic Table Grid
+    // At default zoom (1.0f), the entire 18-column grid takes up the full device width.
+    BoxWithConstraints(
+      modifier = Modifier.fillMaxWidth(),
     ) {
-      // Group Header Row (1..18)
-      Row(
-        horizontalArrangement = Arrangement.spacedBy(tileSpacing),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Box(
-          modifier = Modifier.width(periodColumnWidth),
-          contentAlignment = Alignment.Center,
-        ) {
-          Text(
-            text = "P\\G",
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-        for (col in 1..18) {
-          Box(
-            modifier = Modifier
-              .width(tileWidth)
-              .height(18.dp),
-            contentAlignment = Alignment.Center,
-          ) {
-            Text(
-              text = col.toString(),
-              style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-        }
+      val density = LocalDensity.current
+      val viewportWidthPx = constraints.maxWidth
+      val baseHorizontalPaddingPx = with(density) { 4.dp.roundToPx() }
+      val gridMetrics = remember(viewportWidthPx, tableZoom, baseHorizontalPaddingPx) {
+        PeriodicTableEngine.calculateTableGridMetrics(
+          viewportWidthPx = viewportWidthPx,
+          zoom = tableZoom,
+          horizontalPaddingPx = baseHorizontalPaddingPx,
+        )
       }
 
-      // Main Table Periods 1..7
-      for (row in 1..7) {
+      val tileWidth = with(density) { gridMetrics.tileWidthPx.toDp() }
+      val tileHeight = with(density) { gridMetrics.tileHeightPx.toDp() }
+      val tileSpacing = with(density) { gridMetrics.tileSpacingPx.toDp() }
+      val periodColumnWidth = with(density) { gridMetrics.periodColumnWidthPx.toDp() }
+      val tableWidth = with(density) { gridMetrics.tableWidthPx.toDp() }
+      val horizontalPadding = with(density) {
+        ((gridMetrics.tableWidthPx - gridMetrics.contentWidthPx).coerceAtLeast(0) / 2f).toDp()
+      }
+      val tileScale = (tileWidth.value / PeriodicTableEngine.BASE_TILE_WIDTH_DP).coerceIn(0.25f, 3.0f)
+      val headerRowHeight = (18.dp * tileScale).coerceIn(10.dp, 28.dp)
+      val headerCornerFontSize = (9f * tileScale).coerceIn(4.5f, 13f).sp
+      val groupHeaderFontSize = (10f * tileScale).coerceIn(5.5f, 14f).sp
+      val periodBadgeFontSize = (11f * tileScale).coerceIn(6f, 15f).sp
+      val fBlockBadgeFontSize = (10f * tileScale).coerceIn(5f, 14f).sp
+      val fBlockLabelFontSize = (9f * tileScale).coerceIn(3.5f, 13f).sp
+      val fBlockSpacerHeight = (6.dp * tileScale).coerceIn(2.dp, 10.dp)
+
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .pinchToZoomPeriodicTable(
+            currentZoom = tableZoom,
+            onZoomChange = { updatedZoom ->
+              tableZoom = updatedZoom
+            },
+            onHorizontalPanDelta = { deltaX ->
+              if (tableZoom > PeriodicTableEngine.DEFAULT_TABLE_ZOOM + 0.01f) {
+                horizontalScrollState.dispatchRawDelta(-deltaX)
+              }
+            },
+          )
+          .horizontalScroll(horizontalScrollState)
+          .width(tableWidth)
+          .testTag("periodic_table_grid")
+          .padding(horizontal = horizontalPadding),
+        verticalArrangement = Arrangement.spacedBy(tileSpacing),
+      ) {
+        // Group Header Row (1..18)
         Row(
           horizontalArrangement = Arrangement.spacedBy(tileSpacing),
           verticalAlignment = Alignment.CenterVertically,
         ) {
-          // Period Number Badge
           Box(
-            modifier = Modifier
-              .width(periodColumnWidth)
-              .height(tileHeight),
+            modifier = Modifier.width(periodColumnWidth),
             contentAlignment = Alignment.Center,
           ) {
             Text(
-              text = row.toString(),
-              style = MaterialTheme.typography.labelSmall,
-              fontWeight = FontWeight.Bold,
+              text = "P\\G",
+              style = MaterialTheme.typography.labelSmall.copy(fontSize = headerCornerFontSize),
               color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
             )
           }
-
           for (col in 1..18) {
-            val element = PeriodicTableEngine.byGridPosition(row, col)
-            if (element != null) {
-              val isSelected = element.atomicNumber == selectedElement.atomicNumber
-              val isMatch = element.atomicNumber in matchingAtomicNumbers
-              PeriodicTableElementTile(
-                element = element,
-                isSelected = isSelected,
-                isDimmed = hasActiveFilter && !isMatch,
-                isFavorite = element.atomicNumber in favoriteAtomicNumbers,
-                colorMode = colorMode,
-                activeTemperatureK = activeTemperatureK,
-                tileWidth = tileWidth,
-                tileHeight = tileHeight,
-                onClick = {
-                  if (isSelected) {
-                    onInspectElement(element)
-                  } else {
-                    onSelectElement(element)
-                  }
-                },
-              )
-            } else if (row == 6 && col == 3) {
-              SeriesPlaceholderTile(
-                rangeText = "57–71",
-                label = "La–Lu",
-                category = ElementCategory.LANTHANIDE,
-                tileWidth = tileWidth,
-                tileHeight = tileHeight,
-              )
-            } else if (row == 7 && col == 3) {
-              SeriesPlaceholderTile(
-                rangeText = "89–103",
-                label = "Ac–Lr",
-                category = ElementCategory.ACTINIDE,
-                tileWidth = tileWidth,
-                tileHeight = tileHeight,
-              )
-            } else {
-              Spacer(
-                modifier = Modifier
-                  .width(tileWidth)
-                  .height(tileHeight),
+            Box(
+              modifier = Modifier
+                .width(tileWidth)
+                .height(headerRowHeight),
+              contentAlignment = Alignment.Center,
+            ) {
+              Text(
+                text = col.toString(),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = groupHeaderFontSize),
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
               )
             }
           }
         }
-      }
 
-      Spacer(modifier = Modifier.height(6.dp))
-
-      // F-Block: Lanthanides (Row 9, Cols 3..17) & Actinides (Row 10, Cols 3..17)
-      listOf(
-        9 to "6f" to "Lanthanides",
-        10 to "7f" to "Actinides",
-      ).forEach { (rowAndBadge, seriesLabel) ->
-        val (fRow, badgeText) = rowAndBadge
-        Row(
-          horizontalArrangement = Arrangement.spacedBy(tileSpacing),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Box(
-            modifier = Modifier
-              .width(periodColumnWidth)
-              .height(tileHeight),
-            contentAlignment = Alignment.Center,
+        // Main Table Periods 1..7
+        for (row in 1..7) {
+          Row(
+            horizontalArrangement = Arrangement.spacedBy(tileSpacing),
+            verticalAlignment = Alignment.CenterVertically,
           ) {
-            Text(
-              text = badgeText,
-              style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.primary,
-            )
-          }
-
-          for (col in 1..18) {
-            val element = PeriodicTableEngine.byGridPosition(fRow, col)
-            if (element != null) {
-              val isSelected = element.atomicNumber == selectedElement.atomicNumber
-              val isMatch = element.atomicNumber in matchingAtomicNumbers
-              PeriodicTableElementTile(
-                element = element,
-                isSelected = isSelected,
-                isDimmed = hasActiveFilter && !isMatch,
-                isFavorite = element.atomicNumber in favoriteAtomicNumbers,
-                colorMode = colorMode,
-                activeTemperatureK = activeTemperatureK,
-                tileWidth = tileWidth,
-                tileHeight = tileHeight,
-                onClick = {
-                  if (isSelected) {
-                    onInspectElement(element)
-                  } else {
-                    onSelectElement(element)
-                  }
-                },
+            // Period Number Badge
+            Box(
+              modifier = Modifier
+                .width(periodColumnWidth)
+                .height(tileHeight),
+              contentAlignment = Alignment.Center,
+            ) {
+              Text(
+                text = row.toString(),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = periodBadgeFontSize),
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
               )
-            } else if (col == 2) {
-              Box(
-                modifier = Modifier
-                  .width(tileWidth)
-                  .height(tileHeight),
-                contentAlignment = Alignment.CenterEnd,
-              ) {
-                Text(
-                  text = seriesLabel,
-                  style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                  fontWeight = FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  textAlign = TextAlign.End,
-                  maxLines = 2,
+            }
+
+            for (col in 1..18) {
+              val element = PeriodicTableEngine.byGridPosition(row, col)
+              if (element != null) {
+                val isSelected = element.atomicNumber == selectedElement.atomicNumber
+                val isMatch = element.atomicNumber in matchingAtomicNumbers
+                PeriodicTableElementTile(
+                  element = element,
+                  isSelected = isSelected,
+                  isDimmed = hasActiveFilter && !isMatch,
+                  isFavorite = element.atomicNumber in favoriteAtomicNumbers,
+                  colorMode = colorMode,
+                  activeTemperatureK = activeTemperatureK,
+                  tileWidth = tileWidth,
+                  tileHeight = tileHeight,
+                  tileScale = tileScale,
+                  onClick = {
+                    if (isSelected) {
+                      onInspectElement(element)
+                    } else {
+                      onSelectElement(element)
+                    }
+                  },
+                )
+              } else if (row == 6 && col == 3) {
+                SeriesPlaceholderTile(
+                  rangeText = "57–71",
+                  label = "La–Lu",
+                  category = ElementCategory.LANTHANIDE,
+                  tileWidth = tileWidth,
+                  tileHeight = tileHeight,
+                  tileScale = tileScale,
+                )
+              } else if (row == 7 && col == 3) {
+                SeriesPlaceholderTile(
+                  rangeText = "89–103",
+                  label = "Ac–Lr",
+                  category = ElementCategory.ACTINIDE,
+                  tileWidth = tileWidth,
+                  tileHeight = tileHeight,
+                  tileScale = tileScale,
+                )
+              } else {
+                Spacer(
+                  modifier = Modifier
+                    .width(tileWidth)
+                    .height(tileHeight),
                 )
               }
-            } else {
-              Spacer(
-                modifier = Modifier
-                  .width(tileWidth)
-                  .height(tileHeight),
+            }
+          }
+        }
+
+        Spacer(modifier = Modifier.height(fBlockSpacerHeight))
+
+        // F-Block: Lanthanides (Row 9, Cols 3..17) & Actinides (Row 10, Cols 3..17)
+        listOf(
+          9 to "6f" to "Lanthanides",
+          10 to "7f" to "Actinides",
+        ).forEach { (rowAndBadge, seriesLabel) ->
+          val (fRow, badgeText) = rowAndBadge
+          Row(
+            horizontalArrangement = Arrangement.spacedBy(tileSpacing),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Box(
+              modifier = Modifier
+                .width(periodColumnWidth)
+                .height(tileHeight),
+              contentAlignment = Alignment.Center,
+            ) {
+              Text(
+                text = badgeText,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = fBlockBadgeFontSize),
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
               )
+            }
+
+            for (col in 1..18) {
+              val element = PeriodicTableEngine.byGridPosition(fRow, col)
+              if (element != null) {
+                val isSelected = element.atomicNumber == selectedElement.atomicNumber
+                val isMatch = element.atomicNumber in matchingAtomicNumbers
+                PeriodicTableElementTile(
+                  element = element,
+                  isSelected = isSelected,
+                  isDimmed = hasActiveFilter && !isMatch,
+                  isFavorite = element.atomicNumber in favoriteAtomicNumbers,
+                  colorMode = colorMode,
+                  activeTemperatureK = activeTemperatureK,
+                  tileWidth = tileWidth,
+                  tileHeight = tileHeight,
+                  tileScale = tileScale,
+                  onClick = {
+                    if (isSelected) {
+                      onInspectElement(element)
+                    } else {
+                      onSelectElement(element)
+                    }
+                  },
+                )
+              } else if (col == 2) {
+                Box(
+                  modifier = Modifier
+                    .width(tileWidth)
+                    .height(tileHeight),
+                  contentAlignment = Alignment.CenterEnd,
+                ) {
+                  Text(
+                    text = seriesLabel,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                      fontSize = fBlockLabelFontSize,
+                      lineHeight = (10f * tileScale).coerceIn(4f, 14f).sp,
+                    ),
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.End,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+              } else {
+                Spacer(
+                  modifier = Modifier
+                    .width(tileWidth)
+                    .height(tileHeight),
+                )
+              }
             }
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun Modifier.pinchToZoomPeriodicTable(
+  currentZoom: Float,
+  onZoomChange: (Float) -> Unit,
+  onHorizontalPanDelta: ((Float) -> Unit)? = null,
+): Modifier {
+  val latestZoom by rememberUpdatedState(currentZoom)
+  val latestOnZoomChange by rememberUpdatedState(onZoomChange)
+  val latestOnHorizontalPanDelta by rememberUpdatedState(onHorizontalPanDelta)
+
+  return this.pointerInput(Unit) {
+    awaitEachGesture {
+      var liveZoom = latestZoom
+      var multiTouchStarted = false
+
+      do {
+        val event = awaitPointerEvent(PointerEventPass.Initial)
+        val pressedCount = event.changes.count { it.pressed }
+        if (pressedCount >= 2) {
+          if (!multiTouchStarted) {
+            multiTouchStarted = true
+            liveZoom = latestZoom
+          }
+          val zoomChange = event.calculateZoom()
+          val panChange = event.calculatePan()
+          if (zoomChange != 1f && zoomChange > 0f && !zoomChange.isNaN()) {
+            liveZoom = PeriodicTableEngine.calculateTableZoom(liveZoom, zoomChange)
+            latestOnZoomChange(liveZoom)
+          }
+          if (panChange.x != 0f && !panChange.x.isNaN()) {
+            latestOnHorizontalPanDelta?.invoke(panChange.x)
+          }
+          event.changes.forEach { it.consume() }
+        } else if (multiTouchStarted && pressedCount == 1) {
+          event.changes.forEach { it.consume() }
+        }
+      } while (event.changes.any { it.pressed })
     }
   }
 }
@@ -1176,19 +1309,25 @@ private fun PeriodicTableElementTile(
   activeTemperatureK: Double,
   tileWidth: Dp,
   tileHeight: Dp,
+  tileScale: Float = 1f,
   onClick: () -> Unit,
 ) {
   val visualColors = resolveElementVisualColors(element, colorMode, activeTemperatureK)
   val phaseAtTemp = element.phaseAtTemperature(activeTemperatureK)
 
+  val cornerRadius = (10.dp * tileScale).coerceIn(3.dp, 14.dp)
+  val tileShape = RoundedCornerShape(cornerRadius)
+  val horizontalPadding = (4.dp * tileScale).coerceIn(1.dp, 6.dp)
+  val verticalPadding = (3.dp * tileScale).coerceIn(0.75.dp, 5.dp)
+
   val borderStroke = if (isSelected) {
-    BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+    BorderStroke((2.dp * tileScale).coerceIn(1.2.dp, 3.dp), MaterialTheme.colorScheme.primary)
   } else {
-    BorderStroke(1.dp, visualColors.border)
+    BorderStroke((1.dp * tileScale).coerceIn(0.5.dp, 1.5.dp), visualColors.border)
   }
 
   Surface(
-    shape = RoundedCornerShape(10.dp),
+    shape = tileShape,
     color = visualColors.container,
     border = borderStroke,
     tonalElevation = if (isSelected) 4.dp else 1.dp,
@@ -1196,14 +1335,14 @@ private fun PeriodicTableElementTile(
       .width(tileWidth)
       .height(tileHeight)
       .alpha(if (isDimmed) 0.22f else 1f)
-      .clip(RoundedCornerShape(10.dp))
+      .clip(tileShape)
       .clickable(onClick = onClick)
       .testTag("element_tile_${element.symbol}"),
   ) {
     Column(
       modifier = Modifier
         .fillMaxSize()
-        .padding(horizontal = 4.dp, vertical = 3.dp),
+        .padding(horizontal = horizontalPadding, vertical = verticalPadding),
       verticalArrangement = Arrangement.SpaceBetween,
     ) {
       // Top row: Atomic Number + Phase badge / Favorite star
@@ -1215,21 +1354,23 @@ private fun PeriodicTableElementTile(
         Text(
           text = element.atomicNumber.toString(),
           style = MaterialTheme.typography.labelSmall.copy(
-            fontSize = 9.sp,
-            lineHeight = 10.sp,
+            fontSize = (9f * tileScale).coerceIn(3.6f, 13f).sp,
+            lineHeight = (10f * tileScale).coerceIn(4f, 14f).sp,
           ),
           fontFamily = FontFamily.Monospace,
           fontWeight = FontWeight.Bold,
           color = visualColors.onContainer.copy(alpha = 0.85f),
+          maxLines = 1,
         )
         Text(
           text = if (isFavorite) "★" else phaseAtTemp.badge,
           style = MaterialTheme.typography.labelSmall.copy(
-            fontSize = 8.sp,
-            lineHeight = 9.sp,
+            fontSize = (8f * tileScale).coerceIn(3.2f, 12f).sp,
+            lineHeight = (9f * tileScale).coerceIn(3.6f, 13f).sp,
           ),
           fontWeight = FontWeight.Bold,
           color = visualColors.accent,
+          maxLines = 1,
         )
       }
 
@@ -1237,8 +1378,8 @@ private fun PeriodicTableElementTile(
       Text(
         text = element.symbol,
         style = MaterialTheme.typography.titleMedium.copy(
-          fontSize = 16.sp,
-          lineHeight = 17.sp,
+          fontSize = (16f * tileScale).coerceIn(6.2f, 24f).sp,
+          lineHeight = (17f * tileScale).coerceIn(6.8f, 25f).sp,
         ),
         fontWeight = FontWeight.ExtraBold,
         color = visualColors.onContainer,
@@ -1247,12 +1388,12 @@ private fun PeriodicTableElementTile(
         modifier = Modifier.fillMaxWidth(),
       )
 
-      // Bottom: Element Name or Mass
+      // Bottom: Element Name
       Text(
         text = element.name,
         style = MaterialTheme.typography.labelSmall.copy(
-          fontSize = 7.5.sp,
-          lineHeight = 8.5.sp,
+          fontSize = (7.5f * tileScale).coerceIn(2.8f, 11f).sp,
+          lineHeight = (8.5f * tileScale).coerceIn(3.2f, 12f).sp,
         ),
         color = visualColors.onContainer.copy(alpha = 0.9f),
         maxLines = 1,
@@ -1271,12 +1412,14 @@ private fun SeriesPlaceholderTile(
   category: ElementCategory,
   tileWidth: Dp,
   tileHeight: Dp,
+  tileScale: Float = 1f,
 ) {
   val visualColors = rememberCategoryVisualColors(category)
+  val cornerRadius = (10.dp * tileScale).coerceIn(3.dp, 14.dp)
   Surface(
-    shape = RoundedCornerShape(10.dp),
+    shape = RoundedCornerShape(cornerRadius),
     color = visualColors.container.copy(alpha = 0.55f),
-    border = BorderStroke(1.dp, visualColors.border),
+    border = BorderStroke((1.dp * tileScale).coerceIn(0.5.dp, 1.5.dp), visualColors.border),
     modifier = Modifier
       .width(tileWidth)
       .height(tileHeight),
@@ -1284,22 +1427,30 @@ private fun SeriesPlaceholderTile(
     Column(
       modifier = Modifier
         .fillMaxSize()
-        .padding(3.dp),
+        .padding((3.dp * tileScale).coerceIn(1.dp, 5.dp)),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.Center,
     ) {
       Text(
         text = rangeText,
-        style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp),
+        style = MaterialTheme.typography.labelSmall.copy(
+          fontSize = (8.5f * tileScale).coerceIn(3.2f, 12f).sp,
+          lineHeight = (9.5f * tileScale).coerceIn(3.6f, 13f).sp,
+        ),
         fontFamily = FontFamily.Monospace,
         fontWeight = FontWeight.Bold,
         color = visualColors.onContainer,
+        maxLines = 1,
       )
       Text(
         text = label,
-        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+        style = MaterialTheme.typography.labelSmall.copy(
+          fontSize = (9f * tileScale).coerceIn(3.5f, 13f).sp,
+          lineHeight = (10f * tileScale).coerceIn(4f, 14f).sp,
+        ),
         fontWeight = FontWeight.SemiBold,
         color = visualColors.accent,
+        maxLines = 1,
       )
     }
   }

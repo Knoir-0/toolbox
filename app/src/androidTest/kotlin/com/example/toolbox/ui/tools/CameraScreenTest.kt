@@ -2,6 +2,7 @@ package com.example.toolbox.ui.tools
 
 import android.content.Context
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
@@ -106,20 +107,29 @@ class CameraScreenTest {
     composeTestRule.onNodeWithTag("photo_sub_mode_COLLAGE").assertDoesNotExist()
     composeTestRule.onNodeWithTag("photo_sub_mode_NIGHT").assertDoesNotExist()
 
-    // Verify floating Night Mode icon button is positioned to the left of the zoom options and cycles Auto -> On -> Off
+    // Verify floating Night Mode icon button (without text) is fixed to the left of the screen,
+    // the smooth zoom slider takes the remaining width to its right, and the device camera selector is below the zoom selector
     val nightButtonBounds = composeTestRule.onNodeWithTag("camera_night_mode_button").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-    val zoomPresetsBounds = composeTestRule.onNodeWithTag("zoom_presets_row").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-    assertTrue(nightButtonBounds.right <= zoomPresetsBounds.left + 1f)
-    composeTestRule.onNodeWithTag("camera_night_mode_label", useUnmergedTree = true).assertTextEquals("Auto")
+    val zoomContainerBounds = composeTestRule.onNodeWithTag("camera_zoom_slider_container").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val lensSelectorBounds = composeTestRule.onNodeWithTag("camera_lens_selector_row").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    composeTestRule.onNodeWithTag("camera_zoom_slider").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_zoom_value_text", useUnmergedTree = true).assertTextEquals("1x")
+    composeTestRule.onNodeWithTag("zoom_presets_row").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_night_mode_label", useUnmergedTree = true).assertDoesNotExist()
+    assertTrue(nightButtonBounds.right <= zoomContainerBounds.left + 1f)
+    assertTrue(zoomContainerBounds.width > nightButtonBounds.width * 2f)
+    assertTrue(lensSelectorBounds.top >= zoomContainerBounds.bottom - 1f)
+
+    composeTestRule.onNodeWithTag("camera_night_mode_button").assertContentDescriptionEquals("Night Mode Auto")
     composeTestRule.onNodeWithTag("camera_night_mode_button").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("camera_night_mode_label", useUnmergedTree = true).assertTextEquals("On")
+    composeTestRule.onNodeWithTag("camera_night_mode_button").assertContentDescriptionEquals("Night Mode On")
     composeTestRule.onNodeWithTag("camera_night_mode_button").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("camera_night_mode_label", useUnmergedTree = true).assertTextEquals("Off")
+    composeTestRule.onNodeWithTag("camera_night_mode_button").assertContentDescriptionEquals("Night Mode Off")
     composeTestRule.onNodeWithTag("camera_night_mode_button").performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("camera_night_mode_label", useUnmergedTree = true).assertTextEquals("Auto")
+    composeTestRule.onNodeWithTag("camera_night_mode_button").assertContentDescriptionEquals("Night Mode Auto")
 
     composeTestRule.onNodeWithTag("camera_shutter_button").performClick()
     composeTestRule.waitForIdle()
@@ -151,8 +161,8 @@ class CameraScreenTest {
     composeTestRule.onNodeWithTag("photo_sub_mode_STANDARD").performClick()
     composeTestRule.waitForIdle()
 
-    // Switch to 2x zoom preset
-    composeTestRule.onNodeWithTag("zoom_preset_2x").performClick()
+    // Tap the smooth zoom slider to adjust zoom
+    composeTestRule.onNodeWithTag("camera_zoom_slider").performClick()
     composeTestRule.waitForIdle()
 
     // Toggle grid overlay (3x3)
@@ -440,19 +450,30 @@ class CameraScreenTest {
     }
     composeTestRule.waitForIdle()
 
-    // 1. By default, smart ML Kit object detection autofocus is active
+    // 1. By default, smart ML Kit object detection autofocus is active and rendered with the normal autofocus style (focus ring + hex color pill, no mode label badge)
     composeTestRule.onNodeWithTag("camera_smart_af_indicator").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("camera_focus_mode_badge").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_focus_color_pill").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_focus_color_hex_text", useUnmergedTree = true).assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_focus_mode_badge").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_smart_af_badge_text", useUnmergedTree = true).assertDoesNotExist()
     composeTestRule.onNodeWithTag("camera_focus_indicator").assertDoesNotExist()
 
-    // 2. Tap viewfinder to manually focus and override smart autofocus for 5 seconds
+    // 2. Open adjustments panel and tap viewfinder to manually focus: verify camera controls are NOT hidden
+    composeTestRule.onNodeWithTag("toggle_adjustments_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_adjustments_panel").assertIsDisplayed()
+
     composeTestRule.onNodeWithTag("camera_viewfinder_box").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("camera_focus_indicator").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_focus_color_pill").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("camera_manual_focus_badge_text", useUnmergedTree = true)
-      .assertTextEquals("Manual • 5s")
+    composeTestRule.onNodeWithTag("camera_focus_mode_badge").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_manual_focus_badge_text", useUnmergedTree = true).assertDoesNotExist()
     composeTestRule.onNodeWithTag("camera_smart_af_indicator").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_top_overlay").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_bottom_overlay").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_adjustments_panel").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_shutter_button").assertIsDisplayed()
 
     // 3. Advance clock by 3.5 seconds (past the old 2.8s duration, still within the 5s override window):
     // manual focus override must still be active

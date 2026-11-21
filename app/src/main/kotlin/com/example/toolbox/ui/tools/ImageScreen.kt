@@ -101,6 +101,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -154,7 +155,10 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -336,7 +340,7 @@ fun ImageScreen(
           val siblingFiles = parentDir
             ?.takeIf { it.exists() && it.isDirectory }
             ?.listFiles()
-            ?.filter { it.isFile && !it.name.startsWith(".") && FileManagerEngine.isImageFile(it) }
+            ?.filter { it.isFile && !it.name.startsWith(".") && GalleryEngine.isPhotoFile(it) }
             ?.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
             .orEmpty()
           siblingFiles.map { fileToGalleryPhoto(it) }
@@ -633,12 +637,45 @@ internal fun ImageViewerContent(
   // Current active page's zoom scale (0.5f..5f)
   var currentZoomScale by remember { mutableFloatStateOf(DEFAULT_PHOTO_ZOOM) }
 
+  val currentPhoto = viewerPhotos.getOrElse(pagerState.currentPage) { initialPhoto }
+  val currentIndexEntry = photoIndexMap[currentPhoto.path]
+
+  var videoDurationMs by remember(currentPhoto.path, currentPhoto.lastModifiedMs) {
+    mutableLongStateOf(5_000L)
+  }
+  var videoPositionMs by remember(currentPhoto.path, currentPhoto.lastModifiedMs) {
+    mutableLongStateOf(0L)
+  }
+  var isDraggingVideoSeek by remember(currentPhoto.path, currentPhoto.lastModifiedMs) {
+    mutableStateOf(false)
+  }
+  var videoSeekDragFraction by remember(currentPhoto.path, currentPhoto.lastModifiedMs) {
+    mutableFloatStateOf(0f)
+  }
+  var videoSeekTargetMs by remember(currentPhoto.path, currentPhoto.lastModifiedMs) {
+    mutableLongStateOf(0L)
+  }
+  var videoSeekRequestToken by remember(currentPhoto.path, currentPhoto.lastModifiedMs) {
+    mutableLongStateOf(0L)
+  }
+
+  val videoSeekProgress = if (isDraggingVideoSeek) {
+    videoSeekDragFraction
+  } else if (videoDurationMs > 0L) {
+    (videoPositionMs.toFloat() / videoDurationMs.toFloat()).coerceIn(0f, 1f)
+  } else {
+    0f
+  }
+
   // Reset zoom, active tag box overlay, and auto-play muted when swiping to a different photo/video
   LaunchedEffect(pagerState.currentPage) {
     currentZoomScale = DEFAULT_PHOTO_ZOOM
     selectedOverlayTag = null
     isVideoPlaying = true
     isVideoMuted = true
+    videoPositionMs = 0L
+    isDraggingVideoSeek = false
+    videoSeekDragFraction = 0f
     if (viewerPhotos.isNotEmpty() && pagerState.currentPage in viewerPhotos.indices) {
       if (viewerPhotos[pagerState.currentPage].isVideo) {
         isColorPickerActive = false
@@ -655,9 +692,6 @@ internal fun ImageViewerContent(
       )
     }
   }
-
-  val currentPhoto = viewerPhotos.getOrElse(pagerState.currentPage) { initialPhoto }
-  val currentIndexEntry = photoIndexMap[currentPhoto.path]
 
   val tagBoxStrokeColors = listOf(
     MaterialTheme.colorScheme.tertiary,
@@ -725,6 +759,19 @@ internal fun ImageViewerContent(
         isCurrentPage = isCurrentPage,
         isVideoPlaying = isCurrentPage && isVideoPlaying,
         isVideoMuted = isVideoMuted,
+        isDraggingVideoSeek = isCurrentPage && isDraggingVideoSeek,
+        videoSeekTargetMs = if (isCurrentPage) videoSeekTargetMs else 0L,
+        videoSeekRequestToken = if (isCurrentPage) videoSeekRequestToken else 0L,
+        onVideoDurationChange = { duration ->
+          if (isCurrentPage && duration > 0L) {
+            videoDurationMs = duration
+          }
+        },
+        onVideoPositionChange = { position ->
+          if (isCurrentPage && !isDraggingVideoSeek) {
+            videoPositionMs = position.coerceIn(0L, videoDurationMs)
+          }
+        },
         isColorPickerActive = isCurrentPage && isColorPickerActive && !pagePhoto.isVideo,
         activeOverlayTag = if (isCurrentPage) selectedOverlayTag else null,
         activeOverlayTagColorIndex = selectedOverlayTagIndex,
@@ -828,19 +875,6 @@ internal fun ImageViewerContent(
               .testTag("photo_viewer_zoom_label"),
           )
         }
-
-        Spacer(modifier = Modifier.width(4.dp))
-
-        IconButton(
-          onClick = { onShare(currentPhoto) },
-          modifier = Modifier.testTag("photo_viewer_share_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Share,
-            contentDescription = "Share",
-            tint = Color.White,
-          )
-        }
       }
     }
 
@@ -856,7 +890,7 @@ internal fun ImageViewerContent(
           .fillMaxWidth()
           .onSizeChanged { bottomBarHeightPx = it.height },
       ) {
-        if (currentPhoto.isVideo || currentPhoto.isAnimatedImage) {
+        if (currentPhoto.isAnimatedImage && !currentPhoto.isVideo) {
           Row(
             modifier = Modifier
               .fillMaxWidth()
@@ -899,42 +933,6 @@ internal fun ImageViewerContent(
                 )
               }
             }
-
-            if (currentPhoto.isVideo) {
-              Surface(
-                shape = CircleShape,
-                color = Color.Black.copy(alpha = 0.72f),
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.24f)),
-                modifier = Modifier
-                  .clip(CircleShape)
-                  .clickable { isVideoMuted = !isVideoMuted }
-                  .testTag("photo_viewer_mute_button"),
-              ) {
-                Row(
-                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                  Icon(
-                    imageVector = if (isVideoMuted) {
-                      Icons.AutoMirrored.Filled.VolumeOff
-                    } else {
-                      Icons.AutoMirrored.Filled.VolumeUp
-                    },
-                    contentDescription = if (isVideoMuted) "Unmute video" else "Mute video",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp),
-                  )
-                  Text(
-                    text = if (isVideoMuted) "Muted" else "Sound on",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White,
-                    modifier = Modifier.testTag("photo_viewer_video_mute_state_label"),
-                  )
-                }
-              }
-            }
           }
         }
 
@@ -947,6 +945,75 @@ internal fun ImageViewerContent(
           Column(
             modifier = Modifier.fillMaxWidth(),
           ) {
+            if (currentPhoto.isVideo) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(
+                    start = effStartInset + 12.dp,
+                    end = effEndInset + 12.dp,
+                    top = 6.dp,
+                    bottom = 2.dp,
+                  )
+                  .testTag("photo_viewer_video_controls"),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                IconButton(
+                  onClick = { isVideoPlaying = !isVideoPlaying },
+                  modifier = Modifier.testTag("photo_viewer_play_pause_button"),
+                ) {
+                  Icon(
+                    imageVector = if (isVideoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (isVideoPlaying) "Pause" else "Play",
+                    tint = Color.White,
+                  )
+                }
+
+                SlimDotSlider(
+                  value = videoSeekProgress,
+                  onValueChange = { newFraction ->
+                    val clamped = newFraction.coerceIn(0f, 1f)
+                    isDraggingVideoSeek = true
+                    videoSeekDragFraction = clamped
+                    val targetMs = (clamped * videoDurationMs).roundToLong()
+                    videoPositionMs = targetMs
+                    videoSeekTargetMs = targetMs
+                    videoSeekRequestToken++
+                  },
+                  onValueChangeFinished = {
+                    val clamped = videoSeekDragFraction.coerceIn(0f, 1f)
+                    val targetMs = (clamped * videoDurationMs).roundToLong()
+                    videoPositionMs = targetMs
+                    videoSeekTargetMs = targetMs
+                    videoSeekRequestToken++
+                    isDraggingVideoSeek = false
+                  },
+                  valueRange = 0f..1f,
+                  modifier = Modifier
+                    .weight(1f)
+                    .testTag("photo_viewer_video_seek_bar")
+                    .semantics {
+                      contentDescription = "Video seek bar"
+                    },
+                )
+
+                IconButton(
+                  onClick = { isVideoMuted = !isVideoMuted },
+                  modifier = Modifier.testTag("photo_viewer_mute_button"),
+                ) {
+                  Icon(
+                    imageVector = if (isVideoMuted) {
+                      Icons.AutoMirrored.Filled.VolumeOff
+                    } else {
+                      Icons.AutoMirrored.Filled.VolumeUp
+                    },
+                    contentDescription = if (isVideoMuted) "Unmute video" else "Mute video",
+                    tint = Color.White,
+                  )
+                }
+              }
+            }
             if (currentIndexEntry != null &&
               (currentIndexEntry.autoTags.isNotEmpty() || currentIndexEntry.hasOcrText || currentIndexEntry.hasBarcodes)
             ) {
@@ -1106,6 +1173,17 @@ internal fun ImageViewerContent(
                 Icon(
                   imageVector = Icons.Default.Edit,
                   contentDescription = "Edit",
+                  tint = Color.White,
+                )
+              }
+
+              IconButton(
+                onClick = { onShare(currentPhoto) },
+                modifier = Modifier.testTag("photo_viewer_share_button"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Share,
+                  contentDescription = "Share",
                   tint = Color.White,
                 )
               }
@@ -1651,6 +1729,11 @@ internal fun PhotoViewerPageContent(
   isCurrentPage: Boolean,
   isVideoPlaying: Boolean = isCurrentPage,
   isVideoMuted: Boolean = true,
+  isDraggingVideoSeek: Boolean = false,
+  videoSeekTargetMs: Long = 0L,
+  videoSeekRequestToken: Long = 0L,
+  onVideoDurationChange: (Long) -> Unit = {},
+  onVideoPositionChange: (Long) -> Unit = {},
   isColorPickerActive: Boolean = false,
   activeOverlayTag: String? = null,
   activeOverlayTagColorIndex: Int = 0,
@@ -1711,6 +1794,8 @@ internal fun PhotoViewerPageContent(
   val currentIsVideoPlaying by rememberUpdatedState(isVideoPlaying)
   val currentIsVideoMuted by rememberUpdatedState(isVideoMuted)
   val currentIsColorPickerActive by rememberUpdatedState(isColorPickerActive)
+  val currentOnVideoDurationChange by rememberUpdatedState(onVideoDurationChange)
+  val currentOnVideoPositionChange by rememberUpdatedState(onVideoPositionChange)
 
   val currentBitmap = bitmap
 
@@ -1844,6 +1929,7 @@ internal fun PhotoViewerPageContent(
       if (isVideo) {
         var mediaPlayerRef by remember(photo.path, photo.lastModifiedMs) { mutableStateOf<MediaPlayer?>(null) }
         var isPlayerPrepared by remember(photo.path, photo.lastModifiedMs) { mutableStateOf(false) }
+        var isSeekingMp by remember(photo.path, photo.lastModifiedMs) { mutableStateOf(false) }
         var videoWidth by remember(photo.path, photo.lastModifiedMs) { mutableIntStateOf(0) }
         var videoHeight by remember(photo.path, photo.lastModifiedMs) { mutableIntStateOf(0) }
 
@@ -1866,9 +1952,38 @@ internal fun PhotoViewerPageContent(
               }
               if (!isCurrentPage) {
                 mp.seekTo(0)
+                currentOnVideoPositionChange(0L)
               }
             }
           } catch (_: Throwable) {}
+        }
+
+        LaunchedEffect(videoSeekRequestToken, mediaPlayerRef, isPlayerPrepared) {
+          if (videoSeekRequestToken <= 0L) return@LaunchedEffect
+          val mp = mediaPlayerRef ?: return@LaunchedEffect
+          if (!isPlayerPrepared) return@LaunchedEffect
+          try {
+            isSeekingMp = true
+            mp.seekTo(videoSeekTargetMs.toInt().coerceAtLeast(0))
+          } catch (_: Throwable) {
+            isSeekingMp = false
+          }
+        }
+
+        LaunchedEffect(mediaPlayerRef, isPlayerPrepared, isCurrentPage, isVideoPlaying, isDraggingVideoSeek) {
+          val mp = mediaPlayerRef ?: return@LaunchedEffect
+          if (!isPlayerPrepared || !isCurrentPage || !isVideoPlaying || isDraggingVideoSeek) {
+            return@LaunchedEffect
+          }
+          while (isActive && isPlayerPrepared && isCurrentPage && isVideoPlaying && !isDraggingVideoSeek) {
+            if (!isSeekingMp) {
+              try {
+                val pos = mp.currentPosition.toLong().coerceAtLeast(0L)
+                currentOnVideoPositionChange(pos)
+              } catch (_: Throwable) {}
+            }
+            delay(80L)
+          }
         }
 
         DisposableEffect(photo.path, photo.lastModifiedMs) {
@@ -1976,10 +2091,17 @@ internal fun PhotoViewerPageContent(
                                 videoHeight = h
                               }
                             }
+                            mp.setOnSeekCompleteListener {
+                              isSeekingMp = false
+                            }
                             mp.setOnPreparedListener { preparedMp ->
                               if (preparedMp.videoWidth > 0 && preparedMp.videoHeight > 0) {
                                 videoWidth = preparedMp.videoWidth
                                 videoHeight = preparedMp.videoHeight
+                              }
+                              val duration = preparedMp.duration.toLong()
+                              if (duration > 0L) {
+                                currentOnVideoDurationChange(duration)
                               }
                               preparedMp.isLooping = true
                               val vol = if (currentIsVideoMuted) 0f else 1f

@@ -508,11 +508,25 @@ class GalleryScreenTest {
       .boundsInRoot
     assertEquals(dialogBounds.top, topBarBounds.top, 1f)
     assertEquals(dialogBounds.bottom, previewBarBounds.bottom, 1f)
-    // Verify Info, Edit, Picker, and Delete buttons are in the actions row above the preview scroll bar
+    // Verify Info, Edit, Share, Picker, and Delete buttons are in the actions row above the preview scroll bar
     assertTrue(actionsRowBounds.bottom <= previewScrollBarBounds.top + 2f)
     composeTestRule.onNodeWithTag("photo_viewer_info_button").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("photo_viewer_edit_button").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("photo_viewer_color_picker_button").assertIsDisplayed()
+    val editButtonBounds = composeTestRule.onNodeWithTag("photo_viewer_edit_button")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val shareButtonBounds = composeTestRule.onNodeWithTag("photo_viewer_share_button")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val colorPickerButtonBounds = composeTestRule.onNodeWithTag("photo_viewer_color_picker_button")
+      .assertIsDisplayed()
+      .fetchSemanticsNode()
+      .boundsInRoot
+    assertTrue(
+      "Expected share button to be horizontally between edit and color picker buttons",
+      editButtonBounds.right <= shareButtonBounds.left && shareButtonBounds.right <= colorPickerButtonBounds.left,
+    )
     composeTestRule.onNodeWithTag("photo_viewer_delete_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_viewer_preview_thumb_photo_3.png").assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_viewer_preview_thumb_photo_2.png").assertIsDisplayed()
@@ -679,25 +693,37 @@ class GalleryScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("gallery_screen").assertIsDisplayed()
 
-    // Open video.mp4 in viewer -> verify video plays automatically and starts muted, with toggleable controls
+    // Open video.mp4 in viewer -> verify video plays automatically and starts muted, with icon buttons and a seek bar in-between
     composeTestRule.onNodeWithTag("photo_tile_item_video.mp4").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("photo_viewer_video_video.mp4", useUnmergedTree = true).assertIsDisplayed()
     composeTestRule.onNodeWithTag("photo_viewer_video_controls").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("photo_viewer_video_play_state_label", useUnmergedTree = true)
-      .assertTextEquals("Playing")
-    composeTestRule.onNodeWithTag("photo_viewer_video_mute_state_label", useUnmergedTree = true)
-      .assertTextEquals("Muted")
+    composeTestRule.onNodeWithTag("photo_viewer_video_play_state_label", useUnmergedTree = true).assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_viewer_video_mute_state_label", useUnmergedTree = true).assertDoesNotExist()
 
-    composeTestRule.onNodeWithTag("photo_viewer_mute_button").performClick()
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("photo_viewer_video_mute_state_label", useUnmergedTree = true)
-      .assertTextEquals("Sound on")
+    val playPauseButton = composeTestRule.onNodeWithTag("photo_viewer_play_pause_button")
+    val seekBar = composeTestRule.onNodeWithTag("photo_viewer_video_seek_bar")
+    val muteButton = composeTestRule.onNodeWithTag("photo_viewer_mute_button")
 
-    composeTestRule.onNodeWithTag("photo_viewer_play_pause_button").performClick()
+    playPauseButton.assertIsDisplayed().assertContentDescriptionEquals("Pause")
+    seekBar.assertIsDisplayed()
+    muteButton.assertIsDisplayed().assertContentDescriptionEquals("Unmute video")
+
+    val playPauseBounds = playPauseButton.fetchSemanticsNode().boundsInRoot
+    val seekBarBounds = seekBar.fetchSemanticsNode().boundsInRoot
+    val muteBounds = muteButton.fetchSemanticsNode().boundsInRoot
+    assertTrue(
+      "Expected seek bar to be horizontally between play/pause and mute icon buttons",
+      playPauseBounds.right <= seekBarBounds.left && seekBarBounds.right <= muteBounds.left,
+    )
+
+    muteButton.performClick()
     composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("photo_viewer_video_play_state_label", useUnmergedTree = true)
-      .assertTextEquals("Paused")
+    muteButton.assertContentDescriptionEquals("Mute video")
+
+    playPauseButton.performClick()
+    composeTestRule.waitForIdle()
+    playPauseButton.assertContentDescriptionEquals("Play")
 
     composeTestRule.onNodeWithTag("photo_viewer_close_button").performClick()
     composeTestRule.waitForIdle()
