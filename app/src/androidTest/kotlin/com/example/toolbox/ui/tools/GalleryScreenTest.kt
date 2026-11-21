@@ -1481,4 +1481,46 @@ class GalleryScreenTest {
       reorderedPicturesBounds.left < reorderedDcimBounds.left,
     )
   }
+
+  @Test
+  fun pullToRefresh_reloadsGalleryViewWithNewlyAddedFiles() {
+    val cameraDir = File(testRootDir, "DCIM/Camera").apply { mkdirs() }
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(cameraDir, "initial_photo.png"),
+      lastModifiedMs = 1_000_000L,
+    )
+
+    var refreshCount = 0
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        GalleryScreen(
+          rootDirectory = testRootDir,
+          initialAlbumDirectory = cameraDir,
+          onRefresh = { refreshCount++ },
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("gallery_pull_to_refresh").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_tile_item_initial_photo.png").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("photo_tile_item_new_photo.png").assertDoesNotExist()
+
+    // Write a new photo externally to disk, then swipe down to pull-to-refresh
+    GalleryEngine.writeSolidColorPng(
+      outputFile = File(cameraDir, "new_photo.png"),
+      lastModifiedMs = 2_000_000L,
+    )
+
+    composeTestRule.onNodeWithTag("gallery_tile_grid").performTouchInput {
+      down(Offset(width * 0.5f, height * 0.2f))
+      moveTo(Offset(width * 0.5f, height * 0.85f))
+      up()
+    }
+    composeTestRule.waitForIdle()
+
+    assertTrue("Expected pull-to-refresh to trigger onRefresh", refreshCount >= 1)
+    composeTestRule.onNodeWithTag("photo_tile_item_new_photo.png").assertIsDisplayed()
+  }
 }

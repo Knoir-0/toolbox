@@ -567,7 +567,56 @@
                 <action android:name="com.example.toolbox.music.ACTION_CYCLE_REPEAT" />
                 <action android:name="com.example.toolbox.music.ACTION_CYCLE_SHUFFLE" />
                 <action android:name="com.example.toolbox.music.ACTION_STOP" />
+                <action android:name="com.example.toolbox.music.ACTION_WIDGET_REFRESH" />
             </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".ui.tools.MusicMiniBarWidgetProvider"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_music_player"
+            android:roundIcon="@mipmap/ic_tool_music_player"
+            android:label="@string/music_widget_mini_bar_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.toolbox.music.ACTION_PLAY" />
+                <action android:name="com.example.toolbox.music.ACTION_PAUSE" />
+                <action android:name="com.example.toolbox.music.ACTION_PLAY_PAUSE" />
+                <action android:name="com.example.toolbox.music.ACTION_NEXT" />
+                <action android:name="com.example.toolbox.music.ACTION_PREVIOUS" />
+                <action android:name="com.example.toolbox.music.ACTION_TOGGLE_FAVORITE" />
+                <action android:name="com.example.toolbox.music.ACTION_CYCLE_REPEAT" />
+                <action android:name="com.example.toolbox.music.ACTION_CYCLE_SHUFFLE" />
+                <action android:name="com.example.toolbox.music.ACTION_STOP" />
+                <action android:name="com.example.toolbox.music.ACTION_WIDGET_REFRESH" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/music_mini_bar_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".ui.tools.MusicAlbumArtWidgetProvider"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_music_player"
+            android:roundIcon="@mipmap/ic_tool_music_player"
+            android:label="@string/music_widget_album_art_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.toolbox.music.ACTION_PLAY" />
+                <action android:name="com.example.toolbox.music.ACTION_PAUSE" />
+                <action android:name="com.example.toolbox.music.ACTION_PLAY_PAUSE" />
+                <action android:name="com.example.toolbox.music.ACTION_NEXT" />
+                <action android:name="com.example.toolbox.music.ACTION_PREVIOUS" />
+                <action android:name="com.example.toolbox.music.ACTION_TOGGLE_FAVORITE" />
+                <action android:name="com.example.toolbox.music.ACTION_CYCLE_REPEAT" />
+                <action android:name="com.example.toolbox.music.ACTION_CYCLE_SHUFFLE" />
+                <action android:name="com.example.toolbox.music.ACTION_STOP" />
+                <action android:name="com.example.toolbox.music.ACTION_WIDGET_REFRESH" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/music_album_art_widget_info" />
         </receiver>
 
         <service

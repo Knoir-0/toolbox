@@ -803,7 +803,7 @@ class GalleryEngineTest {
   @Test
   fun inlineVideoPreviewScheduler_cyclesThroughVisibleVideos_pausesAfterCycle_andPausesWhenPlayingVideoScrolledOutOfView() {
     assertTrue(DEFAULT_VIDEO_PREVIEW_PLAY_DURATION_MS in 3_000L..6_000L)
-    assertTrue(DEFAULT_VIDEO_PREVIEW_CYCLE_PAUSE_DURATION_MS in 6_000L..8_000L)
+    assertEquals(3_000L, DEFAULT_VIDEO_PREVIEW_CYCLE_PAUSE_DURATION_MS)
     assertTrue(DEFAULT_VIDEO_PREVIEW_SCROLL_OUT_COOLDOWN_MS in 2_000L..3_000L)
 
     val visibleVideos = listOf("/DCIM/v1.mp4", "/DCIM/v2.mp4", "/DCIM/v3.mp4")
@@ -825,7 +825,7 @@ class GalleryEngineTest {
     assertEquals(GalleryVideoPreviewPhase.PLAYING, state.phase)
     assertEquals("/DCIM/v3.mp4", state.activeVideoPath)
 
-    // 3. Once all videos in view have been played, pauses in CYCLE_PAUSE (6-8s) with no active video
+    // 3. Once all videos in view have been played, pauses in CYCLE_PAUSE (3s) with no active video
     state = GalleryEngine.onActiveVideoPreviewCompleted(state, visibleVideos)
     assertEquals(GalleryVideoPreviewPhase.CYCLE_PAUSE, state.phase)
     assertNull(state.activeVideoPath)
@@ -845,6 +845,89 @@ class GalleryEngineTest {
     state = GalleryEngine.onPreviewPauseOrCooldownCompleted(state, scrolledVisibleVideos)
     assertEquals(GalleryVideoPreviewPhase.PLAYING, state.phase)
     assertEquals("/DCIM/v2.mp4", state.activeVideoPath)
+  }
+
+  @Test
+  fun videoPreviewAspectRatio_accountsForRotationAndThumbnailOrientation_andCenterCropsWithoutStretching() {
+    // 1. Portrait video with 90° or 270° container rotation swaps raw 1920x1080 buffer dimensions to 1080x1920
+    assertEquals(
+      1080 to 1920,
+      GalleryEngine.resolveVideoDisplayDimensions(
+        rawVideoWidth = 1920,
+        rawVideoHeight = 1080,
+        rotationDegrees = 90,
+      ),
+    )
+    assertEquals(
+      1080 to 1920,
+      GalleryEngine.resolveVideoDisplayDimensions(
+        rawVideoWidth = 1920,
+        rawVideoHeight = 1080,
+        rotationDegrees = 270,
+      ),
+    )
+
+    // 2. When rotationDegrees is 0/unprobed, falls back to oriented thumbnail orientation to detect rotated portrait videos
+    assertEquals(
+      1080 to 1920,
+      GalleryEngine.resolveVideoDisplayDimensions(
+        rawVideoWidth = 1920,
+        rawVideoHeight = 1080,
+        rotationDegrees = 0,
+        thumbnailWidth = 360,
+        thumbnailHeight = 640,
+      ),
+    )
+
+    // 3. Landscape video with 0° or 180° rotation keeps 1920x1080
+    assertEquals(
+      1920 to 1080,
+      GalleryEngine.resolveVideoDisplayDimensions(
+        rawVideoWidth = 1920,
+        rawVideoHeight = 1080,
+        rotationDegrees = 0,
+        thumbnailWidth = 640,
+        thumbnailHeight = 360,
+      ),
+    )
+
+    // 4. Center-crop size inside a 300x300 square tile preserves 16:9 or 9:16 aspect ratio
+    val (landscapeW, landscapeH) = GalleryEngine.calculateVideoCenterCropSizePx(
+      containerWidthPx = 300f,
+      containerHeightPx = 300f,
+      displayVideoWidth = 1920,
+      displayVideoHeight = 1080,
+    )
+    assertEquals(300f, landscapeH, 0.01f)
+    assertEquals(533.33f, landscapeW, 0.05f)
+
+    val (portraitW, portraitH) = GalleryEngine.calculateVideoCenterCropSizePx(
+      containerWidthPx = 300f,
+      containerHeightPx = 300f,
+      displayVideoWidth = 1080,
+      displayVideoHeight = 1920,
+    )
+    assertEquals(300f, portraitW, 0.01f)
+    assertEquals(533.33f, portraitH, 0.05f)
+
+    // 5. TextureView center-crop scale counteracts TextureView's buffer stretching when view bounds are clamped to tile
+    val (scaleXLandscape, scaleYLandscape) = GalleryEngine.calculateVideoTextureCenterCropScale(
+      viewWidth = 300,
+      viewHeight = 300,
+      displayVideoWidth = 1920,
+      displayVideoHeight = 1080,
+    )
+    assertEquals(16f / 9f, scaleXLandscape, 0.001f)
+    assertEquals(1f, scaleYLandscape, 0.001f)
+
+    val (scaleXPortrait, scaleYPortrait) = GalleryEngine.calculateVideoTextureCenterCropScale(
+      viewWidth = 300,
+      viewHeight = 300,
+      displayVideoWidth = 1080,
+      displayVideoHeight = 1920,
+    )
+    assertEquals(1f, scaleXPortrait, 0.001f)
+    assertEquals(16f / 9f, scaleYPortrait, 0.001f)
   }
 
   @Test

@@ -35,6 +35,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -903,7 +904,8 @@ fun CameraScreen(
   }
 
   // Continuous live frame ML Kit Object Detection for Smart Autofocus across camera modes.
-  // Pauses automatic focus target updates while a 5-second manual focus override is active.
+  // Pauses automatic focus target updates while a 5-second manual focus override is active,
+  // and defers to the Vision mode detection pipeline when in VISION mode so two detectors do not fight.
   LaunchedEffect(
     activeTextureView,
     selectedCamera.cameraId,
@@ -911,11 +913,12 @@ fun CameraScreen(
     lensFacing,
     mirrorFrontCamera,
     manualFocusTarget,
+    captureMode,
   ) {
-    if (isInspection || manualFocusTarget != null) {
+    if (isInspection || manualFocusTarget != null || captureMode == CameraCaptureMode.VISION) {
       return@LaunchedEffect
     }
-    while (isActive && manualFocusTarget == null) {
+    while (isActive && manualFocusTarget == null && captureMode != CameraCaptureMode.VISION) {
       val alignedFrame = captureTransformedAnalysisBitmap(maxEdgePx = 480)
       if (alignedFrame != null && alignedFrame.width > 32 && alignedFrame.height > 32) {
         val detectedTarget = withContext(Dispatchers.Default) {
@@ -954,6 +957,37 @@ fun CameraScreen(
     }
   }
 
+  // Smooth velocity- and trajectory-aware autofocus glide between detection updates.
+  // Traces a gentle continuous curve from the reticle's current position and velocity toward its desired target.
+  LaunchedEffect(
+    smartAutoFocusTarget?.targetNormX,
+    smartAutoFocusTarget?.targetNormY,
+    manualFocusTarget,
+  ) {
+    if (isInspection || manualFocusTarget != null) {
+      return@LaunchedEffect
+    }
+    var lastStepMs = System.currentTimeMillis()
+    while (isActive && manualFocusTarget == null) {
+      val current = smartAutoFocusTarget ?: break
+      if (current.distanceToDesiredTarget <= 0.0015f && current.speedNormPerSec <= 0.004f) {
+        break
+      }
+      delay(32L)
+      val nowMs = System.currentTimeMillis()
+      val dtSec = ((nowMs - lastStepMs).coerceIn(16L, 120L)) / 1000f
+      lastStepMs = nowMs
+      val latest = smartAutoFocusTarget ?: break
+      if (manualFocusTarget == null) {
+        smartAutoFocusTarget = CameraEngine.stepStickyAutofocusTrajectory(
+          currentTarget = latest,
+          dtSeconds = dtSec,
+          timestampMs = nowMs,
+        )
+      }
+    }
+  }
+
   // Continuous live frame ML Kit Object Detection & Image Labeling when in VISION mode and hardware TextureView is rendering
   LaunchedEffect(captureMode, activeTextureView, zoomLevel, lensFacing, mirrorFrontCamera) {
     if (captureMode != CameraCaptureMode.VISION || isInspection) {
@@ -967,6 +1001,7 @@ fun CameraScreen(
             bitmap = alignedFrame,
             confidenceThreshold = MIN_VISION_CONFIDENCE_THRESHOLD,
             sourceDescription = "Live Camera Frame",
+            previousResult = latestVisionResult,
           )
         }
         if (analyzed != null) {
@@ -1013,6 +1048,7 @@ fun CameraScreen(
             bitmap = alignedHardwareBitmap,
             confidenceThreshold = MIN_VISION_CONFIDENCE_THRESHOLD,
             sourceDescription = "Live Camera Frame",
+            previousResult = latestVisionResult,
           )
         }
         if (hwResult != null && hwResult.tags.isNotEmpty()) {
@@ -4671,7 +4707,10 @@ private fun PanoramaReticleOverlayCanvas(
 
 /**
  * Dynamically drawn colored bounding boxes over detected visual elements in [CameraCaptureMode.VISION] mode,
- * displaying each element's label and confidence percentage (only for tags >= 50% confidence).
+ * displaying each element's label and confidence percentage (only for tags >= 80% confidence).
+ *
+ * When a new detection result arrives, bounding boxes whose labels match boxes from the previous
+ * detection smoothly move and resize from their previous bounds into the new ones.
  */
 @Composable
 private fun VisionReticleOverlayCanvas(
@@ -4679,12 +4718,97 @@ private fun VisionReticleOverlayCanvas(
   modifier: Modifier = Modifier,
   topInset: Dp = 16.dp,
 ) {
-  val visibleTags = remember(visionResult) {
+  val targetTags = remember(visionResult) {
     CameraEngine.suppressOverlappingVisionTags(
       visionResult?.tags
         ?.filter { it.confidenceClamped >= MIN_VISION_CONFIDENCE_THRESHOLD }
         .orEmpty()
     ).take(5)
+  }
+
+  var transitionFromTags by remember { mutableStateOf(targetTags) }
+  var transitionTargetTags by remember { mutableStateOf(targetTags) }
+  val morphProgress = remember { Animatable(1f) }
+  var colorIndexByLabel by remember {
+    mutableStateOf(
+      CameraEngine.resolveStableVisionTagColorIndices(
+        previousTags = emptyList(),
+        currentTags = targetTags,
+      )
+    )
+  }
+
+  val isNewTargetPending = transitionTargetTags != targetTags
+  val snapshotFromTags = remember(isNewTargetPending, transitionFromTags, transitionTargetTags, morphProgress.value) {
+    if (isNewTargetPending) {
+      CameraEngine.interpolateVisionTags(
+        previousTags = transitionFromTags,
+        targetTags = transitionTargetTags,
+        fraction = morphProgress.value,
+      )
+    } else {
+      transitionFromTags
+    }
+  }
+  val hasSharedLabelsWithPending = remember(snapshotFromTags, targetTags) {
+    CameraEngine.hasMatchingVisionTagLabels(snapshotFromTags, targetTags)
+  }
+  val effectiveMorphFraction = if (isNewTargetPending && hasSharedLabelsWithPending) {
+    0f
+  } else if (isNewTargetPending) {
+    1f
+  } else {
+    morphProgress.value
+  }
+
+  val visibleTags = remember(snapshotFromTags, targetTags, effectiveMorphFraction) {
+    CameraEngine.interpolateVisionTags(
+      previousTags = snapshotFromTags,
+      targetTags = targetTags,
+      fraction = effectiveMorphFraction,
+    )
+  }
+
+  val activeColorIndexByLabel = remember(isNewTargetPending, snapshotFromTags, targetTags, colorIndexByLabel) {
+    if (isNewTargetPending) {
+      CameraEngine.resolveStableVisionTagColorIndices(
+        previousTags = snapshotFromTags,
+        currentTags = targetTags,
+        previousColorIndices = colorIndexByLabel,
+      )
+    } else {
+      colorIndexByLabel
+    }
+  }
+
+  LaunchedEffect(targetTags) {
+    if (transitionTargetTags != targetTags) {
+      val fromSnapshot = CameraEngine.interpolateVisionTags(
+        previousTags = transitionFromTags,
+        targetTags = transitionTargetTags,
+        fraction = morphProgress.value,
+      )
+      val shared = CameraEngine.hasMatchingVisionTagLabels(fromSnapshot, targetTags)
+      transitionFromTags = fromSnapshot
+      transitionTargetTags = targetTags
+      colorIndexByLabel = CameraEngine.resolveStableVisionTagColorIndices(
+        previousTags = fromSnapshot,
+        currentTags = targetTags,
+        previousColorIndices = colorIndexByLabel,
+      )
+      if (shared) {
+        morphProgress.snapTo(0f)
+        morphProgress.animateTo(
+          targetValue = 1f,
+          animationSpec = tween(
+            durationMillis = VISION_BOX_MORPH_DURATION_MS,
+            easing = FastOutSlowInEasing,
+          ),
+        )
+      } else {
+        morphProgress.snapTo(1f)
+      }
+    }
   }
 
   val boxStrokeColors = listOf(
@@ -4726,7 +4850,8 @@ private fun VisionReticleOverlayCanvas(
 
       visibleTags.forEachIndexed { idx, tag ->
         val normBox = (tag.boundingBox ?: CameraEngine.defaultVisionBoundingBoxForRank(idx)).coerceNormalized()
-        val boxColor = boxStrokeColors[idx % boxStrokeColors.size]
+        val colorSlot = activeColorIndexByLabel[tag.label.trim().lowercase(java.util.Locale.US)] ?: idx
+        val boxColor = boxStrokeColors[colorSlot % boxStrokeColors.size]
 
         val leftPx = (normBox.left * size.width).coerceIn(12.dp.toPx(), size.width - 64.dp.toPx())
         val rightPx = (normBox.right * size.width).coerceIn(leftPx + 52.dp.toPx(), size.width - 12.dp.toPx())
@@ -4840,9 +4965,10 @@ private fun VisionReticleOverlayCanvas(
       ) {
         labelPlacements.forEachIndexed { idx, placement ->
           val tag = placement.tag
-          val borderColor = boxStrokeColors[idx % boxStrokeColors.size]
-          val containerColor = badgeContainerColors[idx % badgeContainerColors.size]
-          val contentColor = badgeContentColors[idx % badgeContentColors.size]
+          val colorSlot = activeColorIndexByLabel[tag.label.trim().lowercase(java.util.Locale.US)] ?: idx
+          val borderColor = boxStrokeColors[colorSlot % boxStrokeColors.size]
+          val containerColor = badgeContainerColors[colorSlot % badgeContainerColors.size]
+          val contentColor = badgeContentColors[colorSlot % badgeContentColors.size]
 
           Surface(
             shape = RoundedCornerShape(8.dp),

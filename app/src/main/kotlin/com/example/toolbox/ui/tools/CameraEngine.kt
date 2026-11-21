@@ -87,6 +87,41 @@ const val MAX_CAMERA_EXPOSURE_EV = 2.0f
  */
 const val MANUAL_FOCUS_OVERRIDE_DURATION_MS = 5000L
 
+/**
+ * Natural frequency (rad/s) for the sticky autofocus trajectory controller, governing how
+ * gently the focus point accelerates and decelerates toward its destination.
+ */
+const val STICKY_AF_NATURAL_FREQUENCY_RAD_PER_SEC = 3.2f
+
+/**
+ * Steering inertia time constant (seconds) governing how smoothly the autofocus velocity vector
+ * bends from its current trajectory toward a new target direction.
+ */
+const val STICKY_AF_STEERING_TIME_CONSTANT_SEC = 0.18f
+
+/**
+ * Maximum normalized viewfinder travel speed (`0.36f` = 36% of viewfinder width/height per second)
+ * so autofocus glides gently across the frame instead of snapping between detections.
+ */
+const val STICKY_AF_MAX_SPEED_NORM_PER_SEC = 0.36f
+
+/**
+ * Maximum normalized acceleration (`1.60f` units/s²) for smooth velocity transitions and turns.
+ */
+const val STICKY_AF_MAX_ACCEL_NORM_PER_SEC_SQ = 1.60f
+
+/**
+ * Minimum score margin (`0.20f`) a competing detection must exceed the currently locked subject
+ * by before smart autofocus switches targets, preventing focus hunting when detections come in and out.
+ */
+const val STICKY_AF_SWITCH_HYSTERESIS_MARGIN = 0.20f
+
+/**
+ * Maximum duration (`1800ms`) to hold and gently coast the current smart autofocus target
+ * when detections momentarily drop out between frames.
+ */
+const val STICKY_AF_DROPOUT_HOLD_DURATION_MS = 1800L
+
 val CAMERA_ZOOM_PRESETS: List<Float> = listOf(1.0f, 2.0f, 3.0f, 5.0f)
 
 /**
@@ -126,6 +161,9 @@ data class RawDetectedObjectForFocus(
  * Represents a resolved focus target in normalized viewfinder coordinates (`0.0f..1.0f`),
  * either automatically tracked from an ML Kit `DetectedObject` ([CameraFocusSource.ML_OBJECT_AUTO])
  * or manually pinned by the user for [MANUAL_FOCUS_OVERRIDE_DURATION_MS] ([CameraFocusSource.MANUAL_OVERRIDE]).
+ *
+ * Includes velocity ([velocityX], [velocityY]) and desired destination ([targetNormX], [targetNormY])
+ * state so smart autofocus traces a smooth, velocity-continuous trajectory rather than jumping.
  */
 data class CameraSmartFocusTarget(
   val normX: Float,
@@ -136,9 +174,26 @@ data class CameraSmartFocusTarget(
   val confidence: Float = 0f,
   val source: CameraFocusSource = CameraFocusSource.ML_OBJECT_AUTO,
   val timestampMs: Long = System.currentTimeMillis(),
+  val targetNormX: Float = normX,
+  val targetNormY: Float = normY,
+  val targetBoundingBox: CameraVisionBoundingBox? = boundingBox,
+  val velocityX: Float = 0f,
+  val velocityY: Float = 0f,
+  val lockStrength: Float = 1.0f,
+  val missedDetectionFrames: Int = 0,
 ) {
   val clampedX: Float get() = normX.coerceIn(0.08f, 0.92f)
   val clampedY: Float get() = normY.coerceIn(0.08f, 0.92f)
+  val clampedTargetX: Float get() = targetNormX.coerceIn(0.08f, 0.92f)
+  val clampedTargetY: Float get() = targetNormY.coerceIn(0.08f, 0.92f)
+  val speedNormPerSec: Float
+    get() = kotlin.math.sqrt(velocityX * velocityX + velocityY * velocityY)
+  val distanceToDesiredTarget: Float
+    get() {
+      val dx = clampedTargetX - clampedX
+      val dy = clampedTargetY - clampedY
+      return kotlin.math.sqrt(dx * dx + dy * dy)
+    }
   val isManualOverride: Boolean get() = source == CameraFocusSource.MANUAL_OVERRIDE
   val isSmartObjectFocus: Boolean get() = source == CameraFocusSource.ML_OBJECT_AUTO
   val badgeLabel: String
@@ -369,6 +424,12 @@ enum class CameraVisionThresholdPreset(
 }
 
 /**
+ * Duration (`280ms`) for smoothly animating (moving and resizing) Vision mode bounding boxes
+ * when consecutive detections share the same label.
+ */
+const val VISION_BOX_MORPH_DURATION_MS = 280
+
+/**
  * Normalized bounding box (`0.0f..1.0f` in viewfinder coordinates) indicating where
  * a detected visual element is located in the camera frame.
  */
@@ -390,6 +451,24 @@ data class CameraVisionBoundingBox(
     val r = right.coerceIn(l + 0.08f, 0.98f)
     val b = bottom.coerceIn(t + 0.08f, 0.98f)
     return CameraVisionBoundingBox(left = l, top = t, right = r, bottom = b)
+  }
+
+  /**
+   * Smoothly interpolates position and dimensions (`left`, `top`, `right`, `bottom`) from this
+   * bounding box into [target] at progress [fraction] (`0.0f..1.0f`).
+   */
+  fun lerpTo(target: CameraVisionBoundingBox, fraction: Float): CameraVisionBoundingBox {
+    val t = fraction.coerceIn(0f, 1f)
+    if (t <= 0f) return coerceNormalized()
+    if (t >= 1f) return target.coerceNormalized()
+    val from = coerceNormalized()
+    val to = target.coerceNormalized()
+    return CameraVisionBoundingBox(
+      left = from.left + (to.left - from.left) * t,
+      top = from.top + (to.top - from.top) * t,
+      right = from.right + (to.right - from.right) * t,
+      bottom = from.bottom + (to.bottom - from.bottom) * t,
+    ).coerceNormalized()
   }
 
   fun intersectionArea(other: CameraVisionBoundingBox): Float {
@@ -5594,6 +5673,136 @@ object CameraEngine {
   }
 
   /**
+   * Smoothly interpolates a [CameraVisionBoundingBox] from [fromBox] to [toBox] at progress
+   * [fraction] (`0.0f..1.0f`), translating its center and resizing its width and height.
+   */
+  fun interpolateVisionBoundingBox(
+    fromBox: CameraVisionBoundingBox,
+    toBox: CameraVisionBoundingBox,
+    fraction: Float,
+  ): CameraVisionBoundingBox {
+    return fromBox.lerpTo(toBox, fraction)
+  }
+
+  /**
+   * Returns `true` when [previousTags] and [targetTags] share at least one detection with the same
+   * case-insensitive label.
+   */
+  fun hasMatchingVisionTagLabels(
+    previousTags: List<CameraVisionTag>,
+    targetTags: List<CameraVisionTag>,
+  ): Boolean {
+    if (previousTags.isEmpty() || targetTags.isEmpty()) return false
+    val prevKeys = previousTags
+      .map { it.label.trim().lowercase(Locale.US) }
+      .filter { it.isNotEmpty() }
+      .toSet()
+    return targetTags.any { it.label.trim().lowercase(Locale.US) in prevKeys }
+  }
+
+  /**
+   * Smoothly moves and resizes bounding boxes from [previousTags] into [targetTags] at progress
+   * [fraction] (`0.0f..1.0f`) for any detections that share the same label (case-insensitive).
+   * Detections with brand-new labels appear immediately at their target bounding box.
+   */
+  fun interpolateVisionTags(
+    previousTags: List<CameraVisionTag>,
+    targetTags: List<CameraVisionTag>,
+    fraction: Float,
+  ): List<CameraVisionTag> {
+    if (targetTags.isEmpty()) return emptyList()
+    val clampedFraction = fraction.coerceIn(0f, 1f)
+    if (previousTags.isEmpty() || clampedFraction >= 1f) {
+      return targetTags.mapIndexed { idx, tag ->
+        val box = (tag.boundingBox ?: defaultVisionBoundingBoxForRank(idx)).coerceNormalized()
+        tag.copy(boundingBox = box)
+      }
+    }
+
+    val previousByLabel = linkedMapOf<String, Pair<Int, CameraVisionTag>>()
+    previousTags.forEachIndexed { idx, tag ->
+      val key = tag.label.trim().lowercase(Locale.US)
+      if (key.isNotEmpty() && !previousByLabel.containsKey(key)) {
+        previousByLabel[key] = idx to tag
+      }
+    }
+
+    return targetTags.mapIndexed { targetIdx, targetTag ->
+      val targetBox = (targetTag.boundingBox ?: defaultVisionBoundingBoxForRank(targetIdx)).coerceNormalized()
+      val key = targetTag.label.trim().lowercase(Locale.US)
+      val prevMatch = previousByLabel[key]
+      if (prevMatch != null) {
+        val (prevIdx, prevTag) = prevMatch
+        val prevBox = (prevTag.boundingBox ?: defaultVisionBoundingBoxForRank(prevIdx)).coerceNormalized()
+        targetTag.copy(
+          boundingBox = prevBox.lerpTo(targetBox, clampedFraction),
+        )
+      } else {
+        targetTag.copy(
+          boundingBox = targetBox,
+        )
+      }
+    }
+  }
+
+  /**
+   * Assigns stable color palette indices (`0 until paletteSize`) to [currentTags] by preserving the
+   * color index of any tag whose label was already present in [previousTags] / [previousColorIndices],
+   * so same-label boxes keep their color as they move and resize into their new positions.
+   */
+  fun resolveStableVisionTagColorIndices(
+    previousTags: List<CameraVisionTag>,
+    currentTags: List<CameraVisionTag>,
+    previousColorIndices: Map<String, Int> = emptyMap(),
+    paletteSize: Int = 5,
+  ): Map<String, Int> {
+    if (currentTags.isEmpty()) return emptyMap()
+    val safePalette = paletteSize.coerceAtLeast(1)
+    val prevIndexLookup = linkedMapOf<String, Int>()
+    previousTags.forEachIndexed { idx, tag ->
+      val key = tag.label.trim().lowercase(Locale.US)
+      if (key.isNotEmpty()) {
+        prevIndexLookup[key] = previousColorIndices[key] ?: (idx % safePalette)
+      }
+    }
+
+    val result = linkedMapOf<String, Int>()
+    val usedSlots = mutableSetOf<Int>()
+
+    // 1. Preserve color slots for labels carried over from the previous detection
+    for (tag in currentTags) {
+      val key = tag.label.trim().lowercase(Locale.US)
+      val prevSlot = prevIndexLookup[key]
+      if (prevSlot != null && key !in result) {
+        val normalizedSlot = ((prevSlot % safePalette) + safePalette) % safePalette
+        result[key] = normalizedSlot
+        usedSlots.add(normalizedSlot)
+      }
+    }
+
+    // 2. Assign unused palette slots (or fallback index slots) to newly introduced labels
+    var nextCandidateSlot = 0
+    currentTags.forEachIndexed { idx, tag ->
+      val key = tag.label.trim().lowercase(Locale.US)
+      if (key !in result) {
+        var chosenSlot = idx % safePalette
+        if (chosenSlot in usedSlots && usedSlots.size < safePalette) {
+          while (nextCandidateSlot < safePalette && nextCandidateSlot in usedSlots) {
+            nextCandidateSlot++
+          }
+          if (nextCandidateSlot < safePalette) {
+            chosenSlot = nextCandidateSlot
+          }
+        }
+        result[key] = chosenSlot
+        usedSlots.add(chosenSlot)
+      }
+    }
+
+    return result
+  }
+
+  /**
    * Computes non-overlapping label badge placements ([CameraVisionLabelPlacement]) for a list of
    * visible [tags] inside a stage of size [stageWidthPx] × [stageHeightPx] (with badges clamped to
    * the unobstructed vertical range [usableTopPx]..[usableBottomPx]).
@@ -5778,6 +5987,21 @@ object CameraEngine {
     )
   }
 
+  private fun rememberPreviousVisionBoxesByLabel(
+    previousResult: CameraVisionAnalysisResult?,
+  ): Map<String, CameraVisionBoundingBox> {
+    if (previousResult == null) return emptyMap()
+    val map = linkedMapOf<String, CameraVisionBoundingBox>()
+    val sourceTags = previousResult.tags.ifEmpty { previousResult.allCandidateTags }
+    sourceTags.forEachIndexed { idx, tag ->
+      val key = tag.label.trim().lowercase(Locale.US)
+      if (key.isNotEmpty() && key !in map) {
+        map[key] = (tag.boundingBox ?: defaultVisionBoundingBoxForRank(idx)).coerceNormalized()
+      }
+    }
+    return map
+  }
+
   /**
    * Runs a two-stage on-device Google ML Kit vision pipeline on [bitmap]:
    * 1. **Object Detection** (`com.google.mlkit:object-detection`) in `SINGLE_IMAGE_MODE` with
@@ -5796,6 +6020,7 @@ object CameraEngine {
     maxLabels: Int = 6,
     sourceDescription: String = "Live Camera Frame",
     analyzedAtMs: Long = System.currentTimeMillis(),
+    previousResult: CameraVisionAnalysisResult? = null,
   ): CameraVisionAnalysisResult? {
     if (bitmap.width <= 16 || bitmap.height <= 16) return null
     val effectiveThreshold = confidenceThreshold.coerceIn(MIN_VISION_CONFIDENCE_THRESHOLD, 0.98f)
@@ -5913,6 +6138,7 @@ object CameraEngine {
 
       val localizedTags = mutableListOf<CameraVisionTag>()
       val claimedLabelsLower = mutableSetOf<String>()
+      val previousBoxByLabel = rememberPreviousVisionBoxesByLabel(previousResult)
 
       // Classify each real DetectedObject bounding box using a contextual crop + full-frame corroboration
       for (objCandidate in validObjectBoxes.take(maxLabels.coerceAtLeast(1))) {
@@ -5971,10 +6197,18 @@ object CameraEngine {
           }
           if (calibratedConf < MIN_VISION_CONFIDENCE_THRESHOLD) continue
 
+          val prevBoxForLabel = previousBoxByLabel[key]
+          val temporalOverlapBonus = if (prevBoxForLabel != null) {
+            objCandidate.normBox.intersectionOverUnion(prevBoxForLabel) * 0.06f
+          } else {
+            0f
+          }
+
           val rankScore = calibratedConf +
             computeVisionLabelSpecificityBonus(labelText) +
             (if (fullMatch != null) 0.05f else 0f) +
-            (if (matchesCoarseDomain) 0.04f else 0f)
+            (if (matchesCoarseDomain) 0.04f else 0f) +
+            temporalOverlapBonus
 
           if (rankScore > bestRankingScore) {
             bestRankingScore = rankScore
@@ -5992,7 +6226,9 @@ object CameraEngine {
               k !in claimedLabelsLower && k in allowedKeywordsForCoarse
             }
             .maxByOrNull { (lbl, scoreAndIdx) ->
-              scoreAndIdx.first + computeVisionLabelSpecificityBonus(lbl)
+              val prevBox = previousBoxByLabel[lbl.lowercase(Locale.US)]
+              val iouBonus = prevBox?.let { objCandidate.normBox.intersectionOverUnion(it) * 0.06f } ?: 0f
+              scoreAndIdx.first + computeVisionLabelSpecificityBonus(lbl) + iouBonus
             }
           if (domainFullMatch != null) {
             bestLabel = domainFullMatch.first
@@ -6006,7 +6242,9 @@ object CameraEngine {
           val topFull = fullFrameLabels
             .filter { (lbl, _) -> lbl.lowercase(Locale.US) !in claimedLabelsLower }
             .maxByOrNull { (lbl, scoreAndIdx) ->
-              scoreAndIdx.first + computeVisionLabelSpecificityBonus(lbl)
+              val prevBox = previousBoxByLabel[lbl.lowercase(Locale.US)]
+              val iouBonus = prevBox?.let { objCandidate.normBox.intersectionOverUnion(it) * 0.06f } ?: 0f
+              scoreAndIdx.first + computeVisionLabelSpecificityBonus(lbl) + iouBonus
             }
           if (topFull != null) {
             bestLabel = topFull.first
@@ -6049,21 +6287,36 @@ object CameraEngine {
       // Only fall back to foreground contour extraction if ObjectDetector found 0 objects in the frame
       if (localizedTags.isEmpty() && fullFrameLabels.isNotEmpty()) {
         val foregroundContours = extractSalientRegionsFromBitmap(orientedBitmap, maxRegions = 3)
+        val remainingContours = foregroundContours.toMutableList()
         fullFrameLabels
           .sortedByDescending { (lbl, scoreAndIdx) ->
             scoreAndIdx.first + computeVisionLabelSpecificityBonus(lbl)
           }
           .take(foregroundContours.size)
-          .forEachIndexed { idx, (labelText, scoreAndIdx) ->
+          .forEach { (labelText, scoreAndIdx) ->
             val adjustedConfidence = (scoreAndIdx.first + minOf(0f, computeVisionLabelSpecificityBonus(labelText)))
               .coerceIn(0f, 1f)
-            if (adjustedConfidence >= MIN_VISION_CONFIDENCE_THRESHOLD) {
+            if (adjustedConfidence >= MIN_VISION_CONFIDENCE_THRESHOLD && remainingContours.isNotEmpty()) {
+              val prevBox = previousBoxByLabel[labelText.lowercase(Locale.US)]
+              val chosenContour = if (prevBox != null) {
+                remainingContours.maxByOrNull { contour ->
+                  val iou = contour.intersectionOverUnion(prevBox)
+                  val dist = kotlin.math.hypot(
+                    (contour.centerX - prevBox.centerX).toDouble(),
+                    (contour.centerY - prevBox.centerY).toDouble(),
+                  ).toFloat()
+                  iou * 2.0f - dist * 0.5f
+                } ?: remainingContours.first()
+              } else {
+                remainingContours.first()
+              }
+              remainingContours.remove(chosenContour)
               localizedTags.add(
                 CameraVisionTag(
                   label = labelText,
                   confidence = adjustedConfidence,
                   index = scoreAndIdx.second,
-                  boundingBox = foregroundContours[idx],
+                  boundingBox = chosenContour,
                 )
               )
             }
@@ -6159,9 +6412,49 @@ object CameraEngine {
   }
 
   /**
+   * Returns `true` when [candidate] corresponds to the same physical subject currently tracked by
+   * [previousTarget], accounting for tracking ID, bounding-box IoU overlap, category label continuity,
+   * and proximity to both current position and velocity-projected trajectory position.
+   */
+  fun isSameTrackedSubject(
+    candidate: RawDetectedObjectForFocus,
+    previousTarget: CameraSmartFocusTarget?,
+  ): Boolean {
+    if (previousTarget == null || previousTarget.source != CameraFocusSource.ML_OBJECT_AUTO) {
+      return false
+    }
+    val box = candidate.boundingBox.coerceNormalized()
+    val cx = box.centerX.coerceIn(0.08f, 0.92f)
+    val cy = box.centerY.coerceIn(0.08f, 0.92f)
+
+    val predX = (previousTarget.clampedX + previousTarget.velocityX * 0.25f).coerceIn(0.08f, 0.92f)
+    val predY = (previousTarget.clampedY + previousTarget.velocityY * 0.25f).coerceIn(0.08f, 0.92f)
+
+    val distCurr = kotlin.math.hypot((cx - previousTarget.clampedX).toDouble(), (cy - previousTarget.clampedY).toDouble()).toFloat()
+    val distPred = kotlin.math.hypot((cx - predX).toDouble(), (cy - predY).toDouble()).toFloat()
+    val distTarget = kotlin.math.hypot((cx - previousTarget.clampedTargetX).toDouble(), (cy - previousTarget.clampedTargetY).toDouble()).toFloat()
+    val minDist = minOf(distCurr, distPred, distTarget)
+
+    val iouCurr = previousTarget.boundingBox?.let { box.intersectionOverUnion(it) } ?: 0f
+    val iouTarget = previousTarget.targetBoundingBox?.let { box.intersectionOverUnion(it) } ?: 0f
+    val maxIou = maxOf(iouCurr, iouTarget)
+
+    val sameId = candidate.trackingId != null &&
+      candidate.trackingId == previousTarget.trackingId &&
+      minDist <= 0.42f
+    val sameLabel = !candidate.label.isNullOrBlank() &&
+      !previousTarget.categoryLabel.isNullOrBlank() &&
+      candidate.label.trim().equals(previousTarget.categoryLabel.trim(), ignoreCase = true) &&
+      minDist <= 0.30f
+
+    return sameId || maxIou >= 0.28f || minDist <= 0.16f || sameLabel
+  }
+
+  /**
    * Scores an ML Kit [RawDetectedObjectForFocus] candidate for smart autofocus priority.
    * Balances viewfinder center proximity, foreground subject prominence, classification confidence,
-   * and temporal tracking stability with [previousTarget].
+   * and sticky temporal tracking stability (including proximity to velocity-predicted trajectory)
+   * with [previousTarget].
    */
   fun scoreObjectForSmartAutofocus(
     candidate: RawDetectedObjectForFocus,
@@ -6187,22 +6480,54 @@ object CameraEngine {
 
     val confidenceBonus = candidate.confidence.coerceIn(0f, 1f) * 0.28f
 
-    // Temporal tracking stability bonus to avoid focus hunting between similar objects
+    // Temporal tracking stickiness & trajectory alignment bonus to avoid focus hunting
     var trackingBonus = 0f
     if (previousTarget != null && previousTarget.source == CameraFocusSource.ML_OBJECT_AUTO) {
-      if (candidate.trackingId != null && candidate.trackingId == previousTarget.trackingId) {
-        trackingBonus += 0.25f
+      val lockScale = previousTarget.lockStrength.coerceIn(0.65f, 1.35f)
+      val predX = (previousTarget.clampedX + previousTarget.velocityX * 0.25f).coerceIn(0.08f, 0.92f)
+      val predY = (previousTarget.clampedY + previousTarget.velocityY * 0.25f).coerceIn(0.08f, 0.92f)
+
+      val distCurrSq = (box.centerX - previousTarget.clampedX).pow(2) + (box.centerY - previousTarget.clampedY).pow(2)
+      val distPredSq = (box.centerX - predX).pow(2) + (box.centerY - predY).pow(2)
+      val distTargetSq = (box.centerX - previousTarget.clampedTargetX).pow(2) + (box.centerY - previousTarget.clampedTargetY).pow(2)
+      val minDist = kotlin.math.sqrt(minOf(distCurrSq, distPredSq, distTargetSq))
+
+      if (candidate.trackingId != null && candidate.trackingId == previousTarget.trackingId && minDist <= 0.45f) {
+        trackingBonus += 0.26f * lockScale
       }
-      val prevBox = previousTarget.boundingBox
-      if (prevBox != null) {
-        val iou = box.intersectionOverUnion(prevBox)
-        trackingBonus += iou * 0.18f
-      } else {
-        val pdx = box.centerX - previousTarget.normX
-        val pdy = box.centerY - previousTarget.normY
-        val pDistSq = pdx * pdx + pdy * pdy
-        if (pDistSq < 0.04f) {
-          trackingBonus += 0.12f
+
+      if (!candidate.label.isNullOrBlank() &&
+        !previousTarget.categoryLabel.isNullOrBlank() &&
+        candidate.label.trim().equals(previousTarget.categoryLabel.trim(), ignoreCase = true) &&
+        minDist <= 0.36f
+      ) {
+        trackingBonus += 0.14f * lockScale
+      }
+
+      val iouCurr = previousTarget.boundingBox?.let { box.intersectionOverUnion(it) } ?: 0f
+      val iouTarget = previousTarget.targetBoundingBox?.let { box.intersectionOverUnion(it) } ?: 0f
+      val maxIou = maxOf(iouCurr, iouTarget)
+      if (maxIou > 0f) {
+        trackingBonus += maxIou * 0.24f * lockScale
+      }
+
+      // Smooth spatial stickiness radius around current, trajectory-predicted, and desired focus points
+      if (minDist < 0.36f) {
+        val proximityFactor = (1f - minDist / 0.36f).coerceIn(0f, 1f)
+        trackingBonus += proximityFactor * proximityFactor * 0.30f * lockScale
+      }
+
+      // Velocity & trajectory alignment bonus: favor candidates continuing along the current movement vector
+      val speed = previousTarget.speedNormPerSec
+      if (speed >= 0.015f) {
+        val moveDx = box.centerX - previousTarget.clampedX
+        val moveDy = box.centerY - previousTarget.clampedY
+        val moveDist = kotlin.math.sqrt(moveDx * moveDx + moveDy * moveDy)
+        if (moveDist >= 0.015f) {
+          val cosAlign = ((moveDx * previousTarget.velocityX + moveDy * previousTarget.velocityY) / (moveDist * speed))
+            .coerceIn(-1f, 1f)
+          val speedWeight = (speed / STICKY_AF_MAX_SPEED_NORM_PER_SEC).coerceIn(0f, 1f)
+          trackingBonus += cosAlign * 0.12f * speedWeight
         }
       }
     }
@@ -6211,17 +6536,260 @@ object CameraEngine {
   }
 
   /**
+   * Advances [currentTarget] by [dtSeconds] along a smooth, velocity-continuous trajectory toward
+   * ([desiredX], [desiredY]), respecting its current velocity (`velocityX`, `velocityY`), steering
+   * inertia ([steeringTimeConstantSec]), acceleration limit ([maxAccelerationNormPerSecSq]), and
+   * maximum travel speed ([maxSpeedNormPerSec]).
+   *
+   * Holds steady against sub-2% micro-jitter when already settled at the target.
+   */
+  fun stepStickyAutofocusTrajectory(
+    currentTarget: CameraSmartFocusTarget,
+    desiredX: Float = currentTarget.targetNormX,
+    desiredY: Float = currentTarget.targetNormY,
+    desiredBox: CameraVisionBoundingBox? = currentTarget.targetBoundingBox ?: currentTarget.boundingBox,
+    dtSeconds: Float = 0.032f,
+    naturalFrequencyRadPerSec: Float = STICKY_AF_NATURAL_FREQUENCY_RAD_PER_SEC,
+    steeringTimeConstantSec: Float = STICKY_AF_STEERING_TIME_CONSTANT_SEC,
+    maxSpeedNormPerSec: Float = STICKY_AF_MAX_SPEED_NORM_PER_SEC,
+    maxAccelerationNormPerSecSq: Float = STICKY_AF_MAX_ACCEL_NORM_PER_SEC_SQ,
+    timestampMs: Long = currentTarget.timestampMs + (dtSeconds.coerceAtLeast(0f) * 1000f).roundToInt(),
+  ): CameraSmartFocusTarget {
+    val startX = currentTarget.clampedX
+    val startY = currentTarget.clampedY
+    val goalX = desiredX.coerceIn(0.08f, 0.92f)
+    val goalY = desiredY.coerceIn(0.08f, 0.92f)
+    val coercedGoalBox = desiredBox?.coerceNormalized()
+
+    val initialDx = goalX - startX
+    val initialDy = goalY - startY
+    val initialDistSq = initialDx * initialDx + initialDy * initialDy
+    val initialSpeedSq = currentTarget.velocityX * currentTarget.velocityX +
+      currentTarget.velocityY * currentTarget.velocityY
+
+    val alreadySettledAtPreviousGoal = currentTarget.distanceToDesiredTarget < 0.002f &&
+      initialSpeedSq < 0.000225f
+
+    // Sub-2% micro-jitter deadzone when stationary at previous target: hold steady without drift
+    if (alreadySettledAtPreviousGoal && initialDistSq < 0.0004f) {
+      return currentTarget.copy(
+        normX = startX,
+        normY = startY,
+        targetNormX = startX,
+        targetNormY = startY,
+        boundingBox = currentTarget.boundingBox ?: coercedGoalBox,
+        targetBoundingBox = coercedGoalBox ?: currentTarget.boundingBox,
+        velocityX = 0f,
+        velocityY = 0f,
+        timestampMs = timestampMs,
+      )
+    }
+
+    val clampedDt = dtSeconds.coerceIn(0.004f, 0.60f)
+    val subSteps = kotlin.math.ceil(clampedDt / 0.016f).toInt().coerceIn(1, 40)
+    val h = clampedDt / subSteps.toFloat()
+
+    val omega = naturalFrequencyRadPerSec.coerceIn(0.5f, 10.0f)
+    val tau = steeringTimeConstantSec.coerceIn(0.04f, 1.0f)
+    val vMax = maxSpeedNormPerSec.coerceIn(0.08f, 2.0f)
+    val aMax = maxAccelerationNormPerSecSq.coerceIn(0.2f, 8.0f)
+
+    var x = startX
+    var y = startY
+    var vx = currentTarget.velocityX
+    var vy = currentTarget.velocityY
+
+    for (step in 0 until subSteps) {
+      val toX = goalX - x
+      val toY = goalY - y
+      val dist = kotlin.math.sqrt(toX * toX + toY * toY)
+
+      if (dist <= 0.001f) {
+        val speedSq = vx * vx + vy * vy
+        if (speedSq <= 0.0004f) {
+          x = goalX
+          y = goalY
+          vx = 0f
+          vy = 0f
+          break
+        }
+      }
+
+      val desiredSpeed = if (dist > 1e-4f) {
+        minOf(vMax, dist * omega)
+      } else {
+        0f
+      }
+      val desiredVx = if (dist > 1e-4f) (toX / dist) * desiredSpeed else 0f
+      val desiredVy = if (dist > 1e-4f) (toY / dist) * desiredSpeed else 0f
+
+      var ax = (desiredVx - vx) / tau
+      var ay = (desiredVy - vy) / tau
+      val accelMag = kotlin.math.sqrt(ax * ax + ay * ay)
+      if (accelMag > aMax && accelMag > 1e-5f) {
+        val scale = aMax / accelMag
+        ax *= scale
+        ay *= scale
+      }
+
+      vx += ax * h
+      vy += ay * h
+
+      // Critically damped arrival clamping along the radial axis to prevent target overshoot
+      // while preserving lateral velocity inertia for curved mid-flight trajectory turns
+      if (dist > 1e-4f) {
+        val ux = toX / dist
+        val uy = toY / dist
+        val radialVel = vx * ux + vy * uy
+        val lateralVx = vx - radialVel * ux
+        val lateralVy = vy - radialVel * uy
+        val maxRadialVel = minOf(desiredSpeed, dist / h)
+        if (radialVel > maxRadialVel) {
+          vx = lateralVx + maxRadialVel * ux
+          vy = lateralVy + maxRadialVel * uy
+        }
+      }
+
+      val speed = kotlin.math.sqrt(vx * vx + vy * vy)
+      if (speed > vMax && speed > 1e-5f) {
+        val scale = vMax / speed
+        vx *= scale
+        vy *= scale
+      }
+
+      val nextX = (x + vx * h).coerceIn(0.08f, 0.92f)
+      val nextY = (y + vy * h).coerceIn(0.08f, 0.92f)
+      val remDx = goalX - nextX
+      val remDy = goalY - nextY
+      val remDist = kotlin.math.sqrt(remDx * remDx + remDy * remDy)
+
+      if (remDist < 0.0012f && speed < 0.025f) {
+        x = goalX
+        y = goalY
+        vx = 0f
+        vy = 0f
+        break
+      } else {
+        x = nextX
+        y = nextY
+      }
+    }
+
+    val initialDist = kotlin.math.sqrt(initialDistSq)
+    val finalDist = kotlin.math.hypot((goalX - x).toDouble(), (goalY - y).toDouble()).toFloat()
+    val progress = if (initialDist > 1e-4f) {
+      (1f - (finalDist / initialDist)).coerceIn(0.08f, 1f)
+    } else {
+      1f
+    }
+
+    val prevBox = currentTarget.boundingBox
+    val interpolatedBox = if (prevBox != null && coercedGoalBox != null) {
+      CameraVisionBoundingBox(
+        left = prevBox.left + (coercedGoalBox.left - prevBox.left) * progress,
+        top = prevBox.top + (coercedGoalBox.top - prevBox.top) * progress,
+        right = prevBox.right + (coercedGoalBox.right - prevBox.right) * progress,
+        bottom = prevBox.bottom + (coercedGoalBox.bottom - prevBox.bottom) * progress,
+      ).coerceNormalized()
+    } else {
+      coercedGoalBox ?: prevBox
+    }
+
+    return currentTarget.copy(
+      normX = x,
+      normY = y,
+      boundingBox = interpolatedBox,
+      targetNormX = goalX,
+      targetNormY = goalY,
+      targetBoundingBox = coercedGoalBox ?: interpolatedBox,
+      velocityX = vx,
+      velocityY = vy,
+      timestampMs = timestampMs,
+    )
+  }
+
+  /**
+   * Traces a sequence of normalized `(x, y)` coordinates from [target]'s current position
+   * (`clampedX`, `clampedY`) toward its desired destination (`clampedTargetX`, `clampedTargetY`)
+   * with respect to its current velocity (`velocityX`, `velocityY`) and trajectory kinematics.
+   */
+  fun sampleAutofocusTrajectoryPoints(
+    target: CameraSmartFocusTarget,
+    steps: Int = 12,
+    totalDurationSeconds: Float = 1.2f,
+  ): List<Pair<Float, Float>> {
+    val count = steps.coerceIn(2, 60)
+    val dt = (totalDurationSeconds.coerceIn(0.1f, 5.0f)) / count.toFloat()
+    val points = ArrayList<Pair<Float, Float>>(count + 1)
+    points.add(Pair(target.clampedX, target.clampedY))
+    var sim = target
+    for (i in 0 until count) {
+      sim = stepStickyAutofocusTrajectory(
+        currentTarget = sim,
+        dtSeconds = dt,
+        timestampMs = sim.timestampMs + (dt * 1000f).roundToInt(),
+      )
+      points.add(Pair(sim.clampedX, sim.clampedY))
+    }
+    return points
+  }
+
+  /**
+   * Gently coasts and holds [previousTarget] along its current trajectory when object detections
+   * momentarily drop out for a few frames (up to [maxHoldDurationMs]), preventing abrupt focus jumps.
+   */
+  fun retainSmartFocusTargetOnDropout(
+    previousTarget: CameraSmartFocusTarget?,
+    timestampMs: Long = System.currentTimeMillis(),
+    maxHoldDurationMs: Long = STICKY_AF_DROPOUT_HOLD_DURATION_MS,
+    maxMissedFrames: Int = 4,
+  ): CameraSmartFocusTarget? {
+    if (previousTarget == null || previousTarget.source != CameraFocusSource.ML_OBJECT_AUTO) {
+      return null
+    }
+    val elapsedMs = (timestampMs - previousTarget.timestampMs).coerceAtLeast(0L)
+    val nextMissed = previousTarget.missedDetectionFrames + 1
+    if (elapsedMs > maxHoldDurationMs || nextMissed > maxMissedFrames) {
+      return null
+    }
+    val dtSec = (elapsedMs.coerceIn(16L, 500L)) / 1000f
+    val stepped = stepStickyAutofocusTrajectory(
+      currentTarget = previousTarget,
+      desiredX = previousTarget.clampedTargetX,
+      desiredY = previousTarget.clampedTargetY,
+      desiredBox = previousTarget.targetBoundingBox ?: previousTarget.boundingBox,
+      dtSeconds = dtSec,
+      timestampMs = timestampMs,
+    )
+    return stepped.copy(
+      velocityX = stepped.velocityX * 0.75f,
+      velocityY = stepped.velocityY * 0.75f,
+      lockStrength = (previousTarget.lockStrength * 0.90f).coerceAtLeast(0.65f),
+      missedDetectionFrames = nextMissed,
+    )
+  }
+
+  /**
    * Selects the optimal smart autofocus target from a list of ML Kit detected objects ([objects]),
-   * applying temporal smoothing when tracking the same object across consecutive frames.
+   * applying sticky subject hysteresis to resist transient detections and advancing the focus point
+   * smoothly along a velocity- and trajectory-respecting curve toward the selected target.
    */
   fun selectSmartAutofocusTargetFromObjects(
     objects: List<RawDetectedObjectForFocus>,
     previousTarget: CameraSmartFocusTarget? = null,
     timestampMs: Long = System.currentTimeMillis(),
   ): CameraSmartFocusTarget? {
-    if (objects.isEmpty()) return null
+    if (objects.isEmpty()) {
+      return retainSmartFocusTargetOnDropout(
+        previousTarget = previousTarget,
+        timestampMs = timestampMs,
+      )
+    }
+
     var bestCandidate: RawDetectedObjectForFocus? = null
     var bestScore = -1f
+    var lockedCandidate: RawDetectedObjectForFocus? = null
+    var lockedScore = -1f
 
     for (candidate in objects) {
       val score = scoreObjectForSmartAutofocus(candidate, previousTarget)
@@ -6229,43 +6797,33 @@ object CameraEngine {
         bestScore = score
         bestCandidate = candidate
       }
-    }
-
-    val winner = bestCandidate ?: return null
-    if (bestScore < 0f) return null
-
-    val coercedBox = winner.boundingBox.coerceNormalized()
-    var targetX = coercedBox.centerX.coerceIn(0.08f, 0.92f)
-    var targetY = coercedBox.centerY.coerceIn(0.08f, 0.92f)
-    var finalBox = coercedBox
-
-    // Smooth small frame-to-frame jitter when locked onto the same object
-    if (previousTarget != null && previousTarget.source == CameraFocusSource.ML_OBJECT_AUTO) {
-      val sameTrack = (winner.trackingId != null && winner.trackingId == previousTarget.trackingId) ||
-        (previousTarget.boundingBox != null && coercedBox.intersectionOverUnion(previousTarget.boundingBox) >= 0.45f)
-      if (sameTrack) {
-        val moveDistSq = (targetX - previousTarget.normX).pow(2) + (targetY - previousTarget.normY).pow(2)
-        if (moveDistSq < 0.0004f) {
-          // Sub-2% micro-jitter: hold steady
-          targetX = previousTarget.normX
-          targetY = previousTarget.normY
-          finalBox = previousTarget.boundingBox ?: coercedBox
-        } else if (moveDistSq < 0.0225f) {
-          // Smoothly blend towards new position (65% new, 35% previous)
-          targetX = (previousTarget.normX * 0.35f + targetX * 0.65f).coerceIn(0.08f, 0.92f)
-          targetY = (previousTarget.normY * 0.35f + targetY * 0.65f).coerceIn(0.08f, 0.92f)
-          val prevB = previousTarget.boundingBox
-          if (prevB != null) {
-            finalBox = CameraVisionBoundingBox(
-              left = prevB.left * 0.35f + coercedBox.left * 0.65f,
-              top = prevB.top * 0.35f + coercedBox.top * 0.65f,
-              right = prevB.right * 0.35f + coercedBox.right * 0.65f,
-              bottom = prevB.bottom * 0.35f + coercedBox.bottom * 0.65f,
-            ).coerceNormalized()
-          }
-        }
+      if (previousTarget != null &&
+        previousTarget.source == CameraFocusSource.ML_OBJECT_AUTO &&
+        score >= 0f &&
+        isSameTrackedSubject(candidate, previousTarget) &&
+        score > lockedScore
+      ) {
+        lockedScore = score
+        lockedCandidate = candidate
       }
     }
+
+    var winner = bestCandidate ?: return retainSmartFocusTargetOnDropout(previousTarget, timestampMs)
+    if (bestScore < 0f) return retainSmartFocusTargetOnDropout(previousTarget, timestampMs)
+
+    // Sticky hysteresis: if the currently tracked subject is still visible in the frame,
+    // require a competing challenger to beat it by a clear margin before switching focus.
+    val activeLocked = lockedCandidate
+    if (activeLocked != null &&
+      winner !== activeLocked &&
+      (bestScore - lockedScore) < STICKY_AF_SWITCH_HYSTERESIS_MARGIN
+    ) {
+      winner = activeLocked
+    }
+
+    val coercedBox = winner.boundingBox.coerceNormalized()
+    val desiredX = coercedBox.centerX.coerceIn(0.08f, 0.92f)
+    val desiredY = coercedBox.centerY.coerceIn(0.08f, 0.92f)
 
     val cleanedLabel = winner.label?.let { raw ->
       normalizeAndFilterMlKitLabel(raw) ?: raw.trim().replaceFirstChar {
@@ -6273,15 +6831,57 @@ object CameraEngine {
       }.takeIf { !isBlockedGenericVisionLabel(it) }
     }
 
-    return CameraSmartFocusTarget(
-      normX = targetX,
-      normY = targetY,
-      boundingBox = finalBox,
-      trackingId = winner.trackingId,
-      categoryLabel = cleanedLabel,
+    if (previousTarget == null || previousTarget.source != CameraFocusSource.ML_OBJECT_AUTO) {
+      return CameraSmartFocusTarget(
+        normX = desiredX,
+        normY = desiredY,
+        boundingBox = coercedBox,
+        trackingId = winner.trackingId,
+        categoryLabel = cleanedLabel,
+        confidence = winner.confidence.coerceIn(0f, 1f),
+        source = CameraFocusSource.ML_OBJECT_AUTO,
+        timestampMs = timestampMs,
+        targetNormX = desiredX,
+        targetNormY = desiredY,
+        targetBoundingBox = coercedBox,
+        velocityX = 0f,
+        velocityY = 0f,
+        lockStrength = 1.0f,
+        missedDetectionFrames = 0,
+      )
+    }
+
+    val sameSubject = isSameTrackedSubject(winner, previousTarget)
+    val nextLockStrength = if (sameSubject) {
+      (previousTarget.lockStrength + 0.12f).coerceIn(0.85f, 1.35f)
+    } else {
+      0.85f
+    }
+
+    val rawDtMs = timestampMs - previousTarget.timestampMs
+    val dtSeconds = if (rawDtMs > 0L) {
+      (rawDtMs.coerceIn(16L, 450L)) / 1000f
+    } else {
+      0.24f
+    }
+
+    val stepped = stepStickyAutofocusTrajectory(
+      currentTarget = previousTarget,
+      desiredX = desiredX,
+      desiredY = desiredY,
+      desiredBox = coercedBox,
+      dtSeconds = dtSeconds,
+      timestampMs = timestampMs,
+    )
+
+    return stepped.copy(
+      trackingId = winner.trackingId ?: if (sameSubject) previousTarget.trackingId else null,
+      categoryLabel = cleanedLabel ?: if (sameSubject) previousTarget.categoryLabel else null,
       confidence = winner.confidence.coerceIn(0f, 1f),
       source = CameraFocusSource.ML_OBJECT_AUTO,
       timestampMs = timestampMs,
+      lockStrength = nextLockStrength,
+      missedDetectionFrames = 0,
     )
   }
 
@@ -6318,7 +6918,12 @@ object CameraEngine {
     previousTarget: CameraSmartFocusTarget? = null,
     timestampMs: Long = System.currentTimeMillis(),
   ): CameraSmartFocusTarget? {
-    if (result == null) return null
+    if (result == null) {
+      return retainSmartFocusTargetOnDropout(
+        previousTarget = previousTarget,
+        timestampMs = timestampMs,
+      )
+    }
     val sourceTags = result.tags.ifEmpty { result.allCandidateTags }
     return selectSmartAutofocusTargetFromVisionTags(
       tags = sourceTags,
@@ -6410,10 +7015,25 @@ object CameraEngine {
           val salientCandidates = salientBoxes.mapIndexed { idx, box ->
             RawDetectedObjectForFocus(
               boundingBox = box,
-              trackingId = idx + 1,
+              trackingId = null,
               label = null,
               confidence = (0.82f - idx * 0.08f).coerceAtLeast(0.60f),
             )
+          }
+          // When holding a strong lock on a classified ML Kit object that dropped out for just 1-2 frames,
+          // only switch to a salient fallback region if one aligns with the tracked subject; otherwise coast.
+          if (previousTarget != null &&
+            previousTarget.source == CameraFocusSource.ML_OBJECT_AUTO &&
+            previousTarget.categoryLabel != null &&
+            previousTarget.missedDetectionFrames < 2
+          ) {
+            val matchingSalient = salientCandidates.filter { isSameTrackedSubject(it, previousTarget) }
+            if (matchingSalient.isEmpty()) {
+              retainSmartFocusTargetOnDropout(
+                previousTarget = previousTarget,
+                timestampMs = analyzedAtMs,
+              )?.let { return it }
+            }
           }
           return selectSmartAutofocusTargetFromObjects(
             objects = salientCandidates,
@@ -6422,9 +7042,15 @@ object CameraEngine {
           )
         }
       }
-      null
+      retainSmartFocusTargetOnDropout(
+        previousTarget = previousTarget,
+        timestampMs = analyzedAtMs,
+      )
     } catch (_: Throwable) {
-      null
+      retainSmartFocusTargetOnDropout(
+        previousTarget = previousTarget,
+        timestampMs = analyzedAtMs,
+      )
     }
   }
 

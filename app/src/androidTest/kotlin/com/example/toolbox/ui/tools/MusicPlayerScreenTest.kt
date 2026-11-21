@@ -1403,4 +1403,144 @@ class MusicPlayerScreenTest {
     assertEquals(MusicGroupOption.YEAR, session.groupOption)
     composeTestRule.onNodeWithTag("music_group_header_2026").assertIsDisplayed()
   }
+
+  @Test
+  fun musicPlayer_twoAppWidgets_miniBarAndAlbumArtWithFiveControlsAndBottomRightStar() {
+    val context = composeTestRule.activity
+    val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        MusicPlayerScreen(
+          initialTracks = tracks,
+          initialTab = MusicLibraryTab.SONGS,
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // 1. Both AppWidgetProviders are registered in Android's AppWidgetManager
+    val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(context)
+    val installedProviders = appWidgetManager.installedProviders
+      .filter { it.provider.packageName == context.packageName }
+    val providerClasses = installedProviders.map { it.provider.className }.toSet()
+    assertTrue(
+      "Expected MusicMiniBarWidgetProvider to be registered in AppWidgetManager",
+      MusicMiniBarWidgetProvider::class.java.name in providerClasses,
+    )
+    assertTrue(
+      "Expected MusicAlbumArtWidgetProvider to be registered in AppWidgetManager",
+      MusicAlbumArtWidgetProvider::class.java.name in providerClasses,
+    )
+
+    // 2. Start playing the first track and verify both RemoteViews inflate and render all required controls
+    assertTrue(MusicPlayerWidgets.handleWidgetAction(context, MusicPlayerEngine.ACTION_MEDIA_PLAY))
+    composeTestRule.waitForIdle()
+
+    val session = MusicPlayerEngine.getActivePlaybackSession()
+    assertNotNull(session)
+    session!!.seekToPositionMs(tracks[0].durationMs / 2L)
+
+    composeTestRule.runOnIdle {
+      val state = MusicPlayerWidgets.resolveWidgetState(context, session)
+      assertTrue(state.isPlaying)
+      assertEquals(tracks[0].title, state.title)
+
+      // Widget 1: Single bar widget, similar to the collapsed mini player
+      val miniHost = android.widget.FrameLayout(context)
+      val miniRemoteViews = MusicPlayerWidgets.buildMiniBarRemoteViews(context, state)
+      val miniRoot = miniRemoteViews.apply(context, miniHost)
+
+      val miniProgress = miniRoot.findViewById<android.widget.ProgressBar>(com.example.toolbox.R.id.widget_mini_progress_bar)
+      val miniArt = miniRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_mini_album_art)
+      val miniTitle = miniRoot.findViewById<android.widget.TextView>(com.example.toolbox.R.id.widget_mini_title)
+      val miniSubtitle = miniRoot.findViewById<android.widget.TextView>(com.example.toolbox.R.id.widget_mini_subtitle)
+      val miniFav = miniRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_mini_favorite_button)
+      val miniPrev = miniRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_mini_prev_button)
+      val miniPlayPause = miniRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_mini_play_pause_button)
+      val miniNext = miniRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_mini_next_button)
+
+      assertNotNull(miniProgress)
+      assertEquals(500, miniProgress.progress)
+      assertNotNull(miniArt)
+      assertEquals(tracks[0].title, miniTitle.text.toString())
+      assertEquals("${tracks[0].artist} • ${tracks[0].album}", miniSubtitle.text.toString())
+      assertEquals(android.view.View.VISIBLE, miniFav.visibility)
+      assertEquals("Favorite", miniFav.contentDescription.toString())
+      assertEquals("Previous track", miniPrev.contentDescription.toString())
+      assertEquals("Pause", miniPlayPause.contentDescription.toString())
+      assertEquals("Next track", miniNext.contentDescription.toString())
+
+      // Widget 2: Album art with favorite star overlaid at bottom-right of album art,
+      // track title & artist, and the full 5 playback controls below (no progress bar)
+      val albumHost = android.widget.FrameLayout(context)
+      val albumRemoteViews = MusicPlayerWidgets.buildAlbumArtRemoteViews(context, state)
+      val albumRoot = albumRemoteViews.apply(context, albumHost)
+
+      val albumArtContainer = albumRoot.findViewById<android.widget.FrameLayout>(com.example.toolbox.R.id.widget_album_art_container)
+      val albumArt = albumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_album_art)
+      val albumFavContainer = albumRoot.findViewById<android.widget.FrameLayout>(com.example.toolbox.R.id.widget_album_favorite_container)
+      val albumFavButton = albumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_album_favorite_button)
+      val albumTitle = albumRoot.findViewById<android.widget.TextView>(com.example.toolbox.R.id.widget_album_title)
+      val albumSubtitle = albumRoot.findViewById<android.widget.TextView>(com.example.toolbox.R.id.widget_album_subtitle)
+      val albumControlsRow = albumRoot.findViewById<android.widget.LinearLayout>(com.example.toolbox.R.id.widget_album_controls_row)
+      val albumShuffle = albumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_album_shuffle_button)
+      val albumPrev = albumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_album_prev_button)
+      val albumPlayPause = albumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_album_play_pause_button)
+      val albumNext = albumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_album_next_button)
+      val albumRepeat = albumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_album_repeat_button)
+
+      assertNotNull(albumArtContainer)
+      assertNotNull(albumArt)
+      assertNotNull(albumFavContainer)
+      // Verify favorite star container is a direct child of albumArtContainer overlaid at bottom|end
+      assertEquals(albumArtContainer, albumFavContainer.parent)
+      val favLp = albumFavContainer.layoutParams as android.widget.FrameLayout.LayoutParams
+      assertEquals(
+        android.view.Gravity.BOTTOM or android.view.Gravity.END,
+        favLp.gravity and (android.view.Gravity.VERTICAL_GRAVITY_MASK or android.view.Gravity.RELATIVE_HORIZONTAL_GRAVITY_MASK),
+      )
+      assertEquals("Favorite", albumFavButton.contentDescription.toString())
+
+      // Verify no ProgressBar exists inside the second widget
+      org.junit.Assert.assertNull(albumRoot.findViewById<android.widget.ProgressBar>(com.example.toolbox.R.id.widget_mini_progress_bar))
+
+      // Verify title, artist/album, and full 5 playback controls
+      assertEquals(tracks[0].title, albumTitle.text.toString())
+      assertEquals("${tracks[0].artist} • ${tracks[0].album}", albumSubtitle.text.toString())
+      assertEquals(5, albumControlsRow.childCount)
+      assertEquals("Shuffle Off", albumShuffle.contentDescription.toString())
+      assertEquals("Previous track", albumPrev.contentDescription.toString())
+      assertEquals("Pause", albumPlayPause.contentDescription.toString())
+      assertEquals("Next track", albumNext.contentDescription.toString())
+      assertEquals("Repeat Off", albumRepeat.contentDescription.toString())
+    }
+
+    // 3. Exercise widget actions (Favorite, Shuffle, Repeat, Next, Play/Pause) and verify updated RemoteViews
+    assertTrue(MusicPlayerWidgets.handleWidgetAction(context, MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE))
+    assertTrue(MusicPlayerWidgets.handleWidgetAction(context, MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE))
+    assertTrue(MusicPlayerWidgets.handleWidgetAction(context, MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT))
+    composeTestRule.waitForIdle()
+
+    composeTestRule.runOnIdle {
+      val updatedState = MusicPlayerWidgets.resolveWidgetState(context, session)
+      assertTrue(updatedState.isFavorite)
+      assertEquals(MusicShuffleMode.SHUFFLE, updatedState.shuffleMode)
+      assertEquals(MusicRepeatMode.REPEAT_ALL, updatedState.repeatMode)
+
+      val albumHost = android.widget.FrameLayout(context)
+      val albumRoot = MusicPlayerWidgets.buildAlbumArtRemoteViews(context, updatedState).apply(context, albumHost)
+      val albumFavButton = albumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_album_favorite_button)
+      val albumShuffleBg = albumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_album_shuffle_bg)
+      val albumShuffle = albumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_album_shuffle_button)
+      val albumRepeatBg = albumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_album_repeat_bg)
+      val albumRepeat = albumRoot.findViewById<android.widget.ImageView>(com.example.toolbox.R.id.widget_album_repeat_button)
+
+      assertEquals("Unfavorite", albumFavButton.contentDescription.toString())
+      assertEquals(android.view.View.VISIBLE, albumShuffleBg.visibility)
+      assertEquals("Shuffle", albumShuffle.contentDescription.toString())
+      assertEquals(android.view.View.VISIBLE, albumRepeatBg.visibility)
+      assertEquals("Repeat All", albumRepeat.contentDescription.toString())
+    }
+  }
 }

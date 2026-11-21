@@ -977,4 +977,229 @@ class CameraEngineTest {
     assertTrue(manualMetering!!.left >= 0 && manualMetering.right <= 4000)
     assertTrue(manualMetering.top >= 0 && manualMetering.bottom <= 3000)
   }
+
+  @Test
+  fun stickyAutofocus_resistsTransientDistractors_andTracesGentleVelocityAwareTrajectory() {
+    // 1. Acquire initial focus on a subject on the left side of the frame (center ~ 0.32, 0.45)
+    val subjectA = RawDetectedObjectForFocus(
+      boundingBox = CameraVisionBoundingBox(0.16f, 0.29f, 0.48f, 0.61f),
+      trackingId = 101,
+      label = "Coffee cup",
+      confidence = 0.88f,
+    )
+    val initialLock = CameraEngine.selectSmartAutofocusTargetFromObjects(
+      objects = listOf(subjectA),
+      previousTarget = null,
+      timestampMs = 1000L,
+    )
+    assertNotNull(initialLock)
+    assertEquals(0.32f, initialLock!!.normX, 0.01f)
+    assertEquals(0.45f, initialLock.normY, 0.01f)
+
+    // 2. Sticky hysteresis: a competing object pops in on the right side with slightly higher confidence
+    // while subjectA is still present. Sticky autofocus stays locked on subjectA instead of jumping.
+    val transientDistractor = RawDetectedObjectForFocus(
+      boundingBox = CameraVisionBoundingBox(0.48f, 0.32f, 0.84f, 0.68f),
+      trackingId = 202,
+      label = "Laptop",
+      confidence = 0.94f,
+    )
+    val afterDistractor = CameraEngine.selectSmartAutofocusTargetFromObjects(
+      objects = listOf(subjectA, transientDistractor),
+      previousTarget = initialLock,
+      timestampMs = 1350L,
+    )
+    assertNotNull(afterDistractor)
+    assertEquals(101, afterDistractor!!.trackingId)
+    assertEquals("Coffee cup", afterDistractor.categoryLabel)
+    assertEquals(0.32f, afterDistractor.normX, 0.015f)
+    assertEquals(0.45f, afterDistractor.normY, 0.015f)
+
+    // 3. Transient 1-frame detection dropout: when objects list is momentarily empty,
+    // autofocus holds its position rather than resetting to null.
+    val afterDropout = CameraEngine.selectSmartAutofocusTargetFromObjects(
+      objects = emptyList(),
+      previousTarget = afterDistractor,
+      timestampMs = 1700L,
+    )
+    assertNotNull(afterDropout)
+    assertEquals(1, afterDropout!!.missedDetectionFrames)
+    assertEquals(afterDistractor.normX, afterDropout.normX, 0.01f)
+
+    // 4. Gentle trajectory when transitioning to a new target: when subjectA leaves the scene and only
+    // a new subject at (0.76, 0.72) remains, autofocus does NOT teleport there in one step.
+    // Instead, it sets targetNormX/Y to (0.76, 0.72) and begins gliding gently along the line toward it.
+    val newDestinationSubject = RawDetectedObjectForFocus(
+      boundingBox = CameraVisionBoundingBox(0.60f, 0.56f, 0.92f, 0.88f),
+      trackingId = 303,
+      label = "Flowerpot",
+      confidence = 0.92f,
+    )
+    val glideStart = CameraEngine.selectSmartAutofocusTargetFromObjects(
+      objects = listOf(newDestinationSubject),
+      previousTarget = afterDistractor,
+      timestampMs = 1750L,
+    )
+    assertNotNull(glideStart)
+    assertEquals(0.76f, glideStart!!.targetNormX, 0.01f)
+    assertEquals(0.72f, glideStart.targetNormY, 0.01f)
+    // Moved only a fraction of the way in the first frame (slower, gentle movement)
+    assertTrue(glideStart.normX > 0.32f && glideStart.normX < 0.52f)
+    assertTrue(glideStart.normY > 0.45f && glideStart.normY < 0.60f)
+    assertTrue(glideStart.velocityX > 0f && glideStart.velocityY > 0f)
+    assertTrue(glideStart.speedNormPerSec <= STICKY_AF_MAX_SPEED_NORM_PER_SEC + 0.001f)
+
+    // Trace the full trajectory from glideStart to its destination and verify smooth monotonic convergence
+    val trajectoryPoints = CameraEngine.sampleAutofocusTrajectoryPoints(
+      target = glideStart,
+      steps = 20,
+      totalDurationSeconds = 1.6f,
+    )
+    assertTrue(trajectoryPoints.size == 21)
+    for (i in 1 until trajectoryPoints.size) {
+      val prev = trajectoryPoints[i - 1]
+      val curr = trajectoryPoints[i]
+      // Monotonically advances along the gentle line toward (0.76, 0.72) without overshoot
+      assertTrue(curr.first >= prev.first - 1e-4f && curr.first <= 0.76f + 1e-3f)
+      assertTrue(curr.second >= prev.second - 1e-4f && curr.second <= 0.72f + 1e-3f)
+    }
+    val finalPoint = trajectoryPoints.last()
+    assertEquals(0.76f, finalPoint.first, 0.03f)
+    assertEquals(0.72f, finalPoint.second, 0.03f)
+
+    // 5. Velocity & trajectory continuity on mid-flight target change:
+    // Start at (0.40, 0.50) moving right with velocity (+0.32, 0.0), and redirect desired target straight down to (0.40, 0.82).
+    // Because of velocity inertia, the next step continues forward in +X while curving downward in +Y.
+    val movingRightTarget = CameraSmartFocusTarget(
+      normX = 0.40f,
+      normY = 0.50f,
+      targetNormX = 0.80f,
+      targetNormY = 0.50f,
+      velocityX = 0.32f,
+      velocityY = 0.0f,
+      timestampMs = 2000L,
+    )
+    val curvedStep = CameraEngine.stepStickyAutofocusTrajectory(
+      currentTarget = movingRightTarget,
+      desiredX = 0.40f,
+      desiredY = 0.82f,
+      dtSeconds = 0.08f,
+      timestampMs = 2080L,
+    )
+    assertTrue(curvedStep.normX > 0.405f) // Carried rightward by existing velocity trajectory
+    assertTrue(curvedStep.normY > 0.502f) // Smoothly steering downward toward new desired target
+    assertTrue(curvedStep.velocityX > 0f && curvedStep.velocityX < 0.32f)
+    assertTrue(curvedStep.velocityY > 0f)
+  }
+
+  @Test
+  fun visionBoundingBoxes_withSameLabels_smoothlyMoveAndResizeIntoNewDetections() {
+    val previousTags = listOf(
+      CameraVisionTag(
+        label = "Plant",
+        confidence = 0.95f,
+        index = 284,
+        boundingBox = CameraVisionBoundingBox(0.10f, 0.12f, 0.50f, 0.52f),
+      ),
+      CameraVisionTag(
+        label = "Flowerpot",
+        confidence = 0.88f,
+        index = 148,
+        boundingBox = CameraVisionBoundingBox(0.20f, 0.56f, 0.60f, 0.86f),
+      ),
+    )
+
+    // Next detection: "Plant" moves right/down and grows wider/taller; "Flowerpot" moves and shrinks;
+    // "Leaf" is a brand-new label that was not in the previous detection.
+    val nextTags = listOf(
+      CameraVisionTag(
+        label = "Flowerpot",
+        confidence = 0.94f,
+        index = 148,
+        boundingBox = CameraVisionBoundingBox(0.36f, 0.60f, 0.68f, 0.84f),
+      ),
+      CameraVisionTag(
+        label = "Plant",
+        confidence = 0.91f,
+        index = 284,
+        boundingBox = CameraVisionBoundingBox(0.26f, 0.20f, 0.78f, 0.72f),
+      ),
+      CameraVisionTag(
+        label = "Leaf",
+        confidence = 0.86f,
+        index = 211,
+        boundingBox = CameraVisionBoundingBox(0.30f, 0.24f, 0.62f, 0.48f),
+      ),
+    )
+
+    assertTrue(CameraEngine.hasMatchingVisionTagLabels(previousTags, nextTags))
+    assertFalse(
+      CameraEngine.hasMatchingVisionTagLabels(
+        previousTags,
+        listOf(CameraVisionTag("Laptop", 0.95f)),
+      )
+    )
+
+    // At fraction = 0.0f, same-label boxes start at their previous detection's position and size,
+    // while the new "Leaf" box starts immediately at its target position and size.
+    val atStart = CameraEngine.interpolateVisionTags(
+      previousTags = previousTags,
+      targetTags = nextTags,
+      fraction = 0.0f,
+    )
+    val startPlantBox = atStart.first { it.label == "Plant" }.boundingBox!!
+    val startPotBox = atStart.first { it.label == "Flowerpot" }.boundingBox!!
+    val startLeafBox = atStart.first { it.label == "Leaf" }.boundingBox!!
+    assertEquals(0.10f, startPlantBox.left, 0.001f)
+    assertEquals(0.12f, startPlantBox.top, 0.001f)
+    assertEquals(0.50f, startPlantBox.right, 0.001f)
+    assertEquals(0.52f, startPlantBox.bottom, 0.001f)
+    assertEquals(0.20f, startPotBox.left, 0.001f)
+    assertEquals(0.60f, startPotBox.right, 0.001f)
+    assertEquals(0.30f, startLeafBox.left, 0.001f)
+    assertEquals(0.62f, startLeafBox.right, 0.001f)
+
+    // At fraction = 0.5f, "Plant" and "Flowerpot" have smoothly moved and resized halfway to their new boxes
+    val atMid = CameraEngine.interpolateVisionTags(
+      previousTags = previousTags,
+      targetTags = nextTags,
+      fraction = 0.5f,
+    )
+    val midPlantBox = atMid.first { it.label == "Plant" }.boundingBox!!
+    assertEquals(0.18f, midPlantBox.left, 0.001f)
+    assertEquals(0.16f, midPlantBox.top, 0.001f)
+    assertEquals(0.64f, midPlantBox.right, 0.001f)
+    assertEquals(0.62f, midPlantBox.bottom, 0.001f)
+    assertEquals(0.46f, midPlantBox.width, 0.001f) // Resized halfway between width 0.40 and width 0.52
+    assertEquals(0.46f, midPlantBox.height, 0.001f) // Resized halfway between height 0.40 and height 0.52
+
+    // At fraction = 1.0f, all boxes have arrived at their new detection bounds
+    val atEnd = CameraEngine.interpolateVisionTags(
+      previousTags = previousTags,
+      targetTags = nextTags,
+      fraction = 1.0f,
+    )
+    val endPlantBox = atEnd.first { it.label == "Plant" }.boundingBox!!
+    assertEquals(0.26f, endPlantBox.left, 0.001f)
+    assertEquals(0.20f, endPlantBox.top, 0.001f)
+    assertEquals(0.78f, endPlantBox.right, 0.001f)
+    assertEquals(0.72f, endPlantBox.bottom, 0.001f)
+
+    // Color indices remain stable for same-label boxes even when rank order swaps between detections
+    val initialColors = CameraEngine.resolveStableVisionTagColorIndices(
+      previousTags = emptyList(),
+      currentTags = previousTags,
+    )
+    assertEquals(0, initialColors["plant"])
+    assertEquals(1, initialColors["flowerpot"])
+
+    val updatedColors = CameraEngine.resolveStableVisionTagColorIndices(
+      previousTags = previousTags,
+      currentTags = nextTags,
+      previousColorIndices = initialColors,
+    )
+    assertEquals(0, updatedColors["plant"])
+    assertEquals(1, updatedColors["flowerpot"])
+    assertEquals(2, updatedColors["leaf"])
+  }
 }

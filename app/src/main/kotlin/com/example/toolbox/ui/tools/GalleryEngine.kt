@@ -70,14 +70,14 @@ const val DEFAULT_PHOTO_ZOOM = 1f
 const val MAX_PHOTO_ZOOM = 5f
 
 const val DEFAULT_VIDEO_PREVIEW_PLAY_DURATION_MS = 4_500L
-const val DEFAULT_VIDEO_PREVIEW_CYCLE_PAUSE_DURATION_MS = 7_000L
+const val DEFAULT_VIDEO_PREVIEW_CYCLE_PAUSE_DURATION_MS = 3_000L
 const val DEFAULT_VIDEO_PREVIEW_SCROLL_OUT_COOLDOWN_MS = 2_500L
 
 /**
  * Playback phases for inline muted video previews while browsing/scrolling the Gallery:
  * - [IDLE]: No videos currently in view or inline preview disabled.
  * - [PLAYING]: Playing a muted preview of the current active video in view (for 3–6s).
- * - [CYCLE_PAUSE]: All videos currently in view have finished their preview; pausing (for 6–8s)
+ * - [CYCLE_PAUSE]: All videos currently in view have finished their preview; pausing (for 3s)
  *   before starting again with the first video in view.
  * - [SCROLL_COOLDOWN]: The video that was playing was scrolled out of view; pausing (for 2–3s
  *   after the user stops scrolling) before starting again with the first video currently in view.
@@ -710,7 +710,7 @@ object GalleryEngine {
    * - Marks the video as played in [GalleryVideoPreviewState.playedInCurrentCycle].
    * - Moves on to the next unplayed video in [visibleVideoPaths].
    * - If all videos in [visibleVideoPaths] have been played, pauses and transitions to
-   *   [GalleryVideoPreviewPhase.CYCLE_PAUSE] (6–8s).
+   *   [GalleryVideoPreviewPhase.CYCLE_PAUSE] (3s).
    */
   fun onActiveVideoPreviewCompleted(
     state: GalleryVideoPreviewState,
@@ -746,7 +746,7 @@ object GalleryEngine {
 
   /**
    * Resumes preview playback from the first video currently in [visibleVideoPaths] after either
-   * [GalleryVideoPreviewPhase.CYCLE_PAUSE] (6–8s) or [GalleryVideoPreviewPhase.SCROLL_COOLDOWN]
+   * [GalleryVideoPreviewPhase.CYCLE_PAUSE] (3s) or [GalleryVideoPreviewPhase.SCROLL_COOLDOWN]
    * (2–3s after scrolling stops) completes.
    */
   fun onPreviewPauseOrCooldownCompleted(
@@ -763,6 +763,139 @@ object GalleryEngine {
       )
     } else {
       GalleryVideoPreviewState()
+    }
+  }
+
+  /**
+   * Resolves the effective display dimensions `(width, height)` of a video frame after applying
+   * container rotation metadata ([rotationDegrees]), or falling back to the oriented thumbnail
+   * dimensions when rotation metadata is unavailable (`rotationDegrees == 0`) and the decoded
+   * frame vs. thumbnail orientations are transposed (e.g. a portrait video recorded with a 90°/270°
+   * container rotation matrix where `MediaPlayer.getVideoWidth()` returns the unrotated landscape buffer width).
+   */
+  fun resolveVideoDisplayDimensions(
+    rawVideoWidth: Int,
+    rawVideoHeight: Int,
+    rotationDegrees: Int = 0,
+    thumbnailWidth: Int = 0,
+    thumbnailHeight: Int = 0,
+  ): Pair<Int, Int> {
+    if (rawVideoWidth <= 0 || rawVideoHeight <= 0) {
+      return if (thumbnailWidth > 0 && thumbnailHeight > 0) {
+        thumbnailWidth to thumbnailHeight
+      } else {
+        0 to 0
+      }
+    }
+    val normRotation = ((rotationDegrees % 360) + 360) % 360
+    if (normRotation == 90 || normRotation == 270) {
+      return rawVideoHeight to rawVideoWidth
+    }
+    if (normRotation == 0 && thumbnailWidth > 0 && thumbnailHeight > 0) {
+      val rawIsLandscape = rawVideoWidth > rawVideoHeight
+      val rawIsPortrait = rawVideoHeight > rawVideoWidth
+      val thumbIsLandscape = thumbnailWidth > thumbnailHeight
+      val thumbIsPortrait = thumbnailHeight > thumbnailWidth
+      if ((rawIsLandscape && thumbIsPortrait) || (rawIsPortrait && thumbIsLandscape)) {
+        return rawVideoHeight to rawVideoWidth
+      }
+    }
+    return rawVideoWidth to rawVideoHeight
+  }
+
+  /**
+   * Computes the center-crop `(widthPx, heightPx)` dimensions for a video surface of display
+   * dimensions [displayVideoWidth] × [displayVideoHeight] inside a container of
+   * [containerWidthPx] × [containerHeightPx], preserving the video's native aspect ratio without
+   * stretching.
+   */
+  fun calculateVideoCenterCropSizePx(
+    containerWidthPx: Float,
+    containerHeightPx: Float,
+    displayVideoWidth: Int,
+    displayVideoHeight: Int,
+  ): Pair<Float, Float> {
+    if (containerWidthPx <= 0f || containerHeightPx <= 0f) {
+      return 120f to 120f
+    }
+    val videoAspect = if (displayVideoWidth > 0 && displayVideoHeight > 0) {
+      displayVideoWidth.toFloat() / displayVideoHeight.toFloat()
+    } else {
+      containerWidthPx / containerHeightPx
+    }
+    val containerAspect = containerWidthPx / containerHeightPx
+    return if (containerAspect > videoAspect) {
+      containerWidthPx to (containerWidthPx / videoAspect)
+    } else {
+      (containerHeightPx * videoAspect) to containerHeightPx
+    }
+  }
+
+  /**
+   * Computes the `(scaleX, scaleY)` factors required around the center of a [TextureView] of size
+   * [viewWidth] × [viewHeight] so that a video of display dimensions [displayVideoWidth] ×
+   * [displayVideoHeight] is center-cropped to fill the view while preserving its true aspect ratio
+   * (counteracting [TextureView]'s default behavior of stretching the video buffer to the view's bounds).
+   */
+  fun calculateVideoTextureCenterCropScale(
+    viewWidth: Int,
+    viewHeight: Int,
+    displayVideoWidth: Int,
+    displayVideoHeight: Int,
+  ): Pair<Float, Float> {
+    if (viewWidth <= 0 || viewHeight <= 0 || displayVideoWidth <= 0 || displayVideoHeight <= 0) {
+      return 1f to 1f
+    }
+    val videoAspect = displayVideoWidth.toFloat() / displayVideoHeight.toFloat()
+    val viewAspect = viewWidth.toFloat() / viewHeight.toFloat()
+    return if (videoAspect > viewAspect) {
+      (videoAspect / viewAspect) to 1f
+    } else {
+      1f to (viewAspect / videoAspect)
+    }
+  }
+
+  /**
+   * Builds an [android.graphics.Matrix] for `TextureView.setTransform(matrix)` that center-crops
+   * a video of display dimensions [displayVideoWidth] × [displayVideoHeight] inside a [TextureView]
+   * of size [viewWidth] × [viewHeight] without aspect-ratio stretching.
+   */
+  fun buildVideoTextureCenterCropMatrix(
+    viewWidth: Int,
+    viewHeight: Int,
+    displayVideoWidth: Int,
+    displayVideoHeight: Int,
+  ): Matrix {
+    val matrix = Matrix()
+    val (scaleX, scaleY) = calculateVideoTextureCenterCropScale(
+      viewWidth = viewWidth,
+      viewHeight = viewHeight,
+      displayVideoWidth = displayVideoWidth,
+      displayVideoHeight = displayVideoHeight,
+    )
+    if (viewWidth > 0 && viewHeight > 0 && (scaleX != 1f || scaleY != 1f)) {
+      matrix.setScale(scaleX, scaleY, viewWidth / 2f, viewHeight / 2f)
+    }
+    return matrix
+  }
+
+  /**
+   * Extracts the video container rotation metadata in degrees (`0`, `90`, `180`, or `270`) from [file],
+   * or `0` if unavailable.
+   */
+  fun extractVideoRotationDegrees(file: File): Int {
+    if (!file.exists() || !file.isFile) return 0
+    val retriever = MediaMetadataRetriever()
+    return try {
+      retriever.setDataSource(file.absolutePath)
+      val rot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+      ((rot % 360) + 360) % 360
+    } catch (_: Throwable) {
+      0
+    } finally {
+      try {
+        retriever.release()
+      } catch (_: Throwable) {}
     }
   }
 

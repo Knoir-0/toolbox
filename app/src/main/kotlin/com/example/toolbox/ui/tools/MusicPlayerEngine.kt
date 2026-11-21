@@ -7177,6 +7177,7 @@ object MusicPlayerEngine {
       return
     }
     externalSystemMediaInfo = info
+    MusicPlayerWidgets.updateAllWidgets(monitoredAppContext)
   }
 
   /**
@@ -7287,6 +7288,7 @@ object MusicPlayerEngine {
     externalMediaSetFromSystemSync = fromSystemSync
     if (externalSystemMediaInfo != info) {
       externalSystemMediaInfo = info
+      MusicPlayerWidgets.updateAllWidgets(monitoredAppContext)
     }
     return info
   }
@@ -8536,8 +8538,10 @@ object MusicPlayerEngine {
         positionMs = frozenPos,
         positionUpdateElapsedRealtimeMs = nowElapsed,
       )
+      MusicPlayerWidgets.updateAllWidgets(context ?: monitoredAppContext)
       return true
     }
+    MusicPlayerWidgets.updateAllWidgets(context ?: monitoredAppContext)
     return dispatched
   }
 
@@ -10181,6 +10185,8 @@ class MusicPlaybackSession(
     persistFavoritesInBackground(PREF_KEY_MUSIC_FAVORITES, next, separator = "|")
     if (currentTrack?.id == trackId) {
       syncSystemMediaControls(forceMetadataUpdate = false)
+    } else if (!isInspection && appContext != null) {
+      MusicPlayerWidgets.updateAllWidgets(appContext)
     }
     val trackSkipCount = max(
       viewPlayStats[trackId]?.skipCount ?: 0,
@@ -11679,6 +11685,11 @@ class MusicPlaybackSession(
               currentPositionMs = nextPos
             }
           }
+          if (ticksSinceFlush % 5 == 0 && appContext != null && !isInspection) {
+            val safeDur = trackDurationMs.coerceAtLeast(1L)
+            val permille = ((currentPositionMs.toFloat() / safeDur.toFloat()) * 1000f).roundToInt().coerceIn(0, 1000)
+            MusicPlayerWidgets.updateMiniBarProgressOnly(appContext, permille)
+          }
         }
       }
     }
@@ -12471,15 +12482,25 @@ class MusicPlaybackSession(
         true
       }
       MusicPlayerEngine.ACTION_MEDIA_NEXT -> {
+        if (playbackQueue.isEmpty() && allTracks.isNotEmpty()) {
+          unshuffledQueue = allTracks
+          playbackQueue = allTracks
+          currentQueueIndex = 0
+        }
         skipToNext(userInitiated = true)
         true
       }
       MusicPlayerEngine.ACTION_MEDIA_PREVIOUS -> {
+        if (playbackQueue.isEmpty() && allTracks.isNotEmpty()) {
+          unshuffledQueue = allTracks
+          playbackQueue = allTracks
+          currentQueueIndex = 0
+        }
         skipToPrevious()
         true
       }
       MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE -> {
-        val active = currentTrack ?: return false
+        val active = currentTrack ?: allTracks.firstOrNull() ?: return false
         toggleFavorite(active.id)
         true
       }
@@ -12936,9 +12957,11 @@ class MusicPlaybackSession(
       mediaControlSyncJob?.cancel()
       mediaControlSyncJob = scope.launch(ioCoroutineContext) {
         applyPlatformSync()
+        MusicPlayerWidgets.updateAllWidgets(appContext)
       }
     } else {
       applyPlatformSync()
+      MusicPlayerWidgets.updateAllWidgets(appContext)
     }
   }
 
@@ -13202,13 +13225,13 @@ data class SystemMediaPlayingInfo(
 )
 
 /**
- * BroadcastReceiver that routes system media notification transport actions to the active
- * [MusicPlaybackSession].
+ * BroadcastReceiver that routes system media notification and Home Screen AppWidget transport
+ * actions to the active [MusicPlaybackSession] (or external Android system media session).
  */
 class MusicMediaControlReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context?, intent: Intent?) {
     val action = intent?.action ?: return
-    MusicPlayerEngine.getActivePlaybackSession()?.handleMediaControlAction(action)
+    MusicPlayerWidgets.handleWidgetAction(context, action)
   }
 }
 

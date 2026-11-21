@@ -2586,4 +2586,183 @@ class MusicPlayerEngineTest {
       MusicPlayerEngine.resetPlaybackSession()
     }
   }
+
+  @Test
+  fun musicPlayerWidgets_resolveWidgetStateAndHandleWidgetActions_forMiniBarAndAlbumArtWidgets() {
+    MusicPlayerEngine.resetPlaybackSession()
+    val tracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS
+    val session = MusicPlaybackSession(context = null, initialTracks = tracks)
+    MusicPlayerEngine.activeSessionState = session
+    try {
+      // 1. Initial idle state defaults to first library track, paused, not favorited, shuffle off, repeat off
+      val initialState = MusicPlayerWidgets.resolveWidgetState(
+        context = null,
+        session = session,
+        externalMedia = null,
+        decodeArtwork = false,
+      )
+      assertEquals(tracks[0].id, initialState.trackId)
+      assertEquals(tracks[0].title, initialState.title)
+      assertEquals(tracks[0].artist, initialState.artist)
+      assertEquals(tracks[0].album, initialState.album)
+      assertEquals("${tracks[0].artist} • ${tracks[0].album}", initialState.miniBarSubtitle)
+      assertFalse(initialState.isPlaying)
+      assertFalse(initialState.isFavorite)
+      assertFalse(initialState.isExternalMedia)
+      assertEquals(0, initialState.progressPermille)
+      assertEquals(com.example.toolbox.R.drawable.ic_media_play, initialState.playPauseIconRes)
+      assertEquals("Play", initialState.playPauseContentDescription)
+      assertEquals(com.example.toolbox.R.drawable.ic_media_favorite_off, initialState.favoriteIconRes)
+      assertEquals(com.example.toolbox.R.drawable.ic_media_shuffle_off, initialState.shuffleIconRes)
+      assertFalse(initialState.isShuffleHighlighted)
+      assertEquals(com.example.toolbox.R.drawable.ic_media_repeat_off, initialState.repeatIconRes)
+      assertFalse(initialState.isRepeatHighlighted)
+
+      // 2. Play action starts playback and updates play/pause icon & progress bar
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_PLAY_PAUSE))
+      session.seekToPositionMs(tracks[0].durationMs / 2L)
+      val playingState = MusicPlayerWidgets.resolveWidgetState(
+        context = null,
+        session = session,
+        externalMedia = null,
+        decodeArtwork = false,
+      )
+      assertTrue(playingState.isPlaying)
+      assertEquals(com.example.toolbox.R.drawable.ic_media_pause, playingState.playPauseIconRes)
+      assertEquals("Pause", playingState.playPauseContentDescription)
+      assertEquals(500, playingState.progressPermille)
+
+      // 3. Favorite Star toggle action updates favorite state, icon, and accent tint for both widgets
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_TOGGLE_FAVORITE))
+      val favState = MusicPlayerWidgets.resolveWidgetState(
+        context = null,
+        session = session,
+        externalMedia = null,
+        decodeArtwork = false,
+      )
+      assertTrue(favState.isFavorite)
+      assertEquals(com.example.toolbox.R.drawable.ic_media_favorite_on, favState.favoriteIconRes)
+      assertEquals("Unfavorite", favState.favoriteContentDescription)
+      val expectedAccentArgb = MusicPlayerWidgets.colorToArgb(favState.palette.accentColor)
+      assertEquals(expectedAccentArgb, favState.miniFavoriteTintArgb)
+      assertEquals(expectedAccentArgb, favState.albumOverlayFavoriteTintArgb)
+
+      // 4. Full 5 playback controls on the Album Art widget: Shuffle cycles OFF -> SHUFFLE -> SMART_SHUFFLE -> OFF
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE))
+      val shuffleOnState = MusicPlayerWidgets.resolveWidgetState(
+        context = null,
+        session = session,
+        externalMedia = null,
+        decodeArtwork = false,
+      )
+      assertEquals(MusicShuffleMode.SHUFFLE, shuffleOnState.shuffleMode)
+      assertTrue(shuffleOnState.isShuffleHighlighted)
+      assertEquals(com.example.toolbox.R.drawable.ic_media_shuffle_on, shuffleOnState.shuffleIconRes)
+
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE))
+      val smartShuffleState = MusicPlayerWidgets.resolveWidgetState(
+        context = null,
+        session = session,
+        externalMedia = null,
+        decodeArtwork = false,
+      )
+      assertEquals(MusicShuffleMode.SMART_SHUFFLE, smartShuffleState.shuffleMode)
+      assertTrue(smartShuffleState.isShuffleHighlighted)
+      assertEquals(com.example.toolbox.R.drawable.ic_media_shuffle_smart, smartShuffleState.shuffleIconRes)
+
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_CYCLE_SHUFFLE))
+      val shuffleOffState = MusicPlayerWidgets.resolveWidgetState(
+        context = null,
+        session = session,
+        externalMedia = null,
+        decodeArtwork = false,
+      )
+      assertEquals(MusicShuffleMode.OFF, shuffleOffState.shuffleMode)
+      assertFalse(shuffleOffState.isShuffleHighlighted)
+      assertEquals(com.example.toolbox.R.drawable.ic_media_shuffle_off, shuffleOffState.shuffleIconRes)
+
+      // 5. Repeat cycles OFF -> REPEAT_ALL -> REPEAT_ONE -> OFF
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT))
+      val repeatAllState = MusicPlayerWidgets.resolveWidgetState(
+        context = null,
+        session = session,
+        externalMedia = null,
+        decodeArtwork = false,
+      )
+      assertEquals(MusicRepeatMode.REPEAT_ALL, repeatAllState.repeatMode)
+      assertTrue(repeatAllState.isRepeatHighlighted)
+      assertEquals(com.example.toolbox.R.drawable.ic_media_repeat_all, repeatAllState.repeatIconRes)
+
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT))
+      val repeatOneState = MusicPlayerWidgets.resolveWidgetState(
+        context = null,
+        session = session,
+        externalMedia = null,
+        decodeArtwork = false,
+      )
+      assertEquals(MusicRepeatMode.REPEAT_ONE, repeatOneState.repeatMode)
+      assertTrue(repeatOneState.isRepeatHighlighted)
+      assertEquals(com.example.toolbox.R.drawable.ic_media_repeat_one, repeatOneState.repeatIconRes)
+
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_CYCLE_REPEAT))
+      val repeatOffState = MusicPlayerWidgets.resolveWidgetState(
+        context = null,
+        session = session,
+        externalMedia = null,
+        decodeArtwork = false,
+      )
+      assertEquals(MusicRepeatMode.OFF, repeatOffState.repeatMode)
+      assertFalse(repeatOffState.isRepeatHighlighted)
+      assertEquals(com.example.toolbox.R.drawable.ic_media_repeat_off, repeatOffState.repeatIconRes)
+
+      // 6. Next & Previous track actions advance and step back in queue
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_NEXT))
+      val nextTrackState = MusicPlayerWidgets.resolveWidgetState(
+        context = null,
+        session = session,
+        externalMedia = null,
+        decodeArtwork = false,
+      )
+      assertEquals(tracks[1].id, nextTrackState.trackId)
+      assertEquals(tracks[1].title, nextTrackState.title)
+
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_PREVIOUS))
+      val prevTrackState = MusicPlayerWidgets.resolveWidgetState(
+        context = null,
+        session = session,
+        externalMedia = null,
+        decodeArtwork = false,
+      )
+      assertEquals(tracks[0].id, prevTrackState.trackId)
+
+      // 7. When internal session is paused and an external Android media player is active, widgets reflect external media
+      assertTrue(session.handleMediaControlAction(MusicPlayerEngine.ACTION_MEDIA_PAUSE))
+      val externalInfo = MusicPlayerEngine.updateExternalSystemMediaFromMetadata(
+        title = "Digital Love",
+        artist = "Daft Punk",
+        album = "Discovery",
+        sourcePackage = "com.spotify.music",
+        sourceAppName = "Spotify",
+        isPlaying = true,
+        durationMs = 200_000L,
+        positionMs = 50_000L,
+      )
+      val externalWidgetState = MusicPlayerWidgets.resolveWidgetState(
+        context = null,
+        session = session,
+        externalMedia = externalInfo,
+        decodeArtwork = false,
+      )
+      assertTrue(externalWidgetState.isExternalMedia)
+      assertTrue(externalWidgetState.isPlaying)
+      assertEquals("Digital Love", externalWidgetState.title)
+      assertEquals("Daft Punk", externalWidgetState.artist)
+      assertEquals("Discovery", externalWidgetState.album)
+      assertEquals("Daft Punk • Discovery • Spotify", externalWidgetState.miniBarSubtitle)
+      assertTrue(externalWidgetState.progressPermille in 240..300)
+    } finally {
+      session.release()
+      MusicPlayerEngine.resetPlaybackSession()
+    }
+  }
 }

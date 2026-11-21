@@ -169,6 +169,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -204,6 +205,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -307,6 +311,7 @@ fun GalleryScreen(
   videoPreviewPlayDurationMs: Long = DEFAULT_VIDEO_PREVIEW_PLAY_DURATION_MS,
   videoPreviewCyclePauseDurationMs: Long = DEFAULT_VIDEO_PREVIEW_CYCLE_PAUSE_DURATION_MS,
   videoPreviewScrollCooldownMs: Long = DEFAULT_VIDEO_PREVIEW_SCROLL_OUT_COOLDOWN_MS,
+  onRefresh: (() -> Unit)? = null,
   onNavigateBack: (() -> Unit)? = null,
   onOpenImage: ((File) -> Unit)? = null,
   onOpenImageEditor: ((File) -> Unit)? = null,
@@ -332,6 +337,11 @@ fun GalleryScreen(
   }
 
   var refreshTrigger by remember { mutableIntStateOf(0) }
+  val density = LocalDensity.current
+  val pullThresholdPx = with(density) { 44.dp.toPx() }
+  var lastRefreshTimeMs by remember { mutableLongStateOf(0L) }
+  var accumulatedPullPx by remember { mutableFloatStateOf(0f) }
+  val currentOnRefresh by rememberUpdatedState(onRefresh)
 
   val storagePermissionSettingGranted = NavigationPreferencesBridge.isPermissionGranted(
     com.example.toolbox.ui.main.AppPermission.STORAGE
@@ -1829,12 +1839,77 @@ fun GalleryScreen(
         systemInDarkTheme = LocalIsDarkTheme.current,
       )
 
+      fun triggerPullRefresh() {
+        val now = System.currentTimeMillis()
+        if (now - lastRefreshTimeMs >= 120L) {
+          lastRefreshTimeMs = now
+          if (!isInspection) {
+            systemHasFullFilesPermission = FileManagerEngine.hasStoragePermission(context)
+          }
+          if (sortOrder == GallerySortOrder.RANDOM) {
+            val nextSeed = System.currentTimeMillis() + randomSortSeed + 1L
+            randomSortSeed = if (nextSeed != 0L) nextSeed else 1L
+          }
+          refreshTrigger++
+          if (albumStack.isNotEmpty()) {
+            for (i in albumStack.indices) {
+              val existing = albumStack[i]
+              val rebuilt = if (existing.directories.size > 1) {
+                GalleryEngine.buildMergedAlbum(
+                  directories = existing.directories,
+                  bypassNoMedia = existing.bypassNoMedia,
+                ).copy(name = existing.name)
+              } else {
+                GalleryEngine.buildAlbum(
+                  directory = existing.directory,
+                  bypassNoMedia = existing.bypassNoMedia,
+                ).copy(name = existing.name)
+              }
+              albumStack[i] = rebuilt
+            }
+          }
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          currentOnRefresh?.invoke()
+        }
+      }
+
+      val pullNestedScrollConnection = remember(pullThresholdPx) {
+        object : NestedScrollConnection {
+          override fun onPostScroll(
+            consumed: Offset,
+            available: Offset,
+            source: NestedScrollSource,
+          ): Offset {
+            if (source == NestedScrollSource.UserInput && available.y > 0f) {
+              accumulatedPullPx += available.y
+            } else if (consumed.y < 0f) {
+              accumulatedPullPx = 0f
+            }
+            return Offset.Zero
+          }
+
+          override suspend fun onPreFling(available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
+            if (accumulatedPullPx >= pullThresholdPx) {
+              accumulatedPullPx = 0f
+              triggerPullRefresh()
+            } else {
+              accumulatedPullPx = 0f
+            }
+            return androidx.compose.ui.unit.Velocity.Zero
+          }
+        }
+      }
+
       // Main Content Area (Tile View with pinch-to-zoom 2..5 per row <-> List View, or Scoped Storage Permission / Locked View)
-      Box(
+      PullToRefreshBox(
+        isRefreshing = false,
+        onRefresh = { triggerPullRefresh() },
         modifier = Modifier
           .weight(1f)
           .fillMaxWidth()
           .background(contentBackgroundColor)
+          .nestedScroll(pullNestedScrollConnection)
+          .testTag("gallery_pull_to_refresh")
           .testTag("gallery_content_container")
           .pinchToChangeColumns(
             enabled = true,
@@ -3444,6 +3519,7 @@ private fun GallerySearchEmptyStateView(
   Column(
     modifier = Modifier
       .fillMaxSize()
+      .verticalScroll(rememberScrollState())
       .padding(24.dp)
       .testTag("gallery_search_empty_state"),
     horizontalAlignment = Alignment.CenterHorizontally,
@@ -3542,7 +3618,7 @@ internal fun rememberGalleryVideoPreviewPath(
     )
   }
 
-  // Pause for cyclePauseDurationMs (6-8s) once all videos in view have played, then restart with the first
+  // Pause for cyclePauseDurationMs (3s) once all videos in view have played, then restart with the first
   LaunchedEffect(enabled, previewState.phase, cyclePauseDurationMs, scopeKey) {
     if (!enabled || previewState.phase != GalleryVideoPreviewPhase.CYCLE_PAUSE) return@LaunchedEffect
 
@@ -5057,13 +5133,24 @@ internal fun PhotoThumbnailBox(
 
     if (isPlayingVideoPreview && isVideoFile) {
       var mediaPlayerRef by remember(filePath, fileLastMod) { mutableStateOf<MediaPlayer?>(null) }
+      var textureViewRef by remember(filePath, fileLastMod) { mutableStateOf<TextureView?>(null) }
       var isPlayerPrepared by remember(filePath, fileLastMod) { mutableStateOf(false) }
       var videoWidth by remember(filePath, fileLastMod) { mutableIntStateOf(0) }
       var videoHeight by remember(filePath, fileLastMod) { mutableIntStateOf(0) }
+      var videoRotationDegrees by remember(filePath, fileLastMod) { mutableIntStateOf(0) }
+
+      LaunchedEffect(filePath, fileLastMod, isInspectionMode) {
+        if (!isInspectionMode && photoFile.exists()) {
+          videoRotationDegrees = withContext(Dispatchers.IO) {
+            GalleryEngine.extractVideoRotationDegrees(photoFile)
+          }
+        }
+      }
 
       DisposableEffect(filePath, fileLastMod) {
         onDispose {
           isPlayerPrepared = false
+          textureViewRef = null
           mediaPlayerRef?.let { mp ->
             try {
               mp.stop()
@@ -5073,6 +5160,40 @@ internal fun PhotoThumbnailBox(
             } catch (_: Throwable) {}
           }
           mediaPlayerRef = null
+        }
+      }
+
+      val currentThumb = bitmap
+      val (displayVideoWidth, displayVideoHeight) = GalleryEngine.resolveVideoDisplayDimensions(
+        rawVideoWidth = videoWidth,
+        rawVideoHeight = videoHeight,
+        rotationDegrees = videoRotationDegrees,
+        thumbnailWidth = currentThumb?.width ?: 0,
+        thumbnailHeight = currentThumb?.height ?: 0,
+      )
+
+      fun applyCenterCropTransform(
+        tv: TextureView,
+        dispW: Int = displayVideoWidth,
+        dispH: Int = displayVideoHeight,
+        viewW: Int = tv.width,
+        viewH: Int = tv.height,
+      ) {
+        if (viewW > 0 && viewH > 0 && dispW > 0 && dispH > 0) {
+          tv.setTransform(
+            GalleryEngine.buildVideoTextureCenterCropMatrix(
+              viewWidth = viewW,
+              viewHeight = viewH,
+              displayVideoWidth = dispW,
+              displayVideoHeight = dispH,
+            )
+          )
+        }
+      }
+
+      LaunchedEffect(textureViewRef, displayVideoWidth, displayVideoHeight) {
+        textureViewRef?.let { tv ->
+          applyCenterCropTransform(tv, displayVideoWidth, displayVideoHeight)
         }
       }
 
@@ -5088,22 +5209,12 @@ internal fun PhotoThumbnailBox(
       ) {
         val availWPx = with(density) { maxWidth.toPx() }
         val availHPx = with(density) { maxHeight.toPx() }
-        val currentThumb = bitmap
-        val videoAspect = when {
-          videoWidth > 0 && videoHeight > 0 -> videoWidth.toFloat() / videoHeight.toFloat()
-          currentThumb != null && currentThumb.width > 0 && currentThumb.height > 0 ->
-            currentThumb.width.toFloat() / currentThumb.height.toFloat()
-          else -> 1f
-        }
-        val (coverWPx, coverHPx) = if (availWPx > 0f && availHPx > 0f) {
-          if (availWPx / availHPx > videoAspect) {
-            availWPx to (availWPx / videoAspect)
-          } else {
-            (availHPx * videoAspect) to availHPx
-          }
-        } else {
-          120f to 120f
-        }
+        val (coverWPx, coverHPx) = GalleryEngine.calculateVideoCenterCropSizePx(
+          containerWidthPx = availWPx,
+          containerHeightPx = availHPx,
+          displayVideoWidth = displayVideoWidth,
+          displayVideoHeight = displayVideoHeight,
+        )
         val coverW = with(density) { coverWPx.toDp() }
         val coverH = with(density) { coverHPx.toDp() }
 
@@ -5113,12 +5224,14 @@ internal fun PhotoThumbnailBox(
               factory = { ctx ->
                 TextureView(ctx).apply {
                   isOpaque = false
+                  textureViewRef = this
                   surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                     override fun onSurfaceTextureAvailable(
                       surfaceTexture: SurfaceTexture,
                       width: Int,
                       height: Int,
                     ) {
+                      applyCenterCropTransform(this@apply, viewW = width, viewH = height)
                       val surface = AndroidSurface(surfaceTexture)
                       val mp = MediaPlayer()
                       try {
@@ -5130,12 +5243,28 @@ internal fun PhotoThumbnailBox(
                           if (w > 0 && h > 0) {
                             videoWidth = w
                             videoHeight = h
+                            val (dw, dh) = GalleryEngine.resolveVideoDisplayDimensions(
+                              rawVideoWidth = w,
+                              rawVideoHeight = h,
+                              rotationDegrees = videoRotationDegrees,
+                              thumbnailWidth = bitmap?.width ?: 0,
+                              thumbnailHeight = bitmap?.height ?: 0,
+                            )
+                            applyCenterCropTransform(this@apply, dw, dh)
                           }
                         }
                         mp.setOnPreparedListener { preparedMp ->
                           if (preparedMp.videoWidth > 0 && preparedMp.videoHeight > 0) {
                             videoWidth = preparedMp.videoWidth
                             videoHeight = preparedMp.videoHeight
+                            val (dw, dh) = GalleryEngine.resolveVideoDisplayDimensions(
+                              rawVideoWidth = preparedMp.videoWidth,
+                              rawVideoHeight = preparedMp.videoHeight,
+                              rotationDegrees = videoRotationDegrees,
+                              thumbnailWidth = bitmap?.width ?: 0,
+                              thumbnailHeight = bitmap?.height ?: 0,
+                            )
+                            applyCenterCropTransform(this@apply, dw, dh)
                           }
                           preparedMp.isLooping = true
                           try {
@@ -5165,7 +5294,9 @@ internal fun PhotoThumbnailBox(
                       surface: SurfaceTexture,
                       width: Int,
                       height: Int,
-                    ) = Unit
+                    ) {
+                      applyCenterCropTransform(this@apply, viewW = width, viewH = height)
+                    }
 
                     override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
                       isPlayerPrepared = false
@@ -5182,6 +5313,10 @@ internal fun PhotoThumbnailBox(
                     override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
                   }
                 }
+              },
+              update = { tv ->
+                textureViewRef = tv
+                applyCenterCropTransform(tv, displayVideoWidth, displayVideoHeight)
               },
               modifier = Modifier
                 .size(coverW, coverH)
@@ -5349,6 +5484,7 @@ private fun EmptyAlbumStateView(
   Column(
     modifier = Modifier
       .fillMaxSize()
+      .verticalScroll(rememberScrollState())
       .padding(24.dp)
       .testTag("gallery_empty_album_state"),
     horizontalAlignment = Alignment.CenterHorizontally,
