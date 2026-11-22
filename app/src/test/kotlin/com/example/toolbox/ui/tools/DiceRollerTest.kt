@@ -106,12 +106,31 @@ class DiceRollerTest {
   }
 
   @Test
-  fun dndSpellCatalog_searchesCommonSpellsAndFormatsNotation() {
-    val allSpells = DndSpellCatalog.searchSpells()
-    assertTrue(allSpells.isNotEmpty())
+  fun dndSpellCatalog_searchesSrdSpellsWeaponsAndAttribution() {
+    val allEntries = DndSpellCatalog.searchSpells()
+    // 339 SRD 5.2.1 spells + 38 SRD 5.2.1 weapons = 377 entries
+    assertEquals(377, allEntries.size)
 
+    // Old non-SRD spells like Toll the Dead must not be present
+    assertTrue(allEntries.none { it.name.equals("Toll the Dead", ignoreCase = true) })
+
+    // Verify first and last alphabetical SRD 5.2.1 spells are present with full descriptions
+    val acidArrow = DndSpellCatalog.searchSpells(query = "Acid Arrow").first()
+    assertEquals("Acid Arrow", acidArrow.name)
+    assertEquals(2, acidArrow.level)
+    assertEquals(DieType.D4, acidArrow.dieType)
+    assertEquals(4, acidArrow.diceCount)
+    assertTrue(acidArrow.description.contains("powdered rhubarb leaf"))
+    assertTrue(acidArrow.description.contains("4d4 Acid damage"))
+
+    val zoneOfTruth = DndSpellCatalog.searchSpells(query = "Zone of Truth").first()
+    assertEquals("Zone of Truth", zoneOfTruth.name)
+    assertEquals(2, zoneOfTruth.level)
+    assertTrue(zoneOfTruth.description.contains("Charisma saving throw"))
+
+    // Verify Fireball is ranked first when searching "Fireball"
     val fireballResults = DndSpellCatalog.searchSpells(query = "Fireball")
-    assertEquals(1, fireballResults.size)
+    assertTrue(fireballResults.isNotEmpty())
     val fireball = fireballResults.first()
     assertEquals("Fireball", fireball.name)
     assertEquals(DieType.D6, fireball.dieType)
@@ -119,8 +138,32 @@ class DiceRollerTest {
     assertEquals(0, fireball.modifier)
     assertEquals("8d6", fireball.notation)
 
+    // Verify Healing spells
     val healingSpells = DndSpellCatalog.searchSpells(category = DndSpellCategory.HEALING)
     assertTrue(healingSpells.any { it.name == "Cure Wounds" })
     assertTrue(healingSpells.all { it.category == DndSpellCategory.HEALING })
+
+    // Verify SRD 5.2.1 Weapons are included and filterable
+    val weapons = DndSpellCatalog.searchSpells(category = DndSpellCategory.WEAPONS)
+    assertEquals(38, weapons.size)
+    assertTrue(weapons.all { it.category == DndSpellCategory.WEAPONS && it.levelLabel == "Weapon" })
+
+    val greatsword = DndSpellCatalog.searchSpells(query = "Greatsword").first()
+    assertEquals("Greatsword", greatsword.name)
+    assertEquals(DndSpellCategory.WEAPONS, greatsword.category)
+    assertEquals(DieType.D6, greatsword.dieType)
+    assertEquals(2, greatsword.diceCount)
+    assertEquals("2d6", greatsword.notation)
+    assertTrue(greatsword.description.contains("Graze"))
+
+    val longsword = DndSpellCatalog.searchSpells(query = "Longsword").first()
+    assertEquals("Longsword", longsword.name)
+    assertEquals("1d8", longsword.notation)
+    assertTrue(longsword.description.contains("Versatile (1d10)"))
+
+    // Verify CC-BY-4.0 attribution text
+    assertTrue(DndSpellCatalog.SRD_ATTRIBUTION_TEXT.contains("System Reference Document 5.2.1"))
+    assertTrue(DndSpellCatalog.SRD_ATTRIBUTION_TEXT.contains("Wizards of the Coast LLC"))
+    assertTrue(DndSpellCatalog.SRD_ATTRIBUTION_TEXT.contains("Creative Commons Attribution 4.0 International License"))
   }
 }

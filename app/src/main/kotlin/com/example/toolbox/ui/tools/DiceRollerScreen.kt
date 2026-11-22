@@ -64,7 +64,9 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Remove
@@ -84,6 +86,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import com.example.toolbox.ui.theme.FilledIconButton
 import androidx.compose.material3.FilledTonalButton
 import com.example.toolbox.ui.theme.FilledTonalIconButton
+import com.example.toolbox.ui.theme.FloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -133,7 +136,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -179,429 +184,6 @@ enum class HistorySortOrder(val label: String) {
   OLDEST_FIRST("Oldest"),
   HIGHEST_TOTAL("Highest"),
   LOWEST_TOTAL("Lowest"),
-}
-
-enum class DndSpellCategory(val displayName: String) {
-  DAMAGE("Damage"),
-  HEALING("Healing"),
-  BUFF_UTILITY("Buff & Utility"),
-}
-
-data class DndSpell(
-  val id: String,
-  val name: String,
-  val level: Int,
-  val school: String,
-  val category: DndSpellCategory,
-  val dieType: DieType,
-  val diceCount: Int,
-  val modifier: Int = 0,
-  val damageType: String,
-  val description: String,
-) {
-  val levelLabel: String
-    get() = when (level) {
-      0 -> "Cantrip"
-      1 -> "1st Level"
-      2 -> "2nd Level"
-      3 -> "3rd Level"
-      else -> "${level}th Level"
-    }
-
-  val notation: String
-    get() {
-      val base = "${diceCount}${dieType.label}"
-      val modSuffix = when {
-        modifier > 0 -> " + $modifier"
-        modifier < 0 -> " - ${-modifier}"
-        else -> ""
-      }
-      return "$base$modSuffix"
-    }
-
-  fun matches(query: String): Boolean {
-    val terms = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
-    if (terms.isEmpty()) return true
-    val haystack =
-      "$name $levelLabel $school ${category.displayName} $notation ${notation.replace(" ", "")} $damageType $description"
-        .lowercase()
-    return terms.all { haystack.contains(it) }
-  }
-}
-
-object DndSpellCatalog {
-  val COMMON_SPELLS: List<DndSpell> = listOf(
-    DndSpell(
-      id = "fireball",
-      name = "Fireball",
-      level = 3,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D6,
-      diceCount = 8,
-      modifier = 0,
-      damageType = "Fire",
-      description = "A bright streak flashes to a point within range and blossoms into a fiery explosion.",
-    ),
-    DndSpell(
-      id = "magic_missile",
-      name = "Magic Missile",
-      level = 1,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D4,
-      diceCount = 3,
-      modifier = 3,
-      damageType = "Force",
-      description = "Three glowing darts of magical force unerringly strike targets of your choice.",
-    ),
-    DndSpell(
-      id = "cure_wounds",
-      name = "Cure Wounds",
-      level = 1,
-      school = "Evocation",
-      category = DndSpellCategory.HEALING,
-      dieType = DieType.D8,
-      diceCount = 1,
-      modifier = 3,
-      damageType = "Healing",
-      description = "A creature you touch regains hit points imbued with positive energy.",
-    ),
-    DndSpell(
-      id = "eldritch_blast",
-      name = "Eldritch Blast",
-      level = 0,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D10,
-      diceCount = 1,
-      modifier = 0,
-      damageType = "Force",
-      description = "A beam of crackling arcane energy streaks toward a creature within range.",
-    ),
-    DndSpell(
-      id = "healing_word",
-      name = "Healing Word",
-      level = 1,
-      school = "Evocation",
-      category = DndSpellCategory.HEALING,
-      dieType = DieType.D4,
-      diceCount = 1,
-      modifier = 3,
-      damageType = "Healing",
-      description = "A creature of your choice that you can see within range regains hit points.",
-    ),
-    DndSpell(
-      id = "guiding_bolt",
-      name = "Guiding Bolt",
-      level = 1,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D6,
-      diceCount = 4,
-      modifier = 0,
-      damageType = "Radiant",
-      description = "A flash of mystical light streaks toward a creature, granting advantage on the next attack.",
-    ),
-    DndSpell(
-      id = "lightning_bolt",
-      name = "Lightning Bolt",
-      level = 3,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D6,
-      diceCount = 8,
-      modifier = 0,
-      damageType = "Lightning",
-      description = "A stroke of electrical energy forming a 100-foot line blasts out from you.",
-    ),
-    DndSpell(
-      id = "sacred_flame",
-      name = "Sacred Flame",
-      level = 0,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D8,
-      diceCount = 1,
-      modifier = 0,
-      damageType = "Radiant",
-      description = "Flame-like radiance descends on a creature that you can see within range.",
-    ),
-    DndSpell(
-      id = "thunderwave",
-      name = "Thunderwave",
-      level = 1,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D8,
-      diceCount = 2,
-      modifier = 0,
-      damageType = "Thunder",
-      description = "A wave of thunderous force sweeps out from you in a 15-foot cube.",
-    ),
-    DndSpell(
-      id = "inflict_wounds",
-      name = "Inflict Wounds",
-      level = 1,
-      school = "Necromancy",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D10,
-      diceCount = 3,
-      modifier = 0,
-      damageType = "Necrotic",
-      description = "A melee spell attack delivering devastating dark necrotic energy on contact.",
-    ),
-    DndSpell(
-      id = "fire_bolt",
-      name = "Fire Bolt",
-      level = 0,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D10,
-      diceCount = 1,
-      modifier = 0,
-      damageType = "Fire",
-      description = "You hurl a mote of fire at a creature or object within range.",
-    ),
-    DndSpell(
-      id = "toll_the_dead",
-      name = "Toll the Dead",
-      level = 0,
-      school = "Necromancy",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D12,
-      diceCount = 1,
-      modifier = 0,
-      damageType = "Necrotic",
-      description = "Dolorous bell tones fill the air around a wounded target for necrotic damage.",
-    ),
-    DndSpell(
-      id = "burning_hands",
-      name = "Burning Hands",
-      level = 1,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D6,
-      diceCount = 3,
-      modifier = 0,
-      damageType = "Fire",
-      description = "A thin sheet of flames shoots forth from your outstretched fingertips.",
-    ),
-    DndSpell(
-      id = "scorching_ray",
-      name = "Scorching Ray",
-      level = 2,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D6,
-      diceCount = 6,
-      modifier = 0,
-      damageType = "Fire",
-      description = "Three rays of searing fire are hurled at one or several targets.",
-    ),
-    DndSpell(
-      id = "spiritual_weapon",
-      name = "Spiritual Weapon",
-      level = 2,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D8,
-      diceCount = 1,
-      modifier = 3,
-      damageType = "Force",
-      description = "A floating spectral weapon strikes a creature within 5 feet of it.",
-    ),
-    DndSpell(
-      id = "shatter",
-      name = "Shatter",
-      level = 2,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D8,
-      diceCount = 3,
-      modifier = 0,
-      damageType = "Thunder",
-      description = "A sudden loud ringing noise erupts from a point of your choice.",
-    ),
-    DndSpell(
-      id = "bless",
-      name = "Bless",
-      level = 1,
-      school = "Enchantment",
-      category = DndSpellCategory.BUFF_UTILITY,
-      dieType = DieType.D4,
-      diceCount = 1,
-      modifier = 0,
-      damageType = "Bonus",
-      description = "Blessed allies add a d4 bonus to attack rolls and saving throws.",
-    ),
-    DndSpell(
-      id = "guidance",
-      name = "Guidance",
-      level = 0,
-      school = "Divination",
-      category = DndSpellCategory.BUFF_UTILITY,
-      dieType = DieType.D4,
-      diceCount = 1,
-      modifier = 0,
-      damageType = "Bonus",
-      description = "A willing creature rolls a d4 and adds the number to one ability check.",
-    ),
-    DndSpell(
-      id = "sleep",
-      name = "Sleep",
-      level = 1,
-      school = "Enchantment",
-      category = DndSpellCategory.BUFF_UTILITY,
-      dieType = DieType.D8,
-      diceCount = 5,
-      modifier = 0,
-      damageType = "Hit Points",
-      description = "Sends creatures into a magical slumber up to the total hit points rolled.",
-    ),
-    DndSpell(
-      id = "chromatic_orb",
-      name = "Chromatic Orb",
-      level = 1,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D8,
-      diceCount = 3,
-      modifier = 0,
-      damageType = "Elemental",
-      description = "A 4-inch sphere of elemental energy is hurled at a target creature.",
-    ),
-    DndSpell(
-      id = "prayer_of_healing",
-      name = "Prayer of Healing",
-      level = 2,
-      school = "Evocation",
-      category = DndSpellCategory.HEALING,
-      dieType = DieType.D8,
-      diceCount = 2,
-      modifier = 3,
-      damageType = "Healing",
-      description = "Up to six creatures of your choice regain hit points from a soothing prayer.",
-    ),
-    DndSpell(
-      id = "spirit_guardians",
-      name = "Spirit Guardians",
-      level = 3,
-      school = "Conjuration",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D8,
-      diceCount = 3,
-      modifier = 0,
-      damageType = "Radiant",
-      description = "Protective spirits flit around you to a distance of 15 feet.",
-    ),
-    DndSpell(
-      id = "mass_healing_word",
-      name = "Mass Healing Word",
-      level = 3,
-      school = "Evocation",
-      category = DndSpellCategory.HEALING,
-      dieType = DieType.D4,
-      diceCount = 1,
-      modifier = 3,
-      damageType = "Healing",
-      description = "Words of restoration heal up to six creatures that you can see.",
-    ),
-    DndSpell(
-      id = "vicious_mockery",
-      name = "Vicious Mockery",
-      level = 0,
-      school = "Enchantment",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D4,
-      diceCount = 1,
-      modifier = 0,
-      damageType = "Psychic",
-      description = "A string of insults laced with subtle enchantments deals psychic damage.",
-    ),
-    DndSpell(
-      id = "blight",
-      name = "Blight",
-      level = 4,
-      school = "Necromancy",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D8,
-      diceCount = 8,
-      modifier = 0,
-      damageType = "Necrotic",
-      description = "Necromantic energy washes over a creature, draining moisture and vitality.",
-    ),
-    DndSpell(
-      id = "cone_of_cold",
-      name = "Cone of Cold",
-      level = 5,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D8,
-      diceCount = 8,
-      modifier = 0,
-      damageType = "Cold",
-      description = "A blast of freezing air erupts from your hands in a 60-foot cone.",
-    ),
-    DndSpell(
-      id = "mass_cure_wounds",
-      name = "Mass Cure Wounds",
-      level = 5,
-      school = "Evocation",
-      category = DndSpellCategory.HEALING,
-      dieType = DieType.D8,
-      diceCount = 3,
-      modifier = 3,
-      damageType = "Healing",
-      description = "A wave of healing energy washes out from a point of your choice.",
-    ),
-    DndSpell(
-      id = "disintegrate",
-      name = "Disintegrate",
-      level = 6,
-      school = "Transmutation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D6,
-      diceCount = 10,
-      modifier = 40,
-      damageType = "Force",
-      description = "A thin green ray springs from your pointing finger to a target within range.",
-    ),
-    DndSpell(
-      id = "chain_lightning",
-      name = "Chain Lightning",
-      level = 6,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D8,
-      diceCount = 10,
-      modifier = 0,
-      damageType = "Lightning",
-      description = "A bolt of arcing electricity strikes a target and leaps to up to three others.",
-    ),
-    DndSpell(
-      id = "meteor_swarm",
-      name = "Meteor Swarm",
-      level = 9,
-      school = "Evocation",
-      category = DndSpellCategory.DAMAGE,
-      dieType = DieType.D6,
-      diceCount = 20,
-      modifier = 0,
-      damageType = "Fire",
-      description = "Blazing orbs of fire plummet to the ground at four distinct points you can see.",
-    ),
-  )
-
-  fun searchSpells(
-    query: String = "",
-    category: DndSpellCategory? = null,
-    catalog: List<DndSpell> = COMMON_SPELLS,
-  ): List<DndSpell> {
-    return catalog.filter { spell ->
-      (category == null || spell.category == category) && spell.matches(query)
-    }
-  }
 }
 
 data class DiceRollResult(
@@ -972,7 +554,7 @@ internal fun DiceRollerScreen(
   ) {
     ToolboxTopBar(
       title = "Dice Roller",
-      subtext = "Polyhedral dice & D&D spell roller",
+      subtext = "Polyhedral dice & SRD 5.2 spell/weapon roller",
       icon = Icons.Default.Casino,
       modifier = Modifier.testTag("dice_roller_top_bar"),
       searchState = ToolboxTopBarSearchState(
@@ -981,7 +563,7 @@ internal fun DiceRollerScreen(
         onQueryChange = { searchQuery = it },
         onOpenSearch = { isSearchActive = true },
         onCloseSearch = { closeSearch() },
-        placeholder = "Search D&D spells (e.g. Fireball, Cure Wounds)...",
+        placeholder = "Search SRD 5.2 spells & weapons (e.g. Fireball, Longsword)...",
         searchContentDescription = "Search",
         closeContentDescription = "Close search",
         clearContentDescription = "Clear search",
@@ -1316,6 +898,9 @@ private fun DndSpellSearchView(
   onSelectSpell: (DndSpell) -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  var showAttributionDialog by rememberSaveable { mutableStateOf(false) }
+  val haptic = LocalHapticFeedback.current
+
   Surface(
     color = Color.Transparent,
     modifier = modifier
@@ -1323,191 +908,196 @@ private fun DndSpellSearchView(
       .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .testTag("catalog_search_overlay"),
   ) {
-    Column(
+    Box(
       modifier = Modifier
         .fillMaxSize()
         .testTag("dice_roller_spell_search_view"),
     ) {
-      ToolboxPillNavigationBar(
-        rowTestTag = "spell_category_pills",
+      Column(
+        modifier = Modifier.fillMaxSize(),
       ) {
-        ToolboxPillNavigationItem(
-          selected = selectedCategory == null,
-          onClick = { onSelectCategory(null) },
-          label = "All ($allSpellsCount)",
-          testTag = "spell_category_chip_ALL",
-        )
-        DndSpellCategory.entries.forEach { category ->
-          val isSelected = selectedCategory == category
-          val categoryIcon = when (category) {
-            DndSpellCategory.DAMAGE -> Icons.Default.LocalFireDepartment
-            DndSpellCategory.HEALING -> Icons.Default.Favorite
-            DndSpellCategory.BUFF_UTILITY -> Icons.Default.AutoAwesome
-          }
+        ToolboxPillNavigationBar(
+          rowTestTag = "spell_category_pills",
+        ) {
           ToolboxPillNavigationItem(
-            selected = isSelected,
-            onClick = { onSelectCategory(if (isSelected) null else category) },
-            leadingIcon = categoryIcon,
-            label = category.displayName,
-            testTag = "spell_category_chip_${category.name}",
+            selected = selectedCategory == null,
+            onClick = { onSelectCategory(null) },
+            label = "All ($allSpellsCount)",
+            testTag = "spell_category_chip_ALL",
           )
-        }
-      }
-
-      LazyColumn(
-        modifier = Modifier
-          .fillMaxSize()
-          .weight(1f)
-          .testTag("spell_search_results_list"),
-        contentPadding = PaddingValues(
-          start = 16.dp,
-          top = 12.dp,
-          end = 16.dp,
-          bottom = 24.dp,
-        ),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        item(key = "spells_header") {
-          Column {
-            Text(
-              text = when {
-                query.isNotBlank() -> "Search Results (${matchingSpells.size})"
-                selectedCategory != null -> "${selectedCategory.displayName} Spells (${matchingSpells.size})"
-                else -> "Common D&D Spells (${matchingSpells.size})"
-              },
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-              text = "Tap a spell to return to the roller and roll it immediately",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
+          DndSpellCategory.entries.forEach { category ->
+            val isSelected = selectedCategory == category
+            val categoryIcon = when (category) {
+              DndSpellCategory.DAMAGE -> Icons.Default.LocalFireDepartment
+              DndSpellCategory.HEALING -> Icons.Default.Favorite
+              DndSpellCategory.BUFF_UTILITY -> Icons.Default.AutoAwesome
+              DndSpellCategory.WEAPONS -> Icons.Default.Gavel
+            }
+            ToolboxPillNavigationItem(
+              selected = isSelected,
+              onClick = { onSelectCategory(if (isSelected) null else category) },
+              leadingIcon = categoryIcon,
+              label = category.displayName,
+              testTag = "spell_category_chip_${category.name}",
             )
           }
         }
 
-        if (matchingSpells.isEmpty()) {
-          item(key = "spells_empty") {
-            Card(
-              shape = RoundedCornerShape(14.dp),
-              colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-              ),
-              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-              modifier = Modifier
-                .fillMaxWidth()
-                .testTag("spell_search_empty_card"),
-            ) {
-              Column(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-              ) {
-                Text(
-                  text = if (query.isNotBlank()) {
-                    "No spells found matching \"$query\""
-                  } else {
-                    "No matching spells"
-                  },
-                  style = MaterialTheme.typography.bodyMedium,
-                  fontWeight = FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                  text = "Try searching by spell name (e.g. Fireball, Cure Wounds, Magic Missile), damage type, or dice notation.",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  textAlign = TextAlign.Center,
-                )
-              }
+        LazyColumn(
+          modifier = Modifier
+            .fillMaxSize()
+            .weight(1f)
+            .testTag("spell_search_results_list"),
+          contentPadding = PaddingValues(
+            start = 16.dp,
+            top = 12.dp,
+            end = 16.dp,
+            bottom = 88.dp,
+          ),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          item(key = "spells_header") {
+            Column {
+              Text(
+                text = when {
+                  query.isNotBlank() -> "Search Results (${matchingSpells.size})"
+                  selectedCategory == DndSpellCategory.WEAPONS -> "SRD 5.2.1 Weapons (${matchingSpells.size})"
+                  selectedCategory != null -> "${selectedCategory.displayName} Spells (${matchingSpells.size})"
+                  else -> "SRD 5.2.1 Spells & Weapons (${matchingSpells.size})"
+                },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Text(
+                text = "Tap a spell or weapon to return to the roller and roll it immediately",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
             }
           }
-        } else {
-          items(
-            items = matchingSpells,
-            key = { it.id },
-          ) { spell ->
-            Card(
-              modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-                .clickable { onSelectSpell(spell) }
-                .testTag("spell_card_${spell.id}"),
-              shape = RoundedCornerShape(14.dp),
-              colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-              ),
-              border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
-            ) {
-              Row(
+
+          if (matchingSpells.isEmpty()) {
+            item(key = "spells_empty") {
+              Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                  containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
                 modifier = Modifier
                   .fillMaxWidth()
-                  .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                  .testTag("spell_search_empty_card"),
               ) {
-                Box(
+                Column(
                   modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                  contentAlignment = Alignment.Center,
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                  horizontalAlignment = Alignment.CenterHorizontally,
+                  verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                  PolyhedralDieIcon(
-                    dieType = spell.dieType,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp),
-                  )
-                }
-
-                Spacer(modifier = Modifier.width(12.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
                   Text(
-                    text = spell.name,
-                    style = MaterialTheme.typography.bodyLarge,
+                    text = if (query.isNotBlank()) {
+                      "No spells or weapons found matching \"$query\""
+                    } else {
+                      "No matching entries"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                   )
                   Text(
-                    text = "${spell.levelLabel} • ${spell.school} • ${spell.damageType}",
+                    text = "Try searching by spell or weapon name (e.g. Fireball, Cure Wounds, Longsword), damage type, or dice notation.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  )
-                  Text(
-                    text = spell.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
                   )
                 }
-
-                Spacer(modifier = Modifier.width(10.dp))
-
-                Surface(
-                  shape = RoundedCornerShape(20.dp),
-                  color = MaterialTheme.colorScheme.primaryContainer,
-                  border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+              }
+            }
+          } else {
+            items(
+              items = matchingSpells,
+              key = { it.id },
+            ) { spell ->
+              Card(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .clip(RoundedCornerShape(14.dp))
+                  .clickable { onSelectSpell(spell) }
+                  .testTag("spell_card_${spell.id}"),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                  containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+              ) {
+                Row(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                  verticalAlignment = Alignment.Top,
                 ) {
-                  Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                  Box(
+                    modifier = Modifier
+                      .size(40.dp)
+                      .clip(CircleShape)
+                      .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center,
                   ) {
                     PolyhedralDieIcon(
                       dieType = spell.dieType,
                       color = MaterialTheme.colorScheme.primary,
-                      modifier = Modifier.size(14.dp),
+                      modifier = Modifier.size(24.dp),
+                    )
+                  }
+
+                  Spacer(modifier = Modifier.width(12.dp))
+
+                  Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                      text = spell.name,
+                      style = MaterialTheme.typography.bodyLarge,
+                      fontWeight = FontWeight.SemiBold,
+                      color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                      text = spell.notation,
-                      style = MaterialTheme.typography.labelMedium,
-                      fontWeight = FontWeight.Bold,
-                      color = MaterialTheme.colorScheme.onPrimaryContainer,
+                      text = "${spell.levelLabel} • ${spell.school} • ${spell.damageType}",
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                      text = spell.description,
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.88f),
+                    )
+                  }
+
+                  Spacer(modifier = Modifier.width(10.dp))
+
+                  Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                  ) {
+                    Row(
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                      PolyhedralDieIcon(
+                        dieType = spell.dieType,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(14.dp),
+                      )
+                      Text(
+                        text = spell.notation,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                      )
+                    }
                   }
                 }
               }
@@ -1515,8 +1105,131 @@ private fun DndSpellSearchView(
           }
         }
       }
+
+      FloatingActionButton(
+        onClick = {
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          showAttributionDialog = true
+        },
+        shape = CircleShape,
+        containerColor = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        modifier = Modifier
+          .align(Alignment.BottomEnd)
+          .padding(end = 16.dp, bottom = 16.dp)
+          .testTag("srd_attribution_fab"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Info,
+          contentDescription = "SRD 5.2.1 Attribution",
+          modifier = Modifier.size(24.dp),
+        )
+      }
     }
   }
+
+  if (showAttributionDialog) {
+    SrdAttributionDialog(
+      onDismiss = { showAttributionDialog = false },
+    )
+  }
+}
+
+@Composable
+private fun SrdAttributionDialog(
+  onDismiss: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    shape = RoundedCornerShape(28.dp),
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 6.dp,
+    modifier = Modifier.testTag("srd_attribution_dialog"),
+    title = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Box(
+          modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Info,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+          )
+        }
+        Column {
+          Text(
+            text = "SRD 5.2.1 Attribution",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          Text(
+            text = "Creative Commons Attribution 4.0 (CC-BY-4.0)",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    },
+    text = {
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+      ) {
+        Card(
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+          ),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            Text(
+              text = "System Reference Document 5.2.1",
+              style = MaterialTheme.typography.titleSmall,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+              text = "5E Compatible • Licensed under CC-BY-4.0",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+
+        Text(
+          text = DndSpellCatalog.SRD_ATTRIBUTION_TEXT,
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurface,
+          modifier = Modifier.testTag("srd_attribution_text"),
+        )
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = onDismiss,
+        shape = CircleShape,
+        modifier = Modifier.testTag("srd_attribution_close_button"),
+      ) {
+        Text("Close")
+      }
+    },
+  )
 }
 
 @Composable

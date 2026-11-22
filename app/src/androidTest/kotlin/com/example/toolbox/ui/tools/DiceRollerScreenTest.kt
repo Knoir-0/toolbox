@@ -171,6 +171,67 @@ class DiceRollerScreenTest {
 
   @OptIn(ExperimentalMaterial3Api::class)
   @Test
+  fun testSearchPanel_weaponsFilterAndBottomRightAttributionFabModal() {
+    composeTestRule.setContent {
+      ToolboxTheme {
+        DiceRollerScreen(
+          initialSheetValue = SheetValue.PartiallyExpanded,
+          initialHistory = emptyList(),
+          initialSavedRolls = emptyList(),
+        )
+      }
+    }
+
+    // 1. Open search view
+    composeTestRule.onNodeWithTag("toggle_search_bar_button").performClick()
+    composeTestRule.waitForIdle()
+
+    val searchView = composeTestRule.onNodeWithTag("dice_roller_spell_search_view")
+    val infoFab = composeTestRule.onNodeWithTag("srd_attribution_fab")
+    searchView.assertIsDisplayed()
+    infoFab.assertIsDisplayed()
+
+    // 2. Verify info FAB is positioned at the bottom right of the search panel
+    val searchBounds = searchView.getUnclippedBoundsInRoot()
+    val fabBounds = infoFab.getUnclippedBoundsInRoot()
+    val searchCenterX = (searchBounds.left + searchBounds.right) / 2
+    val searchCenterY = (searchBounds.top + searchBounds.bottom) / 2
+    val fabCenterX = (fabBounds.left + fabBounds.right) / 2
+    val fabCenterY = (fabBounds.top + fabBounds.bottom) / 2
+
+    assertTrue("Info FAB should be on the right side of the search panel", fabCenterX > searchCenterX)
+    assertTrue("Info FAB should be in the bottom portion of the search panel", fabCenterY > searchCenterY)
+
+    // 3. Click the info FAB to open the SRD 5.2.1 CC-BY-4.0 attribution modal
+    infoFab.performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("srd_attribution_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithText("SRD 5.2.1 Attribution").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("srd_attribution_text").assertIsDisplayed()
+    composeTestRule.onNodeWithText(DndSpellCatalog.SRD_ATTRIBUTION_TEXT).assertIsDisplayed()
+
+    // 4. Close attribution dialog
+    composeTestRule.onNodeWithTag("srd_attribution_close_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("srd_attribution_dialog").assertDoesNotExist()
+
+    // 5. Filter by Weapons category pill and roll Greatsword (2d6)
+    composeTestRule.onNodeWithTag("spell_category_chip_WEAPONS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("spell_search_input").performTextInput("Greatsword")
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithText("Greatsword").assertIsDisplayed().performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("dice_roller_hero_label").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Greatsword").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Roll 2d6").assertIsDisplayed()
+  }
+
+  @OptIn(ExperimentalMaterial3Api::class)
+  @Test
   fun testHoldToRepeatAndModifierMax40() {
     composeTestRule.setContent {
       ToolboxTheme {
