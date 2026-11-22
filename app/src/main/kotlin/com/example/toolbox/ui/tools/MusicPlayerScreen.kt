@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import com.example.toolbox.ui.theme.toolboxScreenBackground
+
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -77,7 +79,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -147,7 +149,7 @@ import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
+import com.example.toolbox.ui.theme.FilledIconButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -1263,7 +1265,7 @@ fun MusicPlayerScreen(
   Box(
     modifier = modifier
       .fillMaxSize()
-      .background(
+      .toolboxScreenBackground(
         Brush.verticalGradient(
           colors = listOf(ambientTopColor, ambientMidColor, baseBg),
         )
@@ -8892,7 +8894,7 @@ private fun ExpandedMusicPlayerOverlay(
       .graphicsLayer {
         translationY = animatedDismissOffsetPx
       }
-      .background(
+      .toolboxScreenBackground(
         Brush.verticalGradient(
           colors = listOf(topGradientColor, midGradientColor, deepBackgroundColor),
         )

@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import com.example.toolbox.ui.theme.toolboxScreenBackground
+
 import android.content.res.Configuration
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
@@ -28,7 +30,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -417,7 +419,7 @@ fun UnitConverterScreen(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(palette.screenBackground)
+      .toolboxScreenBackground(palette.screenBackground)
       .testTag("unit_converter_screen"),
   ) {
     ToolboxTopBar(

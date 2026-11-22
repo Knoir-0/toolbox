@@ -3,7 +3,11 @@ package com.example.toolbox.ui.tools
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS_MINUS_30
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_COMPLEMENTARY
@@ -20,7 +24,10 @@ import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_ACCENT
 import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_DOMINANT
 import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_PLAYER
 import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_SECONDARY
+import com.example.toolbox.ui.main.BackgroundTexture
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
+import com.example.toolbox.ui.main.DEFAULT_BACKGROUND_TEXTURE
+import com.example.toolbox.ui.main.DEFAULT_HEXAGON_ICON_BUTTONS
 import com.example.toolbox.ui.main.DEFAULT_HIDDEN_TOOLS
 import com.example.toolbox.ui.main.DEFAULT_MUSIC_PLAYER_COLOR_OPTION
 import com.example.toolbox.ui.main.DEFAULT_MUSIC_PLAYER_THEME_ENABLED
@@ -29,6 +36,7 @@ import com.example.toolbox.ui.main.CategorySortingOption
 import com.example.toolbox.ui.main.CategoryToolSortingOption
 import com.example.toolbox.ui.main.FALLBACK_THEME_COLOR_HEX
 import com.example.toolbox.ui.main.InMemoryNavigationPreferencesRepository
+import com.example.toolbox.ui.main.NavigationPreferencesBridge
 import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_ACCENT
 import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_DOMINANT
 import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_PLAYER
@@ -46,6 +54,8 @@ import com.example.toolbox.ui.theme.calculateComplementaryColor
 import com.example.toolbox.ui.theme.calculateMusicPlayerBackgroundColor
 import com.example.toolbox.ui.theme.createCustomColorScheme
 import com.example.toolbox.ui.theme.createTertiaryTokens
+import com.example.toolbox.ui.theme.createVerticalSidedHexagonVertices
+import com.example.toolbox.ui.theme.shouldUseHexagonIconOutline
 import com.example.toolbox.ui.theme.isAutoAccentColorSetting
 import com.example.toolbox.ui.theme.isMusicPlayerAccentColorSetting
 import com.example.toolbox.ui.theme.isMusicPlayerThemeColorSetting
@@ -1165,5 +1175,118 @@ class SettingsScreenTest {
     )
     assertEquals(TOOLBOX_LICENSE_TEXT, highlighted.text)
     assertTrue(highlighted.spanStyles.isNotEmpty())
+  }
+
+  @Test
+  fun backgroundTexture_defaultsToNone_andSupportsAllPresetsBackupAndReset() {
+    assertEquals(BackgroundTexture.NONE, DEFAULT_BACKGROUND_TEXTURE)
+    assertFalse(BackgroundTexture.presets.contains(BackgroundTexture.NONE))
+    assertTrue(BackgroundTexture.presets.contains(BackgroundTexture.FUZZY))
+    assertTrue(BackgroundTexture.presets.contains(BackgroundTexture.FADE))
+    assertTrue(BackgroundTexture.presets.contains(BackgroundTexture.CONCENTRIC))
+    assertTrue(BackgroundTexture.presets.contains(BackgroundTexture.HALFTONE))
+    assertTrue(BackgroundTexture.presets.contains(BackgroundTexture.TOPOGRAPHY))
+    assertTrue(BackgroundTexture.presets.contains(BackgroundTexture.AURORA))
+    assertTrue(BackgroundTexture.presets.contains(BackgroundTexture.STARFIELD))
+    assertTrue(BackgroundTexture.presets.contains(BackgroundTexture.SUNBURST))
+    assertTrue(BackgroundTexture.presets.contains(BackgroundTexture.HEXAGONS))
+    assertTrue(BackgroundTexture.presets.contains(BackgroundTexture.BLUEPRINT))
+    assertTrue(BackgroundTexture.presets.contains(BackgroundTexture.WAVES))
+    assertTrue(BackgroundTexture.presets.contains(BackgroundTexture.CONFETTI))
+    assertTrue(BackgroundTexture.presets.contains(BackgroundTexture.CIRCUIT))
+
+    // Case-insensitive parsing by enum name or display name, falling back to NONE
+    for (texture in BackgroundTexture.entries) {
+      assertEquals(texture, BackgroundTexture.fromPrefValue(texture.name))
+      assertEquals(texture, BackgroundTexture.fromPrefValue(texture.name.lowercase()))
+      assertEquals(texture, BackgroundTexture.fromPrefValue(texture.displayName))
+      assertTrue(texture.displayName.isNotBlank())
+      assertTrue(texture.subtitle.isNotBlank())
+    }
+    assertEquals(BackgroundTexture.NONE, BackgroundTexture.fromPrefValue(null))
+    assertEquals(BackgroundTexture.NONE, BackgroundTexture.fromPrefValue(""))
+    assertEquals(BackgroundTexture.NONE, BackgroundTexture.fromPrefValue("UNKNOWN_TEXTURE"))
+
+    // Repository updates flow and bridge state
+    val repo = InMemoryNavigationPreferencesRepository()
+    assertEquals(BackgroundTexture.NONE, repo.getBackgroundTexture())
+    assertEquals(BackgroundTexture.NONE, repo.backgroundTextureFlow.value)
+    assertEquals(BackgroundTexture.NONE, NavigationPreferencesBridge.backgroundTexture)
+
+    repo.setBackgroundTexture(BackgroundTexture.CONCENTRIC)
+    assertEquals(BackgroundTexture.CONCENTRIC, repo.getBackgroundTexture())
+    assertEquals(BackgroundTexture.CONCENTRIC, repo.backgroundTextureFlow.value)
+    assertEquals(BackgroundTexture.CONCENTRIC, NavigationPreferencesBridge.backgroundTexture)
+
+    // Export & Import settings preserves background texture
+    val exportedJson = com.example.toolbox.ui.main.exportSettingsToJson(repo)
+    val restoredRepo = InMemoryNavigationPreferencesRepository()
+    assertTrue(com.example.toolbox.ui.main.importSettingsFromJson(exportedJson, restoredRepo))
+    assertEquals(BackgroundTexture.CONCENTRIC, restoredRepo.getBackgroundTexture())
+
+    // Reset restores NONE
+    com.example.toolbox.ui.main.resetAllSettingsToDefaults(restoredRepo)
+    assertEquals(BackgroundTexture.NONE, restoredRepo.getBackgroundTexture())
+    assertEquals(BackgroundTexture.NONE, NavigationPreferencesBridge.backgroundTexture)
+  }
+
+  @Test
+  fun hexagonIconButtons_defaultsToFalse_hasStrictlyVerticalLeftAndRightSides_andSupportsBackupAndReset() {
+    assertFalse(DEFAULT_HEXAGON_ICON_BUTTONS)
+
+    // Verify hexagon geometry for a 40x40 circular action icon button
+    val vertices = createVerticalSidedHexagonVertices(Size(40f, 40f))
+    assertEquals(6, vertices.size)
+    // Top and bottom points are horizontally centered
+    assertEquals(20f, vertices[0].x, 0.001f)
+    assertEquals(0f, vertices[0].y, 0.001f)
+    assertEquals(20f, vertices[3].x, 0.001f)
+    assertEquals(40f, vertices[3].y, 0.001f)
+    // Right side (vertices[1] -> vertices[2]) is strictly vertical (same X coordinate)
+    assertEquals(vertices[1].x, vertices[2].x, 0.0001f)
+    assertTrue(vertices[2].y > vertices[1].y)
+    // Left side (vertices[4] -> vertices[5]) is strictly vertical (same X coordinate)
+    assertEquals(vertices[4].x, vertices[5].x, 0.0001f)
+    assertTrue(vertices[4].y > vertices[5].y)
+    // All 6 sides have equal length r = 20f
+    for (i in 0 until 6) {
+      val a = vertices[i]
+      val b = vertices[(i + 1) % 6]
+      val edgeLen = kotlin.math.hypot(b.x - a.x, b.y - a.y)
+      assertEquals(20f, edgeLen, 0.01f)
+    }
+
+    val repo = InMemoryNavigationPreferencesRepository()
+    try {
+      assertFalse(repo.getHexagonIconButtons())
+      assertFalse(repo.hexagonIconButtonsFlow.value)
+      assertFalse(NavigationPreferencesBridge.hexagonIconButtons)
+
+      // When disabled, circular 40x40 button uses standard Circle outline
+      assertFalse(shouldUseHexagonIconOutline(Size(40f, 40f)))
+
+      // Enable Hexagonify Icon Buttons
+      repo.setHexagonIconButtons(true)
+      assertTrue(repo.getHexagonIconButtons())
+      assertTrue(repo.hexagonIconButtonsFlow.value)
+      assertTrue(NavigationPreferencesBridge.hexagonIconButtons)
+
+      // Circular 40x40 icon button uses vertical-sided Hexagon outline, while wide pill buttons remain Rounded
+      assertTrue(shouldUseHexagonIconOutline(Size(40f, 40f)))
+      assertFalse(shouldUseHexagonIconOutline(Size(160f, 40f)))
+
+      // Export & Import settings preserves hexagonIconButtons
+      val exportedJson = com.example.toolbox.ui.main.exportSettingsToJson(repo)
+      val restoredRepo = InMemoryNavigationPreferencesRepository()
+      assertTrue(com.example.toolbox.ui.main.importSettingsFromJson(exportedJson, restoredRepo))
+      assertTrue(restoredRepo.getHexagonIconButtons())
+
+      // Reset restores false
+      com.example.toolbox.ui.main.resetAllSettingsToDefaults(restoredRepo)
+      assertFalse(restoredRepo.getHexagonIconButtons())
+      assertFalse(NavigationPreferencesBridge.hexagonIconButtons)
+    } finally {
+      NavigationPreferencesBridge.hexagonIconButtons = false
+    }
   }
 }

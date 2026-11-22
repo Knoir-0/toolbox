@@ -286,9 +286,118 @@ class NotesTest {
     val restored = NoteItem.fromJson(json)
     assertEquals(original, restored)
     assertEquals(
-      "Project Ideas\n\n[x] Offline sync\n[ ] Color cards\n\nideas, android",
+      "# Project Ideas\n\n+ Offline sync\n- Color cards",
+      restored.toTtxt(),
+    )
+    assertEquals(
+      "# Project Ideas\n\n+ Offline sync\n- Color cards\n\nideas, android",
       restored.toPlainText(),
     )
+  }
+
+  @Test
+  fun ttxtFormat_serializesAndParsesMarkdownNotesAndPlusMinusChecklists_andPersistsInNotesDirectory() {
+    assertEquals("ttxt", NOTES_FILE_EXTENSION)
+    assertEquals(".ttxt", NOTES_FILE_DOT_EXTENSION)
+    assertEquals("Toolbox Text XTension", NOTES_FILE_FORMAT_NAME)
+    assertEquals("/Notes", DEFAULT_NOTES_SCOPED_FOLDER.displayPath)
+
+    // 1. Checklist note uses '- ' for unchecked items and '+ ' for checked items
+    val checklistNote = NoteItem(
+      id = "chk-42",
+      title = "Camping Checklist",
+      isChecklist = true,
+      checklistItems = listOf(
+        NoteChecklistItem(id = "c1", text = "Tent", isChecked = false),
+        NoteChecklistItem(id = "c2", text = "Sleeping bag", isChecked = true),
+        NoteChecklistItem(id = "c3", text = "Water filter", isChecked = false),
+      ),
+      color = NoteColor.SAGE,
+      isPinned = true,
+      labels = listOf("outdoors"),
+    )
+
+    val expectedChecklistTtxt = """
+      # Camping Checklist
+
+      - Tent
+      + Sleeping bag
+      - Water filter
+    """.trimIndent()
+    assertEquals(expectedChecklistTtxt, checklistNote.toTtxt())
+
+    val parsedChecklist = NoteItem.fromTtxt(expectedChecklistTtxt, id = "chk-42")
+    assertEquals("Camping Checklist", parsedChecklist.title)
+    assertTrue(parsedChecklist.isChecklist)
+    assertEquals(3, parsedChecklist.checklistItems.size)
+    assertEquals("Tent", parsedChecklist.checklistItems[0].text)
+    assertFalse(parsedChecklist.checklistItems[0].isChecked)
+    assertEquals('-', parsedChecklist.checklistItems[0].ttxtPrefix)
+    assertEquals("Sleeping bag", parsedChecklist.checklistItems[1].text)
+    assertTrue(parsedChecklist.checklistItems[1].isChecked)
+    assertEquals('+', parsedChecklist.checklistItems[1].ttxtPrefix)
+    assertEquals("Water filter", parsedChecklist.checklistItems[2].text)
+    assertFalse(parsedChecklist.checklistItems[2].isChecked)
+
+    // 2. Markdown text note uses '# Title' and Markdown body
+    val markdownNote = NoteItem(
+      id = "md-1",
+      title = "Architecture Notes",
+      content = "Use **Material 3** tokens and `.ttxt` files in `/Notes`.",
+      isChecklist = false,
+      color = NoteColor.SAND,
+    )
+    val expectedMarkdownTtxt = """
+      # Architecture Notes
+
+      Use **Material 3** tokens and `.ttxt` files in `/Notes`.
+    """.trimIndent()
+    assertEquals(expectedMarkdownTtxt, markdownNote.toTtxt())
+
+    val parsedMarkdown = NoteItem.fromTtxt(expectedMarkdownTtxt, id = "md-1")
+    assertEquals("Architecture Notes", parsedMarkdown.title)
+    assertFalse(parsedMarkdown.isChecklist)
+    assertEquals("Use **Material 3** tokens and `.ttxt` files in `/Notes`.", parsedMarkdown.content)
+
+    // 3. Saving and loading .ttxt files inside a /Notes directory
+    val tempNotesDir = java.nio.file.Files.createTempDirectory("notes_ttxt_test").toFile()
+    try {
+      val repo = InMemoryNotesRepository(notesDirectory = tempNotesDir)
+      repo.saveNotes(listOf(checklistNote, markdownNote))
+
+      val campingFile = java.io.File(tempNotesDir, "Camping Checklist.ttxt")
+      val archFile = java.io.File(tempNotesDir, "Architecture Notes.ttxt")
+      assertTrue(campingFile.exists())
+      assertTrue(archFile.exists())
+      assertEquals(expectedChecklistTtxt, campingFile.readText())
+      assertEquals(expectedMarkdownTtxt, archFile.readText())
+
+      // Checking 'Tent' replaces '-' with '+' in the .ttxt file on disk
+      val afterCheck = NotesEngine.toggleChecklistItem(repo.loadNotes(), "chk-42", "c1")
+      repo.saveNotes(afterCheck)
+      assertEquals(
+        """
+        # Camping Checklist
+
+        + Tent
+        + Sleeping bag
+        - Water filter
+        """.trimIndent(),
+        campingFile.readText(),
+      )
+
+      // Dropping an external .ttxt file into /Notes loads it automatically
+      val externalFile = java.io.File(tempNotesDir, "Quick Groceries.ttxt")
+      externalFile.writeText("# Quick Groceries\n\n- Apples\n+ Coffee")
+
+      val reloaded = repo.loadNotes()
+      assertEquals(3, reloaded.size)
+      val imported = reloaded.first { it.title == "Quick Groceries" }
+      assertTrue(imported.isChecklist)
+      assertEquals(listOf("Apples" to false, "Coffee" to true), imported.checklistItems.map { it.text to it.isChecked })
+    } finally {
+      tempNotesDir.deleteRecursively()
+    }
   }
 
   @Test

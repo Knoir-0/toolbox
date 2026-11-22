@@ -17,8 +17,8 @@ All AI agents and developers implementing new tools, screens, dialogs, or UI enh
 
 ## 2. Color System & Theming
 
-### 2.1 Dynamic Material You & Color Tokens
-Toolbox supports system dynamic theming (Android 12+ / API 31+) and custom user-selected themes in **Settings**, falling back to a curated purple-lavender palette (`#8E66A6`) on older systems. The **Accent Color** is also configurable in Settings: it defaults to **Auto (Analogous +30°)**, and supports automatic color harmonies (**Analogous**, **Tints & Shades**, **Complementary**, **Triadic**, and **Split-Complementary**) as well as preset swatches and custom hex codes.
+### 2.1 Dynamic Material You, Color Tokens & Background Textures
+Toolbox supports system dynamic theming (Android 12+ / API 31+) and custom user-selected themes in **Settings**, falling back to a curated purple-lavender palette (`#8E66A6`) on older systems. The **Accent Color** is also configurable in Settings: it defaults to **Auto (Analogous +30°)**, and supports automatic color harmonies (**Analogous**, **Tints & Shades**, **Complementary**, **Triadic**, and **Split-Complementary**) as well as preset swatches and custom hex codes. The **Background Texture** collapsible section in Settings defaults to **None** and allows users to apply procedural background textures (**Fuzzy**, **Fade**, **Concentric**, **Halftone**, **Topography**, **Aurora**, **Starfield**, **Sunburst**, **Honeycomb**, **Blueprint**, **Waves**, **Confetti**, and **Circuit**) across all tool screens via `Modifier.toolboxScreenBackground(...)`.
 
 > **CRITICAL RULE**: Never hardcode hex values (e.g., `#FFFFFF`, `#1E1E1E`, `#000000`) for surfaces, text, or borders. Always reference `MaterialTheme.colorScheme` tokens so dark mode, light mode, and dynamic palette switches work seamlessly.
 

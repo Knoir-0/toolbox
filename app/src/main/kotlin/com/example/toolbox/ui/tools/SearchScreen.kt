@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import com.example.toolbox.ui.theme.toolboxScreenBackground
+
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -29,7 +31,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Launch
@@ -202,7 +204,7 @@ fun SearchScreen(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background)
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .testTag("search_screen"),
   ) {
     // Standard 68.dp Top Header Bar with integrated & autofocused search bar

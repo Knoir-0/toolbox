@@ -45,7 +45,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.shape.CircleShape
+import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -77,11 +77,14 @@ import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SortByAlpha
+import androidx.compose.material.icons.filled.Texture
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import com.example.toolbox.ui.main.ToolCategory
 import com.example.toolbox.ui.main.addToolToHomeScreen
 import androidx.compose.material3.AlertDialog
@@ -149,9 +152,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_PLAYER
 import com.example.toolbox.ui.main.AppPermission
+import com.example.toolbox.ui.main.BackgroundTexture
 import com.example.toolbox.ui.main.CategorySortingOption
 import com.example.toolbox.ui.main.CategoryToolSortingOption
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
+import com.example.toolbox.ui.main.DEFAULT_BACKGROUND_TEXTURE
 import com.example.toolbox.ui.main.DEFAULT_DATA_BACKUP_FILENAME
 import com.example.toolbox.ui.main.DEFAULT_SETTINGS_BACKUP_FILENAME
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
@@ -177,12 +182,15 @@ import com.example.toolbox.ui.main.importSettingsFromJson
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
 import com.example.toolbox.ui.main.resetAllSettingsToDefaults
 import com.example.toolbox.ui.theme.AccentHarmonyOption
+import com.example.toolbox.ui.theme.BackgroundTexturePreviewBox
+import com.example.toolbox.ui.theme.HexagonShape
 import com.example.toolbox.ui.theme.MusicPlayerColorOption
 import com.example.toolbox.ui.theme.calculateAccentHarmonyColor
 import com.example.toolbox.ui.theme.colorToHexString
 import com.example.toolbox.ui.theme.isAutoAccentColorSetting
 import com.example.toolbox.ui.theme.isMusicPlayerThemeColorSetting
 import com.example.toolbox.ui.theme.parseHexColor
+import com.example.toolbox.ui.theme.toolboxScreenBackground
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
@@ -493,7 +501,7 @@ fun ErrorLogsFullScreenView(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background)
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .testTag("error_logs_screen"),
   ) {
     ToolboxTopBar(
@@ -1433,7 +1441,7 @@ fun LicenseFullScreenView(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background)
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .testTag("license_screen"),
   ) {
     ToolboxTopBar(
@@ -1597,6 +1605,7 @@ fun SettingsScreen(
   initialCollapsedCategories: Set<ToolCategory> = remember { ToolCategory.entries.toSet() },
   initialThemeColorExpanded: Boolean = false,
   initialAccentColorExpanded: Boolean = false,
+  initialBackgroundTextureExpanded: Boolean = false,
   initialPermissionsExpanded: Boolean = false,
   initialBackupRestoreExpanded: Boolean = false,
   initialErrorLogsDialogVisible: Boolean = false,
@@ -1610,6 +1619,8 @@ fun SettingsScreen(
   val musicPlayerThemeEnabled by preferencesRepository.musicPlayerThemeEnabledFlow.collectAsState()
   val musicPlayerColorOption by preferencesRepository.musicPlayerColorOptionFlow.collectAsState()
   val accentColor by preferencesRepository.accentColorFlow.collectAsState()
+  val backgroundTexture by preferencesRepository.backgroundTextureFlow.collectAsState()
+  val hexagonIconButtons by preferencesRepository.hexagonIconButtonsFlow.collectAsState()
   val hiddenTools by preferencesRepository.hiddenToolsFlow.collectAsState()
   val toolSorting by preferencesRepository.toolSortingFlow.collectAsState()
   val toolSortOrder by preferencesRepository.toolSortOrderFlow.collectAsState()
@@ -1624,10 +1635,12 @@ fun SettingsScreen(
   var isSortingExpanded by rememberSaveable { mutableStateOf(initialSortingExpanded) }
   var isThemeColorExpanded by rememberSaveable { mutableStateOf(initialThemeColorExpanded) }
   var isAccentColorExpanded by rememberSaveable { mutableStateOf(initialAccentColorExpanded) }
+  var isBackgroundTextureExpanded by rememberSaveable { mutableStateOf(initialBackgroundTextureExpanded) }
   var isPermissionsExpanded by rememberSaveable { mutableStateOf(initialPermissionsExpanded) }
   var isBackupRestoreExpanded by rememberSaveable { mutableStateOf(initialBackupRestoreExpanded) }
   var showErrorLogsDialog by rememberSaveable { mutableStateOf(initialErrorLogsDialogVisible) }
   var showLicenseDialog by rememberSaveable { mutableStateOf(initialLicenseDialogVisible) }
+  val haptic = LocalHapticFeedback.current
 
   if (showErrorLogsDialog) {
     ErrorLogsFullScreenView(
@@ -1666,7 +1679,7 @@ fun SettingsScreen(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background),
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background, texture = backgroundTexture),
   ) {
     // Standard Tool Header Bar (DESIGN_LANGUAGE.md Section 5.1)
     ToolboxTopBar(
@@ -3366,7 +3379,448 @@ fun SettingsScreen(
       }
     }
 
-    // Section 5: Tool Settings (Collapsible Panel with Collapsible Categories)
+    // Section 5: Background Texture (Collapsible)
+    val backgroundTextureSummary = remember(backgroundTexture, hexagonIconButtons) {
+      val base = if (backgroundTexture == BackgroundTexture.NONE) {
+        "None (Default)"
+      } else {
+        "${backgroundTexture.displayName} • ${backgroundTexture.subtitle}"
+      }
+      if (hexagonIconButtons) {
+        "$base • Hexagon icons"
+      } else {
+        base
+      }
+    }
+
+    Card(
+      modifier = Modifier
+        .fillMaxWidth()
+        .testTag("background_texture_card"),
+      colors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+      ),
+      shape = RoundedCornerShape(16.dp),
+    ) {
+      Column(
+        modifier = Modifier.padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+      ) {
+        // Collapsible Header Row
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { isBackgroundTextureExpanded = !isBackgroundTextureExpanded }
+            .testTag("background_texture_toggle"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Texture,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(20.dp),
+            )
+            Column {
+              Text(
+                text = "Background Texture",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+              )
+              Text(
+                text = backgroundTextureSummary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("background_texture_summary"),
+              )
+            }
+          }
+
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            BackgroundTexturePreviewBox(
+              texture = backgroundTexture,
+              modifier = Modifier
+                .size(24.dp)
+                .clip(CircleShape)
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                .testTag("background_texture_badge"),
+            )
+
+            val textureRotationAngle by animateFloatAsState(
+              targetValue = if (isBackgroundTextureExpanded) 180f else 0f,
+              label = "background_texture_chevron",
+            )
+
+            IconButton(
+              onClick = { isBackgroundTextureExpanded = !isBackgroundTextureExpanded },
+            ) {
+              Icon(
+                imageVector = Icons.Default.ExpandMore,
+                contentDescription = if (isBackgroundTextureExpanded) {
+                  "Collapse background texture"
+                } else {
+                  "Expand background texture"
+                },
+                modifier = Modifier.rotate(textureRotationAngle),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
+
+        AnimatedVisibility(
+          visible = isBackgroundTextureExpanded,
+          enter = expandVertically() + fadeIn(),
+          exit = shrinkVertically() + fadeOut(),
+        ) {
+          Column(
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            Text(
+              text = "Apply a procedural background texture across all tool screens. Uses your active theme and accent colors.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            // Default "None" Option Card
+            val isNoneTextureSelected = backgroundTexture == BackgroundTexture.NONE
+            OutlinedCard(
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                preferencesRepository.setBackgroundTexture(BackgroundTexture.NONE)
+              },
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("background_texture_option_none"),
+              shape = RoundedCornerShape(12.dp),
+              border = CardDefaults.outlinedCardBorder().copy(
+                brush = SolidColor(
+                  if (isNoneTextureSelected) MaterialTheme.colorScheme.primary
+                  else MaterialTheme.colorScheme.outlineVariant
+                ),
+              ),
+              colors = CardDefaults.outlinedCardColors(
+                containerColor = if (isNoneTextureSelected) {
+                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                } else {
+                  Color.Transparent
+                },
+              ),
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                  modifier = Modifier.weight(1f),
+                ) {
+                  Box(
+                    modifier = Modifier
+                      .size(28.dp)
+                      .clip(CircleShape)
+                      .background(MaterialTheme.colorScheme.background)
+                      .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
+                    contentAlignment = Alignment.Center,
+                  ) {
+                    if (isNoneTextureSelected) {
+                      Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp),
+                      )
+                    }
+                  }
+                  Column {
+                    Text(
+                      text = "None (Default)",
+                      style = MaterialTheme.typography.titleSmall,
+                      fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                      text = BackgroundTexture.NONE.subtitle,
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                }
+
+                if (isNoneTextureSelected) {
+                  Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                  ) {
+                    Text(
+                      text = "Active",
+                      style = MaterialTheme.typography.labelSmall,
+                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                  }
+                }
+              }
+            }
+
+            // Hexagonify Icon Buttons Toggle Card (Vertical left and right sides)
+            OutlinedCard(
+              modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .toggleable(
+                  value = hexagonIconButtons,
+                  role = Role.Checkbox,
+                  onValueChange = { checked ->
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    preferencesRepository.setHexagonIconButtons(checked)
+                  },
+                )
+                .testTag("hexagon_icon_buttons_toggle"),
+              shape = RoundedCornerShape(12.dp),
+              border = CardDefaults.outlinedCardBorder().copy(
+                brush = SolidColor(
+                  if (hexagonIconButtons) MaterialTheme.colorScheme.primary
+                  else MaterialTheme.colorScheme.outlineVariant
+                ),
+              ),
+              colors = CardDefaults.outlinedCardColors(
+                containerColor = if (hexagonIconButtons) {
+                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                } else {
+                  Color.Transparent
+                },
+              ),
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                  modifier = Modifier.weight(1f),
+                ) {
+                  Checkbox(
+                    checked = hexagonIconButtons,
+                    onCheckedChange = null,
+                    colors = CheckboxDefaults.colors(
+                      checkedColor = MaterialTheme.colorScheme.primary,
+                      uncheckedColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
+                  )
+                  Box(
+                    modifier = Modifier
+                      .size(28.dp)
+                      .clip(HexagonShape)
+                      .background(MaterialTheme.colorScheme.primaryContainer)
+                      .border(1.dp, MaterialTheme.colorScheme.primary, HexagonShape),
+                    contentAlignment = Alignment.Center,
+                  ) {
+                    Icon(
+                      imageVector = if (hexagonIconButtons) Icons.Default.Check else Icons.Default.Texture,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.size(16.dp),
+                    )
+                  }
+                  Column {
+                    Text(
+                      text = "Hexagonify Icon Buttons",
+                      style = MaterialTheme.typography.titleSmall,
+                      fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                      text = "Transform circular action icon buttons, badges, and FABs into vertical-sided hexagons",
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                }
+
+                if (hexagonIconButtons) {
+                  Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                  ) {
+                    Text(
+                      text = "Active",
+                      style = MaterialTheme.typography.labelSmall,
+                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                  }
+                }
+              }
+            }
+
+            // Fun Presets Header
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Text(
+                text = "Texture Presets",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Text(
+                text = "${BackgroundTexture.presets.size} presets",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+
+            // 2-column grid of live texture preset cards
+            val presetRows = remember { BackgroundTexture.presets.chunked(2) }
+            Column(
+              modifier = Modifier.fillMaxWidth(),
+              verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+              presetRows.forEach { rowPresets ->
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                  rowPresets.forEach { preset ->
+                    val isPresetSelected = backgroundTexture == preset
+                    Surface(
+                      onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        preferencesRepository.setBackgroundTexture(preset)
+                      },
+                      modifier = Modifier
+                        .weight(1f)
+                        .testTag("background_texture_option_${preset.name.lowercase()}"),
+                      shape = RoundedCornerShape(14.dp),
+                      color = if (isPresetSelected) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                      } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                      },
+                      border = BorderStroke(
+                        width = if (isPresetSelected) 2.dp else 1.dp,
+                        color = if (isPresetSelected) {
+                          MaterialTheme.colorScheme.primary
+                        } else {
+                          MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                        },
+                      ),
+                    ) {
+                      Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                      ) {
+                        Box(
+                          modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .border(
+                              width = 1.dp,
+                              color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                              shape = RoundedCornerShape(10.dp),
+                            ),
+                        ) {
+                          BackgroundTexturePreviewBox(
+                            texture = preset,
+                            modifier = Modifier.fillMaxSize(),
+                          )
+
+                          if (isPresetSelected) {
+                            Box(
+                              modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(6.dp)
+                                .size(22.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary),
+                              contentAlignment = Alignment.Center,
+                            ) {
+                              Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selected ${preset.displayName}",
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(14.dp),
+                              )
+                            }
+                          }
+                        }
+
+                        Row(
+                          modifier = Modifier.fillMaxWidth(),
+                          horizontalArrangement = Arrangement.SpaceBetween,
+                          verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                          Text(
+                            text = preset.displayName,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = if (isPresetSelected) FontWeight.Bold else FontWeight.SemiBold,
+                            color = if (isPresetSelected) {
+                              MaterialTheme.colorScheme.primary
+                            } else {
+                              MaterialTheme.colorScheme.onSurface
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                          )
+                          if (isPresetSelected) {
+                            Surface(
+                              shape = CircleShape,
+                              color = MaterialTheme.colorScheme.primary,
+                              contentColor = MaterialTheme.colorScheme.onPrimary,
+                            ) {
+                              Text(
+                                text = "Active",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                              )
+                            }
+                          }
+                        }
+
+                        Text(
+                          text = preset.subtitle,
+                          style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                          maxLines = 2,
+                          minLines = 2,
+                          overflow = TextOverflow.Ellipsis,
+                        )
+                      }
+                    }
+                  }
+                  if (rowPresets.size == 1) {
+                    Spacer(modifier = Modifier.weight(1f))
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Section 6: Tool Settings (Collapsible Panel with Collapsible Categories)
     var isToolSettingsExpanded by rememberSaveable { mutableStateOf(initialVisibilityExpanded) }
     val configurableTools = remember { Tool.entries.filter { it != Tool.SETTINGS } }
     val hiddenCount = configurableTools.count { it in hiddenTools }
@@ -4676,6 +5130,7 @@ fun SettingsScreen(
               isPermissionsExpanded = false
               isThemeColorExpanded = false
               isAccentColorExpanded = false
+              isBackgroundTextureExpanded = false
               isBackupRestoreExpanded = false
               backupRestoreStatus = null
               dataBackupRestoreStatus = null

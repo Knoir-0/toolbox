@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import com.example.toolbox.ui.theme.toolboxScreenBackground
+
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ClipData
@@ -77,7 +79,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -144,7 +146,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.SmallFloatingActionButton
+import com.example.toolbox.ui.theme.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -159,6 +161,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -567,7 +570,7 @@ fun CameraScreen(
     selectCameraDevice(nextDevice)
   }
 
-  // Smart ML Kit Object Detection Autofocus & 5-second Manual Focus Override state
+  // Smart ML Kit Object Detection Autofocus & 7-second Manual Focus Override state
   var smartAutoFocusTarget by remember {
     mutableStateOf(
       CameraEngine.selectSmartAutofocusTargetFromVisionTags(
@@ -597,7 +600,7 @@ fun CameraScreen(
     }
   }
 
-  // Manual tap-to-focus overrides smart ML Kit autofocus for 5 seconds (MANUAL_FOCUS_OVERRIDE_DURATION_MS)
+  // Manual tap-to-focus overrides smart ML Kit autofocus for 7 seconds (MANUAL_FOCUS_OVERRIDE_DURATION_MS)
   // before automatically returning to smart object detection autofocus.
   LaunchedEffect(focusTriggerCounter) {
     if (manualFocusTarget != null || focusPointNormalized != null) {
@@ -873,6 +876,12 @@ fun CameraScreen(
     }
   }
 
+  // Live autofocus hex color sampling from the active TextureView preview stream.
+  // Keeps a lightweight raw preview bitmap cached and maps the current focus coordinates
+  // through the inverse TextureView center-crop, zoom, and front-mirror transform.
+  var latestRawPreviewBitmap by remember { mutableStateOf<Bitmap?>(null) }
+  var lastPreviewGrabUptimeMs by remember { mutableLongStateOf(0L) }
+
   fun captureTransformedAnalysisBitmap(maxEdgePx: Int = 640): Bitmap? {
     return try {
       val tv = activeTextureView ?: return null
@@ -889,6 +898,8 @@ fun CameraScreen(
       } ?: return null
 
       if (raw.width <= 16 || raw.height <= 16) return null
+      latestRawPreviewBitmap = raw
+      lastPreviewGrabUptimeMs = android.os.SystemClock.uptimeMillis()
       CameraEngine.transformCapturedPreviewBitmap(
         rawBitmap = raw,
         textureTransformMatrix = tv.getTransform(null),
@@ -903,8 +914,121 @@ fun CameraScreen(
     }
   }
 
+  fun sampleHexFromRawPreview(
+    normX: Float,
+    normY: Float,
+    rawBitmap: Bitmap? = latestRawPreviewBitmap,
+  ): String? {
+    val bmp = rawBitmap ?: return null
+    if (bmp.width <= 8 || bmp.height <= 8) return null
+    val tv = activeTextureView
+    val transformMatrix = try {
+      tv?.getTransform(null)
+    } catch (_: Throwable) {
+      null
+    }
+    return CameraEngine.sampleLiveFocusColorHexFromRawTextureBitmap(
+      rawBitmap = bmp,
+      normX = normX,
+      normY = normY,
+      textureTransformMatrix = transformMatrix,
+      zoom = zoomLevel,
+      lensFacing = lensFacing,
+      mirrorFront = mirrorFrontCamera,
+      viewWidth = tv?.width?.takeIf { it > 32 } ?: bmp.width,
+      viewHeight = tv?.height?.takeIf { it > 32 } ?: bmp.height,
+      radiusPx = 5,
+      filter = colorFilter,
+      exposureEv = exposureEv,
+    )
+  }
+
+  fun refreshLiveFocusColorSample(forceGrabBitmap: Boolean = false) {
+    val tv = activeTextureView
+    val nowUptimeMs = android.os.SystemClock.uptimeMillis()
+    var rawBmp = latestRawPreviewBitmap
+    if (tv != null &&
+      tv.isAvailable &&
+      (forceGrabBitmap || rawBmp == null || (nowUptimeMs - lastPreviewGrabUptimeMs) >= 48L)
+    ) {
+      val grabbed = try {
+        val vw = tv.width
+        val vh = tv.height
+        if (vw > 32 && vh > 32) {
+          val scale = minOf(1f, 220f / maxOf(vw, vh).toFloat())
+          val targetW = (vw * scale).roundToInt().coerceAtLeast(64)
+          val targetH = (vh * scale).roundToInt().coerceAtLeast(64)
+          tv.getBitmap(targetW, targetH)
+        } else {
+          tv.getBitmap(192, 192)
+        }
+      } catch (_: Throwable) {
+        null
+      }
+      if (grabbed != null && grabbed.width > 8 && grabbed.height > 8) {
+        rawBmp = grabbed
+        latestRawPreviewBitmap = grabbed
+        lastPreviewGrabUptimeMs = nowUptimeMs
+      }
+    }
+
+    val manualPoint = focusPointNormalized
+    if (manualPoint != null) {
+      focusSampledColorHex = sampleHexFromRawPreview(
+        normX = manualPoint.x,
+        normY = manualPoint.y,
+        rawBitmap = rawBmp,
+      )
+    }
+    val smartTarget = smartAutoFocusTarget
+    if (smartTarget != null) {
+      smartFocusSampledColorHex = sampleHexFromRawPreview(
+        normX = smartTarget.clampedX,
+        normY = smartTarget.clampedY,
+        rawBitmap = rawBmp,
+      )
+    }
+  }
+
+  // Re-sample the live autofocus hex color immediately whenever the reticle coordinates or
+  // camera visual parameters (filter, exposure, zoom, lens, mirror) change.
+  LaunchedEffect(
+    smartAutoFocusTarget?.clampedX,
+    smartAutoFocusTarget?.clampedY,
+    focusPointNormalized,
+    colorFilter,
+    exposureEv,
+    zoomLevel,
+    lensFacing,
+    mirrorFrontCamera,
+    selectedCamera.cameraId,
+  ) {
+    refreshLiveFocusColorSample(forceGrabBitmap = false)
+  }
+
+  // Continuous live autofocus hex color sampling loop across all capture modes and during both
+  // Smart Autofocus and 7-second Manual Tap-to-Focus overrides.
+  LaunchedEffect(
+    activeTextureView,
+    hasCameraPermission,
+    selectedCamera.cameraId,
+    colorFilter,
+    exposureEv,
+    zoomLevel,
+    lensFacing,
+    mirrorFrontCamera,
+  ) {
+    if (isInspection || !hasCameraPermission || activeTextureView == null) {
+      return@LaunchedEffect
+    }
+    while (isActive && activeTextureView != null) {
+      refreshLiveFocusColorSample(forceGrabBitmap = false)
+      delay(80L)
+    }
+  }
+
   // Continuous live frame ML Kit Object Detection for Smart Autofocus across camera modes.
-  // Pauses automatic focus target updates while a 5-second manual focus override is active,
+  // Pauses automatic focus target updates while a 7-second manual focus override is active,
   // and defers to the Vision mode detection pipeline when in VISION mode so two detectors do not fight.
   LaunchedEffect(
     activeTextureView,
@@ -914,6 +1038,8 @@ fun CameraScreen(
     mirrorFrontCamera,
     manualFocusTarget,
     captureMode,
+    colorFilter,
+    exposureEv,
   ) {
     if (isInspection || manualFocusTarget != null || captureMode == CameraCaptureMode.VISION) {
       return@LaunchedEffect
@@ -953,12 +1079,14 @@ fun CameraScreen(
       )
       if (fromVision != null) {
         smartAutoFocusTarget = fromVision
+        refreshLiveFocusColorSample(forceGrabBitmap = false)
       }
     }
   }
 
   // Smooth velocity- and trajectory-aware autofocus glide between detection updates.
-  // Traces a gentle continuous curve from the reticle's current position and velocity toward its desired target.
+  // Traces a small elliptical cornering arc at the start of movement before moving in a straight
+  // line toward the new target, with capped velocity gain and smooth deceleration at arrival.
   LaunchedEffect(
     smartAutoFocusTarget?.targetNormX,
     smartAutoFocusTarget?.targetNormY,
@@ -970,32 +1098,45 @@ fun CameraScreen(
     var lastStepMs = System.currentTimeMillis()
     while (isActive && manualFocusTarget == null) {
       val current = smartAutoFocusTarget ?: break
-      if (current.distanceToDesiredTarget <= 0.0015f && current.speedNormPerSec <= 0.004f) {
+      if (current.distanceToDesiredTarget <= 0.0012f && current.speedNormPerSec <= 0.004f) {
         break
       }
-      delay(32L)
+      delay(16L)
       val nowMs = System.currentTimeMillis()
       val dtSec = ((nowMs - lastStepMs).coerceIn(16L, 120L)) / 1000f
       lastStepMs = nowMs
       val latest = smartAutoFocusTarget ?: break
       if (manualFocusTarget == null) {
-        smartAutoFocusTarget = CameraEngine.stepStickyAutofocusTrajectory(
+        val stepped = CameraEngine.stepStickyAutofocusTrajectory(
           currentTarget = latest,
           dtSeconds = dtSec,
           timestampMs = nowMs,
         )
+        smartAutoFocusTarget = stepped
+        refreshLiveFocusColorSample(forceGrabBitmap = false)
       }
     }
   }
 
   // Continuous live frame ML Kit Object Detection & Image Labeling when in VISION mode and hardware TextureView is rendering
-  LaunchedEffect(captureMode, activeTextureView, zoomLevel, lensFacing, mirrorFrontCamera) {
+  LaunchedEffect(captureMode, activeTextureView, zoomLevel, lensFacing, mirrorFrontCamera, colorFilter, exposureEv) {
     if (captureMode != CameraCaptureMode.VISION || isInspection) {
       return@LaunchedEffect
     }
     while (isActive && captureMode == CameraCaptureMode.VISION) {
       val alignedFrame = captureTransformedAnalysisBitmap(maxEdgePx = 640)
       if (alignedFrame != null && alignedFrame.width > 32 && alignedFrame.height > 32) {
+        val currentSmart = smartAutoFocusTarget
+        if (currentSmart != null && manualFocusTarget == null) {
+          smartFocusSampledColorHex = CameraEngine.sampleCenterRadiusColorHexFromBitmap(
+            bitmap = alignedFrame,
+            normX = currentSmart.clampedX,
+            normY = currentSmart.clampedY,
+            radiusPx = 6,
+            filter = colorFilter,
+            exposureEv = exposureEv,
+          )
+        }
         val analyzed = withContext(Dispatchers.Default) {
           CameraEngine.recognizeVisionTagsFromBitmapWithMlKit(
             bitmap = alignedFrame,
@@ -1600,7 +1741,7 @@ fun CameraScreen(
   BoxWithConstraints(
     modifier = modifier
       .fillMaxSize()
-      .background(Color.Black)
+      .toolboxScreenBackground(Color.Black)
       .testTag("camera_screen"),
   ) {
     val containerW = maxWidth
@@ -1619,7 +1760,7 @@ fun CameraScreen(
     Box(
       modifier = Modifier
         .fillMaxSize()
-        .background(Color.Black)
+        .toolboxScreenBackground(Color.Black)
         .testTag("camera_viewfinder_stage"),
       contentAlignment = Alignment.Center,
     ) {
@@ -1635,37 +1776,14 @@ fun CameraScreen(
               }
             }
           }
-          .pointerInput(colorFilter, exposureEv, lensFacing) {
+          .pointerInput(colorFilter, exposureEv, lensFacing, zoomLevel, mirrorFrontCamera) {
             detectTapGestures { tapOffset ->
               val normX = (tapOffset.x / size.width.toFloat()).coerceIn(0.08f, 0.92f)
               val normY = (tapOffset.y / size.height.toFloat()).coerceIn(0.08f, 0.92f)
               val manualTarget = CameraEngine.createManualFocusTarget(normX = normX, normY = normY)
               manualFocusTarget = manualTarget
               focusPointNormalized = Offset(manualTarget.clampedX, manualTarget.clampedY)
-              val tv = activeTextureView
-              val rawFrame = try {
-                if (tv != null && tv.isAvailable) tv.getBitmap(320, 320) else null
-              } catch (_: Throwable) {
-                null
-              }
-              focusSampledColorHex = if (rawFrame != null && rawFrame.width > 8 && rawFrame.height > 8) {
-                CameraEngine.sampleCenterRadiusColorHexFromBitmap(
-                  bitmap = rawFrame,
-                  normX = normX,
-                  normY = normY,
-                  radiusPx = 6,
-                  filter = colorFilter,
-                  exposureEv = exposureEv,
-                )
-              } else {
-                CameraEngine.sampleSyntheticFocusColorHex(
-                  normX = normX,
-                  normY = normY,
-                  lensFacing = lensFacing,
-                  filter = colorFilter,
-                  exposureEv = exposureEv,
-                )
-              }
+              refreshLiveFocusColorSample(forceGrabBitmap = true)
               focusTriggerCounter++
               haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
             }
@@ -1686,6 +1804,7 @@ fun CameraScreen(
             captureMode = captureMode,
             focusTarget = activeFocusTarget,
             onTextureViewReady = { tv -> activeTextureView = tv },
+            onPreviewFrameUpdated = { refreshLiveFocusColorSample(forceGrabBitmap = false) },
             modifier = Modifier.fillMaxSize(),
           )
         }
@@ -3317,10 +3436,13 @@ private fun HardwareCamera2Preview(
   captureMode: CameraCaptureMode,
   focusTarget: CameraSmartFocusTarget?,
   onTextureViewReady: (TextureView?) -> Unit,
+  onPreviewFrameUpdated: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
+  val currentOnTextureViewReady by rememberUpdatedState(onTextureViewReady)
+  val currentOnPreviewFrameUpdated by rememberUpdatedState(onPreviewFrameUpdated)
   var cameraDevice by remember { mutableStateOf<CameraDevice?>(null) }
   var captureSession by remember { mutableStateOf<CameraCaptureSession?>(null) }
   var previewBuilder by remember { mutableStateOf<CaptureRequest.Builder?>(null) }
@@ -3804,7 +3926,7 @@ private fun HardwareCamera2Preview(
         surfaceTextureListener = object : TextureView.SurfaceTextureListener {
           override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
             textureViewInstance = this@apply
-            onTextureViewReady(this@apply)
+            currentOnTextureViewReady(this@apply)
             applyCenterCropTransform(this@apply, viewWidth = width, viewHeight = height)
             surfaceReadyTrigger++
           }
@@ -3814,12 +3936,14 @@ private fun HardwareCamera2Preview(
           }
 
           override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-            onTextureViewReady(null)
+            currentOnTextureViewReady(null)
             textureViewInstance = null
             return true
           }
 
-          override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+          override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
+            currentOnPreviewFrameUpdated?.invoke()
+          }
         }
       }
     },
@@ -5854,7 +5978,7 @@ private fun executeScannedCodePrimaryAction(
 
 /**
  * Renders the autofocus indicator (`camera_smart_af_indicator` for Smart ML Kit Object Detection
- * Autofocus, or `camera_focus_indicator` during a 5-second Manual Tap-to-Focus Override) with the
+ * Autofocus, or `camera_focus_indicator` during a 7-second Manual Tap-to-Focus Override) with the
  * normal autofocus appearance: focus ring, center color dot, and center-radius sampled hex color
  * pill (`camera_focus_color_pill`), without a box or label badge.
  */

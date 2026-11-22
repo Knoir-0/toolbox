@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import com.example.toolbox.ui.theme.toolboxScreenBackground
+
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.activity.compose.BackHandler
@@ -43,7 +45,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -79,9 +81,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
+import com.example.toolbox.ui.theme.FilledIconButton
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilledTonalIconButton
+import com.example.toolbox.ui.theme.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -965,7 +967,7 @@ internal fun DiceRollerScreen(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background)
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .testTag("dice_roller_screen"),
   ) {
     ToolboxTopBar(
@@ -1022,7 +1024,7 @@ internal fun DiceRollerScreen(
         sheetTonalElevation = 6.dp,
         sheetShadowElevation = 12.dp,
         sheetDragHandle = null,
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         sheetContent = {
           RollHistorySheetContent(
             history = history,
@@ -1315,9 +1317,10 @@ private fun DndSpellSearchView(
   modifier: Modifier = Modifier,
 ) {
   Surface(
-    color = MaterialTheme.colorScheme.background,
+    color = Color.Transparent,
     modifier = modifier
       .fillMaxSize()
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .testTag("catalog_search_overlay"),
   ) {
     Column(

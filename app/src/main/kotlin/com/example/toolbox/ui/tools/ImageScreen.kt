@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import com.example.toolbox.ui.theme.toolboxScreenBackground
+
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -57,7 +59,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -287,7 +289,7 @@ fun ImageScreen(
     Column(
       modifier = modifier
         .fillMaxSize()
-        .background(MaterialTheme.colorScheme.background)
+        .toolboxScreenBackground(MaterialTheme.colorScheme.background)
         .testTag("image_screen"),
     ) {
       ToolboxTopBar(

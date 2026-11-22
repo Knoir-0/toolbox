@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import com.example.toolbox.ui.theme.toolboxScreenBackground
+
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.content.ClipData
@@ -47,7 +49,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -88,7 +90,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FloatingActionButton
+import com.example.toolbox.ui.theme.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -321,7 +323,7 @@ fun Obd2ScannerScreen(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background)
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .testTag("obd2_scanner_screen"),
   ) {
     // ==================== TOP TOOLBAR WITH EXPANDING SEARCH ====================
@@ -1317,9 +1319,10 @@ private fun Obd2DtcSearchOverlay(
   matchingDtcs: List<Obd2DtcEntry>,
 ) {
   Surface(
-    color = MaterialTheme.colorScheme.background,
+    color = Color.Transparent,
     modifier = Modifier
       .fillMaxSize()
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .testTag("obd2_dtc_search_overlay"),
   ) {
     Column(modifier = Modifier.fillMaxSize()) {

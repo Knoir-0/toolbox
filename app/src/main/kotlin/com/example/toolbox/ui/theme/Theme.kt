@@ -50,6 +50,7 @@ import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_ACCENT
 import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_DOMINANT
 import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_PLAYER
 import com.example.toolbox.ui.main.ACCENT_COLOR_MUSIC_SECONDARY
+import com.example.toolbox.ui.main.BackgroundTexture
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
 import com.example.toolbox.ui.main.DEFAULT_MUSIC_PLAYER_COLOR_OPTION
 import com.example.toolbox.ui.main.DEFAULT_MUSIC_PLAYER_THEME_ENABLED
@@ -756,6 +757,8 @@ fun ToolboxTheme(
     accentColor: String = DEFAULT_ACCENT_COLOR_AUTO,
     musicPlayerThemeEnabled: Boolean = NavigationPreferencesBridge.musicPlayerThemeEnabled,
     musicPlayerColorOption: String = NavigationPreferencesBridge.musicPlayerColorOption,
+    backgroundTexture: BackgroundTexture = NavigationPreferencesBridge.backgroundTexture,
+    hexagonIconButtons: Boolean = NavigationPreferencesBridge.hexagonIconButtons,
     isMusicPlaying: Boolean = MusicPlayerEngine.isMusicPlaying,
     darkTheme: Boolean = when (themeMode) {
         ThemeMode.SYSTEM -> isSystemInDarkTheme()
@@ -858,7 +861,11 @@ fun ToolboxTheme(
         )
     }
 
-    CompositionLocalProvider(LocalIsDarkTheme provides darkTheme) {
+    CompositionLocalProvider(
+        LocalIsDarkTheme provides darkTheme,
+        LocalBackgroundTexture provides backgroundTexture,
+        LocalHexagonIconButtons provides hexagonIconButtons,
+    ) {
         MaterialTheme(
             colorScheme = colorScheme,
             typography = Typography,

@@ -1,16 +1,48 @@
 package com.example.toolbox.ui.tools
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
+import android.net.Uri
+import android.os.Build
+import android.os.storage.StorageManager
+import android.provider.DocumentsContract
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+
+const val NOTES_FILE_EXTENSION = "ttxt"
+const val NOTES_FILE_DOT_EXTENSION = ".ttxt"
+const val NOTES_FILE_FORMAT_NAME = "Toolbox Text XTension"
+const val NOTES_ROOT_FOLDER_NAME = "Notes"
+const val NOTES_ROOT_DISPLAY_PATH = "/Notes"
+private const val NOTES_EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY = "com.android.externalstorage.documents"
+
+/**
+ * Represents a scoped storage folder used by the Notes tool (defaulting to `/Notes` in root storage).
+ */
+data class NotesFolder(
+  val folderName: String = NOTES_ROOT_FOLDER_NAME,
+  val displayPath: String = NOTES_ROOT_DISPLAY_PATH,
+  val treeUri: String? = null,
+  val customAbsolutePath: String? = null,
+) {
+  val folderPath: String get() = displayPath
+  val pillLabel: String get() = folderName
+}
+
+val DEFAULT_NOTES_SCOPED_FOLDER = NotesFolder(
+  folderName = NOTES_ROOT_FOLDER_NAME,
+  displayPath = NOTES_ROOT_DISPLAY_PATH,
+)
+
 
 /**
  * Curated note card color options inspired by Google Keep.
@@ -35,31 +67,71 @@ enum class NoteColor(
 
 /**
  * Represents a single interactive checkbox item inside a checklist-mode [NoteItem].
+ * In `.ttxt` ("Toolbox Text XTension") files, unchecked items use `- <text>` (matching `.yaml` lists)
+ * and checked items replace the dash with `+` internally (`+ <text>`).
  */
 data class NoteChecklistItem(
   val id: String = UUID.randomUUID().toString(),
   val text: String,
   val isChecked: Boolean = false,
 ) {
+  /**
+   * Internal `.ttxt` list marker: `-` when unchecked, `+` when checked.
+   */
+  val ttxtPrefix: Char
+    get() = if (isChecked) '+' else '-'
+
+  /**
+   * Formats this item as a `.ttxt` checklist line (`- <text>` for unchecked, `+ <text>` for checked).
+   */
+  fun toTtxtLine(): String = "$ttxtPrefix ${text.trim()}"
+
   fun toJson(): JSONObject = JSONObject().apply {
     put("id", id)
     put("text", text)
     put("isChecked", isChecked)
+    put("ttxtLine", toTtxtLine())
   }
 
   companion object {
-    fun fromJson(json: JSONObject): NoteChecklistItem = NoteChecklistItem(
-      id = json.optString("id", UUID.randomUUID().toString()),
-      text = json.optString("text", ""),
-      isChecked = json.optBoolean("isChecked", false),
-    )
+    fun fromTtxtLine(
+      rawLine: String,
+      id: String = UUID.randomUUID().toString(),
+    ): NoteChecklistItem? {
+      val trimmed = rawLine.trim()
+      if (trimmed.isEmpty()) return null
+      return when {
+        trimmed.startsWith("+ ") -> {
+          val itemText = trimmed.substring(2).trim()
+          if (itemText.isNotEmpty()) NoteChecklistItem(id = id, text = itemText, isChecked = true) else null
+        }
+        trimmed.startsWith("- ") -> {
+          val itemText = trimmed.substring(2).trim()
+          if (itemText.isNotEmpty()) NoteChecklistItem(id = id, text = itemText, isChecked = false) else null
+        }
+        else -> null
+      }
+    }
+
+    fun fromJson(json: JSONObject): NoteChecklistItem {
+      val itemId = json.optString("id", UUID.randomUUID().toString())
+      val ttxtLine = json.optString("ttxtLine", "").trim()
+      if (ttxtLine.isNotEmpty() && !json.has("text")) {
+        fromTtxtLine(ttxtLine, id = itemId)?.let { return it }
+      }
+      return NoteChecklistItem(
+        id = itemId,
+        text = json.optString("text", ""),
+        isChecked = json.optBoolean("isChecked", false),
+      )
+    }
   }
 }
 
 /**
  * Represents a single note in the Notes tool.
- * A note can be either a free-form text note ([isChecklist] = false) or an interactive
- * checklist ([isChecklist] = true).
+ * A note can be either a free-form Markdown text note ([isChecklist] = false) or an interactive
+ * `.ttxt` checklist ([isChecklist] = true).
  */
 data class NoteItem(
   val id: String = UUID.randomUUID().toString(),
@@ -87,27 +159,22 @@ data class NoteItem(
     get() = checklistItems.filter { it.isChecked }
 
   /**
-   * Formats the note into plain text suitable for copying to clipboard.
+   * Formats the note into `.ttxt` ("Toolbox Text XTension") file content:
+   * - Markdown `# <title>` heading when [title] is non-blank.
+   * - For checklists ([isChecklist] = `true`), `- <item>` for unchecked items (matching `.yaml` lists)
+   *   and `+ <item>` for checked items (dash replaced with `+` internally).
+   * - For text notes ([isChecklist] = `false`), Markdown body text.
+   */
+  fun toTtxt(): String = NotesEngine.formatNoteToTtxt(this)
+
+  /**
+   * Formats the note into `.ttxt`-based plain text suitable for copying to clipboard or sharing.
    */
   fun toPlainText(): String {
     val sb = StringBuilder()
-    if (title.isNotBlank()) {
-      sb.append(title.trim())
-    }
-    if (isChecklist) {
-      if (checklistItems.isNotEmpty()) {
-        if (sb.isNotEmpty()) sb.append("\n\n")
-        val lines = checklistItems.map { item ->
-          val mark = if (item.isChecked) "[x]" else "[ ]"
-          "$mark ${item.text}"
-        }
-        sb.append(lines.joinToString("\n"))
-      }
-    } else {
-      if (content.isNotBlank()) {
-        if (sb.isNotEmpty()) sb.append("\n\n")
-        sb.append(content.trim())
-      }
+    val ttxtBody = toTtxt()
+    if (ttxtBody.isNotEmpty()) {
+      sb.append(ttxtBody)
     }
     if (labels.isNotEmpty()) {
       if (sb.isNotEmpty()) sb.append("\n\n")
@@ -124,6 +191,8 @@ data class NoteItem(
     val checklistArray = JSONArray()
     checklistItems.forEach { checklistArray.put(it.toJson()) }
     put("checklistItems", checklistArray)
+    put("ttxt", toTtxt())
+    put("format", NOTES_FILE_EXTENSION)
     put("color", color.name)
     put("isPinned", isPinned)
     put("isArchived", isArchived)
@@ -136,6 +205,20 @@ data class NoteItem(
   }
 
   companion object {
+    fun fromTtxt(
+      rawTtxt: String,
+      fallbackTitle: String = "",
+      id: String = UUID.randomUUID().toString(),
+      nowMs: Long = System.currentTimeMillis(),
+      forceChecklist: Boolean? = null,
+    ): NoteItem = NotesEngine.parseNoteFromTtxt(
+      rawTtxt = rawTtxt,
+      fallbackTitle = fallbackTitle,
+      id = id,
+      nowMs = nowMs,
+      forceChecklist = forceChecklist,
+    )
+
     fun fromJson(json: JSONObject): NoteItem {
       val itemsList = mutableListOf<NoteChecklistItem>()
       val checklistArray = json.optJSONArray("checklistItems")
@@ -169,9 +252,29 @@ data class NoteItem(
       val now = System.currentTimeMillis()
       val created = json.optLong("createdAt", now)
       val updated = json.optLong("updatedAt", created)
+      val id = json.optString("id", UUID.randomUUID().toString())
+      val hasExplicitFields = json.has("title") || json.has("content") || checklistArray != null
+      val rawTtxt = json.optString("ttxt", "")
+      if (!hasExplicitFields && rawTtxt.isNotEmpty()) {
+        val parsed = fromTtxt(
+          rawTtxt = rawTtxt,
+          id = id,
+          nowMs = updated,
+          forceChecklist = if (json.has("isChecklist")) json.optBoolean("isChecklist") else null,
+        )
+        return parsed.copy(
+          color = parsedColor,
+          isPinned = json.optBoolean("isPinned", false),
+          isArchived = json.optBoolean("isArchived", false),
+          isTrashed = json.optBoolean("isTrashed", false),
+          labels = labelsList.distinct(),
+          createdAt = created,
+          updatedAt = updated,
+        )
+      }
 
       return NoteItem(
-        id = json.optString("id", UUID.randomUUID().toString()),
+        id = id,
         title = json.optString("title", ""),
         content = json.optString("content", ""),
         isChecklist = json.optBoolean("isChecklist", false),
@@ -226,7 +329,8 @@ const val MAX_NOTES_GRID_COLUMNS = 3
 const val DEFAULT_NOTES_GRID_COLUMNS = 2
 
 /**
- * Repository interface for persisting notes, custom labels, and layout preferences.
+ * Repository interface for persisting `.ttxt` notes in `/Notes`, custom labels, scoped storage state,
+ * and layout preferences.
  */
 interface NotesRepository {
   fun loadNotes(): List<NoteItem>
@@ -237,27 +341,74 @@ interface NotesRepository {
   fun setGridView(isGrid: Boolean)
   fun getGridColumnsPerRow(): Int = DEFAULT_NOTES_GRID_COLUMNS
   fun setGridColumnsPerRow(columns: Int) {}
+  fun isNotesFolderAccessGranted(): Boolean = true
+  fun setNotesFolderAccessGranted(granted: Boolean) {}
+  fun getGrantedFolderPaths(): Set<String> =
+    if (isNotesFolderAccessGranted()) setOf(DEFAULT_NOTES_SCOPED_FOLDER.displayPath) else emptySet()
+  fun setGrantedFolderPaths(paths: Set<String>) {
+    setNotesFolderAccessGranted(NotesEngine.isNotesFolderAccessGranted(paths))
+  }
+  fun getNotesDirectory(): File? = null
 }
 
 /**
  * In-memory implementation of [NotesRepository] for unit tests and Compose previews.
+ * When [notesDirectory] is provided, `.ttxt` files are also synced to and from [notesDirectory].
  */
 class InMemoryNotesRepository(
   initialNotes: List<NoteItem> = emptyList(),
   initialLabels: List<String> = emptyList(),
   initialGridView: Boolean = true,
   initialGridColumnsPerRow: Int = DEFAULT_NOTES_GRID_COLUMNS,
+  initialNotesFolderGranted: Boolean = true,
+  private val notesDirectory: File? = null,
 ) : NotesRepository {
   private val notes = initialNotes.toMutableList()
   private val labels = initialLabels.toMutableList()
   private var gridView = initialGridView
   private var gridColumnsPerRow = initialGridColumnsPerRow.coerceIn(MIN_NOTES_GRID_COLUMNS, MAX_NOTES_GRID_COLUMNS)
+  private var notesFolderGranted = initialNotesFolderGranted
+  private var fileNamesByNoteId = mutableMapOf<String, String>()
 
-  override fun loadNotes(): List<NoteItem> = notes.toList()
+  init {
+    if (notesDirectory != null) {
+      if (initialNotes.isNotEmpty()) {
+        fileNamesByNoteId.putAll(NotesEngine.saveNotesToDirectory(initialNotes, notesDirectory))
+      } else if (notesDirectory.exists()) {
+        val loaded = NotesEngine.loadNotesFromDirectory(notesDirectory)
+        notes.addAll(loaded)
+        fileNamesByNoteId.putAll(NotesEngine.assignTtxtFileNames(loaded))
+      }
+    }
+  }
+
+  override fun loadNotes(): List<NoteItem> {
+    val dir = notesDirectory
+    if (dir != null && dir.exists()) {
+      val ttxtFiles = dir.listFiles { f ->
+        f.isFile && f.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true)
+      }
+      if (ttxtFiles != null && (ttxtFiles.isNotEmpty() || notes.isEmpty())) {
+        val synced = NotesEngine.loadNotesFromDirectory(
+          directory = dir,
+          metadataNotes = notes.toList(),
+          fileNameByNoteId = fileNamesByNoteId,
+        )
+        notes.clear()
+        notes.addAll(synced)
+      }
+    }
+    return notes.toList()
+  }
 
   override fun saveNotes(notes: List<NoteItem>) {
     this.notes.clear()
     this.notes.addAll(notes)
+    val dir = notesDirectory
+    if (dir != null) {
+      fileNamesByNoteId.clear()
+      fileNamesByNoteId.putAll(NotesEngine.saveNotesToDirectory(notes, dir))
+    }
   }
 
   override fun loadLabels(): List<String> = labels.toList()
@@ -278,13 +429,23 @@ class InMemoryNotesRepository(
   override fun setGridColumnsPerRow(columns: Int) {
     gridColumnsPerRow = columns.coerceIn(MIN_NOTES_GRID_COLUMNS, MAX_NOTES_GRID_COLUMNS)
   }
+
+  override fun isNotesFolderAccessGranted(): Boolean = notesFolderGranted
+
+  override fun setNotesFolderAccessGranted(granted: Boolean) {
+    notesFolderGranted = granted
+  }
+
+  override fun getNotesDirectory(): File? = notesDirectory
 }
 
 /**
- * Android [SharedPreferences]-backed implementation of [NotesRepository].
+ * Android [SharedPreferences] and `/Notes` `.ttxt` file-backed implementation of [NotesRepository].
  */
 class SharedPreferencesNotesRepository(
   private val sharedPreferences: SharedPreferences,
+  private val notesDirectory: File? = null,
+  private val hasExplicitNotesDirectory: Boolean = notesDirectory != null,
 ) : NotesRepository {
 
   companion object {
@@ -293,32 +454,106 @@ class SharedPreferencesNotesRepository(
     const val KEY_LABELS_JSON = "labels_json"
     const val KEY_IS_GRID_VIEW = "is_grid_view"
     const val KEY_GRID_COLUMNS_PER_ROW = "grid_columns_per_row"
+    const val KEY_NOTES_FOLDER_GRANTED = "notes_folder_granted"
+    const val KEY_GRANTED_FOLDER_PATHS = "notes_granted_folder_paths"
   }
 
   constructor(context: Context) : this(
-    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    sharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
+    notesDirectory = NotesEngine.getDefaultNotesDirectory(context),
+    hasExplicitNotesDirectory = false,
+  )
+
+  constructor(context: Context, notesDirectory: File) : this(
+    sharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
+    notesDirectory = notesDirectory,
+    hasExplicitNotesDirectory = true,
   )
 
   override fun loadNotes(): List<NoteItem> {
-    val raw = sharedPreferences.getString(KEY_NOTES_JSON, null) ?: return emptyList()
-    return try {
+    val raw = sharedPreferences.getString(KEY_NOTES_JSON, null)
+    val dir = notesDirectory
+    if (raw == null) {
+      if (dir != null) {
+        if (hasExplicitNotesDirectory || isNotesFolderAccessGranted()) {
+          if (dir.exists()) {
+            return NotesEngine.loadNotesFromDirectory(dir)
+          }
+        } else {
+          // SharedPreferences was cleared and /Notes access is not granted: remove stale managed .ttxt files
+          try {
+            dir.listFiles { f ->
+              f.isFile && f.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true)
+            }?.forEach { it.delete() }
+          } catch (_: Throwable) {}
+        }
+      }
+      return emptyList()
+    }
+
+    val metadataNotes = mutableListOf<NoteItem>()
+    val fileNameByNoteId = mutableMapOf<String, String>()
+    try {
       val array = JSONArray(raw)
-      val list = mutableListOf<NoteItem>()
       for (i in 0 until array.length()) {
         val obj = array.optJSONObject(i)
         if (obj != null) {
-          list.add(NoteItem.fromJson(obj))
+          val note = NoteItem.fromJson(obj)
+          metadataNotes.add(note)
+          val fileName = obj.optString("fileName", "").trim()
+          if (fileName.isNotEmpty()) {
+            fileNameByNoteId[note.id] = fileName
+          }
         }
       }
-      list
     } catch (_: Exception) {
-      emptyList()
+      return emptyList()
     }
+
+    if (dir != null) {
+      try {
+        val existingTtxtFiles = if (dir.exists()) {
+          dir.listFiles { f ->
+            f.isFile && f.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true)
+          }?.toList().orEmpty()
+        } else {
+          emptyList()
+        }
+
+        return if (existingTtxtFiles.isEmpty()) {
+          if (metadataNotes.isNotEmpty()) {
+            NotesEngine.saveNotesToDirectory(metadataNotes, dir)
+          }
+          metadataNotes
+        } else {
+          NotesEngine.loadNotesFromDirectory(
+            directory = dir,
+            metadataNotes = metadataNotes,
+            fileNameByNoteId = fileNameByNoteId,
+          )
+        }
+      } catch (_: Throwable) {
+        return metadataNotes
+      }
+    }
+
+    return metadataNotes
   }
 
   override fun saveNotes(notes: List<NoteItem>) {
+    val assignedFileNames = NotesEngine.assignTtxtFileNames(notes)
+    val dir = notesDirectory
+    if (dir != null) {
+      try {
+        NotesEngine.saveNotesToDirectory(notes, dir, assignedFileNames)
+      } catch (_: Throwable) {}
+    }
     val array = JSONArray()
-    notes.forEach { array.put(it.toJson()) }
+    notes.forEach { note ->
+      val json = note.toJson()
+      assignedFileNames[note.id]?.let { json.put("fileName", it) }
+      array.put(json)
+    }
     sharedPreferences.edit().putString(KEY_NOTES_JSON, array.toString()).apply()
   }
 
@@ -363,12 +598,58 @@ class SharedPreferencesNotesRepository(
     val coerced = columns.coerceIn(MIN_NOTES_GRID_COLUMNS, MAX_NOTES_GRID_COLUMNS)
     sharedPreferences.edit().putInt(KEY_GRID_COLUMNS_PER_ROW, coerced).apply()
   }
+
+  override fun isNotesFolderAccessGranted(): Boolean {
+    if (sharedPreferences.getBoolean(KEY_NOTES_FOLDER_GRANTED, false)) {
+      return true
+    }
+    val rawPaths = sharedPreferences.getString(KEY_GRANTED_FOLDER_PATHS, null)
+    return NotesEngine.isNotesFolderAccessGranted(NotesEngine.parseGrantedFolderPaths(rawPaths))
+  }
+
+  override fun setNotesFolderAccessGranted(granted: Boolean) {
+    val updatedPaths = if (granted) {
+      getGrantedFolderPaths() + DEFAULT_NOTES_SCOPED_FOLDER.displayPath
+    } else {
+      emptySet()
+    }
+    sharedPreferences.edit()
+      .putBoolean(KEY_NOTES_FOLDER_GRANTED, granted)
+      .putString(KEY_GRANTED_FOLDER_PATHS, NotesEngine.serializeGrantedFolderPaths(updatedPaths))
+      .apply()
+  }
+
+  override fun getGrantedFolderPaths(): Set<String> {
+    val parsed = NotesEngine.parseGrantedFolderPaths(
+      sharedPreferences.getString(KEY_GRANTED_FOLDER_PATHS, null)
+    )
+    return if (sharedPreferences.getBoolean(KEY_NOTES_FOLDER_GRANTED, false)) {
+      parsed + DEFAULT_NOTES_SCOPED_FOLDER.displayPath
+    } else {
+      parsed
+    }
+  }
+
+  override fun setGrantedFolderPaths(paths: Set<String>) {
+    val granted = NotesEngine.isNotesFolderAccessGranted(paths)
+    sharedPreferences.edit()
+      .putBoolean(KEY_NOTES_FOLDER_GRANTED, granted)
+      .putString(KEY_GRANTED_FOLDER_PATHS, NotesEngine.serializeGrantedFolderPaths(paths))
+      .apply()
+  }
+
+  override fun getNotesDirectory(): File? = notesDirectory
 }
 
 /**
- * Pure business logic for creating, editing, converting, filtering, and organizing notes.
+ * Pure business logic for creating, editing, converting, filtering, and organizing `.ttxt` notes.
  */
 object NotesEngine {
+
+  val DEFAULT_NOTES_FOLDER: NotesFolder = DEFAULT_NOTES_SCOPED_FOLDER
+
+  private val TTXT_UNCHECKED_LINE_REGEX = Regex("""^\s*-\s+(.+)$""")
+  private val TTXT_CHECKED_LINE_REGEX = Regex("""^\s*\+\s+(.+)$""")
 
   data class PendingQuickCaptureRequest(
     val isChecklist: Boolean,
@@ -393,6 +674,447 @@ object NotesEngine {
     val current = pendingQuickCaptureRequest
     pendingQuickCaptureRequest = null
     return current
+  }
+
+  /**
+   * Formats a [NoteItem] into `.ttxt` ("Toolbox Text XTension") content:
+   * - Markdown `# <title>` heading when [NoteItem.title] is non-blank.
+   * - For checklists ([NoteItem.isChecklist] = `true`), `- <item>` for unchecked items (matching
+   *   `.yaml` list syntax) and `+ <item>` for checked items (dash replaced with `+` internally).
+   * - For text notes ([NoteItem.isChecklist] = `false`), Markdown body text.
+   */
+  fun formatNoteToTtxt(note: NoteItem): String {
+    val sb = StringBuilder()
+    if (note.title.isNotBlank()) {
+      sb.append("# ").append(note.title.trim())
+    }
+    if (note.isChecklist) {
+      val validItems = note.checklistItems.filter { it.text.isNotBlank() }
+      if (validItems.isNotEmpty()) {
+        if (sb.isNotEmpty()) sb.append("\n\n")
+        val lines = validItems.map { it.toTtxtLine() }
+        sb.append(lines.joinToString("\n"))
+      }
+    } else {
+      if (note.content.isNotBlank()) {
+        if (sb.isNotEmpty()) sb.append("\n\n")
+        sb.append(note.content.trimEnd())
+      }
+    }
+    return sb.toString()
+  }
+
+  /**
+   * Parses `.ttxt` ("Toolbox Text XTension") content into a [NoteItem].
+   * - Extracts a `# Heading` title if present on the first non-blank line; otherwise uses [fallbackTitle].
+   * - Recognizes `.ttxt` checklists where unchecked items use `- <item>` and checked items use `+ <item>`.
+   */
+  fun parseNoteFromTtxt(
+    rawTtxt: String,
+    fallbackTitle: String = "",
+    id: String = UUID.randomUUID().toString(),
+    nowMs: Long = System.currentTimeMillis(),
+    forceChecklist: Boolean? = null,
+    existingChecklistItems: List<NoteChecklistItem> = emptyList(),
+  ): NoteItem {
+    val normalized = rawTtxt.replace("\r\n", "\n").replace('\r', '\n')
+    val lines = normalized.split('\n')
+    val firstNonBlankIdx = lines.indexOfFirst { it.isNotBlank() }
+    if (firstNonBlankIdx == -1) {
+      return NoteItem(
+        id = id,
+        title = fallbackTitle,
+        isChecklist = forceChecklist ?: false,
+        createdAt = nowMs,
+        updatedAt = nowMs,
+      )
+    }
+
+    val firstTrimmed = lines[firstNonBlankIdx].trim()
+    val title: String
+    val rawBodyLines: List<String>
+    if (firstTrimmed.startsWith("# ") || firstTrimmed == "#") {
+      title = firstTrimmed.removePrefix("#").trim().ifBlank { fallbackTitle }
+      rawBodyLines = lines.drop(firstNonBlankIdx + 1)
+    } else {
+      title = fallbackTitle
+      rawBodyLines = lines.drop(firstNonBlankIdx)
+    }
+
+    val firstBodyNonBlank = rawBodyLines.indexOfFirst { it.isNotBlank() }
+    val lastBodyNonBlank = rawBodyLines.indexOfLast { it.isNotBlank() }
+    val trimmedBodyLines = if (firstBodyNonBlank >= 0 && lastBodyNonBlank >= firstBodyNonBlank) {
+      rawBodyLines.subList(firstBodyNonBlank, lastBodyNonBlank + 1)
+    } else {
+      emptyList()
+    }
+
+    val nonBlankBody = trimmedBodyLines.map { it.trim() }.filter { it.isNotEmpty() }
+    val allTtxtChecklistLines = nonBlankBody.isNotEmpty() && nonBlankBody.all { line ->
+      TTXT_UNCHECKED_LINE_REGEX.matches(line) || TTXT_CHECKED_LINE_REGEX.matches(line)
+    }
+
+    val isChecklist = when (forceChecklist) {
+      true -> true
+      false -> false
+      null -> allTtxtChecklistLines
+    }
+
+    return if (isChecklist) {
+      val remainingExisting = existingChecklistItems.toMutableList()
+      val items = nonBlankBody.mapNotNull { line ->
+        val checkedMatch = TTXT_CHECKED_LINE_REGEX.matchEntire(line)
+        val uncheckedMatch = if (checkedMatch == null) TTXT_UNCHECKED_LINE_REGEX.matchEntire(line) else null
+        val (itemText, isChecked) = when {
+          checkedMatch != null -> checkedMatch.groupValues[1].trim() to true
+          uncheckedMatch != null -> uncheckedMatch.groupValues[1].trim() to false
+          else -> {
+            val parsed = parseChecklistItems(line).firstOrNull()
+            if (parsed != null) parsed.text to parsed.isChecked else line to false
+          }
+        }
+        if (itemText.isEmpty()) {
+          null
+        } else {
+          val matchIdx = remainingExisting.indexOfFirst { it.text == itemText && it.isChecked == isChecked }
+            .takeIf { it >= 0 }
+            ?: remainingExisting.indexOfFirst { it.text == itemText }.takeIf { it >= 0 }
+          val matchedId = if (matchIdx != null) {
+            remainingExisting.removeAt(matchIdx).id
+          } else {
+            UUID.randomUUID().toString()
+          }
+          NoteChecklistItem(
+            id = matchedId,
+            text = itemText,
+            isChecked = isChecked,
+          )
+        }
+      }
+      NoteItem(
+        id = id,
+        title = title,
+        content = "",
+        isChecklist = true,
+        checklistItems = items,
+        createdAt = nowMs,
+        updatedAt = nowMs,
+      )
+    } else {
+      NoteItem(
+        id = id,
+        title = title,
+        content = trimmedBodyLines.joinToString("\n").trimEnd(),
+        isChecklist = false,
+        checklistItems = emptyList(),
+        createdAt = nowMs,
+        updatedAt = nowMs,
+      )
+    }
+  }
+
+  /**
+   * Builds a unique, filesystem-safe `.ttxt` filename for [note].
+   */
+  fun buildTtxtFileName(
+    note: NoteItem,
+    usedFileNamesLower: MutableSet<String> = mutableSetOf(),
+  ): String {
+    val shortId = note.id
+      .replace(Regex("[^A-Za-z0-9_-]"), "")
+      .take(8)
+      .ifEmpty { "note" }
+    val rawStem = if (note.title.isNotBlank()) {
+      note.title.trim()
+    } else {
+      "Untitled_$shortId"
+    }
+    val sanitizedStem = rawStem
+      .replace(Regex("[\\\\/:*?\"<>|\\r\\n\\t]"), "_")
+      .replace(Regex("\\s+"), " ")
+      .trim()
+      .trim('.')
+      .take(80)
+      .ifEmpty { "Untitled_$shortId" }
+
+    var candidate = "$sanitizedStem$NOTES_FILE_DOT_EXTENSION"
+    var counter = 2
+    while (!usedFileNamesLower.add(candidate.lowercase(Locale.ROOT))) {
+      candidate = "$sanitizedStem ($counter)$NOTES_FILE_DOT_EXTENSION"
+      counter++
+    }
+    return candidate
+  }
+
+  /**
+   * Assigns deterministic, collision-free `.ttxt` filenames for a list of [notes],
+   * returning a map of `note.id -> fileName`.
+   */
+  fun assignTtxtFileNames(notes: List<NoteItem>): Map<String, String> {
+    val usedLower = mutableSetOf<String>()
+    val result = LinkedHashMap<String, String>(notes.size)
+    for (note in notes) {
+      result[note.id] = buildTtxtFileName(note, usedLower)
+    }
+    return result
+  }
+
+  /**
+   * Writes all [notes] into [directory] as `.ttxt` files and deletes any stale `.ttxt` files
+   * in [directory] that are no longer part of [notes].
+   */
+  fun saveNotesToDirectory(
+    notes: List<NoteItem>,
+    directory: File,
+    fileNamesByNoteId: Map<String, String> = assignTtxtFileNames(notes),
+  ): Map<String, String> {
+    if (!directory.exists()) {
+      directory.mkdirs()
+    }
+    val activeNamesLower = mutableSetOf<String>()
+    for (note in notes) {
+      val fileName = fileNamesByNoteId[note.id] ?: buildTtxtFileName(note, activeNamesLower)
+      activeNamesLower.add(fileName.lowercase(Locale.ROOT))
+      val targetFile = File(directory, fileName)
+      targetFile.writeText(formatNoteToTtxt(note))
+      try {
+        if (note.updatedAt > 0L) {
+          targetFile.setLastModified(note.updatedAt)
+        }
+      } catch (_: Throwable) {}
+    }
+
+    directory.listFiles { f ->
+      f.isFile && f.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true)
+    }?.forEach { existingFile ->
+      if (existingFile.name.lowercase(Locale.ROOT) !in activeNamesLower) {
+        try {
+          existingFile.delete()
+        } catch (_: Throwable) {}
+      }
+    }
+    return fileNamesByNoteId
+  }
+
+  /**
+   * Loads all `.ttxt` note files from [directory], merging with optional [metadataNotes]
+   * and [fileNameByNoteId] to preserve note IDs, colors, pin/archive/trash flags, labels,
+   * timestamps, and manual card arrangement.
+   */
+  fun loadNotesFromDirectory(
+    directory: File,
+    metadataNotes: List<NoteItem> = emptyList(),
+    fileNameByNoteId: Map<String, String> = emptyMap(),
+  ): List<NoteItem> {
+    if (!directory.exists() || !directory.isDirectory) {
+      return metadataNotes
+    }
+    val ttxtFiles = directory.listFiles { f ->
+      f.isFile && f.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true)
+    }?.toList().orEmpty()
+
+    if (ttxtFiles.isEmpty()) {
+      return emptyList()
+    }
+
+    val effectiveFileNames = if (fileNameByNoteId.isNotEmpty()) {
+      fileNameByNoteId
+    } else if (metadataNotes.isNotEmpty()) {
+      assignTtxtFileNames(metadataNotes)
+    } else {
+      emptyMap()
+    }
+
+    val metaById = metadataNotes.associateBy { it.id }
+    val noteIdByFileNameLower = effectiveFileNames.entries.associate { (id, fName) ->
+      fName.lowercase(Locale.ROOT) to id
+    }
+    val matchedNotesById = LinkedHashMap<String, NoteItem>()
+    val unmatchedExternalNotes = mutableListOf<NoteItem>()
+
+    for (file in ttxtFiles.sortedByDescending { it.lastModified() }) {
+      val rawText = try {
+        file.readText()
+      } catch (_: Throwable) {
+        continue
+      }
+      val fileNameLower = file.name.lowercase(Locale.ROOT)
+      val matchedId = noteIdByFileNameLower[fileNameLower]
+        ?: metadataNotes.firstOrNull { meta ->
+          meta.id !in matchedNotesById &&
+            meta.title.isNotBlank() &&
+            meta.title.equals(file.nameWithoutExtension, ignoreCase = true)
+        }?.id
+      val meta = matchedId?.let { metaById[it] }
+
+      val isAutoUntitledFile = file.nameWithoutExtension.startsWith("Untitled_", ignoreCase = true) ||
+        file.nameWithoutExtension.startsWith("Note_", ignoreCase = true)
+      val fallbackTitle = when {
+        meta != null -> meta.title
+        isAutoUntitledFile -> ""
+        else -> file.nameWithoutExtension
+      }
+      val fileTimestamp = file.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis()
+      val parsed = parseNoteFromTtxt(
+        rawTtxt = rawText,
+        fallbackTitle = fallbackTitle,
+        id = meta?.id ?: "ttxt_${file.nameWithoutExtension.hashCode()}_$fileTimestamp",
+        nowMs = meta?.updatedAt ?: fileTimestamp,
+        forceChecklist = if (rawText.trim().let { !it.contains('\n') && it.startsWith("#") } && meta != null) {
+          meta.isChecklist
+        } else {
+          null
+        },
+        existingChecklistItems = meta?.checklistItems.orEmpty(),
+      )
+
+      if (meta != null) {
+        matchedNotesById[meta.id] = parsed.copy(
+          id = meta.id,
+          isChecklist = if (parsed.content.isEmpty() && parsed.checklistItems.isEmpty()) {
+            meta.isChecklist
+          } else {
+            parsed.isChecklist
+          },
+          color = meta.color,
+          isPinned = meta.isPinned,
+          isArchived = meta.isArchived,
+          isTrashed = meta.isTrashed,
+          labels = meta.labels,
+          createdAt = meta.createdAt,
+          updatedAt = meta.updatedAt,
+        )
+      } else if (!parsed.isEmpty) {
+        unmatchedExternalNotes.add(parsed)
+      }
+    }
+
+    val orderedMatched = metadataNotes.mapNotNull { matchedNotesById[it.id] }
+    return unmatchedExternalNotes + orderedMatched
+  }
+
+  /**
+   * Resolves the `/Notes` directory in the root storage ([userRoot]), falling back to app storage
+   * `/Notes` in restricted/test environments where external root storage isn't directly writable via [File].
+   */
+  fun getDefaultNotesDirectory(
+    context: Context? = null,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): File {
+    val primaryNotesDir = File(userRoot, NOTES_ROOT_FOLDER_NAME)
+    try {
+      if ((primaryNotesDir.exists() && primaryNotesDir.canWrite()) || primaryNotesDir.mkdirs()) {
+        return primaryNotesDir
+      }
+    } catch (_: Throwable) {}
+
+    if (context != null) {
+      val fallbackParent = context.getExternalFilesDir(null) ?: context.filesDir
+      val fallbackNotesDir = File(fallbackParent, NOTES_ROOT_FOLDER_NAME)
+      fallbackNotesDir.mkdirs()
+      return fallbackNotesDir
+    }
+    return primaryNotesDir
+  }
+
+  /**
+   * Creates the Android system prompt [Intent] (`Intent.ACTION_OPEN_DOCUMENT_TREE`) scoped to `/Notes`
+   * in the root directory so the user can grant scoped storage access to use the Notes tool.
+   */
+  fun createFolderAccessIntent(
+    context: Context? = null,
+    folder: NotesFolder = DEFAULT_NOTES_SCOPED_FOLDER,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+  ): Intent {
+    val relativePath = folder.displayPath.trim().trim('/').ifEmpty { NOTES_ROOT_FOLDER_NAME }
+    try {
+      val targetDir = if (!folder.customAbsolutePath.isNullOrBlank()) {
+        File(folder.customAbsolutePath)
+      } else {
+        File(userRoot, relativePath)
+      }
+      if (!targetDir.exists()) {
+        targetDir.mkdirs()
+      }
+    } catch (_: Throwable) {}
+
+    val docId = "primary:$relativePath"
+    val initialUri = try {
+      DocumentsContract.buildDocumentUri(
+        NOTES_EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY,
+        docId,
+      )
+    } catch (_: Throwable) {
+      Uri.parse("content://$NOTES_EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY/document/primary%3A$relativePath")
+    }
+    val baseIntent = if (context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      try {
+        val storageManager = context.getSystemService(Context.STORAGE_SERVICE) as? StorageManager
+        storageManager?.primaryStorageVolume?.createOpenDocumentTreeIntent()
+      } catch (_: Throwable) {
+        null
+      }
+    } else {
+      null
+    } ?: Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+
+    return baseIntent.apply {
+      action = Intent.ACTION_OPEN_DOCUMENT_TREE
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
+      }
+      addFlags(
+        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+          Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+          Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+          Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+      )
+    }
+  }
+
+  fun isNotesFolderAccessGranted(grantedFolderPaths: Set<String>): Boolean {
+    return grantedFolderPaths.any { path ->
+      val clean = path.trim().trim('/')
+      clean.equals(NOTES_ROOT_FOLDER_NAME, ignoreCase = true)
+    }
+  }
+
+  fun parseGrantedFolderPaths(raw: String?): Set<String> {
+    if (raw.isNullOrBlank()) return emptySet()
+    return raw.split('\n')
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .map { if (it.startsWith("/")) it else "/$it" }
+      .toSet()
+  }
+
+  fun serializeGrantedFolderPaths(paths: Set<String>): String {
+    return paths
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .map { if (it.startsWith("/")) it else "/$it" }
+      .distinct()
+      .joinToString("\n")
+  }
+
+  fun getGrantedFolderPaths(context: Context): Set<String> {
+    return SharedPreferencesNotesRepository(context).getGrantedFolderPaths()
+  }
+
+  fun setFolderPathAccessGranted(
+    context: Context,
+    folderPath: String = DEFAULT_NOTES_SCOPED_FOLDER.displayPath,
+    granted: Boolean = true,
+  ): Set<String> {
+    val repo = SharedPreferencesNotesRepository(context)
+    val normalized = if (folderPath.startsWith("/")) folderPath else "/$folderPath"
+    val updated = if (granted) {
+      repo.getGrantedFolderPaths() + normalized
+    } else {
+      repo.getGrantedFolderPaths().filterNot { it.equals(normalized, ignoreCase = true) }.toSet()
+    }
+    repo.setGrantedFolderPaths(updated)
+    return updated
   }
 
   /**
@@ -457,6 +1179,18 @@ object NotesEngine {
           null
         } else {
           when {
+            line.startsWith("+ ") -> {
+              val itemText = line.substring(2).trim()
+              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = true) else null
+            }
+            line.startsWith("- [x] ", ignoreCase = true) || line.startsWith("* [x] ", ignoreCase = true) -> {
+              val itemText = line.substring(6).trim()
+              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = true) else null
+            }
+            line.startsWith("- [ ] ") || line.startsWith("* [ ] ") -> {
+              val itemText = line.substring(6).trim()
+              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = false) else null
+            }
             line.startsWith("[x] ", ignoreCase = true) -> {
               val itemText = line.substring(4).trim()
               if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = true) else null

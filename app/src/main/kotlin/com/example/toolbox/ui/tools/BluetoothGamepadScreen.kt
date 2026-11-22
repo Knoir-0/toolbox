@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import com.example.toolbox.ui.theme.toolboxScreenBackground
+
 import android.app.Application
 import android.bluetooth.BluetoothAdapter
 import android.content.Intent
@@ -34,7 +36,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
+import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -146,7 +148,7 @@ fun BluetoothGamepadScreen(modifier: Modifier = Modifier) {
     Column(
       modifier = modifier
         .fillMaxSize()
-        .background(MaterialTheme.colorScheme.background)
+        .toolboxScreenBackground(MaterialTheme.colorScheme.background)
         .testTag("bt_gamepad_screen"),
     ) {
       BluetoothToolToolbar(
@@ -237,7 +239,7 @@ fun BluetoothGamepadScreen(modifier: Modifier = Modifier) {
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background)
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .testTag("bt_gamepad_screen"),
   ) {
     BluetoothToolToolbar(
@@ -344,7 +346,7 @@ internal fun GamepadControlContent(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background),
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background),
   ) {
     if (showToolbar) {
       BluetoothToolToolbar(

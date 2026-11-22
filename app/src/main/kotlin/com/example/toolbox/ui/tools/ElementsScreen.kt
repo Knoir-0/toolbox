@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import com.example.toolbox.ui.theme.toolboxScreenBackground
+
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -36,7 +38,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -427,7 +429,7 @@ fun ElementsScreen(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background)
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .testTag("elements_screen"),
   ) {
     // ==================== 1. UNIFIED 68.DP TOP TOOLBAR ====================
@@ -1857,9 +1859,10 @@ private fun ElementsSearchOverlay(
   onToggleFavorite: (ChemicalElement) -> Unit,
 ) {
   Surface(
-    color = MaterialTheme.colorScheme.background,
+    color = Color.Transparent,
     modifier = Modifier
       .fillMaxSize()
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .testTag("elements_search_overlay"),
   ) {
     Column(modifier = Modifier.fillMaxSize()) {

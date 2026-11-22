@@ -384,11 +384,11 @@ object SearchEngine {
     ),
     Tool.SETTINGS to ToolSearchMetadata(
       tool = Tool.SETTINGS,
-      summary = "App theme mode, dynamic colors, accent harmonies, tool sorting & backup",
-      description = "Customize light/dark/system theme, wallpaper dynamic colors, automatic accent harmonies, music player theming, tool visibility, grid order, and full JSON backup/restore.",
-      capabilities = listOf("Theme Mode (System, Light, Dark)", "Seed Theme Color & Music Player Dynamic Theme", "Automatic Accent Harmonies (Complementary, Analogous, Triadic, Split-Comp)", "Tool Visibility & Grid Sorting (Manual, Category, Usage)", "Full App JSON Backup & Restore"),
-      keywords = listOf("settings", "preferences", "theme", "dark mode", "light mode", "accent color", "hidden tools", "visibility", "sorting", "backup", "restore", "reset"),
-      sampleQueries = listOf("Dark Mode", "Backup", "Hidden Tools"),
+      summary = "App theme mode, dynamic colors, accent harmonies, background textures, tool sorting & backup",
+      description = "Customize light/dark/system theme, wallpaper dynamic colors, automatic accent harmonies, music player theming, procedural background textures, tool visibility, grid order, and full JSON backup/restore.",
+      capabilities = listOf("Theme Mode (System, Light, Dark)", "Seed Theme Color & Music Player Dynamic Theme", "Automatic Accent Harmonies (Complementary, Analogous, Triadic, Split-Comp)", "Procedural Background Textures (Fuzzy, Fade, Concentric, Halftone, Topography & More)", "Tool Visibility & Grid Sorting (Manual, Category, Usage)", "Full App JSON Backup & Restore"),
+      keywords = listOf("settings", "preferences", "theme", "dark mode", "light mode", "accent color", "background texture", "fuzzy", "fade", "concentric", "halftone", "topography", "aurora", "starfield", "sunburst", "honeycomb", "blueprint", "waves", "confetti", "circuit", "hidden tools", "visibility", "sorting", "backup", "restore", "reset"),
+      sampleQueries = listOf("Dark Mode", "Background Texture", "Backup", "Hidden Tools"),
     ),
   )
 
@@ -2278,6 +2278,13 @@ object SearchEngine {
       subtitle = "Complementary, Analogous, Triadic, Split-Complementary & Tints/Shades",
       snippet = "Automatically derive secondary and accent UI tokens from the main theme color.",
       keywords = "settings accent color harmony complementary analogous triadic split monochromatic",
+    ),
+    SettingCatalogEntry(
+      id = "setting_background_texture",
+      title = "Background Texture Presets",
+      subtitle = "Appearance • None, Fuzzy, Fade, Concentric, Halftone, Topography, Aurora, Starfield & More",
+      snippet = "Apply a procedural background texture across all tool screens matching your active theme and accent colors.",
+      keywords = "settings background texture pattern fuzzy fade concentric halftone topography aurora starfield sunburst honeycomb hexagons blueprint waves confetti circuit",
     ),
     SettingCatalogEntry(
       id = "setting_tool_sorting",

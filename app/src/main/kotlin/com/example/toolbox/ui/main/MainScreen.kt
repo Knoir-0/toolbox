@@ -32,8 +32,13 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.example.toolbox.ui.theme.CircleShape
+import com.example.toolbox.ui.theme.FilledIconButton
+import com.example.toolbox.ui.theme.FilledTonalIconButton
+import com.example.toolbox.ui.theme.HexagonShape
+import com.example.toolbox.ui.theme.LocalHexagonIconButtons
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.AddToHomeScreen
 import androidx.compose.material.icons.filled.Pause
@@ -47,8 +52,6 @@ import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -112,7 +115,11 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.navigation3.runtime.NavKey
+import androidx.compose.runtime.CompositionLocalProvider
+import com.example.toolbox.ui.theme.LocalBackgroundTexture
 import com.example.toolbox.ui.theme.ToolboxTheme
+import com.example.toolbox.ui.theme.currentBackgroundTexture
+import com.example.toolbox.ui.theme.toolboxScreenBackground
 import com.example.toolbox.ui.tools.ArchiveScreen
 import com.example.toolbox.ui.tools.AudioEditorScreen
 import com.example.toolbox.ui.tools.AudioRecorderScreen
@@ -403,6 +410,8 @@ fun MainScreen(
   val musicPlayerThemeEnabled by preferencesRepository.musicPlayerThemeEnabledFlow.collectAsState()
   val musicPlayerColorOption by preferencesRepository.musicPlayerColorOptionFlow.collectAsState()
   val accentColor by preferencesRepository.accentColorFlow.collectAsState()
+  val backgroundTexture by preferencesRepository.backgroundTextureFlow.collectAsState()
+  val hexagonIconButtons by preferencesRepository.hexagonIconButtonsFlow.collectAsState()
 
   ToolboxTheme(
     themeMode = themeMode,
@@ -410,6 +419,8 @@ fun MainScreen(
     accentColor = accentColor,
     musicPlayerThemeEnabled = musicPlayerThemeEnabled,
     musicPlayerColorOption = musicPlayerColorOption,
+    backgroundTexture = backgroundTexture,
+    hexagonIconButtons = hexagonIconButtons,
   ) {
     if (standaloneTool != null) {
       StandaloneToolScreen(
@@ -484,6 +495,10 @@ fun ToolboxScaffold(
     ?: remember { mutableStateOf(emptyMap()) }
   val themeColor by preferencesRepository?.themeColorFlow?.collectAsState()
     ?: remember { mutableStateOf(DEFAULT_THEME_COLOR_SYSTEM) }
+  val backgroundTexture by preferencesRepository?.backgroundTextureFlow?.collectAsState()
+    ?: remember { mutableStateOf(DEFAULT_BACKGROUND_TEXTURE) }
+  val hexagonIconButtons by preferencesRepository?.hexagonIconButtonsFlow?.collectAsState()
+    ?: remember { mutableStateOf(DEFAULT_HEXAGON_ICON_BUTTONS) }
 
   val allOrderedTools = remember(initialTools, persistedToolOrder) {
     val base = initialTools ?: persistedToolOrder
@@ -582,15 +597,19 @@ fun ToolboxScaffold(
     if (returnTo != null) onSelectTool(returnTo)
   }
 
+  CompositionLocalProvider(
+    LocalBackgroundTexture provides backgroundTexture,
+    LocalHexagonIconButtons provides hexagonIconButtons,
+  ) {
   Box(
     modifier = modifier
       .fillMaxSize()
-      .background(currentToolBackgroundColor),
+      .toolboxScreenBackground(currentToolBackgroundColor, texture = backgroundTexture),
   ) {
     Box(
       modifier = Modifier
         .fillMaxSize()
-        .background(currentToolBackgroundColor)
+        .toolboxScreenBackground(currentToolBackgroundColor, texture = backgroundTexture)
         .statusBarsPadding(),
       contentAlignment = Alignment.Center,
     ) {
@@ -763,6 +782,7 @@ fun ToolboxScaffold(
         },
       )
     }
+  }
   }
 }
 
@@ -2471,11 +2491,12 @@ private fun ToolGridItem(
     verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
     // Native NavigationBarItem-style active indicator pill around the icon
+    val hexagonEnabled = currentHexagonIconButtons()
     Box(
       modifier = Modifier
-        .width(56.dp)
+        .width(if (hexagonEnabled) 34.dp else 56.dp)
         .height(32.dp)
-        .clip(CircleShape)
+        .clip(if (hexagonEnabled) HexagonShape else CircleShape)
         .background(indicatorColor),
       contentAlignment = Alignment.Center,
     ) {
@@ -2515,23 +2536,26 @@ fun StandaloneToolScreen(
   }
 
   val bgColor = toolBackgroundColor(tool)
-  Box(
-    modifier = modifier
-      .fillMaxSize()
-      .background(bgColor)
-      .statusBarsPadding()
-      .navigationBarsPadding()
-      .testTag("standalone_tool_screen"),
-    contentAlignment = Alignment.Center,
-  ) {
-    ToolContentView(
-      tool = tool,
-      bottomPadding = 0.dp,
-      initialDirectory = initialDirectory,
-      initialExpandMusicPlayer = initialExpandMusicPlayer,
-      preferencesRepository = preferencesRepository,
-      modifier = Modifier.testTag("standalone_tool_screen_${tool.name}"),
-    )
+  val backgroundTexture by preferencesRepository.backgroundTextureFlow.collectAsState()
+  CompositionLocalProvider(LocalBackgroundTexture provides backgroundTexture) {
+    Box(
+      modifier = modifier
+        .fillMaxSize()
+        .toolboxScreenBackground(bgColor, texture = backgroundTexture)
+        .statusBarsPadding()
+        .navigationBarsPadding()
+        .testTag("standalone_tool_screen"),
+      contentAlignment = Alignment.Center,
+    ) {
+      ToolContentView(
+        tool = tool,
+        bottomPadding = 0.dp,
+        initialDirectory = initialDirectory,
+        initialExpandMusicPlayer = initialExpandMusicPlayer,
+        preferencesRepository = preferencesRepository,
+        modifier = Modifier.testTag("standalone_tool_screen_${tool.name}"),
+      )
+    }
   }
 }
 
@@ -2554,10 +2578,13 @@ fun ToolContentView(
   preferencesRepository: NavigationPreferencesRepository? = null,
 ) {
   val bgColor = toolBackgroundColor(tool)
+  val activeTexture = preferencesRepository?.backgroundTextureFlow?.collectAsState()?.value
+    ?: currentBackgroundTexture()
+  CompositionLocalProvider(LocalBackgroundTexture provides activeTexture) {
   Box(
     modifier = modifier
       .fillMaxSize()
-      .background(bgColor),
+      .toolboxScreenBackground(bgColor, texture = activeTexture),
   ) {
     when (tool) {
       Tool.DICE_ROLLER -> DiceRollerScreen(modifier = Modifier.padding(bottom = bottomPadding))
@@ -2703,6 +2730,7 @@ fun ToolContentView(
         modifier = Modifier.padding(bottom = bottomPadding),
       )
     }
+  }
   }
 }
 

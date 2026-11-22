@@ -643,6 +643,41 @@ class CameraEngineTest {
       radiusPx = 2,
     )
     assertEquals("#102030", sampledCornerHex)
+
+    // Live scene update under the same focus coordinate updates the sampled hex color immediately
+    for (y in 12..20) {
+      for (x in 12..20) {
+        pixels[y * w + x] = 0xFF34D399.toInt()
+      }
+    }
+    val updatedCenterHex = CameraEngine.sampleCenterRadiusColorHexFromArgbPixels(
+      pixels = pixels,
+      width = w,
+      height = h,
+      normX = 16f / 31f,
+      normY = 16f / 31f,
+      radiusPx = 3,
+    )
+    assertEquals("#34D399", updatedCenterHex)
+
+    // Unrendered transparent buffers fall back cleanly instead of returning #000000
+    val transparentPixels = IntArray(w * h) { 0x00000000 }
+    val fallbackFromTransparent = CameraEngine.sampleCenterRadiusColorHexFromArgbPixels(
+      pixels = transparentPixels,
+      width = w,
+      height = h,
+      normX = 0.5f,
+      normY = 0.5f,
+      radiusPx = 3,
+    )
+    assertFalse(fallbackFromTransparent == "#000000")
+
+    // Synthetic fallback hex color also varies continuously across both upper and lower viewfinder coordinates
+    val synthTopLeft = CameraEngine.sampleSyntheticFocusColorHex(0.20f, 0.20f)
+    val synthBottomLeft = CameraEngine.sampleSyntheticFocusColorHex(0.20f, 0.75f)
+    val synthBottomRight = CameraEngine.sampleSyntheticFocusColorHex(0.80f, 0.85f)
+    assertFalse(synthTopLeft == synthBottomLeft)
+    assertFalse(synthBottomLeft == synthBottomRight)
   }
 
   @Test
@@ -834,7 +869,7 @@ class CameraEngineTest {
 
   @Test
   fun smartObjectAutofocus_andManual5sFocusOverride_prioritizeObjectsAndRespect5SecondOverrideWindow() {
-    assertEquals(5000L, MANUAL_FOCUS_OVERRIDE_DURATION_MS)
+    assertEquals(7000L, MANUAL_FOCUS_OVERRIDE_DURATION_MS)
 
     // 1. ML Kit Object Detection candidate scoring prioritizes prominent central subjects over peripheral specks or background boxes
     val peripheralTinySpeck = RawDetectedObjectForFocus(
@@ -897,7 +932,7 @@ class CameraEngineTest {
     assertEquals(selectedTarget.normX, stabilizedTarget!!.normX, 0.001f)
     assertEquals(selectedTarget.normY, stabilizedTarget.normY, 0.001f)
 
-    // 3. Manual tap-to-focus override for 5 seconds (5000ms) before returning to smart autofocus
+    // 3. Manual tap-to-focus override for 7 seconds (7000ms) before returning to smart autofocus
     val tapTimeMs = 2000L
     val manualTarget = CameraEngine.createManualFocusTarget(
       normX = 0.78f,
@@ -907,11 +942,11 @@ class CameraEngineTest {
     assertEquals(CameraFocusSource.MANUAL_OVERRIDE, manualTarget.source)
     assertTrue(manualTarget.isManualOverride)
     assertFalse(manualTarget.isSmartObjectFocus)
-    assertEquals("Manual • 5s", manualTarget.badgeLabel)
+    assertEquals("Manual • 7s", manualTarget.badgeLabel)
 
-    // At t = 2000ms (0s elapsed), manual override is active with 5000ms remaining
+    // At t = 2000ms (0s elapsed), manual override is active with 7000ms remaining
     assertTrue(CameraEngine.isManualFocusOverrideActive(tapTimeMs, nowMs = 2000L))
-    assertEquals(5000L, CameraEngine.remainingManualFocusOverrideMs(tapTimeMs, nowMs = 2000L))
+    assertEquals(7000L, CameraEngine.remainingManualFocusOverrideMs(tapTimeMs, nowMs = 2000L))
     val resolvedAt0s = CameraEngine.resolveActiveFocusTarget(
       manualTarget = manualTarget,
       smartAutoTarget = selectedTarget,
@@ -921,34 +956,34 @@ class CameraEngineTest {
     assertEquals(0.78f, resolvedAt0s?.normX ?: 0f, 0.001f)
     assertEquals(0.32f, resolvedAt0s?.normY ?: 0f, 0.001f)
 
-    // At t = 5500ms (3.5s elapsed — past the old 2.8s timeout, still within 5s window), manual override is STILL active
-    assertTrue(CameraEngine.isManualFocusOverrideActive(tapTimeMs, nowMs = 5500L))
-    assertEquals(1500L, CameraEngine.remainingManualFocusOverrideMs(tapTimeMs, nowMs = 5500L))
-    val resolvedAt3_5s = CameraEngine.resolveActiveFocusTarget(
+    // At t = 7500ms (5.5s elapsed — past the old 5.0s timeout, still within 7s window), manual override is STILL active
+    assertTrue(CameraEngine.isManualFocusOverrideActive(tapTimeMs, nowMs = 7500L))
+    assertEquals(1500L, CameraEngine.remainingManualFocusOverrideMs(tapTimeMs, nowMs = 7500L))
+    val resolvedAt5_5s = CameraEngine.resolveActiveFocusTarget(
       manualTarget = manualTarget,
       smartAutoTarget = selectedTarget,
-      nowMs = 5500L,
+      nowMs = 7500L,
     )
-    assertEquals(CameraFocusSource.MANUAL_OVERRIDE, resolvedAt3_5s?.source)
-    assertEquals(0.78f, resolvedAt3_5s?.normX ?: 0f, 0.001f)
+    assertEquals(CameraFocusSource.MANUAL_OVERRIDE, resolvedAt5_5s?.source)
+    assertEquals(0.78f, resolvedAt5_5s?.normX ?: 0f, 0.001f)
 
-    // At t = 6999ms (4.999s elapsed), manual override is STILL active
-    assertTrue(CameraEngine.isManualFocusOverrideActive(tapTimeMs, nowMs = 6999L))
-    assertEquals(1L, CameraEngine.remainingManualFocusOverrideMs(tapTimeMs, nowMs = 6999L))
+    // At t = 8999ms (6.999s elapsed), manual override is STILL active
+    assertTrue(CameraEngine.isManualFocusOverrideActive(tapTimeMs, nowMs = 8999L))
+    assertEquals(1L, CameraEngine.remainingManualFocusOverrideMs(tapTimeMs, nowMs = 8999L))
 
-    // At t = 7000ms (5.0s elapsed), manual override expires and automatically returns to ML Kit smart object autofocus
-    assertFalse(CameraEngine.isManualFocusOverrideActive(tapTimeMs, nowMs = 7000L))
-    assertEquals(0L, CameraEngine.remainingManualFocusOverrideMs(tapTimeMs, nowMs = 7000L))
-    val resolvedAfter5s = CameraEngine.resolveActiveFocusTarget(
+    // At t = 9000ms (7.0s elapsed), manual override expires and automatically returns to ML Kit smart object autofocus
+    assertFalse(CameraEngine.isManualFocusOverrideActive(tapTimeMs, nowMs = 9000L))
+    assertEquals(0L, CameraEngine.remainingManualFocusOverrideMs(tapTimeMs, nowMs = 9000L))
+    val resolvedAfter7s = CameraEngine.resolveActiveFocusTarget(
       manualTarget = manualTarget,
       smartAutoTarget = selectedTarget,
-      nowMs = 7000L,
+      nowMs = 9000L,
     )
-    assertNotNull(resolvedAfter5s)
-    assertEquals(CameraFocusSource.ML_OBJECT_AUTO, resolvedAfter5s?.source)
-    assertEquals(selectedTarget.normX, resolvedAfter5s?.normX ?: 0f, 0.001f)
-    assertEquals(selectedTarget.normY, resolvedAfter5s?.normY ?: 0f, 0.001f)
-    assertEquals("Plant", resolvedAfter5s?.categoryLabel)
+    assertNotNull(resolvedAfter7s)
+    assertEquals(CameraFocusSource.ML_OBJECT_AUTO, resolvedAfter7s?.source)
+    assertEquals(selectedTarget.normX, resolvedAfter7s?.normX ?: 0f, 0.001f)
+    assertEquals(selectedTarget.normY, resolvedAfter7s?.normY ?: 0f, 0.001f)
+    assertEquals("Plant", resolvedAfter7s?.categoryLabel)
 
     // 4. Camera2 sensor metering region calculation for smart object bounding boxes and manual focus points
     val smartMetering = CameraEngine.computeSensorMeteringRegion(
@@ -1090,6 +1125,94 @@ class CameraEngineTest {
     assertTrue(curvedStep.normY > 0.502f) // Smoothly steering downward toward new desired target
     assertTrue(curvedStep.velocityX > 0f && curvedStep.velocityX < 0.32f)
     assertTrue(curvedStep.velocityY > 0f)
+
+    // 6. Verify elliptical cornering arc at the start of movement followed by a straight line to the target,
+    // higher allowed top speed, capped velocity gain per step, and smooth deceleration into the destination.
+    val cornerPath = curvedStep.cornerPath
+    assertNotNull(cornerPath)
+    // True ellipse (semi-major axis a > semi-minor axis b > 0)
+    assertTrue(cornerPath!!.semiMajorAxisA > cornerPath.semiMinorAxisB)
+    assertTrue(cornerPath.semiMinorAxisB > 0f)
+    assertTrue(cornerPath.isOnEllipticalArc)
+    assertEquals(1.0f, cornerPath.evaluateEllipseEquation(curvedStep.clampedX, curvedStep.clampedY), 0.01f)
+
+    // Step through the rest of the cornering trajectory from movingRightTarget to (0.40, 0.82)
+    var simCorner = movingRightTarget
+    var sawEllipticalArcPoints = 0
+    var sawStraightLinePoints = 0
+    for (stepIdx in 0 until 24) {
+      val prevSpeed = simCorner.speedNormPerSec
+      simCorner = CameraEngine.stepStickyAutofocusTrajectory(
+        currentTarget = simCorner,
+        desiredX = 0.40f,
+        desiredY = 0.82f,
+        dtSeconds = 0.04f,
+        timestampMs = simCorner.timestampMs + 40L,
+      )
+      val activeCorner = simCorner.cornerPath!!
+      // Velocity added to its own speed in any step is strictly capped by STICKY_AF_MAX_VELOCITY_ADD_NORM_PER_SEC
+      val speedAdded = simCorner.speedNormPerSec - prevSpeed
+      assertTrue(speedAdded <= STICKY_AF_MAX_VELOCITY_ADD_NORM_PER_SEC + 1e-4f)
+      assertTrue(speedAdded <= STICKY_AF_MAX_ACCEL_NORM_PER_SEC_SQ * 0.04f + 1e-4f)
+
+      if (activeCorner.isOnEllipticalArc) {
+        sawEllipticalArcPoints++
+        assertEquals(1.0f, activeCorner.evaluateEllipseEquation(simCorner.clampedX, simCorner.clampedY), 0.01f)
+      } else if (simCorner.distanceToDesiredTarget > 0.002f) {
+        sawStraightLinePoints++
+        assertEquals(0.0f, activeCorner.crossTrackDistanceToStraightLine(simCorner.clampedX, simCorner.clampedY), 1e-3f)
+      }
+    }
+    assertTrue("Path traces an elliptical arc at the start of movement", sawEllipticalArcPoints >= 2)
+    assertTrue("Path moves in a straight line after the elliptical arc", sawStraightLinePoints >= 4)
+    assertEquals(0.40f, simCorner.clampedX, 0.01f)
+    assertEquals(0.82f, simCorner.clampedY, 0.01f)
+
+    // 7. Long-distance traverse: reaches faster speed (> old 0.36f cap, up to STICKY_AF_MAX_SPEED_NORM_PER_SEC),
+    // respects the per-step velocity-addition limit from rest, and smoothly decelerates as it reaches the target.
+    assertTrue(STICKY_AF_MAX_SPEED_NORM_PER_SEC >= 0.65f)
+    var longTraverse = CameraSmartFocusTarget(
+      normX = 0.12f,
+      normY = 0.14f,
+      targetNormX = 0.88f,
+      targetNormY = 0.86f,
+      velocityX = 0f,
+      velocityY = 0f,
+      timestampMs = 3000L,
+    )
+    val speedHistory = mutableListOf<Float>()
+    val distHistory = mutableListOf<Float>()
+    for (stepIdx in 0 until 36) {
+      val prevSpeed = longTraverse.speedNormPerSec
+      longTraverse = CameraEngine.stepStickyAutofocusTrajectory(
+        currentTarget = longTraverse,
+        desiredX = 0.88f,
+        desiredY = 0.86f,
+        dtSeconds = 0.06f,
+        timestampMs = longTraverse.timestampMs + 60L,
+      )
+      val newSpeed = longTraverse.speedNormPerSec
+      assertTrue(newSpeed - prevSpeed <= STICKY_AF_MAX_VELOCITY_ADD_NORM_PER_SEC + 1e-4f)
+      assertTrue(newSpeed <= STICKY_AF_MAX_SPEED_NORM_PER_SEC + 1e-4f)
+      speedHistory.add(newSpeed)
+      distHistory.add(longTraverse.distanceToDesiredTarget)
+    }
+    val peakSpeed = speedHistory.maxOrNull() ?: 0f
+    val peakIndex = speedHistory.indexOfFirst { it == peakSpeed }
+    // Reaches a faster cruise speed well above the old 0.36f limit
+    assertTrue("Peak speed ($peakSpeed) exceeds old 0.36f cap", peakSpeed > 0.48f)
+    assertTrue("peakIndex=$peakIndex, speedHistory=$speedHistory", peakIndex in 2..15)
+    // After peak speed, smoothly decelerates monotonically all the way to the target
+    for (i in (peakIndex + 1) until speedHistory.size) {
+      assertTrue(
+        "Speed smoothly decelerates on approach (${speedHistory[i]} <= ${speedHistory[i - 1]})",
+        speedHistory[i] <= speedHistory[i - 1] + 1e-4f,
+      )
+      assertTrue(distHistory[i] <= distHistory[i - 1] + 1e-4f)
+    }
+    assertEquals(0.88f, longTraverse.clampedX, 0.01f)
+    assertEquals(0.86f, longTraverse.clampedY, 0.01f)
+    assertTrue(longTraverse.speedNormPerSec <= 0.03f)
   }
 
   @Test

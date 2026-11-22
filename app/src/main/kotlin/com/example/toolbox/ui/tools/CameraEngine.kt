@@ -82,33 +82,46 @@ const val MIN_CAMERA_EXPOSURE_EV = -2.0f
 const val MAX_CAMERA_EXPOSURE_EV = 2.0f
 
 /**
- * Duration (`5000ms` = 5 seconds) for which a manual tap-to-focus override locks focus
+ * Duration (`7000ms` = 7 seconds) for which a manual tap-to-focus override locks focus
  * before automatically returning to ML Kit object detection smart autofocus.
  */
-const val MANUAL_FOCUS_OVERRIDE_DURATION_MS = 5000L
+const val MANUAL_FOCUS_OVERRIDE_DURATION_MS = 7000L
 
 /**
  * Natural frequency (rad/s) for the sticky autofocus trajectory controller, governing how
- * gently the focus point accelerates and decelerates toward its destination.
+ * smoothly the focus point decelerates into its final destination.
  */
-const val STICKY_AF_NATURAL_FREQUENCY_RAD_PER_SEC = 3.2f
+const val STICKY_AF_NATURAL_FREQUENCY_RAD_PER_SEC = 5.8f
 
 /**
  * Steering inertia time constant (seconds) governing how smoothly the autofocus velocity vector
- * bends from its current trajectory toward a new target direction.
+ * bends and accelerates along its trajectory toward a new target direction.
  */
-const val STICKY_AF_STEERING_TIME_CONSTANT_SEC = 0.18f
+const val STICKY_AF_STEERING_TIME_CONSTANT_SEC = 0.16f
 
 /**
- * Maximum normalized viewfinder travel speed (`0.36f` = 36% of viewfinder width/height per second)
- * so autofocus glides gently across the frame instead of snapping between detections.
+ * Maximum normalized viewfinder travel speed (`0.72f` = 72% of viewfinder width/height per second)
+ * allowing the autofocus cursor to move faster across long distances after building up speed.
  */
-const val STICKY_AF_MAX_SPEED_NORM_PER_SEC = 0.36f
+const val STICKY_AF_MAX_SPEED_NORM_PER_SEC = 0.72f
 
 /**
- * Maximum normalized acceleration (`1.60f` units/s²) for smooth velocity transitions and turns.
+ * Maximum velocity increment (`0.22f` normalized units/sec) that a single trajectory update
+ * can add to the autofocus cursor's current speed, preventing abrupt velocity jumps while
+ * allowing consecutive steps to accelerate smoothly up to [STICKY_AF_MAX_SPEED_NORM_PER_SEC].
  */
-const val STICKY_AF_MAX_ACCEL_NORM_PER_SEC_SQ = 1.60f
+const val STICKY_AF_MAX_VELOCITY_ADD_NORM_PER_SEC = 0.22f
+
+/**
+ * Maximum normalized tangential acceleration (`1.80f` units/s²) for smooth velocity gain and deceleration.
+ */
+const val STICKY_AF_MAX_ACCEL_NORM_PER_SEC_SQ = 1.80f
+
+/**
+ * Elliptical cornering aspect ratio (`b / a = 0.58f`, where `a > b`) for the initial elliptical
+ * arc at the start of an autofocus movement before straightening onto the target line.
+ */
+const val STICKY_AF_CORNER_ELLIPSE_MINOR_TO_MAJOR_RATIO = 0.58f
 
 /**
  * Minimum score margin (`0.20f`) a competing detection must exceed the currently locked subject
@@ -126,7 +139,7 @@ val CAMERA_ZOOM_PRESETS: List<Float> = listOf(1.0f, 2.0f, 3.0f, 5.0f)
 
 /**
  * Indicates whether the active camera focus target is driven by default continuous autofocus,
- * ML Kit Object Detection smart autofocus, or a 5-second manual user override.
+ * ML Kit Object Detection smart autofocus, or a 7-second manual user override.
  */
 enum class CameraFocusSource(
   val displayName: String,
@@ -158,12 +171,125 @@ data class RawDetectedObjectForFocus(
 )
 
 /**
+ * Describes the two-phase $C^1$ tangent-continuous cornering path for an autofocus transition:
+ * 1. An initial elliptical arc with semi-major axis [semiMajorAxisA] (aligned with the exit straight-line
+ *    direction) and semi-minor axis [semiMinorAxisB] (perpendicular to the straight-line direction,
+ *    with [semiMajorAxisA] > [semiMinorAxisB]) sweeping from [startAngleRad] to $\pi/2$ at the
+ *    junction point ([junctionX], [junctionY]).
+ * 2. A straight line along unit vector ([lineDirX], [lineDirY]) of length [straightLineLength]
+ *    from ([junctionX], [junctionY]) directly to ([goalX], [goalY]).
+ */
+data class CameraAutofocusCornerPath(
+  val originX: Float,
+  val originY: Float,
+  val goalX: Float,
+  val goalY: Float,
+  val junctionX: Float,
+  val junctionY: Float,
+  val lineDirX: Float,
+  val lineDirY: Float,
+  val normalDirX: Float,
+  val normalDirY: Float,
+  val semiMajorAxisA: Float,
+  val semiMinorAxisB: Float,
+  val startAngleRad: Float,
+  val currentAngleRad: Float = startAngleRad,
+  val arcLength: Float,
+  val straightLineLength: Float,
+  val straightDistanceTraveled: Float = 0f,
+) {
+  companion object {
+    const val HALF_PI: Float = (Math.PI / 2.0).toFloat()
+  }
+
+  /** Center X of the ellipse that defines the initial cornering arc. */
+  val ellipseCenterX: Float
+    get() = junctionX - semiMinorAxisB * normalDirX
+
+  /** Center Y of the ellipse that defines the initial cornering arc. */
+  val ellipseCenterY: Float
+    get() = junctionY - semiMinorAxisB * normalDirY
+
+  /** `true` while the cursor is traversing the initial elliptical arc before reaching ([junctionX], [junctionY]). */
+  val isOnEllipticalArc: Boolean
+    get() = arcLength > 1e-5f && currentAngleRad < HALF_PI - 1e-4f && straightDistanceTraveled <= 1e-5f
+
+  /** `true` once the cursor has completed the initial elliptical arc and is moving in a straight line to ([goalX], [goalY]). */
+  val isOnStraightLine: Boolean
+    get() = !isOnEllipticalArc
+
+  /**
+   * Evaluates the normalized ellipse equation $(u_1 / a)^2 + (u_2 / b)^2$ for $([x], [y])$
+   * in the principal-axis frame of the initial cornering ellipse. Points on the elliptical arc return `1.0f`.
+   */
+  fun evaluateEllipseEquation(x: Float, y: Float): Float {
+    if (semiMajorAxisA <= 1e-5f || semiMinorAxisB <= 1e-5f) return 1f
+    val dx = x - ellipseCenterX
+    val dy = y - ellipseCenterY
+    val u1 = -(dx * lineDirX + dy * lineDirY)
+    val u2 = dx * normalDirX + dy * normalDirY
+    val term1 = u1 / semiMajorAxisA
+    val term2 = u2 / semiMinorAxisB
+    return term1 * term1 + term2 * term2
+  }
+
+  /**
+   * Perpendicular (cross-track) distance from $([x], [y])$ to the straight line connecting
+   * ([junctionX], [junctionY]) to ([goalX], [goalY]). Points on the straight-line segment return `0.0f`.
+   */
+  fun crossTrackDistanceToStraightLine(x: Float, y: Float): Float {
+    val dx = x - junctionX
+    val dy = y - junctionY
+    return abs(dx * normalDirX + dy * normalDirY)
+  }
+
+  /**
+   * Longitudinal distance along the straight-line segment from ([junctionX], [junctionY]) toward ([goalX], [goalY]).
+   */
+  fun longitudinalDistanceAlongStraightLine(x: Float, y: Float): Float {
+    val dx = x - junctionX
+    val dy = y - junctionY
+    return dx * lineDirX + dy * lineDirY
+  }
+
+  /**
+   * Position $(x, y)$ on the initial elliptical arc at parametric angle [thetaRad] $\in [\text{startAngleRad}, \pi/2]$.
+   */
+  fun pointOnArc(thetaRad: Float): Pair<Float, Float> {
+    val clampedTheta = thetaRad.coerceIn(startAngleRad, HALF_PI)
+    val cosT = cos(clampedTheta.toDouble()).toFloat()
+    val sinT = sin(clampedTheta.toDouble()).toFloat()
+    val x = junctionX - semiMajorAxisA * cosT * lineDirX - semiMinorAxisB * (1f - sinT) * normalDirX
+    val y = junctionY - semiMajorAxisA * cosT * lineDirY - semiMinorAxisB * (1f - sinT) * normalDirY
+    return Pair(x, y)
+  }
+
+  /**
+   * Unit tangent vector $(t_x, t_y)$ on the initial elliptical arc at parametric angle [thetaRad].
+   */
+  fun unitTangentOnArc(thetaRad: Float): Pair<Float, Float> {
+    val clampedTheta = thetaRad.coerceIn(startAngleRad, HALF_PI)
+    val d1 = semiMajorAxisA * sin(clampedTheta.toDouble()).toFloat()
+    val d2 = semiMinorAxisB * cos(clampedTheta.toDouble()).toFloat()
+    val mag = kotlin.math.sqrt(d1 * d1 + d2 * d2)
+    if (mag <= 1e-6f) return Pair(lineDirX, lineDirY)
+    val u1 = d1 / mag
+    val u2 = d2 / mag
+    return Pair(
+      u1 * lineDirX + u2 * normalDirX,
+      u1 * lineDirY + u2 * normalDirY,
+    )
+  }
+}
+
+/**
  * Represents a resolved focus target in normalized viewfinder coordinates (`0.0f..1.0f`),
  * either automatically tracked from an ML Kit `DetectedObject` ([CameraFocusSource.ML_OBJECT_AUTO])
  * or manually pinned by the user for [MANUAL_FOCUS_OVERRIDE_DURATION_MS] ([CameraFocusSource.MANUAL_OVERRIDE]).
  *
- * Includes velocity ([velocityX], [velocityY]) and desired destination ([targetNormX], [targetNormY])
- * state so smart autofocus traces a smooth, velocity-continuous trajectory rather than jumping.
+ * Includes velocity ([velocityX], [velocityY]), desired destination ([targetNormX], [targetNormY]),
+ * and [cornerPath] state so smart autofocus traces a smooth elliptical cornering arc followed by
+ * a straight line into the target.
  */
 data class CameraSmartFocusTarget(
   val normX: Float,
@@ -181,6 +307,7 @@ data class CameraSmartFocusTarget(
   val velocityY: Float = 0f,
   val lockStrength: Float = 1.0f,
   val missedDetectionFrames: Int = 0,
+  val cornerPath: CameraAutofocusCornerPath? = null,
 ) {
   val clampedX: Float get() = normX.coerceIn(0.08f, 0.92f)
   val clampedY: Float get() = normY.coerceIn(0.08f, 0.92f)
@@ -198,7 +325,7 @@ data class CameraSmartFocusTarget(
   val isSmartObjectFocus: Boolean get() = source == CameraFocusSource.ML_OBJECT_AUTO
   val badgeLabel: String
     get() = when (source) {
-      CameraFocusSource.MANUAL_OVERRIDE -> "Manual • 5s"
+      CameraFocusSource.MANUAL_OVERRIDE -> "Manual • 7s"
       CameraFocusSource.ML_OBJECT_AUTO -> {
         val cleanLabel = categoryLabel?.takeIf { it.isNotBlank() }
         if (cleanLabel != null) "Smart AF • $cleanLabel" else "Smart AF"
@@ -2547,9 +2674,11 @@ object CameraEngine {
     val baseG: Int
     val baseB: Int
     if (clampedY >= 0.65f) {
-      baseR = 42
-      baseG = 68
-      baseB = 64
+      val tLow = ((clampedY - 0.65f) / 0.35f).coerceIn(0f, 1f)
+      val horizShift = ((clampedX - 0.5f) * 28f).roundToInt()
+      baseR = (42 + (28 - 42) * tLow + horizShift).roundToInt().coerceIn(0, 255)
+      baseG = (68 + (92 - 68) * tLow - horizShift / 2).roundToInt().coerceIn(0, 255)
+      baseB = (64 + (52 - 64) * tLow - horizShift).roundToInt().coerceIn(0, 255)
     } else {
       val t = (clampedY / 0.65f).coerceIn(0f, 1f)
       val topR = if (lensFacing == CameraLensFacing.BACK) 34 else 72
@@ -2615,10 +2744,12 @@ object CameraEngine {
         val dx = x - cx
         if (dx * dx + dy * dy <= rSq) {
           val argb = pixels[rowOffset + x]
-          sumR += (argb shr 16) and 0xFF
-          sumG += (argb shr 8) and 0xFF
-          sumB += argb and 0xFF
-          count++
+          if ((argb ushr 24) != 0) {
+            sumR += (argb shr 16) and 0xFF
+            sumG += (argb shr 8) and 0xFF
+            sumB += argb and 0xFF
+            count++
+          }
         }
       }
     }
@@ -2684,10 +2815,12 @@ object CameraEngine {
           val dx = (minX + px) - cx
           if (dx * dx + dy * dy <= rSq) {
             val argb = patchPixels[rowOffset + px]
-            sumR += (argb shr 16) and 0xFF
-            sumG += (argb shr 8) and 0xFF
-            sumB += argb and 0xFF
-            count++
+            if ((argb ushr 24) != 0) {
+              sumR += (argb shr 16) and 0xFF
+              sumG += (argb shr 8) and 0xFF
+              sumB += argb and 0xFF
+              count++
+            }
           }
         }
       }
@@ -2707,6 +2840,92 @@ object CameraEngine {
       String.format(Locale.US, "#%02X%02X%02X", finalR, finalG, finalB)
     } catch (_: Throwable) {
       sampleSyntheticFocusColorHex(normX, normY, filter = filter, exposureEv = exposureEv)
+    }
+  }
+
+  /**
+   * Maps normalized viewfinder coordinates ([normX], [normY]) in `0.0f..1.0f` through the inverse
+   * of the [TextureView] center-crop [textureTransformMatrix], digital [zoom], and front-camera
+   * [mirrorFront] transform, and samples the circular patch color directly from [rawBitmap]
+   * without allocating an intermediate transformed full-frame bitmap.
+   */
+  fun sampleLiveFocusColorHexFromRawTextureBitmap(
+    rawBitmap: Bitmap,
+    normX: Float,
+    normY: Float,
+    textureTransformMatrix: Matrix? = null,
+    zoom: Float = 1.0f,
+    lensFacing: CameraLensFacing = CameraLensFacing.BACK,
+    mirrorFront: Boolean = false,
+    viewWidth: Int = rawBitmap.width,
+    viewHeight: Int = rawBitmap.height,
+    radiusPx: Int = 5,
+    filter: CameraColorFilter = CameraColorFilter.NONE,
+    exposureEv: Float = 0f,
+  ): String {
+    val bw = rawBitmap.width
+    val bh = rawBitmap.height
+    if (bw <= 0 || bh <= 0) {
+      return sampleSyntheticFocusColorHex(
+        normX = normX,
+        normY = normY,
+        lensFacing = lensFacing,
+        filter = filter,
+        exposureEv = exposureEv,
+      )
+    }
+    return try {
+      val combinedMatrix = if (textureTransformMatrix != null) Matrix(textureTransformMatrix) else Matrix()
+      val safeViewW = viewWidth.coerceAtLeast(1)
+      val safeViewH = viewHeight.coerceAtLeast(1)
+      if (textureTransformMatrix != null && (safeViewW != bw || safeViewH != bh)) {
+        combinedMatrix.preScale(
+          safeViewW.toFloat() / bw.toFloat(),
+          safeViewH.toFloat() / bh.toFloat(),
+        )
+        combinedMatrix.postScale(
+          bw.toFloat() / safeViewW.toFloat(),
+          bh.toFloat() / safeViewH.toFloat(),
+        )
+      }
+      val cx = bw / 2f
+      val cy = bh / 2f
+      val clampedZoom = coerceZoom(zoom)
+      val flipX = if (lensFacing == CameraLensFacing.FRONT && mirrorFront) -1f else 1f
+      if (clampedZoom != 1f || flipX != 1f) {
+        combinedMatrix.postScale(clampedZoom * flipX, clampedZoom, cx, cy)
+      }
+      val inverseMatrix = Matrix()
+      val (rawNormX, rawNormY) = if (combinedMatrix.invert(inverseMatrix)) {
+        val pts = floatArrayOf(
+          normX.coerceIn(0f, 1f) * bw.toFloat(),
+          normY.coerceIn(0f, 1f) * bh.toFloat(),
+        )
+        inverseMatrix.mapPoints(pts)
+        Pair(
+          (pts[0] / bw.toFloat()).coerceIn(0f, 1f),
+          (pts[1] / bh.toFloat()).coerceIn(0f, 1f),
+        )
+      } else {
+        Pair(normX.coerceIn(0f, 1f), normY.coerceIn(0f, 1f))
+      }
+      sampleCenterRadiusColorHexFromBitmap(
+        bitmap = rawBitmap,
+        normX = rawNormX,
+        normY = rawNormY,
+        radiusPx = radiusPx,
+        filter = filter,
+        exposureEv = exposureEv,
+      )
+    } catch (_: Throwable) {
+      sampleCenterRadiusColorHexFromBitmap(
+        bitmap = rawBitmap,
+        normX = normX,
+        normY = normY,
+        radiusPx = radiusPx,
+        filter = filter,
+        exposureEv = exposureEv,
+      )
     }
   }
 
@@ -6342,7 +6561,7 @@ object CameraEngine {
 
   /**
    * Returns `true` if a manual tap-to-focus override started at [manualFocusTimestampMs]
-   * is still active at [nowMs] within [overrideDurationMs] (defaults to [MANUAL_FOCUS_OVERRIDE_DURATION_MS] = 5000ms).
+   * is still active at [nowMs] within [overrideDurationMs] (defaults to [MANUAL_FOCUS_OVERRIDE_DURATION_MS] = 7000ms).
    */
   fun isManualFocusOverrideActive(
     manualFocusTimestampMs: Long,
@@ -6356,7 +6575,7 @@ object CameraEngine {
 
   /**
    * Returns the remaining duration in milliseconds for an active manual focus override,
-   * or `0L` if the 5-second override has expired.
+   * or `0L` if the 7-second override has expired.
    */
   fun remainingManualFocusOverrideMs(
     manualFocusTimestampMs: Long,
@@ -6395,7 +6614,7 @@ object CameraEngine {
 
   /**
    * Resolves the currently active camera focus target:
-   * - If [manualTarget] is non-null and its 5-second override window ([overrideDurationMs]) has not expired at [nowMs],
+   * - If [manualTarget] is non-null and its 7-second override window ([overrideDurationMs]) has not expired at [nowMs],
    *   returns [manualTarget] with [CameraFocusSource.MANUAL_OVERRIDE].
    * - Otherwise, falls back to [smartAutoTarget] (driven by ML Kit Object Detection).
    */
@@ -6535,13 +6754,223 @@ object CameraEngine {
     return centerScore * 0.48f + sizeScore * 0.34f + confidenceBonus + trackingBonus
   }
 
+  private fun ellipseArcDerivative(
+    semiMajorAxisA: Float,
+    semiMinorAxisB: Float,
+    thetaRad: Float,
+  ): Float {
+    val sinT = sin(thetaRad.toDouble()).toFloat()
+    val cosT = cos(thetaRad.toDouble()).toFloat()
+    val d1 = semiMajorAxisA * sinT
+    val d2 = semiMinorAxisB * cosT
+    return kotlin.math.sqrt(d1 * d1 + d2 * d2).coerceAtLeast(1e-6f)
+  }
+
+  private fun estimateRemainingEllipseArcLength(
+    semiMajorAxisA: Float,
+    semiMinorAxisB: Float,
+    fromThetaRad: Float,
+    toThetaRad: Float = CameraAutofocusCornerPath.HALF_PI,
+    segments: Int = 12,
+  ): Float {
+    if (semiMajorAxisA <= 1e-5f || semiMinorAxisB <= 1e-5f) return 0f
+    val span = toThetaRad - fromThetaRad
+    if (span <= 1e-5f) return 0f
+    val n = segments.coerceIn(4, 32)
+    val dTheta = span / n.toFloat()
+    var sum = 0f
+    for (i in 0 until n) {
+      val mid = fromThetaRad + (i + 0.5f) * dTheta
+      sum += ellipseArcDerivative(semiMajorAxisA, semiMinorAxisB, mid)
+    }
+    return (sum * dTheta).coerceAtLeast(0f)
+  }
+
+  /**
+   * Builds a $C^1$ tangent-continuous [CameraAutofocusCornerPath] from ([startX], [startY])
+   * to ([goalX], [goalY]) given initial velocity ([velocityX], [velocityY]).
+   *
+   * The path begins with a small elliptical arc (semi-major axis `a` along the target line,
+   * semi-minor axis `b < a` perpendicular to the target line) that smoothly turns the cursor
+   * into the junction point `P_J`, and then follows an exact straight line from `P_J` to ([goalX], [goalY]).
+   */
+  fun buildAutofocusCornerPath(
+    startX: Float,
+    startY: Float,
+    goalX: Float,
+    goalY: Float,
+    velocityX: Float = 0f,
+    velocityY: Float = 0f,
+  ): CameraAutofocusCornerPath {
+    val halfPi = CameraAutofocusCornerPath.HALF_PI
+    val dx = goalX - startX
+    val dy = goalY - startY
+    val dist = kotlin.math.sqrt(dx * dx + dy * dy)
+    if (dist <= 0.004f) {
+      val dirX = if (dist > 1e-5f) dx / dist else 1f
+      val dirY = if (dist > 1e-5f) dy / dist else 0f
+      return CameraAutofocusCornerPath(
+        originX = startX,
+        originY = startY,
+        goalX = goalX,
+        goalY = goalY,
+        junctionX = startX,
+        junctionY = startY,
+        lineDirX = dirX,
+        lineDirY = dirY,
+        normalDirX = -dirY,
+        normalDirY = dirX,
+        semiMajorAxisA = 0f,
+        semiMinorAxisB = 0f,
+        startAngleRad = halfPi,
+        currentAngleRad = halfPi,
+        arcLength = 0f,
+        straightLineLength = dist,
+        straightDistanceTraveled = 0f,
+      )
+    }
+
+    val chordDirX = dx / dist
+    val chordDirY = dy / dist
+    val ccwNormalX = -chordDirY
+    val ccwNormalY = chordDirX
+
+    val v0 = kotlin.math.sqrt(velocityX * velocityX + velocityY * velocityY)
+    var normalSign = 1f
+    var alphaChord = 0.22f
+    var hasVelocityHeading = false
+
+    if (v0 >= 0.012f) {
+      val ux0 = velocityX / v0
+      val uy0 = velocityY / v0
+      val dotChord = (ux0 * chordDirX + uy0 * chordDirY).coerceIn(-1f, 1f)
+      val dotNormal = ux0 * ccwNormalX + uy0 * ccwNormalY
+      val rawAngle = kotlin.math.acos(dotChord.toDouble()).toFloat()
+      if (rawAngle >= 0.10f && abs(dotNormal) >= 1e-4f) {
+        normalSign = if (dotNormal >= 0f) 1f else -1f
+        alphaChord = rawAngle.coerceIn(0.10f, (Math.PI - 0.14).toFloat())
+        hasVelocityHeading = true
+      }
+    }
+
+    if (!hasVelocityHeading) {
+      if (abs(dx) > 0.015f && abs(dy) > 0.015f) {
+        val domX = if (abs(dx) >= abs(dy)) (if (dx >= 0f) 1f else -1f) else 0f
+        val domY = if (abs(dx) >= abs(dy)) 0f else (if (dy >= 0f) 1f else -1f)
+        val dotDom = (domX * chordDirX + domY * chordDirY).coerceIn(-1f, 1f)
+        val domAngle = kotlin.math.acos(dotDom.toDouble()).toFloat()
+        val domNormal = domX * ccwNormalX + domY * ccwNormalY
+        normalSign = if (domNormal >= 0f) 1f else -1f
+        alphaChord = (domAngle * 0.55f).coerceIn(0.12f, 0.36f)
+      } else {
+        val toCenterNormal = (0.5f - startX) * ccwNormalX + (0.5f - startY) * ccwNormalY
+        normalSign = if (toCenterNormal >= 0f) 1f else -1f
+        alphaChord = 0.22f
+      }
+    }
+
+    val nX = normalSign * ccwNormalX
+    val nY = normalSign * ccwNormalY
+
+    val turnSine = sin(alphaChord.coerceAtMost(halfPi).toDouble()).toFloat()
+    var a = (0.24f * dist + 0.06f * v0 * turnSine).coerceIn(
+      minOf(0.010f, 0.22f * dist),
+      minOf(0.34f * dist, 0.16f),
+    )
+    var b = (a * STICKY_AF_CORNER_ELLIPSE_MINOR_TO_MAJOR_RATIO).coerceIn(
+      minOf(0.0058f, 0.13f * dist),
+      minOf(0.20f * dist, a * 0.82f),
+    )
+
+    var beta = 0f
+    var theta0 = 0f
+    var e1X = chordDirX
+    var e1Y = chordDirY
+    var e2X = nX
+    var e2Y = nY
+    var jX = startX
+    var jY = startY
+    var lineLen = dist
+
+    for (attempt in 0 until 3) {
+      beta = 0f
+      theta0 = 0f
+      for (iter in 0 until 4) {
+        val alpha = (alphaChord + beta).coerceIn(0.08f, (Math.PI - 0.12).toFloat())
+        theta0 = kotlin.math.atan2(
+          (b * cos(alpha.toDouble())).toFloat(),
+          (a * sin(alpha.toDouble())).toFloat(),
+        )
+        val lateralOffset = b * (1f - sin(theta0.toDouble()).toFloat())
+        val sinBeta = (lateralOffset / dist).coerceIn(0f, 0.65f)
+        beta = kotlin.math.asin(sinBeta.toDouble()).toFloat()
+      }
+
+      val cosBeta = cos(beta.toDouble()).toFloat()
+      val sinBeta = sin(beta.toDouble()).toFloat()
+      e1X = cosBeta * chordDirX - sinBeta * nX
+      e1Y = cosBeta * chordDirY - sinBeta * nY
+      e2X = sinBeta * chordDirX + cosBeta * nX
+      e2Y = sinBeta * chordDirY + cosBeta * nY
+
+      val cosT0 = cos(theta0.toDouble()).toFloat()
+      val sinT0 = sin(theta0.toDouble()).toFloat()
+      jX = startX + a * cosT0 * e1X + b * (1f - sinT0) * e2X
+      jY = startY + a * cosT0 * e1Y + b * (1f - sinT0) * e2Y
+      lineLen = (dist * cosBeta - a * cosT0).coerceAtLeast(0f)
+
+      val apexX = if (theta0 < 0f) jX - a * e1X - b * e2X else jX
+      val apexY = if (theta0 < 0f) jY - a * e1Y - b * e2Y else jY
+      val inBounds = jX in 0.081f..0.919f &&
+        jY in 0.081f..0.919f &&
+        apexX in 0.081f..0.919f &&
+        apexY in 0.081f..0.919f
+      if (inBounds && lineLen >= 0.35f * dist) {
+        break
+      }
+      a *= 0.60f
+      b *= 0.60f
+    }
+
+    val arcLen = estimateRemainingEllipseArcLength(
+      semiMajorAxisA = a,
+      semiMinorAxisB = b,
+      fromThetaRad = theta0,
+      toThetaRad = halfPi,
+      segments = 16,
+    )
+
+    return CameraAutofocusCornerPath(
+      originX = startX,
+      originY = startY,
+      goalX = goalX,
+      goalY = goalY,
+      junctionX = jX,
+      junctionY = jY,
+      lineDirX = e1X,
+      lineDirY = e1Y,
+      normalDirX = e2X,
+      normalDirY = e2Y,
+      semiMajorAxisA = a,
+      semiMinorAxisB = b,
+      startAngleRad = theta0,
+      currentAngleRad = theta0,
+      arcLength = arcLen,
+      straightLineLength = lineLen,
+      straightDistanceTraveled = 0f,
+    )
+  }
+
   /**
    * Advances [currentTarget] by [dtSeconds] along a smooth, velocity-continuous trajectory toward
-   * ([desiredX], [desiredY]), respecting its current velocity (`velocityX`, `velocityY`), steering
-   * inertia ([steeringTimeConstantSec]), acceleration limit ([maxAccelerationNormPerSecSq]), and
-   * maximum travel speed ([maxSpeedNormPerSec]).
-   *
-   * Holds steady against sub-2% micro-jitter when already settled at the target.
+   * ([desiredX], [desiredY]):
+   * - Traces a small elliptical arc at the start of the movement to corner smoothly into the target heading,
+   *   followed by a tangent-continuous straight line directly to ([desiredX], [desiredY]).
+   * - Allows higher travel speed ([maxSpeedNormPerSec]) across long movements while strictly limiting
+   *   the maximum velocity added to the cursor's current speed ([maxVelocityAddNormPerSec] and
+   *   [maxAccelerationNormPerSecSq]).
+   * - Smoothly decelerates along a $C^1$ arrival braking curve as it reaches the target without overshoot.
+   * - Holds steady against sub-2% micro-jitter when already settled at the target.
    */
   fun stepStickyAutofocusTrajectory(
     currentTarget: CameraSmartFocusTarget,
@@ -6552,20 +6981,23 @@ object CameraEngine {
     naturalFrequencyRadPerSec: Float = STICKY_AF_NATURAL_FREQUENCY_RAD_PER_SEC,
     steeringTimeConstantSec: Float = STICKY_AF_STEERING_TIME_CONSTANT_SEC,
     maxSpeedNormPerSec: Float = STICKY_AF_MAX_SPEED_NORM_PER_SEC,
+    maxVelocityAddNormPerSec: Float = STICKY_AF_MAX_VELOCITY_ADD_NORM_PER_SEC,
     maxAccelerationNormPerSecSq: Float = STICKY_AF_MAX_ACCEL_NORM_PER_SEC_SQ,
     timestampMs: Long = currentTarget.timestampMs + (dtSeconds.coerceAtLeast(0f) * 1000f).roundToInt(),
   ): CameraSmartFocusTarget {
+    val halfPi = CameraAutofocusCornerPath.HALF_PI
     val startX = currentTarget.clampedX
     val startY = currentTarget.clampedY
-    val goalX = desiredX.coerceIn(0.08f, 0.92f)
-    val goalY = desiredY.coerceIn(0.08f, 0.92f)
+    val rawGoalX = desiredX.coerceIn(0.08f, 0.92f)
+    val rawGoalY = desiredY.coerceIn(0.08f, 0.92f)
     val coercedGoalBox = desiredBox?.coerceNormalized()
 
-    val initialDx = goalX - startX
-    val initialDy = goalY - startY
+    val initialDx = rawGoalX - startX
+    val initialDy = rawGoalY - startY
     val initialDistSq = initialDx * initialDx + initialDy * initialDy
     val initialSpeedSq = currentTarget.velocityX * currentTarget.velocityX +
       currentTarget.velocityY * currentTarget.velocityY
+    val initialSpeed = kotlin.math.sqrt(initialSpeedSq)
 
     val alreadySettledAtPreviousGoal = currentTarget.distanceToDesiredTarget < 0.002f &&
       initialSpeedSq < 0.000225f
@@ -6581,98 +7013,198 @@ object CameraEngine {
         targetBoundingBox = coercedGoalBox ?: currentTarget.boundingBox,
         velocityX = 0f,
         velocityY = 0f,
+        cornerPath = null,
         timestampMs = timestampMs,
       )
     }
 
+    val existingPath = currentTarget.cornerPath
+    val activePath = if (existingPath != null) {
+      val goalShift = kotlin.math.hypot(
+        (rawGoalX - existingPath.goalX).toDouble(),
+        (rawGoalY - existingPath.goalY).toDouble(),
+      ).toFloat()
+      val (expectedX, expectedY) = if (existingPath.isOnEllipticalArc) {
+        existingPath.pointOnArc(existingPath.currentAngleRad)
+      } else {
+        Pair(
+          existingPath.junctionX + existingPath.straightDistanceTraveled * existingPath.lineDirX,
+          existingPath.junctionY + existingPath.straightDistanceTraveled * existingPath.lineDirY,
+        )
+      }
+      val posDrift = kotlin.math.hypot(
+        (startX - expectedX.coerceIn(0.08f, 0.92f)).toDouble(),
+        (startY - expectedY.coerceIn(0.08f, 0.92f)).toDouble(),
+      ).toFloat()
+      if (goalShift < 0.02f && posDrift < 0.006f) {
+        existingPath
+      } else {
+        buildAutofocusCornerPath(
+          startX = startX,
+          startY = startY,
+          goalX = rawGoalX,
+          goalY = rawGoalY,
+          velocityX = currentTarget.velocityX,
+          velocityY = currentTarget.velocityY,
+        )
+      }
+    } else {
+      buildAutofocusCornerPath(
+        startX = startX,
+        startY = startY,
+        goalX = rawGoalX,
+        goalY = rawGoalY,
+        velocityX = currentTarget.velocityX,
+        velocityY = currentTarget.velocityY,
+      )
+    }
+
+    val goalX = activePath.goalX
+    val goalY = activePath.goalY
+
     val clampedDt = dtSeconds.coerceIn(0.004f, 0.60f)
-    val subSteps = kotlin.math.ceil(clampedDt / 0.016f).toInt().coerceIn(1, 40)
+    val subSteps = kotlin.math.ceil(clampedDt / 0.008f).toInt().coerceIn(1, 64)
     val h = clampedDt / subSteps.toFloat()
 
-    val omega = naturalFrequencyRadPerSec.coerceIn(0.5f, 10.0f)
+    val omega = naturalFrequencyRadPerSec.coerceIn(0.5f, 12.0f)
     val tau = steeringTimeConstantSec.coerceIn(0.04f, 1.0f)
-    val vMax = maxSpeedNormPerSec.coerceIn(0.08f, 2.0f)
-    val aMax = maxAccelerationNormPerSecSq.coerceIn(0.2f, 8.0f)
+    val vMax = maxSpeedNormPerSec.coerceIn(0.08f, 2.5f)
+    val vAddMax = maxVelocityAddNormPerSec.coerceIn(0.02f, vMax)
+    val aMax = maxAccelerationNormPerSecSq.coerceIn(0.2f, 10.0f)
+    val aDecel = (aMax * 0.88f).coerceIn(0.25f, 8.0f)
+
+    // Strict upper bound on the speed the cursor can reach by adding velocity to its own speed in this update
+    val maxAllowedSpeedGain = minOf(vAddMax, aMax * clampedDt)
+    val vCallMax = minOf(vMax, initialSpeed + maxAllowedSpeedGain)
+
+    val d1 = aDecel / (omega * omega)
 
     var x = startX
     var y = startY
-    var vx = currentTarget.velocityX
-    var vy = currentTarget.velocityY
+    var theta = activePath.currentAngleRad
+    var straightU = activePath.straightDistanceTraveled
+    var speed = initialSpeed
+    var (tx, ty) = if (theta < halfPi - 1e-5f && activePath.arcLength > 1e-5f) {
+      activePath.unitTangentOnArc(theta)
+    } else {
+      Pair(activePath.lineDirX, activePath.lineDirY)
+    }
 
     for (step in 0 until subSteps) {
-      val toX = goalX - x
-      val toY = goalY - y
-      val dist = kotlin.math.sqrt(toX * toX + toY * toY)
-
-      if (dist <= 0.001f) {
-        val speedSq = vx * vx + vy * vy
-        if (speedSq <= 0.0004f) {
-          x = goalX
-          y = goalY
-          vx = 0f
-          vy = 0f
-          break
-        }
-      }
-
-      val desiredSpeed = if (dist > 1e-4f) {
-        minOf(vMax, dist * omega)
+      val remArc = if (activePath.arcLength > 1e-5f && theta < halfPi - 1e-5f) {
+        estimateRemainingEllipseArcLength(
+          semiMajorAxisA = activePath.semiMajorAxisA,
+          semiMinorAxisB = activePath.semiMinorAxisB,
+          fromThetaRad = theta,
+          toThetaRad = halfPi,
+          segments = 8,
+        )
       } else {
         0f
       }
-      val desiredVx = if (dist > 1e-4f) (toX / dist) * desiredSpeed else 0f
-      val desiredVy = if (dist > 1e-4f) (toY / dist) * desiredSpeed else 0f
+      val remLine = (activePath.straightLineLength - straightU).coerceAtLeast(0f)
+      val remDist = remArc + remLine
 
-      var ax = (desiredVx - vx) / tau
-      var ay = (desiredVy - vy) / tau
-      val accelMag = kotlin.math.sqrt(ax * ax + ay * ay)
-      if (accelMag > aMax && accelMag > 1e-5f) {
-        val scale = aMax / accelMag
-        ax *= scale
-        ay *= scale
-      }
-
-      vx += ax * h
-      vy += ay * h
-
-      // Critically damped arrival clamping along the radial axis to prevent target overshoot
-      // while preserving lateral velocity inertia for curved mid-flight trajectory turns
-      if (dist > 1e-4f) {
-        val ux = toX / dist
-        val uy = toY / dist
-        val radialVel = vx * ux + vy * uy
-        val lateralVx = vx - radialVel * ux
-        val lateralVy = vy - radialVel * uy
-        val maxRadialVel = minOf(desiredSpeed, dist / h)
-        if (radialVel > maxRadialVel) {
-          vx = lateralVx + maxRadialVel * ux
-          vy = lateralVy + maxRadialVel * uy
-        }
-      }
-
-      val speed = kotlin.math.sqrt(vx * vx + vy * vy)
-      if (speed > vMax && speed > 1e-5f) {
-        val scale = vMax / speed
-        vx *= scale
-        vy *= scale
-      }
-
-      val nextX = (x + vx * h).coerceIn(0.08f, 0.92f)
-      val nextY = (y + vy * h).coerceIn(0.08f, 0.92f)
-      val remDx = goalX - nextX
-      val remDy = goalY - nextY
-      val remDist = kotlin.math.sqrt(remDx * remDx + remDy * remDy)
-
-      if (remDist < 0.0012f && speed < 0.025f) {
+      if (remDist <= 0.0008f && speed <= 0.025f) {
         x = goalX
         y = goalY
-        vx = 0f
-        vy = 0f
+        theta = halfPi
+        straightU = activePath.straightLineLength
+        speed = 0f
         break
-      } else {
-        x = nextX
-        y = nextY
       }
+
+      // Smooth C^1 arrival deceleration curve: constant-deceleration parabola merging tangentially into omega * d
+      val vArrival = if (remDist <= d1) {
+        omega * remDist
+      } else {
+        kotlin.math.sqrt((2f * aDecel * remDist - aDecel * d1).coerceAtLeast(0f))
+      }
+
+      // Moderate speed through tight elliptical corner curvature, accelerating smoothly onto the straight line
+      val vCornerMax = if (remArc > 1e-5f) {
+        val cornerProgressSin = sin(theta.coerceIn(0f, halfPi).toDouble()).toFloat()
+        vMax * (0.42f + 0.58f * cornerProgressSin)
+      } else {
+        vMax
+      }
+
+      val vDesired = minOf(vMax, vCornerMax, vArrival)
+      val vTarget = minOf(vCallMax, vDesired)
+
+      if (speed < vTarget) {
+        speed = minOf(vTarget, speed + aMax * h)
+      } else if (speed > vDesired) {
+        val kinematicDecel = (speed * speed) / (2f * remDist.coerceAtLeast(1e-4f))
+        val decelRate = maxOf(
+          aDecel,
+          (speed - vDesired) / (tau * 0.55f).coerceAtLeast(0.03f),
+          kinematicDecel,
+        )
+        speed = maxOf(vDesired, speed - decelRate * h)
+      }
+
+      speed = minOf(speed, remDist / h).coerceAtLeast(0f)
+      val ds = speed * h
+
+      if (remArc > 1e-5f) {
+        val d1Deriv = ellipseArcDerivative(activePath.semiMajorAxisA, activePath.semiMinorAxisB, theta)
+        val midTheta = (theta + 0.5f * ds / d1Deriv).coerceIn(activePath.startAngleRad, halfPi)
+        val d2Deriv = ellipseArcDerivative(activePath.semiMajorAxisA, activePath.semiMinorAxisB, midTheta)
+        val candidateTheta = theta + ds / d2Deriv
+        if (ds < remArc && candidateTheta < halfPi - 1e-4f) {
+          theta = candidateTheta.coerceIn(activePath.startAngleRad, halfPi - 1e-4f)
+          val (px, py) = activePath.pointOnArc(theta)
+          val (utx, uty) = activePath.unitTangentOnArc(theta)
+          x = px.coerceIn(0.08f, 0.92f)
+          y = py.coerceIn(0.08f, 0.92f)
+          tx = utx
+          ty = uty
+        } else {
+          val leftoverDs = (ds - remArc).coerceAtLeast(0f)
+          theta = halfPi
+          straightU = (straightU + leftoverDs).coerceIn(0f, activePath.straightLineLength)
+          x = (activePath.junctionX + straightU * activePath.lineDirX).coerceIn(0.08f, 0.92f)
+          y = (activePath.junctionY + straightU * activePath.lineDirY).coerceIn(0.08f, 0.92f)
+          tx = activePath.lineDirX
+          ty = activePath.lineDirY
+        }
+      } else {
+        theta = halfPi
+        straightU = (straightU + ds).coerceIn(0f, activePath.straightLineLength)
+        x = (activePath.junctionX + straightU * activePath.lineDirX).coerceIn(0.08f, 0.92f)
+        y = (activePath.junctionY + straightU * activePath.lineDirY).coerceIn(0.08f, 0.92f)
+        tx = activePath.lineDirX
+        ty = activePath.lineDirY
+      }
+
+      val afterRemLine = (activePath.straightLineLength - straightU).coerceAtLeast(0f)
+      if (theta >= halfPi - 1e-5f && afterRemLine <= 0.0008f && speed <= 0.025f) {
+        x = goalX
+        y = goalY
+        theta = halfPi
+        straightU = activePath.straightLineLength
+        speed = 0f
+        break
+      }
+    }
+
+    val vx = if (speed > 1e-5f) speed * tx else 0f
+    val vy = if (speed > 1e-5f) speed * ty else 0f
+
+    val updatedCornerPath = if (speed <= 1e-5f &&
+      theta >= halfPi - 1e-5f &&
+      (activePath.straightLineLength - straightU) <= 0.0008f
+    ) {
+      activePath.copy(
+        currentAngleRad = halfPi,
+        straightDistanceTraveled = activePath.straightLineLength,
+      )
+    } else {
+      activePath.copy(
+        currentAngleRad = theta,
+        straightDistanceTraveled = straightU,
+      )
     }
 
     val initialDist = kotlin.math.sqrt(initialDistSq)
@@ -6704,6 +7236,7 @@ object CameraEngine {
       targetBoundingBox = coercedGoalBox ?: interpolatedBox,
       velocityX = vx,
       velocityY = vy,
+      cornerPath = updatedCornerPath,
       timestampMs = timestampMs,
     )
   }

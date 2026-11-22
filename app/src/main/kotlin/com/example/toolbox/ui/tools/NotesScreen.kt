@@ -1,10 +1,16 @@
 package com.example.toolbox.ui.tools
 
+import com.example.toolbox.ui.theme.toolboxScreenBackground
+
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -54,7 +60,7 @@ import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -86,6 +92,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FormatColorReset
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NewLabel
 import androidx.compose.material.icons.filled.Palette
@@ -106,7 +113,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
+import com.example.toolbox.ui.theme.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -162,12 +169,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -268,8 +279,11 @@ fun NotesScreen(
   repository: NotesRepository? = null,
   initialOpenAddNote: Boolean = false,
   initialAddChecklistMode: Boolean = false,
+  initialGrantedFolderPaths: Set<String>? = null,
+  onRequestFolderSystemAccess: ((NotesFolder, (Boolean) -> Unit) -> Unit)? = null,
 ) {
   val context = LocalContext.current
+  val isInspection = LocalInspectionMode.current
   val haptic = LocalHapticFeedback.current
   val focusManager = LocalFocusManager.current
 
@@ -277,10 +291,92 @@ fun NotesScreen(
     repository ?: SharedPreferencesNotesRepository(context)
   }
 
+  var grantedFolderPaths by remember(repo, initialGrantedFolderPaths, isInspection) {
+    mutableStateOf(
+      when {
+        initialGrantedFolderPaths != null -> initialGrantedFolderPaths
+        isInspection -> setOf(DEFAULT_NOTES_SCOPED_FOLDER.displayPath)
+        else -> repo.getGrantedFolderPaths()
+      }
+    )
+  }
+  val isNotesFolderGranted = remember(grantedFolderPaths) {
+    NotesEngine.isNotesFolderAccessGranted(grantedFolderPaths)
+  }
+  var pendingPermissionFolderPath by rememberSaveable {
+    mutableStateOf<String?>(null)
+  }
+  var folderAwaitingSystemResult by remember {
+    mutableStateOf<NotesFolder?>(null)
+  }
+
   var notes by remember { mutableStateOf(repo.loadNotes()) }
   var savedLabels by remember { mutableStateOf(repo.loadLabels()) }
   var isGridView by remember { mutableStateOf(repo.isGridView()) }
   var gridColumnsPerRow by remember { mutableIntStateOf(repo.getGridColumnsPerRow()) }
+
+  fun grantNotesFolderAccess(folder: NotesFolder = DEFAULT_NOTES_SCOPED_FOLDER) {
+    val updated = buildSet {
+      addAll(grantedFolderPaths)
+      add(folder.displayPath)
+      add(DEFAULT_NOTES_SCOPED_FOLDER.displayPath)
+    }
+    grantedFolderPaths = updated
+    repo.setGrantedFolderPaths(updated)
+    pendingPermissionFolderPath = null
+    notes = repo.loadNotes()
+    savedLabels = repo.loadLabels()
+  }
+
+  val folderAccessLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.StartActivityForResult(),
+  ) { result ->
+    val targetFolder = folderAwaitingSystemResult ?: DEFAULT_NOTES_SCOPED_FOLDER
+    folderAwaitingSystemResult = null
+    if (result.resultCode == Activity.RESULT_OK) {
+      val treeUri = result.data?.data
+      if (treeUri != null) {
+        try {
+          val takeFlags = (result.data?.flags ?: 0) and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+          context.contentResolver.takePersistableUriPermission(
+            treeUri,
+            if (takeFlags != 0) takeFlags else (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION),
+          )
+        } catch (_: Throwable) {}
+      }
+      grantNotesFolderAccess(targetFolder)
+    }
+  }
+
+  fun requestSystemFolderAccess(folder: NotesFolder = DEFAULT_NOTES_SCOPED_FOLDER) {
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    if (onRequestFolderSystemAccess != null) {
+      onRequestFolderSystemAccess(folder) { granted ->
+        if (granted) {
+          grantNotesFolderAccess(folder)
+        }
+      }
+      return
+    }
+    try {
+      folderAwaitingSystemResult = folder
+      folderAccessLauncher.launch(
+        NotesEngine.createFolderAccessIntent(
+          context = context,
+          folder = folder,
+        )
+      )
+    } catch (_: Throwable) {
+      folderAwaitingSystemResult = null
+      grantNotesFolderAccess(folder)
+    }
+  }
+
+  fun requestNotesFolderPermissionPrompt() {
+    pendingPermissionFolderPath = DEFAULT_NOTES_SCOPED_FOLDER.displayPath
+    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+  }
 
   fun updateGridColumnsPerRow(columns: Int) {
     val coerced = columns.coerceIn(MIN_NOTES_GRID_COLUMNS, MAX_NOTES_GRID_COLUMNS)
@@ -487,6 +583,7 @@ fun NotesScreen(
   val trashedNotesCount = remember(notes) { notes.count { it.isTrashed } }
 
   val headerSubtext = remember(
+    isNotesFolderGranted,
     activeFilter,
     activeNotesCount,
     pinnedNotesCount,
@@ -494,20 +591,24 @@ fun NotesScreen(
     trashedNotesCount,
     filteredResult.totalCount,
   ) {
-    when (val filter = activeFilter) {
-      NotesFilter.All -> {
-        val noteWord = if (activeNotesCount == 1) "note" else "notes"
-        if (pinnedNotesCount > 0) {
-          "$activeNotesCount $noteWord • $pinnedNotesCount pinned"
-        } else {
-          "$activeNotesCount $noteWord"
+    if (!isNotesFolderGranted) {
+      "Storage access locked • Grant access to /Notes"
+    } else {
+      when (val filter = activeFilter) {
+        NotesFilter.All -> {
+          val noteWord = if (activeNotesCount == 1) "note" else "notes"
+          if (pinnedNotesCount > 0) {
+            "$activeNotesCount $noteWord • $pinnedNotesCount pinned"
+          } else {
+            "$activeNotesCount $noteWord"
+          }
         }
+        NotesFilter.Pinned -> "$pinnedNotesCount pinned"
+        NotesFilter.Checklists -> "${filteredResult.totalCount} checklists"
+        is NotesFilter.Label -> "${filter.name} • ${filteredResult.totalCount}"
+        NotesFilter.Archived -> "Archive • $archivedNotesCount"
+        NotesFilter.Trash -> "Trash • $trashedNotesCount"
       }
-      NotesFilter.Pinned -> "$pinnedNotesCount pinned"
-      NotesFilter.Checklists -> "${filteredResult.totalCount} checklists"
-      is NotesFilter.Label -> "${filter.name} • ${filteredResult.totalCount}"
-      NotesFilter.Archived -> "Archive • $archivedNotesCount"
-      NotesFilter.Trash -> "Trash • $trashedNotesCount"
     }
   }
 
@@ -588,13 +689,18 @@ fun NotesScreen(
       },
       onExportAsFile = { note ->
         val baseName = note.title.ifBlank { "Note_${note.id.take(6)}" }
-        CrossToolActions.exportTextAsFile(context, baseName, note.toPlainText())
+        CrossToolActions.exportTextAsFile(
+          context = context,
+          suggestedFileName = "$baseName$NOTES_FILE_DOT_EXTENSION",
+          content = note.toTtxt(),
+          targetDir = repo.getNotesDirectory(),
+        )
       },
       onShare = { note ->
         CrossToolActions.shareText(
           context = context,
           title = note.title.ifBlank { "Note" },
-          text = note.toPlainText(),
+          text = note.toTtxt(),
         )
       },
       onToggleArchive = { note ->
@@ -620,7 +726,7 @@ fun NotesScreen(
   Box(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background)
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .onGloballyPositioned { coords ->
         val rootHeight = coords.findRootCoordinates().size.height
         val bottomInRoot = (coords.positionInRoot().y + coords.size.height).roundToInt()
@@ -788,21 +894,40 @@ fun NotesScreen(
         labels = allLabels,
         archivedCount = archivedNotesCount,
         trashedCount = trashedNotesCount,
+        isNotesFolderGranted = isNotesFolderGranted,
+        pendingPermissionFolderPath = pendingPermissionFolderPath,
         isGridView = isGridView,
         gridColumnsPerRow = gridColumnsPerRow,
         onGridColumnsPerRowChange = { updateGridColumnsPerRow(it) },
         onSelectFilter = { filter ->
-          activeFilter = filter
-          selectedNoteIds = emptySet()
+          if (!isNotesFolderGranted) {
+            requestNotesFolderPermissionPrompt()
+          } else {
+            activeFilter = filter
+            selectedNoteIds = emptySet()
+          }
+        },
+        onRequestNotesFolderPermission = {
+          requestNotesFolderPermissionPrompt()
         },
         onDeleteLabel = { labelToDelete ->
-          requestDeleteLabel(labelToDelete)
+          if (!isNotesFolderGranted) {
+            requestNotesFolderPermissionPrompt()
+          } else {
+            requestDeleteLabel(labelToDelete)
+          }
         },
-        onManageLabels = { showManageLabelsDialog = true },
+        onManageLabels = {
+          if (!isNotesFolderGranted) {
+            requestNotesFolderPermissionPrompt()
+          } else {
+            showManageLabelsDialog = true
+          }
+        },
       )
 
       // Trash Banner when inside Trash filter
-      if (activeFilter == NotesFilter.Trash && trashedNotesCount > 0) {
+      if (isNotesFolderGranted && activeFilter == NotesFilter.Trash && trashedNotesCount > 0) {
         Surface(
           color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f),
           shape = RoundedCornerShape(14.dp),
@@ -845,13 +970,13 @@ fun NotesScreen(
         }
       }
 
-      // 4. Staggered Grid / List of Notes
+      // 4. Scoped Storage Locked/Permission View or Staggered Grid / List of Notes
       Box(
         modifier = Modifier
           .weight(1f)
           .fillMaxWidth()
           .pinchToChangeColumns(
-            enabled = true,
+            enabled = isNotesFolderGranted,
             isListView = !isGridView,
             columnsPerRow = gridColumnsPerRow,
             minColumns = MIN_NOTES_GRID_COLUMNS,
@@ -872,7 +997,22 @@ fun NotesScreen(
             },
           ),
       ) {
-        if (filteredResult.isEmpty) {
+        if (!isNotesFolderGranted) {
+          if (pendingPermissionFolderPath != null) {
+            NotesFolderPermissionRequestView(
+              folder = DEFAULT_NOTES_SCOPED_FOLDER,
+              onAllowAccess = {
+                requestSystemFolderAccess(DEFAULT_NOTES_SCOPED_FOLDER)
+              },
+            )
+          } else {
+            NotesLockedStorageStateView(
+              onRequestPermission = {
+                requestNotesFolderPermissionPrompt()
+              },
+            )
+          }
+        } else if (filteredResult.isEmpty) {
           NotesEmptyState(
             activeFilter = activeFilter,
             hasSearchQuery = isSearchActive && (searchQuery.isNotBlank() || selectedColorFilter != null),
@@ -1280,7 +1420,7 @@ fun NotesScreen(
         }
 
         // 5. Floating 28.dp Quick-Capture Bar ("Take a note..." + Checklist shortcut) with Slide-Up Add Note View
-        if (!isSelectionMode && activeFilter != NotesFilter.Trash) {
+        if (isNotesFolderGranted && !isSelectionMode && activeFilter != NotesFilter.Trash) {
           val preselectedLabels = when (val filter = activeFilter) {
             is NotesFilter.Label -> listOf(filter.name)
             else -> emptyList()
@@ -1921,10 +2061,13 @@ private fun NotesFilterChipsRow(
   labels: List<String>,
   archivedCount: Int,
   trashedCount: Int,
+  isNotesFolderGranted: Boolean = true,
+  pendingPermissionFolderPath: String? = null,
   isGridView: Boolean = true,
   gridColumnsPerRow: Int = DEFAULT_NOTES_GRID_COLUMNS,
   onGridColumnsPerRowChange: (Int) -> Unit = {},
   onSelectFilter: (NotesFilter) -> Unit,
+  onRequestNotesFolderPermission: () -> Unit = {},
   onDeleteLabel: (String) -> Unit = {},
   onManageLabels: () -> Unit,
 ) {
@@ -1933,70 +2076,215 @@ private fun NotesFilterChipsRow(
     floatingButtonsCount = 1,
     pills = {
       ToolboxPillNavigationItem(
-        selected = activeFilter == NotesFilter.All,
-        onClick = { onSelectFilter(NotesFilter.All) },
-        label = "All",
-        testTag = "notes_filter_all",
-      )
-
-      labels.forEach { label ->
-        val isSelected = activeFilter is NotesFilter.Label &&
-          activeFilter.name.equals(label, ignoreCase = true)
-        ToolboxPillNavigationItem(
-          selected = isSelected,
-          onClick = { onSelectFilter(NotesFilter.Label(label)) },
-          label = label,
-          trailingIcon = {
+        selected = if (!isNotesFolderGranted) {
+          pendingPermissionFolderPath != null
+        } else {
+          activeFilter == NotesFilter.All
+        },
+        onClick = {
+          if (!isNotesFolderGranted) {
+            onRequestNotesFolderPermission()
+          } else {
+            onSelectFilter(NotesFilter.All)
+          }
+        },
+        leadingIconContent = if (!isNotesFolderGranted) {
+          {
             Box(
               contentAlignment = Alignment.Center,
               modifier = Modifier
-                .clip(CircleShape)
-                .clickable { onDeleteLabel(label) }
-                .testTag("notes_filter_label_delete_$label"),
+                .semantics(mergeDescendants = true) {
+                  onClick {
+                    onRequestNotesFolderPermission()
+                    true
+                  }
+                }
+                .testTag("notes_filter_lock_icon_ALL"),
             ) {
               Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = "Delete label $label",
+                imageVector = Icons.Default.Lock,
+                contentDescription = "Unlock Notes folder",
                 modifier = Modifier
                   .size(16.dp)
-                  .testTag("notes_filter_label_delete_icon_$label"),
+                  .testTag("folder_lock_icon_Notes"),
               )
             }
+          }
+        } else {
+          null
+        },
+        label = "All",
+        testTag = "notes_filter_all",
+        modifier = Modifier.graphicsLayer {
+          alpha = if (!isNotesFolderGranted) 0.72f else 1f
+        },
+      )
+
+      labels.forEach { label ->
+        val isSelected = isNotesFolderGranted &&
+          activeFilter is NotesFilter.Label &&
+          activeFilter.name.equals(label, ignoreCase = true)
+        ToolboxPillNavigationItem(
+          selected = isSelected,
+          onClick = {
+            if (!isNotesFolderGranted) {
+              onRequestNotesFolderPermission()
+            } else {
+              onSelectFilter(NotesFilter.Label(label))
+            }
+          },
+          leadingIcon = if (!isNotesFolderGranted) Icons.Default.Lock else null,
+          label = label,
+          trailingIcon = if (isNotesFolderGranted) {
+            {
+              Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                  .clip(CircleShape)
+                  .clickable { onDeleteLabel(label) }
+                  .testTag("notes_filter_label_delete_$label"),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Close,
+                  contentDescription = "Delete label $label",
+                  modifier = Modifier
+                    .size(16.dp)
+                    .testTag("notes_filter_label_delete_icon_$label"),
+                )
+              }
+            }
+          } else {
+            null
           },
           testTag = "notes_filter_label_$label",
+          modifier = Modifier.graphicsLayer {
+            alpha = if (!isNotesFolderGranted) 0.72f else 1f
+          },
         )
       }
 
       ToolboxPillNavigationItem(
-        selected = activeFilter == NotesFilter.Pinned,
-        onClick = { onSelectFilter(NotesFilter.Pinned) },
-        leadingIcon = Icons.Default.PushPin,
+        selected = isNotesFolderGranted && activeFilter == NotesFilter.Pinned,
+        onClick = {
+          if (!isNotesFolderGranted) {
+            onRequestNotesFolderPermission()
+          } else {
+            onSelectFilter(NotesFilter.Pinned)
+          }
+        },
+        leadingIconContent = {
+          Icon(
+            imageVector = if (isNotesFolderGranted) Icons.Default.PushPin else Icons.Default.Lock,
+            contentDescription = if (isNotesFolderGranted) "Pinned" else "Unlock Notes folder for Pinned",
+            modifier = Modifier
+              .size(16.dp)
+              .testTag(
+                if (isNotesFolderGranted) {
+                  "notes_filter_unlocked_icon_PINNED"
+                } else {
+                  "notes_filter_lock_icon_PINNED"
+                }
+              ),
+          )
+        },
         label = "Pinned",
         testTag = "notes_filter_pinned",
+        modifier = Modifier.graphicsLayer {
+          alpha = if (!isNotesFolderGranted) 0.72f else 1f
+        },
       )
 
       ToolboxPillNavigationItem(
-        selected = activeFilter == NotesFilter.Checklists,
-        onClick = { onSelectFilter(NotesFilter.Checklists) },
-        leadingIcon = Icons.Default.CheckBox,
+        selected = isNotesFolderGranted && activeFilter == NotesFilter.Checklists,
+        onClick = {
+          if (!isNotesFolderGranted) {
+            onRequestNotesFolderPermission()
+          } else {
+            onSelectFilter(NotesFilter.Checklists)
+          }
+        },
+        leadingIconContent = {
+          Icon(
+            imageVector = if (isNotesFolderGranted) Icons.Default.CheckBox else Icons.Default.Lock,
+            contentDescription = if (isNotesFolderGranted) "Checklists" else "Unlock Notes folder for Checklists",
+            modifier = Modifier
+              .size(16.dp)
+              .testTag(
+                if (isNotesFolderGranted) {
+                  "notes_filter_unlocked_icon_CHECKLISTS"
+                } else {
+                  "notes_filter_lock_icon_CHECKLISTS"
+                }
+              ),
+          )
+        },
         label = "Checklists",
         testTag = "notes_filter_checklists",
+        modifier = Modifier.graphicsLayer {
+          alpha = if (!isNotesFolderGranted) 0.72f else 1f
+        },
       )
 
       ToolboxPillNavigationItem(
-        selected = activeFilter == NotesFilter.Archived,
-        onClick = { onSelectFilter(NotesFilter.Archived) },
-        leadingIcon = Icons.Default.Archive,
-        label = if (archivedCount > 0) "Archive ($archivedCount)" else "Archive",
+        selected = isNotesFolderGranted && activeFilter == NotesFilter.Archived,
+        onClick = {
+          if (!isNotesFolderGranted) {
+            onRequestNotesFolderPermission()
+          } else {
+            onSelectFilter(NotesFilter.Archived)
+          }
+        },
+        leadingIconContent = {
+          Icon(
+            imageVector = if (isNotesFolderGranted) Icons.Default.Archive else Icons.Default.Lock,
+            contentDescription = if (isNotesFolderGranted) "Archive" else "Unlock Notes folder for Archive",
+            modifier = Modifier
+              .size(16.dp)
+              .testTag(
+                if (isNotesFolderGranted) {
+                  "notes_filter_unlocked_icon_ARCHIVED"
+                } else {
+                  "notes_filter_lock_icon_ARCHIVED"
+                }
+              ),
+          )
+        },
+        label = if (isNotesFolderGranted && archivedCount > 0) "Archive ($archivedCount)" else "Archive",
         testTag = "notes_filter_archived",
+        modifier = Modifier.graphicsLayer {
+          alpha = if (!isNotesFolderGranted) 0.72f else 1f
+        },
       )
 
       ToolboxPillNavigationItem(
-        selected = activeFilter == NotesFilter.Trash,
-        onClick = { onSelectFilter(NotesFilter.Trash) },
-        leadingIcon = Icons.Default.Delete,
-        label = if (trashedCount > 0) "Trash ($trashedCount)" else "Trash",
+        selected = isNotesFolderGranted && activeFilter == NotesFilter.Trash,
+        onClick = {
+          if (!isNotesFolderGranted) {
+            onRequestNotesFolderPermission()
+          } else {
+            onSelectFilter(NotesFilter.Trash)
+          }
+        },
+        leadingIconContent = {
+          Icon(
+            imageVector = if (isNotesFolderGranted) Icons.Default.Delete else Icons.Default.Lock,
+            contentDescription = if (isNotesFolderGranted) "Trash" else "Unlock Notes folder for Trash",
+            modifier = Modifier
+              .size(16.dp)
+              .testTag(
+                if (isNotesFolderGranted) {
+                  "notes_filter_unlocked_icon_TRASH"
+                } else {
+                  "notes_filter_lock_icon_TRASH"
+                }
+              ),
+          )
+        },
+        label = if (isNotesFolderGranted && trashedCount > 0) "Trash ($trashedCount)" else "Trash",
         testTag = "notes_filter_trash",
+        modifier = Modifier.graphicsLayer {
+          alpha = if (!isNotesFolderGranted) 0.72f else 1f
+        },
       )
     },
     floatingControls = {
@@ -2022,6 +2310,146 @@ private fun NotesFilterChipsRow(
       }
     },
   )
+}
+
+/**
+ * View displayed in the Notes tool when scoped storage access is locked (permission to `/Notes`
+ * has not been granted yet), styled to match the Gallery, Audio Recorder, and Music Player tools.
+ */
+@Composable
+private fun NotesLockedStorageStateView(
+  onRequestPermission: () -> Unit = {},
+  modifier: Modifier = Modifier,
+) {
+  Card(
+    shape = RoundedCornerShape(14.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+    ),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+    modifier = modifier
+      .fillMaxSize()
+      .padding(16.dp)
+      .clip(RoundedCornerShape(14.dp))
+      .clickable(onClick = onRequestPermission)
+      .testTag("locked_storage_state"),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(24.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
+    ) {
+      Box(
+        modifier = Modifier
+          .size(48.dp)
+          .clip(CircleShape)
+          .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Default.Lock,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(24.dp),
+        )
+      }
+      Spacer(modifier = Modifier.height(10.dp))
+      Text(
+        text = "Storage access is locked",
+        style = MaterialTheme.typography.bodyLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurface,
+        textAlign = TextAlign.Center,
+      )
+      Spacer(modifier = Modifier.height(4.dp))
+      Text(
+        text = "Tap the lock icon on a navigation pill above to grant permission to access .ttxt files in /Notes.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+      )
+    }
+  }
+}
+
+/**
+ * View displayed when the user taps a locked navigation pill or its lock icon in the Notes tool,
+ * asking for permission to access `.ttxt` files in `/Notes` and launching the Android system
+ * directory access prompt when the user taps "Allow".
+ */
+@Composable
+private fun NotesFolderPermissionRequestView(
+  folder: NotesFolder,
+  onAllowAccess: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Card(
+    shape = RoundedCornerShape(14.dp),
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    ),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+    modifier = modifier
+      .fillMaxSize()
+      .padding(16.dp)
+      .testTag("folder_permission_view"),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(horizontal = 24.dp, vertical = 16.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
+    ) {
+      Box(
+        modifier = Modifier
+          .size(48.dp)
+          .clip(CircleShape)
+          .background(MaterialTheme.colorScheme.primaryContainer),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Default.Lock,
+          contentDescription = null,
+          tint = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.size(24.dp),
+        )
+      }
+      Spacer(modifier = Modifier.height(10.dp))
+      Text(
+        text = "Allow access to files in ${folder.folderPath}?",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurface,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.testTag("folder_permission_title"),
+      )
+      Spacer(modifier = Modifier.height(4.dp))
+      Text(
+        text = "Notes needs permission to access files in ${folder.folderPath} (${folder.folderName}) to read and save .ttxt notes in this location.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.testTag("folder_permission_message"),
+      )
+      Spacer(modifier = Modifier.height(14.dp))
+      Button(
+        onClick = onAllowAccess,
+        shape = CircleShape,
+        modifier = Modifier.testTag("allow_folder_permission_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Check,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Allow")
+      }
+    }
+  }
 }
 
 @Composable

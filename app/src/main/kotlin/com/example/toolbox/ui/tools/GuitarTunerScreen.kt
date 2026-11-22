@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import com.example.toolbox.ui.theme.toolboxScreenBackground
+
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -44,7 +46,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -893,7 +895,7 @@ fun GuitarTunerScreen(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background)
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .testTag("guitar_tuner_screen"),
   ) {
     // Section 5.1 & 5.7: Standard Tool Header Bar with Integrated Search Toolbar
@@ -1770,9 +1772,10 @@ private fun TuningCatalogSearchOverlay(
   onToggleFavorite: (GuitarTuningPreset) -> Unit,
 ) {
   Surface(
-    color = MaterialTheme.colorScheme.background,
+    color = Color.Transparent,
     modifier = Modifier
       .fillMaxSize()
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .clickable(
         interactionSource = remember { MutableInteractionSource() },
         indication = null,

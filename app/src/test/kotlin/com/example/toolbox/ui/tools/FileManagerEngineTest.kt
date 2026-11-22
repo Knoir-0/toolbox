@@ -714,6 +714,29 @@ class FileManagerEngineTest {
       importedProse.content,
     )
     assertEquals(2, repo.loadNotes().size)
+
+    val ttxtFile = File(tempFolder.root, "ToolboxChecklist.ttxt").apply {
+      writeText(
+        """
+        # Toolbox Checklist
+
+        - Unchecked item
+        + Checked item
+        """.trimIndent()
+      )
+    }
+    assertTrue(FileManagerEngine.isTextFile(ttxtFile))
+    assertEquals("text/x-ttxt", FileManagerEngine.getMimeType(ttxtFile))
+    val importedTtxt = FileManagerEngine.importFileToNotes(ttxtFile, repo, nowMs = 1_700_000_010_000L)
+    assertNotNull(importedTtxt)
+    assertEquals("Toolbox Checklist", importedTtxt!!.title)
+    assertTrue(importedTtxt.isChecklist)
+    assertEquals(2, importedTtxt.checklistItems.size)
+    assertFalse(importedTtxt.checklistItems[0].isChecked)
+    assertEquals("Unchecked item", importedTtxt.checklistItems[0].text)
+    assertTrue(importedTtxt.checklistItems[1].isChecked)
+    assertEquals("Checked item", importedTtxt.checklistItems[1].text)
+    assertEquals(3, repo.loadNotes().size)
   }
 
   @Test

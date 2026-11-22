@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import com.example.toolbox.ui.theme.toolboxScreenBackground
+
 import android.Manifest
 import android.app.Application
 import android.bluetooth.BluetoothAdapter
@@ -47,7 +49,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -97,7 +99,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconToggleButton
-import androidx.compose.material3.FloatingActionButton
+import com.example.toolbox.ui.theme.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -297,7 +299,7 @@ fun BluetoothRemoteScreen(modifier: Modifier = Modifier) {
     Column(
       modifier = modifier
         .fillMaxSize()
-        .background(MaterialTheme.colorScheme.background)
+        .toolboxScreenBackground(MaterialTheme.colorScheme.background)
         .testTag("bt_remote_screen"),
     ) {
       BluetoothToolToolbar(
@@ -386,7 +388,7 @@ fun BluetoothRemoteScreen(modifier: Modifier = Modifier) {
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background)
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .testTag("bt_remote_screen"),
   ) {
     BluetoothToolToolbar(
@@ -507,7 +509,7 @@ internal fun DeviceListContent(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background),
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background),
   ) {
     if (showToolbar) {
       BluetoothToolToolbar(
@@ -1240,7 +1242,7 @@ internal fun RemoteControlContent(
   Column(
     modifier = modifier
       .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background),
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background),
   ) {
     if (showToolbar) {
       BluetoothToolToolbar(

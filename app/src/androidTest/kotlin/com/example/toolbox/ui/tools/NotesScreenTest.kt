@@ -612,4 +612,87 @@ class NotesScreenTest {
     assertEquals(todoBarBounds.height, notesBarBounds.height, 1f)
     assertEquals(todoBarBounds.height, todoItemBounds.height, 1f)
   }
+
+  @Test
+  fun notesScreen_requiresScopedStorageAccessToNotesRoot_andSavesTtxtFiles() {
+    val tempRootDir = java.nio.file.Files.createTempDirectory("notes_scoped_root").toFile()
+    val notesDir = java.io.File(tempRootDir, "Notes")
+    try {
+      val repo = InMemoryNotesRepository(
+        initialNotesFolderGranted = false,
+        notesDirectory = notesDir,
+      )
+      var requestedFolder: NotesFolder? = null
+
+      composeTestRule.setContent {
+        ToolboxTheme {
+          NotesScreen(
+            repository = repo,
+            initialGrantedFolderPaths = emptySet(),
+            onRequestFolderSystemAccess = { folder, onResult ->
+              requestedFolder = folder
+              onResult(true)
+            },
+          )
+        }
+      }
+      composeTestRule.waitForIdle()
+
+      // 1. Before granting scoped storage access to /Notes, tool shows locked storage view and hides quick capture bar
+      composeTestRule.onNodeWithTag("locked_storage_state").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("notes_quick_capture_card").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("folder_lock_icon_Notes", useUnmergedTree = true).assertExists()
+
+      // 2. Tapping a locked navigation pill displays the /Notes folder permission request view
+      composeTestRule.onNodeWithTag("notes_filter_all").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("folder_permission_view").assertIsDisplayed()
+      composeTestRule.onNodeWithText("Allow access to files in /Notes?").assertIsDisplayed()
+
+      val systemIntent = NotesEngine.createFolderAccessIntent(
+        context = composeTestRule.activity,
+        folder = DEFAULT_NOTES_SCOPED_FOLDER,
+        userRoot = tempRootDir,
+      )
+      assertEquals(android.content.Intent.ACTION_OPEN_DOCUMENT_TREE, systemIntent.action)
+
+      // 3. Tapping "Allow" grants scoped storage access to /Notes and unlocks the Notes tool
+      composeTestRule.onNodeWithTag("allow_folder_permission_button").performClick()
+      composeTestRule.waitForIdle()
+
+      assertEquals(DEFAULT_NOTES_SCOPED_FOLDER, requestedFolder)
+      composeTestRule.onNodeWithTag("locked_storage_state").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("folder_permission_view").assertDoesNotExist()
+      composeTestRule.onNodeWithTag("notes_quick_capture_card").assertIsDisplayed()
+
+      // 4. Create a checklist note and verify it is saved as a .ttxt file in /Notes with '- ' and '+ ' list syntax
+      composeTestRule.onNodeWithTag("new_checklist_button").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("editor_title_input").performTextInput("Toolbox Supplies")
+      composeTestRule.onNodeWithTag("editor_new_checklist_input").performTextInput("Wrench\nScrewdriver")
+      composeTestRule.onNodeWithTag("editor_add_checklist_item").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("add_note_confirm_button").performClick()
+      composeTestRule.waitForIdle()
+
+      val savedTtxtFile = java.io.File(notesDir, "Toolbox Supplies.ttxt")
+      assertTrue("Expected .ttxt file in /Notes", savedTtxtFile.exists())
+      assertEquals(
+        "# Toolbox Supplies\n\n- Wrench\n- Screwdriver",
+        savedTtxtFile.readText(),
+      )
+
+      // Checking off the first item replaces '-' with '+' in the .ttxt file
+      val firstItemId = repo.loadNotes().single().checklistItems.first().id
+      composeTestRule.onNodeWithTag("note_card_check_item_$firstItemId").performClick()
+      composeTestRule.waitForIdle()
+
+      assertEquals(
+        "# Toolbox Supplies\n\n+ Wrench\n- Screwdriver",
+        savedTtxtFile.readText(),
+      )
+    } finally {
+      tempRootDir.deleteRecursively()
+    }
+  }
 }

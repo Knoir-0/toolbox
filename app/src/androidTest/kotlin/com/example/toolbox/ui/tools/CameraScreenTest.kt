@@ -475,14 +475,14 @@ class CameraScreenTest {
     composeTestRule.onNodeWithTag("camera_adjustments_panel").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_shutter_button").assertIsDisplayed()
 
-    // 3. Advance clock by 3.5 seconds (past the old 2.8s duration, still within the 5s override window):
+    // 3. Advance clock by 5.5 seconds (past the old 5.0s duration, still within the 7s override window):
     // manual focus override must still be active
-    composeTestRule.mainClock.advanceTimeBy(3500L)
+    composeTestRule.mainClock.advanceTimeBy(5500L)
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("camera_focus_indicator").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_smart_af_indicator").assertDoesNotExist()
 
-    // 4. Advance clock past the 5-second (5000ms) manual override window:
+    // 4. Advance clock past the 7-second (7000ms) manual override window:
     // manual focus expires and camera automatically returns to ML Kit smart object autofocus
     composeTestRule.mainClock.advanceTimeBy(1600L)
     composeTestRule.waitForIdle()

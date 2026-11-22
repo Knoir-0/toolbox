@@ -1,5 +1,7 @@
 package com.example.toolbox.ui.tools
 
+import com.example.toolbox.ui.theme.toolboxScreenBackground
+
 import android.Manifest
 import android.os.Build
 import android.widget.Toast
@@ -52,7 +54,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import com.example.toolbox.ui.theme.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -101,7 +103,7 @@ import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
+import com.example.toolbox.ui.theme.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -917,7 +919,7 @@ fun TodoListScreen(
     Box(
       modifier = modifier
         .fillMaxSize()
-        .background(MaterialTheme.colorScheme.background)
+        .toolboxScreenBackground(MaterialTheme.colorScheme.background)
         .onGloballyPositioned { coords ->
           val rootHeight = coords.findRootCoordinates().size.height
           val bottomInRoot = (coords.positionInRoot().y + coords.size.height).roundToInt()
@@ -929,7 +931,7 @@ fun TodoListScreen(
       Column(
         modifier = Modifier
           .fillMaxSize()
-          .background(MaterialTheme.colorScheme.background),
+          .toolboxScreenBackground(MaterialTheme.colorScheme.background),
       ) {
         // 1. Unified 68.dp Top Bar with Search, Multi-Selection, Undo/Redo, and View Mode Toggle
         ToolboxTopBar(

@@ -37,6 +37,9 @@ const val PREF_KEY_PERMISSION_STATES = "permission_states"
 const val PREF_KEY_PERMISSION_USAGE = "permission_usage"
 const val PREF_KEY_LAST_OPENED_TOOL = "last_opened_tool"
 const val PREF_KEY_ERROR_LOGS = "error_logs"
+const val PREF_KEY_BACKGROUND_TEXTURE = "background_texture"
+const val PREF_KEY_HEXAGON_ICON_BUTTONS = "hexagon_icon_buttons"
+const val DEFAULT_HEXAGON_ICON_BUTTONS = false
 const val MAX_ERROR_LOG_ENTRIES = 100
 
 const val DEFAULT_THEME_COLOR_SYSTEM = "SYSTEM"
@@ -339,6 +342,8 @@ object NavigationPreferencesBridge {
   var themeMode by mutableStateOf(ThemeMode.SYSTEM)
   var musicPlayerThemeEnabled by mutableStateOf(DEFAULT_MUSIC_PLAYER_THEME_ENABLED)
   var musicPlayerColorOption by mutableStateOf(DEFAULT_MUSIC_PLAYER_COLOR_OPTION)
+  var backgroundTexture by mutableStateOf(BackgroundTexture.NONE)
+  var hexagonIconButtons by mutableStateOf(DEFAULT_HEXAGON_ICON_BUTTONS)
   var permissionGrantStates by mutableStateOf(AppPermission.entries.associateWith { true })
   var errorLogs by mutableStateOf<List<ErrorLogEntry>>(emptyList())
   var activeRepository: NavigationPreferencesRepository? = null
@@ -447,6 +452,88 @@ enum class ThemeMode {
   LIGHT,
   DARK,
 }
+
+/**
+ * Procedural background texture presets applied across all tool screens.
+ * Defaults to [NONE].
+ */
+enum class BackgroundTexture(
+  val displayName: String,
+  val subtitle: String,
+) {
+  NONE(
+    displayName = "None",
+    subtitle = "Clean solid surface with no overlay texture",
+  ),
+  FUZZY(
+    displayName = "Fuzzy",
+    subtitle = "Tactile film grain & fine organic static",
+  ),
+  FADE(
+    displayName = "Fade",
+    subtitle = "Smooth ambient gradient wash from primary to accent",
+  ),
+  CONCENTRIC(
+    displayName = "Concentric",
+    subtitle = "Expanding geometric rings & ripples",
+  ),
+  HALFTONE(
+    displayName = "Halftone",
+    subtitle = "Retro comic-book dot matrix wave",
+  ),
+  TOPOGRAPHY(
+    displayName = "Topography",
+    subtitle = "Flowing elevation contour lines",
+  ),
+  AURORA(
+    displayName = "Aurora",
+    subtitle = "Luminous northern lights ribbons & glow",
+  ),
+  STARFIELD(
+    displayName = "Starfield",
+    subtitle = "Cosmic nebula wash with twinkling stars",
+  ),
+  SUNBURST(
+    displayName = "Sunburst",
+    subtitle = "Radiating vintage horizon beams",
+  ),
+  HEXAGONS(
+    displayName = "Honeycomb",
+    subtitle = "Tessellated hexagonal geometric lattice",
+  ),
+  BLUEPRINT(
+    displayName = "Blueprint",
+    subtitle = "Drafting grid with technical crosshairs",
+  ),
+  WAVES(
+    displayName = "Waves",
+    subtitle = "Layered ocean sine waves & interference",
+  ),
+  CONFETTI(
+    displayName = "Confetti",
+    subtitle = "Playful scattered shapes & sparkles",
+  ),
+  CIRCUIT(
+    displayName = "Circuit",
+    subtitle = "Cybernetic PCB traces & solder nodes",
+  );
+
+  companion object {
+    val presets: List<BackgroundTexture>
+      get() = entries.filter { it != NONE }
+
+    fun fromPrefValue(raw: String?): BackgroundTexture {
+      val trimmed = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return NONE
+      entries.firstOrNull {
+        it.name.equals(trimmed, ignoreCase = true) ||
+          it.displayName.equals(trimmed, ignoreCase = true)
+      }?.let { return it }
+      return NONE
+    }
+  }
+}
+
+val DEFAULT_BACKGROUND_TEXTURE: BackgroundTexture = BackgroundTexture.NONE
 
 /**
  * Options for organizing tools in the Toolbox navigation panel.
@@ -818,6 +905,16 @@ interface NavigationPreferencesRepository {
   fun setAccentColor(color: String)
   val accentColorFlow: StateFlow<String>
 
+  fun getBackgroundTexture(): BackgroundTexture = DEFAULT_BACKGROUND_TEXTURE
+  fun setBackgroundTexture(texture: BackgroundTexture) {}
+  val backgroundTextureFlow: StateFlow<BackgroundTexture>
+    get() = MutableStateFlow(getBackgroundTexture()).asStateFlow()
+
+  fun getHexagonIconButtons(): Boolean = DEFAULT_HEXAGON_ICON_BUTTONS
+  fun setHexagonIconButtons(enabled: Boolean) {}
+  val hexagonIconButtonsFlow: StateFlow<Boolean>
+    get() = MutableStateFlow(getHexagonIconButtons()).asStateFlow()
+
   fun getHiddenTools(): Set<Tool>
   fun setHiddenTools(tools: Set<Tool>)
   val hiddenToolsFlow: StateFlow<Set<Tool>>
@@ -971,10 +1068,18 @@ class DefaultNavigationPreferencesRepository(
   private val _accentColorFlow = MutableStateFlow(getAccentColor())
   override val accentColorFlow: StateFlow<String> = _accentColorFlow.asStateFlow()
 
+  private val _backgroundTextureFlow = MutableStateFlow(getBackgroundTexture())
+  override val backgroundTextureFlow: StateFlow<BackgroundTexture> = _backgroundTextureFlow.asStateFlow()
+
+  private val _hexagonIconButtonsFlow = MutableStateFlow(getHexagonIconButtons())
+  override val hexagonIconButtonsFlow: StateFlow<Boolean> = _hexagonIconButtonsFlow.asStateFlow()
+
   init {
     NavigationPreferencesBridge.themeMode = _themeModeFlow.value
     NavigationPreferencesBridge.musicPlayerThemeEnabled = _musicPlayerThemeEnabledFlow.value
     NavigationPreferencesBridge.musicPlayerColorOption = _musicPlayerColorOptionFlow.value
+    NavigationPreferencesBridge.backgroundTexture = _backgroundTextureFlow.value
+    NavigationPreferencesBridge.hexagonIconButtons = _hexagonIconButtonsFlow.value
   }
 
   private val _hiddenToolsFlow = MutableStateFlow(getHiddenTools())
@@ -1128,6 +1233,27 @@ class DefaultNavigationPreferencesRepository(
   override fun setAccentColor(color: String) {
     sharedPreferences.edit().putString(PREF_KEY_ACCENT_COLOR, color).apply()
     _accentColorFlow.value = color
+  }
+
+  override fun getBackgroundTexture(): BackgroundTexture {
+    val raw = sharedPreferences.getString(PREF_KEY_BACKGROUND_TEXTURE, null)
+    return BackgroundTexture.fromPrefValue(raw)
+  }
+
+  override fun setBackgroundTexture(texture: BackgroundTexture) {
+    sharedPreferences.edit().putString(PREF_KEY_BACKGROUND_TEXTURE, texture.name).apply()
+    _backgroundTextureFlow.value = texture
+    NavigationPreferencesBridge.backgroundTexture = texture
+  }
+
+  override fun getHexagonIconButtons(): Boolean {
+    return sharedPreferences.getBoolean(PREF_KEY_HEXAGON_ICON_BUTTONS, DEFAULT_HEXAGON_ICON_BUTTONS)
+  }
+
+  override fun setHexagonIconButtons(enabled: Boolean) {
+    sharedPreferences.edit().putBoolean(PREF_KEY_HEXAGON_ICON_BUTTONS, enabled).apply()
+    _hexagonIconButtonsFlow.value = enabled
+    NavigationPreferencesBridge.hexagonIconButtons = enabled
   }
 
   override fun getHiddenTools(): Set<Tool> {
@@ -1388,6 +1514,8 @@ class InMemoryNavigationPreferencesRepository(
     DEFAULT_MUSIC_PLAYER_COLOR_OPTION
   },
   initialAccentColor: String = DEFAULT_ACCENT_COLOR_AUTO,
+  initialBackgroundTexture: BackgroundTexture = DEFAULT_BACKGROUND_TEXTURE,
+  initialHexagonIconButtons: Boolean = DEFAULT_HEXAGON_ICON_BUTTONS,
   initialHiddenTools: Set<Tool> = DEFAULT_HIDDEN_TOOLS,
   initialToolSorting: ToolSortingOption = ToolSortingOption.USER_CHOICE,
   initialToolSortOrder: ToolSortOrder = ToolSortOrder.ASCENDING,
@@ -1422,10 +1550,18 @@ class InMemoryNavigationPreferencesRepository(
   private val _accentColorFlow = MutableStateFlow(initialAccentColor)
   override val accentColorFlow: StateFlow<String> = _accentColorFlow.asStateFlow()
 
+  private val _backgroundTextureFlow = MutableStateFlow(initialBackgroundTexture)
+  override val backgroundTextureFlow: StateFlow<BackgroundTexture> = _backgroundTextureFlow.asStateFlow()
+
+  private val _hexagonIconButtonsFlow = MutableStateFlow(initialHexagonIconButtons)
+  override val hexagonIconButtonsFlow: StateFlow<Boolean> = _hexagonIconButtonsFlow.asStateFlow()
+
   init {
     NavigationPreferencesBridge.themeMode = _themeModeFlow.value
     NavigationPreferencesBridge.musicPlayerThemeEnabled = _musicPlayerThemeEnabledFlow.value
     NavigationPreferencesBridge.musicPlayerColorOption = _musicPlayerColorOptionFlow.value
+    NavigationPreferencesBridge.backgroundTexture = _backgroundTextureFlow.value
+    NavigationPreferencesBridge.hexagonIconButtons = _hexagonIconButtonsFlow.value
   }
 
   private val _hiddenToolsFlow = MutableStateFlow(initialHiddenTools.filter { it != Tool.SETTINGS }.toSet())
@@ -1530,6 +1666,20 @@ class InMemoryNavigationPreferencesRepository(
 
   override fun setAccentColor(color: String) {
     _accentColorFlow.value = color
+  }
+
+  override fun getBackgroundTexture(): BackgroundTexture = _backgroundTextureFlow.value
+
+  override fun setBackgroundTexture(texture: BackgroundTexture) {
+    _backgroundTextureFlow.value = texture
+    NavigationPreferencesBridge.backgroundTexture = texture
+  }
+
+  override fun getHexagonIconButtons(): Boolean = _hexagonIconButtonsFlow.value
+
+  override fun setHexagonIconButtons(enabled: Boolean) {
+    _hexagonIconButtonsFlow.value = enabled
+    NavigationPreferencesBridge.hexagonIconButtons = enabled
   }
 
   override fun getHiddenTools(): Set<Tool> = _hiddenToolsFlow.value
@@ -1680,6 +1830,8 @@ private val RECOGNIZED_BACKUP_KEYS = setOf(
   PREF_KEY_MUSIC_PLAYER_THEME_ENABLED,
   PREF_KEY_MUSIC_PLAYER_COLOR_OPTION,
   PREF_KEY_ACCENT_COLOR,
+  PREF_KEY_BACKGROUND_TEXTURE,
+  PREF_KEY_HEXAGON_ICON_BUTTONS,
   PREF_KEY_HIDDEN_TOOLS,
   PREF_KEY_TOOL_SORTING,
   PREF_KEY_TOOL_SORT_ORDER,
@@ -1704,6 +1856,8 @@ fun exportSettingsToJson(repository: NavigationPreferencesRepository): String {
   json.put(PREF_KEY_MUSIC_PLAYER_THEME_ENABLED, repository.getMusicPlayerThemeEnabled())
   json.put(PREF_KEY_MUSIC_PLAYER_COLOR_OPTION, repository.getMusicPlayerColorOption())
   json.put(PREF_KEY_ACCENT_COLOR, repository.getAccentColor())
+  json.put(PREF_KEY_BACKGROUND_TEXTURE, repository.getBackgroundTexture().name)
+  json.put(PREF_KEY_HEXAGON_ICON_BUTTONS, repository.getHexagonIconButtons())
   json.put(PREF_KEY_HIDDEN_TOOLS, serializeHiddenTools(repository.getHiddenTools()))
   json.put(PREF_KEY_TOOL_SORTING, repository.getToolSorting().name)
   json.put(PREF_KEY_TOOL_SORT_ORDER, repository.getToolSortOrder().name)
@@ -1769,6 +1923,15 @@ fun importSettingsFromJson(
       val accent = json.optString(PREF_KEY_ACCENT_COLOR, DEFAULT_ACCENT_COLOR_AUTO)
         .ifBlank { DEFAULT_ACCENT_COLOR_AUTO }
       repository.setAccentColor(accent)
+    }
+    if (json.has(PREF_KEY_BACKGROUND_TEXTURE)) {
+      val rawTexture = json.optString(PREF_KEY_BACKGROUND_TEXTURE, DEFAULT_BACKGROUND_TEXTURE.name)
+      repository.setBackgroundTexture(BackgroundTexture.fromPrefValue(rawTexture))
+    }
+    if (json.has(PREF_KEY_HEXAGON_ICON_BUTTONS)) {
+      repository.setHexagonIconButtons(
+        json.optBoolean(PREF_KEY_HEXAGON_ICON_BUTTONS, DEFAULT_HEXAGON_ICON_BUTTONS)
+      )
     }
     if (json.has(PREF_KEY_HIDDEN_TOOLS)) {
       repository.setHiddenTools(parseHiddenTools(json.optString(PREF_KEY_HIDDEN_TOOLS, "")))
@@ -1851,6 +2014,8 @@ fun resetAllSettingsToDefaults(repository: NavigationPreferencesRepository) {
   repository.setMusicPlayerThemeEnabled(DEFAULT_MUSIC_PLAYER_THEME_ENABLED)
   repository.setMusicPlayerColorOption(DEFAULT_MUSIC_PLAYER_COLOR_OPTION)
   repository.setAccentColor(DEFAULT_ACCENT_COLOR_AUTO)
+  repository.setBackgroundTexture(DEFAULT_BACKGROUND_TEXTURE)
+  repository.setHexagonIconButtons(DEFAULT_HEXAGON_ICON_BUTTONS)
   repository.setHiddenTools(DEFAULT_HIDDEN_TOOLS)
   repository.setToolOrder(Tool.entries)
   repository.setToolSorting(ToolSortingOption.USER_CHOICE)
