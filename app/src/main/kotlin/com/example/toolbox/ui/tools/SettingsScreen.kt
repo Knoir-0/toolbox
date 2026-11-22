@@ -63,6 +63,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Gavel
@@ -135,8 +136,11 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -147,6 +151,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -193,8 +198,60 @@ import com.example.toolbox.ui.theme.parseHexColor
 import com.example.toolbox.ui.theme.toolboxScreenBackground
 import kotlin.math.roundToInt
 import kotlin.random.Random
+import kotlinx.coroutines.delay
 
 const val FEEDBACK_DEVIL_ANGEL_EASTER_EGG_CHANCE = 0.01f
+const val DONATE_DEFAULT_BUTTON_TEXT = "Donate"
+const val DONATE_EASTER_EGG_CHANCE = 0.03f
+const val DONATE_TOP_POSITION_EASTER_EGG_CHANCE = 0.01f
+const val DONATE_EASTER_EGG_VIEW_DURATION_MS = 2_000L
+const val DONATE_EASTER_EGG_DISPLAY_DURATION_MS = 2_000L
+const val DONATE_EASTER_EGG_COOLDOWN_MS = 30L * 60L * 1_000L // 0.5 hours / 30 minutes (1,800,000 ms)
+const val DONATE_404_TITLE = "404 Not Found"
+const val DONATE_404_SHRUG_EMOTE = "¯\\_(ツ)_/¯"
+const val DONATE_404_TEMP_DURATION_MS = 2_500L
+
+val DONATE_EASTER_EGG_MESSAGES: List<String> = listOf(
+  "pretty please?",
+  "help me help you",
+  "runnin outta cash",
+  "spare a coin?",
+  "feed the dev",
+  "fuel the code",
+  "coffee fund empty",
+  "accepting shiny coins",
+  "send snacks pls",
+  "100% free forever",
+  "feed the machine",
+  "fuel the machine",
+  "am hungry",
+  "help",
+  "for my cats",
+  "think of the cats",
+  "please",
+  "do good today",
+  "please be kind",
+  "with love",
+  "you're doing great",
+  "glad you're here",
+  "drink some water",
+  "be gentle",
+  "you matter",
+  "sending good vibes",
+  "thanks for being you",
+  "take a break",
+  "rest easy",
+  "one step at a time",
+  "keep going",
+  "proud of you",
+  "stay hydrated",
+  "you got this",
+  "made for you",
+  "i'm doing my best",
+  "be you today",
+  "be good",
+  "help out",
+)
 
 val DevilFeedbackIcon: ImageVector by lazy {
   ImageVector.Builder(
@@ -317,6 +374,69 @@ fun resolveReportBugButtonIcon(useDevilAndAngelIcons: Boolean): ImageVector =
 
 fun resolveRequestFeatureButtonIcon(useDevilAndAngelIcons: Boolean): ImageVector =
   if (useDevilAndAngelIcons) AngelFeedbackIcon else Icons.Default.Lightbulb
+
+fun shouldMoveDonateButtonToTop(
+  random: Random = Random.Default,
+): Boolean = random.nextFloat() < DONATE_TOP_POSITION_EASTER_EGG_CHANCE
+
+fun isDonateEasterEggOnCooldown(
+  lastTriggeredTimestampMs: Long,
+  nowTimestampMs: Long = System.currentTimeMillis(),
+  cooldownMs: Long = DONATE_EASTER_EGG_COOLDOWN_MS,
+): Boolean {
+  if (lastTriggeredTimestampMs <= 0L) return false
+  val elapsed = nowTimestampMs - lastTriggeredTimestampMs
+  return elapsed in 0 until cooldownMs
+}
+
+fun shouldTriggerDonateEasterEggMessage(
+  lastTriggeredTimestampMs: Long,
+  nowTimestampMs: Long = System.currentTimeMillis(),
+  random: Random = Random.Default,
+  cooldownMs: Long = DONATE_EASTER_EGG_COOLDOWN_MS,
+): Boolean {
+  if (isDonateEasterEggOnCooldown(lastTriggeredTimestampMs, nowTimestampMs, cooldownMs)) {
+    return false
+  }
+  return random.nextFloat() < DONATE_EASTER_EGG_CHANCE
+}
+
+fun pickDonateEasterEggMessage(
+  random: Random = Random.Default,
+  messages: List<String> = DONATE_EASTER_EGG_MESSAGES,
+): String {
+  if (messages.isEmpty()) return DONATE_DEFAULT_BUTTON_TEXT
+  return messages[random.nextInt(messages.size)]
+}
+
+/**
+ * Attempts to trigger the Donate button text flip easter egg after the button has been in view for
+ * [DONATE_EASTER_EGG_VIEW_DURATION_MS] (3 seconds).
+ *
+ * When triggered (1% chance), records [nowTimestampMs] in [preferencesRepository] to prevent it
+ * from triggering again for [cooldownMs] (3 hours) and returns the selected cute message.
+ * Returns `null` if on cooldown or if the 1% roll does not hit.
+ */
+fun tryTriggerDonateEasterEgg(
+  preferencesRepository: NavigationPreferencesRepository,
+  nowTimestampMs: Long = System.currentTimeMillis(),
+  random: Random = Random.Default,
+  cooldownMs: Long = DONATE_EASTER_EGG_COOLDOWN_MS,
+): String? {
+  val lastTriggeredMs = preferencesRepository.getDonateEasterEggLastTriggeredMs()
+  if (
+    !shouldTriggerDonateEasterEggMessage(
+      lastTriggeredTimestampMs = lastTriggeredMs,
+      nowTimestampMs = nowTimestampMs,
+      random = random,
+      cooldownMs = cooldownMs,
+    )
+  ) {
+    return null
+  }
+  preferencesRepository.setDonateEasterEggLastTriggeredMs(nowTimestampMs)
+  return pickDonateEasterEggMessage(random)
+}
 
 data class ColorPreset(
   val name: String,
@@ -1595,6 +1715,179 @@ fun LicenseFullScreenView(
   }
 }
 
+@Composable
+fun Donate404FullScreenView(
+  onNavigateBack: () -> Unit,
+  modifier: Modifier = Modifier,
+  autoReturnDelayMs: Long = DONATE_404_TEMP_DURATION_MS,
+) {
+  BackHandler {
+    onNavigateBack()
+  }
+
+  LaunchedEffect(autoReturnDelayMs) {
+    if (autoReturnDelayMs > 0L) {
+      delay(autoReturnDelayMs)
+      onNavigateBack()
+    }
+  }
+
+  Column(
+    modifier = modifier
+      .fillMaxSize()
+      .toolboxScreenBackground(MaterialTheme.colorScheme.background)
+      .testTag("donate_404_screen"),
+  ) {
+    ToolboxTopBar(
+      title = DONATE_DEFAULT_BUTTON_TEXT,
+      subtext = DONATE_404_TITLE,
+      icon = Icons.Default.FavoriteBorder,
+      onNavigateBack = onNavigateBack,
+      backContentDescription = "Back",
+      backButtonTestTag = "action_navigate_back",
+      additionalBackButtonTestTag = "donate_404_back_button",
+      titleTestTag = "donate_404_toolbar_title",
+      subtextTestTag = "donate_404_toolbar_subtext",
+    )
+
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(horizontal = 24.dp, vertical = 20.dp),
+      contentAlignment = Alignment.Center,
+    ) {
+      Card(
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("donate_404_card"),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+          containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        ),
+        border = BorderStroke(
+          1.dp,
+          MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+        ),
+      ) {
+        Column(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 32.dp),
+          horizontalAlignment = Alignment.CenterHorizontally,
+          verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Text(
+            text = DONATE_404_SHRUG_EMOTE,
+            style = MaterialTheme.typography.headlineLarge,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.testTag("donate_404_shrug_emote"),
+          )
+          Text(
+            text = DONATE_404_TITLE,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.testTag("donate_404_title"),
+          )
+          Text(
+            text = "Donate page not found.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.testTag("donate_404_message"),
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+fun SettingsDonateButton(
+  preferencesRepository: NavigationPreferencesRepository,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  donateEasterEggRandom: Random = Random.Default,
+  nowTimestampProvider: () -> Long = { System.currentTimeMillis() },
+) {
+  val view = LocalView.current
+  var isInView by remember { mutableStateOf(false) }
+  var currentButtonText by rememberSaveable { mutableStateOf(DONATE_DEFAULT_BUTTON_TEXT) }
+
+  LaunchedEffect(isInView) {
+    if (!isInView) {
+      currentButtonText = DONATE_DEFAULT_BUTTON_TEXT
+      return@LaunchedEffect
+    }
+    delay(DONATE_EASTER_EGG_VIEW_DURATION_MS)
+    val easterEggMessage = tryTriggerDonateEasterEgg(
+      preferencesRepository = preferencesRepository,
+      nowTimestampMs = nowTimestampProvider(),
+      random = donateEasterEggRandom,
+    )
+    if (easterEggMessage != null) {
+      currentButtonText = easterEggMessage
+      delay(DONATE_EASTER_EGG_DISPLAY_DURATION_MS)
+      currentButtonText = DONATE_DEFAULT_BUTTON_TEXT
+    }
+  }
+
+  OutlinedButton(
+    onClick = onClick,
+    shape = CircleShape,
+    modifier = modifier
+      .fillMaxWidth()
+      .onGloballyPositioned { coordinates ->
+        if (!coordinates.isAttached) {
+          isInView = false
+          return@onGloballyPositioned
+        }
+        val bounds = coordinates.boundsInWindow()
+        val windowWidth = view.width.toFloat()
+        val windowHeight = view.height.toFloat()
+        val hasPositiveSize = bounds.width > 0f && bounds.height > 0f
+        isInView = if (windowWidth > 0f && windowHeight > 0f) {
+          hasPositiveSize &&
+            bounds.bottom > 0f &&
+            bounds.top < windowHeight &&
+            bounds.right > 0f &&
+            bounds.left < windowWidth
+        } else {
+          hasPositiveSize
+        }
+      }
+      .testTag("donate_button"),
+  ) {
+    Icon(
+      imageVector = Icons.Default.FavoriteBorder,
+      contentDescription = null,
+      modifier = Modifier.size(18.dp),
+    )
+    Spacer(modifier = Modifier.width(8.dp))
+    AnimatedContent(
+      targetState = currentButtonText,
+      transitionSpec = {
+        (fadeIn(tween(180)) + scaleIn(initialScale = 0.92f, animationSpec = tween(180)))
+          .togetherWith(fadeOut(tween(140)) + scaleOut(targetScale = 0.92f, animationSpec = tween(140)))
+      },
+      label = "donate_button_text_flip",
+    ) { targetText ->
+      Text(
+        text = targetText,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.testTag("donate_button_text"),
+      )
+    }
+  }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -1610,7 +1903,12 @@ fun SettingsScreen(
   initialBackupRestoreExpanded: Boolean = false,
   initialErrorLogsDialogVisible: Boolean = false,
   initialLicenseDialogVisible: Boolean = false,
+  initialDonate404Visible: Boolean = false,
+  donate404AutoReturnDelayMs: Long = DONATE_404_TEMP_DURATION_MS,
   feedbackIconsRandom: Random = Random.Default,
+  donatePositionRandom: Random = Random.Default,
+  donateEasterEggRandom: Random = Random.Default,
+  nowTimestampProvider: () -> Long = { System.currentTimeMillis() },
   onOpenUrl: ((String) -> Unit)? = null,
   onSelectTool: ((Tool) -> Unit)? = null,
 ) {
@@ -1640,6 +1938,10 @@ fun SettingsScreen(
   var isBackupRestoreExpanded by rememberSaveable { mutableStateOf(initialBackupRestoreExpanded) }
   var showErrorLogsDialog by rememberSaveable { mutableStateOf(initialErrorLogsDialogVisible) }
   var showLicenseDialog by rememberSaveable { mutableStateOf(initialLicenseDialogVisible) }
+  var showDonate404View by rememberSaveable { mutableStateOf(initialDonate404Visible) }
+  val moveDonateButtonToTop = rememberSaveable {
+    shouldMoveDonateButtonToTop(donatePositionRandom)
+  }
   val haptic = LocalHapticFeedback.current
 
   if (showErrorLogsDialog) {
@@ -1655,6 +1957,15 @@ fun SettingsScreen(
   if (showLicenseDialog) {
     LicenseFullScreenView(
       onNavigateBack = { showLicenseDialog = false },
+      modifier = modifier,
+    )
+    return
+  }
+
+  if (showDonate404View) {
+    Donate404FullScreenView(
+      onNavigateBack = { showDonate404View = false },
+      autoReturnDelayMs = donate404AutoReturnDelayMs,
       modifier = modifier,
     )
     return
@@ -1698,6 +2009,19 @@ fun SettingsScreen(
         .testTag("settings_screen"),
       verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
+      if (moveDonateButtonToTop) {
+        SettingsDonateButton(
+          preferencesRepository = preferencesRepository,
+          onClick = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            showDonate404View = true
+          },
+          donateEasterEggRandom = donateEasterEggRandom,
+          nowTimestampProvider = nowTimestampProvider,
+          modifier = Modifier.testTag("donate_button_top"),
+        )
+      }
+
       // Section 1: Toolbox Default Sorting (Collapsible)
       val sortingSummary = remember(toolSorting, toolSortOrder, categorySorting, categoryToolSorting, toolsPerRow) {
         val sortModeLabel = when (toolSorting) {
@@ -5072,6 +5396,20 @@ fun SettingsScreen(
       )
       Spacer(modifier = Modifier.width(8.dp))
       Text("License")
+    }
+
+    // Donate button at the very bottom of Settings (unless the 1% top-position easter egg moved it to the top)
+    if (!moveDonateButtonToTop) {
+      SettingsDonateButton(
+        preferencesRepository = preferencesRepository,
+        onClick = {
+          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+          showDonate404View = true
+        },
+        donateEasterEggRandom = donateEasterEggRandom,
+        nowTimestampProvider = nowTimestampProvider,
+        modifier = Modifier.testTag("donate_button_bottom"),
+      )
     }
 
     if (showResetConfirmDialog) {

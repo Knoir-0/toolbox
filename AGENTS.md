@@ -6,6 +6,7 @@ All AI agents implementing new tools, screens, dialogs, or UI enhancements for t
 
 - [x] **DO** always check and read [DESIGN_LANGUAGE.md](./DESIGN_LANGUAGE.md) before initiating any work.
 - [x] **DO** remember to update [README.md](./README.md) if significant changes have been made.
+- [x] **DO** suggest relevant new Home Screen AppWidgets whenever creating new tools.
 - [x] **DO** use `MaterialTheme.colorScheme.*` for all colors; verify dark and light mode contrast.
 - [x] **DO** use standard corner radii: `28.dp` for dialogs/sheets, `16.dp` for all Home Screen AppWidgets (with `android:id="@android:id/background"` + `android:clipToOutline="true"` on the full-bleed `16.dp` root `FrameLayout` to opt out of Android 12+ `28.dp` launcher corner enforcement, and the `1.dp` border stroke inset by `max(borderWidthPx * 1.25f, 1.5f)` with radius `cornerRadiusPx + borderWidthPx` so corners are never cut off), `14.dp` for fields/cards, `CircleShape` for FABs, icon badges, and slider dot handles.
 - [x] **DO** use `ToolboxTopBar` (`68.dp` fixed height, `12.dp` horizontal padding, `40.dp` `primaryContainer` circular icon badge with `20.dp` `primary`-tinted icon, `titleLarge` Bold title + `bodySmall` `onSurfaceVariant` subtext) for all tool headers.

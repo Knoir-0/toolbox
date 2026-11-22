@@ -124,6 +124,7 @@ import com.example.toolbox.ui.tools.ElementsScreen
 import com.example.toolbox.ui.tools.FileConverterScreen
 import com.example.toolbox.ui.tools.FilesScreen
 import com.example.toolbox.ui.tools.GalleryScreen
+import com.example.toolbox.ui.tools.GoodScreen
 import java.io.File
 import com.example.toolbox.ui.tools.GuitarTunerScreen
 import com.example.toolbox.ui.tools.ImageEditorScreen
@@ -2513,6 +2514,9 @@ fun ToolContentView(
       Tool.ELEMENTS -> ElementsScreen(
         onOpenCalculator = onOpenCalculator,
         onOpenUnitConverter = onOpenUnitConverter,
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.GOOD -> GoodScreen(
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.SEARCH -> SearchScreen(

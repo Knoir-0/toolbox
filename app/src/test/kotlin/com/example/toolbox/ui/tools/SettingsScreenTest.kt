@@ -399,6 +399,7 @@ class SettingsScreenTest {
     assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.PDF_VIEWER.category)
     assertEquals(ToolCategory.REMOTES_AND_DEVICES, Tool.OBD2_SCANNER.category)
     assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.ELEMENTS.category)
+    assertEquals(ToolCategory.MISCELLANEOUS, Tool.GOOD.category)
     assertEquals(ToolCategory.SYSTEM, Tool.SEARCH.category)
     assertEquals(ToolCategory.SYSTEM, Tool.SETTINGS.category)
   }
@@ -1629,5 +1630,297 @@ class SettingsScreenTest {
       NavigationPreferencesBridge.hexagonIconButtons = false
       NavigationPreferencesBridge.backgroundTexture = BackgroundTexture.NONE
     }
+  }
+
+  @Test
+  fun donateButton_hasApprovedEasterEggMessages_twoSecondViewTrigger_twoSecondDisplay_andHalfHourCooldown() {
+    assertEquals("Donate", DONATE_DEFAULT_BUTTON_TEXT)
+    assertEquals(0.03f, DONATE_EASTER_EGG_CHANCE)
+    assertEquals(0.01f, DONATE_TOP_POSITION_EASTER_EGG_CHANCE)
+    assertEquals(2_000L, DONATE_EASTER_EGG_VIEW_DURATION_MS)
+    assertEquals(2_000L, DONATE_EASTER_EGG_DISPLAY_DURATION_MS)
+    assertEquals(30L * 60L * 1_000L, DONATE_EASTER_EGG_COOLDOWN_MS)
+    assertEquals("404 Not Found", DONATE_404_TITLE)
+    assertEquals("¯\\_(ツ)_/¯", DONATE_404_SHRUG_EMOTE)
+
+    // Verify exact approved easter egg message list (including additions and removals)
+    val expectedMessages = listOf(
+      "pretty please?",
+      "help me help you",
+      "runnin outta cash",
+      "spare a coin?",
+      "feed the dev",
+      "fuel the code",
+      "coffee fund empty",
+      "accepting shiny coins",
+      "send snacks pls",
+      "100% free forever",
+      "feed the machine",
+      "fuel the machine",
+      "am hungry",
+      "help",
+      "for my cats",
+      "think of the cats",
+      "please",
+      "do good today",
+      "please be kind",
+      "with love",
+      "you're doing great",
+      "glad you're here",
+      "drink some water",
+      "be gentle",
+      "you matter",
+      "sending good vibes",
+      "thanks for being you",
+      "take a break",
+      "rest easy",
+      "one step at a time",
+      "keep going",
+      "proud of you",
+      "stay hydrated",
+      "you got this",
+      "made for you",
+      "i'm doing my best",
+      "be you today",
+      "be good",
+      "help out",
+    )
+    assertEquals(expectedMessages, DONATE_EASTER_EGG_MESSAGES)
+    assertFalse(DONATE_EASTER_EGG_MESSAGES.contains("100% ad-free forever"))
+    assertFalse(DONATE_EASTER_EGG_MESSAGES.contains("poke me if you're generous"))
+    assertFalse(DONATE_EASTER_EGG_MESSAGES.contains("keep the gears turning"))
+
+    // 1% chance to move Donate button to the top of Settings
+    val luckyTopRandom = object : kotlin.random.Random() {
+      override fun nextBits(bitCount: Int): Int = 0
+      override fun nextFloat(): Float = 0.005f
+    }
+    val boundaryTopRandom = object : kotlin.random.Random() {
+      override fun nextBits(bitCount: Int): Int = 0
+      override fun nextFloat(): Float = 0.01f
+    }
+    val normalTopRandom = object : kotlin.random.Random() {
+      override fun nextBits(bitCount: Int): Int = 0
+      override fun nextFloat(): Float = 0.42f
+    }
+    assertTrue(shouldMoveDonateButtonToTop(luckyTopRandom))
+    assertFalse(shouldMoveDonateButtonToTop(boundaryTopRandom))
+    assertFalse(shouldMoveDonateButtonToTop(normalTopRandom))
+
+    // 1% chance to flip Donate text when not on cooldown, and 1-hour cooldown enforcement
+    val repo = InMemoryNavigationPreferencesRepository()
+    assertEquals(0L, repo.getDonateEasterEggLastTriggeredMs())
+
+    val t0 = 1_763_500_000_000L
+    val unluckyRollRandom = object : kotlin.random.Random() {
+      override fun nextBits(bitCount: Int): Int = 0
+      override fun nextFloat(): Float = 0.05f
+    }
+    assertNull(
+      tryTriggerDonateEasterEgg(
+        preferencesRepository = repo,
+        nowTimestampMs = t0,
+        random = unluckyRollRandom,
+      )
+    )
+    assertEquals(0L, repo.getDonateEasterEggLastTriggeredMs())
+
+    val luckyMessageRandom = object : kotlin.random.Random() {
+      override fun nextBits(bitCount: Int): Int = 0
+      override fun nextFloat(): Float = 0.004f
+      override fun nextInt(until: Int): Int = (until - 1).coerceAtLeast(0)
+    }
+    val triggeredMessage = tryTriggerDonateEasterEgg(
+      preferencesRepository = repo,
+      nowTimestampMs = t0,
+      random = luckyMessageRandom,
+    )
+    assertEquals("help out", triggeredMessage)
+    assertEquals(t0, repo.getDonateEasterEggLastTriggeredMs())
+
+    // During the 1-hour cooldown window, even a lucky <1% roll cannot trigger again
+    assertTrue(isDonateEasterEggOnCooldown(lastTriggeredTimestampMs = t0, nowTimestampMs = t0))
+    assertTrue(
+      isDonateEasterEggOnCooldown(
+        lastTriggeredTimestampMs = t0,
+        nowTimestampMs = t0 + DONATE_EASTER_EGG_COOLDOWN_MS - 1L,
+      )
+    )
+    assertNull(
+      tryTriggerDonateEasterEgg(
+        preferencesRepository = repo,
+        nowTimestampMs = t0 + 60_000L,
+        random = luckyMessageRandom,
+      )
+    )
+    assertNull(
+      tryTriggerDonateEasterEgg(
+        preferencesRepository = repo,
+        nowTimestampMs = t0 + DONATE_EASTER_EGG_COOLDOWN_MS - 1L,
+        random = luckyMessageRandom,
+      )
+    )
+    assertEquals(t0, repo.getDonateEasterEggLastTriggeredMs())
+
+    // Exactly 1 hour later, cooldown expires and a lucky roll can trigger again
+    val afterOneHour = t0 + DONATE_EASTER_EGG_COOLDOWN_MS
+    assertFalse(
+      isDonateEasterEggOnCooldown(
+        lastTriggeredTimestampMs = t0,
+        nowTimestampMs = afterOneHour,
+      )
+    )
+    val firstMessageRandom = object : kotlin.random.Random() {
+      override fun nextBits(bitCount: Int): Int = 0
+      override fun nextFloat(): Float = 0.001f
+      override fun nextInt(until: Int): Int = 0
+    }
+    val secondTriggeredMessage = tryTriggerDonateEasterEgg(
+      preferencesRepository = repo,
+      nowTimestampMs = afterOneHour,
+      random = firstMessageRandom,
+    )
+    assertEquals("pretty please?", secondTriggeredMessage)
+    assertEquals(afterOneHour, repo.getDonateEasterEggLastTriggeredMs())
+  }
+
+  @Test
+  fun goodTool_containsAllPositiveMessages_refreshesToDifferentMessage_andPersistsState() {
+    assertEquals("Good", Tool.GOOD.title)
+    assertEquals(ToolCategory.MISCELLANEOUS, Tool.GOOD.category)
+    assertFalse("Good tool should not be hidden by default", Tool.GOOD in DEFAULT_HIDDEN_TOOLS)
+    assertEquals("tap to refresh", GOOD_TAP_TO_REFRESH_TEXT)
+
+    val expectedPositiveMessages = listOf(
+      "do good today",
+      "please be kind",
+      "with love",
+      "you're doing great",
+      "glad you're here",
+      "drink some water",
+      "be gentle",
+      "you matter",
+      "sending good vibes",
+      "thanks for being you",
+      "take a break",
+      "rest easy",
+      "one step at a time",
+      "keep going",
+      "proud of you",
+      "stay hydrated",
+      "you got this",
+      "made for you",
+      "i'm doing my best",
+      "be you today",
+      "be good",
+      "help someone today",
+      "share a smile",
+      "check on a friend",
+      "say something kind",
+      "spread some joy",
+      "listen more",
+      "be patient",
+      "clean a bit, it helps",
+      "choose kindness",
+      "hug someone",
+      "shine bright",
+      "be a light",
+      "love is everywhere",
+      "choose love",
+      "be kind",
+      "forgive",
+      "leave the past",
+      "don't worry",
+      "it'll be okay",
+      "take care",
+      "be safe",
+      "act with love",
+      "act with kindness",
+      "take action",
+      "be you",
+      "breathe",
+      "let it go",
+      "peace within",
+      "be peaceful",
+      "slow down",
+      "find good",
+      "enjoy life",
+      "be present",
+      "do rest sometimes",
+      "look how far we've come",
+      "act with grace",
+      "be brave",
+      "be bold",
+      "start small",
+      "stay curious",
+      "be wise",
+      "make something",
+      "keep learning",
+      "always try",
+      "spread kindness",
+      "spread love",
+      "you are not alone",
+      "you are loved",
+      "always hope",
+      "it's okay",
+      "be alright",
+      "this too shall pass",
+      "endure",
+      "please forgive",
+      "explore, somehow",
+      "know that you are loved",
+      "love you",
+      "explore today",
+      "forget the past",
+      "it's okay to drift",
+      "make someone happy",
+      "be happy",
+      "together we build",
+      "together we do better",
+      "unite",
+      "break the chains",
+      "be free",
+      "love",
+      "you are human",
+      "sometimes, plans change",
+      "roll with it",
+      "reach out",
+      "forget about it",
+      "make it happen",
+      "stop waiting",
+      "you know what you must do",
+      "i am as i am",
+      "do you",
+      "spread positivity",
+    )
+    assertEquals(expectedPositiveMessages, GOOD_POSITIVE_MESSAGES)
+    assertFalse(GOOD_POSITIVE_MESSAGES.contains("100% free forever"))
+    assertFalse(GOOD_POSITIVE_MESSAGES.contains("help out"))
+    assertTrue(DONATE_EASTER_EGG_MESSAGES.contains("100% free forever"))
+    assertTrue(DONATE_EASTER_EGG_MESSAGES.contains("help out"))
+    assertEquals("do good today", DEFAULT_GOOD_MESSAGE)
+
+    // Repository remembers state and refreshes to a distinct message on tap
+    val repo = InMemoryGoodRepository()
+    assertEquals(DEFAULT_GOOD_MESSAGE, repo.getCurrentMessage())
+
+    val zeroRandom = object : kotlin.random.Random() {
+      override fun nextBits(bitCount: Int): Int = 0
+      override fun nextInt(until: Int): Int = 0
+    }
+    val next1 = repo.refreshMessage(zeroRandom)
+    // Because "do good today" is excluded from candidates when it is the current message,
+    // index 0 of the remaining candidates is "please be kind"
+    assertEquals("please be kind", next1)
+    assertEquals("please be kind", repo.getCurrentMessage())
+
+    val next2 = repo.refreshMessage(zeroRandom)
+    // Now "please be kind" is excluded, so index 0 of candidates is "do good today"
+    assertEquals("do good today", next2)
+    assertEquals("do good today", repo.getCurrentMessage())
+
+    // Explicit state persistence
+    repo.setCurrentMessage("proud of you")
+    assertEquals("proud of you", repo.getCurrentMessage())
   }
 }

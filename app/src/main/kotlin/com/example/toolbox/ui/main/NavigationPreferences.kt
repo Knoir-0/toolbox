@@ -47,6 +47,7 @@ const val PREF_KEY_LAST_OPENED_TOOL = "last_opened_tool"
 const val PREF_KEY_ERROR_LOGS = "error_logs"
 const val PREF_KEY_BACKGROUND_TEXTURE = "background_texture"
 const val PREF_KEY_HEXAGON_ICON_BUTTONS = "hexagon_icon_buttons"
+const val PREF_KEY_DONATE_EASTER_EGG_LAST_TRIGGERED_MS = "donate_easter_egg_last_triggered_ms"
 const val DEFAULT_HEXAGON_ICON_BUTTONS = false
 const val MAX_ERROR_LOG_ENTRIES = 100
 
@@ -1042,6 +1043,11 @@ interface NavigationPreferencesRepository {
   }
   val errorLogsFlow: StateFlow<List<ErrorLogEntry>>
     get() = MutableStateFlow(getErrorLogs()).asStateFlow()
+
+  fun getDonateEasterEggLastTriggeredMs(): Long = 0L
+  fun setDonateEasterEggLastTriggeredMs(timestampMs: Long) {}
+  val donateEasterEggLastTriggeredMsFlow: StateFlow<Long>
+    get() = MutableStateFlow(getDonateEasterEggLastTriggeredMs()).asStateFlow()
 }
 
 /**
@@ -1135,6 +1141,10 @@ class DefaultNavigationPreferencesRepository(
 
   private val _errorLogsFlow = MutableStateFlow(getErrorLogs())
   override val errorLogsFlow: StateFlow<List<ErrorLogEntry>> = _errorLogsFlow.asStateFlow()
+
+  private val _donateEasterEggLastTriggeredMsFlow = MutableStateFlow(getDonateEasterEggLastTriggeredMs())
+  override val donateEasterEggLastTriggeredMsFlow: StateFlow<Long> =
+    _donateEasterEggLastTriggeredMsFlow.asStateFlow()
 
   init {
     NavigationPreferencesBridge.permissionGrantStates = _permissionGrantStatesFlow.value
@@ -1523,6 +1533,21 @@ class DefaultNavigationPreferencesRepository(
     _errorLogsFlow.value = emptyList()
     NavigationPreferencesBridge.errorLogs = emptyList()
   }
+
+  override fun getDonateEasterEggLastTriggeredMs(): Long {
+    return sharedPreferences.getLong(PREF_KEY_DONATE_EASTER_EGG_LAST_TRIGGERED_MS, 0L)
+      .coerceAtLeast(0L)
+  }
+
+  override fun setDonateEasterEggLastTriggeredMs(timestampMs: Long) {
+    val sanitized = timestampMs.coerceAtLeast(0L)
+    if (sanitized == 0L) {
+      sharedPreferences.edit().remove(PREF_KEY_DONATE_EASTER_EGG_LAST_TRIGGERED_MS).apply()
+    } else {
+      sharedPreferences.edit().putLong(PREF_KEY_DONATE_EASTER_EGG_LAST_TRIGGERED_MS, sanitized).apply()
+    }
+    _donateEasterEggLastTriggeredMsFlow.value = sanitized
+  }
 }
 
 /**
@@ -1556,6 +1581,7 @@ class InMemoryNavigationPreferencesRepository(
   initialPermissionUsage: Map<AppPermission, Map<Tool, PermissionToolUsageStat>> = emptyMap(),
   initialLastOpenedTool: Tool? = null,
   initialErrorLogs: List<ErrorLogEntry> = emptyList(),
+  initialDonateEasterEggLastTriggeredMs: Long = 0L,
 ) : NavigationPreferencesRepository {
   private val _toolsPerRowFlow = MutableStateFlow(coerceToolsPerRow(initialToolsPerRow))
   override val toolsPerRowFlow: StateFlow<Int> = _toolsPerRowFlow.asStateFlow()
@@ -1629,6 +1655,12 @@ class InMemoryNavigationPreferencesRepository(
     initialErrorLogs.filter { it.message.isNotBlank() }.takeLast(MAX_ERROR_LOG_ENTRIES)
   )
   override val errorLogsFlow: StateFlow<List<ErrorLogEntry>> = _errorLogsFlow.asStateFlow()
+
+  private val _donateEasterEggLastTriggeredMsFlow = MutableStateFlow(
+    initialDonateEasterEggLastTriggeredMs.coerceAtLeast(0L)
+  )
+  override val donateEasterEggLastTriggeredMsFlow: StateFlow<Long> =
+    _donateEasterEggLastTriggeredMsFlow.asStateFlow()
 
   init {
     NavigationPreferencesBridge.permissionGrantStates = _permissionGrantStatesFlow.value
@@ -1828,6 +1860,12 @@ class InMemoryNavigationPreferencesRepository(
   override fun clearErrorLogs() {
     _errorLogsFlow.value = emptyList()
     NavigationPreferencesBridge.errorLogs = emptyList()
+  }
+
+  override fun getDonateEasterEggLastTriggeredMs(): Long = _donateEasterEggLastTriggeredMsFlow.value
+
+  override fun setDonateEasterEggLastTriggeredMs(timestampMs: Long) {
+    _donateEasterEggLastTriggeredMsFlow.value = timestampMs.coerceAtLeast(0L)
   }
 }
 
@@ -2085,6 +2123,7 @@ val TOOL_DATA_SHARED_PREFERENCES_NAMES: List<String> = listOf(
   com.example.toolbox.ui.tools.CAMERA_PREFS_NAME,
   com.example.toolbox.ui.tools.FILE_CONVERTER_PREFS_NAME,
   com.example.toolbox.ui.tools.ELEMENTS_PREFS_NAME,
+  com.example.toolbox.ui.tools.GOOD_PREFS_NAME,
   "files_tool_preferences",
 )
 

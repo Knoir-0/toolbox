@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.CropOriginal
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Mood
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
@@ -207,6 +208,11 @@ enum class Tool(
     title = "Elements",
     icon = Icons.Default.Science,
     category = ToolCategory.MATH_AND_MEASUREMENT,
+  ),
+  GOOD(
+    title = "Good",
+    icon = Icons.Default.Mood,
+    category = ToolCategory.MISCELLANEOUS,
   ),
   SEARCH(
     title = "Search",

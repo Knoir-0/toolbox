@@ -374,6 +374,14 @@ object SearchEngine {
       keywords = listOf("elements", "periodic table", "chemistry", "atom", "atomic number", "atomic mass", "molar mass", "electron configuration", "bohr", "noble gas", "alkali", "transition metal", "lanthanide", "actinide", "halogen", "hydrogen", "carbon", "oxygen", "gold", "iron", "uranium"),
       sampleQueries = listOf("Gold", "Uranium", "Elements"),
     ),
+    Tool.GOOD to ToolSearchMetadata(
+      tool = Tool.GOOD,
+      summary = "Minimalist positive messages & daily encouragement with tap-to-refresh",
+      description = "Display a centered positive message and tap anywhere on the screen to refresh with a new uplifting reminder, automatically remembering the active message across launches.",
+      capabilities = listOf("Centered Positive Message Canvas", "One-Tap Message Refresh", "Persistent Message State Memory"),
+      keywords = listOf("good", "positive", "affirmation", "kindness", "encouragement", "quote", "vibes", "mindfulness", "motivation", "love"),
+      sampleQueries = listOf("Good", "Positive", "Kindness"),
+    ),
     Tool.SEARCH to ToolSearchMetadata(
       tool = Tool.SEARCH,
       summary = "Universal search across all tools, calculators, converters, user data & catalogs",

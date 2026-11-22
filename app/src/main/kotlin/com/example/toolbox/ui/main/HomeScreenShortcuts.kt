@@ -130,6 +130,7 @@ fun resolveToolShortcutAliasClassName(tool: Tool): String {
     Tool.RECIPES -> "com.example.toolbox.MainActivityToolRecipeBook"
     Tool.OBD2_SCANNER -> "com.example.toolbox.MainActivityToolObd2Scanner"
     Tool.ELEMENTS -> "com.example.toolbox.MainActivityToolElements"
+    Tool.GOOD -> "com.example.toolbox.MainActivityToolGood"
     Tool.SEARCH -> "com.example.toolbox.MainActivityToolSearch"
     Tool.SETTINGS -> "com.example.toolbox.MainActivityToolSettings"
   }
@@ -172,6 +173,7 @@ fun resolveToolShortcutMipmapResId(tool: Tool): Int {
     Tool.RECIPES -> R.mipmap.ic_tool_recipe_book
     Tool.OBD2_SCANNER -> R.mipmap.ic_tool_obd2_scanner
     Tool.ELEMENTS -> R.mipmap.ic_tool_elements
+    Tool.GOOD -> R.mipmap.ic_tool_good
     Tool.SEARCH -> R.mipmap.ic_tool_search
     Tool.SETTINGS -> R.mipmap.ic_tool_settings
   }

@@ -1749,6 +1749,25 @@ class MainScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("license_screen").assertDoesNotExist()
     composeTestRule.onNodeWithTag("settings_screen").assertIsDisplayed()
+
+    // Verify Donate button is positioned below License button at the very bottom and temporarily opens the 404 Not Found view with shrug emote
+    composeTestRule.onNodeWithTag("license_button").performScrollTo()
+    composeTestRule.onNodeWithTag("donate_button").performScrollTo()
+    val licenseBoundsBeforeDonate = composeTestRule.onNodeWithTag("license_button").fetchSemanticsNode().boundsInRoot
+    val donateBounds = composeTestRule.onNodeWithTag("donate_button").fetchSemanticsNode().boundsInRoot
+    assertTrue(donateBounds.top >= licenseBoundsBeforeDonate.bottom)
+
+    composeTestRule.onNodeWithTag("donate_button").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("donate_404_screen").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("donate_404_shrug_emote").assertTextEquals("¯\\_(ツ)_/¯")
+    composeTestRule.onNodeWithTag("donate_404_title").assertTextEquals("404 Not Found")
+
+    composeTestRule.onNodeWithTag("action_navigate_back").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("donate_404_screen").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("settings_screen").assertIsDisplayed()
   }
 
   @Test
