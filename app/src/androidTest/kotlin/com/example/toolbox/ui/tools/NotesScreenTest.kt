@@ -124,11 +124,27 @@ class NotesScreenTest {
     composeTestRule.onNodeWithTag("editor_delete_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("editor_title_input").assertIsDisplayed()
     composeTestRule.onNodeWithTag("editor_content_input").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("single_note_timestamp").assertIsDisplayed()
     composeTestRule.onNodeWithTag("single_note_bottom_color_bar").assertIsDisplayed()
     val singleNoteBoundsBefore = composeTestRule.onNodeWithTag("single_note_view").fetchSemanticsNode().boundsInRoot
     val colorBarBoundsBefore = composeTestRule.onNodeWithTag("single_note_bottom_color_bar").fetchSemanticsNode().boundsInRoot
     assertEquals(singleNoteBoundsBefore.bottom, colorBarBoundsBefore.bottom, 1f)
+
+    // Bottom bar contains palette icon on bottom left, edited timestamp in the middle, and label icon on bottom right
+    val paletteBtnNode = composeTestRule.onNodeWithTag("single_note_palette_button")
+    val timestampNode = composeTestRule.onNodeWithTag("single_note_timestamp")
+    val labelBtnNode = composeTestRule.onNodeWithTag("single_note_label_button")
+    paletteBtnNode.assertIsDisplayed()
+    timestampNode.assertIsDisplayed()
+    labelBtnNode.assertIsDisplayed()
+    val paletteBounds = paletteBtnNode.fetchSemanticsNode().boundsInRoot
+    val timestampBounds = timestampNode.fetchSemanticsNode().boundsInRoot
+    val labelBounds = labelBtnNode.fetchSemanticsNode().boundsInRoot
+    assertTrue("Palette button should be to the left of timestamp", paletteBounds.right <= timestampBounds.left)
+    assertTrue("Timestamp should be to the left of label button", timestampBounds.right <= labelBounds.left)
+
+    // Both panels are initially collapsed
+    composeTestRule.onNodeWithTag("single_note_color_selector_panel").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("single_note_label_controls_panel").assertDoesNotExist()
 
     // Tapping in the empty space below the note content focuses the content field with cursor at the end
     composeTestRule.onNodeWithTag("single_note_editor_empty_space").performTouchInput {
@@ -140,8 +156,26 @@ class NotesScreenTest {
     val selection = contentNode.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.TextSelectionRange]
     assertEquals(androidx.compose.ui.text.TextRange("25g starter, 50g water, 50g flour".length), selection)
 
+    // Tapping label icon slides up label controls
+    labelBtnNode.performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("single_note_label_controls_panel").assertIsDisplayed()
     composeTestRule.onNodeWithTag("editor_label_chip_baking").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("single_note_color_selector_panel").assertDoesNotExist()
+
+    // Tapping palette icon slides up color selector and dismisses label controls
+    paletteBtnNode.performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("single_note_color_selector_panel").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("single_note_label_controls_panel").assertDoesNotExist()
     composeTestRule.onNodeWithTag("editor_color_SAGE").performClick()
+
+    // Tapping label icon again dismisses color selector and slides up label controls
+    labelBtnNode.performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("single_note_label_controls_panel").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("single_note_color_selector_panel").assertDoesNotExist()
+
     composeTestRule.onNodeWithTag("editor_pin_button").performClick()
     composeTestRule.onNodeWithTag("single_note_back_button").performClick()
     composeTestRule.waitForIdle()

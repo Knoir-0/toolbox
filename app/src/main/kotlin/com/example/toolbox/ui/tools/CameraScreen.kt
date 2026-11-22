@@ -545,6 +545,7 @@ fun CameraScreen(
   // Live camera adjustments & transient UI states
   var zoomLevel by rememberSaveable { mutableFloatStateOf(MIN_CAMERA_ZOOM) }
   var exposureEv by rememberSaveable { mutableFloatStateOf(0f) }
+  var showZoomSlider by rememberSaveable { mutableStateOf(false) }
   var showAdjustmentsPanel by rememberSaveable { mutableStateOf(false) }
   var showFiltersBar by rememberSaveable { mutableStateOf(false) }
 
@@ -2226,7 +2227,7 @@ fun CameraScreen(
       }
     }
 
-    // 3. Bottom Controls Overlay (Floating Night Mode Icon + Smooth Zoom Slider + Device Camera Selector + Expandable Sliders/Filters + Translucent Control Deck)
+    // 3. Bottom Controls Overlay (Night Mode + Device Camera Selector + Zoom Toggle + Expandable Sliders/Filters + Translucent Control Deck)
     Column(
       modifier = Modifier
         .fillMaxWidth()
@@ -2234,14 +2235,14 @@ fun CameraScreen(
         .testTag("camera_bottom_overlay"),
       horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-      // Floating Night Mode Icon Button (Auto / On / Off) fixed to the left + Smooth Zoom Slider taking the rest of the width
+      // Floating Night Mode Icon Button (left) + Detected System Cameras Pill Selector Bar (center) + Zoom Toggle Button (right)
       Row(
         modifier = Modifier
           .fillMaxWidth()
           .padding(horizontal = 12.dp)
           .padding(bottom = 6.dp)
-          .testTag("camera_zoom_selector_row"),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+          .testTag("camera_lens_selector_row"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.CenterVertically,
       ) {
         val nightContainerColor by animateColorAsState(
@@ -2286,60 +2287,6 @@ fun CameraScreen(
           }
         }
 
-        // Smooth Zoom Slider taking the rest of the width next to the night mode icon
-        Surface(
-          shape = RoundedCornerShape(24.dp),
-          color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f),
-          modifier = Modifier
-            .weight(1f)
-            .height(38.dp)
-            .testTag("camera_zoom_slider_container"),
-        ) {
-          Row(
-            modifier = Modifier
-              .fillMaxSize()
-              .padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            Icon(
-              imageVector = Icons.Default.ZoomIn,
-              contentDescription = "Zoom",
-              tint = MaterialTheme.colorScheme.primary,
-              modifier = Modifier.size(18.dp),
-            )
-            CameraSlimDotSlider(
-              value = zoomLevel,
-              onValueChange = { zoomLevel = CameraEngine.coerceZoom(it) },
-              valueRange = MIN_CAMERA_ZOOM..MAX_CAMERA_ZOOM,
-              modifier = Modifier
-                .weight(1f)
-                .testTag("camera_zoom_slider"),
-            )
-            Text(
-              text = CameraEngine.formatZoomLabel(zoomLevel),
-              style = MaterialTheme.typography.labelSmall,
-              fontFamily = FontFamily.Monospace,
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onSurface,
-              textAlign = TextAlign.End,
-              modifier = Modifier
-                .width(38.dp)
-                .testTag("camera_zoom_value_text"),
-            )
-          }
-        }
-      }
-
-      // Detected System Cameras Pill Selector Bar (below the zoom selector, separated into Back and Front selector bars)
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 12.dp)
-          .padding(bottom = 6.dp)
-          .testTag("camera_lens_selector_row"),
-        contentAlignment = Alignment.Center,
-      ) {
         val activeFacingCameras = if (selectedCamera.lensFacing == CameraLensFacing.FRONT) {
           frontSystemCameras.ifEmpty { systemCameras }
         } else {
@@ -2352,6 +2299,7 @@ fun CameraScreen(
         }
         Row(
           modifier = Modifier
+            .weight(1f, fill = false)
             .clip(RoundedCornerShape(24.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f))
             .horizontalScroll(rememberScrollState())
@@ -2413,6 +2361,48 @@ fun CameraScreen(
                 )
               }
             }
+          }
+        }
+
+        val zoomContainerColor by animateColorAsState(
+          targetValue = if (showZoomSlider) {
+            MaterialTheme.colorScheme.primaryContainer
+          } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f)
+          },
+          label = "ZoomButtonContainerColor",
+        )
+        val zoomContentColor by animateColorAsState(
+          targetValue = if (showZoomSlider) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+          } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+          },
+          label = "ZoomButtonContentColor",
+        )
+
+        Surface(
+          shape = CircleShape,
+          color = zoomContainerColor,
+          modifier = Modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .clickable(enabled = !isCountingDown) {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              showZoomSlider = !showZoomSlider
+            }
+            .testTag("camera_zoom_button")
+            .semantics {
+              contentDescription = if (showZoomSlider) "Hide zoom slider" else "Show zoom slider"
+            },
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = Icons.Default.ZoomIn,
+              contentDescription = null,
+              tint = zoomContentColor,
+              modifier = Modifier.size(20.dp),
+            )
           }
         }
       }
@@ -2594,7 +2584,7 @@ fun CameraScreen(
 
           // QR Code Reader & Barcode Scanner Selector Row (All / QR / Barcode + Create Code)
           AnimatedVisibility(
-            visible = captureMode == CameraCaptureMode.SCANNER,
+            visible = !showZoomSlider && captureMode == CameraCaptureMode.SCANNER,
             enter = expandVertically() + fadeIn(),
             exit = shrinkVertically() + fadeOut(),
           ) {
@@ -2697,7 +2687,7 @@ fun CameraScreen(
 
           // Document OCR Note Scanner Preset & Quick Actions Row
           AnimatedVisibility(
-            visible = captureMode == CameraCaptureMode.NOTE,
+            visible = !showZoomSlider && captureMode == CameraCaptureMode.NOTE,
             enter = expandVertically() + fadeIn(),
             exit = shrinkVertically() + fadeOut(),
           ) {
@@ -2763,9 +2753,9 @@ fun CameraScreen(
             }
           }
 
-          // Photo Mode Slide-Up Navigation Pill Bar (Standard / Panorama / HDR / Night / Burst / 2×2 Booth)
+          // Photo Mode Slide-Up Navigation Pill Bar (Standard / Panorama / HDR / Burst)
           AnimatedVisibility(
-            visible = captureMode == CameraCaptureMode.PHOTO,
+            visible = !showZoomSlider && captureMode == CameraCaptureMode.PHOTO,
             enter = slideInVertically(initialOffsetY = { it / 2 }) + expandVertically() + fadeIn(),
             exit = slideOutVertically(targetOffsetY = { it / 2 }) + shrinkVertically() + fadeOut(),
           ) {
@@ -2811,6 +2801,56 @@ fun CameraScreen(
             }
           }
 
+          // Smooth Zoom Scroll Bar (replaces the active camera mode tool selector bar when selected)
+          AnimatedVisibility(
+            visible = showZoomSlider,
+            enter = slideInVertically(initialOffsetY = { it / 2 }) + expandVertically() + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it / 2 }) + shrinkVertically() + fadeOut(),
+          ) {
+            Surface(
+              shape = RoundedCornerShape(24.dp),
+              color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f),
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(38.dp)
+                .testTag("camera_zoom_slider_container"),
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxSize()
+                  .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.ZoomIn,
+                  contentDescription = "Zoom",
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(18.dp),
+                )
+                CameraSlimDotSlider(
+                  value = zoomLevel,
+                  onValueChange = { zoomLevel = CameraEngine.coerceZoom(it) },
+                  valueRange = MIN_CAMERA_ZOOM..MAX_CAMERA_ZOOM,
+                  modifier = Modifier
+                    .weight(1f)
+                    .testTag("camera_zoom_slider"),
+                )
+                Text(
+                  text = CameraEngine.formatZoomLabel(zoomLevel),
+                  style = MaterialTheme.typography.labelSmall,
+                  fontFamily = FontFamily.Monospace,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                  textAlign = TextAlign.End,
+                  modifier = Modifier
+                    .width(38.dp)
+                    .testTag("camera_zoom_value_text"),
+                )
+              }
+            }
+          }
+
           // Mode Selector Row: Photo / Video / Scan / Note / Vision Mode Switcher Pill
           Row(
             modifier = Modifier
@@ -2846,6 +2886,7 @@ fun CameraScreen(
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         showFiltersBar = false
                         showAdjustmentsPanel = false
+                        showZoomSlider = false
                         captureMode = mode
                       }
                       .testTag("mode_tab_${mode.name}"),

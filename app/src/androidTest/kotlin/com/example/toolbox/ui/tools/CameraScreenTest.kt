@@ -107,18 +107,17 @@ class CameraScreenTest {
     composeTestRule.onNodeWithTag("photo_sub_mode_COLLAGE").assertDoesNotExist()
     composeTestRule.onNodeWithTag("photo_sub_mode_NIGHT").assertDoesNotExist()
 
-    // Verify floating Night Mode icon button (without text) is fixed to the left of the screen,
-    // the smooth zoom slider takes the remaining width to its right, and the device camera selector is below the zoom selector
+    // Verify Night Mode icon button is to the left of the device camera selector,
+    // and the Zoom toggle icon button is to the right of the device camera selector
+    composeTestRule.onNodeWithTag("camera_lens_selector_row").assertIsDisplayed()
     val nightButtonBounds = composeTestRule.onNodeWithTag("camera_night_mode_button").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-    val zoomContainerBounds = composeTestRule.onNodeWithTag("camera_zoom_slider_container").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-    val lensSelectorBounds = composeTestRule.onNodeWithTag("camera_lens_selector_row").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-    composeTestRule.onNodeWithTag("camera_zoom_slider").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("camera_zoom_value_text", useUnmergedTree = true).assertTextEquals("1x")
+    val backLensSelectorBounds = composeTestRule.onNodeWithTag("camera_back_lens_selector_row").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val zoomButtonBounds = composeTestRule.onNodeWithTag("camera_zoom_button").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    composeTestRule.onNodeWithTag("camera_zoom_slider_container").assertDoesNotExist()
     composeTestRule.onNodeWithTag("zoom_presets_row").assertDoesNotExist()
     composeTestRule.onNodeWithTag("camera_night_mode_label", useUnmergedTree = true).assertDoesNotExist()
-    assertTrue(nightButtonBounds.right <= zoomContainerBounds.left + 1f)
-    assertTrue(zoomContainerBounds.width > nightButtonBounds.width * 2f)
-    assertTrue(lensSelectorBounds.top >= zoomContainerBounds.bottom - 1f)
+    assertTrue(nightButtonBounds.right <= backLensSelectorBounds.left + 1f)
+    assertTrue(backLensSelectorBounds.right <= zoomButtonBounds.left + 1f)
 
     composeTestRule.onNodeWithTag("camera_night_mode_button").assertContentDescriptionEquals("Night Mode Auto")
     composeTestRule.onNodeWithTag("camera_night_mode_button").performClick()
@@ -161,9 +160,21 @@ class CameraScreenTest {
     composeTestRule.onNodeWithTag("photo_sub_mode_STANDARD").performClick()
     composeTestRule.waitForIdle()
 
-    // Tap the smooth zoom slider to adjust zoom
+    // Select the zoom button: verify zoom scroll bar replaces the camera mode tool selector bar (photo_controls_bar)
+    composeTestRule.onNodeWithTag("camera_zoom_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("photo_controls_bar").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_zoom_slider_container").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_zoom_slider").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_zoom_value_text", useUnmergedTree = true).assertTextEquals("1x")
+
+    // Tap the smooth zoom slider to adjust zoom, then toggle zoom button off to restore the mode tool selector bar
     composeTestRule.onNodeWithTag("camera_zoom_slider").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_zoom_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("camera_zoom_slider_container").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("photo_controls_bar").assertIsDisplayed()
 
     // Toggle grid overlay (3x3)
     composeTestRule.onNodeWithTag("camera_grid_button").performClick()

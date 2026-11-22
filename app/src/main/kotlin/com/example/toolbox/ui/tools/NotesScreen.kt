@@ -3433,6 +3433,9 @@ private fun SingleNoteView(
   var newlyCreatedLabels by remember(initialNote.id) { mutableStateOf(listOf<String>()) }
   var newChecklistItemText by remember(initialNote.id) { mutableStateOf("") }
   var focusContentAtEndAction by remember(initialNote.id) { mutableStateOf<(() -> Unit)?>(null) }
+  var isColorSelectorOpen by remember(initialNote.id) { mutableStateOf(false) }
+  var isLabelControlsOpen by remember(initialNote.id) { mutableStateOf(false) }
+  val haptic = LocalHapticFeedback.current
   val checklistInputFocusRequester = remember { FocusRequester() }
   val keyboardController = LocalSoftwareKeyboardController.current
   val handleEmptySpaceTap: () -> Unit = {
@@ -3631,25 +3634,6 @@ private fun SingleNoteView(
       }
     }
 
-    Box(
-      modifier = Modifier
-        .fillMaxWidth()
-        .clickable(
-          interactionSource = remember { MutableInteractionSource() },
-          indication = null,
-          onClick = handleEmptySpaceTap,
-        )
-        .padding(horizontal = 16.dp, vertical = 6.dp),
-      contentAlignment = Alignment.CenterEnd,
-    ) {
-      Text(
-        text = "Edited ${NotesEngine.formatTimestamp(draft.updatedAt)}",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.testTag("single_note_timestamp"),
-      )
-    }
-
     if (draft.isChecklist && !draft.isTrashed) {
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
       Surface(
@@ -3692,25 +3676,141 @@ private fun SingleNoteView(
         .fillMaxWidth()
         .testTag("single_note_bottom_color_bar"),
     ) {
-      Column(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-      ) {
-        NoteColorPickerSection(
-          selectedColor = draft.color,
-          onSelectColor = { draft = draft.copy(color = it) },
-          modifier = Modifier.fillMaxWidth(),
-        )
-        NoteLabelsSection(
-          draft = draft,
-          onDraftChange = { draft = it },
-          availableLabels = availableLabels,
-          newlyCreatedLabels = newlyCreatedLabels,
-          onNewlyCreatedLabelsChange = { newlyCreatedLabels = it },
-          modifier = Modifier.fillMaxWidth(),
-        )
+      Column(modifier = Modifier.fillMaxWidth()) {
+        AnimatedVisibility(
+          visible = isColorSelectorOpen,
+          enter = slideInVertically(initialOffsetY = { it }) +
+            expandVertically(expandFrom = Alignment.Bottom) +
+            fadeIn(),
+          exit = slideOutVertically(targetOffsetY = { it }) +
+            shrinkVertically(shrinkTowards = Alignment.Bottom) +
+            fadeOut(),
+        ) {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("single_note_color_selector_panel"),
+          ) {
+            NoteColorPickerSection(
+              selectedColor = draft.color,
+              onSelectColor = { draft = draft.copy(color = it) },
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+          }
+        }
+
+        AnimatedVisibility(
+          visible = isLabelControlsOpen,
+          enter = slideInVertically(initialOffsetY = { it }) +
+            expandVertically(expandFrom = Alignment.Bottom) +
+            fadeIn(),
+          exit = slideOutVertically(targetOffsetY = { it }) +
+            shrinkVertically(shrinkTowards = Alignment.Bottom) +
+            fadeOut(),
+        ) {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("single_note_label_controls_panel"),
+          ) {
+            NoteLabelsSection(
+              draft = draft,
+              onDraftChange = { draft = it },
+              availableLabels = availableLabels,
+              newlyCreatedLabels = newlyCreatedLabels,
+              onNewlyCreatedLabelsChange = { newlyCreatedLabels = it },
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+          }
+        }
+
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          IconButton(
+            onClick = {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              val nextState = !isColorSelectorOpen
+              isColorSelectorOpen = nextState
+              if (nextState) {
+                isLabelControlsOpen = false
+              }
+            },
+            modifier = Modifier
+              .size(36.dp)
+              .clip(CircleShape)
+              .background(
+                if (isColorSelectorOpen) {
+                  MaterialTheme.colorScheme.primaryContainer
+                } else {
+                  Color.Transparent
+                },
+              )
+              .testTag("single_note_palette_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Palette,
+              contentDescription = if (isColorSelectorOpen) "Hide color selector" else "Show color selector",
+              tint = if (isColorSelectorOpen) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+              },
+              modifier = Modifier.size(20.dp),
+            )
+          }
+
+          Text(
+            text = "Edited ${NotesEngine.formatTimestamp(draft.updatedAt)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.testTag("single_note_timestamp"),
+          )
+
+          IconButton(
+            onClick = {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              val nextState = !isLabelControlsOpen
+              isLabelControlsOpen = nextState
+              if (nextState) {
+                isColorSelectorOpen = false
+              }
+            },
+            modifier = Modifier
+              .size(36.dp)
+              .clip(CircleShape)
+              .background(
+                if (isLabelControlsOpen) {
+                  MaterialTheme.colorScheme.primaryContainer
+                } else {
+                  Color.Transparent
+                },
+              )
+              .testTag("single_note_label_button"),
+          ) {
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.Label,
+              contentDescription = if (isLabelControlsOpen) "Hide label controls" else "Show label controls",
+              tint = if (isLabelControlsOpen) {
+                MaterialTheme.colorScheme.primary
+              } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+              },
+              modifier = Modifier.size(20.dp),
+            )
+          }
+        }
       }
     }
   }
