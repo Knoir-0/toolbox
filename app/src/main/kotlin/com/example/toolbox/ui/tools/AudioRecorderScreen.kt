@@ -216,6 +216,9 @@ fun AudioRecorderScreen(
   fun updateSelectedFormat(format: AudioRecordingFormat) {
     selectedFormat = format
     prefs?.edit()?.putString(PREF_KEY_AUDIO_FORMAT, format.name)?.apply()
+    if (!isInspection) {
+      AudioRecorderWidgets.updateAllWidgets(context)
+    }
   }
 
   val effectiveFallbackDir = remember(initialDirectory, userRoot, fallbackBaseDir) {
@@ -796,6 +799,16 @@ fun AudioRecorderScreen(
     activeSession = session
     elapsedRecordingMs = 0L
     isRecording = true
+  }
+
+  LaunchedEffect(AudioRecorderEngine.pendingQuickRecordRequest, isRecorderEnabled) {
+    val pending = AudioRecorderEngine.pendingQuickRecordRequest ?: return@LaunchedEffect
+    if (pending.startRecording && !isRecording && isRecorderEnabled) {
+      AudioRecorderEngine.consumePendingQuickRecordRequest()
+      startRecording(pending.source)
+    } else if (!pending.startRecording) {
+      AudioRecorderEngine.consumePendingQuickRecordRequest()
+    }
   }
 
   fun stopRecording() {

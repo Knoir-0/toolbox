@@ -1027,7 +1027,7 @@ class TodoListTest {
       ),
     )
 
-    // 1. Single task .ttxt serialization follows YAML 2-space nested list indentation with '-' and '+'
+    // 1. Single task .text serialization follows YAML 2-space nested list indentation with '-' and '+'
     val expectedTask1Ttxt = """
       - Prepare electronics kit
         + Pack multimeter
@@ -1037,7 +1037,7 @@ class TodoListTest {
     """.trimIndent()
     assertEquals(expectedTask1Ttxt, activeTask1.toTtxt())
 
-    // 2. Full To Do list .ttxt document includes '# To Do', active '-' tasks, completed '+' tasks, and nested lists
+    // 2. Full To Do list .text document includes '# To Do', active '-' tasks, completed '+' tasks, and nested lists
     val expectedFullTtxt = """
       # To Do
 
@@ -1058,8 +1058,8 @@ class TodoListTest {
       ),
     )
 
-    // 3. Repository saves and loads .ttxt file on disk, preserving multi-level YAML list nesting
-    val tempDir = java.nio.file.Files.createTempDirectory("todo_ttxt_test").toFile()
+    // 3. Repository saves and loads .text file on disk, preserving multi-level YAML list nesting
+    val tempDir = java.nio.file.Files.createTempDirectory("todo_text_test").toFile()
     val todoTtxtFile = java.io.File(tempDir, TODO_LIST_TTXT_FILE_NAME)
     try {
       val repo = InMemoryTodoListRepository(
@@ -1090,7 +1090,7 @@ class TodoListTest {
       """.trimIndent()
       assertEquals(expectedAfterToggle, todoTtxtFile.readText())
 
-      // Load into a fresh repository from the .ttxt file on disk
+      // Load into a fresh repository from the .text file on disk
       val freshRepo = InMemoryTodoListRepository(todoFile = todoTtxtFile)
       val loadedActive = freshRepo.loadTasks()
       val loadedCompleted = freshRepo.loadCompletedTasks()

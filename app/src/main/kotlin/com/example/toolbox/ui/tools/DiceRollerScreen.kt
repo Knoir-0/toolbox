@@ -362,6 +362,8 @@ internal fun DiceRollerScreen(
   initialSavedRolls: List<SavedDiceRoll> = emptyList(),
   onSaveRolls: (List<SavedDiceRoll>) -> Unit = {},
 ) {
+  val context = LocalContext.current
+  val isInspection = LocalInspectionMode.current
   var selectedDie by rememberSaveable { mutableStateOf(DieType.D20) }
   var diceCount by rememberSaveable { mutableIntStateOf(1) }
   var modifierValue by rememberSaveable { mutableIntStateOf(0) }
@@ -433,20 +435,23 @@ internal fun DiceRollerScreen(
     }
 
     val total = kept.sum() + modifierValue
-    history.add(
-      0,
-      DiceRollResult(
-        id = rollCounter.toLong(),
-        dieType = selectedDie,
-        diceCount = diceCount,
-        modifier = modifierValue,
-        rollMode = effectiveRollMode,
-        keptRolls = kept,
-        droppedRolls = dropped,
-        total = total,
-        label = currentRollLabel,
-      ),
+    val result = DiceRollResult(
+      id = rollCounter.toLong(),
+      dieType = selectedDie,
+      diceCount = diceCount,
+      modifier = modifierValue,
+      rollMode = effectiveRollMode,
+      keptRolls = kept,
+      droppedRolls = dropped,
+      total = total,
+      label = currentRollLabel,
     )
+    history.add(0, result)
+    if (selectedDie == DieType.D20 && diceCount == 1 && !isInspection) {
+      DiceRollerWidgets.saveRollMode(context, effectiveRollMode)
+      DiceRollerWidgets.saveLatestRoll(context, result, rollCounter)
+      DiceRollerWidgets.updateAllWidgets(context)
+    }
   }
 
   fun rollPreset(savedRoll: SavedDiceRoll) {

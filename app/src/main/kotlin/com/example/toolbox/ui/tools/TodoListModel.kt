@@ -14,9 +14,9 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
-const val TODO_LIST_TTXT_FILE_NAME = "todo_list.ttxt"
-const val TODO_COMPLETED_TTXT_FILE_NAME = "todo_completed.ttxt"
-const val TODO_SAVED_TTXT_FILE_NAME = "todo_saved.ttxt"
+const val TODO_LIST_TTXT_FILE_NAME = "todo_list.text"
+const val TODO_COMPLETED_TTXT_FILE_NAME = "todo_completed.text"
+const val TODO_SAVED_TTXT_FILE_NAME = "todo_saved.text"
 
 /**
  * Generates a date key formatted as YYYY-MM-DD for midnight reset comparison.
@@ -28,7 +28,7 @@ fun getTodayDateKey(timeMillis: Long = System.currentTimeMillis()): String {
 
 /**
  * Represents a single subtask (with optional nested child [subtasks]) within a [TodoItem].
- * In `.ttxt` ("Toolbox Text XTension") files, nested subtasks follow YAML 2-space indentation
+ * In `.text` files, nested subtasks follow YAML 2-space indentation
  * (`"  ".repeat(indentLevel)`) with `- <title>` for uncompleted items and `+ <title>` for completed items.
  */
 data class TodoSubTask(
@@ -38,13 +38,13 @@ data class TodoSubTask(
   val subtasks: List<TodoSubTask> = emptyList(),
 ) {
   /**
-   * Internal `.ttxt` list marker: `-` when uncompleted, `+` when completed.
+   * Internal `.text` list marker: `-` when uncompleted, `+` when completed.
    */
   val ttxtPrefix: Char
     get() = if (isCompleted) '+' else '-'
 
   /**
-   * Formats this subtask and any nested [subtasks] into YAML-indented `.ttxt` lines.
+   * Formats this subtask and any nested [subtasks] into YAML-indented `.text` lines.
    * Each level of nesting uses 2 spaces (`"  ".repeat(indentLevel)`).
    */
   fun toTtxt(indentLevel: Int = 1): String {
@@ -320,7 +320,7 @@ data class TodoItem(
   }
 
   /**
-   * Formats this task and its nested [subtasks] into YAML-indented `.ttxt` ("Toolbox Text XTension") lines:
+   * Formats this task and its nested [subtasks] into YAML-indented `.text` lines:
    * - `- <title>` at indent 0 when [isCompleted] is `false`, or `+ <title>` when [isCompleted] is `true`.
    * - Nested subtasks indented by 2 spaces per level (`"  ".repeat(level)`), using `-` for uncompleted
    *   and `+` for completed subtasks.
@@ -439,7 +439,7 @@ data class TodoHistorySnapshot(
 )
 
 /**
- * Parsed result of reading a `.ttxt` To Do list document containing active tasks (`- `)
+ * Parsed result of reading a `.text` To Do list document containing active tasks (`- `)
  * and completed tasks (`+ `) with nested YAML subtasks.
  */
 data class ParsedTodoListTtxt(
@@ -449,7 +449,7 @@ data class ParsedTodoListTtxt(
 )
 
 /**
- * Repository interface for saving and retrieving tasks in `.ttxt` format and the daily completed count.
+ * Repository interface for saving and retrieving tasks in `.text` format and the daily completed count.
  */
 interface TodoListRepository {
   fun loadTasks(): List<TodoItem>
@@ -470,7 +470,7 @@ interface TodoListRepository {
 
 /**
  * In-memory repository for unit tests, previews, and isolation.
- * When [todoFile] is provided, the To Do list is also persisted to and loaded from [todoFile] in `.ttxt` format.
+ * When [todoFile] is provided, the To Do list is also persisted to and loaded from [todoFile] in `.text` format.
  */
 class InMemoryTodoListRepository(
   initialTasks: List<TodoItem> = emptyList(),
@@ -569,7 +569,7 @@ class InMemoryTodoListRepository(
 }
 
 /**
- * Android [SharedPreferences] and `.ttxt` file-backed repository for the To Do List tool.
+ * Android [SharedPreferences] and `.text` file-backed repository for the To Do List tool.
  */
 class SharedPreferencesTodoListRepository(
   private val sharedPreferences: SharedPreferences,
@@ -907,8 +907,8 @@ object TodoListEngine {
   )
 
   /**
-   * Formats a single [TodoItem] and its nested [TodoItem.subtasks] into YAML-indented `.ttxt`
-   * ("Toolbox Text XTension") lines:
+   * Formats a single [TodoItem] and its nested [TodoItem.subtasks] into YAML-indented `.text`
+   * lines:
    * - `- <task title>` at indent 0 when [isCompleted] is `false`, or `+ <task title>` when `true`.
    * - Each level of nested [TodoSubTask]s is indented by 2 spaces (`"  ".repeat(level)`),
    *   using `-` for uncompleted subtasks and `+` for completed subtasks.
@@ -926,7 +926,7 @@ object TodoListEngine {
   }
 
   /**
-   * Formats a list of [TodoItem]s into `.ttxt` nested YAML list lines.
+   * Formats a list of [TodoItem]s into `.text` nested YAML list lines.
    */
   fun formatTasksSectionToTtxt(
     tasks: List<TodoItem>,
@@ -938,7 +938,7 @@ object TodoListEngine {
   }
 
   /**
-   * Formats the full To Do list ([tasks] and [completedTasks]) into a `.ttxt` document
+   * Formats the full To Do list ([tasks] and [completedTasks]) into a `.text` document
    * with YAML-style nested subtasks.
    */
   fun formatTodoListToTtxt(
@@ -1033,7 +1033,7 @@ object TodoListEngine {
   }
 
   /**
-   * Parses a `.ttxt` To Do list document (with YAML-style 2-space nested lists) into active
+   * Parses a `.text` To Do list document (with YAML-style 2-space nested lists) into active
    * [ParsedTodoListTtxt.tasks] (`- ` top-level items) and [ParsedTodoListTtxt.completedTasks]
    * (`+ ` top-level items), merging with optional [metadataTasks] and [metadataCompletedTasks].
    */
@@ -1110,7 +1110,7 @@ object TodoListEngine {
   }
 
   /**
-   * Parses a single [TodoItem] (and its nested YAML subtasks) from a `.ttxt` string.
+   * Parses a single [TodoItem] (and its nested YAML subtasks) from a `.text` string.
    */
   fun parseTaskFromTtxt(
     rawTtxt: String,
@@ -1152,7 +1152,7 @@ object TodoListEngine {
   }
 
   /**
-   * Writes the To Do list ([tasks] and [completedTasks]) to [file] in `.ttxt` format.
+   * Writes the To Do list ([tasks] and [completedTasks]) to [file] in `.text` format.
    */
   fun saveTodoListToTtxtFile(
     file: File,
@@ -1168,7 +1168,7 @@ object TodoListEngine {
   }
 
   /**
-   * Reads and parses a `.ttxt` To Do list from [file].
+   * Reads and parses a `.text` To Do list from [file].
    */
   fun loadTodoListFromTtxtFile(
     file: File,
@@ -1192,7 +1192,7 @@ object TodoListEngine {
   }
 
   /**
-   * Resolves the default `todo_list.ttxt` file inside `/Notes` (or app files fallback).
+   * Resolves the default `todo_list.text` file inside `/Notes` (or app files fallback).
    */
   fun getDefaultTodoTtxtFile(
     context: Context? = null,
@@ -1368,7 +1368,7 @@ object TodoListEngine {
   }
 
   /**
-   * Appends a subtask to a task. If [subtaskTitle] contains a multi-line YAML-indented `.ttxt` list,
+   * Appends a subtask to a task. If [subtaskTitle] contains a multi-line YAML-indented `.text` list,
    * parses the nested subtask hierarchy in place.
    */
   fun addSubTask(tasks: List<TodoItem>, taskId: String, subtaskTitle: String): List<TodoItem> {

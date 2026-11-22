@@ -29,7 +29,7 @@
             android:orientation="horizontal"
             android:paddingStart="12dp"
             android:paddingTop="8dp"
-            android:paddingEnd="12dp"
+            android:paddingEnd="8dp"
             android:paddingBottom="6dp">
 
             <FrameLayout
@@ -86,24 +86,54 @@
                     android:textSize="11.5sp" />
             </LinearLayout>
 
-            <!-- Filter Mode Pill (All / Pinned / Label) -->
-            <TextView
-                android:id="@+id/widget_notes_filter_pill"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:background="@drawable/bg_todo_widget_pill"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:maxWidth="110dp"
-                android:paddingStart="10dp"
-                android:paddingTop="4dp"
-                android:paddingEnd="10dp"
-                android:paddingBottom="4dp"
-                android:text="All"
-                android:textColor="#FFF3DAFF"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+            <!-- View Mode Selector (List View <-> 2-Column Grid View) at Top Right -->
+            <FrameLayout
+                android:id="@+id/widget_notes_view_mode_toggle"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_marginStart="4dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Toggle view mode">
+
+                <ImageView
+                    android:id="@+id/widget_notes_view_mode_list_icon"
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:layout_gravity="center"
+                    android:contentDescription="@null"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_notes_widget_view_list"
+                    android:tint="#FFCDC4CF" />
+
+                <FrameLayout
+                    android:id="@+id/widget_notes_view_mode_grid_container"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:visibility="gone">
+
+                    <ImageView
+                        android:id="@+id/widget_notes_view_mode_grid_icon"
+                        android:layout_width="26dp"
+                        android:layout_height="26dp"
+                        android:layout_gravity="center"
+                        android:contentDescription="@null"
+                        android:scaleType="centerInside"
+                        android:src="@drawable/ic_notes_widget_fullscreen"
+                        android:tint="#FFCDC4CF" />
+
+                    <TextView
+                        android:id="@+id/widget_notes_view_mode_grid_count"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:gravity="center"
+                        android:includeFontPadding="false"
+                        android:text="2"
+                        android:textColor="#FFCDC4CF"
+                        android:textSize="11sp"
+                        android:textStyle="bold" />
+                </FrameLayout>
+            </FrameLayout>
         </LinearLayout>
 
         <!-- Scrollable Notes List & Empty View Container -->

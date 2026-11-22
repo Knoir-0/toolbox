@@ -166,4 +166,73 @@ class DiceRollerTest {
     assertTrue(DndSpellCatalog.SRD_ATTRIBUTION_TEXT.contains("Wizards of the Coast LLC"))
     assertTrue(DndSpellCatalog.SRD_ATTRIBUTION_TEXT.contains("Creative Commons Attribution 4.0 International License"))
   }
+
+  @Test
+  fun diceRollerWidget_rollsD20WithNormalAdvantageAndDisadvantage() {
+    DiceRollerWidgets.clearInMemoryStateForTesting()
+
+    // Initial unrolled state
+    val initial = DiceRollerWidgets.resolveWidgetState(context = null)
+    assertEquals(RollMode.NORMAL, initial.rollMode)
+    assertEquals(null, initial.latestRoll)
+    assertEquals("1d20", initial.notationText)
+    assertEquals("TAP TO ROLL", initial.statusBadgeText)
+
+    // Roll with Advantage (e.g., 7 and 19 -> keeps 19, drops 7)
+    val advRoll = DiceRollerWidgets.rollD20FromWidget(
+      context = null,
+      mode = RollMode.ADVANTAGE,
+      fixedFirstRoll = 7,
+      fixedSecondRoll = 19,
+    )
+    assertEquals(19, advRoll.total)
+    assertEquals(listOf(19), advRoll.keptRolls)
+    assertEquals(listOf(7), advRoll.droppedRolls)
+    val advState = DiceRollerWidgets.resolveWidgetState(context = null)
+    assertEquals(RollMode.ADVANTAGE, advState.rollMode)
+    assertEquals("1d20 (Adv)", advState.notationText)
+    assertEquals("ADVANTAGE", advState.statusBadgeText)
+    assertEquals("Kept 19 · Dropped 7", advState.breakdownText)
+
+    // Roll with Disadvantage (e.g., 18 and 4 -> keeps 4, drops 18)
+    val disRoll = DiceRollerWidgets.rollD20FromWidget(
+      context = null,
+      mode = RollMode.DISADVANTAGE,
+      fixedFirstRoll = 18,
+      fixedSecondRoll = 4,
+    )
+    assertEquals(4, disRoll.total)
+    assertEquals(listOf(4), disRoll.keptRolls)
+    assertEquals(listOf(18), disRoll.droppedRolls)
+    val disState = DiceRollerWidgets.resolveWidgetState(context = null)
+    assertEquals(RollMode.DISADVANTAGE, disState.rollMode)
+    assertEquals("1d20 (Dis)", disState.notationText)
+    assertEquals("DISADVANTAGE", disState.statusBadgeText)
+    assertEquals("Kept 4 · Dropped 18", disState.breakdownText)
+
+    // Critical Hit (Natural 20) & Critical Miss (Natural 1)
+    DiceRollerWidgets.rollD20FromWidget(
+      context = null,
+      mode = RollMode.NORMAL,
+      fixedFirstRoll = 20,
+    )
+    val nat20State = DiceRollerWidgets.resolveWidgetState(context = null)
+    assertTrue(nat20State.isNatural20)
+    assertEquals("★ CRITICAL HIT · NAT 20!", nat20State.statusBadgeText)
+
+    val nat1Roll = DiceRollerWidgets.rollD20FromWidget(
+      context = null,
+      mode = RollMode.NORMAL,
+      fixedFirstRoll = 1,
+    )
+    val nat1State = DiceRollerWidgets.resolveWidgetState(context = null)
+    assertTrue(nat1State.isNatural1)
+    assertEquals("✦ CRITICAL MISS · NAT 1!", nat1State.statusBadgeText)
+
+    // JSON round-trip
+    val json = DiceRollerWidgets.rollResultToJson(advRoll)
+    val restored = DiceRollerWidgets.rollResultFromJson(json)
+    assertEquals(advRoll, restored)
+    assertEquals(1, nat1Roll.total)
+  }
 }

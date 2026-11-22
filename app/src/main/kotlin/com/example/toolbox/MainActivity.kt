@@ -14,11 +14,16 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import com.example.toolbox.ui.main.AUDIO_RECORDER_QUICK_ACTION_START_MIC
+import com.example.toolbox.ui.main.EXTRA_AUDIO_RECORDER_QUICK_ACTION
+import com.example.toolbox.ui.main.EXTRA_CAMERA_CAPTURE_MODE
 import com.example.toolbox.ui.main.EXTRA_EXPAND_MUSIC_PLAYER
 import com.example.toolbox.ui.main.EXTRA_NOTES_INITIAL_FILTER_LABEL
 import com.example.toolbox.ui.main.EXTRA_NOTES_INITIAL_FILTER_MODE
 import com.example.toolbox.ui.main.EXTRA_NOTES_OPEN_NOTE_ID
 import com.example.toolbox.ui.main.EXTRA_NOTES_QUICK_CAPTURE_MODE
+import com.example.toolbox.ui.main.EXTRA_PLANT_SCHEDULE_MONTH
+import com.example.toolbox.ui.main.EXTRA_PLANT_SCHEDULE_OPEN_SEARCH
 import com.example.toolbox.ui.main.EXTRA_TODO_QUICK_ACTION_MODE
 import com.example.toolbox.ui.main.NOTES_FILTER_MODE_ALL
 import com.example.toolbox.ui.main.NOTES_FILTER_MODE_LABEL
@@ -30,18 +35,27 @@ import com.example.toolbox.ui.main.createFolderShortcutIntent
 import com.example.toolbox.ui.main.createStandaloneToolIntent
 import com.example.toolbox.ui.main.findExistingStandaloneAppTask
 import com.example.toolbox.ui.main.isSameStandaloneTarget
+import com.example.toolbox.ui.main.parseAudioRecorderQuickAction
+import com.example.toolbox.ui.main.parseCameraCaptureModeName
 import com.example.toolbox.ui.main.parseExpandMusicPlayer
 import com.example.toolbox.ui.main.parseFolderShortcut
 import com.example.toolbox.ui.main.parseNotesQuickCaptureMode
+import com.example.toolbox.ui.main.parsePlantScheduleMonth
+import com.example.toolbox.ui.main.parsePlantScheduleOpenSearch
 import com.example.toolbox.ui.main.parseStandaloneTool
 import com.example.toolbox.ui.main.parseTodoQuickActionMode
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
 import com.example.toolbox.ui.main.syncPinnedHomeScreenShortcuts
 import com.example.toolbox.ui.main.syncStandaloneTaskDescription
 import com.example.toolbox.ui.theme.ToolboxTheme
+import com.example.toolbox.ui.tools.AudioRecorderEngine
+import com.example.toolbox.ui.tools.CameraCaptureMode
+import com.example.toolbox.ui.tools.CameraEngine
+import com.example.toolbox.ui.tools.CameraWidgets
 import com.example.toolbox.ui.tools.MusicPlayerEngine
 import com.example.toolbox.ui.tools.NotesEngine
 import com.example.toolbox.ui.tools.NotesFilter
+import com.example.toolbox.ui.tools.PlantScheduleEngine
 import com.example.toolbox.ui.tools.TodoListEngine
 import java.io.File
 
@@ -67,6 +81,10 @@ class MainActivity : ComponentActivity() {
     expandMusicPlayer: Boolean,
     notesQuickCaptureMode: String?,
     todoQuickActionMode: String?,
+    audioRecorderQuickAction: String? = parseAudioRecorderQuickAction(intent),
+    plantScheduleMonth: Int? = parsePlantScheduleMonth(intent),
+    plantScheduleOpenSearch: Boolean = parsePlantScheduleOpenSearch(intent),
+    cameraCaptureModeName: String? = parseCameraCaptureModeName(intent),
   ) {
     if (expandMusicPlayer) {
       MusicPlayerEngine.requestExpandFullPlayer()
@@ -92,6 +110,20 @@ class MainActivity : ComponentActivity() {
         openSchedule = todoQuickActionMode == TODO_QUICK_ACTION_SCHEDULE,
       )
     }
+    if (audioRecorderQuickAction == AUDIO_RECORDER_QUICK_ACTION_START_MIC) {
+      AudioRecorderEngine.requestQuickRecord(startRecording = true)
+    }
+    if (plantScheduleMonth != null || plantScheduleOpenSearch) {
+      PlantScheduleEngine.requestWidgetNavigation(
+        monthNumber = plantScheduleMonth,
+        openCatalogSearch = plantScheduleOpenSearch,
+      )
+    }
+    if (cameraCaptureModeName != null) {
+      val mode = CameraCaptureMode.fromNameOrDefault(cameraCaptureModeName)
+      CameraWidgets.saveActiveCaptureMode(this, mode)
+      CameraEngine.requestCaptureMode(mode)
+    }
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -104,6 +136,10 @@ class MainActivity : ComponentActivity() {
     val expandMusicPlayer = parseExpandMusicPlayer(intent)
     val notesQuickCaptureMode = parseNotesQuickCaptureMode(intent)
     val todoQuickActionMode = parseTodoQuickActionMode(intent)
+    val audioRecorderQuickAction = parseAudioRecorderQuickAction(intent)
+    val plantScheduleMonth = parsePlantScheduleMonth(intent)
+    val plantScheduleOpenSearch = parsePlantScheduleOpenSearch(intent)
+    val cameraCaptureModeName = parseCameraCaptureModeName(intent)
     val hasNotesNavigationExtras = parseNotesFilterFromIntent(intent) != null ||
       !intent?.getStringExtra(EXTRA_NOTES_OPEN_NOTE_ID).isNullOrBlank()
     val resolvedTool = when {
@@ -111,6 +147,9 @@ class MainActivity : ComponentActivity() {
       expandMusicPlayer -> parsedTool ?: Tool.MUSIC
       notesQuickCaptureMode != null || hasNotesNavigationExtras -> parsedTool ?: Tool.NOTES
       todoQuickActionMode != null -> parsedTool ?: Tool.TODO_LIST
+      audioRecorderQuickAction != null -> parsedTool ?: Tool.AUDIO_RECORDER
+      plantScheduleMonth != null || plantScheduleOpenSearch -> parsedTool ?: Tool.PLANT_SCHEDULE
+      cameraCaptureModeName != null -> parsedTool ?: Tool.CAMERA
       else -> parsedTool
     }
     if (resolvedTool != null || parsedFolder != null) {
@@ -211,6 +250,10 @@ class MainActivity : ComponentActivity() {
     val expandMusicPlayer = parseExpandMusicPlayer(intent)
     val notesQuickCaptureMode = parseNotesQuickCaptureMode(intent)
     val todoQuickActionMode = parseTodoQuickActionMode(intent)
+    val audioRecorderQuickAction = parseAudioRecorderQuickAction(intent)
+    val plantScheduleMonth = parsePlantScheduleMonth(intent)
+    val plantScheduleOpenSearch = parsePlantScheduleOpenSearch(intent)
+    val cameraCaptureModeName = parseCameraCaptureModeName(intent)
     val hasNotesNavigationExtras = parseNotesFilterFromIntent(intent) != null ||
       !intent.getStringExtra(EXTRA_NOTES_OPEN_NOTE_ID).isNullOrBlank()
     val incomingTool = when {
@@ -218,6 +261,9 @@ class MainActivity : ComponentActivity() {
       expandMusicPlayer -> parsedTool ?: Tool.MUSIC
       notesQuickCaptureMode != null || hasNotesNavigationExtras -> parsedTool ?: Tool.NOTES
       todoQuickActionMode != null -> parsedTool ?: Tool.TODO_LIST
+      audioRecorderQuickAction != null -> parsedTool ?: Tool.AUDIO_RECORDER
+      plantScheduleMonth != null || plantScheduleOpenSearch -> parsedTool ?: Tool.PLANT_SCHEDULE
+      cameraCaptureModeName != null -> parsedTool ?: Tool.CAMERA
       else -> parsedTool
     }
     if ((incomingTool != null || parsedFolder != null) &&
@@ -271,6 +317,18 @@ class MainActivity : ComponentActivity() {
             if (todoQuickActionMode != null) {
               putExtra(EXTRA_TODO_QUICK_ACTION_MODE, todoQuickActionMode)
             }
+            if (audioRecorderQuickAction != null) {
+              putExtra(EXTRA_AUDIO_RECORDER_QUICK_ACTION, audioRecorderQuickAction)
+            }
+            if (plantScheduleMonth != null) {
+              putExtra(EXTRA_PLANT_SCHEDULE_MONTH, plantScheduleMonth)
+            }
+            if (plantScheduleOpenSearch) {
+              putExtra(EXTRA_PLANT_SCHEDULE_OPEN_SEARCH, true)
+            }
+            if (cameraCaptureModeName != null) {
+              putExtra(EXTRA_CAMERA_CAPTURE_MODE, cameraCaptureModeName)
+            }
           }
         }
         startActivity(launchIntent)
@@ -293,6 +351,15 @@ class MainActivity : ComponentActivity() {
     } else if (todoQuickActionMode != null) {
       initialFolderState.value = null
       standaloneToolState.value = parsedTool ?: Tool.TODO_LIST
+    } else if (audioRecorderQuickAction != null) {
+      initialFolderState.value = null
+      standaloneToolState.value = parsedTool ?: Tool.AUDIO_RECORDER
+    } else if (plantScheduleMonth != null || plantScheduleOpenSearch) {
+      initialFolderState.value = null
+      standaloneToolState.value = parsedTool ?: Tool.PLANT_SCHEDULE
+    } else if (cameraCaptureModeName != null) {
+      initialFolderState.value = null
+      standaloneToolState.value = parsedTool ?: Tool.CAMERA
     } else if (parsedTool != null) {
       initialFolderState.value = null
       standaloneToolState.value = parsedTool

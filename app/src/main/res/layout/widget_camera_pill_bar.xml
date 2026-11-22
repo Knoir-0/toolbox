@@ -1,0 +1,263 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_todo_widget_card"
+    android:clipToOutline="true">
+
+    <ImageView
+        android:id="@+id/widget_camera_background"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="fitXY"
+        android:src="@drawable/bg_todo_widget_card" />
+
+    <LinearLayout
+        android:id="@+id/widget_camera_pill_bar_row"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:baselineAligned="false"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="6dp"
+        android:paddingTop="6dp"
+        android:paddingEnd="6dp"
+        android:paddingBottom="6dp">
+
+        <!-- 1. Photo Mode Pill -->
+        <FrameLayout
+            android:id="@+id/widget_camera_mode_photo"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginEnd="3dp"
+            android:layout_weight="1"
+            android:contentDescription="Open Camera in Photo mode">
+
+            <ImageView
+                android:id="@+id/widget_camera_mode_photo_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:scaleType="fitXY"
+                android:src="@drawable/bg_todo_widget_pill" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:padding="4dp">
+
+                <ImageView
+                    android:id="@+id/widget_camera_mode_photo_icon"
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:contentDescription="@null"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_widget_camera_photo"
+                    android:tint="#FFDDB9F6" />
+
+                <TextView
+                    android:id="@+id/widget_camera_mode_photo_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="Photo"
+                    android:textColor="#FFF3DAFF"
+                    android:textSize="10.5sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+        </FrameLayout>
+
+        <!-- 2. Video Mode Pill -->
+        <FrameLayout
+            android:id="@+id/widget_camera_mode_video"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="3dp"
+            android:layout_marginEnd="3dp"
+            android:layout_weight="1"
+            android:contentDescription="Open Camera in Video mode">
+
+            <ImageView
+                android:id="@+id/widget_camera_mode_video_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:scaleType="fitXY"
+                android:src="@drawable/bg_todo_widget_pill" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:padding="4dp">
+
+                <ImageView
+                    android:id="@+id/widget_camera_mode_video_icon"
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:contentDescription="@null"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_widget_camera_video"
+                    android:tint="#FFCDC4CF" />
+
+                <TextView
+                    android:id="@+id/widget_camera_mode_video_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="Video"
+                    android:textColor="#FFE7E1E6"
+                    android:textSize="10.5sp" />
+            </LinearLayout>
+        </FrameLayout>
+
+        <!-- 3. Scan (QR/Barcode) Mode Pill -->
+        <FrameLayout
+            android:id="@+id/widget_camera_mode_scan"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="3dp"
+            android:layout_marginEnd="3dp"
+            android:layout_weight="1"
+            android:contentDescription="Open Camera in QR and Barcode Scan mode">
+
+            <ImageView
+                android:id="@+id/widget_camera_mode_scan_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:scaleType="fitXY"
+                android:src="@drawable/bg_todo_widget_pill" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:padding="4dp">
+
+                <ImageView
+                    android:id="@+id/widget_camera_mode_scan_icon"
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:contentDescription="@null"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_widget_camera_scan"
+                    android:tint="#FFCDC4CF" />
+
+                <TextView
+                    android:id="@+id/widget_camera_mode_scan_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="Scan"
+                    android:textColor="#FFE7E1E6"
+                    android:textSize="10.5sp" />
+            </LinearLayout>
+        </FrameLayout>
+
+        <!-- 4. Note (OCR Document) Mode Pill -->
+        <FrameLayout
+            android:id="@+id/widget_camera_mode_note"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="3dp"
+            android:layout_marginEnd="3dp"
+            android:layout_weight="1"
+            android:contentDescription="Open Camera in OCR Document Note mode">
+
+            <ImageView
+                android:id="@+id/widget_camera_mode_note_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:scaleType="fitXY"
+                android:src="@drawable/bg_todo_widget_pill" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:padding="4dp">
+
+                <ImageView
+                    android:id="@+id/widget_camera_mode_note_icon"
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:contentDescription="@null"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_widget_camera_note"
+                    android:tint="#FFCDC4CF" />
+
+                <TextView
+                    android:id="@+id/widget_camera_mode_note_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="Note"
+                    android:textColor="#FFE7E1E6"
+                    android:textSize="10.5sp" />
+            </LinearLayout>
+        </FrameLayout>
+
+        <!-- 5. Vision (Live ML Kit) Mode Pill -->
+        <FrameLayout
+            android:id="@+id/widget_camera_mode_vision"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="3dp"
+            android:layout_weight="1"
+            android:contentDescription="Open Camera in Live ML Kit Vision mode">
+
+            <ImageView
+                android:id="@+id/widget_camera_mode_vision_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:scaleType="fitXY"
+                android:src="@drawable/bg_todo_widget_pill" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:padding="4dp">
+
+                <ImageView
+                    android:id="@+id/widget_camera_mode_vision_icon"
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:contentDescription="@null"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_widget_camera_vision"
+                    android:tint="#FFCDC4CF" />
+
+                <TextView
+                    android:id="@+id/widget_camera_mode_vision_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="Vision"
+                    android:textColor="#FFE7E1E6"
+                    android:textSize="10.5sp" />
+            </LinearLayout>
+        </FrameLayout>
+    </LinearLayout>
+</FrameLayout>

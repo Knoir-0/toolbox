@@ -2,6 +2,9 @@ package com.example.toolbox.ui.tools
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
@@ -270,6 +273,7 @@ class InMemoryPlantScheduleRepository(
  */
 class SharedPreferencesPlantScheduleRepository(
   private val sharedPreferences: SharedPreferences,
+  private val appContext: Context? = null,
 ) : PlantScheduleRepository {
 
   companion object {
@@ -279,7 +283,8 @@ class SharedPreferencesPlantScheduleRepository(
   }
 
   constructor(context: Context) : this(
-    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    sharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
+    appContext = context.applicationContext ?: context,
   )
 
   override fun loadScheduledPlants(): List<PlantItem> {
@@ -291,6 +296,7 @@ class SharedPreferencesPlantScheduleRepository(
     val array = JSONArray()
     plants.forEach { array.put(it.toJson()) }
     sharedPreferences.edit().putString(KEY_SCHEDULED_PLANTS_JSON, array.toString()).apply()
+    PlantScheduleWidgets.updateAllWidgets(appContext)
   }
 
   override fun loadCustomPlants(): List<PlantItem> {
@@ -302,6 +308,7 @@ class SharedPreferencesPlantScheduleRepository(
     val array = JSONArray()
     plants.forEach { array.put(it.toJson()) }
     sharedPreferences.edit().putString(KEY_CUSTOM_PLANTS_JSON, array.toString()).apply()
+    PlantScheduleWidgets.updateAllWidgets(appContext)
   }
 
   private fun parsePlantListJson(raw: String): List<PlantItem> {
@@ -328,6 +335,31 @@ class SharedPreferencesPlantScheduleRepository(
  * Engine containing the built-in plant database, search logic, schedule mutations, and formatting helpers.
  */
 object PlantScheduleEngine {
+
+  data class PendingWidgetNavigationRequest(
+    val monthNumber: Int? = null,
+    val openCatalogSearch: Boolean = false,
+    val requestId: Long = System.nanoTime(),
+  )
+
+  var pendingWidgetNavigationRequest by mutableStateOf<PendingWidgetNavigationRequest?>(null)
+    private set
+
+  fun requestWidgetNavigation(
+    monthNumber: Int? = null,
+    openCatalogSearch: Boolean = false,
+  ) {
+    pendingWidgetNavigationRequest = PendingWidgetNavigationRequest(
+      monthNumber = monthNumber?.takeIf { it in 1..12 },
+      openCatalogSearch = openCatalogSearch,
+    )
+  }
+
+  fun consumePendingWidgetNavigationRequest(): PendingWidgetNavigationRequest? {
+    val current = pendingWidgetNavigationRequest
+    pendingWidgetNavigationRequest = null
+    return current
+  }
 
   val BUILT_IN_PLANTS: List<PlantItem> = listOf(
     // Vegetables

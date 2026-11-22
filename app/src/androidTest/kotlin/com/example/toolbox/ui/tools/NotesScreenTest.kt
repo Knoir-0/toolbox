@@ -699,7 +699,7 @@ class NotesScreenTest {
       composeTestRule.onNodeWithTag("folder_permission_view").assertDoesNotExist()
       composeTestRule.onNodeWithTag("notes_quick_capture_card").assertIsDisplayed()
 
-      // 4. Create a checklist note and verify it is saved as a .ttxt file in /Notes with '- ' and '+ ' list syntax
+      // 4. Create a checklist note and verify it is saved as a .text file in /Notes with '- ' and '+ ' list syntax
       composeTestRule.onNodeWithTag("new_checklist_button").performClick()
       composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("editor_title_input").performTextInput("Toolbox Supplies")
@@ -709,14 +709,14 @@ class NotesScreenTest {
       composeTestRule.onNodeWithTag("add_note_confirm_button").performClick()
       composeTestRule.waitForIdle()
 
-      val savedTtxtFile = java.io.File(notesDir, "Toolbox Supplies.ttxt")
-      assertTrue("Expected .ttxt file in /Notes", savedTtxtFile.exists())
+      val savedTtxtFile = java.io.File(notesDir, "Toolbox Supplies.text")
+      assertTrue("Expected .text file in /Notes", savedTtxtFile.exists())
       assertEquals(
         "# Toolbox Supplies\n\n- Wrench\n- Screwdriver",
         savedTtxtFile.readText(),
       )
 
-      // Checking off the first item replaces '-' with '+' in the .ttxt file
+      // Checking off the first item replaces '-' with '+' in the .text file
       val firstItemId = repo.loadNotes().single().checklistItems.first().id
       composeTestRule.onNodeWithTag("note_card_check_item_$firstItemId").performClick()
       composeTestRule.waitForIdle()

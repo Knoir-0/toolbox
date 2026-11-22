@@ -11,4 +11,12 @@
     <string name="notes_widget_label">Notes</string>
     <string name="notes_widget_configure_label">Configure Notes Widget</string>
     <string name="notes_widget_description">Scrollable Notes list filtered by All Notes, Pinned Notes, or a Specific Label, with quick Note &amp; Checklist FABs</string>
+    <string name="audio_recorder_widget_label">Record</string>
+    <string name="audio_recorder_widget_description">Compact voice memo widget with one-tap instant audio recording</string>
+    <string name="plant_schedule_widget_label">Planting Schedule</string>
+    <string name="plant_schedule_widget_description">Monthly planting and harvest schedule with month switcher and seasonal checklist</string>
+    <string name="camera_widget_label">Camera Modes</string>
+    <string name="camera_widget_description">Compact pill bar to launch Camera directly into Photo, Video, QR/Barcode Scan, OCR Note, or Live Vision</string>
+    <string name="dice_roller_widget_label">D20 Roller</string>
+    <string name="dice_roller_widget_description">Interactive D20 hero card roller with 3D polyhedral die, critical hit/miss badges, and Disadvantage / Normal / Advantage selector</string>
 </resources>

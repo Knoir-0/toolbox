@@ -2420,7 +2420,7 @@ private fun NotesLockedStorageStateView(
       )
       Spacer(modifier = Modifier.height(4.dp))
       Text(
-        text = "Tap the lock icon on a navigation pill above to grant permission to access .ttxt files in /Notes.",
+        text = "Tap the lock icon on a navigation pill above to grant permission to access .text files in /Notes.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = TextAlign.Center,
@@ -2431,7 +2431,7 @@ private fun NotesLockedStorageStateView(
 
 /**
  * View displayed when the user taps a locked navigation pill or its lock icon in the Notes tool,
- * asking for permission to access `.ttxt` files in `/Notes` and launching the Android system
+ * asking for permission to access `.text` files in `/Notes` and launching the Android system
  * directory access prompt when the user taps "Allow".
  */
 @Composable
@@ -2483,7 +2483,7 @@ private fun NotesFolderPermissionRequestView(
       )
       Spacer(modifier = Modifier.height(4.dp))
       Text(
-        text = "Notes needs permission to access files in ${folder.folderPath} (${folder.folderName}) to read and save .ttxt notes in this location.",
+        text = "Notes needs permission to access files in ${folder.folderPath} (${folder.folderName}) to read and save .text notes in this location.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = TextAlign.Center,

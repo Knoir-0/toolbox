@@ -262,4 +262,40 @@ class PlantScheduleTest {
     )
     assertEquals(PlantIconType.FLOWER_BLOOM, customFlower.iconType)
   }
+
+  @Test
+  fun plantScheduleWidget_resolvesMonthlyScheduleAndStepsMonths() {
+    PlantScheduleWidgets.clearInMemoryMonthForTesting()
+    val tomato = PlantScheduleEngine.BUILT_IN_PLANTS.first { it.id == "tomato" } // plant 3,4,5; harvest 7,8,9,10
+    val lettuce = PlantScheduleEngine.BUILT_IN_PLANTS.first { it.id == "lettuce" } // plant 3,4,5,8,9; harvest 5,6,9,10,11
+    val repo = InMemoryPlantScheduleRepository(
+      initialScheduledPlants = listOf(tomato, lettuce),
+    )
+
+    val mayState = PlantScheduleWidgets.resolveWidgetState(
+      context = null,
+      repository = repo,
+      monthNumberOverride = 5,
+    )
+    assertEquals(CalendarMonth.MAY, mayState.month)
+    assertEquals("May", mayState.headerTitle)
+    assertEquals(2, mayState.plantingThisMonth.size)
+    assertEquals(1, mayState.harvestingThisMonth.size)
+    assertEquals("2 to plant • 1 to harvest", mayState.headerSubtitle)
+    assertTrue(mayState.plantingListText.contains("• Tomato"))
+    assertTrue(mayState.plantingListText.contains("• Lettuce"))
+    assertTrue(mayState.harvestListText.contains("• Lettuce"))
+
+    // Step months with wrap-around
+    PlantScheduleWidgets.saveSelectedMonth(null, 1)
+    assertEquals(12, PlantScheduleWidgets.stepSelectedMonth(null, delta = -1))
+    assertEquals(1, PlantScheduleWidgets.stepSelectedMonth(null, delta = 1))
+
+    // Pending widget navigation request
+    PlantScheduleEngine.requestWidgetNavigation(monthNumber = 9, openCatalogSearch = true)
+    val navReq = PlantScheduleEngine.consumePendingWidgetNavigationRequest()
+    assertEquals(9, navReq?.monthNumber)
+    assertEquals(true, navReq?.openCatalogSearch)
+    assertEquals(null, PlantScheduleEngine.consumePendingWidgetNavigationRequest())
+  }
 }

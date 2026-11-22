@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:description="@string/dice_roller_widget_description"
+    android:initialLayout="@layout/widget_dice_roller"
+    android:minWidth="180dp"
+    android:minHeight="140dp"
+    android:minResizeWidth="150dp"
+    android:minResizeHeight="120dp"
+    android:maxResizeWidth="520dp"
+    android:maxResizeHeight="520dp"
+    android:previewLayout="@layout/widget_dice_roller"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="3"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen"
+    tools:targetApi="s" />

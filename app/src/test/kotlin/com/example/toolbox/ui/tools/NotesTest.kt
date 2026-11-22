@@ -296,10 +296,10 @@ class NotesTest {
   }
 
   @Test
-  fun ttxtFormat_serializesAndParsesMarkdownNotesAndPlusMinusChecklists_andPersistsInNotesDirectory() {
-    assertEquals("ttxt", NOTES_FILE_EXTENSION)
-    assertEquals(".ttxt", NOTES_FILE_DOT_EXTENSION)
-    assertEquals("Toolbox Text XTension", NOTES_FILE_FORMAT_NAME)
+  fun textFormat_serializesAndParsesMarkdownNotesAndPlusMinusChecklists_andPersistsInNotesDirectory() {
+    assertEquals("text", NOTES_FILE_EXTENSION)
+    assertEquals(".text", NOTES_FILE_DOT_EXTENSION)
+    assertEquals("Text", NOTES_FILE_FORMAT_NAME)
     assertEquals("/Notes", DEFAULT_NOTES_SCOPED_FOLDER.displayPath)
 
     // 1. Checklist note uses '- ' for unchecked items and '+ ' for checked items
@@ -343,36 +343,36 @@ class NotesTest {
     val markdownNote = NoteItem(
       id = "md-1",
       title = "Architecture Notes",
-      content = "Use **Material 3** tokens and `.ttxt` files in `/Notes`.",
+      content = "Use **Material 3** tokens and `.text` files in `/Notes`.",
       isChecklist = false,
       color = NoteColor.SAND,
     )
     val expectedMarkdownTtxt = """
       # Architecture Notes
 
-      Use **Material 3** tokens and `.ttxt` files in `/Notes`.
+      Use **Material 3** tokens and `.text` files in `/Notes`.
     """.trimIndent()
     assertEquals(expectedMarkdownTtxt, markdownNote.toTtxt())
 
     val parsedMarkdown = NoteItem.fromTtxt(expectedMarkdownTtxt, id = "md-1")
     assertEquals("Architecture Notes", parsedMarkdown.title)
     assertFalse(parsedMarkdown.isChecklist)
-    assertEquals("Use **Material 3** tokens and `.ttxt` files in `/Notes`.", parsedMarkdown.content)
+    assertEquals("Use **Material 3** tokens and `.text` files in `/Notes`.", parsedMarkdown.content)
 
-    // 3. Saving and loading .ttxt files inside a /Notes directory
-    val tempNotesDir = java.nio.file.Files.createTempDirectory("notes_ttxt_test").toFile()
+    // 3. Saving and loading .text files inside a /Notes directory
+    val tempNotesDir = java.nio.file.Files.createTempDirectory("notes_text_test").toFile()
     try {
       val repo = InMemoryNotesRepository(notesDirectory = tempNotesDir)
       repo.saveNotes(listOf(checklistNote, markdownNote))
 
-      val campingFile = java.io.File(tempNotesDir, "Camping Checklist.ttxt")
-      val archFile = java.io.File(tempNotesDir, "Architecture Notes.ttxt")
+      val campingFile = java.io.File(tempNotesDir, "Camping Checklist.text")
+      val archFile = java.io.File(tempNotesDir, "Architecture Notes.text")
       assertTrue(campingFile.exists())
       assertTrue(archFile.exists())
       assertEquals(expectedChecklistTtxt, campingFile.readText())
       assertEquals(expectedMarkdownTtxt, archFile.readText())
 
-      // Checking 'Tent' replaces '-' with '+' in the .ttxt file on disk
+      // Checking 'Tent' replaces '-' with '+' in the .text file on disk
       val afterCheck = NotesEngine.toggleChecklistItem(repo.loadNotes(), "chk-42", "c1")
       repo.saveNotes(afterCheck)
       assertEquals(
@@ -386,8 +386,8 @@ class NotesTest {
         campingFile.readText(),
       )
 
-      // Dropping an external .ttxt file into /Notes loads it automatically
-      val externalFile = java.io.File(tempNotesDir, "Quick Groceries.ttxt")
+      // Dropping an external .text file into /Notes loads it automatically
+      val externalFile = java.io.File(tempNotesDir, "Quick Groceries.text")
       externalFile.writeText("# Quick Groceries\n\n- Apples\n+ Coffee")
 
       val reloaded = repo.loadNotes()
@@ -580,6 +580,43 @@ class NotesTest {
     assertEquals("3 notes • 2 pinned", allState.headerSubtitle)
     assertEquals("All", allState.filterPillText)
     assertEquals(listOf("nw-1", "nw-3", "nw-2"), allState.visibleNotes.map { it.id })
+    assertFalse(allState.isGridView)
+    assertEquals(1, allState.columnsPerRow)
+    assertEquals(
+      listOf(listOf("nw-1"), listOf("nw-3"), listOf("nw-2")),
+      allState.noteRows.map { row -> row.map { it.id } },
+    )
+
+    // View mode selector at top right cycles List (1 column) -> 2-column Grid -> List (1 column)
+    // and clamps grid columns to a maximum of 2
+    assertEquals(2, NotesWidgets.MAX_WIDGET_GRID_COLUMNS)
+    val clampedConfig = NotesWidgetConfig(
+      filterMode = NotesWidgetFilterMode.ALL,
+      isGridView = true,
+      gridColumnsPerRow = 3,
+    )
+    assertEquals(2, clampedConfig.coercedGridColumnsPerRow)
+    assertEquals(2, clampedConfig.effectiveColumnsPerRow)
+
+    val cycledToGrid = NotesWidgets.cycleWidgetViewMode(context = null, appWidgetId = 101)
+    assertTrue(cycledToGrid.isGridView)
+    assertEquals(2, cycledToGrid.effectiveColumnsPerRow)
+    val gridState = NotesWidgets.resolveWidgetState(
+      context = null,
+      appWidgetId = 101,
+      repository = repo,
+    )
+    assertTrue(gridState.isGridView)
+    assertEquals(2, gridState.columnsPerRow)
+    assertEquals(
+      listOf(listOf("nw-1", "nw-3"), listOf("nw-2")),
+      gridState.noteRows.map { row -> row.map { it.id } },
+    )
+
+    // Cycling again from 2 columns wraps back to List view (1 column)
+    val cycledBackToList = NotesWidgets.cycleWidgetViewMode(context = null, appWidgetId = 101)
+    assertFalse(cycledBackToList.isGridView)
+    assertEquals(1, cycledBackToList.effectiveColumnsPerRow)
 
     // 2. Pinned Notes mode shows only pinned active notes
     val pinnedConfig = NotesWidgetConfig(filterMode = NotesWidgetFilterMode.PINNED)

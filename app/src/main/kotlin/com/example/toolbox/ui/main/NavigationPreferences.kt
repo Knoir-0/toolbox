@@ -9,8 +9,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
+import com.example.toolbox.ui.tools.AudioRecorderWidgets
+import com.example.toolbox.ui.tools.CameraWidgets
+import com.example.toolbox.ui.tools.DiceRollerWidgets
 import com.example.toolbox.ui.tools.MusicPlayerWidgets
 import com.example.toolbox.ui.tools.NotesWidgets
+import com.example.toolbox.ui.tools.PlantScheduleWidgets
 import com.example.toolbox.ui.tools.TodoListWidgets
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -1057,6 +1061,10 @@ class DefaultNavigationPreferencesRepository(
     MusicPlayerWidgets.updateAllWidgets(ctx)
     TodoListWidgets.updateAllWidgets(ctx)
     NotesWidgets.updateAllWidgets(ctx)
+    AudioRecorderWidgets.updateAllWidgets(ctx)
+    PlantScheduleWidgets.updateAllWidgets(ctx)
+    CameraWidgets.updateAllWidgets(ctx)
+    DiceRollerWidgets.updateAllWidgets(ctx)
   }
 
   private val _toolsPerRowFlow = MutableStateFlow(getToolsPerRow())

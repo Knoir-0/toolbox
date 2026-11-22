@@ -715,7 +715,7 @@ class FileManagerEngineTest {
     )
     assertEquals(2, repo.loadNotes().size)
 
-    val ttxtFile = File(tempFolder.root, "ToolboxChecklist.ttxt").apply {
+    val ttxtFile = File(tempFolder.root, "ToolboxChecklist.text").apply {
       writeText(
         """
         # Toolbox Checklist
@@ -726,7 +726,7 @@ class FileManagerEngineTest {
       )
     }
     assertTrue(FileManagerEngine.isTextFile(ttxtFile))
-    assertEquals("text/x-ttxt", FileManagerEngine.getMimeType(ttxtFile))
+    assertEquals("text/plain", FileManagerEngine.getMimeType(ttxtFile))
     val importedTtxt = FileManagerEngine.importFileToNotes(ttxtFile, repo, nowMs = 1_700_000_010_000L)
     assertNotNull(importedTtxt)
     assertEquals("Toolbox Checklist", importedTtxt!!.title)

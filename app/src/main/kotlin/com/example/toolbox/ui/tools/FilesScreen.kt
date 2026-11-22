@@ -3826,7 +3826,7 @@ private fun CreateFileDialog(
           modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-          listOf(".txt", ".ttxt", ".md", ".json", ".log").forEach { ext ->
+          listOf(".txt", ".text", ".md", ".json", ".log").forEach { ext ->
             FilterChip(
               selected = name.endsWith(ext),
               onClick = {

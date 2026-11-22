@@ -13,6 +13,9 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.os.Build
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.label.ImageLabeler
 import com.google.mlkit.vision.label.ImageLabeling
@@ -597,6 +600,32 @@ data class CameraVisionBoundingBox(
   val area: Float get() = width * height
   val centerX: Float get() = (left + right) * 0.5f
   val centerY: Float get() = (top + bottom) * 0.5f
+
+  /**
+   * Euclidean distance in normalized viewfinder coordinates (`0.0f..0.707f`) from this
+   * bounding box's center (`centerX`, `centerY`) to the viewfinder center (`0.5f`, `0.5f`).
+   */
+  val distanceToViewfinderCenter: Float
+    get() {
+      val dx = centerX - 0.5f
+      val dy = centerY - 0.5f
+      return kotlin.math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+    }
+
+  /**
+   * Euclidean distance from the viewfinder center (`0.5f`, `0.5f`) to the nearest point inside
+   * this bounding box (`0.0f` when the bounding box contains the viewfinder center).
+   */
+  val distanceFromBoundsToViewfinderCenter: Float
+    get() {
+      val nearestX = 0.5f.coerceIn(left, right)
+      val nearestY = 0.5f.coerceIn(top, bottom)
+      return kotlin.math.hypot((0.5f - nearestX).toDouble(), (0.5f - nearestY).toDouble()).toFloat()
+    }
+
+  /** `true` when this bounding box covers the exact center of the viewfinder (`0.5f`, `0.5f`). */
+  val containsViewfinderCenter: Boolean
+    get() = 0.5f in left..right && 0.5f in top..bottom
 
   fun coerceNormalized(): CameraVisionBoundingBox {
     val l = left.coerceIn(0.02f, 0.90f)
@@ -1682,6 +1711,24 @@ data class CameraMediaItem(
  * - Synthesizes valid image and video files when hardware camera capture is unavailable
  */
 object CameraEngine {
+
+  data class PendingCaptureModeRequest(
+    val mode: CameraCaptureMode,
+    val requestId: Long = System.nanoTime(),
+  )
+
+  var pendingCaptureModeRequest by mutableStateOf<PendingCaptureModeRequest?>(null)
+    private set
+
+  fun requestCaptureMode(mode: CameraCaptureMode) {
+    pendingCaptureModeRequest = PendingCaptureModeRequest(mode = mode)
+  }
+
+  fun consumePendingCaptureModeRequest(): PendingCaptureModeRequest? {
+    val current = pendingCaptureModeRequest
+    pendingCaptureModeRequest = null
+    return current
+  }
 
   val SUPPORTED_PHOTO_EXTENSIONS: Set<String> = setOf("jpg", "jpeg", "png", "webp")
   val SUPPORTED_VIDEO_EXTENSIONS: Set<String> = setOf("mp4", "3gp", "mkv", "webm")
@@ -5902,7 +5949,7 @@ object CameraEngine {
 
         val normDx = (gx + 0.5f) / cols - 0.5f
         val normDy = (gy + 0.5f) / rows - 0.5f
-        val centerWeight = (1.12f - (normDx * normDx + normDy * normDy) * 0.65f).coerceIn(0.72f, 1.12f)
+        val centerWeight = (1.30f - (normDx * normDx + normDy * normDy) * 1.85f).coerceIn(0.42f, 1.30f)
 
         val score = (colorContrast * 0.78f + edgeEnergy * 0.85f) * centerWeight
         saliency[idx] = score
@@ -6746,13 +6793,12 @@ object CameraEngine {
           )
         }
       }.sortedByDescending { candidate ->
-        // Prioritize prominent, centrally-framed, tracked, or classified objects
-        val dx = candidate.normBox.centerX - 0.5f
-        val dy = candidate.normBox.centerY - 0.5f
-        val centerBonus = (1f - (dx * dx + dy * dy)).coerceIn(0.4f, 1f)
+        // Prioritize centrally-framed objects closer to the center of the view, followed by prominence, confidence, and track continuity
+        val centerScore = computeCenterProximityScore(candidate.normBox)
         val trackBonus = if (candidate.trackingId != null && candidate.trackingId in previousTagByTrackingId) 0.14f else 0f
-        candidate.normBox.area.coerceIn(0.04f, 0.65f) * centerBonus +
-          candidate.coarseConfidence * 0.35f +
+        centerScore * 0.55f +
+          candidate.normBox.area.coerceIn(0.04f, 0.65f) * centerScore * 0.35f +
+          candidate.coarseConfidence * 0.30f +
           trackBonus
       }
 
@@ -7106,10 +7152,28 @@ object CameraEngine {
   }
 
   /**
+   * Computes a normalized center-proximity priority score (`0.04f..1.0f`) for [box] relative to the
+   * viewfinder center (`0.5f`, `0.5f`).
+   *
+   * Uses a steep radial falloff from the viewfinder center combined with an inner-core center bonus
+   * and bounding-box center-overlap proximity so objects closer to the center of the view are
+   * strongly prioritized over peripheral detections.
+   */
+  fun computeCenterProximityScore(box: CameraVisionBoundingBox): Float {
+    val centerDist = box.distanceToViewfinderCenter
+    val normDist = (centerDist / 0.55f).coerceIn(0f, 1f)
+    val radialScore = (1f - normDist).pow(1.65f)
+    val innerCoreScore = ((0.24f - centerDist) / 0.24f).coerceIn(0f, 1f)
+    val boundsProximityScore = ((0.18f - box.distanceFromBoundsToViewfinderCenter) / 0.18f).coerceIn(0f, 1f)
+    return (radialScore * 0.84f + innerCoreScore * 0.11f + boundsProximityScore * 0.05f)
+      .coerceIn(0.04f, 1.0f)
+  }
+
+  /**
    * Scores an ML Kit [RawDetectedObjectForFocus] candidate for smart autofocus priority.
-   * Balances viewfinder center proximity, foreground subject prominence, classification confidence,
-   * and sticky temporal tracking stability (including proximity to velocity-predicted trajectory)
-   * with [previousTarget].
+   * Strongly prioritizes viewfinder center proximity so objects detected closer to the center
+   * of the view are favored, while balancing foreground subject prominence, classification
+   * confidence, and sticky temporal tracking stability (scaled by center proximity) with [previousTarget].
    */
   fun scoreObjectForSmartAutofocus(
     candidate: RawDetectedObjectForFocus,
@@ -7119,11 +7183,8 @@ object CameraEngine {
     if (box.width < 0.04f || box.height < 0.04f || box.area < 0.0020f || box.area > 0.92f) {
       return -1f
     }
-    val dx = box.centerX - 0.5f
-    val dy = box.centerY - 0.5f
-    val distSq = dx * dx + dy * dy
-    // Center proximity score (1.0 at exact center, smoothly tapering toward edges)
-    val centerScore = (1f - distSq * 1.8f).coerceIn(0.15f, 1.0f)
+    // Center proximity score (1.0 at exact center, steeply falling off toward periphery)
+    val centerScore = computeCenterProximityScore(box)
 
     // Subject size prominence: sweet spot is 5%..45% of frame area
     val area = box.area
@@ -7133,12 +7194,14 @@ object CameraEngine {
       else -> (1f - ((area - 0.45f) / 0.50f)).coerceIn(0.25f, 0.85f)
     }
 
-    val confidenceBonus = candidate.confidence.coerceIn(0f, 1f) * 0.28f
+    val confidenceBonus = candidate.confidence.coerceIn(0f, 1f) * 0.14f
 
-    // Temporal tracking stickiness & trajectory alignment bonus to avoid focus hunting
+    // Temporal tracking stickiness & trajectory alignment bonus to avoid focus hunting,
+    // attenuated by center proximity so peripheral locks yield smoothly when a central object is detected
     var trackingBonus = 0f
     if (previousTarget != null && previousTarget.source == CameraFocusSource.ML_OBJECT_AUTO) {
       val lockScale = previousTarget.lockStrength.coerceIn(0.65f, 1.35f)
+      val centerLockWeight = (0.35f + 0.65f * centerScore).coerceIn(0.35f, 1.0f)
       val predX = (previousTarget.clampedX + previousTarget.velocityX * 0.25f).coerceIn(0.08f, 0.92f)
       val predY = (previousTarget.clampedY + previousTarget.velocityY * 0.25f).coerceIn(0.08f, 0.92f)
 
@@ -7148,7 +7211,7 @@ object CameraEngine {
       val minDist = kotlin.math.sqrt(minOf(distCurrSq, distPredSq, distTargetSq))
 
       if (candidate.trackingId != null && candidate.trackingId == previousTarget.trackingId && minDist <= 0.45f) {
-        trackingBonus += 0.26f * lockScale
+        trackingBonus += 0.11f * lockScale * centerLockWeight
       }
 
       if (!candidate.label.isNullOrBlank() &&
@@ -7156,20 +7219,20 @@ object CameraEngine {
         candidate.label.trim().equals(previousTarget.categoryLabel.trim(), ignoreCase = true) &&
         minDist <= 0.36f
       ) {
-        trackingBonus += 0.14f * lockScale
+        trackingBonus += 0.06f * lockScale * centerLockWeight
       }
 
       val iouCurr = previousTarget.boundingBox?.let { box.intersectionOverUnion(it) } ?: 0f
       val iouTarget = previousTarget.targetBoundingBox?.let { box.intersectionOverUnion(it) } ?: 0f
       val maxIou = maxOf(iouCurr, iouTarget)
       if (maxIou > 0f) {
-        trackingBonus += maxIou * 0.24f * lockScale
+        trackingBonus += maxIou * 0.10f * lockScale * centerLockWeight
       }
 
       // Smooth spatial stickiness radius around current, trajectory-predicted, and desired focus points
       if (minDist < 0.36f) {
         val proximityFactor = (1f - minDist / 0.36f).coerceIn(0f, 1f)
-        trackingBonus += proximityFactor * proximityFactor * 0.30f * lockScale
+        trackingBonus += proximityFactor * proximityFactor * 0.12f * lockScale * centerLockWeight
       }
 
       // Velocity & trajectory alignment bonus: favor candidates continuing along the current movement vector
@@ -7182,12 +7245,12 @@ object CameraEngine {
           val cosAlign = ((moveDx * previousTarget.velocityX + moveDy * previousTarget.velocityY) / (moveDist * speed))
             .coerceIn(-1f, 1f)
           val speedWeight = (speed / STICKY_AF_MAX_SPEED_NORM_PER_SEC).coerceIn(0f, 1f)
-          trackingBonus += cosAlign * 0.12f * speedWeight
+          trackingBonus += cosAlign * 0.08f * speedWeight
         }
       }
     }
 
-    return centerScore * 0.48f + sizeScore * 0.34f + confidenceBonus + trackingBonus
+    return centerScore * 0.82f + sizeScore * 0.14f + confidenceBonus + trackingBonus
   }
 
   private fun ellipseArcDerivative(

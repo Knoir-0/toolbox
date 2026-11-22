@@ -126,6 +126,8 @@ enum class NotesWidgetFilterMode(
 data class NotesWidgetConfig(
   val filterMode: NotesWidgetFilterMode = NotesWidgetFilterMode.ALL,
   val labelName: String? = null,
+  val isGridView: Boolean = false,
+  val gridColumnsPerRow: Int = NotesWidgets.MAX_WIDGET_GRID_COLUMNS,
 ) {
   val normalizedLabelName: String?
     get() = labelName?.trim()?.takeIf { it.isNotEmpty() }
@@ -136,6 +138,38 @@ data class NotesWidgetConfig(
     } else {
       filterMode
     }
+
+  val coercedGridColumnsPerRow: Int
+    get() = gridColumnsPerRow.coerceIn(
+      NotesWidgets.MIN_WIDGET_GRID_COLUMNS,
+      NotesWidgets.MAX_WIDGET_GRID_COLUMNS,
+    )
+
+  val effectiveColumnsPerRow: Int
+    get() = if (isGridView) coercedGridColumnsPerRow else 1
+
+  /**
+   * Cycles the widget's view mode following [ToolboxViewModeCycleButton] limited to a maximum of 2 columns:
+   * List view (1 column) -> 2-column Grid view -> List view (1 column).
+   */
+  fun cycleViewMode(): NotesWidgetConfig {
+    return if (!isGridView) {
+      copy(
+        isGridView = true,
+        gridColumnsPerRow = NotesWidgets.MIN_WIDGET_GRID_COLUMNS,
+      )
+    } else if (coercedGridColumnsPerRow < NotesWidgets.MAX_WIDGET_GRID_COLUMNS) {
+      copy(
+        isGridView = true,
+        gridColumnsPerRow = coercedGridColumnsPerRow + 1,
+      )
+    } else {
+      copy(
+        isGridView = false,
+        gridColumnsPerRow = NotesWidgets.MAX_WIDGET_GRID_COLUMNS,
+      )
+    }
+  }
 
   fun toNotesFilter(): NotesFilter = when (effectiveFilterMode) {
     NotesWidgetFilterMode.ALL -> NotesFilter.All
@@ -169,6 +203,8 @@ data class NotesWidgetConfig(
     if (normalizedLabelName != null) {
       put("labelName", normalizedLabelName)
     }
+    put("isGridView", isGridView)
+    put("gridColumnsPerRow", coercedGridColumnsPerRow)
   }
 
   companion object {
@@ -176,6 +212,9 @@ data class NotesWidgetConfig(
       if (json == null) return NotesWidgetConfig()
       val mode = NotesWidgetFilterMode.fromStorageValue(json.optString("filterMode", NOTES_FILTER_MODE_ALL))
       val label = json.optString("labelName", "").trim().takeIf { it.isNotEmpty() }
+      val isGridView = json.optBoolean("isGridView", false)
+      val gridColumns = json.optInt("gridColumnsPerRow", NotesWidgets.MAX_WIDGET_GRID_COLUMNS)
+        .coerceIn(NotesWidgets.MIN_WIDGET_GRID_COLUMNS, NotesWidgets.MAX_WIDGET_GRID_COLUMNS)
       return NotesWidgetConfig(
         filterMode = if (mode == NotesWidgetFilterMode.LABEL && label == null) {
           NotesWidgetFilterMode.ALL
@@ -183,19 +222,24 @@ data class NotesWidgetConfig(
           mode
         },
         labelName = if (mode == NotesWidgetFilterMode.LABEL) label else null,
+        isGridView = isGridView,
+        gridColumnsPerRow = gridColumns,
       )
     }
   }
 }
 
 /**
- * Snapshot of the filtered notes list, header metadata, and theme palette rendered by the Notes
- * Home Screen AppWidget ([NotesWidgetProvider]).
+ * Snapshot of the filtered notes list, header metadata, view mode, and theme palette rendered by
+ * the Notes Home Screen AppWidget ([NotesWidgetProvider]).
  */
 @Immutable
 data class NotesWidgetState(
   val config: NotesWidgetConfig,
   val visibleNotes: List<NoteItem>,
+  val noteRows: List<List<NoteItem>>,
+  val isGridView: Boolean,
+  val columnsPerRow: Int,
   val totalVisibleCount: Int,
   val pinnedVisibleCount: Int,
   val headerTitle: String,
@@ -221,10 +265,14 @@ data class NotesWidgetState(
  */
 object NotesWidgets {
 
+  const val MIN_WIDGET_GRID_COLUMNS = 2
+  const val MAX_WIDGET_GRID_COLUMNS = 2
+
   const val ACTION_WIDGET_REFRESH = "com.example.toolbox.notes.ACTION_WIDGET_REFRESH"
   const val ACTION_WIDGET_ITEM_CLICK = "com.example.toolbox.notes.ACTION_WIDGET_ITEM_CLICK"
   const val ACTION_WIDGET_OPEN_NEW_NOTE = "com.example.toolbox.notes.ACTION_WIDGET_OPEN_NEW_NOTE"
   const val ACTION_WIDGET_OPEN_NEW_CHECKLIST = "com.example.toolbox.notes.ACTION_WIDGET_OPEN_NEW_CHECKLIST"
+  const val ACTION_WIDGET_CYCLE_VIEW_MODE = "com.example.toolbox.notes.ACTION_WIDGET_CYCLE_VIEW_MODE"
 
   const val EXTRA_NOTE_ID = "extra_notes_widget_note_id"
   const val EXTRA_FILTER_MODE = "extra_notes_widget_filter_mode"
@@ -237,6 +285,7 @@ object NotesWidgets {
   private const val REQUEST_CODE_ITEM_TEMPLATE_BASE = 4200
   private const val REQUEST_CODE_FAB_NEW_NOTE_BASE = 4300
   private const val REQUEST_CODE_FAB_NEW_CHECKLIST_BASE = 4400
+  private const val REQUEST_CODE_CYCLE_VIEW_MODE_BASE = 4500
 
   private val inMemoryConfigs = mutableMapOf<Int, NotesWidgetConfig>()
 
@@ -336,6 +385,33 @@ object NotesWidgets {
   }
 
   /**
+   * Cycles the view mode for [appWidgetId] between List view (1 column) and 2-column Grid view
+   * (limited to a maximum of [MAX_WIDGET_GRID_COLUMNS] = 2 columns) and persists the updated config.
+   */
+  fun cycleWidgetViewMode(
+    context: Context?,
+    appWidgetId: Int,
+  ): NotesWidgetConfig {
+    val current = loadWidgetConfig(context, appWidgetId)
+    val next = current.cycleViewMode()
+    saveWidgetConfig(context, appWidgetId, next)
+    return next
+  }
+
+  /**
+   * Partitions [notes] into rows of at most [columnsPerRow] items (1 per row in List view, up to
+   * [MAX_WIDGET_GRID_COLUMNS] = 2 per row in Grid view).
+   */
+  fun buildWidgetNoteRows(
+    notes: List<NoteItem>,
+    columnsPerRow: Int,
+  ): List<List<NoteItem>> {
+    if (notes.isEmpty()) return emptyList()
+    val coercedColumns = columnsPerRow.coerceIn(1, MAX_WIDGET_GRID_COLUMNS)
+    return notes.chunked(coercedColumns)
+  }
+
+  /**
    * Resolves the current [NotesWidgetState] for [config] (or [appWidgetId]) from [repository].
    */
   fun resolveWidgetState(
@@ -350,6 +426,8 @@ object NotesWidgets {
       filter = config.toNotesFilter(),
     )
     val visibleNotes = filtered.allNotes
+    val columnsPerRow = config.effectiveColumnsPerRow
+    val noteRows = buildWidgetNoteRows(visibleNotes, columnsPerRow)
     val pinnedCount = filtered.pinned.size
     val totalCount = visibleNotes.size
     val noteWord = if (totalCount == 1) "note" else "notes"
@@ -377,6 +455,9 @@ object NotesWidgets {
     return NotesWidgetState(
       config = config,
       visibleNotes = visibleNotes,
+      noteRows = noteRows,
+      isGridView = config.isGridView,
+      columnsPerRow = columnsPerRow,
       totalVisibleCount = totalCount,
       pinnedVisibleCount = pinnedCount,
       headerTitle = config.headerTitle,
@@ -535,49 +616,122 @@ object NotesWidgets {
     )
   }
 
+  fun buildCycleViewModePendingIntent(
+    context: Context,
+    appWidgetId: Int,
+  ): PendingIntent {
+    val intent = Intent(context, NotesWidgetProvider::class.java).apply {
+      action = ACTION_WIDGET_CYCLE_VIEW_MODE
+      putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+      setPackage(context.packageName)
+    }
+    return PendingIntent.getBroadcast(
+      context,
+      REQUEST_CODE_CYCLE_VIEW_MODE_BASE + (appWidgetId and 0xFFFF),
+      intent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+  }
+
   /**
-   * Builds the [RemoteViews] for a single [NoteItem] card inside the widget's scrollable [ListView].
+   * Builds the [RemoteViews] for a row in the widget's scrollable [ListView] (1 note card per row in
+   * List view, or up to 2 side-by-side note cards per row in 2-column Grid view).
    */
   fun buildNoteItemRemoteViews(
     context: Context,
     note: NoteItem,
+    secondNote: NoteItem? = null,
     config: NotesWidgetConfig = NotesWidgetConfig(),
     palette: TodoWidgetPalette = TodoListWidgets.resolveWidgetPalette(context),
     nowMillis: Long = System.currentTimeMillis(),
   ): RemoteViews {
     val views = RemoteViews(context.packageName, R.layout.widget_notes_item)
+    bindNoteCardViews(
+      views = views,
+      note = note,
+      config = config,
+      palette = palette,
+      nowMillis = nowMillis,
+      rootId = R.id.widget_notes_item_root,
+      containerId = R.id.widget_notes_item_container,
+      titleId = R.id.widget_notes_item_title,
+      pinIconId = R.id.widget_notes_item_pin_icon,
+      checklistBadgeId = R.id.widget_notes_item_checklist_badge,
+      bodyId = R.id.widget_notes_item_body,
+      metaId = R.id.widget_notes_item_meta,
+    )
+
+    if (!config.isGridView) {
+      views.setViewVisibility(R.id.widget_notes_item_second_root, View.GONE)
+    } else if (secondNote != null) {
+      views.setViewVisibility(R.id.widget_notes_item_second_root, View.VISIBLE)
+      bindNoteCardViews(
+        views = views,
+        note = secondNote,
+        config = config,
+        palette = palette,
+        nowMillis = nowMillis,
+        rootId = R.id.widget_notes_item_second_root,
+        containerId = R.id.widget_notes_item_second_container,
+        titleId = R.id.widget_notes_item_second_title,
+        pinIconId = R.id.widget_notes_item_second_pin_icon,
+        checklistBadgeId = R.id.widget_notes_item_second_checklist_badge,
+        bodyId = R.id.widget_notes_item_second_body,
+        metaId = R.id.widget_notes_item_second_meta,
+      )
+    } else {
+      views.setViewVisibility(R.id.widget_notes_item_second_root, View.INVISIBLE)
+    }
+
+    return views
+  }
+
+  private fun bindNoteCardViews(
+    views: RemoteViews,
+    note: NoteItem,
+    config: NotesWidgetConfig,
+    palette: TodoWidgetPalette,
+    nowMillis: Long,
+    rootId: Int,
+    containerId: Int,
+    titleId: Int,
+    pinIconId: Int,
+    checklistBadgeId: Int,
+    bodyId: Int,
+    metaId: Int,
+  ) {
     val title = buildNoteItemTitle(note)
-    views.setTextViewText(R.id.widget_notes_item_title, title)
-    views.setTextColor(R.id.widget_notes_item_title, palette.onSurfaceArgb)
+    views.setTextViewText(titleId, title)
+    views.setTextColor(titleId, palette.onSurfaceArgb)
 
     if (note.isPinned) {
-      views.setViewVisibility(R.id.widget_notes_item_pin_icon, View.VISIBLE)
-      views.setInt(R.id.widget_notes_item_pin_icon, "setColorFilter", palette.primaryArgb)
+      views.setViewVisibility(pinIconId, View.VISIBLE)
+      views.setInt(pinIconId, "setColorFilter", palette.primaryArgb)
     } else {
-      views.setViewVisibility(R.id.widget_notes_item_pin_icon, View.GONE)
+      views.setViewVisibility(pinIconId, View.GONE)
     }
 
     val checklistBadge = formatChecklistBadgeText(note)
     if (checklistBadge != null) {
-      views.setViewVisibility(R.id.widget_notes_item_checklist_badge, View.VISIBLE)
-      views.setTextViewText(R.id.widget_notes_item_checklist_badge, checklistBadge)
-      views.setTextColor(R.id.widget_notes_item_checklist_badge, palette.onPrimaryContainerArgb)
+      views.setViewVisibility(checklistBadgeId, View.VISIBLE)
+      views.setTextViewText(checklistBadgeId, checklistBadge)
+      views.setTextColor(checklistBadgeId, palette.onPrimaryContainerArgb)
     } else {
-      views.setViewVisibility(R.id.widget_notes_item_checklist_badge, View.GONE)
+      views.setViewVisibility(checklistBadgeId, View.GONE)
     }
 
     val bodyPreview = buildNoteItemBodyPreview(note)
     if (bodyPreview.isNotBlank()) {
-      views.setViewVisibility(R.id.widget_notes_item_body, View.VISIBLE)
-      views.setTextViewText(R.id.widget_notes_item_body, bodyPreview)
-      views.setTextColor(R.id.widget_notes_item_body, palette.onSurfaceVariantArgb)
+      views.setViewVisibility(bodyId, View.VISIBLE)
+      views.setTextViewText(bodyId, bodyPreview)
+      views.setTextColor(bodyId, palette.onSurfaceVariantArgb)
     } else {
-      views.setViewVisibility(R.id.widget_notes_item_body, View.GONE)
+      views.setViewVisibility(bodyId, View.GONE)
     }
 
     val metadata = buildNoteItemMetadata(note, nowMillis)
-    views.setTextViewText(R.id.widget_notes_item_meta, metadata)
-    views.setTextColor(R.id.widget_notes_item_meta, palette.outlineArgb)
+    views.setTextViewText(metaId, metadata)
+    views.setTextColor(metaId, palette.outlineArgb)
 
     val openFillIn = Intent().apply {
       putExtra(EXTRA_NOTE_ID, note.id)
@@ -586,10 +740,8 @@ object NotesWidgets {
         putExtra(EXTRA_FILTER_LABEL, config.normalizedLabelName)
       }
     }
-    views.setOnClickFillInIntent(R.id.widget_notes_item_root, openFillIn)
-    views.setOnClickFillInIntent(R.id.widget_notes_item_container, openFillIn)
-
-    return views
+    views.setOnClickFillInIntent(rootId, openFillIn)
+    views.setOnClickFillInIntent(containerId, openFillIn)
   }
 
   /**
@@ -649,11 +801,44 @@ object NotesWidgets {
     views.setTextColor(R.id.widget_notes_title, palette.onSurfaceArgb)
     views.setTextViewText(R.id.widget_notes_subtext, state.headerSubtitle)
     views.setTextColor(R.id.widget_notes_subtext, palette.onSurfaceVariantArgb)
-    views.setTextViewText(R.id.widget_notes_filter_pill, state.filterPillText)
-    views.setTextColor(R.id.widget_notes_filter_pill, palette.onPrimaryContainerArgb)
+
+    // Top-right view mode selector (carried from Notes tool, limited to a maximum of 2 columns)
+    if (state.isGridView) {
+      views.setViewVisibility(R.id.widget_notes_view_mode_list_icon, View.GONE)
+      views.setViewVisibility(R.id.widget_notes_view_mode_grid_container, View.VISIBLE)
+      views.setInt(
+        R.id.widget_notes_view_mode_grid_icon,
+        "setColorFilter",
+        palette.onSurfaceVariantArgb,
+      )
+      views.setTextViewText(
+        R.id.widget_notes_view_mode_grid_count,
+        state.columnsPerRow.toString(),
+      )
+      views.setTextColor(R.id.widget_notes_view_mode_grid_count, palette.onSurfaceVariantArgb)
+      views.setContentDescription(
+        R.id.widget_notes_view_mode_toggle,
+        "${state.columnsPerRow} notes per row",
+      )
+    } else {
+      views.setViewVisibility(R.id.widget_notes_view_mode_list_icon, View.VISIBLE)
+      views.setViewVisibility(R.id.widget_notes_view_mode_grid_container, View.GONE)
+      views.setInt(
+        R.id.widget_notes_view_mode_list_icon,
+        "setColorFilter",
+        palette.onSurfaceVariantArgb,
+      )
+      views.setContentDescription(R.id.widget_notes_view_mode_toggle, "List view")
+    }
+    views.setOnClickPendingIntent(
+      R.id.widget_notes_view_mode_toggle,
+      buildCycleViewModePendingIntent(context, appWidgetId),
+    )
 
     val openNotesIntent = buildOpenNotesPendingIntent(context, appWidgetId, config)
     views.setOnClickPendingIntent(R.id.widget_notes_header, openNotesIntent)
+    views.setOnClickPendingIntent(R.id.widget_notes_header_badge, openNotesIntent)
+    views.setOnClickPendingIntent(R.id.widget_notes_header_text_container, openNotesIntent)
     views.setOnClickPendingIntent(R.id.widget_notes_empty_view, openNotesIntent)
 
     // Empty state styling
@@ -817,6 +1002,30 @@ object NotesWidgets {
         }
         true
       }
+      ACTION_WIDGET_CYCLE_VIEW_MODE -> {
+        val appWidgetId = intent.getIntExtra(
+          AppWidgetManager.EXTRA_APPWIDGET_ID,
+          AppWidgetManager.INVALID_APPWIDGET_ID,
+        )
+        cycleWidgetViewMode(context, appWidgetId)
+        if (context != null) {
+          if (appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+            try {
+              val manager = AppWidgetManager.getInstance(context)
+              if (manager != null) {
+                updateNotesWidgets(context, manager, intArrayOf(appWidgetId))
+              } else {
+                updateAllWidgets(context)
+              }
+            } catch (_: Throwable) {
+              updateAllWidgets(context)
+            }
+          } else {
+            updateAllWidgets(context)
+          }
+        }
+        true
+      }
       else -> false
     }
   }
@@ -943,7 +1152,7 @@ internal class NotesWidgetRemoteViewsFactory(
   private val appWidgetId: Int,
 ) : RemoteViewsService.RemoteViewsFactory {
 
-  private var notes: List<NoteItem> = emptyList()
+  private var noteRows: List<List<NoteItem>> = emptyList()
   private var config: NotesWidgetConfig = NotesWidgetConfig()
   private var palette: TodoWidgetPalette = TodoListWidgets.resolveWidgetPalette(context)
 
@@ -965,24 +1174,27 @@ internal class NotesWidgetRemoteViewsFactory(
         config = config,
         repository = repo,
       )
-      notes = state.visibleNotes
+      noteRows = state.noteRows
       palette = state.palette
     } catch (_: Throwable) {
-      notes = emptyList()
+      noteRows = emptyList()
     }
   }
 
   override fun onDestroy() {
-    notes = emptyList()
+    noteRows = emptyList()
   }
 
-  override fun getCount(): Int = notes.size
+  override fun getCount(): Int = noteRows.size
 
   override fun getViewAt(position: Int): RemoteViews? {
-    val item = notes.getOrNull(position) ?: return null
+    val row = noteRows.getOrNull(position) ?: return null
+    val firstNote = row.firstOrNull() ?: return null
+    val secondNote = row.getOrNull(1)
     return NotesWidgets.buildNoteItemRemoteViews(
       context = context,
-      note = item,
+      note = firstNote,
+      secondNote = secondNote,
       config = config,
       palette = palette,
     )
@@ -993,7 +1205,8 @@ internal class NotesWidgetRemoteViewsFactory(
   override fun getViewTypeCount(): Int = 1
 
   override fun getItemId(position: Int): Long {
-    return notes.getOrNull(position)?.id?.hashCode()?.toLong() ?: position.toLong()
+    val row = noteRows.getOrNull(position) ?: return position.toLong()
+    return row.joinToString("|") { it.id }.hashCode().toLong()
   }
 
   override fun hasStableIds(): Boolean = true
@@ -1447,6 +1660,8 @@ fun NotesWidgetConfigureDialog(
           val chosenConfig = NotesWidgetConfig(
             filterMode = selectedMode,
             labelName = if (selectedMode == NotesWidgetFilterMode.LABEL) effectiveLabel else null,
+            isGridView = initialConfig.isGridView,
+            gridColumnsPerRow = initialConfig.coercedGridColumnsPerRow,
           )
           onConfirm(chosenConfig, finalLabelsToSave)
         },

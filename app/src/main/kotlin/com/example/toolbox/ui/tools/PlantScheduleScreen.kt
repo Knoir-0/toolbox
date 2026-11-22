@@ -277,6 +277,18 @@ fun PlantScheduleScreen(
     }
   }
 
+  LaunchedEffect(PlantScheduleEngine.pendingWidgetNavigationRequest) {
+    val pending = PlantScheduleEngine.consumePendingWidgetNavigationRequest() ?: return@LaunchedEffect
+    if (pending.monthNumber != null && pending.monthNumber in 1..12) {
+      selectedMonth = pending.monthNumber
+    }
+    if (pending.openCatalogSearch) {
+      isSelectionMode = false
+      selectedPlantIds = emptySet()
+      isSearchActive = true
+    }
+  }
+
   fun exitSelectionMode() {
     isSelectionMode = false
     selectedPlantIds = emptySet()
@@ -285,6 +297,9 @@ fun PlantScheduleScreen(
   fun updateSchedule(updated: List<PlantItem>) {
     scheduledPlants = updated
     repo.saveScheduledPlants(updated)
+    if (!isInspection) {
+      PlantScheduleWidgets.updateAllWidgets(context)
+    }
     val remainingIds = updated.map { it.id }.toSet()
     selectedPlantIds = selectedPlantIds.intersect(remainingIds)
     if (updated.isEmpty()) {

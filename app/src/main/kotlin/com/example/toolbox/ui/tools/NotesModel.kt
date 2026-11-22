@@ -18,9 +18,9 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
-const val NOTES_FILE_EXTENSION = "ttxt"
-const val NOTES_FILE_DOT_EXTENSION = ".ttxt"
-const val NOTES_FILE_FORMAT_NAME = "Toolbox Text XTension"
+const val NOTES_FILE_EXTENSION = "text"
+const val NOTES_FILE_DOT_EXTENSION = ".text"
+const val NOTES_FILE_FORMAT_NAME = "Text"
 const val NOTES_ROOT_FOLDER_NAME = "Notes"
 const val NOTES_ROOT_DISPLAY_PATH = "/Notes"
 private const val NOTES_EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY = "com.android.externalstorage.documents"
@@ -67,7 +67,7 @@ enum class NoteColor(
 
 /**
  * Represents a single interactive checkbox item inside a checklist-mode [NoteItem].
- * In `.ttxt` ("Toolbox Text XTension") files, unchecked items use `- <text>` (matching `.yaml` lists)
+ * In `.text` files, unchecked items use `- <text>` (matching `.yaml` lists)
  * and checked items replace the dash with `+` internally (`+ <text>`).
  */
 data class NoteChecklistItem(
@@ -77,13 +77,13 @@ data class NoteChecklistItem(
   val indentLevel: Int = 0,
 ) {
   /**
-   * Internal `.ttxt` list marker: `-` when unchecked, `+` when checked.
+   * Internal `.text` list marker: `-` when unchecked, `+` when checked.
    */
   val ttxtPrefix: Char
     get() = if (isChecked) '+' else '-'
 
   /**
-   * Formats this item as a `.ttxt` checklist line (`- <text>` for unchecked, `+ <text>` for checked),
+   * Formats this item as a `.text` checklist line (`- <text>` for unchecked, `+ <text>` for checked),
    * indented by 2 spaces per [indentLevel] following YAML list nesting conventions.
    */
   fun toTtxtLine(): String {
@@ -149,7 +149,7 @@ data class NoteChecklistItem(
 /**
  * Represents a single note in the Notes tool.
  * A note can be either a free-form Markdown text note ([isChecklist] = false) or an interactive
- * `.ttxt` checklist ([isChecklist] = true).
+ * `.text` checklist ([isChecklist] = true).
  */
 data class NoteItem(
   val id: String = UUID.randomUUID().toString(),
@@ -177,7 +177,7 @@ data class NoteItem(
     get() = checklistItems.filter { it.isChecked }
 
   /**
-   * Formats the note into `.ttxt` ("Toolbox Text XTension") file content:
+   * Formats the note into `.text` file content:
    * - Markdown `# <title>` heading when [title] is non-blank.
    * - For checklists ([isChecklist] = `true`), `- <item>` for unchecked items (matching `.yaml` lists)
    *   and `+ <item>` for checked items (dash replaced with `+` internally).
@@ -186,7 +186,7 @@ data class NoteItem(
   fun toTtxt(): String = NotesEngine.formatNoteToTtxt(this)
 
   /**
-   * Formats the note into `.ttxt`-based plain text suitable for copying to clipboard or sharing.
+   * Formats the note into `.text`-based plain text suitable for copying to clipboard or sharing.
    */
   fun toPlainText(): String {
     val sb = StringBuilder()
@@ -347,7 +347,7 @@ const val MAX_NOTES_GRID_COLUMNS = 3
 const val DEFAULT_NOTES_GRID_COLUMNS = 2
 
 /**
- * Repository interface for persisting `.ttxt` notes in `/Notes`, custom labels, scoped storage state,
+ * Repository interface for persisting `.text` notes in `/Notes`, custom labels, scoped storage state,
  * and layout preferences.
  */
 interface NotesRepository {
@@ -371,7 +371,7 @@ interface NotesRepository {
 
 /**
  * In-memory implementation of [NotesRepository] for unit tests and Compose previews.
- * When [notesDirectory] is provided, `.ttxt` files are also synced to and from [notesDirectory].
+ * When [notesDirectory] is provided, `.text` files are also synced to and from [notesDirectory].
  */
 class InMemoryNotesRepository(
   initialNotes: List<NoteItem> = emptyList(),
@@ -456,7 +456,7 @@ class InMemoryNotesRepository(
 }
 
 /**
- * Android [SharedPreferences] and `/Notes` `.ttxt` file-backed implementation of [NotesRepository].
+ * Android [SharedPreferences] and `/Notes` `.text` file-backed implementation of [NotesRepository].
  */
 class SharedPreferencesNotesRepository(
   private val sharedPreferences: SharedPreferences,
@@ -496,7 +496,7 @@ class SharedPreferencesNotesRepository(
             return NotesEngine.loadNotesFromDirectory(dir)
           }
         } else {
-          // SharedPreferences was cleared and /Notes access is not granted: remove stale managed .ttxt files
+          // SharedPreferences was cleared and /Notes access is not granted: remove stale managed .text files
           try {
             dir.listFiles { f -> NotesEngine.isNoteTtxtFile(f) }?.forEach { it.delete() }
           } catch (_: Throwable) {}
@@ -654,7 +654,7 @@ class SharedPreferencesNotesRepository(
 }
 
 /**
- * Pure business logic for creating, editing, converting, filtering, and organizing `.ttxt` notes.
+ * Pure business logic for creating, editing, converting, filtering, and organizing `.text` notes.
  */
 object NotesEngine {
 
@@ -743,7 +743,7 @@ object NotesEngine {
   }
 
   /**
-   * Formats a [NoteItem] into `.ttxt` ("Toolbox Text XTension") content:
+   * Formats a [NoteItem] into `.text` content:
    * - Markdown `# <title>` heading when [NoteItem.title] is non-blank.
    * - For checklists ([NoteItem.isChecklist] = `true`), `- <item>` for unchecked items (matching
    *   `.yaml` list syntax) and `+ <item>` for checked items (dash replaced with `+` internally).
@@ -771,9 +771,9 @@ object NotesEngine {
   }
 
   /**
-   * Parses `.ttxt` ("Toolbox Text XTension") content into a [NoteItem].
+   * Parses `.text` content into a [NoteItem].
    * - Extracts a `# Heading` title if present on the first non-blank line; otherwise uses [fallbackTitle].
-   * - Recognizes `.ttxt` checklists where unchecked items use `- <item>` and checked items use `+ <item>`.
+   * - Recognizes `.text` checklists where unchecked items use `- <item>` and checked items use `+ <item>`.
    */
   fun parseNoteFromTtxt(
     rawTtxt: String,
@@ -888,7 +888,7 @@ object NotesEngine {
   }
 
   /**
-   * Builds a unique, filesystem-safe `.ttxt` filename for [note].
+   * Builds a unique, filesystem-safe `.text` filename for [note].
    */
   fun buildTtxtFileName(
     note: NoteItem,
@@ -921,7 +921,7 @@ object NotesEngine {
   }
 
   /**
-   * Assigns deterministic, collision-free `.ttxt` filenames for a list of [notes],
+   * Assigns deterministic, collision-free `.text` filenames for a list of [notes],
    * returning a map of `note.id -> fileName`.
    */
   fun assignTtxtFileNames(notes: List<NoteItem>): Map<String, String> {
@@ -934,7 +934,7 @@ object NotesEngine {
   }
 
   /**
-   * Writes all [notes] into [directory] as `.ttxt` files and deletes any stale `.ttxt` files
+   * Writes all [notes] into [directory] as `.text` files and deletes any stale `.text` files
    * in [directory] that are no longer part of [notes].
    */
   fun saveNotesToDirectory(
@@ -969,7 +969,7 @@ object NotesEngine {
   }
 
   /**
-   * Loads all `.ttxt` note files from [directory], merging with optional [metadataNotes]
+   * Loads all `.text` note files from [directory], merging with optional [metadataNotes]
    * and [fileNameByNoteId] to preserve note IDs, colors, pin/archive/trash flags, labels,
    * timestamps, and manual card arrangement.
    */

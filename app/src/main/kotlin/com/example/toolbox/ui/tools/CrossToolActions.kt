@@ -235,12 +235,12 @@ object CrossToolActions {
       val sanitized = suggestedFileName
         .replace(Regex("[\\\\/:*?\"<>|]"), "_")
         .trim()
-        .ifEmpty { "note.ttxt" }
-      val finalName = if (sanitized.contains(".")) sanitized else "$sanitized.ttxt"
+        .ifEmpty { "note.text" }
+      val finalName = if (sanitized.contains(".")) sanitized else "$sanitized.text"
       var candidate = File(dir, finalName)
       var counter = 1
       val stem = finalName.substringBeforeLast(".")
-      val ext = finalName.substringAfterLast(".", "ttxt")
+      val ext = finalName.substringAfterLast(".", "text")
       while (candidate.exists()) {
         candidate = File(dir, "$stem ($counter).$ext")
         counter++

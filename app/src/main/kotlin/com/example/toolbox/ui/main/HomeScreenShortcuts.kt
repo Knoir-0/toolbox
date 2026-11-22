@@ -47,6 +47,11 @@ const val NOTES_FILTER_MODE_LABEL = "label"
 const val EXTRA_TODO_QUICK_ACTION_MODE = "extra_todo_quick_action_mode"
 const val TODO_QUICK_ACTION_ADD_TASK = "add_task"
 const val TODO_QUICK_ACTION_SCHEDULE = "schedule"
+const val EXTRA_AUDIO_RECORDER_QUICK_ACTION = "extra_audio_recorder_quick_action"
+const val AUDIO_RECORDER_QUICK_ACTION_START_MIC = "start_mic"
+const val EXTRA_PLANT_SCHEDULE_MONTH = "extra_plant_schedule_month"
+const val EXTRA_PLANT_SCHEDULE_OPEN_SEARCH = "extra_plant_schedule_open_search"
+const val EXTRA_CAMERA_CAPTURE_MODE = "extra_camera_capture_mode"
 
 const val STANDALONE_SHORTCUT_INTENT_FLAGS =
   Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -371,6 +376,97 @@ fun createTodoQuickActionIntent(
   val mode = if (openSchedule) TODO_QUICK_ACTION_SCHEDULE else TODO_QUICK_ACTION_ADD_TASK
   return createStandaloneToolIntent(context, Tool.TODO_LIST).apply {
     putExtra(EXTRA_TODO_QUICK_ACTION_MODE, mode)
+  }
+}
+
+/**
+ * Parses the requested Audio Recorder quick-action mode ([AUDIO_RECORDER_QUICK_ACTION_START_MIC])
+ * from an incoming [Intent], or `null` if none was requested.
+ */
+fun parseAudioRecorderQuickAction(intent: Intent?): String? {
+  val raw = intent?.getStringExtra(EXTRA_AUDIO_RECORDER_QUICK_ACTION)
+    ?: intent?.data?.getQueryParameter("audio_recorder_action")
+    ?: return null
+  return when {
+    raw.equals(AUDIO_RECORDER_QUICK_ACTION_START_MIC, ignoreCase = true) ->
+      AUDIO_RECORDER_QUICK_ACTION_START_MIC
+    else -> null
+  }
+}
+
+/**
+ * Creates an [Intent] that launches [Tool.AUDIO_RECORDER] and optionally immediately begins
+ * recording a voice memo ([startRecording] = `true`).
+ */
+fun createAudioRecorderQuickActionIntent(
+  context: Context,
+  startRecording: Boolean = true,
+): Intent {
+  return createStandaloneToolIntent(context, Tool.AUDIO_RECORDER).apply {
+    if (startRecording) {
+      putExtra(EXTRA_AUDIO_RECORDER_QUICK_ACTION, AUDIO_RECORDER_QUICK_ACTION_START_MIC)
+    }
+  }
+}
+
+/**
+ * Parses the requested focus month (`1..12`) for [Tool.PLANT_SCHEDULE] from an incoming [Intent],
+ * or `null` if none was specified.
+ */
+fun parsePlantScheduleMonth(intent: Intent?): Int? {
+  val fromExtra = intent?.getIntExtra(EXTRA_PLANT_SCHEDULE_MONTH, -1)?.takeIf { it in 1..12 }
+  if (fromExtra != null) return fromExtra
+  val fromQuery = intent?.data?.getQueryParameter("plant_month")?.toIntOrNull()?.takeIf { it in 1..12 }
+  return fromQuery
+}
+
+/**
+ * Returns `true` if the incoming [Intent] requests opening [Tool.PLANT_SCHEDULE] with the
+ * plant catalog search overlay expanded.
+ */
+fun parsePlantScheduleOpenSearch(intent: Intent?): Boolean {
+  return intent?.getBooleanExtra(EXTRA_PLANT_SCHEDULE_OPEN_SEARCH, false) == true ||
+    intent?.data?.getQueryParameter("plant_search")?.equals("true", ignoreCase = true) == true
+}
+
+/**
+ * Creates an [Intent] that launches [Tool.PLANT_SCHEDULE] focused on [monthNumber] (`1..12`)
+ * and optionally opens the plant catalog search overlay ([openCatalogSearch] = `true`).
+ */
+fun createPlantScheduleWidgetIntent(
+  context: Context,
+  monthNumber: Int? = null,
+  openCatalogSearch: Boolean = false,
+): Intent {
+  return createStandaloneToolIntent(context, Tool.PLANT_SCHEDULE).apply {
+    if (monthNumber != null && monthNumber in 1..12) {
+      putExtra(EXTRA_PLANT_SCHEDULE_MONTH, monthNumber)
+    }
+    if (openCatalogSearch) {
+      putExtra(EXTRA_PLANT_SCHEDULE_OPEN_SEARCH, true)
+    }
+  }
+}
+
+/**
+ * Parses the requested Camera capture mode name from an incoming [Intent], or `null` if none was requested.
+ */
+fun parseCameraCaptureModeName(intent: Intent?): String? {
+  val raw = intent?.getStringExtra(EXTRA_CAMERA_CAPTURE_MODE)
+    ?: intent?.data?.getQueryParameter("camera_mode")
+    ?: return null
+  return raw.trim().takeIf { it.isNotEmpty() }
+}
+
+/**
+ * Creates an [Intent] that launches [Tool.CAMERA] directly into the specified capture [modeName].
+ */
+fun createCameraModeQuickActionIntent(
+  context: Context,
+  modeName: String,
+): Intent {
+  return createStandaloneToolIntent(context, Tool.CAMERA).apply {
+    putExtra(EXTRA_CAMERA_CAPTURE_MODE, modeName)
   }
 }
 

@@ -900,6 +900,60 @@ class CameraEngineTest {
     // Huge background (> 92% area) is rejected with negative score
     assertTrue(CameraEngine.scoreObjectForSmartAutofocus(hugeBackground) < 0f)
 
+    // Center proximity scoring strictly prioritizes objects closer to the center of the view (0.5, 0.5)
+    assertTrue(
+      CameraEngine.computeCenterProximityScore(centralSubject.boundingBox) >
+        CameraEngine.computeCenterProximityScore(offCenterSecondary.boundingBox)
+    )
+    assertTrue(
+      CameraEngine.computeCenterProximityScore(offCenterSecondary.boundingBox) >
+        CameraEngine.computeCenterProximityScore(peripheralTinySpeck.boundingBox)
+    )
+
+    // Even when an off-center object is larger and has higher confidence, the object detected closer
+    // to the center of the view is prioritized for smoother autofocus behavior
+    val compactCenterObject = RawDetectedObjectForFocus(
+      boundingBox = CameraVisionBoundingBox(0.42f, 0.42f, 0.58f, 0.58f), // center (0.50, 0.50), area 0.0256
+      trackingId = 55,
+      label = "Coffee cup",
+      confidence = 0.80f,
+    )
+    val largeOffCenterObject = RawDetectedObjectForFocus(
+      boundingBox = CameraVisionBoundingBox(0.54f, 0.50f, 0.92f, 0.88f), // center (0.73, 0.69), area 0.1444
+      trackingId = 56,
+      label = "Laptop",
+      confidence = 0.96f,
+    )
+    assertTrue(
+      "Object closer to the center of the view must score higher than a larger off-center object",
+      CameraEngine.scoreObjectForSmartAutofocus(compactCenterObject) >
+        CameraEngine.scoreObjectForSmartAutofocus(largeOffCenterObject),
+    )
+    val centerPrioritized = CameraEngine.selectSmartAutofocusTargetFromObjects(
+      objects = listOf(largeOffCenterObject, compactCenterObject),
+      previousTarget = null,
+      timestampMs = 950L,
+    )
+    assertEquals(55, centerPrioritized?.trackingId)
+    assertEquals("Coffee cup", centerPrioritized?.categoryLabel)
+
+    // When focus was initially on a peripheral object and an object appears closer to the center of the view,
+    // autofocus smoothly transitions toward the central object instead of staying stuck on the edge
+    val initialPeripheralLock = CameraEngine.selectSmartAutofocusTargetFromObjects(
+      objects = listOf(offCenterSecondary),
+      previousTarget = null,
+      timestampMs = 900L,
+    )
+    assertEquals(77, initialPeripheralLock?.trackingId)
+    val switchedToCenter = CameraEngine.selectSmartAutofocusTargetFromObjects(
+      objects = listOf(offCenterSecondary, compactCenterObject),
+      previousTarget = initialPeripheralLock,
+      timestampMs = 980L,
+    )
+    assertEquals(55, switchedToCenter?.trackingId)
+    assertEquals(0.50f, switchedToCenter?.targetNormX ?: 0f, 0.01f)
+    assertEquals(0.50f, switchedToCenter?.targetNormY ?: 0f, 0.01f)
+
     val selectedTarget = CameraEngine.selectSmartAutofocusTargetFromObjects(
       objects = listOf(peripheralTinySpeck, offCenterSecondary, centralSubject, hugeBackground),
       previousTarget = null,
@@ -1504,5 +1558,31 @@ class CameraEngineTest {
       nowMs = 1800L,
     )
     assertEquals(fullerNewScan.rawText, updated?.rawText)
+  }
+
+  @Test
+  fun cameraWidget_resolvesPillBarModesAndPendingModeRequest() {
+    CameraWidgets.clearInMemoryModeForTesting()
+    val defaultState = CameraWidgets.resolveWidgetState(context = null)
+    assertEquals(CameraCaptureMode.PHOTO, defaultState.activeMode)
+    assertEquals(
+      listOf(
+        CameraCaptureMode.PHOTO,
+        CameraCaptureMode.VIDEO,
+        CameraCaptureMode.SCANNER,
+        CameraCaptureMode.NOTE,
+        CameraCaptureMode.VISION,
+      ),
+      defaultState.modes,
+    )
+
+    CameraWidgets.saveActiveCaptureMode(null, CameraCaptureMode.SCANNER, refreshWidgets = false)
+    val scanState = CameraWidgets.resolveWidgetState(context = null)
+    assertEquals(CameraCaptureMode.SCANNER, scanState.activeMode)
+
+    CameraEngine.requestCaptureMode(CameraCaptureMode.VISION)
+    val pending = CameraEngine.consumePendingCaptureModeRequest()
+    assertEquals(CameraCaptureMode.VISION, pending?.mode)
+    assertEquals(null, CameraEngine.consumePendingCaptureModeRequest())
   }
 }

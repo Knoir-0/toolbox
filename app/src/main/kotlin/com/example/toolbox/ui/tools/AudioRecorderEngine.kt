@@ -10,6 +10,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.storage.StorageManager
 import android.provider.DocumentsContract
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
@@ -355,6 +358,31 @@ data class AudioRecordingItem(
  * - WAV header writing and fallback stub generation
  */
 object AudioRecorderEngine {
+
+  data class PendingQuickRecordRequest(
+    val startRecording: Boolean = true,
+    val source: AudioCaptureSource = AudioCaptureSource.MICROPHONE,
+    val requestId: Long = System.nanoTime(),
+  )
+
+  var pendingQuickRecordRequest by mutableStateOf<PendingQuickRecordRequest?>(null)
+    private set
+
+  fun requestQuickRecord(
+    startRecording: Boolean = true,
+    source: AudioCaptureSource = AudioCaptureSource.MICROPHONE,
+  ) {
+    pendingQuickRecordRequest = PendingQuickRecordRequest(
+      startRecording = startRecording,
+      source = source,
+    )
+  }
+
+  fun consumePendingQuickRecordRequest(): PendingQuickRecordRequest? {
+    val current = pendingQuickRecordRequest
+    pendingQuickRecordRequest = null
+    return current
+  }
 
   const val WAV_SAMPLE_RATE = 44100
 

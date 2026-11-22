@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_todo_widget_card"
+    android:clipToOutline="true">
+
+    <ImageView
+        android:id="@+id/widget_plant_schedule_background"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="fitXY"
+        android:src="@drawable/bg_todo_widget_card" />
+
+    <LinearLayout
+        android:id="@+id/widget_plant_schedule_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <!-- Header Bar with Month Navigation -->
+        <LinearLayout
+            android:id="@+id/widget_plant_schedule_header"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="12dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="6dp">
+
+            <FrameLayout
+                android:id="@+id/widget_plant_schedule_header_badge"
+                android:layout_width="34dp"
+                android:layout_height="34dp">
+
+                <ImageView
+                    android:id="@+id/widget_plant_schedule_header_badge_bg"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:src="@drawable/bg_music_widget_circle"
+                    android:tint="#FF5A3472" />
+
+                <ImageView
+                    android:id="@+id/widget_plant_schedule_header_badge_icon"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:padding="8dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_widget_yard"
+                    android:tint="#FFDDB9F6" />
+            </FrameLayout>
+
+            <LinearLayout
+                android:id="@+id/widget_plant_schedule_header_text_container"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/widget_plant_schedule_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="November Schedule"
+                    android:textColor="#FFE7E1E6"
+                    android:textSize="15.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/widget_plant_schedule_subtitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="0 to plant • 0 to harvest"
+                    android:textColor="#FFCDC4CF"
+                    android:textSize="11.5sp" />
+            </LinearLayout>
+
+            <ImageView
+                android:id="@+id/widget_plant_schedule_prev_month"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Previous month"
+                android:padding="5dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_widget_chevron_left"
+                android:tint="#FFCDC4CF" />
+
+            <ImageView
+                android:id="@+id/widget_plant_schedule_next_month"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Next month"
+                android:padding="5dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_widget_chevron_right"
+                android:tint="#FFCDC4CF" />
+
+            <FrameLayout
+                android:id="@+id/widget_plant_schedule_add_button"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="2dp"
+                android:contentDescription="Add plants to schedule">
+
+                <ImageView
+                    android:id="@+id/widget_plant_schedule_add_button_bg"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:src="@drawable/bg_music_widget_circle"
+                    android:tint="#FF5A3472" />
+
+                <ImageView
+                    android:id="@+id/widget_plant_schedule_add_button_icon"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@null"
+                    android:padding="7dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_media_add"
+                    android:tint="#FFDDB9F6" />
+            </FrameLayout>
+        </LinearLayout>
+
+        <!-- Two-Column Monthly Planting & Harvest Breakdown -->
+        <LinearLayout
+            android:id="@+id/widget_plant_schedule_columns_row"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:baselineAligned="false"
+            android:orientation="horizontal"
+            android:paddingStart="10dp"
+            android:paddingTop="2dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="10dp">
+
+            <!-- Left Column: Plant (Theme Primary Color) -->
+            <FrameLayout
+                android:id="@+id/widget_plant_schedule_planting_column"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginEnd="5dp"
+                android:layout_weight="1">
+
+                <ImageView
+                    android:id="@+id/widget_plant_schedule_planting_bg"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:scaleType="fitXY"
+                    android:src="@drawable/bg_todo_widget_item" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:orientation="vertical"
+                    android:padding="10dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <ImageView
+                            android:id="@+id/widget_plant_schedule_planting_dot"
+                            android:layout_width="8dp"
+                            android:layout_height="8dp"
+                            android:contentDescription="@null"
+                            android:src="@drawable/bg_music_widget_circle"
+                            android:tint="#FFDDB9F6" />
+
+                        <TextView
+                            android:id="@+id/widget_plant_schedule_planting_header"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:text="Plant"
+                            android:textColor="#FFF3DAFF"
+                            android:textSize="12.5sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/widget_plant_schedule_planting_count"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="0"
+                            android:textColor="#FFDDB9F6"
+                            android:textSize="11.5sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/widget_plant_schedule_planting_list"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:layout_marginTop="6dp"
+                        android:ellipsize="end"
+                        android:lineSpacingExtra="2dp"
+                        android:text="No scheduled plantings"
+                        android:textColor="#FFE7E1E6"
+                        android:textSize="12sp" />
+                </LinearLayout>
+            </FrameLayout>
+
+            <!-- Right Column: Harvest (Theme Accent / Tertiary Color) -->
+            <FrameLayout
+                android:id="@+id/widget_plant_schedule_harvest_column"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="5dp"
+                android:layout_weight="1">
+
+                <ImageView
+                    android:id="@+id/widget_plant_schedule_harvest_bg"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:scaleType="fitXY"
+                    android:src="@drawable/bg_todo_widget_item" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:orientation="vertical"
+                    android:padding="10dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <ImageView
+                            android:id="@+id/widget_plant_schedule_harvest_dot"
+                            android:layout_width="8dp"
+                            android:layout_height="8dp"
+                            android:contentDescription="@null"
+                            android:src="@drawable/bg_music_widget_circle"
+                            android:tint="#FFFFB4AB" />
+
+                        <TextView
+                            android:id="@+id/widget_plant_schedule_harvest_header"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:text="Harvest"
+                            android:textColor="#FFFFDAD6"
+                            android:textSize="12.5sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/widget_plant_schedule_harvest_count"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="0"
+                            android:textColor="#FFFFB4AB"
+                            android:textSize="11.5sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/widget_plant_schedule_harvest_list"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:layout_marginTop="6dp"
+                        android:ellipsize="end"
+                        android:lineSpacingExtra="2dp"
+                        android:text="No scheduled harvests"
+                        android:textColor="#FFE7E1E6"
+                        android:textSize="12sp" />
+                </LinearLayout>
+            </FrameLayout>
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

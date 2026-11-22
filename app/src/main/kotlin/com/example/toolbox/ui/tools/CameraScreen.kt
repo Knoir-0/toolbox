@@ -278,6 +278,17 @@ fun CameraScreen(
     mutableStateOf(initialCaptureMode ?: CameraCaptureMode.DEFAULT)
   }
 
+  LaunchedEffect(CameraEngine.pendingCaptureModeRequest) {
+    val pending = CameraEngine.consumePendingCaptureModeRequest() ?: return@LaunchedEffect
+    captureMode = pending.mode
+  }
+
+  LaunchedEffect(captureMode) {
+    if (!isInspection) {
+      CameraWidgets.saveActiveCaptureMode(context, captureMode)
+    }
+  }
+
   var lensFacing by rememberSaveable {
     val saved = prefs?.getString(PREF_KEY_CAMERA_LENS, null)
     mutableStateOf(CameraLensFacing.fromNameOrDefault(saved))

@@ -153,7 +153,7 @@ object FileManagerEngine {
 
   private val MIME_MAP = mapOf(
     "txt" to "text/plain",
-    "ttxt" to "text/x-ttxt",
+    "text" to "text/plain",
     "md" to "text/markdown",
     "json" to "application/json",
     "xml" to "application/xml",
@@ -271,7 +271,7 @@ object FileManagerEngine {
     val mime = getMimeType(file)
     if (mime.startsWith("text/")) return true
     val textExts = setOf(
-      "txt", "ttxt", "md", "json", "xml", "csv", "html", "htm", "css",
+      "txt", "text", "md", "json", "xml", "csv", "html", "htm", "css",
       "js", "ts", "kt", "java", "py", "c", "cpp", "h", "sh",
       "log", "properties", "yaml", "yml", "toml", "ini", "svg", "sql", "gradle", "kts",
     )
@@ -1872,9 +1872,9 @@ object FileManagerEngine {
   private val BULLET_LINE_REGEX = Regex("""^\s*(?:[-*•]|\d+\.)\s+(.+)$""")
 
   /**
-   * Parses a text/markdown/`.ttxt` [file] into a [NoteItem] suitable for saving in the Notes tool.
+   * Parses a text/markdown/`.text` [file] into a [NoteItem] suitable for saving in the Notes tool.
    * - Extracts a `# Heading` title if present; otherwise uses the filename without extension.
-   * - Automatically converts `.ttxt` checklists (`- item` / `+ item`) and Markdown checklists
+   * - Automatically converts `.text` checklists (`- item` / `+ item`) and Markdown checklists
    *   (`- [ ]` / `- [x]`) into a checklist [NoteItem].
    * - Tags the imported note with the `"Files"` label.
    */

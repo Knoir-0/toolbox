@@ -377,4 +377,21 @@ class AudioRecorderEngineTest {
     assertEquals(1, AudioRecorderEngine.findRecordingListIndex(formatGroups, "/storage/emulated/0/Audio/Rec_3.m4a"))
     assertEquals(3, AudioRecorderEngine.findRecordingListIndex(formatGroups, "/storage/emulated/0/Audio/Rec_1.m4a"))
   }
+
+  @Test
+  fun audioRecorderWidget_resolvesStateAndQuickRecordRequest() {
+    val state = AudioRecorderWidgets.resolveWidgetState(context = null)
+    assertEquals("Record", state.title)
+    assertEquals(AudioRecordingFormat.M4A, state.selectedFormat)
+    assertEquals("/Audio", state.directoryDisplayPath)
+    assertEquals("M4A • /Audio", state.subtitle)
+    assertEquals(16f, AudioRecorderWidgets.WIDGET_CORNER_RADIUS_DP, 0.001f)
+
+    AudioRecorderEngine.requestQuickRecord(startRecording = true, source = AudioCaptureSource.MICROPHONE)
+    val pending = AudioRecorderEngine.consumePendingQuickRecordRequest()
+    assertNotNull(pending)
+    assertTrue(pending!!.startRecording)
+    assertEquals(AudioCaptureSource.MICROPHONE, pending.source)
+    assertEquals(null, AudioRecorderEngine.consumePendingQuickRecordRequest())
+  }
 }

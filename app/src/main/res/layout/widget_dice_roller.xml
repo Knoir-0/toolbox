@@ -1,0 +1,266 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_todo_widget_card"
+    android:clipToOutline="true">
+
+    <ImageView
+        android:id="@+id/widget_dice_background"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="fitXY"
+        android:src="@drawable/bg_todo_widget_card" />
+
+    <LinearLayout
+        android:id="@+id/widget_dice_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:paddingStart="10dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="8dp">
+
+        <!-- Top Header Row (like RollResultHero): Notation Pill (Start) + Crit / Mode Status Badge (End) -->
+        <LinearLayout
+            android:id="@+id/widget_dice_header_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <FrameLayout
+                android:id="@+id/widget_dice_notation_pill"
+                android:layout_width="wrap_content"
+                android:layout_height="26dp"
+                android:contentDescription="Open Dice Roller tool">
+
+                <ImageView
+                    android:id="@+id/widget_dice_notation_pill_bg"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:scaleType="fitXY"
+                    android:src="@drawable/bg_todo_widget_pill" />
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp">
+
+                    <ImageView
+                        android:id="@+id/widget_dice_notation_icon"
+                        android:layout_width="14dp"
+                        android:layout_height="14dp"
+                        android:contentDescription="@null"
+                        android:scaleType="centerInside"
+                        android:src="@drawable/ic_widget_dice_d20"
+                        android:tint="#FFDDB9F6" />
+
+                    <TextView
+                        android:id="@+id/widget_dice_notation_text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="5dp"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="1d20"
+                        android:textColor="#FFE7E1E6"
+                        android:textSize="11.5sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+            </FrameLayout>
+
+            <FrameLayout
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <FrameLayout
+                android:id="@+id/widget_dice_status_badge"
+                android:layout_width="wrap_content"
+                android:layout_height="24dp">
+
+                <ImageView
+                    android:id="@+id/widget_dice_status_badge_bg"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:scaleType="fitXY"
+                    android:src="@drawable/bg_todo_widget_pill" />
+
+                <TextView
+                    android:id="@+id/widget_dice_status_badge_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:ellipsize="end"
+                    android:gravity="center"
+                    android:maxLines="1"
+                    android:paddingStart="9dp"
+                    android:paddingEnd="9dp"
+                    android:text="TAP TO ROLL"
+                    android:textColor="#FFCDC4CF"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+            </FrameLayout>
+        </LinearLayout>
+
+        <!-- Centerpiece: Tap-to-Roll 3D Faceted D20 Hero + Kept/Dropped Breakdown -->
+        <LinearLayout
+            android:id="@+id/widget_dice_hero_tap_area"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:contentDescription="Tap to roll D20"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <ImageView
+                android:id="@+id/widget_dice_hero_die_image"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:contentDescription="@null"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_widget_dice_d20" />
+
+            <TextView
+                android:id="@+id/widget_dice_breakdown_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:gravity="center"
+                android:maxLines="1"
+                android:paddingTop="1dp"
+                android:paddingBottom="2dp"
+                android:text="Tap die to roll 1d20"
+                android:textColor="#FFCDC4CF"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <!-- Bottom Row: 3-Way Advantage Selector (Disadvantage | Normal | Advantage) -->
+        <FrameLayout
+            android:id="@+id/widget_dice_mode_selector_container"
+            android:layout_width="match_parent"
+            android:layout_height="32dp"
+            android:layout_marginTop="4dp">
+
+            <ImageView
+                android:id="@+id/widget_dice_mode_selector_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:scaleType="fitXY"
+                android:src="@drawable/bg_todo_widget_pill" />
+
+            <LinearLayout
+                android:id="@+id/widget_dice_mode_selector_row"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:baselineAligned="false"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="2dp">
+
+                <!-- Disadvantage Segment -->
+                <FrameLayout
+                    android:id="@+id/widget_dice_mode_disadvantage"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:contentDescription="Roll with Disadvantage">
+
+                    <ImageView
+                        android:id="@+id/widget_dice_mode_disadvantage_bg"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:contentDescription="@null"
+                        android:scaleType="fitXY"
+                        android:src="@drawable/bg_todo_widget_pill" />
+
+                    <TextView
+                        android:id="@+id/widget_dice_mode_disadvantage_text"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:ellipsize="end"
+                        android:gravity="center"
+                        android:maxLines="1"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:text="Disadvantage"
+                        android:textColor="#FFCDC4CF"
+                        android:textSize="11sp" />
+                </FrameLayout>
+
+                <!-- Normal Segment -->
+                <FrameLayout
+                    android:id="@+id/widget_dice_mode_normal"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginStart="2dp"
+                    android:layout_marginEnd="2dp"
+                    android:layout_weight="1"
+                    android:contentDescription="Roll Normal">
+
+                    <ImageView
+                        android:id="@+id/widget_dice_mode_normal_bg"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:contentDescription="@null"
+                        android:scaleType="fitXY"
+                        android:src="@drawable/bg_todo_widget_pill" />
+
+                    <TextView
+                        android:id="@+id/widget_dice_mode_normal_text"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:ellipsize="end"
+                        android:gravity="center"
+                        android:maxLines="1"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:text="Normal"
+                        android:textColor="#FFF3DAFF"
+                        android:textSize="11sp"
+                        android:textStyle="bold" />
+                </FrameLayout>
+
+                <!-- Advantage Segment -->
+                <FrameLayout
+                    android:id="@+id/widget_dice_mode_advantage"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:contentDescription="Roll with Advantage">
+
+                    <ImageView
+                        android:id="@+id/widget_dice_mode_advantage_bg"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:contentDescription="@null"
+                        android:scaleType="fitXY"
+                        android:src="@drawable/bg_todo_widget_pill" />
+
+                    <TextView
+                        android:id="@+id/widget_dice_mode_advantage_text"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:ellipsize="end"
+                        android:gravity="center"
+                        android:maxLines="1"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:text="Advantage"
+                        android:textColor="#FFCDC4CF"
+                        android:textSize="11sp" />
+                </FrameLayout>
+            </LinearLayout>
+        </FrameLayout>
+    </LinearLayout>
+</FrameLayout>
