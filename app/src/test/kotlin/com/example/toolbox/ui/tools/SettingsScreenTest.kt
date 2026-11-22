@@ -1374,51 +1374,57 @@ class SettingsScreenTest {
   }
 
   @Test
-  fun backgroundTextureWidget_listsNoneAndAllOptions_scalesRowsVertically_andSelectsTexture() {
+  fun backgroundTextureWidget_listsNoneAndAllOptions_scalesColumnsHorizontally_andSelectsTexture() {
     BackgroundTextureWidgets.clearInMemoryStateForTesting()
     val repo = InMemoryNavigationPreferencesRepository()
     try {
-      // 1. Default 1-row state (heightDp = 84f < 118f) lists None first followed by all 13 presets
+      // 1. Default 2x2 state (widthDp = 180f in 130f..209f -> 2 columns, 7 rows) lists None first followed by all 13 presets
       val defaultState = BackgroundTextureWidgets.resolveWidgetState(context = null)
       assertEquals(BackgroundTexture.NONE, defaultState.activeTexture)
       assertEquals(BackgroundTexture.entries, defaultState.textures)
       assertEquals(BackgroundTexture.NONE, defaultState.textures.first())
       assertEquals(14, defaultState.textures.size)
-      assertEquals(1, defaultState.rowCount)
-      assertEquals(14, defaultState.textureColumns.size)
-      assertTrue(defaultState.textureColumns.all { it.size == 1 })
+      assertEquals(2, defaultState.columnCount)
+      assertEquals(7, defaultState.textureRows.size)
+      assertTrue(defaultState.textureRows.all { it.size == 2 })
 
-      // 2. Vertical resize thresholds scale from 1 row up to 4 rows
-      assertEquals(1, BackgroundTextureWidgets.resolveRowCountForHeight(72f))
-      assertEquals(1, BackgroundTextureWidgets.resolveRowCountForHeight(117f))
-      assertEquals(2, BackgroundTextureWidgets.resolveRowCountForHeight(118f))
-      assertEquals(2, BackgroundTextureWidgets.resolveRowCountForHeight(165f))
-      assertEquals(3, BackgroundTextureWidgets.resolveRowCountForHeight(198f))
-      assertEquals(3, BackgroundTextureWidgets.resolveRowCountForHeight(245f))
-      assertEquals(4, BackgroundTextureWidgets.resolveRowCountForHeight(278f))
-      assertEquals(4, BackgroundTextureWidgets.resolveRowCountForHeight(360f))
+      // 2. Horizontal resize thresholds scale from 1 column up to 4 columns per row
+      assertEquals(1, BackgroundTextureWidgets.resolveColumnCountForWidth(72f))
+      assertEquals(1, BackgroundTextureWidgets.resolveColumnCountForWidth(129f))
+      assertEquals(2, BackgroundTextureWidgets.resolveColumnCountForWidth(130f))
+      assertEquals(2, BackgroundTextureWidgets.resolveColumnCountForWidth(180f))
+      assertEquals(3, BackgroundTextureWidgets.resolveColumnCountForWidth(210f))
+      assertEquals(3, BackgroundTextureWidgets.resolveColumnCountForWidth(260f))
+      assertEquals(4, BackgroundTextureWidgets.resolveColumnCountForWidth(290f))
+      assertEquals(4, BackgroundTextureWidgets.resolveColumnCountForWidth(360f))
 
-      // 3. Column partitioning for 2, 3, and 4 rows preserves order starting with None
-      val twoRowColumns = BackgroundTextureWidgets.buildTextureColumns(rowCount = 2)
-      assertEquals(7, twoRowColumns.size)
-      assertEquals(listOf(BackgroundTexture.NONE, BackgroundTexture.FUZZY), twoRowColumns.first())
-      assertEquals(listOf(BackgroundTexture.CONFETTI, BackgroundTexture.CIRCUIT), twoRowColumns.last())
-      assertEquals(BackgroundTexture.entries, twoRowColumns.flatten())
+      // 3. Row partitioning for 1, 2, 3, and 4 columns preserves order starting with None
+      val oneColumnRows = BackgroundTextureWidgets.buildTextureRows(columnCount = 1)
+      assertEquals(14, oneColumnRows.size)
+      assertEquals(listOf(BackgroundTexture.NONE), oneColumnRows.first())
+      assertEquals(listOf(BackgroundTexture.CIRCUIT), oneColumnRows.last())
+      assertEquals(BackgroundTexture.entries, oneColumnRows.flatten())
 
-      val threeRowColumns = BackgroundTextureWidgets.buildTextureColumns(rowCount = 3)
-      assertEquals(5, threeRowColumns.size)
+      val twoColumnRows = BackgroundTextureWidgets.buildTextureRows(columnCount = 2)
+      assertEquals(7, twoColumnRows.size)
+      assertEquals(listOf(BackgroundTexture.NONE, BackgroundTexture.FUZZY), twoColumnRows.first())
+      assertEquals(listOf(BackgroundTexture.CONFETTI, BackgroundTexture.CIRCUIT), twoColumnRows.last())
+      assertEquals(BackgroundTexture.entries, twoColumnRows.flatten())
+
+      val threeColumnRows = BackgroundTextureWidgets.buildTextureRows(columnCount = 3)
+      assertEquals(5, threeColumnRows.size)
       assertEquals(
         listOf(BackgroundTexture.NONE, BackgroundTexture.FUZZY, BackgroundTexture.FADE),
-        threeRowColumns.first(),
+        threeColumnRows.first(),
       )
       assertEquals(
         listOf(BackgroundTexture.CONFETTI, BackgroundTexture.CIRCUIT),
-        threeRowColumns.last(),
+        threeColumnRows.last(),
       )
-      assertEquals(BackgroundTexture.entries, threeRowColumns.flatten())
+      assertEquals(BackgroundTexture.entries, threeColumnRows.flatten())
 
-      val fourRowColumns = BackgroundTextureWidgets.buildTextureColumns(rowCount = 4)
-      assertEquals(4, fourRowColumns.size)
+      val fourColumnRows = BackgroundTextureWidgets.buildTextureRows(columnCount = 4)
+      assertEquals(4, fourColumnRows.size)
       assertEquals(
         listOf(
           BackgroundTexture.NONE,
@@ -1426,41 +1432,54 @@ class SettingsScreenTest {
           BackgroundTexture.FADE,
           BackgroundTexture.CONCENTRIC,
         ),
-        fourRowColumns.first(),
+        fourColumnRows.first(),
       )
       assertEquals(
         listOf(BackgroundTexture.CONFETTI, BackgroundTexture.CIRCUIT),
-        fourRowColumns.last(),
+        fourColumnRows.last(),
       )
-      assertEquals(BackgroundTexture.entries, fourRowColumns.flatten())
+      assertEquals(BackgroundTexture.entries, fourColumnRows.flatten())
 
-      // 4. Saved per-widget vertical resize dimensions resolve multi-row widget state
+      // 4. Saved per-widget horizontal resize dimensions resolve multi-column vertically scrollable widget state
       val widgetId = 42
+      BackgroundTextureWidgets.saveWidgetDimensions(
+        context = null,
+        appWidgetId = widgetId,
+        widthDp = 96f,
+        heightDp = 220f,
+      )
+      val oneColState = BackgroundTextureWidgets.resolveWidgetState(
+        context = null,
+        appWidgetId = widgetId,
+      )
+      assertEquals(1, oneColState.columnCount)
+      assertEquals(14, oneColState.textureRows.size)
+
+      BackgroundTextureWidgets.saveWidgetDimensions(
+        context = null,
+        appWidgetId = widgetId,
+        widthDp = 250f,
+        heightDp = 230f,
+      )
+      val threeColState = BackgroundTextureWidgets.resolveWidgetState(
+        context = null,
+        appWidgetId = widgetId,
+      )
+      assertEquals(3, threeColState.columnCount)
+      assertEquals(5, threeColState.textureRows.size)
+
       BackgroundTextureWidgets.saveWidgetDimensions(
         context = null,
         appWidgetId = widgetId,
         widthDp = 340f,
         heightDp = 160f,
       )
-      val twoRowState = BackgroundTextureWidgets.resolveWidgetState(
+      val fourColState = BackgroundTextureWidgets.resolveWidgetState(
         context = null,
         appWidgetId = widgetId,
       )
-      assertEquals(2, twoRowState.rowCount)
-      assertEquals(7, twoRowState.textureColumns.size)
-
-      BackgroundTextureWidgets.saveWidgetDimensions(
-        context = null,
-        appWidgetId = widgetId,
-        widthDp = 340f,
-        heightDp = 230f,
-      )
-      val threeRowState = BackgroundTextureWidgets.resolveWidgetState(
-        context = null,
-        appWidgetId = widgetId,
-      )
-      assertEquals(3, threeRowState.rowCount)
-      assertEquals(5, threeRowState.textureColumns.size)
+      assertEquals(4, fourColState.columnCount)
+      assertEquals(4, fourColState.textureRows.size)
 
       // 5. Selecting a texture from the widget updates repository and bridge state
       BackgroundTextureWidgets.selectBackgroundTexture(

@@ -46,6 +46,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.example.toolbox.ui.theme.CircleShape
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -683,15 +685,25 @@ internal fun DiceRollerScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
               ) {
                 AnimatedVisibility(visible = selectedDie == DieType.D20 && diceCount == 1) {
-                  SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                  val hexagonEnabled = currentHexagonIconButtons()
+                  SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .testTag("dice_roller_advantage_selector"),
+                  ) {
                     RollMode.entries.forEachIndexed { index, mode ->
                       SegmentedButton(
                         selected = rollMode == mode,
                         onClick = { rollMode = mode },
-                        shape = SegmentedButtonDefaults.itemShape(
-                          index = index,
-                          count = RollMode.entries.size,
-                        ),
+                        modifier = Modifier.testTag("dice_roller_mode_${mode.name.lowercase()}"),
+                        shape = if (hexagonEnabled) {
+                          HorizontalHexagonShape
+                        } else {
+                          SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = RollMode.entries.size,
+                          )
+                        },
                       ) {
                         Text(mode.label)
                       }

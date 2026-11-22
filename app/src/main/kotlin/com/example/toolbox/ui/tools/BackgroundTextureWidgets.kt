@@ -41,34 +41,35 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Snapshot of the Background Texture options, active texture selection, responsive row count,
- * column partitioning, and Material 3 palette rendered by the Background Texture Home Screen
+ * Snapshot of the Background Texture options, active texture selection, responsive column count,
+ * row partitioning, and Material 3 palette rendered by the Background Texture Home Screen
  * AppWidget ([BackgroundTextureWidgetProvider]).
  */
 @Immutable
 data class BackgroundTextureWidgetState(
   val activeTexture: BackgroundTexture,
   val textures: List<BackgroundTexture>,
-  val rowCount: Int,
-  val textureColumns: List<List<BackgroundTexture>>,
+  val columnCount: Int,
+  val textureRows: List<List<BackgroundTexture>>,
   val widthDp: Float,
   val heightDp: Float,
   val columnWidthDp: Float,
+  val rowHeightDp: Float,
   val palette: TodoWidgetPalette,
   val hexagonIconButtons: Boolean = palette.hexagonIconButtons,
 )
 
 /**
- * Central state resolver, multi-row column partitioner, live texture preview swatch renderer, and
+ * Central state resolver, multi-column row partitioner, live texture preview swatch renderer, and
  * RemoteViews builder for the Background Texture Home Screen AppWidget ([BackgroundTextureWidgetProvider]):
- * - Displays a horizontally scrollable list of **None** ([BackgroundTexture.NONE]) and all 13
+ * - Displays a vertically scrollable list of **None** ([BackgroundTexture.NONE]) and all 13
  *   procedural background texture presets ([BackgroundTexture.entries]).
- * - Automatically adapts its number of rows (`1..4`) as the widget is resized vertically on the
- *   home screen ([resolveRowCountForHeight]):
- *   - `1` row when `heightDp < 118dp` (e.g., `4x1`)
- *   - `2` rows when `118dp <= heightDp < 198dp` (e.g., `4x2`)
- *   - `3` rows when `198dp <= heightDp < 278dp` (e.g., `4x3`)
- *   - `4` rows when `heightDp >= 278dp` (e.g., `4x4+`)
+ * - Automatically adapts its number of columns per row (`1..4`) as the widget is resized
+ *   horizontally on the home screen ([resolveColumnCountForWidth]):
+ *   - `1` column when `widthDp < 130dp` (e.g., `1x2`, `1x3`)
+ *   - `2` columns when `130dp <= widthDp < 210dp` (e.g., `2x2`, `2x3`)
+ *   - `3` columns when `210dp <= widthDp < 290dp` (e.g., `3x2`, `3x3`)
+ *   - `4` columns when `widthDp >= 290dp` (e.g., `4x1`, `4x2+`)
  * - Tapping any texture card immediately updates the app's background texture setting directly
  *   from the home screen and refreshes all pinned Toolbox widgets.
  */
@@ -78,16 +79,19 @@ object BackgroundTextureWidgets {
   const val ACTION_WIDGET_SELECT_TEXTURE = "com.example.toolbox.texture.ACTION_WIDGET_SELECT_TEXTURE"
   const val EXTRA_BACKGROUND_TEXTURE = "extra_background_texture_widget_texture"
 
-  const val MIN_WIDGET_ROWS = 1
-  const val MAX_WIDGET_ROWS = 4
+  const val MIN_WIDGET_COLUMNS = 1
+  const val MAX_WIDGET_COLUMNS = 4
 
-  const val DEFAULT_WIDGET_WIDTH_DP = 340f
-  const val DEFAULT_WIDGET_HEIGHT_DP = 84f
-  const val DEFAULT_COLUMN_WIDTH_DP = 96f
+  const val DEFAULT_WIDGET_WIDTH_DP = 180f
+  const val DEFAULT_WIDGET_HEIGHT_DP = 160f
+  const val DEFAULT_COLUMN_WIDTH_DP = 86f
+  const val DEFAULT_ROW_HEIGHT_DP = 76f
 
-  const val TWO_ROWS_HEIGHT_THRESHOLD_DP = 118f
-  const val THREE_ROWS_HEIGHT_THRESHOLD_DP = 198f
-  const val FOUR_ROWS_HEIGHT_THRESHOLD_DP = 278f
+  const val TWO_COLUMNS_WIDTH_THRESHOLD_DP = 130f
+  const val THREE_COLUMNS_WIDTH_THRESHOLD_DP = 210f
+  const val FOUR_COLUMNS_WIDTH_THRESHOLD_DP = 290f
+
+  const val TWO_ROWS_VISIBLE_HEIGHT_THRESHOLD_DP = 118f
 
   const val WIDGET_CORNER_RADIUS_DP = 16f
   const val CARD_CORNER_RADIUS_DP = 14f
@@ -101,38 +105,54 @@ object BackgroundTextureWidgets {
   private val inMemoryDimensions = mutableMapOf<Int, Pair<Float, Float>>()
 
   /**
-   * Resolves the number of vertical rows (`1..4`) to display inside each horizontally scrollable
-   * column for a widget of [heightDp].
+   * Resolves the number of horizontal columns (`1..4`) to display inside each vertically scrollable
+   * row for a widget of [widthDp].
    */
-  fun resolveRowCountForHeight(heightDp: Float): Int {
+  fun resolveColumnCountForWidth(widthDp: Float): Int {
     return when {
-      heightDp < TWO_ROWS_HEIGHT_THRESHOLD_DP -> 1
-      heightDp < THREE_ROWS_HEIGHT_THRESHOLD_DP -> 2
-      heightDp < FOUR_ROWS_HEIGHT_THRESHOLD_DP -> 3
-      else -> MAX_WIDGET_ROWS
+      widthDp < TWO_COLUMNS_WIDTH_THRESHOLD_DP -> 1
+      widthDp < THREE_COLUMNS_WIDTH_THRESHOLD_DP -> 2
+      widthDp < FOUR_COLUMNS_WIDTH_THRESHOLD_DP -> 3
+      else -> MAX_WIDGET_COLUMNS
     }
   }
 
   /**
-   * Partitions [textures] (`None` + all procedural texture options) into columns of at most
-   * [rowCount] vertical items per column for the horizontally scrollable list.
+   * Partitions [textures] (`None` + all procedural texture options) into horizontal rows of at most
+   * [columnCount] items per row for the vertically scrollable list.
    */
-  fun buildTextureColumns(
+  fun buildTextureRows(
     textures: List<BackgroundTexture> = BackgroundTexture.entries,
-    rowCount: Int,
+    columnCount: Int,
   ): List<List<BackgroundTexture>> {
     if (textures.isEmpty()) return emptyList()
-    val coercedRows = rowCount.coerceIn(MIN_WIDGET_ROWS, MAX_WIDGET_ROWS)
-    return textures.chunked(coercedRows)
+    val coercedColumns = columnCount.coerceIn(MIN_WIDGET_COLUMNS, MAX_WIDGET_COLUMNS)
+    return textures.chunked(coercedColumns)
   }
 
   /**
-   * Resolves the width in `dp` of each column in the horizontally scrollable list so ~3.35 columns
-   * are visible in the viewport with the next column peeking in from the right edge.
+   * Resolves the width in `dp` of each column slot inside a row of the vertically scrollable list.
    */
-  fun resolveColumnWidthDp(listAreaWidthDp: Float): Float {
+  fun resolveColumnWidthDp(
+    listAreaWidthDp: Float,
+    columnCount: Int = resolveColumnCountForWidth(listAreaWidthDp),
+  ): Float {
     if (listAreaWidthDp <= 0f) return DEFAULT_COLUMN_WIDTH_DP
-    return (listAreaWidthDp / 3.35f).coerceIn(84f, 118f)
+    val coercedColumns = columnCount.coerceIn(MIN_WIDGET_COLUMNS, MAX_WIDGET_COLUMNS)
+    return ((listAreaWidthDp - 8f) / coercedColumns.toFloat()).coerceIn(56f, 240f)
+  }
+
+  /**
+   * Resolves the height in `dp` of each row in the vertically scrollable list so a single-row-tall
+   * widget fits 1 full row cleanly while taller widgets show 2+ rows with smooth vertical scrolling.
+   */
+  fun resolveRowHeightDp(heightDp: Float): Float {
+    if (heightDp <= 0f) return DEFAULT_ROW_HEIGHT_DP
+    return if (heightDp < TWO_ROWS_VISIBLE_HEIGHT_THRESHOLD_DP) {
+      (heightDp - 8f).coerceIn(52f, 84f)
+    } else {
+      DEFAULT_ROW_HEIGHT_DP
+    }
   }
 
   /**
@@ -146,7 +166,7 @@ object BackgroundTextureWidgets {
     heightDp: Float,
   ) {
     if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
-    val sanitizedW = widthDp.coerceAtLeast(120f)
+    val sanitizedW = widthDp.coerceAtLeast(56f)
     val sanitizedH = heightDp.coerceAtLeast(48f)
     synchronized(inMemoryDimensions) {
       inMemoryDimensions[appWidgetId] = sanitizedW to sanitizedH
@@ -315,7 +335,7 @@ object BackgroundTextureWidgets {
       fallbackW to fallbackH
     }
 
-    val widthDp = resolvedWidthDp.coerceAtLeast(120f)
+    val widthDp = resolvedWidthDp.coerceAtLeast(56f)
     val heightDp = resolvedHeightDp.coerceAtLeast(48f)
     if (appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID && effectiveOptions != null) {
       saveWidgetDimensions(context, appWidgetId, widthDp, heightDp)
@@ -323,19 +343,21 @@ object BackgroundTextureWidgets {
 
     val activeTexture = activeTextureOverride ?: loadActiveBackgroundTexture(context)
     val allTextures = BackgroundTexture.entries
-    val rowCount = resolveRowCountForHeight(heightDp)
-    val columns = buildTextureColumns(allTextures, rowCount)
-    val columnWidthDp = resolveColumnWidthDp(widthDp)
+    val columnCount = resolveColumnCountForWidth(widthDp)
+    val rows = buildTextureRows(allTextures, columnCount)
+    val columnWidthDp = resolveColumnWidthDp(widthDp, columnCount)
+    val rowHeightDp = resolveRowHeightDp(heightDp)
     val palette = TodoListWidgets.resolveWidgetPalette(context)
 
     return BackgroundTextureWidgetState(
       activeTexture = activeTexture,
       textures = allTextures,
-      rowCount = rowCount,
-      textureColumns = columns,
+      columnCount = columnCount,
+      textureRows = rows,
       widthDp = widthDp,
       heightDp = heightDp,
       columnWidthDp = columnWidthDp,
+      rowHeightDp = rowHeightDp,
       palette = palette,
     )
   }
@@ -599,39 +621,34 @@ object BackgroundTextureWidgets {
   )
 
   /**
-   * Builds the [RemoteViews] for a single vertical column of [columnTextures] (containing `1..4`
-   * vertically stacked texture cards depending on [rowCount]) inside the horizontally scrollable
+   * Builds the [RemoteViews] for a single horizontal row of [rowTextures] (containing `1..4`
+   * side-by-side texture cards depending on [columnCount]) inside the vertically scrollable
    * [ListView].
    */
-  fun buildTextureColumnRemoteViews(
+  fun buildTextureRowRemoteViews(
     context: Context,
-    columnTextures: List<BackgroundTexture>,
+    rowTextures: List<BackgroundTexture>,
     activeTexture: BackgroundTexture,
-    rowCount: Int,
+    columnCount: Int,
     columnWidthDp: Float = DEFAULT_COLUMN_WIDTH_DP,
-    columnHeightDp: Float = DEFAULT_WIDGET_HEIGHT_DP,
+    rowHeightDp: Float = DEFAULT_ROW_HEIGHT_DP,
     palette: TodoWidgetPalette = TodoListWidgets.resolveWidgetPalette(context),
   ): RemoteViews {
     val views = RemoteViews(context.packageName, R.layout.widget_background_texture_column_item)
-    val coercedRowCount = rowCount.coerceIn(MIN_WIDGET_ROWS, MAX_WIDGET_ROWS)
-    val safeColWidthDp = columnWidthDp.coerceIn(72f, 160f)
-    val safeColHeightDp = columnHeightDp.coerceIn(48f, 520f)
+    val coercedColumnCount = columnCount.coerceIn(MIN_WIDGET_COLUMNS, MAX_WIDGET_COLUMNS)
+    val safeColWidthDp = columnWidthDp.coerceIn(52f, 260f)
+    val safeRowHeightDp = rowHeightDp.coerceIn(48f, 160f)
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       try {
         views.setViewLayoutHeight(
           R.id.widget_texture_column_outer,
-          safeColWidthDp,
-          TypedValue.COMPLEX_UNIT_DIP,
-        )
-        views.setViewLayoutWidth(
-          R.id.widget_texture_column_inner,
-          safeColWidthDp,
+          safeRowHeightDp,
           TypedValue.COMPLEX_UNIT_DIP,
         )
         views.setViewLayoutHeight(
           R.id.widget_texture_column_inner,
-          safeColHeightDp,
+          safeRowHeightDp,
           TypedValue.COMPLEX_UNIT_DIP,
         )
       } catch (_: Throwable) {}
@@ -643,15 +660,14 @@ object BackgroundTextureWidgets {
       2f
     }
 
-    val cardWidthPx = ((safeColWidthDp - 6f) * density).roundToInt().coerceIn(72, 360)
-    val slotHeightDp = ((safeColHeightDp - 10f) / coercedRowCount.toFloat()) - 4f
-    val cardHeightPx = (slotHeightDp.coerceAtLeast(36f) * density).roundToInt().coerceIn(52, 320)
+    val cardWidthPx = ((safeColWidthDp - 4f) * density).roundToInt().coerceIn(72, 420)
+    val cardHeightPx = ((safeRowHeightDp - 6f) * density).roundToInt().coerceIn(52, 320)
 
-    ROW_SLOTS.forEachIndexed { rowIndex, slot ->
-      if (rowIndex >= coercedRowCount) {
+    ROW_SLOTS.forEachIndexed { colIndex, slot ->
+      if (colIndex >= coercedColumnCount) {
         views.setViewVisibility(slot.containerId, View.GONE)
       } else {
-        val texture = columnTextures.getOrNull(rowIndex)
+        val texture = rowTextures.getOrNull(colIndex)
         if (texture == null) {
           views.setViewVisibility(slot.containerId, View.INVISIBLE)
         } else {
@@ -746,12 +762,12 @@ object BackgroundTextureWidgets {
     }
     saveWidgetDimensions(context, appWidgetId, widthDp, heightDp)
 
-    val rawWidthPx = (widthDp * density).coerceAtLeast(160f)
+    val rawWidthPx = (widthDp * density).coerceAtLeast(120f)
     val rawHeightPx = (heightDp * density).coerceAtLeast(80f)
     val maxDimPx = 1000f
     val maxRaw = max(rawWidthPx, rawHeightPx)
     val scaleFactor = if (maxRaw > maxDimPx) maxDimPx / maxRaw else 1f
-    val bgWidthPx = (rawWidthPx * scaleFactor).roundToInt().coerceAtLeast(160)
+    val bgWidthPx = (rawWidthPx * scaleFactor).roundToInt().coerceAtLeast(120)
     val bgHeightPx = (rawHeightPx * scaleFactor).roundToInt().coerceAtLeast(80)
 
     TodoListWidgets.renderWidgetBackgroundBitmap(
@@ -762,24 +778,6 @@ object BackgroundTextureWidgets {
       borderWidthPx = max(1f, 1f * density * scaleFactor),
     )?.let { bgBmp ->
       views.setImageViewBitmap(R.id.widget_background_texture_background, bgBmp)
-    }
-
-    // Because the ListView is rotated -90deg around its center:
-    // - its local width is its vertical height on screen (heightDp)
-    // - its local height is its horizontal width on screen (widthDp)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-      try {
-        views.setViewLayoutWidth(
-          R.id.widget_background_texture_list_view,
-          heightDp.coerceAtLeast(48f),
-          TypedValue.COMPLEX_UNIT_DIP,
-        )
-        views.setViewLayoutHeight(
-          R.id.widget_background_texture_list_view,
-          widthDp.coerceAtLeast(120f),
-          TypedValue.COMPLEX_UNIT_DIP,
-        )
-      } catch (_: Throwable) {}
     }
 
     val serviceIntent = Intent(context, BackgroundTextureWidgetRemoteViewsService::class.java).apply {
@@ -832,7 +830,7 @@ object BackgroundTextureWidgets {
 
   /**
    * Refreshes all pinned instances of [BackgroundTextureWidgetProvider] and notifies their
-   * horizontally scrollable [ListView] adapters that data changed.
+   * vertically scrollable [ListView] adapters that data changed.
    */
   fun updateAllWidgets(context: Context?) {
     val appCtx = context?.applicationContext ?: context ?: return
@@ -887,9 +885,9 @@ object BackgroundTextureWidgets {
 }
 
 /**
- * Horizontally scrollable Background Texture Home Screen AppWidget that displays **None** and all
- * procedural background texture presets, automatically expanding to multiple rows as the widget is
- * resized vertically.
+ * Vertically scrollable Background Texture Home Screen AppWidget that displays **None** and all
+ * procedural background texture presets, automatically adapting its number of columns per row as
+ * the widget is resized horizontally.
  */
 class BackgroundTextureWidgetProvider : AppWidgetProvider() {
   override fun onUpdate(
@@ -934,7 +932,7 @@ class BackgroundTextureWidgetProvider : AppWidgetProvider() {
 }
 
 /**
- * [RemoteViewsService] that powers the horizontally scrollable multi-row [ListView] inside
+ * [RemoteViewsService] that powers the vertically scrollable multi-column [ListView] inside
  * [BackgroundTextureWidgetProvider].
  */
 class BackgroundTextureWidgetRemoteViewsService : RemoteViewsService() {
@@ -974,18 +972,18 @@ internal class BackgroundTextureWidgetRemoteViewsFactory(
 
   override fun onDestroy() {}
 
-  override fun getCount(): Int = state.textureColumns.size
+  override fun getCount(): Int = state.textureRows.size
 
   override fun getViewAt(position: Int): RemoteViews? {
     val currentState = state
-    val columnTextures = currentState.textureColumns.getOrNull(position) ?: return null
-    return BackgroundTextureWidgets.buildTextureColumnRemoteViews(
+    val rowTextures = currentState.textureRows.getOrNull(position) ?: return null
+    return BackgroundTextureWidgets.buildTextureRowRemoteViews(
       context = context,
-      columnTextures = columnTextures,
+      rowTextures = rowTextures,
       activeTexture = currentState.activeTexture,
-      rowCount = currentState.rowCount,
+      columnCount = currentState.columnCount,
       columnWidthDp = currentState.columnWidthDp,
-      columnHeightDp = currentState.heightDp,
+      rowHeightDp = currentState.rowHeightDp,
       palette = currentState.palette,
     )
   }
@@ -995,8 +993,8 @@ internal class BackgroundTextureWidgetRemoteViewsFactory(
   override fun getViewTypeCount(): Int = 1
 
   override fun getItemId(position: Int): Long {
-    val col = state.textureColumns.getOrNull(position) ?: return position.toLong()
-    return col.joinToString("|") { it.name }.hashCode().toLong()
+    val row = state.textureRows.getOrNull(position) ?: return position.toLong()
+    return row.joinToString("|") { it.name }.hashCode().toLong()
   }
 
   override fun hasStableIds(): Boolean = true

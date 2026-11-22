@@ -265,4 +265,35 @@ class DiceRollerScreenTest {
 
     composeTestRule.onNodeWithText("20d20").assertIsDisplayed()
   }
+
+  @OptIn(ExperimentalMaterial3Api::class)
+  @Test
+  fun testAdvantageSelector_hexagonifiedWhenEnabled() {
+    composeTestRule.setContent {
+      ToolboxTheme(hexagonIconButtons = true) {
+        DiceRollerScreen(
+          initialSheetValue = SheetValue.PartiallyExpanded,
+          initialHistory = emptyList(),
+          initialSavedRolls = emptyList(),
+        )
+      }
+    }
+
+    composeTestRule.onNodeWithTag("dice_roller_advantage_selector").assertIsDisplayed()
+    val disBtn = composeTestRule.onNodeWithTag("dice_roller_mode_disadvantage")
+    val normBtn = composeTestRule.onNodeWithTag("dice_roller_mode_normal")
+    val advBtn = composeTestRule.onNodeWithTag("dice_roller_mode_advantage")
+
+    disBtn.assertIsDisplayed()
+    normBtn.assertIsDisplayed()
+    advBtn.assertIsDisplayed()
+
+    advBtn.performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Roll 1d20 (Adv)").assertIsDisplayed()
+
+    disBtn.performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Roll 1d20 (Dis)").assertIsDisplayed()
+  }
 }
