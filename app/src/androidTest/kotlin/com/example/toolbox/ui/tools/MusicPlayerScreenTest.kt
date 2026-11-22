@@ -291,11 +291,17 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("expanded_player_speed_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("expanded_player_up_next_button").assertIsDisplayed()
     composeTestRule.onNodeWithTag("music_queue_panel_toggle").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_queue_grab_handle").assertIsDisplayed()
     composeTestRule.onNodeWithText("Queue").assertIsDisplayed()
 
-    // Toggle slide-up queue panel from the bottom of the full player
+    // Drag or toggle slide-up queue panel from the bottom of the full player:
+    // album art is pushed out of the way while title and controls remain visible above the queue
     composeTestRule.onNodeWithTag("music_queue_panel_toggle").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("expanded_player_album_art").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("expanded_player_title").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("expanded_player_play_pause_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("expanded_player_seek_slider").assertIsDisplayed()
     composeTestRule.onNodeWithTag("music_queue_list").assertIsDisplayed()
     composeTestRule.onNodeWithTag("music_queue_drag_handle_0").assertIsDisplayed()
     composeTestRule.onNodeWithTag("save_queue_as_playlist_button").assertIsDisplayed()
@@ -307,9 +313,10 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("confirm_save_playlist_button").performClick()
     composeTestRule.waitForIdle()
 
-    // Collapse queue panel back down
+    // Collapse queue panel back down -> album art returns
     composeTestRule.onNodeWithTag("music_queue_panel_toggle").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("expanded_player_album_art").assertIsDisplayed()
 
     // Collapse back down to mini player by swiping down on the expanded music player
     composeTestRule.onNodeWithTag("music_player_expanded").performTouchInput {
@@ -611,7 +618,7 @@ class MusicPlayerScreenTest {
 
   @OptIn(ExperimentalMaterial3Api::class)
   @Test
-  fun navigationPaneExpanded_replacesToolsPerRowWithMiniPlayerWhenMusicPlayingOutsideMusicTool() {
+  fun navigationPaneExpanded_keepsToolsPerRowWhenMusicPlayingOutsideMusicTool() {
     composeTestRule.activity.getSharedPreferences(MUSIC_PLAYER_PREFS_NAME, Context.MODE_PRIVATE)
       .edit()
       .putBoolean(PREF_KEY_MUSIC_INCLUDE_SAMPLES, true)
@@ -644,7 +651,7 @@ class MusicPlayerScreenTest {
     assertTrue(session!!.isPlaying)
 
     // While still inside the Music tool, pull up the navigation pane:
-    // ToolsPerRowControl should be shown (not the navigation mini player)
+    // ToolsPerRowControl should be shown (no navigation mini player)
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tools_per_row_control").assertIsDisplayed()
@@ -656,15 +663,8 @@ class MusicPlayerScreenTest {
     composeTestRule.onNodeWithTag("calculator_screen").assertIsDisplayed()
 
     // Pull the navigation pane all the way up while in the Calculator tool with music playing:
-    // The entire tools-per-row toolbar should be replaced by the navigation mini player
+    // The tools-per-row toolbar remains displayed and no navigation mini player is shown
     composeTestRule.onNodeWithTag("pull_up_panel_toggle").performClick()
-    composeTestRule.waitForIdle()
-    composeTestRule.onNodeWithTag("navigation_mini_player").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("navigation_mini_player_title", useUnmergedTree = true).assertIsDisplayed()
-    composeTestRule.onNodeWithTag("tools_per_row_control").assertDoesNotExist()
-
-    // Pausing playback from the navigation mini player restores the tools-per-row toolbar
-    composeTestRule.onNodeWithTag("navigation_mini_player_play_pause_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("tools_per_row_control").assertIsDisplayed()
     composeTestRule.onNodeWithTag("navigation_mini_player").assertDoesNotExist()

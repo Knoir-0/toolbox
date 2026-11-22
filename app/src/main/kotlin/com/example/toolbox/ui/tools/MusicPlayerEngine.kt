@@ -6512,8 +6512,7 @@ object MusicPlayerEngine {
   private var activeLifecycleObserver: LifecycleEventObserver? = null
 
   /**
-   * Currently active [MusicPlaybackSession], observable by Compose UI (such as the expanded
-   * navigation pane mini-player in [com.example.toolbox.ui.main.MainScreen]).
+   * Currently active [MusicPlaybackSession], observable by Compose UI.
    */
   var activeSessionState by mutableStateOf<MusicPlaybackSession?>(null)
     internal set

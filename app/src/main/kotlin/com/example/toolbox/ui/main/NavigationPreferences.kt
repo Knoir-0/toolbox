@@ -1067,7 +1067,6 @@ class DefaultNavigationPreferencesRepository(
     CameraWidgets.updateAllWidgets(ctx)
     DiceRollerWidgets.updateAllWidgets(ctx)
     BackgroundTextureWidgets.updateAllWidgets(ctx)
-    com.example.toolbox.ui.tools.HexagonifyWidgets.updateAllWidgets(ctx)
   }
 
   private val _toolsPerRowFlow = MutableStateFlow(getToolsPerRow())

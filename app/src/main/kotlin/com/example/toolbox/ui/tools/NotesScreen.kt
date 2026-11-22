@@ -25,6 +25,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -116,7 +117,9 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import com.example.toolbox.ui.theme.FilledIconButton
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -164,6 +167,7 @@ import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -184,6 +188,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -526,10 +531,69 @@ fun NotesScreen(
     }
   }
 
+  fun performDraggedNoteReorderAtCurrentPointer() {
+    val activeNoteId = draggedNoteId ?: return
+    val desiredCenter = dragPointerOffset - grabOffsetFromCenter
+    val liveFiltered = NotesEngine.filterNotes(
+      notes = notes,
+      filter = activeFilter,
+      searchQuery = if (isSearchActive) searchQuery else "",
+      colorFilter = if (isSearchActive) selectedColorFilter else null,
+    )
+    val sectionNotes = if (liveFiltered.pinned.any { it.id == activeNoteId }) {
+      liveFiltered.pinned
+    } else {
+      liveFiltered.others
+    }
+
+    val targetNoteId = findTargetNoteId(
+      draggedNoteId = activeNoteId,
+      point = desiredCenter,
+      sectionNotes = sectionNotes,
+      cardBounds = cardBounds,
+      isGridView = isGridView,
+    )
+
+    if (targetNoteId != null && targetNoteId != activeNoteId) {
+      val firstVisibleIndex = gridState.firstVisibleItemIndex
+      val firstVisibleOffset = gridState.firstVisibleItemScrollOffset
+      val reordered = NotesEngine.reorderNotes(notes, activeNoteId, targetNoteId)
+      if (reordered != notes) {
+        val nextFiltered = NotesEngine.filterNotes(
+          notes = reordered,
+          filter = activeFilter,
+          searchQuery = if (isSearchActive) searchQuery else "",
+          colorFilter = if (isSearchActive) selectedColorFilter else null,
+        )
+        val newSectionNotes = if (nextFiltered.pinned.any { it.id == activeNoteId }) {
+          nextFiltered.pinned
+        } else {
+          nextFiltered.others
+        }
+        val activeColumns = if (isGridView) gridColumnsPerRow else 1
+        updateSectionCardBoundsOptimistically(
+          oldSectionNotes = sectionNotes,
+          newSectionNotes = newSectionNotes,
+          cardBounds = cardBounds,
+          isGridView = isGridView,
+          verticalSpacingPx = verticalSpacingPx,
+          columns = activeColumns,
+        )
+        notes = reordered
+        gridState.requestScrollToItem(firstVisibleIndex, firstVisibleOffset)
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+      }
+    }
+  }
+
   LaunchedEffect(draggedNoteId, autoScrollSpeedPx) {
     if (draggedNoteId == null || autoScrollSpeedPx == 0f) return@LaunchedEffect
     while (isActive && draggedNoteId != null && autoScrollSpeedPx != 0f) {
-      gridState.scrollBy(autoScrollSpeedPx)
+      val consumed = gridState.scrollBy(autoScrollSpeedPx)
+      if (consumed != 0f) {
+        syncCardBounds()
+        performDraggedNoteReorderAtCurrentPointer()
+      }
       delay(16L)
     }
   }
@@ -1535,6 +1599,7 @@ fun NotesScreen(
             addNoteDragOffsetY = 0f
           }
 
+          val hexagonEnabled = currentHexagonIconButtons()
           Box(
             modifier = Modifier
               .align(Alignment.BottomCenter)
@@ -1542,7 +1607,11 @@ fun NotesScreen(
               .padding(horizontal = 14.dp, vertical = 12.dp),
           ) {
             Surface(
-              shape = RoundedCornerShape(28.dp),
+              shape = if (hexagonEnabled && !isAddNoteOpen) {
+                HorizontalHexagonShape
+              } else {
+                RoundedCornerShape(28.dp)
+              },
               color = containerColor,
               tonalElevation = 6.dp,
               shadowElevation = 4.dp,
@@ -3094,6 +3163,7 @@ private fun NotesQuickCaptureBar(
       )
     }
 
+    val hexagonEnabled = currentHexagonIconButtons()
     Row(
       modifier = Modifier
         .fillMaxWidth()
@@ -3104,7 +3174,7 @@ private fun NotesQuickCaptureBar(
       Row(
         modifier = Modifier
           .weight(1f)
-          .clip(RoundedCornerShape(20.dp))
+          .clip(if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(20.dp))
           .clickable(onClick = onTakeTextNote)
           .padding(vertical = 4.dp)
           .testTag("take_a_note_button"),
@@ -3372,11 +3442,14 @@ private fun AddNoteSlideUpPanel(
   ) {
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
+    var addNoteViewportCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+
     Column(
       modifier = Modifier
         .fillMaxWidth()
         .weight(1f, fill = false)
         .heightIn(max = 440.dp)
+        .onGloballyPositioned { addNoteViewportCoordinates = it }
         .verticalScroll(scrollState)
         .padding(horizontal = 16.dp, vertical = 12.dp),
       verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -3387,6 +3460,8 @@ private fun AddNoteSlideUpPanel(
         autoFocusTitle = autoFocusTitle,
         minContentLines = 3,
         showInlineChecklistInput = true,
+        scrollState = scrollState,
+        viewportCoordinates = addNoteViewportCoordinates,
         onChecklistDragActiveChange = { isChecklistDragActive = it },
       )
 
@@ -3649,10 +3724,14 @@ private fun SingleNoteView(
     )
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
+    val editorScrollState = rememberScrollState()
+    var editorViewportCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+
     Box(
       modifier = Modifier
         .weight(1f)
         .fillMaxWidth()
+        .onGloballyPositioned { editorViewportCoordinates = it }
         .clickable(
           interactionSource = remember { MutableInteractionSource() },
           indication = null,
@@ -3663,7 +3742,7 @@ private fun SingleNoteView(
       Column(
         modifier = Modifier
           .fillMaxWidth()
-          .verticalScroll(rememberScrollState())
+          .verticalScroll(editorScrollState)
           .padding(
             start = 16.dp,
             end = 16.dp,
@@ -3677,6 +3756,9 @@ private fun SingleNoteView(
           autoFocusTitle = false,
           minContentLines = 1,
           showInlineChecklistInput = false,
+          scrollState = editorScrollState,
+          viewportCoordinates = editorViewportCoordinates,
+          imeBottomPadding = imeBottomPadding,
           onProvideFocusContentAtEnd = { focusContentAtEndAction = it },
         )
       }
@@ -3909,8 +3991,9 @@ private fun ChecklistItemInputRow(
       )
     }
 
+    val hexagonEnabled = currentHexagonIconButtons()
     Surface(
-      shape = RoundedCornerShape(28.dp),
+      shape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(28.dp),
       color = MaterialTheme.colorScheme.surfaceContainerHigh,
       tonalElevation = 6.dp,
       border = BorderStroke(
@@ -4165,6 +4248,9 @@ private fun NoteEditorContent(
   autoFocusTitle: Boolean,
   minContentLines: Int = 5,
   showInlineChecklistInput: Boolean = true,
+  scrollState: ScrollState? = null,
+  viewportCoordinates: LayoutCoordinates? = null,
+  imeBottomPadding: Dp = 0.dp,
   onChecklistDragActiveChange: (Boolean) -> Unit = {},
   onProvideFocusContentAtEnd: ((() -> Unit) -> Unit)? = null,
 ) {
@@ -4174,12 +4260,21 @@ private fun NoteEditorContent(
   // Drag-and-drop reorder state for checklist items
   val density = LocalDensity.current
   val haptic = LocalHapticFeedback.current
+  val focusManager = LocalFocusManager.current
   val itemSpacingPx = with(density) { 2.dp.toPx() }
   val defaultItemHeightPx = with(density) { 36.dp.toPx() }
   val maxOverscrollPx = with(density) { 4.dp.toPx() }
+  val autoScrollEdgeThresholdPx = with(density) { 56.dp.toPx() }
+  val maxAutoScrollStepPx = with(density) { 14.dp.toPx() }
+  val imeBottomPaddingPx = with(density) { imeBottomPadding.toPx() }
+  var editorCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
   var draggedChecklistItemId by remember(draft.id) { mutableStateOf<String?>(null) }
   var isChecklistHandlePressed by remember(draft.id) { mutableStateOf(false) }
   var checklistDragOffsetY by remember(draft.id) { mutableFloatStateOf(0f) }
+  var checklistDragPointerRootY by remember(draft.id) { mutableStateOf<Float?>(null) }
+  var checklistTopEdgeTriggerY by remember(draft.id) { mutableStateOf<Float?>(null) }
+  var checklistBottomEdgeTriggerY by remember(draft.id) { mutableStateOf<Float?>(null) }
+  var checklistAutoScrollSpeedPx by remember(draft.id) { mutableFloatStateOf(0f) }
   val checklistItemHeightsPx = remember(draft.id) { mutableStateMapOf<String, Float>() }
   val currentDraft by rememberUpdatedState(draft)
   val currentOnDraftChange by rememberUpdatedState(onDraftChange)
@@ -4189,14 +4284,91 @@ private fun NoteEditorContent(
     currentOnChecklistDragActiveChange(draggedChecklistItemId != null || isChecklistHandlePressed)
   }
 
-  fun startDraggingChecklistItem(itemId: String) {
+  fun resolveVisibleChecklistViewportBounds(): Pair<Float, Float>? {
+    val activeCoords = viewportCoordinates?.takeIf { it.isAttached }
+      ?: editorCoordinates?.takeIf { it.isAttached }
+      ?: return null
+    val bounds = activeCoords.boundsInRoot()
+    val rootHeight = activeCoords.findRootCoordinates().size.height.toFloat()
+    val imeCutoffY = if (imeBottomPaddingPx > 0f && rootHeight > 0f) {
+      rootHeight - imeBottomPaddingPx
+    } else {
+      Float.MAX_VALUE
+    }
+    val visibleTop = bounds.top
+    val visibleBottom = minOf(bounds.bottom, imeCutoffY)
+    return if (visibleBottom > visibleTop) visibleTop to visibleBottom else null
+  }
+
+  fun updateChecklistAutoScrollSpeed(pointerRootY: Float?, isPointerMove: Boolean) {
+    val activeScrollState = scrollState
+    val activeItemId = draggedChecklistItemId
+    if (activeScrollState == null || activeItemId == null || pointerRootY == null) {
+      checklistAutoScrollSpeedPx = 0f
+      return
+    }
+    val (visibleTop, visibleBottom) = resolveVisibleChecklistViewportBounds() ?: run {
+      checklistAutoScrollSpeedPx = 0f
+      return
+    }
+    val liveDraft = currentDraft
+    val item = liveDraft.checklistItems.firstOrNull { it.id == activeItemId } ?: run {
+      checklistAutoScrollSpeedPx = 0f
+      return
+    }
+    val sectionItems = if (item.isChecked) liveDraft.checkedItems else liveDraft.uncheckedItems
+    val sectionIndex = sectionItems.indexOfFirst { it.id == activeItemId }
+    val canMoveBackward = sectionIndex > 0
+    val canMoveForward = sectionIndex in 0 until sectionItems.lastIndex
+
+    val defaultTopTrigger = visibleTop + autoScrollEdgeThresholdPx
+    val defaultBottomTrigger = visibleBottom - autoScrollEdgeThresholdPx
+    val topTrigger = checklistTopEdgeTriggerY ?: defaultTopTrigger
+    val bottomTrigger = checklistBottomEdgeTriggerY ?: defaultBottomTrigger
+
+    checklistAutoScrollSpeedPx = TodoListEngine.calculateDragAutoScrollSpeed(
+      pointerY = pointerRootY,
+      viewportTop = visibleTop,
+      viewportBottom = visibleBottom,
+      edgeThresholdPx = autoScrollEdgeThresholdPx,
+      maxScrollStepPx = maxAutoScrollStepPx,
+      canScrollBackward = activeScrollState.canScrollBackward,
+      canScrollForward = activeScrollState.canScrollForward,
+      canMoveItemBackward = canMoveBackward,
+      canMoveItemForward = canMoveForward,
+      topEdgeTriggerY = topTrigger,
+      bottomEdgeTriggerY = bottomTrigger,
+    )
+
+    if (isPointerMove) {
+      checklistTopEdgeTriggerY = minOf(defaultTopTrigger, maxOf(topTrigger, pointerRootY))
+      checklistBottomEdgeTriggerY = maxOf(defaultBottomTrigger, minOf(bottomTrigger, pointerRootY))
+    }
+  }
+
+  fun startDraggingChecklistItem(itemId: String, startRootY: Float? = null) {
+    focusManager.clearFocus()
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     draggedChecklistItemId = itemId
     checklistDragOffsetY = 0f
+    checklistDragPointerRootY = startRootY
+    checklistAutoScrollSpeedPx = 0f
+    val viewportBounds = resolveVisibleChecklistViewportBounds()
+    if (viewportBounds != null && startRootY != null) {
+      val (visibleTop, visibleBottom) = viewportBounds
+      checklistTopEdgeTriggerY = minOf(startRootY, visibleTop + autoScrollEdgeThresholdPx)
+      checklistBottomEdgeTriggerY = maxOf(startRootY, visibleBottom - autoScrollEdgeThresholdPx)
+    } else {
+      checklistTopEdgeTriggerY = null
+      checklistBottomEdgeTriggerY = null
+    }
   }
 
-  fun onDragChecklistItemDelta(itemId: String, deltaY: Float) {
+  fun onDragChecklistItemDelta(itemId: String, deltaY: Float, pointerRootY: Float? = null) {
     if (draggedChecklistItemId != itemId) return
+    if (pointerRootY != null) {
+      checklistDragPointerRootY = pointerRootY
+    }
     val liveDraft = currentDraft
     val item = liveDraft.checklistItems.firstOrNull { it.id == itemId } ?: return
     val sectionItems = if (item.isChecked) liveDraft.checkedItems else liveDraft.uncheckedItems
@@ -4222,11 +4394,44 @@ private fun NoteEditorContent(
       currentOnDraftChange(liveDraft.copy(checklistItems = updatedList))
       haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
+    updateChecklistAutoScrollSpeed(
+      pointerRootY = pointerRootY ?: checklistDragPointerRootY,
+      isPointerMove = pointerRootY != null,
+    )
   }
 
   fun endDraggingChecklistItem() {
     draggedChecklistItemId = null
     checklistDragOffsetY = 0f
+    checklistDragPointerRootY = null
+    checklistTopEdgeTriggerY = null
+    checklistBottomEdgeTriggerY = null
+    checklistAutoScrollSpeedPx = 0f
+  }
+
+  LaunchedEffect(draggedChecklistItemId, checklistAutoScrollSpeedPx, scrollState) {
+    val activeScrollState = scrollState ?: return@LaunchedEffect
+    val activeItemId = draggedChecklistItemId ?: return@LaunchedEffect
+    if (checklistAutoScrollSpeedPx == 0f) return@LaunchedEffect
+    while (isActive && draggedChecklistItemId == activeItemId && checklistAutoScrollSpeedPx != 0f) {
+      val canScroll = if (checklistAutoScrollSpeedPx < 0f) {
+        activeScrollState.canScrollBackward
+      } else {
+        activeScrollState.canScrollForward
+      }
+      if (!canScroll) {
+        checklistAutoScrollSpeedPx = 0f
+        break
+      }
+      val consumed = activeScrollState.scrollBy(checklistAutoScrollSpeedPx)
+      if (consumed != 0f) {
+        onDragChecklistItemDelta(activeItemId, consumed, pointerRootY = null)
+      } else {
+        checklistAutoScrollSpeedPx = 0f
+        break
+      }
+      delay(16L)
+    }
   }
 
   val titleFocusRequester = remember { FocusRequester() }
@@ -4273,7 +4478,9 @@ private fun NoteEditorContent(
   }
 
   Column(
-    modifier = Modifier.fillMaxWidth(),
+    modifier = Modifier
+      .fillMaxWidth()
+      .onGloballyPositioned { editorCoordinates = it },
     verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
     // Title Field (borderless / no outline)
@@ -4326,8 +4533,8 @@ private fun NoteEditorContent(
               isBeingDragged = isDraggingThis,
               dragOffsetY = if (isDraggingThis) checklistDragOffsetY else 0f,
               onDragHandlePressedChange = { isChecklistHandlePressed = it },
-              onStartDrag = { startDraggingChecklistItem(item.id) },
-              onDrag = { deltaY -> onDragChecklistItemDelta(item.id, deltaY) },
+              onStartDrag = { startRootY -> startDraggingChecklistItem(item.id, startRootY) },
+              onDrag = { deltaY, pointerRootY -> onDragChecklistItemDelta(item.id, deltaY, pointerRootY) },
               onEndDrag = { endDraggingChecklistItem() },
               onHeightMeasured = { heightPx ->
                 if (heightPx > 0f) {
@@ -4466,8 +4673,8 @@ private fun NoteEditorContent(
                   isBeingDragged = isDraggingThis,
                   dragOffsetY = if (isDraggingThis) checklistDragOffsetY else 0f,
                   onDragHandlePressedChange = { isChecklistHandlePressed = it },
-                  onStartDrag = { startDraggingChecklistItem(item.id) },
-                  onDrag = { deltaY -> onDragChecklistItemDelta(item.id, deltaY) },
+                  onStartDrag = { startRootY -> startDraggingChecklistItem(item.id, startRootY) },
+                  onDrag = { deltaY, pointerRootY -> onDragChecklistItemDelta(item.id, deltaY, pointerRootY) },
                   onEndDrag = { endDraggingChecklistItem() },
                   onHeightMeasured = { heightPx ->
                     if (heightPx > 0f) {
@@ -4634,8 +4841,9 @@ private fun NoteLabelsSection(
           newLabelInput = ""
         }
       }
+      val hexagonEnabled = currentHexagonIconButtons()
       Surface(
-        shape = RoundedCornerShape(28.dp),
+        shape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(28.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         tonalElevation = 6.dp,
         border = BorderStroke(
@@ -4781,8 +4989,8 @@ private fun ChecklistEditorRow(
   isBeingDragged: Boolean = false,
   dragOffsetY: Float = 0f,
   onDragHandlePressedChange: (Boolean) -> Unit = {},
-  onStartDrag: () -> Unit = {},
-  onDrag: (Float) -> Unit = {},
+  onStartDrag: (Float?) -> Unit = {},
+  onDrag: (Float, Float?) -> Unit = { _, _ -> },
   onEndDrag: () -> Unit = {},
   onHeightMeasured: (Float) -> Unit = {},
   onToggleChecked: () -> Unit,
@@ -4797,6 +5005,8 @@ private fun ChecklistEditorRow(
   val currentOnEndDrag by rememberUpdatedState(onEndDrag)
   var isInputFocused by remember(item.id) { mutableStateOf(false) }
   var hasTypedWhileFocused by remember(item.id) { mutableStateOf(false) }
+  var dragHandleCoords by remember(item.id) { mutableStateOf<LayoutCoordinates?>(null) }
+  var lastDownLocalOffset by remember(item.id) { mutableStateOf<Offset?>(null) }
 
   Column(modifier = Modifier.fillMaxWidth()) {
     Surface(
@@ -4841,10 +5051,15 @@ private fun ChecklistEditorRow(
           modifier = Modifier
             .size(width = 20.dp, height = 28.dp)
             .clip(CircleShape)
+            .onGloballyPositioned { dragHandleCoords = it }
             .pointerInput(item.id) {
               awaitPointerEventScope {
                 while (true) {
                   val event = awaitPointerEvent(PointerEventPass.Initial)
+                  val firstNewDown = event.changes.firstOrNull { it.pressed && !it.previousPressed }
+                  if (firstNewDown != null) {
+                    lastDownLocalOffset = firstNewDown.position
+                  }
                   currentOnDragHandlePressedChange(event.changes.any { it.pressed })
                 }
               }
@@ -4853,27 +5068,39 @@ private fun ChecklistEditorRow(
               var draggingThis = false
               try {
                 detectDragGestures(
-                  onDragStart = {
+                  onDragStart = { startOffset ->
                     draggingThis = true
-                    currentOnStartDrag()
+                    val initialLocalOffset = lastDownLocalOffset ?: startOffset
+                    val startRootY = dragHandleCoords
+                      ?.takeIf { it.isAttached }
+                      ?.localToRoot(initialLocalOffset)
+                      ?.y
+                    currentOnStartDrag(startRootY)
                   },
                   onDrag = { change, dragAmount ->
                     change.consume()
-                    currentOnDrag(dragAmount.y)
+                    val pointerRootY = dragHandleCoords
+                      ?.takeIf { it.isAttached }
+                      ?.localToRoot(change.position)
+                      ?.y
+                    currentOnDrag(dragAmount.y, pointerRootY)
                   },
                   onDragEnd = {
                     draggingThis = false
+                    lastDownLocalOffset = null
                     currentOnDragHandlePressedChange(false)
                     currentOnEndDrag()
                   },
                   onDragCancel = {
                     draggingThis = false
+                    lastDownLocalOffset = null
                     currentOnDragHandlePressedChange(false)
                     currentOnEndDrag()
                   },
                 )
               } finally {
                 if (draggingThis) {
+                  lastDownLocalOffset = null
                   currentOnDragHandlePressedChange(false)
                   currentOnEndDrag()
                 }

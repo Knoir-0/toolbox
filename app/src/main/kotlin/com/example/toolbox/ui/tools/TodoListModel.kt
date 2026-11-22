@@ -1297,6 +1297,46 @@ object TodoListEngine {
   }
 
   /**
+   * Calculates the per-frame vertical auto-scroll step (in pixels, negative when scrolling up /
+   * backward, positive when scrolling down / forward, or `0f` when no auto-scroll is needed) when
+   * a dragged list item is moved toward the visible top or bottom edge of a scrollable viewport.
+   */
+  fun calculateDragAutoScrollSpeed(
+    pointerY: Float,
+    viewportTop: Float,
+    viewportBottom: Float,
+    edgeThresholdPx: Float,
+    maxScrollStepPx: Float,
+    canScrollBackward: Boolean,
+    canScrollForward: Boolean,
+    canMoveItemBackward: Boolean = true,
+    canMoveItemForward: Boolean = true,
+    topEdgeTriggerY: Float = viewportTop + edgeThresholdPx,
+    bottomEdgeTriggerY: Float = viewportBottom - edgeThresholdPx,
+  ): Float {
+    val viewportHeight = viewportBottom - viewportTop
+    if (viewportHeight <= 0f || edgeThresholdPx <= 0f || maxScrollStepPx <= 0f) {
+      return 0f
+    }
+    val effectiveTopTriggerY = topEdgeTriggerY.coerceIn(viewportTop, viewportTop + edgeThresholdPx)
+    val effectiveBottomTriggerY = bottomEdgeTriggerY.coerceIn(viewportBottom - edgeThresholdPx, viewportBottom)
+    val topTriggerSpanPx = (effectiveTopTriggerY - viewportTop).coerceAtLeast(1f)
+    val bottomTriggerSpanPx = (viewportBottom - effectiveBottomTriggerY).coerceAtLeast(1f)
+
+    return when {
+      pointerY < effectiveTopTriggerY && canScrollBackward && canMoveItemBackward -> {
+        val fraction = ((effectiveTopTriggerY - pointerY) / topTriggerSpanPx).coerceIn(0f, 1f)
+        -maxScrollStepPx * fraction
+      }
+      pointerY > effectiveBottomTriggerY && canScrollForward && canMoveItemForward -> {
+        val fraction = ((pointerY - effectiveBottomTriggerY) / bottomTriggerSpanPx).coerceIn(0f, 1f)
+        maxScrollStepPx * fraction
+      }
+      else -> 0f
+    }
+  }
+
+  /**
    * Moves a task from [fromIndex] to [toIndex].
    */
   fun reorderTasks(tasks: List<TodoItem>, fromIndex: Int, toIndex: Int): List<TodoItem> {

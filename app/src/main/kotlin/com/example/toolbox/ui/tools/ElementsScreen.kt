@@ -66,6 +66,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import com.example.toolbox.ui.theme.FilledTonalButton
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -442,11 +444,12 @@ fun ElementsScreen(
       subtextTestTag = "elements_toolbar_subtext",
       actions = {
         // Temperature Unit Cycle Pill (K -> °C -> °F)
+        val unitPillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp)
         Surface(
-          shape = RoundedCornerShape(20.dp),
+          shape = unitPillShape,
           color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
           modifier = Modifier
-            .clip(RoundedCornerShape(20.dp))
+            .clip(unitPillShape)
             .clickable {
               haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
               tempUnit = tempUnit.next()
@@ -1972,13 +1975,14 @@ private fun MolarMassCalculatorContent(
           )
 
           // Quick Sample Formula Chips
+          val samplePillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp)
           FlowRow(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
           ) {
             PeriodicTableEngine.SAMPLE_FORMULAS.forEach { (formula, name) ->
               Surface(
-                shape = RoundedCornerShape(20.dp),
+                shape = samplePillShape,
                 color = if (formulaInput.trim() == formula) {
                   MaterialTheme.colorScheme.primaryContainer
                 } else {
@@ -1989,7 +1993,7 @@ private fun MolarMassCalculatorContent(
                   MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
                 ),
                 modifier = Modifier
-                  .clip(RoundedCornerShape(20.dp))
+                  .clip(samplePillShape)
                   .clickable { onFormulaChange(formula) }
                   .testTag("sample_formula_chip_$formula"),
               ) {

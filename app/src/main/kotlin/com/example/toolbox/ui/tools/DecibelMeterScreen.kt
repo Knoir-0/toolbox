@@ -52,6 +52,8 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -742,11 +744,16 @@ fun DecibelMeterScreen(
                   modifier = Modifier.testTag("decibel_calibration_value"),
                 )
                 if (calibrationOffsetDb != 0f) {
+                  val resetPillShape = if (currentHexagonIconButtons()) {
+                    HorizontalHexagonShape
+                  } else {
+                    RoundedCornerShape(20.dp)
+                  }
                   Surface(
-                    shape = RoundedCornerShape(20.dp),
+                    shape = resetPillShape,
                     color = MaterialTheme.colorScheme.primaryContainer,
                     modifier = Modifier
-                      .clip(RoundedCornerShape(20.dp))
+                      .clip(resetPillShape)
                       .clickable {
                         calibrationOffsetDb = 0f
                       }

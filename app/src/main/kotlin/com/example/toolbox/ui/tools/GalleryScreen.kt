@@ -156,7 +156,9 @@ import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material3.FilterChipDefaults
 import com.example.toolbox.ui.theme.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -2248,7 +2250,7 @@ fun GalleryScreen(
     clipboardState?.let { clip ->
       val pasteTargetDir = currentAlbum?.directory ?: defaultNewAlbumDir
       Surface(
-        shape = RoundedCornerShape(20.dp),
+        shape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp),
         tonalElevation = 6.dp,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),

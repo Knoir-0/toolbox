@@ -865,4 +865,115 @@ class NotesScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithText("No scheduled tasks").assertIsDisplayed()
   }
+
+  @Test
+  fun notesScreen_reorderingChecklistItemsNearVisibleEdges_autoScrollsAndReordersList() {
+    val items = (1..22).map { index ->
+      NoteChecklistItem(
+        id = "chk-item-$index",
+        text = "Checklist entry $index",
+        isChecked = false,
+      )
+    }
+    val repo = InMemoryNotesRepository(
+      initialNotes = listOf(
+        NoteItem(
+          id = "chk-large",
+          title = "Large Packing List",
+          isChecklist = true,
+          checklistItems = items,
+        ),
+      ),
+    )
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        NotesScreen(repository = repo)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Open the checklist note in full-screen single note view
+    composeTestRule.onNodeWithTag("note_card_chk-large").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("single_note_view").assertIsDisplayed()
+
+    val viewportBounds = composeTestRule
+      .onNodeWithTag("single_note_editor_empty_space")
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val firstHandleNode = composeTestRule.onNodeWithTag("editor_checklist_drag_chk-item-1")
+    val handleBounds = firstHandleNode.fetchSemanticsNode().boundsInRoot
+    val dragToBottomEdgeDeltaY = (viewportBounds.bottom - 12f) - handleBounds.center.y
+
+    // Drag the first checklist item toward the bottom visible edge and hold so the list auto-scrolls
+    firstHandleNode.performTouchInput {
+      down(center)
+      moveBy(androidx.compose.ui.geometry.Offset(0f, dragToBottomEdgeDeltaY / 2f))
+      advanceEventTime(50L)
+      moveBy(androidx.compose.ui.geometry.Offset(0f, dragToBottomEdgeDeltaY / 2f))
+      repeat(45) {
+        advanceEventTime(20L)
+      }
+      up()
+    }
+    composeTestRule.waitForIdle()
+
+    // Save by navigating back and verify item 1 moved far down past the initially visible items
+    composeTestRule.onNodeWithTag("single_note_back_button").performClick()
+    composeTestRule.waitForIdle()
+
+    val savedOrder = repo.loadNotes().single().uncheckedItems.map { it.id }
+    val movedIndex = savedOrder.indexOf("chk-item-1")
+    assertTrue(
+      "Expected chk-item-1 to auto-scroll and reorder well past initial position (movedIndex=$movedIndex)",
+      movedIndex > 10,
+    )
+  }
+
+  @Test
+  fun todoListScreen_reorderingTasksNearVisibleEdges_autoScrollsAndReordersList() {
+    val initialTasks = (1..18).map { index ->
+      TodoItem(
+        id = "todo-task-$index",
+        title = "Scrollable Task $index",
+      )
+    }
+    val todoRepo = InMemoryTodoListRepository(initialTasks = initialTasks)
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        TodoListScreen(repository = todoRepo)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    val quickAddBounds = composeTestRule
+      .onNodeWithTag("todo_quick_add_card")
+      .fetchSemanticsNode()
+      .boundsInRoot
+    val firstTaskHandleNode = composeTestRule.onNodeWithTag("todo_item_drag_todo-task-1")
+    val handleBounds = firstTaskHandleNode.fetchSemanticsNode().boundsInRoot
+    val dragToBottomEdgeDeltaY = (quickAddBounds.top - 12f) - handleBounds.center.y
+
+    // Drag task 1 toward the visible bottom edge above the Quick-Add bar and hold to auto-scroll
+    firstTaskHandleNode.performTouchInput {
+      down(center)
+      moveBy(androidx.compose.ui.geometry.Offset(0f, dragToBottomEdgeDeltaY / 2f))
+      advanceEventTime(50L)
+      moveBy(androidx.compose.ui.geometry.Offset(0f, dragToBottomEdgeDeltaY / 2f))
+      repeat(45) {
+        advanceEventTime(20L)
+      }
+      up()
+    }
+    composeTestRule.waitForIdle()
+
+    val savedOrder = todoRepo.loadTasks().map { it.id }
+    val movedIndex = savedOrder.indexOf("todo-task-1")
+    assertTrue(
+      "Expected todo-task-1 to auto-scroll and reorder past the initially visible tasks (movedIndex=$movedIndex)",
+      movedIndex > 6,
+    )
+  }
 }

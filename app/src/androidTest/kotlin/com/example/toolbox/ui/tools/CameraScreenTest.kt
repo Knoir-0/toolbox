@@ -455,7 +455,7 @@ class CameraScreenTest {
   }
 
   @Test
-  fun cameraScreen_usesMlKitSmartObjectAutofocus_andAllows5SecondManualFocusOverride() {
+  fun cameraScreen_usesMlKitSmartObjectAutofocus_andAllows7SecondManualFocusOverride() {
     composeTestRule.setContent {
       ToolboxTheme {
         CameraScreen(initialDirectory = tempCameraDir)

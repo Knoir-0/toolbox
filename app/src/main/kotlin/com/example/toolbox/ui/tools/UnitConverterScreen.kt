@@ -49,7 +49,9 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -783,13 +785,14 @@ private fun ConversionHeroCard(
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
         // Top Header with category badge & conversion formula rate
+        val headerPillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(50)
         Row(
           modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Surface(
-            shape = RoundedCornerShape(50),
+            shape = headerPillShape,
             color = palette.accentSoftContainer,
             border = BorderStroke(1.dp, palette.accentBorder.copy(alpha = 0.45f)),
           ) {
@@ -814,7 +817,7 @@ private fun ConversionHeroCard(
           }
 
           Surface(
-            shape = RoundedCornerShape(50),
+            shape = headerPillShape,
             color = palette.fromWellSurface,
             border = BorderStroke(1.dp, palette.fromWellBorder),
           ) {
@@ -1144,6 +1147,7 @@ private fun QuickValuePresetsRow(
     }
   }
 
+  val presetPillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(50)
   Row(
     modifier = modifier
       .fillMaxWidth()
@@ -1155,7 +1159,7 @@ private fun QuickValuePresetsRow(
       val isSelected = currentInput.trim() == preset
       Surface(
         onClick = { onSelectPreset(preset) },
-        shape = RoundedCornerShape(50),
+        shape = presetPillShape,
         color = if (isSelected) palette.accentSoftContainer else palette.rowSurface,
         border = BorderStroke(
           width = 1.dp,

@@ -85,7 +85,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import com.example.toolbox.ui.theme.FilledTonalButton
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import com.example.toolbox.ui.theme.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider

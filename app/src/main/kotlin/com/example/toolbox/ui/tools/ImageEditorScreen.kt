@@ -86,7 +86,9 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import com.example.toolbox.ui.theme.FilledIconButton
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material3.FilterChipDefaults
 import com.example.toolbox.ui.theme.FilledTonalButton
 import com.example.toolbox.ui.theme.FilledTonalIconButton
@@ -1224,6 +1226,9 @@ fun ModeSelectorRow(
   hasDataEdits: Boolean = false,
 ) {
   val modes = ImageEditorMode.entries
+  val hexagonEnabled = currentHexagonIconButtons()
+  val outerSelectorShape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(24.dp)
+  val innerTabShape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(20.dp)
   Row(
     modifier = modifier
       .fillMaxWidth()
@@ -1233,7 +1238,7 @@ fun ModeSelectorRow(
     verticalAlignment = Alignment.CenterVertically,
   ) {
     Surface(
-      shape = RoundedCornerShape(24.dp),
+      shape = outerSelectorShape,
       color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
       modifier = Modifier.testTag("image_mode_selector"),
     ) {
@@ -1256,14 +1261,14 @@ fun ModeSelectorRow(
             ImageEditorMode.DATA -> Icons.Default.Info
           }
           Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = innerTabShape,
             color = if (selected) {
               MaterialTheme.colorScheme.primaryContainer
             } else {
               Color.Transparent
             },
             modifier = Modifier
-              .clip(RoundedCornerShape(20.dp))
+              .clip(innerTabShape)
               .clickable { onModeSelected(mode) }
               .testTag("image_editor_mode_${mode.name.lowercase(Locale.ROOT)}"),
           ) {

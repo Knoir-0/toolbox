@@ -19,8 +19,6 @@
     <string name="camera_widget_description">Compact pill bar to launch Camera directly into Photo, Video, QR/Barcode Scan, OCR Note, or Live Vision</string>
     <string name="dice_roller_widget_label">D20 Roller</string>
     <string name="dice_roller_widget_description">Interactive D20 hero card roller with 3D polyhedral die, critical hit/miss badges, and Disadvantage / Normal / Advantage selector</string>
-    <string name="background_texture_widget_label">Background Texture</string>
-    <string name="background_texture_widget_description">Vertically scrollable background texture selector with None and all procedural texture options, adapting columns as resized horizontally</string>
-    <string name="hexagonify_widget_label">Hexagonify</string>
-    <string name="hexagonify_widget_description">Easter egg shape widget — tap to toggle Hexagonify between a circle and a hexagon</string>
+    <string name="background_texture_widget_label">Style</string>
+    <string name="background_texture_widget_description">Vertically scrollable style and background texture selector that adapts columns as resized horizontally</string>
 </resources>

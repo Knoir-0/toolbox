@@ -75,7 +75,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material3.FilterChipDefaults
 import com.example.toolbox.ui.theme.FilledTonalButton
 import com.example.toolbox.ui.theme.FilledTonalIconButton
@@ -1053,6 +1055,7 @@ private fun ChordsExplorerTabContent(
             .padding(12.dp),
           verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+          val pillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp)
           // Root Pitch Selector Row + Slash Bass Toggle
           Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1066,14 +1069,14 @@ private fun ChordsExplorerTabContent(
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Surface(
-              shape = RoundedCornerShape(20.dp),
+              shape = pillShape,
               color = if (slashBassPitchClass != null || showSlashBassRow) {
                 MaterialTheme.colorScheme.tertiaryContainer
               } else {
                 MaterialTheme.colorScheme.surfaceContainerHigh
               },
               modifier = Modifier
-                .clip(RoundedCornerShape(20.dp))
+                .clip(pillShape)
                 .clickable { onToggleSlashBassRow() }
                 .testTag("slash_bass_toggle"),
             ) {
@@ -1162,14 +1165,14 @@ private fun ChordsExplorerTabContent(
             items(ChordCategory.entries) { cat ->
               val isSelected = selectedCategory == cat
               Surface(
-                shape = RoundedCornerShape(20.dp),
+                shape = pillShape,
                 color = if (isSelected) {
                   MaterialTheme.colorScheme.primary
                 } else {
                   MaterialTheme.colorScheme.surfaceContainerHigh
                 },
                 modifier = Modifier
-                  .clip(RoundedCornerShape(20.dp))
+                  .clip(pillShape)
                   .clickable { onSelectCategory(cat) }
                   .testTag("chord_category_${cat.name}"),
               ) {
@@ -1490,6 +1493,7 @@ private fun ReverseFinderTabContent(
   ) {
     // 0. Reverse Mode Switcher (Reverse Chord Search vs Reverse Scale Search)
     item {
+      val reversePillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp)
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1497,7 +1501,7 @@ private fun ReverseFinderTabContent(
         ReverseSearchMode.entries.forEach { mode ->
           val isSelected = searchMode == mode
           Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = reversePillShape,
             color = if (isSelected) {
               MaterialTheme.colorScheme.primary
             } else {
@@ -1505,7 +1509,7 @@ private fun ReverseFinderTabContent(
             },
             modifier = Modifier
               .weight(1f)
-              .clip(RoundedCornerShape(20.dp))
+              .clip(reversePillShape)
               .clickable { onSelectSearchMode(mode) }
               .testTag(
                 if (mode == ReverseSearchMode.CHORDS) {
@@ -2217,6 +2221,7 @@ private fun ScalesAndKeyTabContent(
             .padding(12.dp),
           verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+          val scalePillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp)
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -2230,10 +2235,10 @@ private fun ScalesAndKeyTabContent(
             )
 
             Surface(
-              shape = RoundedCornerShape(20.dp),
+              shape = scalePillShape,
               color = MaterialTheme.colorScheme.secondaryContainer,
               modifier = Modifier
-                .clip(RoundedCornerShape(20.dp))
+                .clip(scalePillShape)
                 .clickable { onOpenReverseScaleSearch() }
                 .testTag("scales_reverse_search_button"),
             ) {
@@ -2271,14 +2276,14 @@ private fun ScalesAndKeyTabContent(
             items(ScaleCategory.entries) { cat ->
               val isSelected = selectedScaleCategory == cat
               Surface(
-                shape = RoundedCornerShape(20.dp),
+                shape = scalePillShape,
                 color = if (isSelected) {
                   MaterialTheme.colorScheme.primary
                 } else {
                   MaterialTheme.colorScheme.surfaceContainerHigh
                 },
                 modifier = Modifier
-                  .clip(RoundedCornerShape(20.dp))
+                  .clip(scalePillShape)
                   .clickable { onSelectScaleCategory(cat) }
                   .testTag("scale_category_${cat.name}"),
               ) {
@@ -2411,11 +2416,12 @@ private fun ScalesAndKeyTabContent(
             )
           }
 
+          val harmonizePillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp)
           Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = harmonizePillShape,
             color = MaterialTheme.colorScheme.secondaryContainer,
             modifier = Modifier
-              .clip(RoundedCornerShape(20.dp))
+              .clip(harmonizePillShape)
               .clickable { onToggleHarmonizeSevenths() }
               .testTag("harmonize_sevenths_toggle"),
           ) {
@@ -3094,6 +3100,7 @@ private fun PitchClassSelectorBar(
   onSelectPitchClass: (Int) -> Unit,
   tagPrefix: String,
 ) {
+  val pitchShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(12.dp)
   Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
     for (row in 0..1) {
       Row(
@@ -3105,7 +3112,7 @@ private fun PitchClassSelectorBar(
           val isSelected = selectedPitchClass.mod(12) == pc
           val label = ChordBookEngine.formatPitchClass(pc, enharmonicPref, pc)
           Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = pitchShape,
             color = if (isSelected) {
               MaterialTheme.colorScheme.primary
             } else {
@@ -3113,7 +3120,7 @@ private fun PitchClassSelectorBar(
             },
             modifier = Modifier
               .weight(1f)
-              .clip(RoundedCornerShape(12.dp))
+              .clip(pitchShape)
               .clickable { onSelectPitchClass(pc) }
               .testTag("${tagPrefix}_$pc"),
           ) {
@@ -3147,6 +3154,7 @@ private fun PitchClassMultiSelectorBar(
   onTogglePitchClass: (Int) -> Unit,
   tagPrefix: String,
 ) {
+  val pitchMultiShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(12.dp)
   Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
     for (row in 0..1) {
       Row(
@@ -3159,7 +3167,7 @@ private fun PitchClassMultiSelectorBar(
           val isRoot = highlightedRootPitchClass != null && highlightedRootPitchClass.mod(12) == pc
           val label = ChordBookEngine.formatPitchClass(pc, enharmonicPref, pc)
           Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = pitchMultiShape,
             color = when {
               isSelected && isRoot -> MaterialTheme.colorScheme.primary
               isSelected -> MaterialTheme.colorScheme.secondary
@@ -3167,7 +3175,7 @@ private fun PitchClassMultiSelectorBar(
             },
             modifier = Modifier
               .weight(1f)
-              .clip(RoundedCornerShape(12.dp))
+              .clip(pitchMultiShape)
               .clickable { onTogglePitchClass(pc) }
               .testTag("${tagPrefix}_$pc"),
           ) {

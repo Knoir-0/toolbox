@@ -30,6 +30,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -106,7 +107,9 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import com.example.toolbox.ui.theme.FilledIconButton
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -151,12 +154,15 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -183,6 +189,7 @@ import androidx.compose.ui.zIndex
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.theme.ToolboxTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -307,10 +314,18 @@ fun TodoListScreen(
   val subtaskSpacingPx = with(density) { 6.dp.toPx() }
   val defaultSubtaskHeightPx = with(density) { 40.dp.toPx() }
   val subtaskMaxOverscrollPx = with(density) { 4.dp.toPx() }
+  val autoScrollEdgeThresholdPx = with(density) { 56.dp.toPx() }
+  val maxAutoScrollStepPx = with(density) { 14.dp.toPx() }
 
+  var taskListCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+  var quickAddBarCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
   var draggedTaskId by remember { mutableStateOf<String?>(null) }
   var dragOffsetY by remember { mutableFloatStateOf(0f) }
   var initialDragSnapshot by remember { mutableStateOf<TodoHistorySnapshot?>(null) }
+  var dragPointerRootY by remember { mutableStateOf<Float?>(null) }
+  var dragTopEdgeTriggerY by remember { mutableStateOf<Float?>(null) }
+  var dragBottomEdgeTriggerY by remember { mutableStateOf<Float?>(null) }
+  var autoScrollSpeedPx by remember { mutableFloatStateOf(0f) }
   val taskHeightsPx = remember { mutableStateMapOf<String, Float>() }
   val subtaskHeightsPx = remember { mutableStateMapOf<String, Float>() }
   var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -731,33 +746,28 @@ fun TodoListScreen(
   }
 
   var draggedSubtaskId by remember { mutableStateOf<String?>(null) }
+  var draggedSubtaskParentTaskId by remember { mutableStateOf<String?>(null) }
   var subtaskDragOffsetY by remember { mutableFloatStateOf(0f) }
   var initialSubtaskDragSnapshot by remember { mutableStateOf<TodoHistorySnapshot?>(null) }
 
-  fun endDraggingSubTask() {
-    val before = initialSubtaskDragSnapshot
-    draggedSubtaskId = null
-    subtaskDragOffsetY = 0f
-    initialSubtaskDragSnapshot = null
-
-    if (before != null && before.tasks != tasks) {
-      undoStack = listOf(before) + undoStack.take(49)
-      redoStack = emptyList()
-      historyVersion += 1
-      repo.saveTasks(tasks)
-      TodoListWidgets.updateAllWidgets(context)
+  fun resolveVisibleTaskListViewportBounds(): Pair<Float, Float>? {
+    val listCoords = taskListCoordinates?.takeIf { it.isAttached } ?: return null
+    val listBounds = listCoords.boundsInRoot()
+    val visibleTop = listBounds.top
+    val quickAddTop = quickAddBarCoordinates
+      ?.takeIf { it.isAttached }
+      ?.boundsInRoot()
+      ?.top
+    val visibleBottom = if (
+      quickAddTop != null &&
+      quickAddTop > visibleTop + autoScrollEdgeThresholdPx * 2f &&
+      quickAddTop < listBounds.bottom
+    ) {
+      quickAddTop
+    } else {
+      listBounds.bottom
     }
-  }
-
-  fun startDragging(taskId: String) {
-    if (draggedSubtaskId != null) {
-      endDraggingSubTask()
-    }
-    inlineEditingTaskId = null
-    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-    draggedTaskId = taskId
-    dragOffsetY = 0f
-    initialDragSnapshot = TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)
+    return if (visibleBottom > visibleTop) visibleTop to visibleBottom else null
   }
 
   val mainViewTasks = remember(tasks, nowMillis) {
@@ -777,8 +787,112 @@ fun TodoListScreen(
     }
   }
 
-  fun onDragDelta(taskId: String, deltaY: Float) {
+  fun updateTodoDragAutoScrollSpeed(pointerRootY: Float?, isPointerMove: Boolean) {
+    val activeTaskId = draggedTaskId
+    val activeSubtaskId = draggedSubtaskId
+    if ((activeTaskId == null && activeSubtaskId == null) || pointerRootY == null) {
+      autoScrollSpeedPx = 0f
+      return
+    }
+    val (visibleTop, visibleBottom) = resolveVisibleTaskListViewportBounds() ?: run {
+      autoScrollSpeedPx = 0f
+      return
+    }
+    val canMoveBackward: Boolean
+    val canMoveForward: Boolean
+    if (activeTaskId != null) {
+      val currentIndex = activeFilteredTasks.indexOfFirst { it.id == activeTaskId }
+      canMoveBackward = currentIndex > 0
+      canMoveForward = currentIndex in 0 until activeFilteredTasks.lastIndex
+    } else {
+      val parentTask = tasks.firstOrNull { it.id == draggedSubtaskParentTaskId }
+        ?: tasks.firstOrNull { task -> task.subtasks.any { it.id == activeSubtaskId } }
+      val subtasks = parentTask?.subtasks.orEmpty()
+      val currentIndex = subtasks.indexOfFirst { it.id == activeSubtaskId }
+      canMoveBackward = currentIndex > 0
+      canMoveForward = currentIndex in 0 until subtasks.lastIndex
+    }
+
+    val defaultTopTrigger = visibleTop + autoScrollEdgeThresholdPx
+    val defaultBottomTrigger = visibleBottom - autoScrollEdgeThresholdPx
+    val topTrigger = dragTopEdgeTriggerY ?: defaultTopTrigger
+    val bottomTrigger = dragBottomEdgeTriggerY ?: defaultBottomTrigger
+
+    autoScrollSpeedPx = TodoListEngine.calculateDragAutoScrollSpeed(
+      pointerY = pointerRootY,
+      viewportTop = visibleTop,
+      viewportBottom = visibleBottom,
+      edgeThresholdPx = autoScrollEdgeThresholdPx,
+      maxScrollStepPx = maxAutoScrollStepPx,
+      canScrollBackward = listState.canScrollBackward,
+      canScrollForward = listState.canScrollForward,
+      canMoveItemBackward = canMoveBackward,
+      canMoveItemForward = canMoveForward,
+      topEdgeTriggerY = topTrigger,
+      bottomEdgeTriggerY = bottomTrigger,
+    )
+
+    if (isPointerMove) {
+      dragTopEdgeTriggerY = minOf(defaultTopTrigger, maxOf(topTrigger, pointerRootY))
+      dragBottomEdgeTriggerY = maxOf(defaultBottomTrigger, minOf(bottomTrigger, pointerRootY))
+    }
+  }
+
+  fun initializeDragEdgeTriggers(startRootY: Float?) {
+    dragPointerRootY = startRootY
+    autoScrollSpeedPx = 0f
+    val viewportBounds = resolveVisibleTaskListViewportBounds()
+    if (viewportBounds != null && startRootY != null) {
+      val (visibleTop, visibleBottom) = viewportBounds
+      dragTopEdgeTriggerY = minOf(startRootY, visibleTop + autoScrollEdgeThresholdPx)
+      dragBottomEdgeTriggerY = maxOf(startRootY, visibleBottom - autoScrollEdgeThresholdPx)
+    } else {
+      dragTopEdgeTriggerY = null
+      dragBottomEdgeTriggerY = null
+    }
+  }
+
+  fun clearDragAutoScrollState() {
+    dragPointerRootY = null
+    dragTopEdgeTriggerY = null
+    dragBottomEdgeTriggerY = null
+    autoScrollSpeedPx = 0f
+  }
+
+  fun endDraggingSubTask() {
+    val before = initialSubtaskDragSnapshot
+    draggedSubtaskId = null
+    draggedSubtaskParentTaskId = null
+    subtaskDragOffsetY = 0f
+    initialSubtaskDragSnapshot = null
+    clearDragAutoScrollState()
+
+    if (before != null && before.tasks != tasks) {
+      undoStack = listOf(before) + undoStack.take(49)
+      redoStack = emptyList()
+      historyVersion += 1
+      repo.saveTasks(tasks)
+      TodoListWidgets.updateAllWidgets(context)
+    }
+  }
+
+  fun startDragging(taskId: String, startRootY: Float? = null) {
+    if (draggedSubtaskId != null) {
+      endDraggingSubTask()
+    }
+    inlineEditingTaskId = null
+    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    draggedTaskId = taskId
+    dragOffsetY = 0f
+    initialDragSnapshot = TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)
+    initializeDragEdgeTriggers(startRootY)
+  }
+
+  fun onDragDelta(taskId: String, deltaY: Float, pointerRootY: Float? = null) {
     if (draggedTaskId != taskId) return
+    if (pointerRootY != null) {
+      dragPointerRootY = pointerRootY
+    }
     val firstVisibleIndex = listState.firstVisibleItemIndex
     val firstVisibleOffset = listState.firstVisibleItemScrollOffset
     val visibleItems = activeFilteredTasks
@@ -812,6 +926,10 @@ fun TodoListScreen(
       }
       haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
+    updateTodoDragAutoScrollSpeed(
+      pointerRootY = pointerRootY ?: dragPointerRootY,
+      isPointerMove = pointerRootY != null,
+    )
   }
 
   fun endDragging() {
@@ -819,6 +937,7 @@ fun TodoListScreen(
     draggedTaskId = null
     dragOffsetY = 0f
     initialDragSnapshot = null
+    clearDragAutoScrollState()
 
     if (before != null && before.tasks != tasks) {
       undoStack = listOf(before) + undoStack.take(49)
@@ -829,19 +948,24 @@ fun TodoListScreen(
     }
   }
 
-  fun startDraggingSubTask(subtaskId: String) {
+  fun startDraggingSubTask(taskId: String, subtaskId: String, startRootY: Float? = null) {
     if (draggedTaskId != null) {
       endDragging()
     }
     inlineEditingTaskId = null
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    draggedSubtaskParentTaskId = taskId
     draggedSubtaskId = subtaskId
     subtaskDragOffsetY = 0f
     initialSubtaskDragSnapshot = TodoHistorySnapshot(tasks, completedTodayCount, completedTasks)
+    initializeDragEdgeTriggers(startRootY)
   }
 
-  fun onDragSubTaskDelta(taskId: String, subtaskId: String, deltaY: Float) {
+  fun onDragSubTaskDelta(taskId: String, subtaskId: String, deltaY: Float, pointerRootY: Float? = null) {
     if (draggedSubtaskId != subtaskId) return
+    if (pointerRootY != null) {
+      dragPointerRootY = pointerRootY
+    }
     val task = tasks.firstOrNull { it.id == taskId } ?: return
 
     val stepResult = TodoListEngine.calculateDragReorder(
@@ -861,6 +985,53 @@ fun TodoListScreen(
         if (item.id == taskId) item.copy(subtasks = stepResult.items) else item
       }
       haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    }
+    updateTodoDragAutoScrollSpeed(
+      pointerRootY = pointerRootY ?: dragPointerRootY,
+      isPointerMove = pointerRootY != null,
+    )
+  }
+
+  LaunchedEffect(draggedTaskId, draggedSubtaskId, autoScrollSpeedPx) {
+    val activeTaskId = draggedTaskId
+    val activeSubtaskId = draggedSubtaskId
+    if ((activeTaskId == null && activeSubtaskId == null) || autoScrollSpeedPx == 0f) {
+      return@LaunchedEffect
+    }
+    while (
+      isActive &&
+      draggedTaskId == activeTaskId &&
+      draggedSubtaskId == activeSubtaskId &&
+      autoScrollSpeedPx != 0f
+    ) {
+      val canScroll = if (autoScrollSpeedPx < 0f) {
+        listState.canScrollBackward
+      } else {
+        listState.canScrollForward
+      }
+      if (!canScroll) {
+        autoScrollSpeedPx = 0f
+        break
+      }
+      val consumed = listState.scrollBy(autoScrollSpeedPx)
+      if (consumed != 0f) {
+        if (activeTaskId != null) {
+          onDragDelta(activeTaskId, consumed, pointerRootY = null)
+        } else if (activeSubtaskId != null) {
+          val parentTaskId = draggedSubtaskParentTaskId
+            ?: tasks.firstOrNull { task -> task.subtasks.any { it.id == activeSubtaskId } }?.id
+          if (parentTaskId != null) {
+            onDragSubTaskDelta(parentTaskId, activeSubtaskId, consumed, pointerRootY = null)
+          } else {
+            autoScrollSpeedPx = 0f
+            break
+          }
+        }
+      } else {
+        autoScrollSpeedPx = 0f
+        break
+      }
+      delay(16L)
     }
   }
 
@@ -1484,6 +1655,7 @@ fun TodoListScreen(
                   state = listState,
                   modifier = Modifier
                     .fillMaxSize()
+                    .onGloballyPositioned { taskListCoordinates = it }
                     .testTag("todo_tasks_list"),
                   contentPadding = PaddingValues(
                     start = 12.dp,
@@ -1532,16 +1704,20 @@ fun TodoListScreen(
                       onUpdateSubTask = { subtaskId, newTitle -> updateSubTask(task.id, subtaskId, newTitle) },
                       draggedSubtaskId = draggedSubtaskId,
                       subtaskDragOffsetY = subtaskDragOffsetY,
-                      onStartDragSubTask = { subtaskId -> startDraggingSubTask(subtaskId) },
-                      onDragSubTask = { subtaskId, deltaY -> onDragSubTaskDelta(task.id, subtaskId, deltaY) },
+                      onStartDragSubTask = { subtaskId, startRootY ->
+                        startDraggingSubTask(task.id, subtaskId, startRootY)
+                      },
+                      onDragSubTask = { subtaskId, deltaY, pointerRootY ->
+                        onDragSubTaskDelta(task.id, subtaskId, deltaY, pointerRootY)
+                      },
                       onEndDragSubTask = { endDraggingSubTask() },
                       onSubtaskHeightMeasured = { subtaskId, heightPx ->
                         if (heightPx > 0f) {
                           subtaskHeightsPx[subtaskId] = heightPx
                         }
                       },
-                      onStartDrag = { startDragging(task.id) },
-                      onDrag = { deltaY -> onDragDelta(task.id, deltaY) },
+                      onStartDrag = { startRootY -> startDragging(task.id, startRootY) },
+                      onDrag = { deltaY, pointerRootY -> onDragDelta(task.id, deltaY, pointerRootY) },
                       onEndDrag = { endDragging() },
                       onItemHeightMeasured = { heightPx ->
                         if (heightPx > 0f) {
@@ -1569,6 +1745,7 @@ fun TodoListScreen(
 
       // 5. Floating 28.dp Pill Quick-Add Bar (styled like NotesQuickCaptureBar)
       if (!isSelectionMode || isSchedulePanelOpen) {
+        val hexagonEnabled = currentHexagonIconButtons()
         Box(
           modifier = Modifier
             .align(Alignment.BottomCenter)
@@ -1578,7 +1755,11 @@ fun TodoListScreen(
         ) {
           Surface(
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shape = RoundedCornerShape(28.dp),
+            shape = if (hexagonEnabled && !isSchedulePanelOpen) {
+              HorizontalHexagonShape
+            } else {
+              RoundedCornerShape(28.dp)
+            },
             tonalElevation = 6.dp,
             shadowElevation = 4.dp,
             border = BorderStroke(
@@ -1587,6 +1768,7 @@ fun TodoListScreen(
             ),
             modifier = Modifier
               .fillMaxWidth()
+              .onGloballyPositioned { quickAddBarCoordinates = it }
               .testTag("todo_quick_add_card"),
           ) {
             Column(modifier = Modifier.fillMaxWidth()) {
@@ -1820,12 +2002,12 @@ private fun SwipeableTaskItem(
   onUpdateSubTask: (String, String) -> Unit,
   draggedSubtaskId: String? = null,
   subtaskDragOffsetY: Float = 0f,
-  onStartDragSubTask: (String) -> Unit = {},
-  onDragSubTask: (String, Float) -> Unit = { _, _ -> },
+  onStartDragSubTask: (String, Float?) -> Unit = { _, _ -> },
+  onDragSubTask: (String, Float, Float?) -> Unit = { _, _, _ -> },
   onEndDragSubTask: () -> Unit = {},
   onSubtaskHeightMeasured: (String, Float) -> Unit = { _, _ -> },
-  onStartDrag: () -> Unit,
-  onDrag: (Float) -> Unit,
+  onStartDrag: (Float?) -> Unit,
+  onDrag: (Float, Float?) -> Unit,
   onEndDrag: () -> Unit,
   onItemHeightMeasured: (Float) -> Unit,
   modifier: Modifier = Modifier,
@@ -2017,12 +2199,12 @@ private fun TaskCardContent(
   onUpdateSubTask: (String, String) -> Unit,
   draggedSubtaskId: String? = null,
   subtaskDragOffsetY: Float = 0f,
-  onStartDragSubTask: (String) -> Unit = {},
-  onDragSubTask: (String, Float) -> Unit = { _, _ -> },
+  onStartDragSubTask: (String, Float?) -> Unit = { _, _ -> },
+  onDragSubTask: (String, Float, Float?) -> Unit = { _, _, _ -> },
   onEndDragSubTask: () -> Unit = {},
   onSubtaskHeightMeasured: (String, Float) -> Unit = { _, _ -> },
-  onStartDrag: () -> Unit,
-  onDrag: (Float) -> Unit,
+  onStartDrag: (Float?) -> Unit,
+  onDrag: (Float, Float?) -> Unit,
   onEndDrag: () -> Unit,
   onDragHandlePressedChange: (Boolean) -> Unit = {},
   onHeightMeasured: (Float) -> Unit,
@@ -2127,15 +2309,22 @@ private fun TaskCardContent(
           Spacer(modifier = Modifier.width(8.dp))
         } else {
           if (showDragHandle) {
+            var taskDragHandleCoords by remember(task.id) { mutableStateOf<LayoutCoordinates?>(null) }
+            var lastTaskDownLocalOffset by remember(task.id) { mutableStateOf<Offset?>(null) }
             // Drag Handle to reorder tasks (on the left side) - Triple bar
             Box(
               modifier = Modifier
                 .size(36.dp)
                 .clip(CircleShape)
+                .onGloballyPositioned { taskDragHandleCoords = it }
                 .pointerInput(task.id) {
                   awaitPointerEventScope {
                     while (true) {
                       val event = awaitPointerEvent(PointerEventPass.Initial)
+                      val firstNewDown = event.changes.firstOrNull { it.pressed && !it.previousPressed }
+                      if (firstNewDown != null) {
+                        lastTaskDownLocalOffset = firstNewDown.position
+                      }
                       currentOnDragHandlePressedChange(event.changes.any { it.pressed })
                     }
                   }
@@ -2144,27 +2333,39 @@ private fun TaskCardContent(
                   var draggingThis = false
                   try {
                     detectDragGestures(
-                      onDragStart = {
+                      onDragStart = { startOffset ->
                         draggingThis = true
-                        currentOnStartDrag()
+                        val initialLocalOffset = lastTaskDownLocalOffset ?: startOffset
+                        val startRootY = taskDragHandleCoords
+                          ?.takeIf { it.isAttached }
+                          ?.localToRoot(initialLocalOffset)
+                          ?.y
+                        currentOnStartDrag(startRootY)
                       },
                       onDrag = { change, dragAmount ->
                         change.consume()
-                        currentOnDrag(dragAmount.y * currentDragScale)
+                        val pointerRootY = taskDragHandleCoords
+                          ?.takeIf { it.isAttached }
+                          ?.localToRoot(change.position)
+                          ?.y
+                        currentOnDrag(dragAmount.y * currentDragScale, pointerRootY)
                       },
                       onDragEnd = {
                         draggingThis = false
+                        lastTaskDownLocalOffset = null
                         currentOnDragHandlePressedChange(false)
                         currentOnEndDrag()
                       },
                       onDragCancel = {
                         draggingThis = false
+                        lastTaskDownLocalOffset = null
                         currentOnDragHandlePressedChange(false)
                         currentOnEndDrag()
                       },
                     )
                   } finally {
                     if (draggingThis) {
+                      lastTaskDownLocalOffset = null
                       currentOnDragHandlePressedChange(false)
                       currentOnEndDrag()
                     }
@@ -2625,15 +2826,22 @@ private fun TaskCardContent(
                 verticalAlignment = Alignment.CenterVertically,
               ) {
                 if (showDragHandle && !isSelectionMode) {
+                  var subtaskDragHandleCoords by remember(subtask.id) { mutableStateOf<LayoutCoordinates?>(null) }
+                  var lastSubtaskDownLocalOffset by remember(subtask.id) { mutableStateOf<Offset?>(null) }
                   // Smaller drag handle with double bar
                   Box(
                     modifier = Modifier
                       .size(36.dp)
                       .clip(CircleShape)
+                      .onGloballyPositioned { subtaskDragHandleCoords = it }
                       .pointerInput(subtask.id) {
                         awaitPointerEventScope {
                           while (true) {
                             val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val firstNewDown = event.changes.firstOrNull { it.pressed && !it.previousPressed }
+                            if (firstNewDown != null) {
+                              lastSubtaskDownLocalOffset = firstNewDown.position
+                            }
                             currentOnDragHandlePressedChange(event.changes.any { it.pressed })
                           }
                         }
@@ -2642,27 +2850,39 @@ private fun TaskCardContent(
                         var draggingThisSubtask = false
                         try {
                           detectDragGestures(
-                            onDragStart = {
+                            onDragStart = { startOffset ->
                               draggingThisSubtask = true
-                              currentOnStartDragSubTask(subtask.id)
+                              val initialLocalOffset = lastSubtaskDownLocalOffset ?: startOffset
+                              val startRootY = subtaskDragHandleCoords
+                                ?.takeIf { it.isAttached }
+                                ?.localToRoot(initialLocalOffset)
+                                ?.y
+                              currentOnStartDragSubTask(subtask.id, startRootY)
                             },
                             onDrag = { change, dragAmount ->
                               change.consume()
-                              currentOnDragSubTask(subtask.id, dragAmount.y * currentDragScale)
+                              val pointerRootY = subtaskDragHandleCoords
+                                ?.takeIf { it.isAttached }
+                                ?.localToRoot(change.position)
+                                ?.y
+                              currentOnDragSubTask(subtask.id, dragAmount.y * currentDragScale, pointerRootY)
                             },
                             onDragEnd = {
                               draggingThisSubtask = false
+                              lastSubtaskDownLocalOffset = null
                               currentOnDragHandlePressedChange(false)
                               currentOnEndDragSubTask()
                             },
                             onDragCancel = {
                               draggingThisSubtask = false
+                              lastSubtaskDownLocalOffset = null
                               currentOnDragHandlePressedChange(false)
                               currentOnEndDragSubTask()
                             },
                           )
                         } finally {
                           if (draggingThisSubtask) {
+                            lastSubtaskDownLocalOffset = null
                             currentOnDragHandlePressedChange(false)
                             currentOnEndDragSubTask()
                           }
@@ -2852,15 +3072,18 @@ private fun TaskCardContent(
                 Spacer(modifier = Modifier.width(38.dp))
               }
 
+              val hexagonEnabled = currentHexagonIconButtons()
               Surface(
-                shape = RoundedCornerShape(28.dp),
+                shape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(28.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 tonalElevation = 4.dp,
                 border = BorderStroke(
                   width = 1.dp,
                   color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
                 ),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                  .weight(1f)
+                  .testTag("todo_subtask_input_card_${task.id}"),
               ) {
                 Row(
                   modifier = Modifier
@@ -4151,8 +4374,9 @@ private fun SavedTasksSheet(
       // Quick save input inside sheet (styled like NotesQuickCaptureBar)
       val templateFocusRequester = remember { FocusRequester() }
       val isTemplateEnabled = newTemplateText.trim().isNotEmpty()
+      val hexagonEnabled = currentHexagonIconButtons()
       Surface(
-        shape = RoundedCornerShape(28.dp),
+        shape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(28.dp),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 4.dp,
         border = BorderStroke(
@@ -4161,7 +4385,8 @@ private fun SavedTasksSheet(
         ),
         modifier = Modifier
           .fillMaxWidth()
-          .padding(vertical = 12.dp),
+          .padding(vertical = 12.dp)
+          .testTag("todo_save_template_input_card"),
       ) {
         Row(
           modifier = Modifier
@@ -4685,13 +4910,18 @@ private fun ScheduleTaskPanel(
               val isPresetSelected = selectedPreset.unit == presetRule.unit &&
                 selectedPreset.interval == presetRule.interval &&
                 selectedPreset.presetLabel == presetRule.presetLabel
+              val presetPillShape = if (currentHexagonIconButtons()) {
+                HorizontalHexagonShape
+              } else {
+                RoundedCornerShape(20.dp)
+              }
               Surface(
                 color = if (isPresetSelected) {
                   MaterialTheme.colorScheme.primaryContainer
                 } else {
                   MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
                 },
-                shape = RoundedCornerShape(20.dp),
+                shape = presetPillShape,
                 border = BorderStroke(
                   width = 1.dp,
                   color = if (isPresetSelected) {
@@ -4702,7 +4932,7 @@ private fun ScheduleTaskPanel(
                 ),
                 modifier = Modifier
                   .weight(1f)
-                  .clip(RoundedCornerShape(20.dp))
+                  .clip(presetPillShape)
                   .clickable {
                     onStartMillisChange(
                       addCalendarOffset(System.currentTimeMillis(), calField, amount),

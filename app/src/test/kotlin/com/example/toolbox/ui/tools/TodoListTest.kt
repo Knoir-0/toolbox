@@ -1121,4 +1121,134 @@ class TodoListTest {
       tempDir.deleteRecursively()
     }
   }
+
+  @Test
+  fun engine_calculateDragAutoScrollSpeed_scrollsNearVisibleEdgesAndHonorsBoundaries() {
+    val viewportTop = 100f
+    val viewportBottom = 700f
+    val threshold = 60f
+    val maxStep = 15f
+
+    // 1. Pointer in middle of viewport -> 0f speed
+    val centerSpeed = TodoListEngine.calculateDragAutoScrollSpeed(
+      pointerY = 400f,
+      viewportTop = viewportTop,
+      viewportBottom = viewportBottom,
+      edgeThresholdPx = threshold,
+      maxScrollStepPx = maxStep,
+      canScrollBackward = true,
+      canScrollForward = true,
+    )
+    assertEquals(0f, centerSpeed, 0.001f)
+
+    // 2. Pointer halfway into bottom edge zone (700 - 30 = 670) -> +0.5 * maxStep
+    val bottomHalfSpeed = TodoListEngine.calculateDragAutoScrollSpeed(
+      pointerY = 670f,
+      viewportTop = viewportTop,
+      viewportBottom = viewportBottom,
+      edgeThresholdPx = threshold,
+      maxScrollStepPx = maxStep,
+      canScrollBackward = true,
+      canScrollForward = true,
+    )
+    assertEquals(7.5f, bottomHalfSpeed, 0.001f)
+
+    // 3. Pointer at or past bottom edge (710) -> clamped to +maxStep
+    val bottomMaxSpeed = TodoListEngine.calculateDragAutoScrollSpeed(
+      pointerY = 710f,
+      viewportTop = viewportTop,
+      viewportBottom = viewportBottom,
+      edgeThresholdPx = threshold,
+      maxScrollStepPx = maxStep,
+      canScrollBackward = true,
+      canScrollForward = true,
+    )
+    assertEquals(15f, bottomMaxSpeed, 0.001f)
+
+    // 4. Pointer halfway into top edge zone (100 + 30 = 130) -> -0.5 * maxStep
+    val topHalfSpeed = TodoListEngine.calculateDragAutoScrollSpeed(
+      pointerY = 130f,
+      viewportTop = viewportTop,
+      viewportBottom = viewportBottom,
+      edgeThresholdPx = threshold,
+      maxScrollStepPx = maxStep,
+      canScrollBackward = true,
+      canScrollForward = true,
+    )
+    assertEquals(-7.5f, topHalfSpeed, 0.001f)
+
+    // 5. No auto-scroll when container cannot scroll in that direction or item is already at end of section
+    assertEquals(
+      0f,
+      TodoListEngine.calculateDragAutoScrollSpeed(
+        pointerY = 685f,
+        viewportTop = viewportTop,
+        viewportBottom = viewportBottom,
+        edgeThresholdPx = threshold,
+        maxScrollStepPx = maxStep,
+        canScrollBackward = true,
+        canScrollForward = false,
+      ),
+      0.001f,
+    )
+    assertEquals(
+      0f,
+      TodoListEngine.calculateDragAutoScrollSpeed(
+        pointerY = 685f,
+        viewportTop = viewportTop,
+        viewportBottom = viewportBottom,
+        edgeThresholdPx = threshold,
+        maxScrollStepPx = maxStep,
+        canScrollBackward = true,
+        canScrollForward = true,
+        canMoveItemForward = false,
+      ),
+      0.001f,
+    )
+    assertEquals(
+      0f,
+      TodoListEngine.calculateDragAutoScrollSpeed(
+        pointerY = 115f,
+        viewportTop = viewportTop,
+        viewportBottom = viewportBottom,
+        edgeThresholdPx = threshold,
+        maxScrollStepPx = maxStep,
+        canScrollBackward = true,
+        canScrollForward = true,
+        canMoveItemBackward = false,
+      ),
+      0.001f,
+    )
+
+    // 6. Starting inside top edge zone (topEdgeTriggerY = 120) and dragging down to 135 does NOT scroll up,
+    //    while dragging up to 110 DOES scroll up
+    assertEquals(
+      0f,
+      TodoListEngine.calculateDragAutoScrollSpeed(
+        pointerY = 135f,
+        viewportTop = viewportTop,
+        viewportBottom = viewportBottom,
+        edgeThresholdPx = threshold,
+        maxScrollStepPx = maxStep,
+        canScrollBackward = true,
+        canScrollForward = true,
+        topEdgeTriggerY = 120f,
+      ),
+      0.001f,
+    )
+    assertEquals(
+      -7.5f,
+      TodoListEngine.calculateDragAutoScrollSpeed(
+        pointerY = 110f,
+        viewportTop = viewportTop,
+        viewportBottom = viewportBottom,
+        edgeThresholdPx = threshold,
+        maxScrollStepPx = maxStep,
+        canScrollBackward = true,
+        canScrollForward = true,
+        topEdgeTriggerY = 120f,
+      ),
+      0.001f,
+    )
+  }
 }

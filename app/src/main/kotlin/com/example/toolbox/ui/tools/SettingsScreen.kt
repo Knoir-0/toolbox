@@ -95,7 +95,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -3592,7 +3592,6 @@ fun SettingsScreen(
                     TodoListWidgets.updateAllWidgets(localContext)
                     NotesWidgets.updateAllWidgets(localContext)
                     BackgroundTextureWidgets.updateAllWidgets(localContext)
-                    HexagonifyWidgets.updateAllWidgets(localContext)
                   },
                 )
                 .testTag("hexagon_icon_buttons_toggle"),

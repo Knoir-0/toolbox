@@ -95,7 +95,9 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import com.example.toolbox.ui.theme.FilledIconButton
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material3.FilterChipDefaults
 import com.example.toolbox.ui.theme.FloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
@@ -1578,16 +1580,21 @@ fun AudioRecorderScreen(
         } else {
           disabledContentColor
         }
+        val formatPillShape = if (currentHexagonIconButtons()) {
+          HorizontalHexagonShape
+        } else {
+          RoundedCornerShape(20.dp)
+        }
         Box {
           Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = formatPillShape,
             color = if (isRecorderEnabled) {
               MaterialTheme.colorScheme.secondaryContainer
             } else {
               disabledContainerColor
             },
             modifier = Modifier
-              .clip(RoundedCornerShape(20.dp))
+              .clip(formatPillShape)
               .clickable(enabled = !isRecording && isRecorderEnabled) { showFormatMenu = true }
               .testTag("format_selector_button"),
           ) {
@@ -3014,11 +3021,16 @@ private fun RenameRecordingDialog(
         )
 
         if (missingExtension && trimmed.isNotEmpty()) {
+          val extPillShape = if (currentHexagonIconButtons()) {
+            HorizontalHexagonShape
+          } else {
+            RoundedCornerShape(20.dp)
+          }
           Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = extPillShape,
             color = MaterialTheme.colorScheme.tertiaryContainer,
             modifier = Modifier
-              .clip(RoundedCornerShape(20.dp))
+              .clip(extPillShape)
               .clickable {
                 val restored = "$trimmed.$ext"
                 textFieldValue = TextFieldValue(restored, TextRange(restored.length))

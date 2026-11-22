@@ -106,10 +106,17 @@ const val STICKY_AF_NATURAL_FREQUENCY_RAD_PER_SEC = 5.8f
 const val STICKY_AF_STEERING_TIME_CONSTANT_SEC = 0.16f
 
 /**
- * Maximum normalized viewfinder travel speed (`0.72f` = 72% of viewfinder width/height per second)
- * allowing the autofocus cursor to move faster across long distances after building up speed.
+ * Maximum normalized viewfinder travel speed (`0.64f` = 64% of viewfinder width/height per second)
+ * allowing the autofocus reticle to move smoothly across long distances after building up speed.
  */
-const val STICKY_AF_MAX_SPEED_NORM_PER_SEC = 0.72f
+const val STICKY_AF_MAX_SPEED_NORM_PER_SEC = 0.64f
+
+/**
+ * Normalized radial threshold (`0.26f` = 26% of viewfinder from the center `(0.5f, 0.5f)`)
+ * within which detected objects are considered near the center of the view for multi-object
+ * center-midpoint autofocus targeting.
+ */
+const val STICKY_AF_NEAR_CENTER_RADIUS_NORM = 0.26f
 
 /**
  * Maximum velocity increment (`0.22f` normalized units/sec) that a single trajectory update
@@ -8057,9 +8064,63 @@ object CameraEngine {
   }
 
   /**
+   * Returns `true` when [candidate] is a valid foreground object detection located near the center
+   * of the viewfinder (`(0.5f, 0.5f)`), within normalized center radius [maxCenterRadiusNorm]
+   * (defaults to [STICKY_AF_NEAR_CENTER_RADIUS_NORM]).
+   */
+  fun isObjectNearViewfinderCenter(
+    candidate: RawDetectedObjectForFocus,
+    maxCenterRadiusNorm: Float = STICKY_AF_NEAR_CENTER_RADIUS_NORM,
+  ): Boolean {
+    val box = candidate.boundingBox
+    if (box.width < 0.04f || box.height < 0.04f || box.area < 0.0020f || box.area > 0.92f) {
+      return false
+    }
+    return box.coerceNormalized().distanceToViewfinderCenter <= maxCenterRadiusNorm
+  }
+
+  /**
+   * Returns `true` when [first] and [second] represent two distinct detected objects rather than
+   * duplicate bounding boxes or a tightly nested sub-region of the exact same subject.
+   */
+  fun areDistinctFocusObjects(
+    first: RawDetectedObjectForFocus,
+    second: RawDetectedObjectForFocus,
+  ): Boolean {
+    if (first === second) return false
+    if (first.trackingId != null && second.trackingId != null && first.trackingId == second.trackingId) {
+      return false
+    }
+    val boxA = first.boundingBox.coerceNormalized()
+    val boxB = second.boundingBox.coerceNormalized()
+    if (boxA.isFullyOverlappingWith(boxB)) {
+      return false
+    }
+    val centerDist = kotlin.math.hypot(
+      (boxA.centerX - boxB.centerX).toDouble(),
+      (boxA.centerY - boxB.centerY).toDouble(),
+    ).toFloat()
+    if (centerDist < 0.03f) {
+      return false
+    }
+    if (boxA.containmentRatio(boxB) >= 0.85f && centerDist < 0.08f) {
+      return false
+    }
+    return true
+  }
+
+  private fun cleanFocusCategoryLabel(rawLabel: String?): String? {
+    val raw = rawLabel ?: return null
+    return normalizeAndFilterMlKitLabel(raw) ?: raw.trim().replaceFirstChar {
+      if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString()
+    }.takeIf { it.isNotBlank() && !isBlockedGenericVisionLabel(it) }
+  }
+
+  /**
    * Selects the optimal smart autofocus target from a list of ML Kit detected objects ([objects]),
-   * applying sticky subject hysteresis to resist transient detections and advancing the focus point
-   * smoothly along a velocity- and trajectory-respecting curve toward the selected target.
+   * targeting the center of both objects when multiple distinct objects are detected near the center
+   * of the viewfinder, applying sticky subject hysteresis to resist transient peripheral detections,
+   * and advancing the focus point smoothly along a velocity- and trajectory-respecting curve.
    */
   fun selectSmartAutofocusTargetFromObjects(
     objects: List<RawDetectedObjectForFocus>,
@@ -8077,12 +8138,17 @@ object CameraEngine {
     var bestScore = -1f
     var lockedCandidate: RawDetectedObjectForFocus? = null
     var lockedScore = -1f
+    val nearCenterScored = mutableListOf<Pair<RawDetectedObjectForFocus, Float>>()
 
     for (candidate in objects) {
       val score = scoreObjectForSmartAutofocus(candidate, previousTarget)
       if (score > bestScore) {
         bestScore = score
         bestCandidate = candidate
+      }
+      if (score >= 0f && isObjectNearViewfinderCenter(candidate)) {
+        val intrinsicScore = scoreObjectForSmartAutofocus(candidate, null)
+        nearCenterScored.add(Pair(candidate, intrinsicScore))
       }
       if (previousTarget != null &&
         previousTarget.source == CameraFocusSource.ML_OBJECT_AUTO &&
@@ -8098,6 +8164,106 @@ object CameraEngine {
     var winner = bestCandidate ?: return retainSmartFocusTargetOnDropout(previousTarget, timestampMs)
     if (bestScore < 0f) return retainSmartFocusTargetOnDropout(previousTarget, timestampMs)
 
+    val distinctNearCenter = mutableListOf<RawDetectedObjectForFocus>()
+    for ((candidate, _) in nearCenterScored.sortedByDescending { it.second }) {
+      if (distinctNearCenter.all { existing -> areDistinctFocusObjects(existing, candidate) }) {
+        distinctNearCenter.add(candidate)
+      }
+    }
+
+    if (distinctNearCenter.size >= 2) {
+      val firstObj = distinctNearCenter[0]
+      val secondObj = distinctNearCenter[1]
+      val box1 = firstObj.boundingBox.coerceNormalized()
+      val box2 = secondObj.boundingBox.coerceNormalized()
+
+      val desiredX = ((box1.centerX + box2.centerX) * 0.5f).coerceIn(0.08f, 0.92f)
+      val desiredY = ((box1.centerY + box2.centerY) * 0.5f).coerceIn(0.08f, 0.92f)
+
+      val avgHalfW = ((box1.width + box2.width) * 0.25f).coerceIn(0.04f, 0.42f)
+      val avgHalfH = ((box1.height + box2.height) * 0.25f).coerceIn(0.04f, 0.42f)
+      val halfW = minOf(avgHalfW, desiredX - 0.02f, 0.98f - desiredX).coerceAtLeast(0.04f)
+      val halfH = minOf(avgHalfH, desiredY - 0.02f, 0.98f - desiredY).coerceAtLeast(0.04f)
+      val combinedBox = CameraVisionBoundingBox(
+        left = desiredX - halfW,
+        top = desiredY - halfH,
+        right = desiredX + halfW,
+        bottom = desiredY + halfH,
+      )
+
+      val label1 = cleanFocusCategoryLabel(firstObj.label)
+      val label2 = cleanFocusCategoryLabel(secondObj.label)
+      val combinedLabel = when {
+        label1 != null && label2 != null && !label1.equals(label2, ignoreCase = true) -> "$label1 & $label2"
+        label1 != null -> label1
+        else -> label2
+      }
+      val combinedConfidence = ((firstObj.confidence.coerceIn(0f, 1f) + secondObj.confidence.coerceIn(0f, 1f)) * 0.5f)
+        .coerceIn(0f, 1f)
+      val combinedTrackingId = firstObj.trackingId ?: secondObj.trackingId
+
+      if (previousTarget == null || previousTarget.source != CameraFocusSource.ML_OBJECT_AUTO) {
+        return CameraSmartFocusTarget(
+          normX = desiredX,
+          normY = desiredY,
+          boundingBox = combinedBox,
+          trackingId = combinedTrackingId,
+          categoryLabel = combinedLabel,
+          confidence = combinedConfidence,
+          source = CameraFocusSource.ML_OBJECT_AUTO,
+          timestampMs = timestampMs,
+          targetNormX = desiredX,
+          targetNormY = desiredY,
+          targetBoundingBox = combinedBox,
+          velocityX = 0f,
+          velocityY = 0f,
+          lockStrength = 1.0f,
+          missedDetectionFrames = 0,
+        )
+      }
+
+      val midpointAsCandidate = RawDetectedObjectForFocus(
+        boundingBox = combinedBox,
+        trackingId = combinedTrackingId,
+        label = combinedLabel,
+        confidence = combinedConfidence,
+      )
+      val sameSubject = isSameTrackedSubject(midpointAsCandidate, previousTarget) ||
+        isSameTrackedSubject(firstObj, previousTarget) ||
+        isSameTrackedSubject(secondObj, previousTarget)
+      val nextLockStrength = if (sameSubject) {
+        (previousTarget.lockStrength + 0.12f).coerceIn(0.85f, 1.35f)
+      } else {
+        0.85f
+      }
+
+      val rawDtMs = timestampMs - previousTarget.timestampMs
+      val dtSeconds = if (rawDtMs > 0L) {
+        (rawDtMs.coerceIn(16L, 450L)) / 1000f
+      } else {
+        0.24f
+      }
+
+      val stepped = stepStickyAutofocusTrajectory(
+        currentTarget = previousTarget,
+        desiredX = desiredX,
+        desiredY = desiredY,
+        desiredBox = combinedBox,
+        dtSeconds = dtSeconds,
+        timestampMs = timestampMs,
+      )
+
+      return stepped.copy(
+        trackingId = combinedTrackingId ?: if (sameSubject) previousTarget.trackingId else null,
+        categoryLabel = combinedLabel ?: if (sameSubject) previousTarget.categoryLabel else null,
+        confidence = combinedConfidence,
+        source = CameraFocusSource.ML_OBJECT_AUTO,
+        timestampMs = timestampMs,
+        lockStrength = nextLockStrength,
+        missedDetectionFrames = 0,
+      )
+    }
+
     // Sticky hysteresis: if the currently tracked subject is still visible in the frame,
     // require a competing challenger to beat it by a clear margin before switching focus.
     val activeLocked = lockedCandidate
@@ -8112,11 +8278,7 @@ object CameraEngine {
     val desiredX = coercedBox.centerX.coerceIn(0.08f, 0.92f)
     val desiredY = coercedBox.centerY.coerceIn(0.08f, 0.92f)
 
-    val cleanedLabel = winner.label?.let { raw ->
-      normalizeAndFilterMlKitLabel(raw) ?: raw.trim().replaceFirstChar {
-        if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString()
-      }.takeIf { !isBlockedGenericVisionLabel(it) }
-    }
+    val cleanedLabel = cleanFocusCategoryLabel(winner.label)
 
     if (previousTarget == null || previousTarget.source != CameraFocusSource.ML_OBJECT_AUTO) {
       return CameraSmartFocusTarget(

@@ -34,7 +34,6 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.example.toolbox.ui.theme.CircleShape
-import com.example.toolbox.ui.theme.FilledIconButton
 import com.example.toolbox.ui.theme.FilledTonalIconButton
 import com.example.toolbox.ui.theme.HexagonShape
 import com.example.toolbox.ui.theme.HorizontalHexagonShape
@@ -42,13 +41,7 @@ import com.example.toolbox.ui.theme.LocalHexagonIconButtons
 import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.AddToHomeScreen
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QuestionMark
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -57,7 +50,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.SheetValue
@@ -65,8 +57,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberBottomSheetScaffoldState
-import androidx.compose.material3.rememberStandardBottomSheetState
 import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.material3.rememberStandardBottomSheetState
 import androidx.compose.runtime.Composable
@@ -89,10 +79,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -141,10 +129,7 @@ import com.example.toolbox.ui.tools.GuitarTunerScreen
 import com.example.toolbox.ui.tools.ImageEditorScreen
 import com.example.toolbox.ui.tools.ImageScreen
 import com.example.toolbox.ui.tools.MetronomeScreen
-import com.example.toolbox.ui.tools.MusicPlaybackSession
-import com.example.toolbox.ui.tools.MusicPlayerEngine
 import com.example.toolbox.ui.tools.MusicPlayerScreen
-import com.example.toolbox.ui.tools.MusicTrack
 import com.example.toolbox.ui.tools.NotesScreen
 import com.example.toolbox.ui.tools.Obd2ScannerScreen
 import com.example.toolbox.ui.tools.PdfViewerScreen
@@ -154,7 +139,6 @@ import com.example.toolbox.ui.tools.RulerScreen
 import com.example.toolbox.ui.tools.SearchScreen
 import com.example.toolbox.ui.tools.SettingsScreen
 import com.example.toolbox.ui.tools.TodoListScreen
-import com.example.toolbox.ui.tools.TrackArtworkThumbnail
 import com.example.toolbox.ui.tools.UnitConverterScreen
 import com.example.toolbox.ui.tools.VideoEditorScreen
 import kotlin.math.roundToInt
@@ -864,215 +848,33 @@ fun ToolsPullUpPanelContent(
           .padding(horizontal = 8.dp, vertical = 4.dp),
       )
 
-      // Row controls (add to home screen button, slider with dots 3-6, + ? help button) are hidden until pulled up;
-      // when the Music tool is playing in the background and another tool is open, replace this toolbar with a mini-player.
+      // Row controls (add to home screen button, slider with dots 3-6, + ? help button) are hidden until pulled up.
       if (isExpanded) {
         HorizontalDivider(
           modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
           color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
         )
 
-        val activeMusicSession = MusicPlayerEngine.activeSessionState
-        val activeMusicTrack = activeMusicSession?.currentTrack
-
-        if (
-          selectedTool != Tool.MUSIC &&
-            activeMusicSession != null &&
-            activeMusicSession.isPlaying &&
-            activeMusicTrack != null
-        ) {
-          NavigationPaneMiniMusicPlayer(
-            session = activeMusicSession,
-            track = activeMusicTrack,
-            onOpenMusicTool = {
-              onSelectTool(Tool.MUSIC)
-            },
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 12.dp, vertical = 6.dp),
-          )
-        } else {
-          ToolsPerRowControl(
-            toolsPerRow = toolsPerRow,
-            showHelp = showReorderHelp,
-            onToolsPerRowChange = onToolsPerRowChange,
-            onToggleHelp = { showReorderHelp = !showReorderHelp },
-            selectedTool = selectedTool,
-            onAddToHomeScreen = {
-              if (onAddToHomeScreen != null) {
-                onAddToHomeScreen(selectedTool)
-              } else {
-                addToolToHomeScreen(context, selectedTool)
-              }
-            },
-            toolSorting = toolSorting,
-            categorySorting = categorySorting,
-            categoryToolSorting = categoryToolSorting,
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 16.dp, vertical = 8.dp),
-          )
-        }
-      }
-    }
-  }
-}
-
-/**
- * Compact Music Player mini-player displayed in the expanded navigation pane in place of the
- * tools-per-row toolbar whenever music is playing in the background while another tool is active.
- */
-@Composable
-fun NavigationPaneMiniMusicPlayer(
-  session: MusicPlaybackSession,
-  track: MusicTrack,
-  onOpenMusicTool: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  val palette = session.activePalette
-  val isPlaying = session.isPlaying
-  val isFavorite = track.id in session.favoriteIds
-  val durationMs = session.trackDurationMs.coerceAtLeast(1L)
-  val progressFraction = (session.currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-  val accentColor = palette.accentColor
-  val dominantColor = palette.dominantColor
-  val darkSurfaceColor = palette.darkSurfaceColor
-
-  Card(
-    shape = RoundedCornerShape(16.dp),
-    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
-    border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f)),
-    modifier = modifier
-      .testTag("navigation_mini_player")
-      .semantics {
-        contentDescription = "Navigation mini music player ${track.title}"
-      },
-  ) {
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .background(
-          Brush.horizontalGradient(
-            colors = listOf(darkSurfaceColor, lerp(dominantColor, Color(0xFF14141F), 0.38f)),
-          )
-        ),
-    ) {
-      LinearProgressIndicator(
-        progress = { progressFraction },
-        color = accentColor,
-        trackColor = Color.White.copy(alpha = 0.16f),
-        modifier = Modifier
-          .fillMaxWidth()
-          .height(3.dp),
-      )
-
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        TrackArtworkThumbnail(
-          track = track,
-          size = 38.dp,
-          shape = RoundedCornerShape(9.dp),
-          modifier = Modifier
-            .clickable(onClick = onOpenMusicTool)
-            .testTag("navigation_mini_player_album_art"),
-        )
-
-        Column(
-          modifier = Modifier
-            .weight(1f)
-            .clickable(
-              interactionSource = remember { MutableInteractionSource() },
-              indication = null,
-              onClick = onOpenMusicTool,
-            ),
-        ) {
-          Text(
-            text = track.title,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.testTag("navigation_mini_player_title"),
-          )
-          Text(
-            text = "${track.artist} • ${track.album}",
-            style = MaterialTheme.typography.bodySmall,
-            color = Color.White.copy(alpha = 0.78f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.testTag("navigation_mini_player_subtitle"),
-          )
-        }
-
-        IconButton(
-          onClick = { session.toggleFavorite(track.id) },
-          modifier = Modifier
-            .size(30.dp)
-            .testTag("navigation_mini_player_favorite_button"),
-        ) {
-          Icon(
-            imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-            contentDescription = "Favorite",
-            tint = if (isFavorite) accentColor else Color.White.copy(alpha = 0.8f),
-            modifier = Modifier.size(18.dp),
-          )
-        }
-
-        IconButton(
-          onClick = { session.skipToPrevious() },
-          modifier = Modifier
-            .size(32.dp)
-            .testTag("navigation_mini_player_prev_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.SkipPrevious,
-            contentDescription = "Previous track",
-            tint = Color.White,
-            modifier = Modifier.size(20.dp),
-          )
-        }
-
-        FilledIconButton(
-          onClick = { session.togglePlayPause() },
-          shape = CircleShape,
-          modifier = Modifier
-            .size(34.dp)
-            .testTag("navigation_mini_player_play_pause_button"),
-          colors = IconButtonDefaults.filledIconButtonColors(
-            containerColor = accentColor,
-            contentColor = if (accentColor.red * 0.299f + accentColor.green * 0.587f + accentColor.blue * 0.114f > 0.55f) {
-              Color(0xFF101018)
+        ToolsPerRowControl(
+          toolsPerRow = toolsPerRow,
+          showHelp = showReorderHelp,
+          onToolsPerRowChange = onToolsPerRowChange,
+          onToggleHelp = { showReorderHelp = !showReorderHelp },
+          selectedTool = selectedTool,
+          onAddToHomeScreen = {
+            if (onAddToHomeScreen != null) {
+              onAddToHomeScreen(selectedTool)
             } else {
-              Color.White
-            },
-          ),
-        ) {
-          Icon(
-            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-            contentDescription = if (isPlaying) "Pause" else "Play",
-            modifier = Modifier.size(18.dp),
-          )
-        }
-
-        IconButton(
-          onClick = { session.skipToNext(userInitiated = true) },
+              addToolToHomeScreen(context, selectedTool)
+            }
+          },
+          toolSorting = toolSorting,
+          categorySorting = categorySorting,
+          categoryToolSorting = categoryToolSorting,
           modifier = Modifier
-            .size(32.dp)
-            .testTag("navigation_mini_player_next_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.SkipNext,
-            contentDescription = "Next track",
-            tint = Color.White,
-            modifier = Modifier.size(20.dp),
-          )
-        }
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        )
       }
     }
   }

@@ -139,7 +139,9 @@ import com.example.toolbox.ui.theme.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -2006,11 +2008,13 @@ fun CameraScreen(
             }
 
             // Aspect Ratio Pill Button
+            val hexagonEnabled = currentHexagonIconButtons()
+            val aspectPillShape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(16.dp)
             Surface(
-              shape = RoundedCornerShape(16.dp),
+              shape = aspectPillShape,
               color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f),
               modifier = Modifier
-                .clip(RoundedCornerShape(16.dp))
+                .clip(aspectPillShape)
                 .clickable(enabled = !isRecordingVideo) {
                   haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                   updateAspectRatio(aspectRatio.next())
@@ -2118,6 +2122,8 @@ fun CameraScreen(
       }
 
       // Top-Left & Top-Right Status Badges Overlay Row
+      val hexagonEnabled = currentHexagonIconButtons()
+      val statusPillShape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(20.dp)
       Row(
         modifier = Modifier
           .fillMaxWidth()
@@ -2128,7 +2134,7 @@ fun CameraScreen(
         // Left: Recording indicator OR Lens + Filter pill
         if (isRecordingVideo) {
           Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = statusPillShape,
             color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.88f),
             modifier = Modifier.testTag("video_recording_badge"),
           ) {
@@ -2155,10 +2161,10 @@ fun CameraScreen(
           }
         } else {
           Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = statusPillShape,
             color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f),
             modifier = Modifier
-              .clip(RoundedCornerShape(20.dp))
+              .clip(statusPillShape)
               .clickable(enabled = !isCountingDown && systemCameras.size > 1) {
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 toggleFrontBackPrimaryCamera()
@@ -2196,10 +2202,10 @@ fun CameraScreen(
 
         // Right: Zoom & EV readout pill
         Surface(
-          shape = RoundedCornerShape(20.dp),
+          shape = statusPillShape,
           color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f),
           modifier = Modifier
-            .clip(RoundedCornerShape(20.dp))
+            .clip(statusPillShape)
             .clickable { showAdjustmentsPanel = !showAdjustmentsPanel }
             .testTag("viewfinder_telemetry_pill"),
         ) {
@@ -2285,10 +2291,13 @@ fun CameraScreen(
         } else {
           "camera_back_lens_selector_row"
         }
+        val hexagonEnabled = currentHexagonIconButtons()
+        val lensBarOuterShape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(24.dp)
+        val lensPillShape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(16.dp)
         Row(
           modifier = Modifier
             .weight(1f, fill = false)
-            .clip(RoundedCornerShape(24.dp))
+            .clip(lensBarOuterShape)
             .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f))
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = 6.dp, vertical = 4.dp)
@@ -2299,7 +2308,7 @@ fun CameraScreen(
           activeFacingCameras.forEach { camera ->
             val isSelected = camera.cameraId == selectedCamera.cameraId
             Surface(
-              shape = RoundedCornerShape(16.dp),
+              shape = lensPillShape,
               color = if (isSelected) {
                 MaterialTheme.colorScheme.primaryContainer
               } else {
@@ -2307,7 +2316,7 @@ fun CameraScreen(
               },
               modifier = Modifier
                 .height(28.dp)
-                .clip(RoundedCornerShape(16.dp))
+                .clip(lensPillShape)
                 .clickable(enabled = !isCountingDown) {
                   haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                   selectCameraDevice(camera)
@@ -2790,13 +2799,14 @@ fun CameraScreen(
           }
 
           // Smooth Zoom Scroll Bar (replaces the active camera mode tool selector bar when selected)
+          val hexagonEnabled = currentHexagonIconButtons()
           AnimatedVisibility(
             visible = showZoomSlider,
             enter = slideInVertically(initialOffsetY = { it / 2 }) + expandVertically() + fadeIn(),
             exit = slideOutVertically(targetOffsetY = { it / 2 }) + shrinkVertically() + fadeOut(),
           ) {
             Surface(
-              shape = RoundedCornerShape(24.dp),
+              shape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(24.dp),
               color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f),
               modifier = Modifier
                 .fillMaxWidth()
@@ -2840,6 +2850,8 @@ fun CameraScreen(
           }
 
           // Mode Selector Row: Photo / Video / Scan / Note / Vision Mode Switcher Pill
+          val modeSelectorOuterShape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(24.dp)
+          val modeTabShape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(20.dp)
           Row(
             modifier = Modifier
               .fillMaxWidth()
@@ -2848,7 +2860,7 @@ fun CameraScreen(
             verticalAlignment = Alignment.CenterVertically,
           ) {
             Surface(
-              shape = RoundedCornerShape(24.dp),
+              shape = modeSelectorOuterShape,
               color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
               modifier = Modifier.testTag("capture_mode_selector"),
             ) {
@@ -2862,14 +2874,14 @@ fun CameraScreen(
                 CameraCaptureMode.entries.forEach { mode ->
                   val selected = mode == captureMode
                   Surface(
-                    shape = RoundedCornerShape(20.dp),
+                    shape = modeTabShape,
                     color = if (selected) {
                       MaterialTheme.colorScheme.primaryContainer
                     } else {
                       Color.Transparent
                     },
                     modifier = Modifier
-                      .clip(RoundedCornerShape(20.dp))
+                      .clip(modeTabShape)
                       .clickable(enabled = !isRecordingVideo && !isCapturingPanorama && !isCountingDown) {
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         showFiltersBar = false
@@ -4575,8 +4587,9 @@ private fun PanoramaReticleOverlayCanvas(
     }
 
     // Panorama guidance / active sweep status badge
+    val hexagonEnabled = currentHexagonIconButtons()
     Surface(
-      shape = RoundedCornerShape(20.dp),
+      shape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(20.dp),
       color = if (isCapturingPanorama) {
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
       } else {
@@ -5839,8 +5852,9 @@ private fun CameraFocusReticleOverlay(
       }
 
       // Hex Color Pill below the auto-focus circle
+      val focusPillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else CircleShape
       Surface(
-        shape = CircleShape,
+        shape = focusPillShape,
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.82f),
         border = BorderStroke(1.dp, swatchColor.copy(alpha = 0.65f)),
         modifier = Modifier
@@ -5851,7 +5865,7 @@ private fun CameraFocusReticleOverlay(
               y = pillTopPx.roundToInt(),
             )
           }
-          .clip(CircleShape)
+          .clip(focusPillShape)
           .clickable { onOpenColorInColorsTool(activeHex) }
           .testTag("camera_focus_color_pill"),
       ) {

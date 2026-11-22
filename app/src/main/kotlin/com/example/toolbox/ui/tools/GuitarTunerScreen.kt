@@ -72,7 +72,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -1151,13 +1153,14 @@ internal fun GuitarTunerContent(
           verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           // Header Row: String Badge + Tuning Status Badge
+          val hexagonEnabled = currentHexagonIconButtons()
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
           ) {
             Surface(
-              shape = RoundedCornerShape(50),
+              shape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(50),
               color = MaterialTheme.colorScheme.surface,
               border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
             ) {

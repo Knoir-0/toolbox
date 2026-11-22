@@ -18,6 +18,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -151,7 +152,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import com.example.toolbox.ui.theme.FilledIconButton
 import com.example.toolbox.ui.theme.FilledTonalButton
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -242,6 +243,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.Dp
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.toolbox.ui.theme.ToolboxTheme
@@ -4206,10 +4209,11 @@ private fun HomePreferredMusicAppsFloatingBar(
   modifier: Modifier = Modifier,
 ) {
   val scrollState = rememberScrollState()
+  val hexagonEnabled = currentHexagonIconButtons()
 
   Box(modifier = modifier) {
     Surface(
-      shape = RoundedCornerShape(28.dp),
+      shape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(28.dp),
       color = MaterialTheme.colorScheme.surfaceContainerHigh,
       tonalElevation = 6.dp,
       shadowElevation = 4.dp,
@@ -4250,7 +4254,7 @@ private fun HomePreferredMusicAppsFloatingBar(
           Row(
             modifier = Modifier
               .weight(1f)
-              .clip(RoundedCornerShape(20.dp))
+              .clip(if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(20.dp))
               .clickable(onClick = onOpenAddAppDialog)
               .padding(vertical = 10.dp)
               .testTag("music_home_empty_apps_prompt"),
@@ -4281,15 +4285,16 @@ private fun HomePreferredMusicAppsFloatingBar(
           ) {
             preferredApps.forEach { app ->
               val appAccent = Color(0xFF000000 or (app.accentRgb.toLong() and 0xFFFFFFL))
+              val chipShape = if (hexagonEnabled) HorizontalHexagonShape else CircleShape
               Surface(
-                shape = CircleShape,
+                shape = chipShape,
                 color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f),
                 border = BorderStroke(
                   width = 1.dp,
                   color = appAccent.copy(alpha = 0.45f),
                 ),
                 modifier = Modifier
-                  .clip(CircleShape)
+                  .clip(chipShape)
                   .combinedClickable(
                     onClick = { onLaunchApp(app) },
                     onLongClick = { onRemoveApp(app.id) },
@@ -8790,7 +8795,8 @@ private fun CollapsedMiniMusicPlayer(
 /**
  * Full-Screen Collapsible Music Player Sheet.
  * Renders a multi-stop vertical gradient derived directly from the active song's album art colors
- * and a slide-up Queue bottom sheet panel styled similarly to the Roll History panel in the Dice Roller tool.
+ * with an integrated grab handle at the bottom of the player view. Dragging the handle up slides up
+ * the queue view while pushing the album art out of the way, leaving the controls and title visible.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -8846,33 +8852,42 @@ private fun ExpandedMusicPlayerOverlay(
     label = "artworkScale",
   )
 
-  val sheetState = rememberStandardBottomSheetState(
-    initialValue = initialQueueSheetValue,
-    skipHiddenState = true,
-  )
-  val scaffoldState = rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
   val coroutineScope = rememberCoroutineScope()
-
-  val sheetPeekHeight = if (isExternal) 0.dp else 32.dp
-  val isQueueExpanded = !isExternal && (
-    sheetState.currentValue == SheetValue.Expanded ||
-      sheetState.targetValue == SheetValue.Expanded
-    )
-  val isSheetSettledExpanded = !isExternal && sheetState.currentValue == SheetValue.Expanded
+  val initialExpandedFraction = if (!isExternal && initialQueueSheetValue == SheetValue.Expanded) 1f else 0f
+  val queueExpandAnimatable = remember(isExternal) { Animatable(initialExpandedFraction) }
+  var queueTargetExpanded by remember(isExternal, initialQueueSheetValue) {
+    mutableStateOf(!isExternal && initialQueueSheetValue == SheetValue.Expanded)
+  }
+  val queueFraction = if (isExternal) 0f else queueExpandAnimatable.value.coerceIn(0f, 1f)
+  val isQueueExpanded = !isExternal && (queueTargetExpanded || queueFraction > 0.5f)
+  val isSheetSettledExpanded = !isExternal && queueTargetExpanded && queueFraction >= 0.98f
   var queueOpenCount by remember {
     mutableIntStateOf(if (initialQueueSheetValue == SheetValue.Expanded) 1 else 0)
   }
 
-  LaunchedEffect(isQueueExpanded) {
-    if (isQueueExpanded) {
+  fun animateQueueTo(expanded: Boolean) {
+    if (isExternal) return
+    if (expanded && !queueTargetExpanded) {
       queueOpenCount++
+    }
+    queueTargetExpanded = expanded
+    coroutineScope.launch {
+      queueExpandAnimatable.animateTo(
+        targetValue = if (expanded) 1f else 0f,
+        animationSpec = spring(
+          dampingRatio = Spring.DampingRatioNoBouncy,
+          stiffness = Spring.StiffnessMediumLow,
+        ),
+      )
     }
   }
 
+  fun toggleQueueSheet() {
+    animateQueueTo(!queueTargetExpanded)
+  }
+
   BackHandler(enabled = isQueueExpanded) {
-    coroutineScope.launch {
-      sheetState.partialExpand()
-    }
+    animateQueueTo(false)
   }
 
   val topGradientColor = lerp(dominantColor, Color(0xFF12121A), 0.25f)
@@ -8880,6 +8895,9 @@ private fun ExpandedMusicPlayerOverlay(
 
   val density = LocalDensity.current
   val dismissThresholdPx = with(density) { 64.dp.toPx() }
+  val defaultDragRangePx = with(density) { 300.dp.toPx() }
+  var maxAlbumArtHeightPx by remember { mutableFloatStateOf(0f) }
+  val queueDragRangePx = if (maxAlbumArtHeightPx > 80f) maxAlbumArtHeightPx else defaultDragRangePx
   var swipeDismissOffsetPx by remember { mutableFloatStateOf(0f) }
   val animatedDismissOffsetPx by animateFloatAsState(
     targetValue = swipeDismissOffsetPx,
@@ -8933,131 +8951,115 @@ private fun ExpandedMusicPlayerOverlay(
         contentDescription = "Expanded player background $dominantHex accent $accentHex"
       },
   ) {
-    BottomSheetScaffold(
-      modifier = Modifier.fillMaxSize(),
-      scaffoldState = scaffoldState,
-      sheetPeekHeight = sheetPeekHeight,
-      sheetSwipeEnabled = !isExternal,
-      sheetShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-      sheetContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-      sheetTonalElevation = 6.dp,
-      sheetShadowElevation = 12.dp,
-      sheetDragHandle = null,
-      containerColor = Color.Transparent,
-      sheetContent = {
-        if (!isExternal) {
-          PlaybackQueueSheetContent(
-            queue = queue,
-            currentQueueIndex = currentQueueIndex,
-            currentTrackId = track.id,
-            isPlaying = isPlaying,
-            shuffleMode = shuffleMode,
-            isExpanded = isQueueExpanded,
-            isSheetSettledExpanded = isSheetSettledExpanded,
-            queueOpenCount = queueOpenCount,
-            peekHeight = sheetPeekHeight,
-            onToggleSheet = {
-              coroutineScope.launch {
-                if (sheetState.currentValue == SheetValue.Expanded) {
-                  sheetState.partialExpand()
-                } else {
-                  queueOpenCount++
-                  sheetState.expand()
-                }
-              }
-            },
-            onSelectQueueIndex = onSelectQueueIndex,
-            onMoveQueueItem = onMoveQueueItem,
-            onSaveQueueAsPlaylist = onSaveQueueAsPlaylist,
-          )
-        }
-      },
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(top = 6.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-      Box(modifier = Modifier.fillMaxSize()) {
-        Column(
-          modifier = Modifier
-            .fillMaxSize()
-            .padding(
-              start = 20.dp,
-              end = 20.dp,
-              top = 6.dp,
-              bottom = 8.dp + sheetPeekHeight,
-            ),
-          horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          // 1. Top Header with Collapse Button, Now Playing Context, and Palette Swatch Pill
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            IconButton(
-              onClick = onCollapse,
-              modifier = Modifier
-                .size(40.dp)
-                .testTag("music_player_collapse_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.ExpandMore,
-                contentDescription = "Collapse player",
-                tint = Color.White,
-              )
-            }
-
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-              Text(
-                text = if (externalMedia != null) {
-                  val appName = externalMedia.sourceAppName.trim()
-                  if (appName.isNotEmpty()) "PLAYING FROM ${appName.uppercase()}" else "ANDROID MEDIA PLAYER"
-                } else {
-                  "NOW PLAYING"
-                },
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = Color.White.copy(alpha = 0.72f),
-              )
-              Text(
-                text = if (externalMedia != null) {
-                  externalMedia.album.ifBlank {
-                    externalMedia.sourceAppName.ifBlank { "Android Media Player" }
-                  }
-                } else {
-                  "${track.album} (${currentQueueIndex + 1}/$queueSize)"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium,
-                color = Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-              )
-            }
-
-            if (!isExternal) {
-              IconButton(
-                onClick = onOpenTrackInfo,
-                modifier = Modifier
-                  .size(40.dp)
-                  .testTag("expanded_player_info_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Info,
-                  contentDescription = "Track details",
-                  tint = Color.White.copy(alpha = 0.85f),
-                  modifier = Modifier.size(20.dp),
-                )
-              }
+      // Upper Player Section (Header, Collapsing Album Art, Title/Metadata, Seek, Transport, Speed/Sleep, Grab Handle)
+      val artworkWeight = (1f - queueFraction).coerceAtLeast(0.0001f)
+      val queueWeight = queueFraction.coerceAtLeast(0.0001f)
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .then(
+            if (queueFraction < 0.999f) {
+              Modifier.weight(artworkWeight)
             } else {
-              Spacer(modifier = Modifier.size(40.dp))
+              Modifier
             }
+          )
+          .padding(horizontal = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        // 1. Top Header with Collapse Button, Now Playing Context, and Track Info Button
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          IconButton(
+            onClick = onCollapse,
+            modifier = Modifier
+              .size(40.dp)
+              .testTag("music_player_collapse_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.ExpandMore,
+              contentDescription = "Collapse player",
+              tint = Color.White,
+            )
           }
 
-          // 2. Large Album Art Card with Favorite Star in Bottom-Right Corner
+          Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+              text = if (externalMedia != null) {
+                val appName = externalMedia.sourceAppName.trim()
+                if (appName.isNotEmpty()) "PLAYING FROM ${appName.uppercase()}" else "ANDROID MEDIA PLAYER"
+              } else {
+                "NOW PLAYING"
+              },
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.Bold,
+              color = Color.White.copy(alpha = 0.72f),
+            )
+            Text(
+              text = if (externalMedia != null) {
+                externalMedia.album.ifBlank {
+                  externalMedia.sourceAppName.ifBlank { "Android Media Player" }
+                }
+              } else {
+                "${track.album} (${currentQueueIndex + 1}/$queueSize)"
+              },
+              style = MaterialTheme.typography.bodySmall,
+              fontWeight = FontWeight.Medium,
+              color = Color.White,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+
+          if (!isExternal) {
+            IconButton(
+              onClick = onOpenTrackInfo,
+              modifier = Modifier
+                .size(40.dp)
+                .testTag("expanded_player_info_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Info,
+                contentDescription = "Track details",
+                tint = Color.White.copy(alpha = 0.85f),
+                modifier = Modifier.size(20.dp),
+              )
+            }
+          } else {
+            Spacer(modifier = Modifier.size(40.dp))
+          }
+        }
+
+        // 2. Large Album Art Card — smoothly pushed out of the way as the queue slides up
+        if (queueFraction < 0.995f) {
+          val artVisibilityFraction = (1f - queueFraction).coerceIn(0f, 1f)
           Box(
             modifier = Modifier
               .weight(1f)
               .fillMaxWidth()
-              .padding(vertical = 2.dp),
+              .padding(vertical = 2.dp)
+              .onSizeChanged { size ->
+                if (queueFraction < 0.05f && size.height > 0) {
+                  maxAlbumArtHeightPx = size.height.toFloat()
+                }
+              }
+              .graphicsLayer {
+                alpha = (1f - queueFraction * 1.15f).coerceIn(0f, 1f)
+                val collapseScale = 0.72f + 0.28f * artVisibilityFraction
+                scaleX = collapseScale
+                scaleY = collapseScale
+                translationY = -queueFraction * size.height * 0.35f
+              },
             contentAlignment = Alignment.Center,
           ) {
             Card(
@@ -9100,23 +9102,29 @@ private fun ExpandedMusicPlayerOverlay(
               }
             }
           }
+        }
 
-          // 3. Track Title, Artist, Album & Genre / Source Badge
-          val displayTitle = externalMedia?.title ?: track.title
-          val displayArtist = if (externalMedia != null) {
-            externalMedia.artist.ifBlank {
-              externalMedia.sourceAppName.ifBlank { "Android Media Player" }
-            }
-          } else {
-            track.artist
+        // 3. Track Title, Artist, Album & Genre / Source Badge
+        val displayTitle = externalMedia?.title ?: track.title
+        val displayArtist = if (externalMedia != null) {
+          externalMedia.artist.ifBlank {
+            externalMedia.sourceAppName.ifBlank { "Android Media Player" }
           }
-          val displayAlbum = if (externalMedia != null) {
-            externalMedia.album
-          } else {
-            track.album
-          }
-          Column(
+        } else {
+          track.artist
+        }
+        val displayAlbum = if (externalMedia != null) {
+          externalMedia.album
+        } else {
+          track.album
+        }
+        Column(
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Row(
             modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
           ) {
             Text(
               text = displayTitle,
@@ -9125,395 +9133,594 @@ private fun ExpandedMusicPlayerOverlay(
               color = Color.White,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.testTag("expanded_player_title"),
+              modifier = Modifier
+                .weight(1f)
+                .testTag("expanded_player_title"),
             )
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
+            if (!isExternal && queueFraction >= 0.995f) {
+              IconButton(
+                onClick = onToggleFavorite,
+                modifier = Modifier
+                  .size(32.dp)
+                  .testTag("expanded_player_favorite_button"),
+              ) {
+                Icon(
+                  imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                  contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
+                  tint = if (isFavorite) accentColor else Color.White.copy(alpha = 0.85f),
+                  modifier = Modifier.size(18.dp),
+                )
+              }
+            }
+          }
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            Text(
+              text = displayArtist,
+              style = MaterialTheme.typography.bodyMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = accentColor,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier
+                .then(
+                  if (!isExternal) Modifier.clickable(onClick = onNavigateToArtist)
+                  else Modifier
+                )
+                .testTag("expanded_player_artist"),
+            )
+            if (displayAlbum.isNotBlank()) {
               Text(
-                text = displayArtist,
+                text = "•",
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = accentColor,
+                color = Color.White.copy(alpha = 0.6f),
+              )
+              Text(
+                text = displayAlbum,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.85f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                   .then(
-                    if (!isExternal) Modifier.clickable(onClick = onNavigateToArtist)
+                    if (!isExternal) Modifier.clickable(onClick = onNavigateToAlbum)
                     else Modifier
                   )
-                  .testTag("expanded_player_artist"),
+                  .testTag("expanded_player_album"),
               )
-              if (displayAlbum.isNotBlank()) {
-                Text(
-                  text = "•",
-                  style = MaterialTheme.typography.bodyMedium,
-                  color = Color.White.copy(alpha = 0.6f),
-                )
-                Text(
-                  text = displayAlbum,
-                  style = MaterialTheme.typography.bodyMedium,
-                  color = Color.White.copy(alpha = 0.85f),
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                  modifier = Modifier
-                    .then(
-                      if (!isExternal) Modifier.clickable(onClick = onNavigateToAlbum)
-                      else Modifier
-                    )
-                    .testTag("expanded_player_album"),
-                )
-              }
             }
-            Spacer(modifier = Modifier.height(2.dp))
-            val badgeText = if (externalMedia != null) {
-              listOf(
-                externalMedia.sourceAppName.ifBlank { "Android Media Player" },
-                externalMedia.genre,
-              ).filter { it.isNotBlank() }.distinct().joinToString(" • ")
-            } else {
-              "${track.genre} • ${track.year}"
-            }
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
+          }
+          Spacer(modifier = Modifier.height(2.dp))
+          val badgeText = if (externalMedia != null) {
+            listOf(
+              externalMedia.sourceAppName.ifBlank { "Android Media Player" },
+              externalMedia.genre,
+            ).filter { it.isNotBlank() }.distinct().joinToString(" • ")
+          } else {
+            "${track.genre} • ${track.year}"
+          }
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Surface(
+              shape = RoundedCornerShape(12.dp),
+              color = Color.White.copy(alpha = 0.15f),
+              modifier = if (isExternal) {
+                Modifier
+                  .clip(RoundedCornerShape(12.dp))
+                  .then(
+                    if (onOpenExternalApp != null) {
+                      Modifier.clickable(onClick = onOpenExternalApp)
+                    } else {
+                      Modifier
+                    }
+                  )
+                  .semantics {
+                    val appLabel = externalMedia.sourceAppName.takeIf { it.isNotBlank() } ?: "Android Media Player"
+                    contentDescription = "Open $appLabel ($badgeText)"
+                  }
+                  .testTag("expanded_player_external_source_badge")
+              } else {
+                Modifier
+              },
             ) {
+              Text(
+                text = badgeText,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+              )
+            }
+            if (isExternal && !isSystemMediaListenerEnabled && onGrantSystemMediaAccess != null) {
               Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = Color.White.copy(alpha = 0.15f),
-                modifier = if (isExternal) {
-                  Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .then(
-                      if (onOpenExternalApp != null) {
-                        Modifier.clickable(onClick = onOpenExternalApp)
-                      } else {
-                        Modifier
-                      }
-                    )
-                    .semantics {
-                      val appLabel = externalMedia.sourceAppName.takeIf { it.isNotBlank() } ?: "Android Media Player"
-                      contentDescription = "Open $appLabel ($badgeText)"
-                    }
-                    .testTag("expanded_player_external_source_badge")
-                } else {
-                  Modifier
-                },
+                color = Color.White.copy(alpha = 0.14f),
+                border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f)),
+                modifier = Modifier
+                  .clip(RoundedCornerShape(12.dp))
+                  .clickable(onClick = onGrantSystemMediaAccess)
+                  .testTag("expanded_player_grant_media_access_banner"),
               ) {
                 Text(
-                  text = badgeText,
+                  text = "Grant Access",
                   style = MaterialTheme.typography.labelSmall,
-                  color = Color.White.copy(alpha = 0.9f),
+                  fontWeight = FontWeight.Bold,
+                  color = accentColor,
+                  maxLines = 1,
                   modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                )
-              }
-              if (isExternal && !isSystemMediaListenerEnabled && onGrantSystemMediaAccess != null) {
-                Surface(
-                  shape = RoundedCornerShape(12.dp),
-                  color = Color.White.copy(alpha = 0.14f),
-                  border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f)),
-                  modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable(onClick = onGrantSystemMediaAccess)
-                    .testTag("expanded_player_grant_media_access_banner"),
-                ) {
-                  Text(
-                    text = "Grant Access",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = accentColor,
-                    maxLines = 1,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                  )
-                }
-              }
-            }
-          }
-
-          // 4. Seek Slider (SlimDotSlider per DESIGN_LANGUAGE.md) + Elapsed / Total Time
-          // Always reserve the row space even when hidden for external media with unknown duration.
-          val isSeekBarVisible = !isExternal || durationMs > 0L
-          Box(
-            modifier = Modifier
-              .fillMaxWidth()
-              .testTag("expanded_player_seek_row"),
-          ) {
-            if (isSeekBarVisible) {
-              Column(modifier = Modifier.fillMaxWidth()) {
-                MusicSlimDotSlider(
-                  value = seekFraction,
-                  onValueChange = onSeekChange,
-                  onValueChangeFinished = onSeekFinished,
-                  accentColor = accentColor,
-                  inactiveColor = Color.White.copy(alpha = 0.25f),
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("expanded_player_seek_slider"),
-                )
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                  Text(
-                    text = AudioRecorderEngine.formatDurationMs(currentPositionMs),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = Color.White.copy(alpha = 0.82f),
-                    modifier = Modifier.testTag("expanded_player_current_time"),
-                  )
-                  Text(
-                    text = AudioRecorderEngine.formatDurationMs(durationMs),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = Color.White.copy(alpha = 0.82f),
-                    modifier = Modifier.testTag("expanded_player_total_time"),
-                  )
-                }
-              }
-            } else {
-              Column(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .alpha(0f)
-                  .clearAndSetSemantics {},
-              ) {
-                Spacer(modifier = Modifier.height(28.dp))
-                Text(
-                  text = "00:00",
-                  style = MaterialTheme.typography.labelSmall,
-                  fontFamily = FontFamily.Monospace,
-                )
-              }
-            }
-          }
-
-          // 5. Primary Transport Controls (Shuffle / External Action 1, Previous, Play/Pause, Next, Repeat / External Action 2)
-          val externalLeftAction = externalMedia?.customActions?.getOrNull(0)
-          val externalRightAction = externalMedia?.customActions?.getOrNull(1)
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            if (!isExternal) {
-              IconButton(
-                onClick = onToggleShuffle,
-                colors = IconButtonDefaults.iconButtonColors(
-                  containerColor = if (shuffleMode.isEnabled) accentColor.copy(alpha = 0.25f) else Color.Transparent,
-                ),
-                modifier = Modifier
-                  .size(40.dp)
-                  .testTag("expanded_player_shuffle_button"),
-              ) {
-                Icon(
-                  imageVector = if (shuffleMode == MusicShuffleMode.SMART_SHUFFLE) Icons.Default.AutoAwesome else Icons.Default.Shuffle,
-                  contentDescription = shuffleMode.displayName,
-                  tint = if (shuffleMode.isEnabled) accentColor else Color.White.copy(alpha = 0.7f),
-                  modifier = Modifier.size(22.dp),
-                )
-              }
-            } else if (externalLeftAction != null) {
-              ExternalCustomActionButton(
-                customAction = externalLeftAction,
-                accentColor = accentColor,
-                testTag = "expanded_player_external_action_left",
-                onClick = { onTriggerExternalCustomAction(externalLeftAction) },
-              )
-            } else {
-              Spacer(modifier = Modifier.size(40.dp))
-            }
-
-            IconButton(
-              onClick = onPrevious,
-              modifier = Modifier
-                .size(44.dp)
-                .testTag("expanded_player_prev_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.SkipPrevious,
-                contentDescription = "Previous track",
-                tint = Color.White,
-                modifier = Modifier.size(30.dp),
-              )
-            }
-
-            FilledIconButton(
-              onClick = onPlayPause,
-              modifier = Modifier
-                .size(64.dp)
-                .testTag("expanded_player_play_pause_button"),
-              shape = CircleShape,
-              colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = accentColor,
-                contentColor = if (accentColor.red * 0.299f + accentColor.green * 0.587f + accentColor.blue * 0.114f > 0.55f) {
-                  Color(0xFF101018)
-                } else {
-                  Color.White
-                },
-              ),
-            ) {
-              Icon(
-                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (isPlaying) "Pause" else "Play",
-                modifier = Modifier.size(34.dp),
-              )
-            }
-
-            IconButton(
-              onClick = onNext,
-              modifier = Modifier
-                .size(44.dp)
-                .testTag("expanded_player_next_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.SkipNext,
-                contentDescription = "Next track",
-                tint = Color.White,
-                modifier = Modifier.size(30.dp),
-              )
-            }
-
-            if (!isExternal) {
-              IconButton(
-                onClick = onCycleRepeat,
-                colors = IconButtonDefaults.iconButtonColors(
-                  containerColor = if (repeatMode != MusicRepeatMode.OFF) accentColor.copy(alpha = 0.25f) else Color.Transparent,
-                ),
-                modifier = Modifier
-                  .size(40.dp)
-                  .testTag("expanded_player_repeat_button"),
-              ) {
-                Icon(
-                  imageVector = if (repeatMode == MusicRepeatMode.REPEAT_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
-                  contentDescription = repeatMode.displayName,
-                  tint = if (repeatMode != MusicRepeatMode.OFF) accentColor else Color.White.copy(alpha = 0.7f),
-                  modifier = Modifier.size(22.dp),
-                )
-              }
-            } else if (externalRightAction != null) {
-              ExternalCustomActionButton(
-                customAction = externalRightAction,
-                accentColor = accentColor,
-                testTag = "expanded_player_external_action_right",
-                onClick = { onTriggerExternalCustomAction(externalRightAction) },
-              )
-            } else {
-              Spacer(modifier = Modifier.size(40.dp))
-            }
-          }
-
-          // 6. Secondary Utility Bar: Speed & Sleep Timer
-          // Hidden when controlling external Android system media, while reserving the row space.
-          Box(
-            modifier = Modifier
-              .fillMaxWidth()
-              .testTag("expanded_player_speed_sleep_row"),
-          ) {
-            if (!isExternal) {
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Surface(
-                  shape = CircleShape,
-                  color = Color.White.copy(alpha = 0.14f),
-                  modifier = Modifier
-                    .clip(CircleShape)
-                    .clickable(onClick = onCycleSpeed)
-                    .testTag("expanded_player_speed_button"),
-                ) {
-                  Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.Speed,
-                      contentDescription = null,
-                      tint = Color.White,
-                      modifier = Modifier.size(16.dp),
-                    )
-                    Text(
-                      text = "${playbackSpeed}x",
-                      style = MaterialTheme.typography.labelMedium,
-                      fontWeight = FontWeight.SemiBold,
-                      color = Color.White,
-                    )
-                  }
-                }
-
-                Surface(
-                  shape = CircleShape,
-                  color = if (sleepTimerPreset != SleepTimerPreset.OFF) accentColor.copy(alpha = 0.28f)
-                  else Color.White.copy(alpha = 0.14f),
-                  modifier = Modifier
-                    .clip(CircleShape)
-                    .clickable(onClick = onCycleSleepTimer)
-                    .testTag("expanded_player_sleep_button"),
-                ) {
-                  Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.Timer,
-                      contentDescription = null,
-                      tint = Color.White,
-                      modifier = Modifier.size(16.dp),
-                    )
-                    Text(
-                      text = if (sleepTimerPreset == SleepTimerPreset.OFF) {
-                        "Sleep"
-                      } else {
-                        AudioRecorderEngine.formatDurationMs(sleepRemainingMs)
-                      },
-                      style = MaterialTheme.typography.labelMedium,
-                      fontWeight = FontWeight.SemiBold,
-                      color = Color.White,
-                    )
-                  }
-                }
-              }
-            } else {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .padding(vertical = 6.dp)
-                  .alpha(0f)
-                  .clearAndSetSemantics {},
-              ) {
-                Spacer(modifier = Modifier.size(16.dp))
-                Text(
-                  text = "1.0x",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.SemiBold,
                 )
               }
             }
           }
         }
 
-        // Scrim overlay behind queue sheet when expanded
-        AnimatedVisibility(
-          visible = isQueueExpanded,
-          enter = fadeIn(tween(250)),
-          exit = fadeOut(tween(200)),
+        // 4. Seek Slider (SlimDotSlider per DESIGN_LANGUAGE.md) + Elapsed / Total Time
+        // Always reserve the row space even when hidden for external media with unknown duration.
+        val isSeekBarVisible = !isExternal || durationMs > 0L
+        Box(
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("expanded_player_seek_row"),
         ) {
-          Box(
+          if (isSeekBarVisible) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+              MusicSlimDotSlider(
+                value = seekFraction,
+                onValueChange = onSeekChange,
+                onValueChangeFinished = onSeekFinished,
+                accentColor = accentColor,
+                inactiveColor = Color.White.copy(alpha = 0.25f),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .testTag("expanded_player_seek_slider"),
+              )
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Text(
+                  text = AudioRecorderEngine.formatDurationMs(currentPositionMs),
+                  style = MaterialTheme.typography.labelSmall,
+                  fontFamily = FontFamily.Monospace,
+                  color = Color.White.copy(alpha = 0.82f),
+                  modifier = Modifier.testTag("expanded_player_current_time"),
+                )
+                Text(
+                  text = AudioRecorderEngine.formatDurationMs(durationMs),
+                  style = MaterialTheme.typography.labelSmall,
+                  fontFamily = FontFamily.Monospace,
+                  color = Color.White.copy(alpha = 0.82f),
+                  modifier = Modifier.testTag("expanded_player_total_time"),
+                )
+              }
+            }
+          } else {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .alpha(0f)
+                .clearAndSetSemantics {},
+            ) {
+              Spacer(modifier = Modifier.height(28.dp))
+              Text(
+                text = "00:00",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+              )
+            }
+          }
+        }
+
+        // 5. Primary Transport Controls (Shuffle / External Action 1, Previous, Play/Pause, Next, Repeat / External Action 2)
+        val externalLeftAction = externalMedia?.customActions?.getOrNull(0)
+        val externalRightAction = externalMedia?.customActions?.getOrNull(1)
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          if (!isExternal) {
+            IconButton(
+              onClick = onToggleShuffle,
+              colors = IconButtonDefaults.iconButtonColors(
+                containerColor = if (shuffleMode.isEnabled) accentColor.copy(alpha = 0.25f) else Color.Transparent,
+              ),
+              modifier = Modifier
+                .size(40.dp)
+                .testTag("expanded_player_shuffle_button"),
+            ) {
+              Icon(
+                imageVector = if (shuffleMode == MusicShuffleMode.SMART_SHUFFLE) Icons.Default.AutoAwesome else Icons.Default.Shuffle,
+                contentDescription = shuffleMode.displayName,
+                tint = if (shuffleMode.isEnabled) accentColor else Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.size(22.dp),
+              )
+            }
+          } else if (externalLeftAction != null) {
+            ExternalCustomActionButton(
+              customAction = externalLeftAction,
+              accentColor = accentColor,
+              testTag = "expanded_player_external_action_left",
+              onClick = { onTriggerExternalCustomAction(externalLeftAction) },
+            )
+          } else {
+            Spacer(modifier = Modifier.size(40.dp))
+          }
+
+          IconButton(
+            onClick = onPrevious,
             modifier = Modifier
-              .fillMaxSize()
-              .background(Color.Black.copy(alpha = 0.5f))
+              .size(44.dp)
+              .testTag("expanded_player_prev_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.SkipPrevious,
+              contentDescription = "Previous track",
+              tint = Color.White,
+              modifier = Modifier.size(30.dp),
+            )
+          }
+
+          FilledIconButton(
+            onClick = onPlayPause,
+            modifier = Modifier
+              .size(64.dp)
+              .testTag("expanded_player_play_pause_button"),
+            shape = CircleShape,
+            colors = IconButtonDefaults.filledIconButtonColors(
+              containerColor = accentColor,
+              contentColor = if (accentColor.red * 0.299f + accentColor.green * 0.587f + accentColor.blue * 0.114f > 0.55f) {
+                Color(0xFF101018)
+              } else {
+                Color.White
+              },
+            ),
+          ) {
+            Icon(
+              imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+              contentDescription = if (isPlaying) "Pause" else "Play",
+              modifier = Modifier.size(34.dp),
+            )
+          }
+
+          IconButton(
+            onClick = onNext,
+            modifier = Modifier
+              .size(44.dp)
+              .testTag("expanded_player_next_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.SkipNext,
+              contentDescription = "Next track",
+              tint = Color.White,
+              modifier = Modifier.size(30.dp),
+            )
+          }
+
+          if (!isExternal) {
+            IconButton(
+              onClick = onCycleRepeat,
+              colors = IconButtonDefaults.iconButtonColors(
+                containerColor = if (repeatMode != MusicRepeatMode.OFF) accentColor.copy(alpha = 0.25f) else Color.Transparent,
+              ),
+              modifier = Modifier
+                .size(40.dp)
+                .testTag("expanded_player_repeat_button"),
+            ) {
+              Icon(
+                imageVector = if (repeatMode == MusicRepeatMode.REPEAT_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                contentDescription = repeatMode.displayName,
+                tint = if (repeatMode != MusicRepeatMode.OFF) accentColor else Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.size(22.dp),
+              )
+            }
+          } else if (externalRightAction != null) {
+            ExternalCustomActionButton(
+              customAction = externalRightAction,
+              accentColor = accentColor,
+              testTag = "expanded_player_external_action_right",
+              onClick = { onTriggerExternalCustomAction(externalRightAction) },
+            )
+          } else {
+            Spacer(modifier = Modifier.size(40.dp))
+          }
+        }
+
+        // 6. Secondary Utility Bar: Speed & Sleep Timer
+        // Hidden when controlling external Android system media, while reserving the row space.
+        Box(
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("expanded_player_speed_sleep_row"),
+        ) {
+          if (!isExternal) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Surface(
+                shape = CircleShape,
+                color = Color.White.copy(alpha = 0.14f),
+                modifier = Modifier
+                  .clip(CircleShape)
+                  .clickable(onClick = onCycleSpeed)
+                  .testTag("expanded_player_speed_button"),
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Speed,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp),
+                  )
+                  Text(
+                    text = "${playbackSpeed}x",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                  )
+                }
+              }
+
+              Surface(
+                shape = CircleShape,
+                color = if (sleepTimerPreset != SleepTimerPreset.OFF) accentColor.copy(alpha = 0.28f)
+                else Color.White.copy(alpha = 0.14f),
+                modifier = Modifier
+                  .clip(CircleShape)
+                  .clickable(onClick = onCycleSleepTimer)
+                  .testTag("expanded_player_sleep_button"),
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Timer,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp),
+                  )
+                  Text(
+                    text = if (sleepTimerPreset == SleepTimerPreset.OFF) {
+                      "Sleep"
+                    } else {
+                      AudioRecorderEngine.formatDurationMs(sleepRemainingMs)
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                  )
+                }
+              }
+            }
+          } else {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp)
+                .alpha(0f)
+                .clearAndSetSemantics {},
+            ) {
+              Spacer(modifier = Modifier.size(16.dp))
+              Text(
+                text = "1.0x",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+              )
+            }
+          }
+        }
+
+        // 7. Integrated Queue Grab Handle Bar at the bottom of the Player View
+        if (!isExternal) {
+          val arrowRotation by animateFloatAsState(
+            targetValue = if (isQueueExpanded) 180f else 0f,
+            label = "QueueChevronRotation",
+          )
+          val handleContainerColor = lerp(
+            Color.White.copy(alpha = 0.12f),
+            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+            queueFraction,
+          )
+          val handlePrimaryTextColor = lerp(
+            Color.White,
+            MaterialTheme.colorScheme.onSurface,
+            queueFraction,
+          )
+          val handleSecondaryTextColor = lerp(
+            Color.White.copy(alpha = 0.72f),
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            queueFraction,
+          )
+          val handlePillColor = lerp(
+            Color.White.copy(alpha = 0.45f),
+            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+            queueFraction,
+          )
+
+          Surface(
+            shape = RoundedCornerShape(
+              topStart = 20.dp,
+              topEnd = 20.dp,
+              bottomStart = ((1f - queueFraction) * 20f).dp,
+              bottomEnd = ((1f - queueFraction) * 20f).dp,
+            ),
+            color = handleContainerColor,
+            border = BorderStroke(
+              width = 1.dp,
+              color = Color.White.copy(alpha = 0.16f * (1f - queueFraction * 0.5f)),
+            ),
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(bottom = ((1f - queueFraction) * 6f).dp)
+              .pointerInput(queueDragRangePx) {
+                var dragStartFraction = 0f
+                var totalDragY = 0f
+                detectVerticalDragGestures(
+                  onDragStart = {
+                    dragStartFraction = queueExpandAnimatable.value
+                    totalDragY = 0f
+                  },
+                  onVerticalDrag = { change, dragAmount ->
+                    change.consume()
+                    totalDragY += dragAmount
+                    val deltaFraction = -totalDragY / queueDragRangePx.coerceAtLeast(1f)
+                    val nextFraction = (dragStartFraction + deltaFraction).coerceIn(0f, 1f)
+                    coroutineScope.launch {
+                      queueExpandAnimatable.snapTo(nextFraction)
+                    }
+                  },
+                  onDragEnd = {
+                    val cur = queueExpandAnimatable.value
+                    val shouldExpand = when {
+                      totalDragY < -24f -> true
+                      totalDragY > 24f -> false
+                      else -> cur >= 0.5f
+                    }
+                    animateQueueTo(shouldExpand)
+                  },
+                  onDragCancel = {
+                    animateQueueTo(queueExpandAnimatable.value >= 0.5f)
+                  },
+                )
+              }
               .pointerInput(Unit) {
-                detectTapGestures {
-                  coroutineScope.launch {
-                    sheetState.partialExpand()
+                detectTapGestures { toggleQueueSheet() }
+              }
+              .testTag("music_queue_panel_toggle"),
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.Center,
+            ) {
+              // Grab handle pill integrated at top of bar
+              Box(
+                modifier = Modifier
+                  .width(34.dp)
+                  .height(3.5.dp)
+                  .background(
+                    color = handlePillColor,
+                    shape = CircleShape,
+                  )
+                  .testTag("music_queue_grab_handle"),
+              )
+
+              Spacer(modifier = Modifier.height(4.dp))
+
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .clickable(onClick = { toggleQueueSheet() })
+                  .testTag("expanded_player_up_next_button"),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                    contentDescription = null,
+                    tint = accentColor,
+                    modifier = Modifier.size(16.dp),
+                  )
+                  Text(
+                    text = "Queue",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = handlePrimaryTextColor,
+                  )
+                  if (queue.isNotEmpty()) {
+                    Badge(
+                      containerColor = accentColor.copy(alpha = 0.25f),
+                      contentColor = handlePrimaryTextColor,
+                    ) {
+                      Text(
+                        text = queue.size.toString(),
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                      )
+                    }
                   }
                 }
-              },
+
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                  if (!isQueueExpanded && queue.isNotEmpty()) {
+                    val nextTrack = queue.getOrNull((currentQueueIndex + 1) % queue.size)
+                    val previewText = if (queue.size > 1 && nextTrack != null) {
+                      "Next: ${nextTrack.title}"
+                    } else {
+                      "Track ${currentQueueIndex + 1}/${queue.size}"
+                    }
+                    Text(
+                      text = previewText,
+                      style = MaterialTheme.typography.labelSmall,
+                      color = handleSecondaryTextColor,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                      modifier = Modifier.widthIn(max = 160.dp),
+                    )
+                  }
+                  Icon(
+                    imageVector = Icons.Default.KeyboardArrowUp,
+                    contentDescription = "Toggle queue panel",
+                    modifier = Modifier
+                      .size(18.dp)
+                      .rotate(arrowRotation),
+                    tint = handleSecondaryTextColor,
+                  )
+                }
+              }
+            }
+          }
+        } else {
+          Spacer(modifier = Modifier.height(8.dp))
+        }
+      }
+
+      // 8. Slide-Up Queue Panel (pushes album art out of the way while keeping controls & title visible)
+      if (!isExternal && queueFraction > 0.001f) {
+        Surface(
+          shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+          color = MaterialTheme.colorScheme.surfaceContainerHigh,
+          tonalElevation = 6.dp,
+          shadowElevation = 12.dp,
+          modifier = Modifier
+            .fillMaxWidth()
+            .weight(queueWeight)
+            .graphicsLayer {
+              alpha = (queueFraction * 1.35f).coerceIn(0f, 1f)
+            },
+        ) {
+          PlaybackQueueSheetContent(
+            queue = queue,
+            currentQueueIndex = currentQueueIndex,
+            currentTrackId = track.id,
+            isPlaying = isPlaying,
+            shuffleMode = shuffleMode,
+            isExpanded = isQueueExpanded,
+            isSheetSettledExpanded = isSheetSettledExpanded,
+            queueOpenCount = queueOpenCount,
+            onSelectQueueIndex = onSelectQueueIndex,
+            onMoveQueueItem = onMoveQueueItem,
+            onSaveQueueAsPlaylist = onSaveQueueAsPlaylist,
           )
         }
       }
@@ -9596,8 +9803,7 @@ private fun resolveExternalCustomActionVector(
 }
 
 /**
- * Slide-up Playback Queue Sheet Panel inside the Full Music Player,
- * styled similarly to `RollHistorySheetContent` in the Dice Roller tool.
+ * Slide-up Playback Queue Sheet Panel inside the Full Music Player.
  */
 @Composable
 private fun PlaybackQueueSheetContent(
@@ -9609,17 +9815,10 @@ private fun PlaybackQueueSheetContent(
   isExpanded: Boolean,
   isSheetSettledExpanded: Boolean = isExpanded,
   queueOpenCount: Int = 0,
-  peekHeight: Dp = 32.dp,
-  onToggleSheet: () -> Unit,
   onSelectQueueIndex: (Int) -> Unit,
   onMoveQueueItem: (fromIndex: Int, toIndex: Int) -> Unit,
   onSaveQueueAsPlaylist: () -> Unit,
 ) {
-  val arrowRotation by animateFloatAsState(
-    targetValue = if (isExpanded) 180f else 0f,
-    label = "QueueChevronRotation",
-  )
-
   val focusedQueueIndex = remember(queue, currentQueueIndex, currentTrackId) {
     MusicPlayerEngine.resolveFocusedQueueIndex(
       queue = queue,
@@ -9656,111 +9855,9 @@ private fun PlaybackQueueSheetContent(
 
   Column(
     modifier = Modifier
-      .fillMaxWidth()
-      .fillMaxHeight(0.60f)
+      .fillMaxSize()
       .testTag("music_queue_sheet"),
   ) {
-    // Peek Header Bar (Drag or Tap to Pull Up Over the Player)
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .height(peekHeight)
-        .pointerInput(onToggleSheet) {
-          detectTapGestures { onToggleSheet() }
-        }
-        .testTag("music_queue_panel_toggle")
-        .padding(horizontal = 20.dp, vertical = 3.dp),
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.Center,
-    ) {
-      // Drag handle pill
-      Box(
-        modifier = Modifier.fillMaxWidth(),
-        contentAlignment = Alignment.Center,
-      ) {
-        Box(
-          modifier = Modifier
-            .width(28.dp)
-            .height(2.5.dp)
-            .background(
-              color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-              shape = CircleShape,
-            ),
-        )
-      }
-
-      Spacer(modifier = Modifier.height(2.dp))
-
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .clickable(onClick = onToggleSheet)
-          .testTag("expanded_player_up_next_button"),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          Icon(
-            imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(15.dp),
-          )
-          Text(
-            text = "Queue",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold,
-          )
-          if (queue.isNotEmpty()) {
-            Badge(
-              containerColor = MaterialTheme.colorScheme.primaryContainer,
-              contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            ) {
-              Text(
-                text = queue.size.toString(),
-                modifier = Modifier.padding(horizontal = 4.dp),
-              )
-            }
-          }
-        }
-
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-          if (!isExpanded && queue.isNotEmpty()) {
-            val nextTrack = queue.getOrNull((currentQueueIndex + 1) % queue.size)
-            val previewText = if (queue.size > 1 && nextTrack != null) {
-              "Next: ${nextTrack.title}"
-            } else {
-              "Track ${currentQueueIndex + 1}/${queue.size}"
-            }
-            Text(
-              text = previewText,
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.widthIn(max = 150.dp),
-            )
-          }
-          Icon(
-            imageVector = Icons.Default.KeyboardArrowUp,
-            contentDescription = "Toggle queue panel",
-            modifier = Modifier
-              .size(18.dp)
-              .rotate(arrowRotation),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-      }
-    }
-
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
     // Top of Song Queue Action Bar: Save Queue as Playlist
     if (queue.isNotEmpty()) {
       Row(

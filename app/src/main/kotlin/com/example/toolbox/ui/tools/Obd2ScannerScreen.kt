@@ -89,7 +89,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import com.example.toolbox.ui.theme.FilledTonalButton
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import com.example.toolbox.ui.theme.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -339,11 +341,12 @@ fun Obd2ScannerScreen(
       actions = {
         if (isConnected) {
           // Metric / Imperial quick toggle pill
+          val unitPillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp)
           Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = unitPillShape,
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
             modifier = Modifier
-              .clip(RoundedCornerShape(20.dp))
+              .clip(unitPillShape)
               .clickable {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 useImperialUnits = !useImperialUnits
@@ -1401,6 +1404,7 @@ private fun Obd2ConnectedDashboardContent(
         .padding(horizontal = 12.dp, vertical = 8.dp),
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+      val tabPillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp)
       Obd2ScannerTab.entries.forEach { tab ->
         val selected = selectedTab == tab
         val badgeCount = if (tab == Obd2ScannerTab.TROUBLE_CODES && activeDtcs.isNotEmpty()) {
@@ -1409,7 +1413,7 @@ private fun Obd2ConnectedDashboardContent(
           0
         }
         Surface(
-          shape = RoundedCornerShape(20.dp),
+          shape = tabPillShape,
           color = if (selected) {
             MaterialTheme.colorScheme.primaryContainer
           } else {
@@ -1425,7 +1429,7 @@ private fun Obd2ConnectedDashboardContent(
           ),
           modifier = Modifier
             .weight(1f)
-            .clip(RoundedCornerShape(20.dp))
+            .clip(tabPillShape)
             .clickable { onSelectTab(tab) }
             .testTag("obd2_tab_${tab.name}"),
         ) {

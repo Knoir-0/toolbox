@@ -137,7 +137,9 @@ import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material3.FilterChipDefaults
 import com.example.toolbox.ui.theme.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -1800,7 +1802,7 @@ fun FilesScreen(
       val isMove = clip.operation == ClipboardOperation.MOVE
       val isCut = clip.operation == ClipboardOperation.CUT
       Surface(
-        shape = CircleShape,
+        shape = if (currentHexagonIconButtons()) HorizontalHexagonShape else CircleShape,
         tonalElevation = 6.dp,
         shadowElevation = 6.dp,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,

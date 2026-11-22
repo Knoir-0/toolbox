@@ -63,7 +63,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import com.example.toolbox.ui.theme.FilledTonalButton
 import com.example.toolbox.ui.theme.FilledTonalIconButton
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -541,7 +543,7 @@ fun PdfViewerScreen(
                 zoomScale = 1f
                 panOffset = Offset.Zero
               },
-              shape = RoundedCornerShape(20.dp),
+              shape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp),
               color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
               tonalElevation = 4.dp,
               modifier =

@@ -89,7 +89,9 @@ import com.example.toolbox.ui.theme.FilledIconButton
 import com.example.toolbox.ui.theme.FilledTonalButton
 import com.example.toolbox.ui.theme.FilledTonalIconButton
 import com.example.toolbox.ui.theme.FilledTonalIconToggleButton
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -2501,6 +2503,9 @@ private fun VideoModeSelectorRow(
   modifier: Modifier = Modifier,
 ) {
   val modes = VideoEditorMode.entries
+  val hexagonEnabled = currentHexagonIconButtons()
+  val outerSelectorShape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(24.dp)
+  val innerTabShape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(20.dp)
   Row(
     modifier = modifier
       .fillMaxWidth()
@@ -2510,7 +2515,7 @@ private fun VideoModeSelectorRow(
     verticalAlignment = Alignment.CenterVertically,
   ) {
     Surface(
-      shape = RoundedCornerShape(24.dp),
+      shape = outerSelectorShape,
       color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
       modifier = Modifier.testTag("video_mode_selector"),
     ) {
@@ -2540,14 +2545,14 @@ private fun VideoModeSelectorRow(
             VideoEditorMode.DATA -> Icons.Default.Info
           }
           Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = innerTabShape,
             color = if (selected) {
               MaterialTheme.colorScheme.primaryContainer
             } else {
               Color.Transparent
             },
             modifier = Modifier
-              .clip(RoundedCornerShape(20.dp))
+              .clip(innerTabShape)
               .clickable { onModeSelected(mode) }
               .testTag("mode_tab_${mode.name.lowercase(Locale.ROOT)}"),
           ) {

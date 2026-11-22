@@ -89,7 +89,7 @@ import com.example.toolbox.ui.theme.FilledIconButton
 import com.example.toolbox.ui.theme.FilledTonalButton
 import com.example.toolbox.ui.theme.FilledTonalIconButton
 import com.example.toolbox.ui.theme.FloatingActionButton
-import androidx.compose.material3.FilterChip
+import com.example.toolbox.ui.theme.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton

@@ -902,7 +902,7 @@ class CameraEngineTest {
   }
 
   @Test
-  fun smartObjectAutofocus_andManual5sFocusOverride_prioritizeObjectsAndRespect5SecondOverrideWindow() {
+  fun smartObjectAutofocus_andManual7sFocusOverride_prioritizeObjectsAndRespect7SecondOverrideWindow() {
     assertEquals(7000L, MANUAL_FOCUS_OVERRIDE_DURATION_MS)
 
     // 1. ML Kit Object Detection candidate scoring prioritizes prominent central subjects over peripheral specks or background boxes
@@ -1002,6 +1002,50 @@ class CameraEngineTest {
     assertEquals("Smart AF • Plant", selectedTarget.badgeLabel)
     assertEquals(0.50f, selectedTarget.normX, 0.01f)
     assertEquals(0.48f, selectedTarget.normY, 0.01f)
+
+    // When multiple distinct objects are detected near the center of the view, focus targets the center of both objects
+    val nearCenterLeft = RawDetectedObjectForFocus(
+      boundingBox = CameraVisionBoundingBox(0.20f, 0.30f, 0.52f, 0.62f), // center (0.36, 0.46), dist = 0.146
+      trackingId = 61,
+      label = "Coffee cup",
+      confidence = 0.91f,
+    )
+    val nearCenterRight = RawDetectedObjectForFocus(
+      boundingBox = CameraVisionBoundingBox(0.48f, 0.38f, 0.80f, 0.70f), // center (0.64, 0.54), dist = 0.146
+      trackingId = 62,
+      label = "Flowerpot",
+      confidence = 0.89f,
+    )
+    assertTrue(CameraEngine.isObjectNearViewfinderCenter(nearCenterLeft))
+    assertTrue(CameraEngine.isObjectNearViewfinderCenter(nearCenterRight))
+    assertFalse(CameraEngine.isObjectNearViewfinderCenter(offCenterSecondary))
+    val dualCenterTarget = CameraEngine.selectSmartAutofocusTargetFromObjects(
+      objects = listOf(nearCenterLeft, nearCenterRight, offCenterSecondary),
+      previousTarget = null,
+      timestampMs = 1020L,
+    )
+    assertNotNull(dualCenterTarget)
+    assertEquals(0.50f, dualCenterTarget!!.normX, 0.01f)
+    assertEquals(0.50f, dualCenterTarget.normY, 0.01f)
+    assertEquals(0.50f, dualCenterTarget.targetNormX, 0.01f)
+    assertEquals(0.50f, dualCenterTarget.targetNormY, 0.01f)
+
+    // Transitioning from a single central object to two objects near the center smoothly sets the desired target to the center of both objects
+    val singleLeftTarget = CameraEngine.selectSmartAutofocusTargetFromObjects(
+      objects = listOf(nearCenterLeft),
+      previousTarget = null,
+      timestampMs = 1040L,
+    )
+    assertEquals(0.36f, singleLeftTarget?.normX ?: 0f, 0.01f)
+    assertEquals(0.46f, singleLeftTarget?.normY ?: 0f, 0.01f)
+    val transitionedToDualCenter = CameraEngine.selectSmartAutofocusTargetFromObjects(
+      objects = listOf(nearCenterLeft, nearCenterRight),
+      previousTarget = singleLeftTarget,
+      timestampMs = 1120L,
+    )
+    assertNotNull(transitionedToDualCenter)
+    assertEquals(0.50f, transitionedToDualCenter!!.targetNormX, 0.01f)
+    assertEquals(0.50f, transitionedToDualCenter.targetNormY, 0.01f)
 
     // 2. Temporal stability & jitter smoothing when tracking the same object across consecutive frames
     val microJitterFrame = RawDetectedObjectForFocus(
@@ -1119,10 +1163,10 @@ class CameraEngineTest {
     assertEquals(0.32f, initialLock!!.normX, 0.01f)
     assertEquals(0.45f, initialLock.normY, 0.01f)
 
-    // 2. Sticky hysteresis: a competing object pops in on the right side with slightly higher confidence
-    // while subjectA is still present. Sticky autofocus stays locked on subjectA instead of jumping.
+    // 2. Sticky hysteresis: a competing peripheral object pops in on the right side with slightly higher confidence
+    // while subjectA is still present near the center. Sticky autofocus stays locked on subjectA instead of jumping.
     val transientDistractor = RawDetectedObjectForFocus(
-      boundingBox = CameraVisionBoundingBox(0.48f, 0.32f, 0.84f, 0.68f),
+      boundingBox = CameraVisionBoundingBox(0.60f, 0.50f, 0.92f, 0.86f),
       trackingId = 202,
       label = "Laptop",
       confidence = 0.94f,
@@ -1256,9 +1300,9 @@ class CameraEngineTest {
     assertEquals(0.40f, simCorner.clampedX, 0.01f)
     assertEquals(0.82f, simCorner.clampedY, 0.01f)
 
-    // 7. Long-distance traverse: reaches faster speed (> old 0.36f cap, up to STICKY_AF_MAX_SPEED_NORM_PER_SEC),
+    // 7. Long-distance traverse: reaches cruise speed up to STICKY_AF_MAX_SPEED_NORM_PER_SEC (0.64f, reduced slightly from 0.72f),
     // respects the per-step velocity-addition limit from rest, and smoothly decelerates as it reaches the target.
-    assertTrue(STICKY_AF_MAX_SPEED_NORM_PER_SEC >= 0.65f)
+    assertEquals(0.64f, STICKY_AF_MAX_SPEED_NORM_PER_SEC, 0.001f)
     var longTraverse = CameraSmartFocusTarget(
       normX = 0.12f,
       normY = 0.14f,
@@ -1270,7 +1314,7 @@ class CameraEngineTest {
     )
     val speedHistory = mutableListOf<Float>()
     val distHistory = mutableListOf<Float>()
-    for (stepIdx in 0 until 36) {
+    for (stepIdx in 0 until 38) {
       val prevSpeed = longTraverse.speedNormPerSec
       longTraverse = CameraEngine.stepStickyAutofocusTrajectory(
         currentTarget = longTraverse,
