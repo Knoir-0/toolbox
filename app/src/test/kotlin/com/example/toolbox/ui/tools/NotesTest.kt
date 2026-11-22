@@ -502,4 +502,144 @@ class NotesTest {
     )
     assertEquals("n2", targetInGrid)
   }
+
+  @Test
+  fun notesWidgets_filtersByAllPinnedOrLabel_persistsConfig_andSupportsQuickCaptureFabs() {
+    assertEquals(16f, NotesWidgets.WIDGET_CORNER_RADIUS_DP, 0.001f)
+    NotesWidgets.clearInMemoryConfigs()
+
+    val pinnedWorkNote = NoteItem(
+      id = "nw-1",
+      title = "Q4 Roadmap",
+      content = "Finalize widget specifications",
+      isPinned = true,
+      labels = listOf("work"),
+      updatedAt = 1000L,
+    )
+    val unpinnedWorkChecklist = NoteItem(
+      id = "nw-2",
+      title = "Release Checklist",
+      isChecklist = true,
+      checklistItems = listOf(
+        NoteChecklistItem(id = "c1", text = "Update manifest", isChecked = true),
+        NoteChecklistItem(id = "c2", text = "Run unit tests", isChecked = false),
+      ),
+      isPinned = false,
+      labels = listOf("work", "android"),
+      updatedAt = 2000L,
+    )
+    val personalPinnedNote = NoteItem(
+      id = "nw-3",
+      title = "Grocery List",
+      content = "Oat milk and espresso beans",
+      isPinned = true,
+      labels = listOf("personal"),
+      updatedAt = 3000L,
+    )
+    val archivedNote = NoteItem(
+      id = "nw-4",
+      title = "Archived Note",
+      content = "Should not appear in widget",
+      isArchived = true,
+      labels = listOf("work"),
+    )
+    val trashedNote = NoteItem(
+      id = "nw-5",
+      title = "Trashed Note",
+      content = "In trash",
+      isTrashed = true,
+      labels = listOf("work"),
+    )
+
+    val repo = InMemoryNotesRepository(
+      initialNotes = listOf(
+        pinnedWorkNote,
+        unpinnedWorkChecklist,
+        personalPinnedNote,
+        archivedNote,
+        trashedNote,
+      ),
+      initialLabels = listOf("work", "personal", "ideas"),
+    )
+
+    // Available labels combines saved labels and active note labels alphabetically
+    assertEquals(
+      listOf("android", "ideas", "personal", "work"),
+      NotesWidgets.resolveAvailableLabels(repository = repo),
+    )
+
+    // 1. All Notes mode shows all active (non-archived, non-trashed) notes with pinned notes first
+    val allConfig = NotesWidgetConfig(filterMode = NotesWidgetFilterMode.ALL)
+    NotesWidgets.saveWidgetConfig(context = null, appWidgetId = 101, config = allConfig)
+    val allState = NotesWidgets.resolveWidgetState(
+      context = null,
+      appWidgetId = 101,
+      repository = repo,
+    )
+    assertEquals("Notes", allState.headerTitle)
+    assertEquals("3 notes • 2 pinned", allState.headerSubtitle)
+    assertEquals("All", allState.filterPillText)
+    assertEquals(listOf("nw-1", "nw-3", "nw-2"), allState.visibleNotes.map { it.id })
+
+    // 2. Pinned Notes mode shows only pinned active notes
+    val pinnedConfig = NotesWidgetConfig(filterMode = NotesWidgetFilterMode.PINNED)
+    NotesWidgets.saveWidgetConfig(context = null, appWidgetId = 102, config = pinnedConfig)
+    val pinnedState = NotesWidgets.resolveWidgetState(
+      context = null,
+      appWidgetId = 102,
+      repository = repo,
+    )
+    assertEquals("Pinned Notes", pinnedState.headerTitle)
+    assertEquals("2 pinned notes", pinnedState.headerSubtitle)
+    assertEquals("Pinned", pinnedState.filterPillText)
+    assertEquals(listOf("nw-1", "nw-3"), pinnedState.visibleNotes.map { it.id })
+
+    // 3. Specific Label mode shows only non-trashed notes tagged with that label
+    val labelConfig = NotesWidgetConfig(
+      filterMode = NotesWidgetFilterMode.LABEL,
+      labelName = "work",
+    )
+    val restoredLabelConfig = NotesWidgetConfig.fromJson(labelConfig.toJson())
+    assertEquals(NotesWidgetFilterMode.LABEL, restoredLabelConfig.effectiveFilterMode)
+    assertEquals("work", restoredLabelConfig.normalizedLabelName)
+
+    NotesWidgets.saveWidgetConfig(context = null, appWidgetId = 103, config = restoredLabelConfig)
+    val labelState = NotesWidgets.resolveWidgetState(
+      context = null,
+      appWidgetId = 103,
+      repository = repo,
+    )
+    assertEquals("work", labelState.headerTitle)
+    assertEquals("2 notes • 1 pinned", labelState.headerSubtitle)
+    assertEquals("work", labelState.filterPillText)
+    assertEquals(listOf("nw-1", "nw-2"), labelState.visibleNotes.map { it.id })
+
+    // 4. Item formatting helpers for titles, checklist previews, badges, and metadata
+    assertEquals("1/2", NotesWidgets.formatChecklistBadgeText(unpinnedWorkChecklist))
+    assertNull(NotesWidgets.formatChecklistBadgeText(pinnedWorkNote))
+    assertEquals("☐ Run unit tests", NotesWidgets.buildNoteItemBodyPreview(unpinnedWorkChecklist))
+    assertEquals("Finalize widget specifications", NotesWidgets.buildNoteItemBodyPreview(pinnedWorkNote))
+
+    // 5. Plus (+) and Checklist FAB quick-capture requests carry the widget's filter context
+    NotesEngine.consumePendingQuickCaptureRequest()
+    NotesEngine.requestQuickCapture(
+      isChecklist = false,
+      initialPinned = true,
+      initialLabel = null,
+    )
+    val pinnedNoteCapture = NotesEngine.consumePendingQuickCaptureRequest()
+    assertEquals(false, pinnedNoteCapture?.isChecklist)
+    assertEquals(true, pinnedNoteCapture?.initialPinned)
+    assertNull(pinnedNoteCapture?.initialLabel)
+
+    NotesEngine.requestQuickCapture(
+      isChecklist = true,
+      initialPinned = false,
+      initialLabel = "work",
+    )
+    val labeledChecklistCapture = NotesEngine.consumePendingQuickCaptureRequest()
+    assertEquals(true, labeledChecklistCapture?.isChecklist)
+    assertEquals(false, labeledChecklistCapture?.initialPinned)
+    assertEquals("work", labeledChecklistCapture?.initialLabel)
+  }
 }

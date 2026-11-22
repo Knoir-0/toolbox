@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_notes_item_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_todo_widget_item">
+
+    <LinearLayout
+        android:id="@+id/widget_notes_item_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="12dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="10dp">
+
+        <!-- Title Row + Pin Indicator + Badge -->
+        <LinearLayout
+            android:id="@+id/widget_notes_item_header_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/widget_notes_item_title"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="Note title"
+                android:textColor="#FFE7E1E6"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <ImageView
+                android:id="@+id/widget_notes_item_pin_icon"
+                android:layout_width="14dp"
+                android:layout_height="14dp"
+                android:layout_marginStart="6dp"
+                android:contentDescription="Pinned note"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_notes_widget_pin"
+                android:tint="#FFDDB9F6"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/widget_notes_item_checklist_badge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/bg_todo_widget_pill"
+                android:paddingStart="7dp"
+                android:paddingTop="2dp"
+                android:paddingEnd="7dp"
+                android:paddingBottom="2dp"
+                android:text="0/0"
+                android:textColor="#FFF3DAFF"
+                android:textSize="10.5sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- Note Content or Checklist Preview -->
+        <TextView
+            android:id="@+id/widget_notes_item_body"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:ellipsize="end"
+            android:maxLines="3"
+            android:text=""
+            android:textColor="#FFCDC4CF"
+            android:textSize="12sp"
+            android:visibility="gone" />
+
+        <!-- Labels & Updated Timestamp Metadata Row -->
+        <TextView
+            android:id="@+id/widget_notes_item_meta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text=""
+            android:textColor="#FF968E99"
+            android:textSize="11sp" />
+    </LinearLayout>
+</FrameLayout>

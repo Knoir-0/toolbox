@@ -2,6 +2,9 @@ package com.example.toolbox.ui.tools
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -868,6 +871,31 @@ class TodoHistoryManager(
  * Helper functions for tasks.
  */
 object TodoListEngine {
+
+  data class PendingQuickActionRequest(
+    val openSchedule: Boolean,
+    val requestId: Long = System.nanoTime(),
+  )
+
+  var pendingQuickActionRequest by mutableStateOf<PendingQuickActionRequest?>(null)
+    private set
+
+  /**
+   * Requests that [TodoListScreen] immediately focus the "Add a task..." input
+   * ([openSchedule] = `false`) or open the schedule view ([openSchedule] = `true`).
+   */
+  fun requestQuickAction(openSchedule: Boolean) {
+    pendingQuickActionRequest = PendingQuickActionRequest(openSchedule = openSchedule)
+  }
+
+  /**
+   * Consumes any pending quick-action request after [TodoListScreen] handles it.
+   */
+  fun consumePendingQuickActionRequest(): PendingQuickActionRequest? {
+    val current = pendingQuickActionRequest
+    pendingQuickActionRequest = null
+    return current
+  }
 
   private val TTXT_NESTED_LIST_LINE_REGEX = Regex("""^([ \t]*)([-+])\s+(.+)$""")
 

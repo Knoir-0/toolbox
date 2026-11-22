@@ -223,6 +223,8 @@ private fun formatTodoTaskPlainText(task: TodoItem): String {
 fun TodoListScreen(
   modifier: Modifier = Modifier,
   repository: TodoListRepository? = null,
+  initialFocusAddTask: Boolean = false,
+  initialOpenSchedule: Boolean = false,
 ) {
   val context = LocalContext.current
   val haptic = LocalHapticFeedback.current
@@ -235,7 +237,9 @@ fun TodoListScreen(
   var tasks by remember { mutableStateOf(repo.loadTasks()) }
   var completedTodayCount by remember { mutableIntStateOf(repo.getCompletedTodayCount(getTodayDateKey())) }
   var completedTasks by remember { mutableStateOf(repo.loadCompletedTasks(getTodayDateKey())) }
-  var selectedTab by remember { mutableStateOf(TodoFilterTab.TASKS) }
+  var selectedTab by remember {
+    mutableStateOf(if (initialOpenSchedule) TodoFilterTab.SCHEDULED else TodoFilterTab.TASKS)
+  }
   var showCompletedTasksSheet by remember { mutableStateOf(false) }
 
   var savedTasks by remember { mutableStateOf(repo.loadSavedTasks()) }
@@ -337,6 +341,43 @@ fun TodoListScreen(
     completedTodayCount = repo.getCompletedTodayCount(getTodayDateKey())
     completedTasks = repo.loadCompletedTasks(getTodayDateKey())
     TodoNotificationHelper.ensureNotificationChannel(context)
+  }
+
+  LaunchedEffect(
+    initialFocusAddTask,
+    initialOpenSchedule,
+    TodoListEngine.pendingQuickActionRequest,
+  ) {
+    val pending = TodoListEngine.consumePendingQuickActionRequest()
+    if (pending != null || initialFocusAddTask || initialOpenSchedule) {
+      val openSchedule = pending?.openSchedule ?: initialOpenSchedule
+      val focusAddTask = if (pending != null) !pending.openSchedule else initialFocusAddTask
+      selectedTaskIds = emptySet()
+      inlineEditingTaskId = null
+      if (openSchedule) {
+        selectedTab = TodoFilterTab.SCHEDULED
+        schedulingTaskId = null
+        isSchedulingBulk = false
+        if (!hasPendingSchedule) {
+          scheduleStartMillis = System.currentTimeMillis() + 3_600_000L
+          scheduleRecurrenceRule = null
+          selectedSchedulePreset = TodoRecurrenceRule(
+            interval = 1,
+            unit = TodoRecurrenceUnit.HOUR,
+            presetLabel = "1 hr",
+          )
+        }
+        showSchedulePanel = true
+      }
+      if (focusAddTask) {
+        if (selectedTab == TodoFilterTab.COMPLETED) {
+          selectedTab = TodoFilterTab.TASKS
+        }
+        try {
+          taskInputFocusRequester.requestFocus()
+        } catch (_: Throwable) {}
+      }
+    }
   }
 
   // Synchronize background alarms and poll for due tasks every second while screen is active

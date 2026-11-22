@@ -608,8 +608,8 @@
                 <action android:name="com.example.toolbox.todo.ACTION_WIDGET_COMPLETE_TASK" />
                 <action android:name="com.example.toolbox.todo.ACTION_WIDGET_UNDO_COMPLETE" />
                 <action android:name="com.example.toolbox.todo.ACTION_WIDGET_DISMISS_UNDO" />
-                <action android:name="com.example.toolbox.todo.ACTION_WIDGET_OPEN_NOTES_NEW_NOTE" />
-                <action android:name="com.example.toolbox.todo.ACTION_WIDGET_OPEN_NOTES_NEW_CHECKLIST" />
+                <action android:name="com.example.toolbox.todo.ACTION_WIDGET_OPEN_TODO_ADD_TASK" />
+                <action android:name="com.example.toolbox.todo.ACTION_WIDGET_OPEN_TODO_SCHEDULE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
@@ -618,6 +618,41 @@
 
         <service
             android:name=".ui.tools.TodoWidgetRemoteViewsService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
+
+        <activity
+            android:name=".ui.tools.NotesWidgetConfigureActivity"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_notes"
+            android:roundIcon="@mipmap/ic_tool_notes"
+            android:label="@string/notes_widget_configure_label"
+            android:theme="@style/Theme.Toolbox">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name=".ui.tools.NotesWidgetProvider"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_notes"
+            android:roundIcon="@mipmap/ic_tool_notes"
+            android:label="@string/notes_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.toolbox.notes.ACTION_WIDGET_REFRESH" />
+                <action android:name="com.example.toolbox.notes.ACTION_WIDGET_ITEM_CLICK" />
+                <action android:name="com.example.toolbox.notes.ACTION_WIDGET_OPEN_NEW_NOTE" />
+                <action android:name="com.example.toolbox.notes.ACTION_WIDGET_OPEN_NEW_CHECKLIST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/notes_widget_info" />
+        </receiver>
+
+        <service
+            android:name=".ui.tools.NotesWidgetRemoteViewsService"
             android:exported="false"
             android:permission="android.permission.BIND_REMOTEVIEWS" />
 

@@ -7,5 +7,8 @@
     <string name="music_widget_album_art_label">Music Player</string>
     <string name="music_widget_album_art_description">Responsive music player that automatically adapts between Mini Bar, Medium Player, and Album Art views as you resize it</string>
     <string name="todo_widget_label">To Do List</string>
-    <string name="todo_widget_description">Scrollable To-Do task list with completion check circles, undo toast, and quick Note &amp; Checklist FABs</string>
+    <string name="todo_widget_description">Scrollable To-Do task list with completion check circles, undo toast, and quick Add Task &amp; Schedule FABs</string>
+    <string name="notes_widget_label">Notes</string>
+    <string name="notes_widget_configure_label">Configure Notes Widget</string>
+    <string name="notes_widget_description">Scrollable Notes list filtered by All Notes, Pinned Notes, or a Specific Label, with quick Note &amp; Checklist FABs</string>
 </resources>

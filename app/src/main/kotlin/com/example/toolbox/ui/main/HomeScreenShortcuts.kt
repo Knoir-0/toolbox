@@ -38,6 +38,15 @@ const val EXTRA_EXPAND_MUSIC_PLAYER = "extra_expand_music_player"
 const val EXTRA_NOTES_QUICK_CAPTURE_MODE = "extra_notes_quick_capture_mode"
 const val NOTES_QUICK_CAPTURE_NOTE = "note"
 const val NOTES_QUICK_CAPTURE_CHECKLIST = "checklist"
+const val EXTRA_NOTES_INITIAL_FILTER_MODE = "extra_notes_initial_filter_mode"
+const val EXTRA_NOTES_INITIAL_FILTER_LABEL = "extra_notes_initial_filter_label"
+const val EXTRA_NOTES_OPEN_NOTE_ID = "extra_notes_open_note_id"
+const val NOTES_FILTER_MODE_ALL = "all"
+const val NOTES_FILTER_MODE_PINNED = "pinned"
+const val NOTES_FILTER_MODE_LABEL = "label"
+const val EXTRA_TODO_QUICK_ACTION_MODE = "extra_todo_quick_action_mode"
+const val TODO_QUICK_ACTION_ADD_TASK = "add_task"
+const val TODO_QUICK_ACTION_SCHEDULE = "schedule"
 
 const val STANDALONE_SHORTCUT_INTENT_FLAGS =
   Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -290,15 +299,78 @@ fun parseNotesQuickCaptureMode(intent: Intent?): String? {
 
 /**
  * Creates an [Intent] that launches [Tool.NOTES] directly into creating a new text note
- * ([isChecklist] = `false`) or a new checklist note ([isChecklist] = `true`).
+ * ([isChecklist] = `false`) or a new checklist note ([isChecklist] = `true`), optionally
+ * pre-populating [pinned] or [label] according to the widget's filter configuration.
  */
 fun createNotesQuickCaptureIntent(
   context: Context,
   isChecklist: Boolean,
+  pinned: Boolean = false,
+  label: String? = null,
 ): Intent {
   val mode = if (isChecklist) NOTES_QUICK_CAPTURE_CHECKLIST else NOTES_QUICK_CAPTURE_NOTE
   return createStandaloneToolIntent(context, Tool.NOTES).apply {
     putExtra(EXTRA_NOTES_QUICK_CAPTURE_MODE, mode)
+    when {
+      !label.isNullOrBlank() -> {
+        putExtra(EXTRA_NOTES_INITIAL_FILTER_MODE, NOTES_FILTER_MODE_LABEL)
+        putExtra(EXTRA_NOTES_INITIAL_FILTER_LABEL, label)
+      }
+      pinned -> {
+        putExtra(EXTRA_NOTES_INITIAL_FILTER_MODE, NOTES_FILTER_MODE_PINNED)
+      }
+    }
+  }
+}
+
+/**
+ * Creates an [Intent] that launches [Tool.NOTES] filtered to [filterMode] ([NOTES_FILTER_MODE_ALL],
+ * [NOTES_FILTER_MODE_PINNED], or [NOTES_FILTER_MODE_LABEL] with [label]) and optionally opens a
+ * specific [noteId] in the single-note editor.
+ */
+fun createNotesOpenIntent(
+  context: Context,
+  filterMode: String = NOTES_FILTER_MODE_ALL,
+  label: String? = null,
+  noteId: String? = null,
+): Intent {
+  return createStandaloneToolIntent(context, Tool.NOTES).apply {
+    putExtra(EXTRA_NOTES_INITIAL_FILTER_MODE, filterMode)
+    if (!label.isNullOrBlank()) {
+      putExtra(EXTRA_NOTES_INITIAL_FILTER_LABEL, label)
+    }
+    if (!noteId.isNullOrBlank()) {
+      putExtra(EXTRA_NOTES_OPEN_NOTE_ID, noteId)
+    }
+  }
+}
+
+/**
+ * Parses the requested To-Do quick-action mode ([TODO_QUICK_ACTION_ADD_TASK] or
+ * [TODO_QUICK_ACTION_SCHEDULE]) from an incoming [Intent], or `null` if none was requested.
+ */
+fun parseTodoQuickActionMode(intent: Intent?): String? {
+  val raw = intent?.getStringExtra(EXTRA_TODO_QUICK_ACTION_MODE)
+    ?: intent?.data?.getQueryParameter("todo_action")
+    ?: return null
+  return when {
+    raw.equals(TODO_QUICK_ACTION_ADD_TASK, ignoreCase = true) -> TODO_QUICK_ACTION_ADD_TASK
+    raw.equals(TODO_QUICK_ACTION_SCHEDULE, ignoreCase = true) -> TODO_QUICK_ACTION_SCHEDULE
+    else -> null
+  }
+}
+
+/**
+ * Creates an [Intent] that launches [Tool.TODO_LIST] with either the "Add a task..." input focused
+ * ([openSchedule] = `false`) or the schedule view opened ([openSchedule] = `true`).
+ */
+fun createTodoQuickActionIntent(
+  context: Context,
+  openSchedule: Boolean,
+): Intent {
+  val mode = if (openSchedule) TODO_QUICK_ACTION_SCHEDULE else TODO_QUICK_ACTION_ADD_TASK
+  return createStandaloneToolIntent(context, Tool.TODO_LIST).apply {
+    putExtra(EXTRA_TODO_QUICK_ACTION_MODE, mode)
   }
 }
 

@@ -811,7 +811,7 @@ class TodoListTest {
   }
 
   @Test
-  fun todoListWidgets_resolvesStateCompletesTasksWithUndoToastAndOpensNotesQuickCapture() {
+  fun todoListWidgets_resolvesStateCompletesTasksWithUndoToastAndOpensTodoQuickActions() {
     assertEquals(16f, TodoListWidgets.WIDGET_CORNER_RADIUS_DP, 0.001f)
     assertEquals(16f, MusicPlayerWidgets.MINI_BAR_CORNER_RADIUS_DP, 0.001f)
     assertEquals(72f, MusicPlayerWidgets.MINI_BAR_HEIGHT_DP, 0.001f)
@@ -980,21 +980,21 @@ class TodoListTest {
     assertFalse(expiredState.isUndoToastVisible)
     assertNull(expiredState.pendingUndoRecord)
 
-    // 5. Plus (+) and Checklist FAB actions request opening Notes tool to take a new note or checklist
-    NotesEngine.consumePendingQuickCaptureRequest()
-    assertNull(NotesEngine.pendingQuickCaptureRequest)
+    // 5. Plus (+) and Schedule FAB actions request opening To-Do tool with Add a task focused or Schedule view opened
+    TodoListEngine.consumePendingQuickActionRequest()
+    assertNull(TodoListEngine.pendingQuickActionRequest)
 
-    NotesEngine.requestQuickCapture(isChecklist = false)
-    val noteRequest = NotesEngine.consumePendingQuickCaptureRequest()
-    assertNotNull(noteRequest)
-    assertFalse(noteRequest!!.isChecklist)
-    assertNull(NotesEngine.pendingQuickCaptureRequest)
+    TodoListEngine.requestQuickAction(openSchedule = false)
+    val addTaskRequest = TodoListEngine.consumePendingQuickActionRequest()
+    assertNotNull(addTaskRequest)
+    assertFalse(addTaskRequest!!.openSchedule)
+    assertNull(TodoListEngine.pendingQuickActionRequest)
 
-    NotesEngine.requestQuickCapture(isChecklist = true)
-    val checklistRequest = NotesEngine.consumePendingQuickCaptureRequest()
-    assertNotNull(checklistRequest)
-    assertTrue(checklistRequest!!.isChecklist)
-    assertNull(NotesEngine.pendingQuickCaptureRequest)
+    TodoListEngine.requestQuickAction(openSchedule = true)
+    val scheduleRequest = TodoListEngine.consumePendingQuickActionRequest()
+    assertNotNull(scheduleRequest)
+    assertTrue(scheduleRequest!!.openSchedule)
+    assertNull(TodoListEngine.pendingQuickActionRequest)
   }
 
   @Test

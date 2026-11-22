@@ -695,4 +695,97 @@ class NotesScreenTest {
       tempRootDir.deleteRecursively()
     }
   }
+
+  @Test
+  fun notesWidgetConfigureDialog_allowsChoosingAllPinnedOrSpecificLabel() {
+    val repo = InMemoryNotesRepository(
+      initialNotes = listOf(
+        NoteItem(
+          id = "n1",
+          title = "Pinned Note",
+          content = "Important content",
+          isPinned = true,
+          labels = listOf("work"),
+        ),
+        NoteItem(
+          id = "n2",
+          title = "Other Note",
+          content = "Secondary content",
+          isPinned = false,
+          labels = listOf("recipes"),
+        ),
+      ),
+      initialLabels = listOf("work", "recipes"),
+    )
+
+    var confirmedConfig: NotesWidgetConfig? = null
+    var persistedNewLabels: List<String> = emptyList()
+
+    composeTestRule.setContent {
+      ToolboxTheme {
+        NotesWidgetConfigureDialog(
+          initialConfig = NotesWidgetConfig(),
+          repository = repo,
+          onConfirm = { config, newLabels ->
+            confirmedConfig = config
+            persistedNewLabels = newLabels
+          },
+          onDismiss = {},
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("notes_widget_configure_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("notes_widget_option_all").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("notes_widget_option_pinned").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("notes_widget_option_label").assertIsDisplayed()
+
+    // Select Pinned Notes
+    composeTestRule.onNodeWithTag("notes_widget_option_pinned").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("notes_widget_label_picker_card").assertDoesNotExist()
+
+    // Select Specific Label -> shows label chips and new label creator
+    composeTestRule.onNodeWithTag("notes_widget_option_label").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("notes_widget_label_picker_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("notes_widget_label_chip_work").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("notes_widget_label_chip_recipes").assertIsDisplayed()
+
+    // Pick 'recipes' label chip and confirm
+    composeTestRule.onNodeWithTag("notes_widget_label_chip_recipes").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("notes_widget_confirm_button").performClick()
+    composeTestRule.waitForIdle()
+
+    assertEquals(NotesWidgetFilterMode.LABEL, confirmedConfig?.effectiveFilterMode)
+    assertEquals("recipes", confirmedConfig?.normalizedLabelName)
+    assertTrue(persistedNewLabels.isEmpty())
+  }
+
+  @Test
+  fun todoListScreen_quickActions_focusAddTaskAndOpenScheduleView() {
+    val todoRepo = InMemoryTodoListRepository()
+    composeTestRule.setContent {
+      ToolboxTheme {
+        TodoListScreen(repository = todoRepo)
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // 1. Plus (+) button quick action focuses "Add a task..." input
+    composeTestRule.runOnIdle {
+      TodoListEngine.requestQuickAction(openSchedule = false)
+    }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("todo_input_title").assertIsFocused()
+
+    // 2. Schedule button quick action opens the Schedule view
+    composeTestRule.runOnIdle {
+      TodoListEngine.requestQuickAction(openSchedule = true)
+    }
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("No scheduled tasks").assertIsDisplayed()
+  }
 }

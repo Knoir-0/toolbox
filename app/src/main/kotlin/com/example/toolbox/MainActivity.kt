@@ -15,8 +15,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import com.example.toolbox.ui.main.EXTRA_EXPAND_MUSIC_PLAYER
+import com.example.toolbox.ui.main.EXTRA_NOTES_INITIAL_FILTER_LABEL
+import com.example.toolbox.ui.main.EXTRA_NOTES_INITIAL_FILTER_MODE
+import com.example.toolbox.ui.main.EXTRA_NOTES_OPEN_NOTE_ID
 import com.example.toolbox.ui.main.EXTRA_NOTES_QUICK_CAPTURE_MODE
+import com.example.toolbox.ui.main.EXTRA_TODO_QUICK_ACTION_MODE
+import com.example.toolbox.ui.main.NOTES_FILTER_MODE_ALL
+import com.example.toolbox.ui.main.NOTES_FILTER_MODE_LABEL
+import com.example.toolbox.ui.main.NOTES_FILTER_MODE_PINNED
 import com.example.toolbox.ui.main.NOTES_QUICK_CAPTURE_CHECKLIST
+import com.example.toolbox.ui.main.TODO_QUICK_ACTION_SCHEDULE
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.createFolderShortcutIntent
 import com.example.toolbox.ui.main.createStandaloneToolIntent
@@ -26,18 +34,65 @@ import com.example.toolbox.ui.main.parseExpandMusicPlayer
 import com.example.toolbox.ui.main.parseFolderShortcut
 import com.example.toolbox.ui.main.parseNotesQuickCaptureMode
 import com.example.toolbox.ui.main.parseStandaloneTool
+import com.example.toolbox.ui.main.parseTodoQuickActionMode
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
 import com.example.toolbox.ui.main.syncPinnedHomeScreenShortcuts
 import com.example.toolbox.ui.main.syncStandaloneTaskDescription
 import com.example.toolbox.ui.theme.ToolboxTheme
 import com.example.toolbox.ui.tools.MusicPlayerEngine
 import com.example.toolbox.ui.tools.NotesEngine
+import com.example.toolbox.ui.tools.NotesFilter
+import com.example.toolbox.ui.tools.TodoListEngine
 import java.io.File
 
 class MainActivity : ComponentActivity() {
   private val standaloneToolState = mutableStateOf<Tool?>(null)
   private val initialFolderState = mutableStateOf<String?>(null)
   private val expandMusicPlayerState = mutableStateOf(false)
+
+  private fun parseNotesFilterFromIntent(intent: Intent?): NotesFilter? {
+    val mode = intent?.getStringExtra(EXTRA_NOTES_INITIAL_FILTER_MODE)?.trim() ?: return null
+    val label = intent.getStringExtra(EXTRA_NOTES_INITIAL_FILTER_LABEL)?.trim()
+    return when {
+      mode.equals(NOTES_FILTER_MODE_PINNED, ignoreCase = true) -> NotesFilter.Pinned
+      mode.equals(NOTES_FILTER_MODE_LABEL, ignoreCase = true) && !label.isNullOrBlank() ->
+        NotesFilter.Label(label)
+      mode.equals(NOTES_FILTER_MODE_ALL, ignoreCase = true) -> NotesFilter.All
+      else -> null
+    }
+  }
+
+  private fun applyIncomingToolActions(
+    intent: Intent?,
+    expandMusicPlayer: Boolean,
+    notesQuickCaptureMode: String?,
+    todoQuickActionMode: String?,
+  ) {
+    if (expandMusicPlayer) {
+      MusicPlayerEngine.requestExpandFullPlayer()
+    }
+    val notesFilter = parseNotesFilterFromIntent(intent)
+    val openNoteId = intent?.getStringExtra(EXTRA_NOTES_OPEN_NOTE_ID)?.takeIf { it.isNotBlank() }
+    val filterLabel = (notesFilter as? NotesFilter.Label)?.name
+    val filterPinned = notesFilter == NotesFilter.Pinned
+    if (notesQuickCaptureMode != null) {
+      NotesEngine.requestQuickCapture(
+        isChecklist = notesQuickCaptureMode == NOTES_QUICK_CAPTURE_CHECKLIST,
+        initialPinned = filterPinned,
+        initialLabel = filterLabel,
+      )
+    } else if (notesFilter != null || openNoteId != null) {
+      NotesEngine.requestWidgetNavigation(
+        filter = notesFilter,
+        openNoteId = openNoteId,
+      )
+    }
+    if (todoQuickActionMode != null) {
+      TodoListEngine.requestQuickAction(
+        openSchedule = todoQuickActionMode == TODO_QUICK_ACTION_SCHEDULE,
+      )
+    }
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -48,10 +103,14 @@ class MainActivity : ComponentActivity() {
     val parsedFolder = parseFolderShortcut(intent)
     val expandMusicPlayer = parseExpandMusicPlayer(intent)
     val notesQuickCaptureMode = parseNotesQuickCaptureMode(intent)
+    val todoQuickActionMode = parseTodoQuickActionMode(intent)
+    val hasNotesNavigationExtras = parseNotesFilterFromIntent(intent) != null ||
+      !intent?.getStringExtra(EXTRA_NOTES_OPEN_NOTE_ID).isNullOrBlank()
     val resolvedTool = when {
       parsedFolder != null -> parsedTool ?: Tool.FILES
       expandMusicPlayer -> parsedTool ?: Tool.MUSIC
-      notesQuickCaptureMode != null -> parsedTool ?: Tool.NOTES
+      notesQuickCaptureMode != null || hasNotesNavigationExtras -> parsedTool ?: Tool.NOTES
+      todoQuickActionMode != null -> parsedTool ?: Tool.TODO_LIST
       else -> parsedTool
     }
     if (resolvedTool != null || parsedFolder != null) {
@@ -62,14 +121,12 @@ class MainActivity : ComponentActivity() {
         excludeTaskId = taskId,
       )
       if (existingTask != null) {
-        if (expandMusicPlayer) {
-          MusicPlayerEngine.requestExpandFullPlayer()
-        }
-        if (notesQuickCaptureMode != null) {
-          NotesEngine.requestQuickCapture(
-            isChecklist = notesQuickCaptureMode == NOTES_QUICK_CAPTURE_CHECKLIST,
-          )
-        }
+        applyIncomingToolActions(
+          intent = intent,
+          expandMusicPlayer = expandMusicPlayer,
+          notesQuickCaptureMode = notesQuickCaptureMode,
+          todoQuickActionMode = todoQuickActionMode,
+        )
         try {
           existingTask.moveToFront()
           finishAndRemoveTask()
@@ -82,14 +139,12 @@ class MainActivity : ComponentActivity() {
     standaloneToolState.value = resolvedTool
     initialFolderState.value = parsedFolder
     expandMusicPlayerState.value = expandMusicPlayer
-    if (expandMusicPlayer) {
-      MusicPlayerEngine.requestExpandFullPlayer()
-    }
-    if (notesQuickCaptureMode != null) {
-      NotesEngine.requestQuickCapture(
-        isChecklist = notesQuickCaptureMode == NOTES_QUICK_CAPTURE_CHECKLIST,
-      )
-    }
+    applyIncomingToolActions(
+      intent = intent,
+      expandMusicPlayer = expandMusicPlayer,
+      notesQuickCaptureMode = notesQuickCaptureMode,
+      todoQuickActionMode = todoQuickActionMode,
+    )
     syncStandaloneTaskDescription(
       activity = this,
       standaloneTool = resolvedTool,
@@ -155,10 +210,14 @@ class MainActivity : ComponentActivity() {
     val parsedTool = parseStandaloneTool(intent)
     val expandMusicPlayer = parseExpandMusicPlayer(intent)
     val notesQuickCaptureMode = parseNotesQuickCaptureMode(intent)
+    val todoQuickActionMode = parseTodoQuickActionMode(intent)
+    val hasNotesNavigationExtras = parseNotesFilterFromIntent(intent) != null ||
+      !intent.getStringExtra(EXTRA_NOTES_OPEN_NOTE_ID).isNullOrBlank()
     val incomingTool = when {
       parsedFolder != null -> parsedTool ?: Tool.FILES
       expandMusicPlayer -> parsedTool ?: Tool.MUSIC
-      notesQuickCaptureMode != null -> parsedTool ?: Tool.NOTES
+      notesQuickCaptureMode != null || hasNotesNavigationExtras -> parsedTool ?: Tool.NOTES
+      todoQuickActionMode != null -> parsedTool ?: Tool.TODO_LIST
       else -> parsedTool
     }
     if ((incomingTool != null || parsedFolder != null) &&
@@ -169,14 +228,12 @@ class MainActivity : ComponentActivity() {
         secondFolder = parsedFolder,
       )
     ) {
-      if (expandMusicPlayer) {
-        MusicPlayerEngine.requestExpandFullPlayer()
-      }
-      if (notesQuickCaptureMode != null) {
-        NotesEngine.requestQuickCapture(
-          isChecklist = notesQuickCaptureMode == NOTES_QUICK_CAPTURE_CHECKLIST,
-        )
-      }
+      applyIncomingToolActions(
+        intent = intent,
+        expandMusicPlayer = expandMusicPlayer,
+        notesQuickCaptureMode = notesQuickCaptureMode,
+        todoQuickActionMode = todoQuickActionMode,
+      )
       val existingTask = findExistingStandaloneAppTask(
         context = this,
         targetTool = incomingTool,
@@ -202,6 +259,18 @@ class MainActivity : ComponentActivity() {
             if (notesQuickCaptureMode != null) {
               putExtra(EXTRA_NOTES_QUICK_CAPTURE_MODE, notesQuickCaptureMode)
             }
+            intent.getStringExtra(EXTRA_NOTES_INITIAL_FILTER_MODE)?.let {
+              putExtra(EXTRA_NOTES_INITIAL_FILTER_MODE, it)
+            }
+            intent.getStringExtra(EXTRA_NOTES_INITIAL_FILTER_LABEL)?.let {
+              putExtra(EXTRA_NOTES_INITIAL_FILTER_LABEL, it)
+            }
+            intent.getStringExtra(EXTRA_NOTES_OPEN_NOTE_ID)?.let {
+              putExtra(EXTRA_NOTES_OPEN_NOTE_ID, it)
+            }
+            if (todoQuickActionMode != null) {
+              putExtra(EXTRA_TODO_QUICK_ACTION_MODE, todoQuickActionMode)
+            }
           }
         }
         startActivity(launchIntent)
@@ -218,17 +287,22 @@ class MainActivity : ComponentActivity() {
       initialFolderState.value = null
       standaloneToolState.value = parsedTool ?: Tool.MUSIC
       expandMusicPlayerState.value = true
-      MusicPlayerEngine.requestExpandFullPlayer()
-    } else if (notesQuickCaptureMode != null) {
+    } else if (notesQuickCaptureMode != null || hasNotesNavigationExtras) {
       initialFolderState.value = null
       standaloneToolState.value = parsedTool ?: Tool.NOTES
-      NotesEngine.requestQuickCapture(
-        isChecklist = notesQuickCaptureMode == NOTES_QUICK_CAPTURE_CHECKLIST,
-      )
+    } else if (todoQuickActionMode != null) {
+      initialFolderState.value = null
+      standaloneToolState.value = parsedTool ?: Tool.TODO_LIST
     } else if (parsedTool != null) {
       initialFolderState.value = null
       standaloneToolState.value = parsedTool
     }
+    applyIncomingToolActions(
+      intent = intent,
+      expandMusicPlayer = expandMusicPlayer,
+      notesQuickCaptureMode = notesQuickCaptureMode,
+      todoQuickActionMode = todoQuickActionMode,
+    )
     syncStandaloneTaskDescription(
       activity = this,
       standaloneTool = standaloneToolState.value,

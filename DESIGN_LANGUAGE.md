@@ -350,7 +350,7 @@ Tools with searchable catalogs, presets, or collections (such as **Files**, **Mu
 ---
 
 ### 5.8 Home Screen AppWidgets Pattern
-All Home Screen AppWidgets (including the unified responsive **Music Player** widget—which automatically switches between **Mini Bar**, **Medium Player**, and **Album Art** views based on widget dimensions—and **To Do List**) must adhere to the following visual and structural conventions:
+All Home Screen AppWidgets (including the unified responsive **Music Player** widget—which automatically switches between **Mini Bar**, **Medium Player**, and **Album Art** views based on widget dimensions—as well as **To Do List** and **Notes**) must adhere to the following visual and structural conventions:
 
 1. **Standard `16.dp` Outer Corner Radius**:
    - Every widget root container and rendered background `Bitmap` must use a **`16.dp` corner radius** (`<corners android:radius="16dp" />` in the preview XML `<shape>` drawable and `16f * density` in any dynamically rendered `Canvas.drawRoundRect` background bitmap).

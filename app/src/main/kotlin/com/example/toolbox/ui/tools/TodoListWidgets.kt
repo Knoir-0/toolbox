@@ -39,8 +39,8 @@ import com.example.toolbox.ui.main.PREF_KEY_THEME_COLOR
 import com.example.toolbox.ui.main.PREF_KEY_THEME_MODE
 import com.example.toolbox.ui.main.ThemeMode
 import com.example.toolbox.ui.main.Tool
-import com.example.toolbox.ui.main.createNotesQuickCaptureIntent
 import com.example.toolbox.ui.main.createStandaloneToolIntent
+import com.example.toolbox.ui.main.createTodoQuickActionIntent
 import com.example.toolbox.ui.theme.AccentHarmonyOption
 import com.example.toolbox.ui.theme.MusicPlayerColorOption
 import com.example.toolbox.ui.theme.Purple8E66A6DarkColorScheme
@@ -168,7 +168,8 @@ data class TodoWidgetPalette(
  * - Upon completion, pops up an undo toast (both an interactive in-widget Undo toast pill and a
  *   system Toast) allowing the user to undo the completion
  * - Features two floating circular FABs at the bottom-right: one for Plus (`+`) and one for
- *   Checklist, opening the Notes tool directly to taking a new note or a new checklist
+ *   Schedule, opening the To-Do tool directly with the "Add a task..." input focused or the
+ *   schedule view opened
  */
 object TodoListWidgets {
 
@@ -177,8 +178,8 @@ object TodoListWidgets {
   const val ACTION_WIDGET_COMPLETE_TASK = "com.example.toolbox.todo.ACTION_WIDGET_COMPLETE_TASK"
   const val ACTION_WIDGET_UNDO_COMPLETE = "com.example.toolbox.todo.ACTION_WIDGET_UNDO_COMPLETE"
   const val ACTION_WIDGET_DISMISS_UNDO = "com.example.toolbox.todo.ACTION_WIDGET_DISMISS_UNDO"
-  const val ACTION_WIDGET_OPEN_NOTES_NEW_NOTE = "com.example.toolbox.todo.ACTION_WIDGET_OPEN_NOTES_NEW_NOTE"
-  const val ACTION_WIDGET_OPEN_NOTES_NEW_CHECKLIST = "com.example.toolbox.todo.ACTION_WIDGET_OPEN_NOTES_NEW_CHECKLIST"
+  const val ACTION_WIDGET_OPEN_TODO_ADD_TASK = "com.example.toolbox.todo.ACTION_WIDGET_OPEN_TODO_ADD_TASK"
+  const val ACTION_WIDGET_OPEN_TODO_SCHEDULE = "com.example.toolbox.todo.ACTION_WIDGET_OPEN_TODO_SCHEDULE"
 
   const val EXTRA_TASK_ID = "extra_todo_widget_task_id"
   const val EXTRA_ITEM_CLICK_ACTION = "extra_todo_widget_item_click_action"
@@ -194,8 +195,8 @@ object TodoListWidgets {
   private const val REQUEST_CODE_ITEM_TEMPLATE = 3101
   private const val REQUEST_CODE_UNDO_COMPLETE = 3102
   private const val REQUEST_CODE_DISMISS_UNDO = 3103
-  private const val REQUEST_CODE_FAB_NEW_NOTE = 3104
-  private const val REQUEST_CODE_FAB_NEW_CHECKLIST = 3105
+  private const val REQUEST_CODE_FAB_ADD_TASK = 3104
+  private const val REQUEST_CODE_FAB_SCHEDULE = 3105
 
   @Volatile
   private var inMemoryUndoRecord: TodoWidgetUndoRecord? = null
@@ -686,12 +687,12 @@ object TodoListWidgets {
     )
   }
 
-  fun buildOpenNotesQuickCapturePendingIntent(
+  fun buildOpenTodoQuickActionPendingIntent(
     context: Context,
-    isChecklist: Boolean,
+    openSchedule: Boolean,
   ): PendingIntent {
-    val intent = createNotesQuickCaptureIntent(context, isChecklist = isChecklist)
-    val requestCode = if (isChecklist) REQUEST_CODE_FAB_NEW_CHECKLIST else REQUEST_CODE_FAB_NEW_NOTE
+    val intent = createTodoQuickActionIntent(context, openSchedule = openSchedule)
+    val requestCode = if (openSchedule) REQUEST_CODE_FAB_SCHEDULE else REQUEST_CODE_FAB_ADD_TASK
     return PendingIntent.getActivity(
       context,
       requestCode,
@@ -896,23 +897,23 @@ object TodoListWidgets {
     }
 
     // Two Floating FABs at Bottom Right:
-    // 1. Checklist FAB -> opens Notes tool to take a new checklist
+    // 1. Schedule FAB -> opens To Do tool with Schedule view opened
     views.setInt(
-      R.id.widget_todo_fab_checklist_bg,
+      R.id.widget_todo_fab_schedule_bg,
       "setColorFilter",
       palette.secondaryContainerArgb,
     )
     views.setInt(
-      R.id.widget_todo_fab_checklist,
+      R.id.widget_todo_fab_schedule,
       "setColorFilter",
       palette.onSecondaryContainerArgb,
     )
     views.setOnClickPendingIntent(
-      R.id.widget_todo_fab_checklist,
-      buildOpenNotesQuickCapturePendingIntent(context, isChecklist = true),
+      R.id.widget_todo_fab_schedule,
+      buildOpenTodoQuickActionPendingIntent(context, openSchedule = true),
     )
 
-    // 2. Plus (+) FAB -> opens Notes tool to take a new note
+    // 2. Plus (+) FAB -> opens To Do tool with Add a task focused
     views.setInt(
       R.id.widget_todo_fab_plus_bg,
       "setColorFilter",
@@ -925,7 +926,7 @@ object TodoListWidgets {
     )
     views.setOnClickPendingIntent(
       R.id.widget_todo_fab_plus,
-      buildOpenNotesQuickCapturePendingIntent(context, isChecklist = false),
+      buildOpenTodoQuickActionPendingIntent(context, openSchedule = false),
     )
 
     return views
@@ -979,20 +980,20 @@ object TodoListWidgets {
           true
         }
       }
-      ACTION_WIDGET_OPEN_NOTES_NEW_NOTE -> {
-        NotesEngine.requestQuickCapture(isChecklist = false)
+      ACTION_WIDGET_OPEN_TODO_ADD_TASK -> {
+        TodoListEngine.requestQuickAction(openSchedule = false)
         if (context != null) {
           try {
-            context.startActivity(createNotesQuickCaptureIntent(context, isChecklist = false))
+            context.startActivity(createTodoQuickActionIntent(context, openSchedule = false))
           } catch (_: Throwable) {}
         }
         return true
       }
-      ACTION_WIDGET_OPEN_NOTES_NEW_CHECKLIST -> {
-        NotesEngine.requestQuickCapture(isChecklist = true)
+      ACTION_WIDGET_OPEN_TODO_SCHEDULE -> {
+        TodoListEngine.requestQuickAction(openSchedule = true)
         if (context != null) {
           try {
-            context.startActivity(createNotesQuickCaptureIntent(context, isChecklist = true))
+            context.startActivity(createTodoQuickActionIntent(context, openSchedule = true))
           } catch (_: Throwable) {}
         }
         return true
@@ -1058,8 +1059,8 @@ object TodoListWidgets {
  * - Resizable horizontally and vertically within reasonable bounds
  * - No drag-handle or reorder controls; keeps check circles to complete tasks directly
  * - Shows a toast with Undo support upon task completion
- * - Features two floating FABs at the bottom-right (`+` and Checklist) that launch the Notes tool
- *   directly into taking a new text note or checklist
+ * - Features two floating FABs at the bottom-right (`+` and Schedule) that launch the To-Do tool
+ *   with the "Add a task..." input focused or the schedule view opened
  */
 class TodoListWidgetProvider : AppWidgetProvider() {
   override fun onUpdate(

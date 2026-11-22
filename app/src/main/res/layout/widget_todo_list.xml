@@ -158,7 +158,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
                     android:gravity="center"
-                    android:text="Tap + or checklist to take a note"
+                    android:text="Tap + to add a task or schedule to view reminders"
                     android:textColor="#FFCDC4CF"
                     android:textSize="11.5sp" />
             </LinearLayout>
@@ -254,7 +254,7 @@
             android:layout_height="1dp"
             android:layout_weight="1" />
 
-        <!-- Two Floating FABs at Bottom Right: Checklist FAB and Plus (+) FAB -->
+        <!-- Two Floating FABs at Bottom Right: Schedule FAB and Plus (+) FAB -->
         <LinearLayout
             android:id="@+id/widget_todo_fabs_container"
             android:layout_width="wrap_content"
@@ -262,15 +262,15 @@
             android:gravity="bottom|end"
             android:orientation="horizontal">
 
-            <!-- Checklist Floating FAB -> Opens Notes tool to create a new checklist -->
+            <!-- Schedule Floating FAB -> Opens To Do tool with Schedule view opened -->
             <FrameLayout
-                android:id="@+id/widget_todo_fab_checklist_container"
+                android:id="@+id/widget_todo_fab_schedule_container"
                 android:layout_width="42dp"
                 android:layout_height="42dp"
                 android:layout_marginEnd="8dp">
 
                 <ImageView
-                    android:id="@+id/widget_todo_fab_checklist_bg"
+                    android:id="@+id/widget_todo_fab_schedule_bg"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
                     android:contentDescription="@null"
@@ -278,18 +278,18 @@
                     android:tint="#FF4E4356" />
 
                 <ImageView
-                    android:id="@+id/widget_todo_fab_checklist"
+                    android:id="@+id/widget_todo_fab_schedule"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
                     android:background="?android:attr/selectableItemBackgroundBorderless"
-                    android:contentDescription="New checklist in Notes"
+                    android:contentDescription="Open schedule view in To Do"
                     android:padding="10dp"
                     android:scaleType="centerInside"
-                    android:src="@drawable/ic_todo_widget_checklist"
+                    android:src="@drawable/ic_todo_widget_schedule"
                     android:tint="#FFEFDEF5" />
             </FrameLayout>
 
-            <!-- Plus (+) Floating FAB -> Opens Notes tool to take a new note -->
+            <!-- Plus (+) Floating FAB -> Opens To Do tool with Add a task focused -->
             <FrameLayout
                 android:id="@+id/widget_todo_fab_plus_container"
                 android:layout_width="46dp"
@@ -308,7 +308,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
                     android:background="?android:attr/selectableItemBackgroundBorderless"
-                    android:contentDescription="New note in Notes"
+                    android:contentDescription="Add a task in To Do"
                     android:padding="11dp"
                     android:scaleType="centerInside"
                     android:src="@drawable/ic_media_add"

@@ -185,6 +185,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.toolbox.ui.theme.ToolboxTheme
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -315,6 +318,24 @@ fun NotesScreen(
   var isGridView by remember { mutableStateOf(repo.isGridView()) }
   var gridColumnsPerRow by remember { mutableIntStateOf(repo.getGridColumnsPerRow()) }
 
+  val lifecycleOwner = LocalLifecycleOwner.current
+  DisposableEffect(lifecycleOwner, repo) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_RESUME) {
+        val latestNotes = repo.loadNotes()
+        val latestLabels = repo.loadLabels()
+        if (latestNotes != notes || latestLabels != savedLabels) {
+          notes = latestNotes
+          savedLabels = latestLabels
+        }
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+    }
+  }
+
   fun grantNotesFolderAccess(folder: NotesFolder = DEFAULT_NOTES_SCOPED_FOLDER) {
     val updated = buildSet {
       addAll(grantedFolderPaths)
@@ -419,17 +440,47 @@ fun NotesScreen(
     val pending = NotesEngine.consumePendingQuickCaptureRequest()
     if (pending != null || initialOpenAddNote) {
       val openChecklist = pending?.isChecklist ?: initialAddChecklistMode
+      val initialPinned = pending?.initialPinned ?: false
+      val initialLabel = pending?.initialLabel?.trim()?.takeIf { it.isNotEmpty() }
       editingNote = null
       selectedNoteIds = emptySet()
-      if (activeFilter == NotesFilter.Trash) {
-        activeFilter = NotesFilter.All
+      when {
+        initialLabel != null -> activeFilter = NotesFilter.Label(initialLabel)
+        initialPinned -> activeFilter = NotesFilter.Pinned
+        activeFilter == NotesFilter.Trash -> activeFilter = NotesFilter.All
       }
       addingNoteNewLabels = emptyList()
       addingNoteDraft = NoteItem(
         isChecklist = openChecklist,
         checklistItems = emptyList(),
+        isPinned = initialPinned || activeFilter == NotesFilter.Pinned,
+        labels = if (initialLabel != null) listOf(initialLabel) else emptyList(),
       )
       isAddNoteOpen = true
+    }
+  }
+
+  LaunchedEffect(NotesEngine.pendingWidgetNavigationRequest) {
+    val navRequest = NotesEngine.consumePendingWidgetNavigationRequest() ?: return@LaunchedEffect
+    val latestNotes = repo.loadNotes()
+    val latestLabels = repo.loadLabels()
+    if (latestNotes != notes) notes = latestNotes
+    if (latestLabels != savedLabels) savedLabels = latestLabels
+
+    selectedNoteIds = emptySet()
+    isAddNoteOpen = false
+    if (navRequest.filter != null) {
+      activeFilter = navRequest.filter
+    }
+    val targetNoteId = navRequest.openNoteId
+    if (!targetNoteId.isNullOrBlank()) {
+      val targetNote = latestNotes.firstOrNull { it.id == targetNoteId }
+        ?: notes.firstOrNull { it.id == targetNoteId }
+      if (targetNote != null) {
+        editingNote = targetNote
+      }
+    } else {
+      editingNote = null
     }
   }
 
@@ -496,6 +547,7 @@ fun NotesScreen(
     savedLabels = updatedLabels
     repo.saveNotes(updatedNotes)
     repo.saveLabels(updatedLabels)
+    NotesWidgets.updateAllWidgets(context)
   }
 
   fun undo() {
@@ -509,6 +561,7 @@ fun NotesScreen(
     savedLabels = previous.labels
     repo.saveNotes(previous.notes)
     repo.saveLabels(previous.labels)
+    NotesWidgets.updateAllWidgets(context)
   }
 
   fun redo() {
@@ -522,6 +575,7 @@ fun NotesScreen(
     savedLabels = next.labels
     repo.saveNotes(next.notes)
     repo.saveLabels(next.labels)
+    NotesWidgets.updateAllWidgets(context)
   }
 
   val allLabels = remember(notes, savedLabels) {
@@ -1218,6 +1272,7 @@ fun NotesScreen(
                       undoStack = listOf(before) + undoStack.take(49)
                       redoStack = emptyList()
                       repo.saveNotes(notes)
+                      NotesWidgets.updateAllWidgets(context)
                     }
                   }
                 }

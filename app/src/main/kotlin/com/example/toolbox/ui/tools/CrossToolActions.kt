@@ -145,6 +145,7 @@ object CrossToolActions {
         repo.saveLabels(currentLabels.sorted())
       }
     }
+    NotesWidgets.updateAllWidgets(context)
     if (showToast) {
       Toast.makeText(context, "Saved \"${created.title}\" to Notes", Toast.LENGTH_SHORT).show()
     }
@@ -190,6 +191,9 @@ object CrossToolActions {
   fun saveFileToNotes(context: Context, file: File, showToast: Boolean = true): NoteItem? {
     val repo = SharedPreferencesNotesRepository(context)
     val imported = FileManagerEngine.importFileToNotes(file, repo)
+    if (imported != null) {
+      NotesWidgets.updateAllWidgets(context)
+    }
     if (showToast) {
       if (imported != null) {
         Toast.makeText(context, "Saved \"${imported.title}\" to Notes", Toast.LENGTH_SHORT).show()

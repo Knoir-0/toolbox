@@ -677,6 +677,8 @@ object NotesEngine {
 
   data class PendingQuickCaptureRequest(
     val isChecklist: Boolean,
+    val initialPinned: Boolean = false,
+    val initialLabel: String? = null,
     val requestId: Long = System.nanoTime(),
   )
 
@@ -685,10 +687,19 @@ object NotesEngine {
 
   /**
    * Requests that [NotesScreen] immediately open its new-note creation panel in either text note
-   * mode ([isChecklist] = `false`) or checklist mode ([isChecklist] = `true`).
+   * mode ([isChecklist] = `false`) or checklist mode ([isChecklist] = `true`), optionally
+   * pre-populating [initialPinned] or [initialLabel].
    */
-  fun requestQuickCapture(isChecklist: Boolean) {
-    pendingQuickCaptureRequest = PendingQuickCaptureRequest(isChecklist = isChecklist)
+  fun requestQuickCapture(
+    isChecklist: Boolean,
+    initialPinned: Boolean = false,
+    initialLabel: String? = null,
+  ) {
+    pendingQuickCaptureRequest = PendingQuickCaptureRequest(
+      isChecklist = isChecklist,
+      initialPinned = initialPinned,
+      initialLabel = initialLabel?.trim()?.takeIf { it.isNotEmpty() },
+    )
   }
 
   /**
@@ -697,6 +708,37 @@ object NotesEngine {
   fun consumePendingQuickCaptureRequest(): PendingQuickCaptureRequest? {
     val current = pendingQuickCaptureRequest
     pendingQuickCaptureRequest = null
+    return current
+  }
+
+  data class PendingWidgetNavigationRequest(
+    val filter: NotesFilter? = null,
+    val openNoteId: String? = null,
+    val requestId: Long = System.nanoTime(),
+  )
+
+  var pendingWidgetNavigationRequest by mutableStateOf<PendingWidgetNavigationRequest?>(null)
+    private set
+
+  /**
+   * Requests that [NotesScreen] switch to [filter] and/or open [openNoteId] in the single-note view.
+   */
+  fun requestWidgetNavigation(
+    filter: NotesFilter? = null,
+    openNoteId: String? = null,
+  ) {
+    pendingWidgetNavigationRequest = PendingWidgetNavigationRequest(
+      filter = filter,
+      openNoteId = openNoteId?.takeIf { it.isNotBlank() },
+    )
+  }
+
+  /**
+   * Consumes any pending widget navigation request after [NotesScreen] handles it.
+   */
+  fun consumePendingWidgetNavigationRequest(): PendingWidgetNavigationRequest? {
+    val current = pendingWidgetNavigationRequest
+    pendingWidgetNavigationRequest = null
     return current
   }
 
