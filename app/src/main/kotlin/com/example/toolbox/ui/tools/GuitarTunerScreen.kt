@@ -5,6 +5,7 @@ import com.example.toolbox.ui.theme.toolboxScreenBackground
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -65,7 +66,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Badge
-import androidx.compose.material3.Button
+import com.example.toolbox.ui.theme.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -79,7 +80,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.example.toolbox.ui.theme.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -379,12 +380,18 @@ enum class GuitarTuningPreset(
  * Search, filtering, and favoriting engine for Guitar Tuner presets.
  */
 object GuitarTunerEngine {
+  val DEFAULT_FAVORITE_PRESETS: Set<GuitarTuningPreset> =
+    setOf(GuitarTuningPreset.STANDARD, GuitarTuningPreset.DROP_D)
+
+  val DEFAULT_FAVORITE_TUNING_IDS: Set<String> =
+    DEFAULT_FAVORITE_PRESETS.map { it.chordTuningId }.toSet()
+
   fun searchTunings(
     catalog: List<GuitarTuningPreset> = GuitarTuningPreset.entries,
     query: String = "",
     category: GuitarTuningCategory? = null,
     favoritesOnly: Boolean = false,
-    favorites: Set<GuitarTuningPreset> = emptySet(),
+    favorites: Set<GuitarTuningPreset> = DEFAULT_FAVORITE_PRESETS,
   ): List<GuitarTuningPreset> {
     return catalog.filter { preset ->
       (!favoritesOnly || preset in favorites) &&
@@ -399,7 +406,7 @@ object GuitarTunerEngine {
    */
   fun filterTuningsForList(
     catalog: List<GuitarTuningPreset> = GuitarTuningPreset.entries,
-    favorites: Set<GuitarTuningPreset> = emptySet(),
+    favorites: Set<GuitarTuningPreset> = DEFAULT_FAVORITE_PRESETS,
     favoritesOnly: Boolean = false,
     category: GuitarTuningCategory? = null,
   ): List<GuitarTuningPreset> {
@@ -440,12 +447,18 @@ interface GuitarTunerRepository {
 }
 
 class InMemoryGuitarTunerRepository(
-  initialFavorites: Set<GuitarTuningPreset> = emptySet(),
+  initialFavorites: Set<GuitarTuningPreset>? = null,
   initialFavoriteIds: Set<String> = emptySet(),
 ) : GuitarTunerRepository {
   private var favoriteIds: Set<String> =
-    initialFavorites.map { it.chordTuningId }.toSet() +
-      initialFavoriteIds.map { GuitarTuningPreset.fromKey(it)?.chordTuningId ?: it }.toSet()
+    when {
+      initialFavorites != null ->
+        initialFavorites.map { it.chordTuningId }.toSet() +
+          initialFavoriteIds.map { GuitarTuningPreset.fromKey(it)?.chordTuningId ?: it }.toSet()
+      initialFavoriteIds.isNotEmpty() ->
+        initialFavoriteIds.map { GuitarTuningPreset.fromKey(it)?.chordTuningId ?: it }.toSet()
+      else -> GuitarTunerEngine.DEFAULT_FAVORITE_TUNING_IDS
+    }
 
   override fun loadFavoritePresets(): Set<GuitarTuningPreset> {
     return favoriteIds.mapNotNull { GuitarTuningPreset.fromKey(it) }.toSet()
@@ -464,17 +477,23 @@ class InMemoryGuitarTunerRepository(
 }
 
 class SharedPreferencesGuitarTunerRepository(
-  context: Context,
+  private val prefs: SharedPreferences,
 ) : GuitarTunerRepository {
-  private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+  constructor(context: Context) : this(
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
+  )
+
+  private fun loadRawFavoriteKeys(): Set<String> {
+    return prefs.getStringSet(KEY_FAVORITE_TUNINGS, null) ?: DEFAULT_FAVORITE_KEYS
+  }
 
   override fun loadFavoritePresets(): Set<GuitarTuningPreset> {
-    val raw = prefs.getStringSet(KEY_FAVORITE_TUNINGS, emptySet()).orEmpty()
+    val raw = loadRawFavoriteKeys()
     return raw.mapNotNull { key -> GuitarTuningPreset.fromKey(key) }.toSet()
   }
 
   override fun saveFavoritePresets(favorites: Set<GuitarTuningPreset>) {
-    val existingRaw = prefs.getStringSet(KEY_FAVORITE_TUNINGS, emptySet()).orEmpty()
+    val existingRaw = loadRawFavoriteKeys()
     val nonGuitarIds = existingRaw.filter { GuitarTuningPreset.fromKey(it) == null }.toSet()
     val updated = nonGuitarIds + favorites.map { it.name }.toSet()
     prefs.edit()
@@ -483,7 +502,7 @@ class SharedPreferencesGuitarTunerRepository(
   }
 
   override fun loadFavoriteTuningIds(): Set<String> {
-    val raw = prefs.getStringSet(KEY_FAVORITE_TUNINGS, emptySet()).orEmpty()
+    val raw = loadRawFavoriteKeys()
     return raw.map { key -> GuitarTuningPreset.fromKey(key)?.chordTuningId ?: key }.toSet()
   }
 
@@ -499,6 +518,8 @@ class SharedPreferencesGuitarTunerRepository(
   companion object {
     const val PREFS_NAME = "guitar_tuner_prefs"
     const val KEY_FAVORITE_TUNINGS = "favorite_tunings"
+    val DEFAULT_FAVORITE_KEYS: Set<String> =
+      GuitarTunerEngine.DEFAULT_FAVORITE_PRESETS.map { it.name }.toSet()
   }
 }
 

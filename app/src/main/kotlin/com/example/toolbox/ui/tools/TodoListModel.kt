@@ -28,8 +28,8 @@ fun getTodayDateKey(timeMillis: Long = System.currentTimeMillis()): String {
 
 /**
  * Represents a single subtask (with optional nested child [subtasks]) within a [TodoItem].
- * In `.text` files, nested subtasks follow YAML 2-space indentation
- * (`"  ".repeat(indentLevel)`) with `- <title>` for uncompleted items and `+ <title>` for completed items.
+ * In `.text` files, nested subtasks use tab indentation (`"\t".repeat(indentLevel)`)
+ * with `- <title>` for uncompleted items and `+ <title>` for completed items.
  */
 data class TodoSubTask(
   val id: String = UUID.randomUUID().toString(),
@@ -44,11 +44,11 @@ data class TodoSubTask(
     get() = if (isCompleted) '+' else '-'
 
   /**
-   * Formats this subtask and any nested [subtasks] into YAML-indented `.text` lines.
-   * Each level of nesting uses 2 spaces (`"  ".repeat(indentLevel)`).
+   * Formats this subtask and any nested [subtasks] into tab-indented `.text` lines.
+   * Each level of nesting uses 1 tab (`"\t".repeat(indentLevel)`).
    */
   fun toTtxt(indentLevel: Int = 1): String {
-    val indent = "  ".repeat(indentLevel.coerceAtLeast(0))
+    val indent = "\t".repeat(indentLevel.coerceAtLeast(0))
     val selfLine = "$indent$ttxtPrefix ${title.trim()}"
     val validChildren = subtasks.filter { it.title.isNotBlank() }
     if (validChildren.isEmpty()) return selfLine
@@ -320,9 +320,9 @@ data class TodoItem(
   }
 
   /**
-   * Formats this task and its nested [subtasks] into YAML-indented `.text` lines:
+   * Formats this task and its nested [subtasks] into tab-indented `.text` lines:
    * - `- <title>` at indent 0 when [isCompleted] is `false`, or `+ <title>` when [isCompleted] is `true`.
-   * - Nested subtasks indented by 2 spaces per level (`"  ".repeat(level)`), using `-` for uncompleted
+   * - Nested subtasks indented by 1 tab per level (`"\t".repeat(level)`), using `-` for uncompleted
    *   and `+` for completed subtasks.
    */
   fun toTtxt(isCompleted: Boolean = false): String =
@@ -907,10 +907,10 @@ object TodoListEngine {
   )
 
   /**
-   * Formats a single [TodoItem] and its nested [TodoItem.subtasks] into YAML-indented `.text`
+   * Formats a single [TodoItem] and its nested [TodoItem.subtasks] into tab-indented `.text`
    * lines:
    * - `- <task title>` at indent 0 when [isCompleted] is `false`, or `+ <task title>` when `true`.
-   * - Each level of nested [TodoSubTask]s is indented by 2 spaces (`"  ".repeat(level)`),
+   * - Each level of nested [TodoSubTask]s is indented by 1 tab (`"\t".repeat(level)`),
    *   using `-` for uncompleted subtasks and `+` for completed subtasks.
    */
   fun formatTaskToTtxt(

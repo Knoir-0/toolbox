@@ -55,29 +55,33 @@ class NotesTest {
     val textNote = NoteItem(
       id = "n1",
       title = "Packing",
-      content = "- Tent\n[x] Sleeping bag\n[ ] Lantern\nWater filter",
+      content = "- Tent\n\t- Rainfly\n[x] Sleeping bag\n[ ] Lantern\nWater filter",
       isChecklist = false,
     )
 
-    // Convert to checklist
+    // Convert to checklist (preserving tab indentation as nesting level)
     val checklistNote = NotesEngine.toggleChecklistMode(textNote)
     assertTrue(checklistNote.isChecklist)
     assertEquals("", checklistNote.content)
-    assertEquals(4, checklistNote.checklistItems.size)
+    assertEquals(5, checklistNote.checklistItems.size)
     assertEquals("Tent", checklistNote.checklistItems[0].text)
     assertFalse(checklistNote.checklistItems[0].isChecked)
-    assertEquals("Sleeping bag", checklistNote.checklistItems[1].text)
-    assertTrue(checklistNote.checklistItems[1].isChecked)
-    assertEquals("Lantern", checklistNote.checklistItems[2].text)
-    assertFalse(checklistNote.checklistItems[2].isChecked)
-    assertEquals("Water filter", checklistNote.checklistItems[3].text)
+    assertEquals(0, checklistNote.checklistItems[0].indentLevel)
+    assertEquals("Rainfly", checklistNote.checklistItems[1].text)
+    assertFalse(checklistNote.checklistItems[1].isChecked)
+    assertEquals(1, checklistNote.checklistItems[1].indentLevel)
+    assertEquals("Sleeping bag", checklistNote.checklistItems[2].text)
+    assertTrue(checklistNote.checklistItems[2].isChecked)
+    assertEquals("Lantern", checklistNote.checklistItems[3].text)
     assertFalse(checklistNote.checklistItems[3].isChecked)
+    assertEquals("Water filter", checklistNote.checklistItems[4].text)
+    assertFalse(checklistNote.checklistItems[4].isChecked)
 
-    // Convert back to plain text
+    // Convert back to plain text (preserving tab indentation)
     val backToText = NotesEngine.toggleChecklistMode(checklistNote)
     assertFalse(backToText.isChecklist)
     assertTrue(backToText.checklistItems.isEmpty())
-    assertEquals("Tent\nSleeping bag\nLantern\nWater filter", backToText.content)
+    assertEquals("Tent\n\tRainfly\nSleeping bag\nLantern\nWater filter", backToText.content)
   }
 
   @Test
@@ -286,7 +290,7 @@ class NotesTest {
     val restored = NoteItem.fromJson(json)
     assertEquals(original, restored)
     assertEquals(
-      "# Project Ideas\n\n+ Offline sync\n- Color cards",
+      "# Project Ideas\n\n+ Offline sync\n- Color cards\n\n#ideas, #android",
       restored.toTtxt(),
     )
     assertEquals(
@@ -302,42 +306,61 @@ class NotesTest {
     assertEquals("Text", NOTES_FILE_FORMAT_NAME)
     assertEquals("/Notes", DEFAULT_NOTES_SCOPED_FOLDER.displayPath)
 
-    // 1. Checklist note uses '- ' for unchecked items and '+ ' for checked items
+    // 1. Checklist note uses '- ' for unchecked items, '+ ' for checked items, tab indentation ('\t') for nested items,
+    //    and '#Label 1, #Label 2' on the last line
     val checklistNote = NoteItem(
       id = "chk-42",
       title = "Camping Checklist",
       isChecklist = true,
       checklistItems = listOf(
-        NoteChecklistItem(id = "c1", text = "Tent", isChecked = false),
-        NoteChecklistItem(id = "c2", text = "Sleeping bag", isChecked = true),
-        NoteChecklistItem(id = "c3", text = "Water filter", isChecked = false),
+        NoteChecklistItem(id = "c1", text = "Tent", isChecked = false, indentLevel = 0),
+        NoteChecklistItem(id = "c1-sub", text = "Rainfly & stakes", isChecked = false, indentLevel = 1),
+        NoteChecklistItem(id = "c1-deep", text = "Titanium pegs", isChecked = true, indentLevel = 2),
+        NoteChecklistItem(id = "c2", text = "Sleeping bag", isChecked = true, indentLevel = 0),
+        NoteChecklistItem(id = "c3", text = "Water filter", isChecked = false, indentLevel = 0),
       ),
       color = NoteColor.SAGE,
       isPinned = true,
-      labels = listOf("outdoors"),
+      labels = listOf("outdoors", "weekend trip"),
     )
 
-    val expectedChecklistTtxt = """
-      # Camping Checklist
-
-      - Tent
-      + Sleeping bag
-      - Water filter
-    """.trimIndent()
+    val expectedChecklistTtxt = listOf(
+      "# Camping Checklist",
+      "",
+      "- Tent",
+      "\t- Rainfly & stakes",
+      "\t\t+ Titanium pegs",
+      "+ Sleeping bag",
+      "- Water filter",
+      "",
+      "#outdoors, #weekend trip",
+    ).joinToString("\n")
     assertEquals(expectedChecklistTtxt, checklistNote.toTtxt())
 
     val parsedChecklist = NoteItem.fromTtxt(expectedChecklistTtxt, id = "chk-42")
     assertEquals("Camping Checklist", parsedChecklist.title)
     assertTrue(parsedChecklist.isChecklist)
-    assertEquals(3, parsedChecklist.checklistItems.size)
+    assertEquals(5, parsedChecklist.checklistItems.size)
     assertEquals("Tent", parsedChecklist.checklistItems[0].text)
     assertFalse(parsedChecklist.checklistItems[0].isChecked)
+    assertEquals(0, parsedChecklist.checklistItems[0].indentLevel)
     assertEquals('-', parsedChecklist.checklistItems[0].ttxtPrefix)
-    assertEquals("Sleeping bag", parsedChecklist.checklistItems[1].text)
-    assertTrue(parsedChecklist.checklistItems[1].isChecked)
-    assertEquals('+', parsedChecklist.checklistItems[1].ttxtPrefix)
-    assertEquals("Water filter", parsedChecklist.checklistItems[2].text)
-    assertFalse(parsedChecklist.checklistItems[2].isChecked)
+    assertEquals("Rainfly & stakes", parsedChecklist.checklistItems[1].text)
+    assertFalse(parsedChecklist.checklistItems[1].isChecked)
+    assertEquals(1, parsedChecklist.checklistItems[1].indentLevel)
+    assertEquals("\t- Rainfly & stakes", parsedChecklist.checklistItems[1].toTtxtLine())
+    assertEquals("Titanium pegs", parsedChecklist.checklistItems[2].text)
+    assertTrue(parsedChecklist.checklistItems[2].isChecked)
+    assertEquals(2, parsedChecklist.checklistItems[2].indentLevel)
+    assertEquals("\t\t+ Titanium pegs", parsedChecklist.checklistItems[2].toTtxtLine())
+    assertEquals("Sleeping bag", parsedChecklist.checklistItems[3].text)
+    assertTrue(parsedChecklist.checklistItems[3].isChecked)
+    assertEquals(0, parsedChecklist.checklistItems[3].indentLevel)
+    assertEquals('+', parsedChecklist.checklistItems[3].ttxtPrefix)
+    assertEquals("Water filter", parsedChecklist.checklistItems[4].text)
+    assertFalse(parsedChecklist.checklistItems[4].isChecked)
+    assertEquals(0, parsedChecklist.checklistItems[4].indentLevel)
+    assertEquals(listOf("outdoors", "weekend trip"), parsedChecklist.labels)
 
     // 2. Markdown text note uses '# Title' and Markdown body
     val markdownNote = NoteItem(
@@ -358,6 +381,7 @@ class NotesTest {
     assertEquals("Architecture Notes", parsedMarkdown.title)
     assertFalse(parsedMarkdown.isChecklist)
     assertEquals("Use **Material 3** tokens and `.text` files in `/Notes`.", parsedMarkdown.content)
+    assertTrue(parsedMarkdown.labels.isEmpty())
 
     // 3. Saving and loading .text files inside a /Notes directory
     val tempNotesDir = java.nio.file.Files.createTempDirectory("notes_text_test").toFile()
@@ -376,25 +400,38 @@ class NotesTest {
       val afterCheck = NotesEngine.toggleChecklistItem(repo.loadNotes(), "chk-42", "c1")
       repo.saveNotes(afterCheck)
       assertEquals(
-        """
-        # Camping Checklist
-
-        + Tent
-        + Sleeping bag
-        - Water filter
-        """.trimIndent(),
+        listOf(
+          "# Camping Checklist",
+          "",
+          "+ Tent",
+          "\t- Rainfly & stakes",
+          "\t\t+ Titanium pegs",
+          "+ Sleeping bag",
+          "- Water filter",
+          "",
+          "#outdoors, #weekend trip",
+        ).joinToString("\n"),
         campingFile.readText(),
       )
 
-      // Dropping an external .text file into /Notes loads it automatically
+      // Dropping an external .text file into /Notes loads it automatically (including tab-nested checklist items and #Label CSV line)
       val externalFile = java.io.File(tempNotesDir, "Quick Groceries.text")
-      externalFile.writeText("# Quick Groceries\n\n- Apples\n+ Coffee")
+      externalFile.writeText("# Quick Groceries\n\n- Produce\n\t- Apples\n\t+ Spinach\n+ Coffee\n\n#Groceries, #Meal Prep")
 
       val reloaded = repo.loadNotes()
       assertEquals(3, reloaded.size)
       val imported = reloaded.first { it.title == "Quick Groceries" }
       assertTrue(imported.isChecklist)
-      assertEquals(listOf("Apples" to false, "Coffee" to true), imported.checklistItems.map { it.text to it.isChecked })
+      assertEquals(
+        listOf(
+          Triple("Produce", false, 0),
+          Triple("Apples", false, 1),
+          Triple("Spinach", true, 1),
+          Triple("Coffee", true, 0),
+        ),
+        imported.checklistItems.map { Triple(it.text, it.isChecked, it.indentLevel) },
+      )
+      assertEquals(listOf("Groceries", "Meal Prep"), imported.labels)
     } finally {
       tempNotesDir.deleteRecursively()
     }
@@ -678,5 +715,33 @@ class NotesTest {
     assertEquals(true, labeledChecklistCapture?.isChecklist)
     assertEquals(false, labeledChecklistCapture?.initialPinned)
     assertEquals("work", labeledChecklistCapture?.initialLabel)
+
+    // 6. Note card color in the widget follows the selected NoteColor
+    val darkPalette = allState.palette.copy(isDarkTheme = true)
+    val lightPalette = allState.palette.copy(isDarkTheme = false)
+    assertEquals(
+      darkPalette.itemCardArgb,
+      NotesWidgets.resolveNoteCardArgb(NoteColor.DEFAULT, darkPalette),
+    )
+    assertEquals(
+      lightPalette.itemCardArgb,
+      NotesWidgets.resolveNoteCardArgb(NoteColor.DEFAULT, lightPalette),
+    )
+
+    val resolvedDarkColors = NoteColor.entries.map { color ->
+      NotesWidgets.resolveNoteCardArgb(color, darkPalette)
+    }
+    val resolvedLightColors = NoteColor.entries.map { color ->
+      NotesWidgets.resolveNoteCardArgb(color, lightPalette)
+    }
+    assertEquals(NoteColor.entries.size, resolvedDarkColors.toSet().size)
+    assertEquals(NoteColor.entries.size, resolvedLightColors.toSet().size)
+    NoteColor.entries.filter { it != NoteColor.DEFAULT }.forEach { color ->
+      val fillDark = NotesWidgets.resolveNoteCardArgb(color, darkPalette)
+      val borderDark = NotesWidgets.resolveNoteCardBorderArgb(color, darkPalette)
+      assertTrue(fillDark != darkPalette.itemCardArgb)
+      assertEquals(0xFF000000.toInt(), fillDark and 0xFF000000.toInt())
+      assertEquals(0xFF000000.toInt(), borderDark and 0xFF000000.toInt())
+    }
   }
 }

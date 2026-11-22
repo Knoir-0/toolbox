@@ -665,9 +665,12 @@ object ChordBookEngine {
     ChordTuning("mandolin_gdad", "GDAD Celtic (G D A D)", InstrumentFamily.MANDOLIN, listOf(55, 62, 69, 74)),
   )
 
+  val DEFAULT_FAVORITE_TUNING_IDS: Set<String> =
+    GuitarTunerEngine.DEFAULT_FAVORITE_TUNING_IDS
+
   fun isTuningFavorite(
     tuning: ChordTuning,
-    favoriteIds: Set<String>,
+    favoriteIds: Set<String> = DEFAULT_FAVORITE_TUNING_IDS,
   ): Boolean {
     val preset = tuning.matchingTunerPreset
     return tuning.id in favoriteIds || (preset != null && (preset.name in favoriteIds || preset.chordTuningId in favoriteIds))
@@ -692,7 +695,7 @@ object ChordBookEngine {
     instrument: InstrumentFamily? = null,
     category: GuitarTuningCategory? = null,
     favoritesOnly: Boolean = false,
-    favoriteIds: Set<String> = emptySet(),
+    favoriteIds: Set<String> = DEFAULT_FAVORITE_TUNING_IDS,
     preference: EnharmonicPreference = EnharmonicPreference.AUTO,
   ): List<ChordTuning> {
     val filtered = catalog.filter { tuning ->

@@ -31,10 +31,13 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import com.example.toolbox.R
+import com.example.toolbox.ui.main.BackgroundTexture
 import com.example.toolbox.ui.main.DEFAULT_HEXAGON_ICON_BUTTONS
 import com.example.toolbox.ui.main.NAVIGATION_PREFERENCES_NAME
 import com.example.toolbox.ui.main.NavigationPreferencesBridge
+import com.example.toolbox.ui.main.PREF_KEY_BACKGROUND_TEXTURE
 import com.example.toolbox.ui.main.PREF_KEY_HEXAGON_ICON_BUTTONS
+import com.example.toolbox.ui.theme.drawWidgetBackgroundTextureOverlay
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
@@ -109,6 +112,7 @@ data class MusicPlayerWidgetState(
   val isRightControlVisible: Boolean = true,
   val hexagonIconButtons: Boolean = false,
   val iconButtonBackgroundRes: Int = R.drawable.bg_music_widget_circle,
+  val backgroundTexture: BackgroundTexture = BackgroundTexture.NONE,
 )
 
 /**
@@ -134,9 +138,9 @@ object MusicPlayerWidgets {
 
   /**
    * Height threshold in `dp` at or above which the responsive Music Player widget renders the full
-   * vertical [MusicWidgetViewStyle.ALBUM_ART] layout (`heightDp >= 180f`).
+   * vertical [MusicWidgetViewStyle.ALBUM_ART] layout (`heightDp >= 260f`).
    */
-  const val MEDIUM_TO_ALBUM_ART_HEIGHT_THRESHOLD_DP = 180f
+  const val MEDIUM_TO_ALBUM_ART_HEIGHT_THRESHOLD_DP = 260f
 
   private const val OVERLAY_FAVORITE_BG_ARGB = 0x73000000 // Color.Black.copy(alpha = 0.45f)
   private const val INACTIVE_CONTROL_TINT_ARGB = 0xB3FFFFFF.toInt() // Color.White.copy(alpha = 0.7f)
@@ -201,6 +205,22 @@ object MusicPlayerWidgets {
       } catch (_: Throwable) {}
     }
     return NavigationPreferencesBridge.hexagonIconButtons
+  }
+
+  /**
+   * Resolves the active [BackgroundTexture] for Home Screen AppWidgets from persisted navigation
+   * [Context.getSharedPreferences] or [NavigationPreferencesBridge.backgroundTexture].
+   */
+  fun resolveBackgroundTexture(context: Context? = null): BackgroundTexture {
+    if (context != null) {
+      try {
+        val prefs = context.getSharedPreferences(NAVIGATION_PREFERENCES_NAME, Context.MODE_PRIVATE)
+        if (prefs != null && prefs.contains(PREF_KEY_BACKGROUND_TEXTURE)) {
+          return BackgroundTexture.fromPrefValue(prefs.getString(PREF_KEY_BACKGROUND_TEXTURE, null))
+        }
+      } catch (_: Throwable) {}
+    }
+    return NavigationPreferencesBridge.backgroundTexture
   }
 
   /**
@@ -352,6 +372,7 @@ object MusicPlayerWidgets {
   ): MusicPlayerWidgetState {
     val hexagonIconButtons = resolveHexagonIconButtonsEnabled(context)
     val iconButtonBackgroundRes = resolveIconButtonBackgroundRes(hexagonIconButtons)
+    val backgroundTexture = resolveBackgroundTexture(context)
     val internalPlaying = session?.let { it.isPlaying && it.currentTrack != null } == true
 
     if (!internalPlaying && externalMedia != null && MusicPlayerEngine.isMusicPlayingOverride != true) {
@@ -464,6 +485,7 @@ object MusicPlayerWidgets {
         isRightControlVisible = rightAction != null,
         hexagonIconButtons = hexagonIconButtons,
         iconButtonBackgroundRes = iconButtonBackgroundRes,
+        backgroundTexture = backgroundTexture,
       )
     }
 
@@ -565,6 +587,7 @@ object MusicPlayerWidgets {
       isRightControlVisible = true,
       hexagonIconButtons = hexagonIconButtons,
       iconButtonBackgroundRes = iconButtonBackgroundRes,
+      backgroundTexture = backgroundTexture,
     )
   }
 
@@ -766,6 +789,7 @@ object MusicPlayerWidgets {
     heightPx: Int = 128,
     cornerRadiusPx: Float = 32f,
     borderWidthPx: Float = 2f,
+    backgroundTexture: BackgroundTexture = NavigationPreferencesBridge.backgroundTexture,
   ): Bitmap? {
     val safeW = widthPx.coerceIn(120, 1600)
     val safeH = heightPx.coerceIn(48, 600)
@@ -795,6 +819,17 @@ object MusicPlayerWidgets {
         )
       }
       canvas.drawRoundRect(fillRect, fillCornerRadius, fillCornerRadius, fillPaint)
+
+      drawWidgetBackgroundTextureOverlay(
+        bitmap = bitmap,
+        cornerRadiusPx = fillCornerRadius,
+        texture = backgroundTexture,
+        primaryColor = palette.accentColor,
+        tertiaryColor = palette.dominantColor,
+        secondaryColor = palette.secondaryColor,
+        onSurfaceColor = Color.White,
+        isDarkTheme = true,
+      )
 
       if (borderWidthPx > 0f) {
         val strokeInset = max(borderWidthPx * 1.25f, 1.5f)
@@ -866,6 +901,7 @@ object MusicPlayerWidgets {
     heightPx: Int = 540,
     cornerRadiusPx: Float = 32f,
     borderWidthPx: Float = 2f,
+    backgroundTexture: BackgroundTexture = NavigationPreferencesBridge.backgroundTexture,
   ): Bitmap? {
     val safeW = widthPx.coerceIn(120, 1600)
     val safeH = heightPx.coerceIn(120, 1600)
@@ -895,6 +931,17 @@ object MusicPlayerWidgets {
         )
       }
       canvas.drawRoundRect(fillRect, fillCornerRadius, fillCornerRadius, fillPaint)
+
+      drawWidgetBackgroundTextureOverlay(
+        bitmap = bitmap,
+        cornerRadiusPx = fillCornerRadius,
+        texture = backgroundTexture,
+        primaryColor = palette.accentColor,
+        tertiaryColor = palette.dominantColor,
+        secondaryColor = palette.secondaryColor,
+        onSurfaceColor = Color.White,
+        isDarkTheme = true,
+      )
 
       if (borderWidthPx > 0f) {
         val strokeInset = max(borderWidthPx * 1.25f, 1.5f)
@@ -1070,6 +1117,7 @@ object MusicPlayerWidgets {
       heightPx = bgHeightPx,
       cornerRadiusPx = barCornerRadiusPx,
       borderWidthPx = max(1f, 1f * density * scaleFactor),
+      backgroundTexture = state.backgroundTexture,
     )?.let { bgBmp ->
       views.setImageViewBitmap(R.id.widget_mini_background, bgBmp)
     }
@@ -1234,6 +1282,7 @@ object MusicPlayerWidgets {
       heightPx = bgHeightPx,
       cornerRadiusPx = cornerRadiusPx,
       borderWidthPx = max(1f, 1f * density * scaleFactor),
+      backgroundTexture = state.backgroundTexture,
     )?.let { bgBmp ->
       views.setImageViewBitmap(R.id.widget_medium_background, bgBmp)
     }
@@ -1434,6 +1483,7 @@ object MusicPlayerWidgets {
       heightPx = bgHeightPx,
       cornerRadiusPx = ALBUM_WIDGET_CORNER_RADIUS_DP * density * scaleFactor,
       borderWidthPx = max(1f, 1f * density * scaleFactor),
+      backgroundTexture = state.backgroundTexture,
     )?.let { bgBmp ->
       views.setImageViewBitmap(R.id.widget_album_background, bgBmp)
     }
@@ -1862,10 +1912,10 @@ class MusicMediumWidgetProvider : AppWidgetProvider() {
  * Automatically switches between three views based on widget dimensions as the user resizes it:
  * - **Mini Bar** (`heightDp < 100dp`): Single-row horizontal bar with full-height left-aligned album art,
  *   song title & subtitle, favorite star, and Previous / Play-Pause / Next controls.
- * - **Medium Player** (`100dp <= heightDp < 180dp`, default `4x2`): Two-row horizontal card with
+ * - **Medium Player** (`100dp <= heightDp < 260dp`, default `4x2`): Two-row horizontal card with
  *   full-height left-aligned album art, song info & favorite star on the top row, and the full 5
  *   playback controls underneath the song info.
- * - **Album Art Player** (`heightDp >= 180dp`): Large vertical card with top square album art and
+ * - **Album Art Player** (`heightDp >= 260dp`): Large vertical card with top square album art and
  *   overlaid bottom-right favorite star, song title & artist/album, and the full 5 playback controls
  *   at the bottom (extracting the left and right custom playback buttons from the Android system media
  *   player when controlling external media).

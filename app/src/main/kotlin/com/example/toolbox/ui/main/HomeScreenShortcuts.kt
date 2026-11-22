@@ -49,6 +49,8 @@ const val TODO_QUICK_ACTION_ADD_TASK = "add_task"
 const val TODO_QUICK_ACTION_SCHEDULE = "schedule"
 const val EXTRA_AUDIO_RECORDER_QUICK_ACTION = "extra_audio_recorder_quick_action"
 const val AUDIO_RECORDER_QUICK_ACTION_START_MIC = "start_mic"
+const val AUDIO_RECORDER_QUICK_ACTION_START_DEVICE = "start_device"
+const val AUDIO_RECORDER_QUICK_ACTION_START_BOTH = "start_both"
 const val EXTRA_PLANT_SCHEDULE_MONTH = "extra_plant_schedule_month"
 const val EXTRA_PLANT_SCHEDULE_OPEN_SEARCH = "extra_plant_schedule_open_search"
 const val EXTRA_CAMERA_CAPTURE_MODE = "extra_camera_capture_mode"
@@ -380,7 +382,8 @@ fun createTodoQuickActionIntent(
 }
 
 /**
- * Parses the requested Audio Recorder quick-action mode ([AUDIO_RECORDER_QUICK_ACTION_START_MIC])
+ * Parses the requested Audio Recorder quick-action mode ([AUDIO_RECORDER_QUICK_ACTION_START_MIC],
+ * [AUDIO_RECORDER_QUICK_ACTION_START_DEVICE], or [AUDIO_RECORDER_QUICK_ACTION_START_BOTH])
  * from an incoming [Intent], or `null` if none was requested.
  */
 fun parseAudioRecorderQuickAction(intent: Intent?): String? {
@@ -390,21 +393,27 @@ fun parseAudioRecorderQuickAction(intent: Intent?): String? {
   return when {
     raw.equals(AUDIO_RECORDER_QUICK_ACTION_START_MIC, ignoreCase = true) ->
       AUDIO_RECORDER_QUICK_ACTION_START_MIC
+    raw.equals(AUDIO_RECORDER_QUICK_ACTION_START_DEVICE, ignoreCase = true) ->
+      AUDIO_RECORDER_QUICK_ACTION_START_DEVICE
+    raw.equals(AUDIO_RECORDER_QUICK_ACTION_START_BOTH, ignoreCase = true) ->
+      AUDIO_RECORDER_QUICK_ACTION_START_BOTH
     else -> null
   }
 }
 
 /**
  * Creates an [Intent] that launches [Tool.AUDIO_RECORDER] and optionally immediately begins
- * recording a voice memo ([startRecording] = `true`).
+ * recording with the requested [quickActionMode] ([AUDIO_RECORDER_QUICK_ACTION_START_MIC],
+ * [AUDIO_RECORDER_QUICK_ACTION_START_DEVICE], or [AUDIO_RECORDER_QUICK_ACTION_START_BOTH]).
  */
 fun createAudioRecorderQuickActionIntent(
   context: Context,
   startRecording: Boolean = true,
+  quickActionMode: String = AUDIO_RECORDER_QUICK_ACTION_START_MIC,
 ): Intent {
   return createStandaloneToolIntent(context, Tool.AUDIO_RECORDER).apply {
     if (startRecording) {
-      putExtra(EXTRA_AUDIO_RECORDER_QUICK_ACTION, AUDIO_RECORDER_QUICK_ACTION_START_MIC)
+      putExtra(EXTRA_AUDIO_RECORDER_QUICK_ACTION, quickActionMode)
     }
   }
 }

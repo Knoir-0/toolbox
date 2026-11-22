@@ -11,6 +11,9 @@ import android.os.Bundle
 import android.widget.RemoteViews
 import androidx.compose.runtime.Immutable
 import com.example.toolbox.R
+import com.example.toolbox.ui.main.AUDIO_RECORDER_QUICK_ACTION_START_BOTH
+import com.example.toolbox.ui.main.AUDIO_RECORDER_QUICK_ACTION_START_DEVICE
+import com.example.toolbox.ui.main.AUDIO_RECORDER_QUICK_ACTION_START_MIC
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.createAudioRecorderQuickActionIntent
 import com.example.toolbox.ui.main.createStandaloneToolIntent
@@ -35,22 +38,27 @@ data class AudioRecorderWidgetState(
 /**
  * Central state resolver, RemoteViews builder, and action handler for the compact Record Home Screen
  * AppWidget ([AudioRecorderWidgetProvider]):
- * - Displays a compact `2x1` card with the active recording format (`M4A`, `WAV`, `AAC`, `OGG`, `3GP`)
+ * - Displays a compact card with the active recording format (`M4A`, `WAV`, `AAC`, `OGG`, `3GP`)
  *   and destination folder (`/Audio`, `/Recordings`, etc.).
- * - Tapping the card opens the **Record** tool ([Tool.AUDIO_RECORDER]).
- * - Tapping the trailing circular/hexagon **Mic** button opens **Record** and immediately begins
- *   capturing a timestamped voice memo.
+ * - Tapping the left badge or title opens the **Record** tool ([Tool.AUDIO_RECORDER]).
+ * - Features all 3 recording buttons from [AudioRecorderScreen] on the right:
+ *   1. **Device + Mic** ([AudioCaptureSource.DEVICE_AND_MIC]) — smaller left button (`secondaryContainer`)
+ *   2. **Microphone** ([AudioCaptureSource.MICROPHONE]) — larger center primary button (`primary`)
+ *   3. **Device Audio** ([AudioCaptureSource.DEVICE_AUDIO]) — smaller right button (`secondaryContainer`)
  */
 object AudioRecorderWidgets {
 
   const val ACTION_WIDGET_REFRESH = "com.example.toolbox.audiorecorder.ACTION_WIDGET_REFRESH"
   const val ACTION_WIDGET_OPEN_RECORDER = "com.example.toolbox.audiorecorder.ACTION_WIDGET_OPEN_RECORDER"
   const val ACTION_WIDGET_START_RECORDING = "com.example.toolbox.audiorecorder.ACTION_WIDGET_START_RECORDING"
+  const val EXTRA_CAPTURE_SOURCE = "extra_audio_recorder_widget_capture_source"
 
   const val WIDGET_CORNER_RADIUS_DP = 16f
 
   private const val REQUEST_CODE_OPEN_RECORDER = 5100
-  private const val REQUEST_CODE_START_RECORDING = 5101
+  private const val REQUEST_CODE_START_MIC_RECORDING = 5101
+  private const val REQUEST_CODE_START_BOTH_RECORDING = 5102
+  private const val REQUEST_CODE_START_DEVICE_RECORDING = 5103
 
   /**
    * Resolves the current [AudioRecorderWidgetState] from persisted Audio Recorder preferences and
@@ -83,7 +91,7 @@ object AudioRecorderWidgets {
 
   fun renderWidgetBackgroundBitmap(
     palette: TodoWidgetPalette,
-    widthPx: Int = 360,
+    widthPx: Int = 440,
     heightPx: Int = 144,
     cornerRadiusPx: Float = 32f,
     borderWidthPx: Float = 2f,
@@ -97,16 +105,35 @@ object AudioRecorderWidgets {
     )
   }
 
+  fun quickActionModeForSource(source: AudioCaptureSource): String = when (source) {
+    AudioCaptureSource.MICROPHONE -> AUDIO_RECORDER_QUICK_ACTION_START_MIC
+    AudioCaptureSource.DEVICE_AUDIO -> AUDIO_RECORDER_QUICK_ACTION_START_DEVICE
+    AudioCaptureSource.DEVICE_AND_MIC -> AUDIO_RECORDER_QUICK_ACTION_START_BOTH
+  }
+
   fun buildOpenRecorderPendingIntent(
     context: Context,
     startRecording: Boolean = false,
+    source: AudioCaptureSource = AudioCaptureSource.MICROPHONE,
   ): PendingIntent {
     val intent = if (startRecording) {
-      createAudioRecorderQuickActionIntent(context, startRecording = true)
+      createAudioRecorderQuickActionIntent(
+        context = context,
+        startRecording = true,
+        quickActionMode = quickActionModeForSource(source),
+      )
     } else {
       createStandaloneToolIntent(context, Tool.AUDIO_RECORDER)
     }
-    val requestCode = if (startRecording) REQUEST_CODE_START_RECORDING else REQUEST_CODE_OPEN_RECORDER
+    val requestCode = if (!startRecording) {
+      REQUEST_CODE_OPEN_RECORDER
+    } else {
+      when (source) {
+        AudioCaptureSource.MICROPHONE -> REQUEST_CODE_START_MIC_RECORDING
+        AudioCaptureSource.DEVICE_AND_MIC -> REQUEST_CODE_START_BOTH_RECORDING
+        AudioCaptureSource.DEVICE_AUDIO -> REQUEST_CODE_START_DEVICE_RECORDING
+      }
+    }
     return PendingIntent.getActivity(
       context,
       requestCode,
@@ -135,15 +162,15 @@ object AudioRecorderWidgets {
     val (widthDp, heightDp) = MusicPlayerWidgets.resolveWidgetSizeDp(
       context = context,
       options = options,
-      defaultWidthDp = 180f,
+      defaultWidthDp = 240f,
       defaultHeightDp = 72f,
     )
-    val rawWidthPx = (widthDp * density).coerceAtLeast(120f)
+    val rawWidthPx = (widthDp * density).coerceAtLeast(140f)
     val rawHeightPx = (heightDp * density).coerceAtLeast(100f)
     val maxDimPx = 900f
     val maxRaw = max(rawWidthPx, rawHeightPx)
     val scaleFactor = if (maxRaw > maxDimPx) maxDimPx / maxRaw else 1f
-    val bgWidthPx = (rawWidthPx * scaleFactor).roundToInt().coerceAtLeast(120)
+    val bgWidthPx = (rawWidthPx * scaleFactor).roundToInt().coerceAtLeast(140)
     val bgHeightPx = (rawHeightPx * scaleFactor).roundToInt().coerceAtLeast(100)
 
     renderWidgetBackgroundBitmap(
@@ -167,18 +194,50 @@ object AudioRecorderWidgets {
     views.setTextViewText(R.id.widget_audio_recorder_subtitle, state.subtitle)
     views.setTextColor(R.id.widget_audio_recorder_subtitle, palette.onSurfaceVariantArgb)
 
-    // Trailing 1-tap Record button
+    // 1. Left: Smaller Device + Mic (Both) button
+    views.setImageViewResource(R.id.widget_audio_recorder_both_button_bg, state.iconButtonBackgroundRes)
+    views.setInt(R.id.widget_audio_recorder_both_button_bg, "setColorFilter", palette.secondaryContainerArgb)
+    views.setInt(R.id.widget_audio_recorder_both_button_icon, "setColorFilter", palette.onSecondaryContainerArgb)
+
+    // 2. Middle: Primary Larger Microphone button
     views.setImageViewResource(R.id.widget_audio_recorder_record_button_bg, state.iconButtonBackgroundRes)
     views.setInt(R.id.widget_audio_recorder_record_button_bg, "setColorFilter", palette.primaryArgb)
     views.setInt(R.id.widget_audio_recorder_record_button_icon, "setColorFilter", palette.onPrimaryArgb)
 
+    // 3. Right: Smaller Device Audio button
+    views.setImageViewResource(R.id.widget_audio_recorder_device_button_bg, state.iconButtonBackgroundRes)
+    views.setInt(R.id.widget_audio_recorder_device_button_bg, "setColorFilter", palette.secondaryContainerArgb)
+    views.setInt(R.id.widget_audio_recorder_device_button_icon, "setColorFilter", palette.onSecondaryContainerArgb)
+
     val openIntent = buildOpenRecorderPendingIntent(context, startRecording = false)
-    val recordIntent = buildOpenRecorderPendingIntent(context, startRecording = true)
+    val recordBothIntent = buildOpenRecorderPendingIntent(
+      context = context,
+      startRecording = true,
+      source = AudioCaptureSource.DEVICE_AND_MIC,
+    )
+    val recordMicIntent = buildOpenRecorderPendingIntent(
+      context = context,
+      startRecording = true,
+      source = AudioCaptureSource.MICROPHONE,
+    )
+    val recordDeviceIntent = buildOpenRecorderPendingIntent(
+      context = context,
+      startRecording = true,
+      source = AudioCaptureSource.DEVICE_AUDIO,
+    )
+
     views.setOnClickPendingIntent(R.id.widget_audio_recorder_root, openIntent)
     views.setOnClickPendingIntent(R.id.widget_audio_recorder_badge, openIntent)
     views.setOnClickPendingIntent(R.id.widget_audio_recorder_text_container, openIntent)
-    views.setOnClickPendingIntent(R.id.widget_audio_recorder_record_button, recordIntent)
-    views.setOnClickPendingIntent(R.id.widget_audio_recorder_record_button_icon, recordIntent)
+
+    views.setOnClickPendingIntent(R.id.widget_audio_recorder_both_button, recordBothIntent)
+    views.setOnClickPendingIntent(R.id.widget_audio_recorder_both_button_icon, recordBothIntent)
+
+    views.setOnClickPendingIntent(R.id.widget_audio_recorder_record_button, recordMicIntent)
+    views.setOnClickPendingIntent(R.id.widget_audio_recorder_record_button_icon, recordMicIntent)
+
+    views.setOnClickPendingIntent(R.id.widget_audio_recorder_device_button, recordDeviceIntent)
+    views.setOnClickPendingIntent(R.id.widget_audio_recorder_device_button_icon, recordDeviceIntent)
 
     return views
   }
@@ -205,10 +264,18 @@ object AudioRecorderWidgets {
         true
       }
       ACTION_WIDGET_START_RECORDING -> {
-        AudioRecorderEngine.requestQuickRecord(startRecording = true)
+        val rawSource = intent.getStringExtra(EXTRA_CAPTURE_SOURCE)
+        val source = AudioCaptureSource.fromNameOrDefault(rawSource)
+        AudioRecorderEngine.requestQuickRecord(startRecording = true, source = source)
         if (context != null) {
           try {
-            context.startActivity(createAudioRecorderQuickActionIntent(context, startRecording = true))
+            context.startActivity(
+              createAudioRecorderQuickActionIntent(
+                context = context,
+                startRecording = true,
+                quickActionMode = quickActionModeForSource(source),
+              )
+            )
           } catch (_: Throwable) {}
         }
         true

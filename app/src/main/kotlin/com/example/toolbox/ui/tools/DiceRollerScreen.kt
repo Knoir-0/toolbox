@@ -76,7 +76,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.BottomSheetScaffold
-import androidx.compose.material3.Button
+import com.example.toolbox.ui.theme.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -84,7 +84,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import com.example.toolbox.ui.theme.FilledIconButton
-import androidx.compose.material3.FilledTonalButton
+import com.example.toolbox.ui.theme.FilledTonalButton
 import com.example.toolbox.ui.theme.FilledTonalIconButton
 import com.example.toolbox.ui.theme.FloatingActionButton
 import androidx.compose.material3.FilterChip
@@ -102,7 +102,7 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.example.toolbox.ui.theme.TextButton
 import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberStandardBottomSheetState

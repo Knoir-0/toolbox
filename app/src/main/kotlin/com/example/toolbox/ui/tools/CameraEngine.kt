@@ -2491,26 +2491,281 @@ object CameraEngine {
   }
 
   /**
-   * Resolves the default `/DCIM/Camera` directory.
-   * Prefers `/storage/emulated/0/DCIM/Camera` when accessible, falling back to app storage `/DCIM/Camera`
-   * when external storage access is unavailable.
+   * Non-camera folder names commonly found inside `DCIM` or `Pictures` that must not be mistaken
+   * for the device's default camera photo directory.
    */
-  fun getDefaultCameraDirectory(context: Context? = null): File {
-    val userRoot = FileManagerEngine.getUserRootDirectory()
-    val primaryDir = File(userRoot, DEFAULT_CAMERA_FOLDER_SUBPATH)
+  private val NON_CAMERA_SUBFOLDER_NAMES = setOf(
+    ".thumbnails",
+    "thumbnails",
+    ".trash",
+    ".trashed",
+    "screenshots",
+    "screenrecorder",
+    "screen recordings",
+    "screen_recordings",
+    "videocaptures",
+    "restored",
+    "facebook",
+    "whatsapp",
+    "instagram",
+    "snapchat",
+    "telegram",
+    "twitter",
+    "tiktok",
+    "messenger",
+    "download",
+    "downloads",
+    "collage",
+    "shared",
+    "cache",
+  )
+
+  /**
+   * JEITA DCF standard camera directory pattern (`100..999` followed by 5 alphanumeric/underscore chars,
+   * such as `100ANDRO` on Sony Xperia, `100MEDIA` on HTC, `100LGDSC` on LG, `100SHARP`, `100PANA`, `100APPLE`, etc.).
+   */
+  private val DCF_CAMERA_FOLDER_REGEX = Regex("^[1-9][0-9]{2}[A-Z0-9_]{5}$", RegexOption.IGNORE_CASE)
+
+  /**
+   * Known OEM camera folder names inside `DCIM` in priority order.
+   */
+  private val KNOWN_OEM_DCIM_CAMERA_FOLDERS = listOf(
+    "Camera",
+    "100ANDRO",
+    "100MEDIA",
+    "100LGDSC",
+    "100SHARP",
+    "100PANA",
+    "100_CFV5",
+    "100APPLE",
+    "100EOS",
+    "100NIKON",
+    "100CANON",
+    "OpenCamera",
+    "GCam",
+    "Photos",
+  )
+
+  private fun findCaseInsensitiveChildDir(parent: File, targetName: String): File? {
+    val exact = File(parent, targetName)
+    if (exact.exists() && exact.isDirectory) return exact
+    val children = try {
+      parent.listFiles()
+    } catch (_: Throwable) {
+      null
+    } ?: return null
+    return children.firstOrNull { it.isDirectory && it.name.equals(targetName, ignoreCase = true) }
+  }
+
+  private fun countCameraMediaFilesInDir(directory: File): Int {
+    if (!directory.exists() || !directory.isDirectory) return 0
+    val files = try {
+      directory.listFiles()
+    } catch (_: Throwable) {
+      null
+    } ?: return 0
+    return files.count { isCameraMediaFile(it) }
+  }
+
+  private fun queryMediaStoreCameraDirectory(
+    context: Context,
+    userRoot: File,
+  ): File? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+    return try {
+      val projection = arrayOf(android.provider.MediaStore.MediaColumns.RELATIVE_PATH)
+      val sortOrder = "${android.provider.MediaStore.MediaColumns.DATE_MODIFIED} DESC"
+      context.contentResolver.query(
+        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+        projection,
+        null,
+        null,
+        sortOrder,
+      )?.use { cursor ->
+        val relPathCol = cursor.getColumnIndex(android.provider.MediaStore.MediaColumns.RELATIVE_PATH)
+        if (relPathCol < 0) return null
+        var inspected = 0
+        while (cursor.moveToNext() && inspected < 40) {
+          inspected++
+          val rawRel = cursor.getString(relPathCol)?.trim()?.trim('/') ?: continue
+          if (rawRel.isEmpty()) continue
+          val segments = rawRel.split('/').filter { it.isNotBlank() }
+          if (segments.isEmpty()) continue
+          val rootSegment = segments[0]
+          val subSegment = segments.getOrNull(1)
+          if (rootSegment.equals("DCIM", ignoreCase = true)) {
+            if (subSegment == null) {
+              return File(userRoot, rootSegment)
+            }
+            if (!subSegment.startsWith(".") && subSegment.lowercase(Locale.ROOT) !in NON_CAMERA_SUBFOLDER_NAMES) {
+              return File(userRoot, "$rootSegment/$subSegment")
+            }
+          } else if (
+            (rootSegment.equals("Pictures", ignoreCase = true) || rootSegment.equals("Photos", ignoreCase = true)) &&
+            subSegment != null &&
+            subSegment.equals("Camera", ignoreCase = true)
+          ) {
+            return File(userRoot, "$rootSegment/$subSegment")
+          }
+        }
+        null
+      }
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  /**
+   * Detects the default camera photo directory of the device.
+   *
+   * Most Android devices use `DCIM/Camera`, while certain OEM devices use device-specific directories:
+   * - Standard Android (Pixel, Samsung, OnePlus, Xiaomi, Motorola, etc.): `DCIM/Camera`
+   * - Sony Xperia / JEITA DCF devices: `DCIM/100ANDRO` (or `DCIM/100*`..`999*` DCF folders)
+   * - HTC Sense devices: `DCIM/100MEDIA`
+   * - LG / Sharp / Panasonic devices: `DCIM/100LGDSC`, `DCIM/100SHARP`, `DCIM/100PANA`
+   * - Alternative OEM camera paths: `Pictures/Camera` or `Photos/Camera`
+   * - Meizu / custom ROMs: `DCIM` root directly (when camera photos are stored directly in `DCIM/` without a `Camera` subfolder)
+   *
+   * Falls back to `DCIM/Camera` under [userRoot] (or [fallbackBaseDir] / app storage when [userRoot] is not writable).
+   */
+  fun detectDefaultCameraDirectory(
+    context: Context? = null,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+    fallbackBaseDir: File? = null,
+  ): File {
+    val dcimDir = findCaseInsensitiveChildDir(userRoot, "DCIM") ?: run {
+      val defaultUserRoot = FileManagerEngine.getUserRootDirectory()
+      if (userRoot.absolutePath == defaultUserRoot.absolutePath) {
+        try {
+          val envDcim = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DCIM)
+          if (envDcim != null && FileManagerEngine.isSameOrDescendant(envDcim, userRoot)) {
+            envDcim
+          } else {
+            File(userRoot, "DCIM")
+          }
+        } catch (_: Throwable) {
+          File(userRoot, "DCIM")
+        }
+      } else {
+        File(userRoot, "DCIM")
+      }
+    }
+
+    val existingStandardCameraDir = findCaseInsensitiveChildDir(dcimDir, "Camera")
+    val standardCameraDir = existingStandardCameraDir ?: File(dcimDir, "Camera")
+
+    // 1. Fast path: if DCIM/Camera already exists and contains captured camera media, use it immediately.
+    if (existingStandardCameraDir != null && countCameraMediaFilesInDir(existingStandardCameraDir) > 0) {
+      return existingStandardCameraDir
+    }
+
+    // 2. Collect existing OEM / DCF / alternative camera directories under DCIM, Pictures, and Photos.
+    val dcimSubdirs = try {
+      dcimDir.listFiles()?.filter {
+        it.isDirectory &&
+          !it.name.startsWith(".") &&
+          it.name.lowercase(Locale.ROOT) !in NON_CAMERA_SUBFOLDER_NAMES
+      }.orEmpty()
+    } catch (_: Throwable) {
+      emptyList()
+    }
+
+    val knownOemDirs = KNOWN_OEM_DCIM_CAMERA_FOLDERS
+      .filter { !it.equals("Camera", ignoreCase = true) }
+      .mapNotNull { oemName ->
+        dcimSubdirs.firstOrNull { it.name.equals(oemName, ignoreCase = true) }
+      }
+
+    val dcfDirs = dcimSubdirs
+      .filter { dir ->
+        DCF_CAMERA_FOLDER_REGEX.matches(dir.name) &&
+          knownOemDirs.none { it.absolutePath == dir.absolutePath }
+      }
+      .sortedByDescending { it.name.uppercase(Locale.ROOT) }
+
+    val picturesDir = findCaseInsensitiveChildDir(userRoot, "Pictures")
+    val photosDir = findCaseInsensitiveChildDir(userRoot, "Photos")
+    val altCameraDirs = listOfNotNull(
+      picturesDir?.let { findCaseInsensitiveChildDir(it, "Camera") },
+      photosDir?.let { findCaseInsensitiveChildDir(it, "Camera") },
+    )
+
+    val otherDcimDirs = dcimSubdirs.filter { dir ->
+      !dir.name.equals("Camera", ignoreCase = true) &&
+        knownOemDirs.none { it.absolutePath == dir.absolutePath } &&
+        dcfDirs.none { it.absolutePath == dir.absolutePath }
+    }
+
+    val orderedAlternativeCandidates = (knownOemDirs + dcfDirs + altCameraDirs + otherDcimDirs).distinctBy { it.absolutePath }
+
+    // If any known/alternative camera folder already contains captured photos/videos (while DCIM/Camera is missing or empty), prefer it.
+    val candidateWithMedia = orderedAlternativeCandidates
+      .map { dir -> dir to countCameraMediaFilesInDir(dir) }
+      .filter { (_, count) -> count > 0 }
+      .maxByOrNull { (_, count) -> count }
+      ?.first
+    if (candidateWithMedia != null) {
+      return candidateWithMedia
+    }
+
+    // 3. If no subfolder has media yet, prefer existing DCIM/Camera, then existing known OEM / DCF / Pictures/Camera folders.
+    if (existingStandardCameraDir != null) {
+      return existingStandardCameraDir
+    }
+    val firstExistingKnownCandidate = (knownOemDirs + dcfDirs + altCameraDirs).firstOrNull()
+    if (firstExistingKnownCandidate != null) {
+      return firstExistingKnownCandidate
+    }
+
+    // 4. Some devices (e.g., Meizu) store camera photos directly in /DCIM without a /Camera subfolder.
+    if (dcimDir.exists() && dcimDir.isDirectory && countCameraMediaFilesInDir(dcimDir) > 0) {
+      return dcimDir
+    }
+
+    // 5. When a live Context is available, check MediaStore for the device's active camera bucket path.
+    if (context != null) {
+      val mediaStoreDir = queryMediaStoreCameraDirectory(context, userRoot)
+      if (mediaStoreDir != null) {
+        try {
+          if ((mediaStoreDir.exists() && mediaStoreDir.canWrite()) || mediaStoreDir.mkdirs()) {
+            return mediaStoreDir
+          }
+        } catch (_: Throwable) {}
+      }
+    }
+
+    // 6. Default to DCIM/Camera (creating it if needed), falling back to app storage when userRoot is not writable.
     try {
-      if ((primaryDir.exists() && primaryDir.canWrite()) || primaryDir.mkdirs()) {
-        return primaryDir
+      if ((standardCameraDir.exists() && standardCameraDir.canWrite()) || standardCameraDir.mkdirs()) {
+        return standardCameraDir
       }
     } catch (_: Throwable) {}
 
-    if (context != null) {
-      val fallbackParent = context.getExternalFilesDir(null) ?: context.filesDir
-      val fallbackDir = File(fallbackParent, DEFAULT_CAMERA_FOLDER_SUBPATH)
-      fallbackDir.mkdirs()
+    val effectiveFallbackParent = fallbackBaseDir ?: context?.let { it.getExternalFilesDir(null) ?: it.filesDir }
+    if (effectiveFallbackParent != null) {
+      val fallbackDir = File(effectiveFallbackParent, DEFAULT_CAMERA_FOLDER_SUBPATH)
+      try {
+        fallbackDir.mkdirs()
+      } catch (_: Throwable) {}
       return fallbackDir
     }
-    return primaryDir
+    return standardCameraDir
+  }
+
+  /**
+   * Resolves the device's default camera directory (typically `/DCIM/Camera`, or an OEM-specific
+   * camera folder when detected on the device).
+   */
+  fun getDefaultCameraDirectory(
+    context: Context? = null,
+    userRoot: File = FileManagerEngine.getUserRootDirectory(),
+    fallbackBaseDir: File? = null,
+  ): File {
+    return detectDefaultCameraDirectory(
+      context = context,
+      userRoot = userRoot,
+      fallbackBaseDir = fallbackBaseDir,
+    )
   }
 
   /**

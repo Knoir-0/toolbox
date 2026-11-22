@@ -14,6 +14,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import com.example.toolbox.ui.main.AUDIO_RECORDER_QUICK_ACTION_START_BOTH
+import com.example.toolbox.ui.main.AUDIO_RECORDER_QUICK_ACTION_START_DEVICE
 import com.example.toolbox.ui.main.AUDIO_RECORDER_QUICK_ACTION_START_MIC
 import com.example.toolbox.ui.main.EXTRA_AUDIO_RECORDER_QUICK_ACTION
 import com.example.toolbox.ui.main.EXTRA_CAMERA_CAPTURE_MODE
@@ -48,6 +50,7 @@ import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
 import com.example.toolbox.ui.main.syncPinnedHomeScreenShortcuts
 import com.example.toolbox.ui.main.syncStandaloneTaskDescription
 import com.example.toolbox.ui.theme.ToolboxTheme
+import com.example.toolbox.ui.tools.AudioCaptureSource
 import com.example.toolbox.ui.tools.AudioRecorderEngine
 import com.example.toolbox.ui.tools.CameraCaptureMode
 import com.example.toolbox.ui.tools.CameraEngine
@@ -110,8 +113,13 @@ class MainActivity : ComponentActivity() {
         openSchedule = todoQuickActionMode == TODO_QUICK_ACTION_SCHEDULE,
       )
     }
-    if (audioRecorderQuickAction == AUDIO_RECORDER_QUICK_ACTION_START_MIC) {
-      AudioRecorderEngine.requestQuickRecord(startRecording = true)
+    if (audioRecorderQuickAction != null) {
+      val source = when (audioRecorderQuickAction) {
+        AUDIO_RECORDER_QUICK_ACTION_START_DEVICE -> AudioCaptureSource.DEVICE_AUDIO
+        AUDIO_RECORDER_QUICK_ACTION_START_BOTH -> AudioCaptureSource.DEVICE_AND_MIC
+        else -> AudioCaptureSource.MICROPHONE
+      }
+      AudioRecorderEngine.requestQuickRecord(startRecording = true, source = source)
     }
     if (plantScheduleMonth != null || plantScheduleOpenSearch) {
       PlantScheduleEngine.requestWidgetNavigation(

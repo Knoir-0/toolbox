@@ -58,7 +58,7 @@ class GuitarTunerScreenTest {
     composeTestRule.onNodeWithTag("tuning_card_DROP_D").performClick()
 
     // Toolbar subtitle and target frequency reflect Drop D (6th string D2 = 73.42 Hz)
-    composeTestRule.onNodeWithText("Drop D • D A D G B E").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Drop D (D A D G B E) • 2 favorites").assertIsDisplayed()
     composeTestRule
       .onNodeWithTag("tuner_main_list")
       .performScrollToNode(hasTestTag("tuner_gauge_card"))
@@ -66,27 +66,32 @@ class GuitarTunerScreenTest {
   }
 
   @Test
-  fun favoritingTunings_persistsAndFiltersFavorites() {
+  fun favoritingTunings_defaultsToStandardAndDropDAndPersistsChanges() {
     val repo = InMemoryGuitarTunerRepository()
+    assertEquals(
+      setOf(GuitarTuningPreset.STANDARD, GuitarTuningPreset.DROP_D),
+      repo.loadFavoritePresets(),
+    )
+
     composeTestRule.setContent {
       ToolboxTheme {
         GuitarTunerScreen(repository = repo)
       }
     }
 
-    // Scroll to Drop D and favorite it
-    composeTestRule
-      .onNodeWithTag("tuner_main_list")
-      .performScrollToNode(hasTestTag("favorite_tuning_button_DROP_D"))
-    composeTestRule.onNodeWithTag("favorite_tuning_button_DROP_D").performClick()
-
-    assertTrue(GuitarTuningPreset.DROP_D in repo.loadFavoritePresets())
-
-    // Filter by Favorites chip
+    // Filter by Favorites chip — Standard and Drop D are favorited by default
     composeTestRule
       .onNodeWithTag("tuner_main_list")
       .performScrollToNode(hasTestTag("tuning_filter_row"))
     composeTestRule.onNodeWithTag("tuning_filter_favorites").performClick()
+
+    composeTestRule.onNodeWithTag("tuning_card_STANDARD").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tuning_card_DROP_D").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("tuning_card_DADGAD").assertDoesNotExist()
+
+    // Unfavorite Standard and verify only Drop D remains in Favorites
+    composeTestRule.onNodeWithTag("favorite_tuning_button_STANDARD").performClick()
+    assertEquals(setOf(GuitarTuningPreset.DROP_D), repo.loadFavoritePresets())
 
     composeTestRule.onNodeWithTag("tuning_card_DROP_D").assertIsDisplayed()
     composeTestRule.onNodeWithTag("tuning_card_STANDARD").assertDoesNotExist()
@@ -116,7 +121,7 @@ class GuitarTunerScreenTest {
     composeTestRule.onNodeWithTag("catalog_tuning_card_DADGAD").performClick()
 
     composeTestRule.onNodeWithTag("catalog_search_overlay").assertDoesNotExist()
-    composeTestRule.onNodeWithText("DADGAD • D A D G A D").assertIsDisplayed()
+    composeTestRule.onNodeWithText("DADGAD (D A D G A D) • 2 favorites").assertIsDisplayed()
   }
 
   @Test

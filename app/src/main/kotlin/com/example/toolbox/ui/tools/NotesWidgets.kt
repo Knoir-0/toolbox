@@ -47,7 +47,7 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import com.example.toolbox.ui.theme.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -58,7 +58,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.example.toolbox.ui.theme.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -73,6 +73,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -634,6 +635,56 @@ object NotesWidgets {
   }
 
   /**
+   * Resolves the adaptive ARGB background fill color for a [NoteItem] card inside the Notes widget
+   * following the selected [NoteColor] and active theme [palette] (matching [resolveNoteCardColor]
+   * in [NotesScreen]).
+   */
+  fun resolveNoteCardArgb(
+    noteColor: NoteColor,
+    palette: TodoWidgetPalette,
+  ): Int {
+    if (noteColor == NoteColor.DEFAULT) {
+      return palette.itemCardArgb
+    }
+    val isDark = palette.isDarkTheme
+    val hue = noteColorHue(noteColor)
+    val saturation = if (noteColor == NoteColor.CLAY) {
+      if (isDark) 0.22f else 0.28f
+    } else {
+      if (isDark) 0.55f else 0.65f
+    }
+    val value = if (isDark) 0.52f else 0.96f
+    val tint = Color.hsv(hue = hue, saturation = saturation, value = value)
+    val solidBase = Color(palette.itemCardArgb)
+    val blendFraction = if (isDark) 0.36f else 0.42f
+    return MusicPlayerWidgets.colorToArgb(lerp(solidBase, tint, blendFraction))
+  }
+
+  /**
+   * Resolves the opaque ARGB border stroke color for a [NoteItem] card inside the Notes widget
+   * following the selected [NoteColor] and active theme [palette].
+   */
+  fun resolveNoteCardBorderArgb(
+    noteColor: NoteColor,
+    palette: TodoWidgetPalette,
+  ): Int {
+    val cardFill = Color(resolveNoteCardArgb(noteColor, palette))
+    val baseOutline = Color(palette.borderArgb or 0xFF000000.toInt())
+    val borderColor = if (noteColor == NoteColor.DEFAULT) {
+      lerp(cardFill, baseOutline, 0.5f)
+    } else {
+      val isDark = palette.isDarkTheme
+      val hue = noteColorHue(noteColor)
+      val saturation = if (noteColor == NoteColor.CLAY) 0.32f else 0.72f
+      val value = if (isDark) 0.68f else 0.82f
+      val swatchTint = Color.hsv(hue = hue, saturation = saturation, value = value)
+      val tintedOutline = lerp(baseOutline, swatchTint, 0.45f)
+      lerp(cardFill, tintedOutline, 0.52f)
+    }
+    return MusicPlayerWidgets.colorToArgb(borderColor)
+  }
+
+  /**
    * Builds the [RemoteViews] for a row in the widget's scrollable [ListView] (1 note card per row in
    * List view, or up to 2 side-by-side note cards per row in 2-column Grid view).
    */
@@ -653,6 +704,8 @@ object NotesWidgets {
       palette = palette,
       nowMillis = nowMillis,
       rootId = R.id.widget_notes_item_root,
+      bgId = R.id.widget_notes_item_bg,
+      borderId = R.id.widget_notes_item_border,
       containerId = R.id.widget_notes_item_container,
       titleId = R.id.widget_notes_item_title,
       pinIconId = R.id.widget_notes_item_pin_icon,
@@ -672,6 +725,8 @@ object NotesWidgets {
         palette = palette,
         nowMillis = nowMillis,
         rootId = R.id.widget_notes_item_second_root,
+        bgId = R.id.widget_notes_item_second_bg,
+        borderId = R.id.widget_notes_item_second_border,
         containerId = R.id.widget_notes_item_second_container,
         titleId = R.id.widget_notes_item_second_title,
         pinIconId = R.id.widget_notes_item_second_pin_icon,
@@ -693,6 +748,8 @@ object NotesWidgets {
     palette: TodoWidgetPalette,
     nowMillis: Long,
     rootId: Int,
+    bgId: Int,
+    borderId: Int,
     containerId: Int,
     titleId: Int,
     pinIconId: Int,
@@ -700,6 +757,11 @@ object NotesWidgets {
     bodyId: Int,
     metaId: Int,
   ) {
+    val cardFillArgb = resolveNoteCardArgb(note.color, palette)
+    val cardBorderArgb = resolveNoteCardBorderArgb(note.color, palette)
+    views.setInt(bgId, "setColorFilter", cardFillArgb)
+    views.setInt(borderId, "setColorFilter", cardBorderArgb)
+
     val title = buildNoteItemTitle(note)
     views.setTextViewText(titleId, title)
     views.setTextColor(titleId, palette.onSurfaceArgb)
@@ -741,6 +803,8 @@ object NotesWidgets {
       }
     }
     views.setOnClickFillInIntent(rootId, openFillIn)
+    views.setOnClickFillInIntent(bgId, openFillIn)
+    views.setOnClickFillInIntent(borderId, openFillIn)
     views.setOnClickFillInIntent(containerId, openFillIn)
   }
 

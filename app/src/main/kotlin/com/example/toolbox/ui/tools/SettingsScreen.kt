@@ -88,7 +88,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import com.example.toolbox.ui.main.ToolCategory
 import com.example.toolbox.ui.main.addToolToHomeScreen
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import com.example.toolbox.ui.theme.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -101,7 +101,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import com.example.toolbox.ui.theme.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -112,7 +112,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.example.toolbox.ui.theme.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -3591,6 +3591,8 @@ fun SettingsScreen(
                     MusicPlayerWidgets.updateAllWidgets(localContext)
                     TodoListWidgets.updateAllWidgets(localContext)
                     NotesWidgets.updateAllWidgets(localContext)
+                    BackgroundTextureWidgets.updateAllWidgets(localContext)
+                    HexagonifyWidgets.updateAllWidgets(localContext)
                   },
                 )
                 .testTag("hexagon_icon_buttons_toggle"),

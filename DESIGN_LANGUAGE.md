@@ -73,7 +73,7 @@ Consistent rounding gives Toolbox its signature modern, friendly, and cohesive a
 - **Device & Category Pills / Filter Chips**: `RoundedCornerShape(20.dp)` (enforced via `ToolboxPillNavigationItem`)
 - **Item Cards (Lists & Grids)**: `RoundedCornerShape(12.dp)` to `RoundedCornerShape(14.dp)`
 - **Text Input Fields (`OutlinedTextField`)**: `RoundedCornerShape(14.dp)` or `RoundedCornerShape(16.dp)`
-- **Buttons (Dialog Confirm / Dismiss & Action Buttons)**: `CircleShape` (fully rounded pill shape, matching the rest of the app's buttons)
+- **Buttons (Dialog Confirm / Dismiss & Action Buttons)**: `CircleShape` (fully rounded pill shape when **Hexagonify** is off, automatically rendering as a sharp-edged horizontal-aligned `HorizontalHexagonShape` when **Hexagonify** is enabled in Settings)
 - **Floating Action Buttons (FAB & Mini-FAB)**: `CircleShape`
 - **Header Icon Badges**: `CircleShape` (fixed `40.dp` container in `colorScheme.primaryContainer` with a `20.dp` icon tinted `colorScheme.primary`)
 - **Sliders & Trackbars (`SlimDotSlider`)**: Slim track (`4.dp` to `6.dp` height) with a circular dot drag handle (`CircleShape`, `16.dp` to `20.dp`). Never use the default thick Material 3 vertical bar thumb.
@@ -141,7 +141,7 @@ Dialogs must not be bare or plain. They must feature:
 4. **Rounded text field** (`14.dp` shape) with leading icon, clear button (`Icons.Default.Clear`), auto-focus, and keyboard action support.
 5. **Intelligent Selection**: When editing file names, pre-select the filename stem excluding the extension (`TextRange(0, stem.length)`).
 6. **Helper Badges**: Warnings for missing file extensions with one-tap restore pills.
-7. **Rounded Action Buttons**: Confirm and dismiss buttons using `CircleShape` (matching the rest of the app's buttons), enabled only when valid and modified.
+7. **Rounded Action Buttons**: Confirm and dismiss buttons using `CircleShape` (matching the rest of the app's buttons, and automatically becoming horizontal-aligned `HorizontalHexagonShape` hexagons when **Hexagonify** is enabled), enabled only when valid and modified.
 
 ```kotlin
 AlertDialog(
@@ -359,8 +359,8 @@ All Home Screen AppWidgets (including the unified responsive **Music Player** wi
    - Give the widget card `FrameLayout` `android:id="@android:id/background"`, `android:background="@drawable/bg_..."` (`<corners android:radius="16dp" />`), and `android:clipToOutline="true"`. On Android 12+ launchers (`RoundedCornerEnforcement.hasAppWidgetOptedOut`), this opts the widget out of the launcher's `28.dp` `system_app_widget_background_radius` clip mask—which would otherwise slice off the 4 corners of a `16.dp` outline—and clips to the widget's own `16.dp` outline instead.
    - The unified **Music Player** widget (`MusicAlbumArtWidgetProvider`, `music_album_art_widget_info.xml`) switches views automatically based on widget height (`resolveWidgetViewStyleForSize`):
      - **Mini Bar view** (`heightDp < 100dp`, card height `72.dp` / `MINI_BAR_HEIGHT_DP = 72f`): Single-row bar with left-aligned square album art, song info, favorite star, and Previous / Play-Pause / Next controls.
-     - **Medium Player view** (`100dp <= heightDp < 180dp`, default `4x2`, card height `112.dp` / `MEDIUM_WIDGET_HEIGHT_DP = 112f`): Two-row horizontal card with left-aligned square album art, song info & favorite star on the top row, and the full 5 playback controls below it.
-     - **Album Art view** (`heightDp >= 180dp`): Vertical card with top square album art, bottom-right overlaid favorite star, song info, and the full 5 playback controls below it.
+     - **Medium Player view** (`100dp <= heightDp < 260dp`, default `4x2`, card height `112.dp` / `MEDIUM_WIDGET_HEIGHT_DP = 112f`): Two-row horizontal card with left-aligned square album art, song info & favorite star on the top row, and the full 5 playback controls below it.
+     - **Album Art view** (`heightDp >= 260dp`): Vertical card with top square album art, bottom-right overlaid favorite star, song info, and the full 5 playback controls below it.
    - When drawing the `1.dp` border stroke in `Canvas.drawRoundRect`, inset the stroke rectangle by `strokeInset = max(borderWidthPx * 1.25f, 1.5f)` (`RectF(strokeInset, strokeInset, w - strokeInset, h - strokeInset)`) and use corner radius `cornerRadiusPx + borderWidthPx` so the entire stroke thickness stays strictly inside the `16.dp` `ViewOutlineProvider` curve even when `scaleType="fitXY"` slightly adjusts the bitmap's aspect ratio.
    - In the **Mini Bar** and **Medium Player** views, where the `1:1` square album art occupies the full height on the left (`x in 0..h`), apply a horizontal `LinearGradient` to the border stroke that smoothly fades the outline to transparent as it approaches the album art.
 3. **Theme & Dynamic Palette Synchronization**:
@@ -368,5 +368,6 @@ All Home Screen AppWidgets (including the unified responsive **Music Player** wi
 4. **Inner Cards, Badges & Floating Controls**:
    - List items inside scrollable widget collections (such as task cards in **To Do List**) use `14.dp` rounded corners (`<corners android:radius="14dp" />`).
    - Header icon badges, task check circles, transport buttons, and floating action buttons (FABs) inside widgets use circular (`oval`) backgrounds matching the app's `CircleShape` tokens (and automatically switch to vertical-sided hexagon drawables `@drawable/bg_music_widget_hexagon`, `@drawable/ic_todo_widget_hexagon_unchecked`, and `@drawable/ic_todo_widget_hexagon_checked` when **Hexagonify** is enabled in Settings).
+   - The Easter Egg **Hexagonify** widget (`HexagonifyWidgetProvider`) renders as an icon-free floating circle (`isHexagon == false`) or vertical-sided hexagon (`isHexagon == true`) clipped to the active procedural `BackgroundTexture` with tonal radial sheen, subtle concentric geometric contours, and an inset outer border outline matching the other widgets; tapping it toggles **Hexagonify** and refreshes all widgets.
 
 

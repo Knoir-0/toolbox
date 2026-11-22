@@ -33,6 +33,7 @@ class NotesScreenTest {
     }
 
     composeTestRule.onNodeWithTag("notes_empty_state").assertIsDisplayed()
+    val quickCaptureClosedBounds = composeTestRule.onNodeWithTag("notes_quick_capture_card").fetchSemanticsNode().boundsInRoot
     val pinBounds = composeTestRule.onNodeWithTag("new_pin_note_button").fetchSemanticsNode().boundsInRoot
     val checklistBounds = composeTestRule.onNodeWithTag("new_checklist_button").fetchSemanticsNode().boundsInRoot
     assertTrue("Pin and checklist buttons should not overlap", pinBounds.right <= checklistBounds.left)
@@ -57,6 +58,12 @@ class NotesScreenTest {
     composeTestRule.onNodeWithTag("new_pin_note_button").performClick()
     composeTestRule.onNodeWithTag("editor_toggle_label_picker").performClick()
     composeTestRule.waitForIdle()
+    val labelInputCardBounds = composeTestRule.onNodeWithTag("editor_new_label_input_card").fetchSemanticsNode().boundsInRoot
+    val addLabelButtonBounds = composeTestRule.onNodeWithTag("editor_add_label_confirm", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+    val labelIconBounds = composeTestRule.onNodeWithTag("editor_new_label_icon", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+    assertEquals("Add label input should have the same height as the Take a note input", quickCaptureClosedBounds.height, labelInputCardBounds.height, 2f)
+    assertTrue("Plus button should be inside input", addLabelButtonBounds.left >= labelInputCardBounds.left && addLabelButtonBounds.right <= labelInputCardBounds.right)
+    assertTrue("Label icon should be inside input on the right of plus button", labelIconBounds.left > addLabelButtonBounds.right && labelIconBounds.right <= labelInputCardBounds.right)
     composeTestRule.onNodeWithTag("editor_new_label_input").assertIsFocused()
     composeTestRule.onNodeWithTag("editor_new_label_input").performTextInput("snacks")
     composeTestRule.onNodeWithTag("editor_add_label_confirm").performClick()
@@ -76,11 +83,24 @@ class NotesScreenTest {
     composeTestRule.onNodeWithText("Almonds, cashews, dark chocolate").assertIsDisplayed()
     composeTestRule.onNodeWithTag("notes_section_pinned").assertIsDisplayed()
 
-    // Tapping the bottom-left X button in the add note view discards the draft and closes the panel
-    composeTestRule.onNodeWithTag("take_a_note_button").performClick()
+    // Tapping the bottom-left X button in the add note view discards the draft and closes the panel,
+    // and adding a large list never squishes or resizes the bottom X and Check buttons
+    composeTestRule.onNodeWithTag("new_checklist_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("add_note_panel").assertIsDisplayed()
+    val initialCancelBounds = composeTestRule.onNodeWithTag("add_note_cancel_button").fetchSemanticsNode().boundsInRoot
+    val initialConfirmBounds = composeTestRule.onNodeWithTag("add_note_confirm_button").fetchSemanticsNode().boundsInRoot
+    assertEquals(initialCancelBounds.width, initialCancelBounds.height, 1f)
+    assertEquals(initialConfirmBounds.width, initialConfirmBounds.height, 1f)
     composeTestRule.onNodeWithTag("editor_title_input").performTextInput("Discarded Draft")
+    composeTestRule.onNodeWithTag("editor_new_checklist_input").performTextInput((1..20).joinToString("\n") { "Item $it" })
+    composeTestRule.waitForIdle()
+    val largeListCancelBounds = composeTestRule.onNodeWithTag("add_note_cancel_button").fetchSemanticsNode().boundsInRoot
+    val largeListConfirmBounds = composeTestRule.onNodeWithTag("add_note_confirm_button").fetchSemanticsNode().boundsInRoot
+    assertEquals("Cancel button width must not change when list grows large", initialCancelBounds.width, largeListCancelBounds.width, 1f)
+    assertEquals("Cancel button height must not change when list grows large", initialCancelBounds.height, largeListCancelBounds.height, 1f)
+    assertEquals("Confirm button width must not change when list grows large", initialConfirmBounds.width, largeListConfirmBounds.width, 1f)
+    assertEquals("Confirm button height must not change when list grows large", initialConfirmBounds.height, largeListConfirmBounds.height, 1f)
     composeTestRule.onNodeWithTag("add_note_cancel_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("add_note_panel").assertIsNotDisplayed()
@@ -231,6 +251,12 @@ class NotesScreenTest {
     composeTestRule.onNodeWithTag("note_card_chk-1").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("single_note_view").assertIsDisplayed()
+    val titleInputBounds = composeTestRule.onNodeWithTag("editor_title_input").fetchSemanticsNode().boundsInRoot
+    val checklistRowBounds = composeTestRule.onNodeWithTag("editor_checklist_row_item-2").fetchSemanticsNode().boundsInRoot
+    val checklistDragBounds = composeTestRule.onNodeWithTag("editor_checklist_drag_item-2").fetchSemanticsNode().boundsInRoot
+    assertEquals("Checklist row left edge should align with title/textarea left edge", titleInputBounds.left, checklistRowBounds.left, 1f)
+    assertEquals("Checklist row right edge should align with title/textarea right edge", titleInputBounds.right, checklistRowBounds.right, 1f)
+    assertEquals("Checklist item leading handle should sit flush with row left edge", titleInputBounds.left, checklistDragBounds.left, 1f)
     composeTestRule.onNodeWithTag("editor_checked_suggestions").assertDoesNotExist()
 
     composeTestRule.onNodeWithTag("editor_new_checklist_input").performTextInput("Oat")
@@ -243,10 +269,12 @@ class NotesScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("editor_checked_suggestions").assertDoesNotExist()
 
-    // Pasting a list with return characters into the new item input and adding it parses into multiple checklist items
+    // Pasting a list with return characters into the new item input automatically adds the entire list immediately
     composeTestRule.onNodeWithTag("editor_new_checklist_input").performTextInput("Apples\nBananas\nCherries")
-    composeTestRule.onNodeWithTag("editor_add_checklist_item").performClick()
     composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithText("Apples").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Bananas").assertIsDisplayed()
+    composeTestRule.onNodeWithText("Cherries").assertIsDisplayed()
 
     composeTestRule.onNodeWithTag("single_note_back_button").performClick()
     composeTestRule.waitForIdle()
@@ -699,30 +727,45 @@ class NotesScreenTest {
       composeTestRule.onNodeWithTag("folder_permission_view").assertDoesNotExist()
       composeTestRule.onNodeWithTag("notes_quick_capture_card").assertIsDisplayed()
 
-      // 4. Create a checklist note and verify it is saved as a .text file in /Notes with '- ' and '+ ' list syntax
+      // 4. Create a checklist note with labels and verify it is saved as a .text file in /Notes with '- ' and '+ ' list syntax
+      //    and '#Label Name 1, #Label Name 2' on the last line (without showing '#' in the UI)
       composeTestRule.onNodeWithTag("new_checklist_button").performClick()
       composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("editor_title_input").performTextInput("Toolbox Supplies")
       composeTestRule.onNodeWithTag("editor_new_checklist_input").performTextInput("Wrench\nScrewdriver")
       composeTestRule.onNodeWithTag("editor_add_checklist_item").performClick()
       composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("editor_toggle_label_picker").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("editor_new_label_input").performTextInput("Hardware Store")
+      composeTestRule.onNodeWithTag("editor_add_label_confirm").performClick()
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag("editor_new_label_input").performTextInput("Weekend DIY")
+      composeTestRule.onNodeWithTag("editor_add_label_confirm").performClick()
+      composeTestRule.waitForIdle()
       composeTestRule.onNodeWithTag("add_note_confirm_button").performClick()
       composeTestRule.waitForIdle()
+
+      // UI displays label names without '#'
+      composeTestRule.onNodeWithTag("notes_filter_label_Hardware Store").assertIsDisplayed()
+      composeTestRule.onNodeWithTag("notes_filter_label_Weekend DIY").assertIsDisplayed()
+      composeTestRule.onNodeWithText("#Hardware Store").assertDoesNotExist()
+      composeTestRule.onNodeWithText("#Weekend DIY").assertDoesNotExist()
 
       val savedTtxtFile = java.io.File(notesDir, "Toolbox Supplies.text")
       assertTrue("Expected .text file in /Notes", savedTtxtFile.exists())
       assertEquals(
-        "# Toolbox Supplies\n\n- Wrench\n- Screwdriver",
+        "# Toolbox Supplies\n\n- Wrench\n- Screwdriver\n\n#Hardware Store, #Weekend DIY",
         savedTtxtFile.readText(),
       )
 
-      // Checking off the first item replaces '-' with '+' in the .text file
+      // Checking off the first item replaces '-' with '+' in the .text file while keeping the #Label CSV footer line
       val firstItemId = repo.loadNotes().single().checklistItems.first().id
       composeTestRule.onNodeWithTag("note_card_check_item_$firstItemId").performClick()
       composeTestRule.waitForIdle()
 
       assertEquals(
-        "# Toolbox Supplies\n\n+ Wrench\n- Screwdriver",
+        "# Toolbox Supplies\n\n+ Wrench\n- Screwdriver\n\n#Hardware Store, #Weekend DIY",
         savedTtxtFile.readText(),
       )
     } finally {

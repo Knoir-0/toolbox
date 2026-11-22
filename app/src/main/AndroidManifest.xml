@@ -724,6 +724,43 @@
                 android:resource="@xml/dice_roller_widget_info" />
         </receiver>
 
+        <receiver
+            android:name=".ui.tools.BackgroundTextureWidgetProvider"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_settings"
+            android:roundIcon="@mipmap/ic_tool_settings"
+            android:label="@string/background_texture_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.toolbox.texture.ACTION_WIDGET_REFRESH" />
+                <action android:name="com.example.toolbox.texture.ACTION_WIDGET_SELECT_TEXTURE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/background_texture_widget_info" />
+        </receiver>
+
+        <service
+            android:name=".ui.tools.BackgroundTextureWidgetRemoteViewsService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
+
+        <receiver
+            android:name=".ui.tools.HexagonifyWidgetProvider"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_settings"
+            android:roundIcon="@mipmap/ic_tool_settings"
+            android:label="@string/hexagonify_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.toolbox.hexagonify.ACTION_WIDGET_REFRESH" />
+                <action android:name="com.example.toolbox.hexagonify.ACTION_WIDGET_TOGGLE_HEXAGONIFY" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/hexagonify_widget_info" />
+        </receiver>
+
         <service
             android:name=".ui.tools.ToolboxMediaListenerService"
             android:exported="true"

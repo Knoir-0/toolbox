@@ -438,18 +438,20 @@ class CameraScreenTest {
     composeTestRule.onNodeWithTag("camera_device_pill_2").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_device_pill_3").assertIsDisplayed()
 
-    // Open Camera Settings dialog and verify all system camera lens chips and hardware specs are shown
+    // Open Camera Settings dialog and verify photo format and front mirror controls are shown,
+    // while device camera selector and editable folder path controls are removed from the modal
     composeTestRule.onNodeWithTag("camera_settings_button").performClick()
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("camera_folder_dialog").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("camera_settings_lens_chip_0").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("camera_settings_lens_chip_3").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("camera_settings_lens_specs").assertIsDisplayed()
-
-    // Select 1x Wide (ID 0) from settings dialog
-    composeTestRule.onNodeWithTag("camera_settings_lens_chip_0").performClick()
-    composeTestRule.waitForIdle()
-    assertEquals("0", prefs.getString(PREF_KEY_CAMERA_ID, null))
+    composeTestRule.onNodeWithTag("camera_format_chip_JPG").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_format_chip_PNG").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("mirror_front_camera_switch").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("camera_settings_back_lens_row").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_settings_front_lens_row").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_settings_lens_chip_0").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_settings_lens_specs").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_folder_input").assertDoesNotExist()
+    composeTestRule.onNodeWithTag("camera_choose_scoped_folder_chip").assertDoesNotExist()
   }
 
   @Test

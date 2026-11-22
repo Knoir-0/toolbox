@@ -21,6 +21,7 @@ import androidx.compose.runtime.Immutable
 import com.example.toolbox.R
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.createStandaloneToolIntent
+import com.example.toolbox.ui.theme.drawWidgetBackgroundTextureOverlay
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.atan2
@@ -451,6 +452,17 @@ object DiceRollerWidgets {
       }
       canvas.drawRoundRect(fillRect, fillRadius, fillRadius, glowPaint)
 
+      drawWidgetBackgroundTextureOverlay(
+        bitmap = bitmap,
+        cornerRadiusPx = fillRadius,
+        texture = palette.backgroundTexture,
+        primaryColor = androidx.compose.ui.graphics.Color(palette.primaryArgb),
+        tertiaryColor = androidx.compose.ui.graphics.Color(palette.tertiaryArgb),
+        secondaryColor = androidx.compose.ui.graphics.Color(palette.secondaryArgb),
+        onSurfaceColor = androidx.compose.ui.graphics.Color(palette.onSurfaceArgb),
+        isDarkTheme = palette.isDarkTheme,
+      )
+
       val effectiveBorderWidth = if (state.isNatural20 || state.isNatural1) {
         max(borderWidthPx * 1.6f, 2.5f)
       } else {
@@ -691,6 +703,7 @@ object DiceRollerWidgets {
       cornerRadiusPx = safeH * 0.5f,
       borderWidthPx = borderWidthPx,
       hexagonShape = hexagonShape,
+      verticalHexagon = false,
     )
   }
 

@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
 import com.example.toolbox.ui.tools.AudioRecorderWidgets
+import com.example.toolbox.ui.tools.BackgroundTextureWidgets
 import com.example.toolbox.ui.tools.CameraWidgets
 import com.example.toolbox.ui.tools.DiceRollerWidgets
 import com.example.toolbox.ui.tools.MusicPlayerWidgets
@@ -1065,6 +1066,8 @@ class DefaultNavigationPreferencesRepository(
     PlantScheduleWidgets.updateAllWidgets(ctx)
     CameraWidgets.updateAllWidgets(ctx)
     DiceRollerWidgets.updateAllWidgets(ctx)
+    BackgroundTextureWidgets.updateAllWidgets(ctx)
+    com.example.toolbox.ui.tools.HexagonifyWidgets.updateAllWidgets(ctx)
   }
 
   private val _toolsPerRowFlow = MutableStateFlow(getToolsPerRow())
@@ -1270,6 +1273,7 @@ class DefaultNavigationPreferencesRepository(
     sharedPreferences.edit().putString(PREF_KEY_BACKGROUND_TEXTURE, texture.name).apply()
     _backgroundTextureFlow.value = texture
     NavigationPreferencesBridge.backgroundTexture = texture
+    refreshHomeScreenWidgets()
   }
 
   override fun getHexagonIconButtons(): Boolean {

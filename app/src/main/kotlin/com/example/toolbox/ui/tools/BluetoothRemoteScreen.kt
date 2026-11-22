@@ -92,13 +92,14 @@ import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.BottomSheetDefaults
-import androidx.compose.material3.Button
+import com.example.toolbox.ui.theme.ActionButtonShape
+import com.example.toolbox.ui.theme.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilledTonalIconToggleButton
+import com.example.toolbox.ui.theme.FilledTonalButton
+import com.example.toolbox.ui.theme.FilledTonalIconToggleButton
 import com.example.toolbox.ui.theme.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -107,7 +108,7 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
+import com.example.toolbox.ui.theme.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -115,7 +116,7 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.example.toolbox.ui.theme.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -1990,7 +1991,7 @@ private fun MouseClickButton(label: String, actions: RemoteInputActions, modifie
     onPress = { actions.mouseButton(HidProtocol.MOUSE_BUTTON_LEFT, true) },
     onRelease = { actions.mouseButton(HidProtocol.MOUSE_BUTTON_LEFT, false) },
     contentDescription = label,
-    shape = RoundedCornerShape(28.dp),
+    shape = ActionButtonShape,
     containerColor = MaterialTheme.colorScheme.primary,
     contentColor = MaterialTheme.colorScheme.onPrimary,
     modifier = modifier.height(56.dp),

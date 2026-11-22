@@ -827,8 +827,12 @@ class TodoListTest {
       MusicPlayerWidgets.resolveWidgetViewStyleForSize(280f, 112f),
     )
     assertEquals(
+      MusicWidgetViewStyle.MEDIUM,
+      MusicPlayerWidgets.resolveWidgetViewStyleForSize(280f, 220f),
+    )
+    assertEquals(
       MusicWidgetViewStyle.ALBUM_ART,
-      MusicPlayerWidgets.resolveWidgetViewStyleForSize(260f, 240f),
+      MusicPlayerWidgets.resolveWidgetViewStyleForSize(260f, 260f),
     )
 
     // Verify external system media left custom action replaces the star button in widget state
@@ -1027,29 +1031,29 @@ class TodoListTest {
       ),
     )
 
-    // 1. Single task .text serialization follows YAML 2-space nested list indentation with '-' and '+'
-    val expectedTask1Ttxt = """
-      - Prepare electronics kit
-        + Pack multimeter
-        - Charge soldering iron
-          - Find USB-C PD cable
-          + Inspect chisel tip
-    """.trimIndent()
+    // 1. Single task .text serialization uses tab indentation ('\t') for nested lists with '-' and '+'
+    val expectedTask1Ttxt = listOf(
+      "- Prepare electronics kit",
+      "\t+ Pack multimeter",
+      "\t- Charge soldering iron",
+      "\t\t- Find USB-C PD cable",
+      "\t\t+ Inspect chisel tip",
+    ).joinToString("\n")
     assertEquals(expectedTask1Ttxt, activeTask1.toTtxt())
 
-    // 2. Full To Do list .text document includes '# To Do', active '-' tasks, completed '+' tasks, and nested lists
-    val expectedFullTtxt = """
-      # To Do
-
-      - Prepare electronics kit
-        + Pack multimeter
-        - Charge soldering iron
-          - Find USB-C PD cable
-          + Inspect chisel tip
-      - Order replacement fuses
-      + Clean workbench
-        + Wipe ESD mat
-    """.trimIndent()
+    // 2. Full To Do list .text document includes '# To Do', active '-' tasks, completed '+' tasks, and tab-nested lists
+    val expectedFullTtxt = listOf(
+      "# To Do",
+      "",
+      "- Prepare electronics kit",
+      "\t+ Pack multimeter",
+      "\t- Charge soldering iron",
+      "\t\t- Find USB-C PD cable",
+      "\t\t+ Inspect chisel tip",
+      "- Order replacement fuses",
+      "+ Clean workbench",
+      "\t+ Wipe ESD mat",
+    ).joinToString("\n")
     assertEquals(
       expectedFullTtxt,
       TodoListEngine.formatTodoListToTtxt(
@@ -1058,7 +1062,7 @@ class TodoListTest {
       ),
     )
 
-    // 3. Repository saves and loads .text file on disk, preserving multi-level YAML list nesting
+    // 3. Repository saves and loads .text file on disk, preserving multi-level tab list nesting
     val tempDir = java.nio.file.Files.createTempDirectory("todo_text_test").toFile()
     val todoTtxtFile = java.io.File(tempDir, TODO_LIST_TTXT_FILE_NAME)
     try {
@@ -1072,22 +1076,22 @@ class TodoListTest {
       assertEquals(expectedFullTtxt, todoTtxtFile.readText())
       assertEquals(expectedFullTtxt, repo.toTtxt())
 
-      // Toggle deeply nested subtask 's2-1' ("Find USB-C PD cable") -> '-' becomes '+' at indent level 2 (4 spaces)
+      // Toggle deeply nested subtask 's2-1' ("Find USB-C PD cable") -> '-' becomes '+' at indent level 2 (2 tabs)
       val afterNestedToggle = TodoListEngine.toggleSubTask(repo.loadTasks(), taskId = "t1", subtaskId = "s2-1")
       repo.saveTasks(afterNestedToggle)
 
-      val expectedAfterToggle = """
-        # To Do
-
-        - Prepare electronics kit
-          + Pack multimeter
-          - Charge soldering iron
-            + Find USB-C PD cable
-            + Inspect chisel tip
-        - Order replacement fuses
-        + Clean workbench
-          + Wipe ESD mat
-      """.trimIndent()
+      val expectedAfterToggle = listOf(
+        "# To Do",
+        "",
+        "- Prepare electronics kit",
+        "\t+ Pack multimeter",
+        "\t- Charge soldering iron",
+        "\t\t+ Find USB-C PD cable",
+        "\t\t+ Inspect chisel tip",
+        "- Order replacement fuses",
+        "+ Clean workbench",
+        "\t+ Wipe ESD mat",
+      ).joinToString("\n")
       assertEquals(expectedAfterToggle, todoTtxtFile.readText())
 
       // Load into a fresh repository from the .text file on disk

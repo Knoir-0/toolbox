@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:description="@string/background_texture_widget_description"
+    android:initialLayout="@layout/widget_background_texture"
+    android:minWidth="180dp"
+    android:minHeight="56dp"
+    android:minResizeWidth="140dp"
+    android:minResizeHeight="52dp"
+    android:maxResizeWidth="520dp"
+    android:maxResizeHeight="520dp"
+    android:previewLayout="@layout/widget_background_texture"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="4"
+    android:targetCellHeight="1"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen"
+    tools:targetApi="s" />

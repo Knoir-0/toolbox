@@ -116,6 +116,16 @@ class ToolsUnitTest {
     assertEquals(6, openResults.size)
     assertTrue(openResults.all { it.category == GuitarTuningCategory.OPEN })
 
+    // Default favorites are Standard and Drop D
+    assertEquals(
+      setOf(GuitarTuningPreset.STANDARD, GuitarTuningPreset.DROP_D),
+      GuitarTunerEngine.DEFAULT_FAVORITE_PRESETS,
+    )
+    assertEquals(
+      listOf(GuitarTuningPreset.STANDARD, GuitarTuningPreset.DROP_D),
+      GuitarTunerEngine.filterTuningsForList(favoritesOnly = true),
+    )
+
     // Toggle favorites and sort favorites to top of list
     var favs = emptySet<GuitarTuningPreset>()
     favs = GuitarTunerEngine.toggleFavorite(favs, GuitarTuningPreset.DADGAD)

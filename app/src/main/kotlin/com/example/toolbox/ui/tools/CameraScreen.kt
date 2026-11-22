@@ -122,6 +122,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Timer
@@ -134,7 +135,7 @@ import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
-import androidx.compose.material3.Button
+import com.example.toolbox.ui.theme.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -150,7 +151,7 @@ import com.example.toolbox.ui.theme.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.example.toolbox.ui.theme.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -492,46 +493,22 @@ fun CameraScreen(
     prefs?.edit()?.putString(PREF_KEY_CAMERA_VISION_PRESET, preset.name)?.apply()
   }
 
-  // Output directory (defaults to /DCIM/Camera)
-  var cameraDirectory by remember {
-    val initialDir = initialDirectory ?: run {
-      val savedPath = prefs?.getString(PREF_KEY_CAMERA_DIRECTORY, null)
-      if (!savedPath.isNullOrBlank()) {
-        CameraEngine.resolveDirectoryInput(savedPath, userRoot, fallbackBaseDir)
-      } else {
-        if (isInspection) File("/storage/emulated/0/DCIM/Camera")
-        else CameraEngine.getDefaultCameraDirectory(context)
-      }
-    }
-    mutableStateOf(initialDir)
-  }
-
-  var directoryDisplayPath by rememberSaveable {
-    val savedPath = prefs?.getString(PREF_KEY_CAMERA_DIRECTORY, null)
-    mutableStateOf(
-      if (!savedPath.isNullOrBlank()) savedPath
-      else if (initialDirectory != null) CameraEngine.formatDirectoryDisplayPath(initialDirectory, userRoot)
-      else DEFAULT_CAMERA_FOLDER_DISPLAY
-    )
-  }
-
-  fun updateCameraDirectory(inputPath: String) {
-    val normalized = if (inputPath.isBlank()) {
-      DEFAULT_CAMERA_FOLDER_DISPLAY
-    } else if (!inputPath.startsWith("/")) {
-      "/$inputPath"
+  // Automatically detected default photo directory of the device (usually /DCIM/Camera, or OEM camera directory)
+  val cameraDirectory = remember(initialDirectory, context, userRoot, fallbackBaseDir, isInspection) {
+    initialDirectory ?: if (isInspection) {
+      File("/storage/emulated/0/DCIM/Camera")
     } else {
-      inputPath.trim()
+      CameraEngine.detectDefaultCameraDirectory(
+        context = context,
+        userRoot = userRoot,
+        fallbackBaseDir = fallbackBaseDir,
+      )
     }
-    val resolved = CameraEngine.resolveDirectoryInput(
-      inputPath = normalized,
-      userRoot = userRoot,
-      fallbackBaseDir = fallbackBaseDir,
-    )
-    cameraDirectory = resolved
-    directoryDisplayPath = CameraEngine.formatDirectoryDisplayPath(resolved, userRoot)
-      .takeIf { it.isNotBlank() } ?: normalized
-    prefs?.edit()?.putString(PREF_KEY_CAMERA_DIRECTORY, directoryDisplayPath)?.apply()
+  }
+
+  val directoryDisplayPath = remember(cameraDirectory, userRoot) {
+    CameraEngine.formatDirectoryDisplayPath(cameraDirectory, userRoot)
+      .takeIf { it.isNotBlank() } ?: DEFAULT_CAMERA_FOLDER_DISPLAY
   }
 
   // Camera permission check
@@ -2072,15 +2049,15 @@ fun CameraScreen(
               )
             }
 
-            // Camera Folder & Format Settings Button
+            // Camera Settings Button
             IconButton(
               onClick = { showFolderSettingsDialog = true },
               enabled = !isRecordingVideo,
               modifier = Modifier.testTag("camera_settings_button"),
             ) {
               Icon(
-                imageVector = Icons.Default.FolderOpen,
-                contentDescription = "Camera storage and format settings",
+                imageVector = Icons.Default.Settings,
+                contentDescription = "Camera settings",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
               )
             }
@@ -3266,22 +3243,15 @@ fun CameraScreen(
     }
   }
 
-  // Dialog 1: Camera Folder & Photo Format Settings Dialog (DESIGN_LANGUAGE.md 5.2)
+  // Dialog 1: Camera Settings Dialog (DESIGN_LANGUAGE.md 5.2)
   if (showFolderSettingsDialog) {
     CameraFolderAndFormatDialog(
       currentDisplayPath = directoryDisplayPath,
       currentDirectory = cameraDirectory,
       currentFormat = photoFormat,
       mirrorFront = mirrorFrontCamera,
-      systemCameras = systemCameras,
-      selectedCamera = selectedCamera,
-      onSelectCamera = { device ->
-        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-        selectCameraDevice(device)
-      },
       onDismiss = { showFolderSettingsDialog = false },
-      onConfirm = { newPath, newFormat, newMirror ->
-        updateCameraDirectory(newPath)
+      onConfirm = { newFormat, newMirror ->
         updatePhotoFormat(newFormat)
         updateMirrorFrontCamera(newMirror)
         showFolderSettingsDialog = false
@@ -4003,7 +3973,7 @@ private fun HardwareCamera2Preview(
 }
 
 /**
- * Dialog for configuring the Camera output folder, still photo format (JPG/PNG),
+ * Dialog for configuring the Camera still photo format (JPG/PNG)
  * and front camera mirroring, styled per `DESIGN_LANGUAGE.md` 5.2.
  */
 @Composable
@@ -4012,60 +3982,11 @@ private fun CameraFolderAndFormatDialog(
   currentDirectory: File,
   currentFormat: CameraPhotoFormat,
   mirrorFront: Boolean,
-  systemCameras: List<CameraSystemDevice>,
-  selectedCamera: CameraSystemDevice,
-  onSelectCamera: (CameraSystemDevice) -> Unit,
   onDismiss: () -> Unit,
-  onConfirm: (String, CameraPhotoFormat, Boolean) -> Unit,
+  onConfirm: (CameraPhotoFormat, Boolean) -> Unit,
 ) {
-  val context = LocalContext.current
-  val focusRequester = remember { FocusRequester() }
-  var textFieldValue by remember {
-    mutableStateOf(
-      TextFieldValue(
-        text = currentDisplayPath,
-        selection = TextRange(0, currentDisplayPath.length),
-      )
-    )
-  }
   var selectedFormat by remember { mutableStateOf(currentFormat) }
   var mirrorFrontEnabled by remember { mutableStateOf(mirrorFront) }
-
-  val folderPickerLauncher = rememberLauncherForActivityResult(
-    contract = ActivityResultContracts.StartActivityForResult(),
-  ) { result ->
-    if (result.resultCode == android.app.Activity.RESULT_OK) {
-      val treeUri = result.data?.data
-      if (treeUri != null) {
-        try {
-          val takeFlags = (result.data?.flags ?: 0) and
-            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-          val effectiveFlags = if (takeFlags != 0) {
-            takeFlags
-          } else {
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-          }
-          context.contentResolver.takePersistableUriPermission(treeUri, effectiveFlags)
-        } catch (_: Throwable) {}
-        val resolvedPath = CameraEngine.resolveDisplayPathFromTreeUri(treeUri)
-        if (!resolvedPath.isNullOrBlank()) {
-          textFieldValue = TextFieldValue(
-            text = resolvedPath,
-            selection = TextRange(0, resolvedPath.length),
-          )
-        }
-      }
-    }
-  }
-
-  LaunchedEffect(Unit) {
-    try {
-      focusRequester.requestFocus()
-    } catch (_: Throwable) {}
-  }
-
-  val trimmedInput = textFieldValue.text.trim()
-  val isValid = trimmedInput.isNotEmpty() && !trimmedInput.contains('\u0000')
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -4087,7 +4008,7 @@ private fun CameraFolderAndFormatDialog(
           contentAlignment = Alignment.Center,
         ) {
           Icon(
-            imageVector = Icons.Default.PhotoCamera,
+            imageVector = Icons.Default.Settings,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(24.dp),
@@ -4101,7 +4022,7 @@ private fun CameraFolderAndFormatDialog(
             color = MaterialTheme.colorScheme.onSurface,
           )
           Text(
-            text = "Configure save folder, photo format, and lens options",
+            text = "Configure photo format and front camera options",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -4113,7 +4034,7 @@ private fun CameraFolderAndFormatDialog(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(14.dp),
       ) {
-        // Context Preview Card
+        // Context Preview Card (read-only detected default device photo directory)
         Card(
           shape = RoundedCornerShape(14.dp),
           colors = CardDefaults.cardColors(
@@ -4185,193 +4106,6 @@ private fun CameraFolderAndFormatDialog(
           }
         }
 
-        // Detected System Cameras Selector Chips & Hardware Specs (Separated into Back and Front bars)
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-          val backDialogCameras = remember(systemCameras) {
-            CameraEngine.getCamerasForFacing(systemCameras, CameraLensFacing.BACK)
-          }
-          val frontDialogCameras = remember(systemCameras) {
-            CameraEngine.getCamerasForFacing(systemCameras, CameraLensFacing.FRONT)
-          }
-
-          if (backDialogCameras.isNotEmpty()) {
-            Text(
-              text = "Back Cameras (${backDialogCameras.size})",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .testTag("camera_settings_back_lens_row"),
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              backDialogCameras.forEach { camera ->
-                val isSelected = camera.cameraId == selectedCamera.cameraId
-                FilterChip(
-                  selected = isSelected,
-                  onClick = { onSelectCamera(camera) },
-                  label = { Text(camera.chipLabel) },
-                  leadingIcon = if (isSelected) {
-                    {
-                      Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                      )
-                    }
-                  } else {
-                    {
-                      Icon(
-                        imageVector = Icons.Default.PhotoCamera,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                      )
-                    }
-                  },
-                  shape = RoundedCornerShape(20.dp),
-                  modifier = Modifier.testTag("camera_settings_lens_chip_${camera.cameraId}"),
-                )
-              }
-            }
-          }
-
-          if (frontDialogCameras.isNotEmpty()) {
-            Text(
-              text = "Front Cameras (${frontDialogCameras.size})",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .testTag("camera_settings_front_lens_row"),
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              frontDialogCameras.forEach { camera ->
-                val isSelected = camera.cameraId == selectedCamera.cameraId
-                FilterChip(
-                  selected = isSelected,
-                  onClick = { onSelectCamera(camera) },
-                  label = { Text(camera.chipLabel) },
-                  leadingIcon = if (isSelected) {
-                    {
-                      Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                      )
-                    }
-                  } else {
-                    {
-                      Icon(
-                        imageVector = Icons.Default.CameraAlt,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                      )
-                    }
-                  },
-                  shape = RoundedCornerShape(20.dp),
-                  modifier = Modifier.testTag("camera_settings_lens_chip_${camera.cameraId}"),
-                )
-              }
-            }
-          }
-
-          Text(
-            text = selectedCamera.specsSummary,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.testTag("camera_settings_lens_specs"),
-          )
-        }
-
-        // Quick Folder Presets + Scoped Storage Folder Picker
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          val presets = listOf("/DCIM/Camera", "/Photos", "/Pictures")
-          presets.forEach { preset ->
-            FilterChip(
-              selected = textFieldValue.text.trim().equals(preset, ignoreCase = true),
-              onClick = {
-                textFieldValue = TextFieldValue(
-                  text = preset,
-                  selection = TextRange(0, preset.length),
-                )
-              },
-              label = { Text(preset) },
-              shape = RoundedCornerShape(20.dp),
-              modifier = Modifier.testTag("camera_folder_preset_${preset.trimStart('/').replace('/', '_')}"),
-            )
-          }
-          FilterChip(
-            selected = false,
-            onClick = {
-              try {
-                folderPickerLauncher.launch(
-                  CameraEngine.createFolderAccessIntent(
-                    context = context,
-                    currentDisplayPath = textFieldValue.text.ifBlank { DEFAULT_CAMERA_FOLDER_DISPLAY },
-                  )
-                )
-              } catch (_: Throwable) {}
-            },
-            label = { Text("Choose Folder") },
-            leadingIcon = {
-              Icon(
-                imageVector = Icons.Default.CreateNewFolder,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-              )
-            },
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.testTag("camera_choose_scoped_folder_chip"),
-          )
-        }
-
-        // Rounded Folder Path Input Field
-        OutlinedTextField(
-          value = textFieldValue,
-          onValueChange = { textFieldValue = it },
-          label = { Text("Save folder path") },
-          singleLine = true,
-          shape = RoundedCornerShape(14.dp),
-          leadingIcon = {
-            Icon(Icons.Default.FolderOpen, contentDescription = null)
-          },
-          trailingIcon = {
-            if (textFieldValue.text.isNotEmpty()) {
-              IconButton(
-                onClick = { textFieldValue = TextFieldValue("") },
-              ) {
-                Icon(Icons.Default.Clear, contentDescription = "Clear folder path")
-              }
-            }
-          },
-          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-          keyboardActions = KeyboardActions(
-            onDone = {
-              if (isValid) {
-                onConfirm(trimmedInput, selectedFormat, mirrorFrontEnabled)
-              }
-            }
-          ),
-          modifier = Modifier
-            .fillMaxWidth()
-            .focusRequester(focusRequester)
-            .testTag("camera_folder_input"),
-        )
-
         // Front Camera Mirror Toggle
         Row(
           modifier = Modifier.fillMaxWidth(),
@@ -4413,8 +4147,7 @@ private fun CameraFolderAndFormatDialog(
     },
     confirmButton = {
       Button(
-        onClick = { onConfirm(trimmedInput, selectedFormat, mirrorFrontEnabled) },
-        enabled = isValid,
+        onClick = { onConfirm(selectedFormat, mirrorFrontEnabled) },
         shape = CircleShape,
         modifier = Modifier.testTag("confirm_camera_settings_button"),
       ) {

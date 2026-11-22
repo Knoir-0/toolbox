@@ -67,8 +67,8 @@ enum class NoteColor(
 
 /**
  * Represents a single interactive checkbox item inside a checklist-mode [NoteItem].
- * In `.text` files, unchecked items use `- <text>` (matching `.yaml` lists)
- * and checked items replace the dash with `+` internally (`+ <text>`).
+ * In `.text` files, unchecked items use `- <text>` and checked items replace the dash with `+`
+ * internally (`+ <text>`), with nesting denoted by leading tab indentation (`"\t".repeat(indentLevel)`).
  */
 data class NoteChecklistItem(
   val id: String = UUID.randomUUID().toString(),
@@ -84,10 +84,10 @@ data class NoteChecklistItem(
 
   /**
    * Formats this item as a `.text` checklist line (`- <text>` for unchecked, `+ <text>` for checked),
-   * indented by 2 spaces per [indentLevel] following YAML list nesting conventions.
+   * indented by 1 tab (`\t`) per [indentLevel] to denote checklist nesting.
    */
   fun toTtxtLine(): String {
-    val indent = "  ".repeat(indentLevel.coerceAtLeast(0))
+    val indent = "\t".repeat(indentLevel.coerceAtLeast(0))
     return "$indent$ttxtPrefix ${text.trim()}"
   }
 
@@ -106,11 +106,7 @@ data class NoteChecklistItem(
       rawLine: String,
       id: String = UUID.randomUUID().toString(),
     ): NoteChecklistItem? {
-      val leadingSpaces = rawLine
-        .takeWhile { it == ' ' || it == '\t' }
-        .replace("\t", "  ")
-        .length
-      val indentLevel = leadingSpaces / 2
+      val indentLevel = NotesEngine.parseTtxtIndentLevel(rawLine)
       val trimmed = rawLine.trim()
       if (trimmed.isEmpty()) return null
       return when {
@@ -182,21 +178,27 @@ data class NoteItem(
    * - For checklists ([isChecklist] = `true`), `- <item>` for unchecked items (matching `.yaml` lists)
    *   and `+ <item>` for checked items (dash replaced with `+` internally).
    * - For text notes ([isChecklist] = `false`), Markdown body text.
+   * - Labels on the last line as a `#Label Name 1, #Label Name 2, ...` CSV list when [labels] is non-empty.
    */
   fun toTtxt(): String = NotesEngine.formatNoteToTtxt(this)
 
   /**
-   * Formats the note into `.text`-based plain text suitable for copying to clipboard or sharing.
+   * Formats the note into `.text`-based plain text suitable for copying to clipboard or sharing,
+   * without the internal `#` prefixes on labels.
    */
   fun toPlainText(): String {
     val sb = StringBuilder()
-    val ttxtBody = toTtxt()
+    val ttxtBody = NotesEngine.formatNoteToTtxt(this, includeLabels = false)
     if (ttxtBody.isNotEmpty()) {
       sb.append(ttxtBody)
     }
-    if (labels.isNotEmpty()) {
+    val cleanedLabels = labels
+      .map { NotesEngine.normalizeLabelName(it) }
+      .filter { it.isNotEmpty() }
+      .distinct()
+    if (cleanedLabels.isNotEmpty()) {
       if (sb.isNotEmpty()) sb.append("\n\n")
-      sb.append(labels.joinToString(", "))
+      sb.append(cleanedLabels.joinToString(", "))
     }
     return sb.toString()
   }
@@ -253,7 +255,7 @@ data class NoteItem(
       val labelsArray = json.optJSONArray("labels")
       if (labelsArray != null) {
         for (i in 0 until labelsArray.length()) {
-          val label = labelsArray.optString(i, "").trim()
+          val label = NotesEngine.normalizeLabelName(labelsArray.optString(i, ""))
           if (label.isNotEmpty()) {
             labelsList.add(label)
           }
@@ -285,7 +287,7 @@ data class NoteItem(
           isPinned = json.optBoolean("isPinned", false),
           isArchived = json.optBoolean("isArchived", false),
           isTrashed = json.optBoolean("isTrashed", false),
-          labels = labelsList.distinct(),
+          labels = (labelsList + parsed.labels).distinct(),
           createdAt = created,
           updatedAt = updated,
         )
@@ -427,11 +429,11 @@ class InMemoryNotesRepository(
     }
   }
 
-  override fun loadLabels(): List<String> = labels.toList()
+  override fun loadLabels(): List<String> = labels.map { NotesEngine.normalizeLabelName(it) }.filter { it.isNotEmpty() }.distinct()
 
   override fun saveLabels(labels: List<String>) {
     this.labels.clear()
-    this.labels.addAll(labels.map { it.trim() }.filter { it.isNotEmpty() }.distinct())
+    this.labels.addAll(labels.map { NotesEngine.normalizeLabelName(it) }.filter { it.isNotEmpty() }.distinct())
   }
 
   override fun isGridView(): Boolean = gridView
@@ -575,7 +577,7 @@ class SharedPreferencesNotesRepository(
       val array = JSONArray(raw)
       val list = mutableListOf<String>()
       for (i in 0 until array.length()) {
-        val label = array.optString(i, "").trim()
+        val label = NotesEngine.normalizeLabelName(array.optString(i, ""))
         if (label.isNotEmpty()) {
           list.add(label)
         }
@@ -588,7 +590,7 @@ class SharedPreferencesNotesRepository(
 
   override fun saveLabels(labels: List<String>) {
     val array = JSONArray()
-    labels.map { it.trim() }.filter { it.isNotEmpty() }.distinct().forEach { array.put(it) }
+    labels.map { NotesEngine.normalizeLabelName(it) }.filter { it.isNotEmpty() }.distinct().forEach { array.put(it) }
     sharedPreferences.edit().putString(KEY_LABELS_JSON, array.toString()).apply()
   }
 
@@ -743,13 +745,74 @@ object NotesEngine {
   }
 
   /**
+   * Computes the `.text` checklist nesting depth (`indentLevel`) from leading whitespace on [rawLine].
+   * Each leading tab character (`\t`) denotes 1 nesting level (with every 2 leading spaces also
+   * accepted as 1 nesting level for backwards compatibility).
+   */
+  fun parseTtxtIndentLevel(rawLine: String): Int {
+    val leadingWhitespace = rawLine.takeWhile { it == ' ' || it == '\t' }
+    val tabCount = leadingWhitespace.count { it == '\t' }
+    val spaceCount = leadingWhitespace.count { it == ' ' }
+    return tabCount + (spaceCount / 2)
+  }
+
+  /**
+   * Normalizes a label name so the internal `.text` `#` prefix is never stored on [NoteItem.labels]
+   * or displayed in the UI.
+   */
+  fun normalizeLabelName(raw: String): String {
+    return raw.trim().trimStart('#').trim()
+  }
+
+  /**
+   * Formats a list of labels into the internal `.text` CSV footer line:
+   * `#Label Name 1, #Label Name 2, ...`
+   */
+  fun formatLabelsToTtxtLine(labels: List<String>): String {
+    return labels
+      .map { normalizeLabelName(it) }
+      .filter { it.isNotEmpty() }
+      .distinct()
+      .joinToString(", ") { "#$it" }
+  }
+
+  /**
+   * Parses a `.text` label CSV line (`#Label Name 1, #Label Name 2, ...`) into clean label names
+   * without the internal `#`, or returns `null` if [rawLine] is not a `.text` label line.
+   *
+   * Note: Markdown headings use `# <Title>` (with a space after `#`), whereas `.text` label tokens
+   * start directly with `#<LabelName>` (no space immediately following `#`) and are comma-separated.
+   */
+  fun parseLabelsFromTtxtLine(rawLine: String): List<String>? {
+    val trimmed = rawLine.trim()
+    if (!trimmed.startsWith("#")) return null
+    val tokens = trimmed.split(',').map { it.trim() }
+    if (tokens.isEmpty()) return null
+    val parsedLabels = mutableListOf<String>()
+    for (token in tokens) {
+      if (!token.startsWith("#") || token.length < 2) return null
+      val secondChar = token[1]
+      if (secondChar.isWhitespace() || secondChar == '#') return null
+      val labelName = normalizeLabelName(token)
+      if (labelName.isEmpty()) return null
+      parsedLabels.add(labelName)
+    }
+    return parsedLabels.distinct()
+  }
+
+  /**
    * Formats a [NoteItem] into `.text` content:
    * - Markdown `# <title>` heading when [NoteItem.title] is non-blank.
    * - For checklists ([NoteItem.isChecklist] = `true`), `- <item>` for unchecked items (matching
    *   `.yaml` list syntax) and `+ <item>` for checked items (dash replaced with `+` internally).
    * - For text notes ([NoteItem.isChecklist] = `false`), Markdown body text.
+   * - Labels on the last line as a `#Label Name 1, #Label Name 2, ...` CSV list when [includeLabels]
+   *   is `true` and [NoteItem.labels] is non-empty.
    */
-  fun formatNoteToTtxt(note: NoteItem): String {
+  fun formatNoteToTtxt(
+    note: NoteItem,
+    includeLabels: Boolean = true,
+  ): String {
     val sb = StringBuilder()
     if (note.title.isNotBlank()) {
       sb.append("# ").append(note.title.trim())
@@ -767,12 +830,21 @@ object NotesEngine {
         sb.append(note.content.trimEnd())
       }
     }
+    if (includeLabels) {
+      val labelsLine = formatLabelsToTtxtLine(note.labels)
+      if (labelsLine.isNotEmpty()) {
+        if (sb.isNotEmpty()) sb.append("\n\n")
+        sb.append(labelsLine)
+      }
+    }
     return sb.toString()
   }
 
   /**
    * Parses `.text` content into a [NoteItem].
    * - Extracts a `# Heading` title if present on the first non-blank line; otherwise uses [fallbackTitle].
+   * - Extracts the trailing `#Label Name 1, #Label Name 2, ...` CSV label list from the last non-blank line
+   *   (stripping the internal `#` prefixes so they are never shown in the UI).
    * - Recognizes `.text` checklists where unchecked items use `- <item>` and checked items use `+ <item>`.
    */
   fun parseNoteFromTtxt(
@@ -796,15 +868,35 @@ object NotesEngine {
       )
     }
 
-    val firstTrimmed = lines[firstNonBlankIdx].trim()
+    val lastNonBlankIdx = lines.indexOfLast { it.isNotBlank() }
+    val trailingLabels = parseLabelsFromTtxtLine(lines[lastNonBlankIdx])
+    val contentLines = if (trailingLabels != null) {
+      lines.subList(0, lastNonBlankIdx)
+    } else {
+      lines
+    }
+
+    val firstContentNonBlankIdx = contentLines.indexOfFirst { it.isNotBlank() }
+    if (firstContentNonBlankIdx == -1) {
+      return NoteItem(
+        id = id,
+        title = fallbackTitle,
+        isChecklist = forceChecklist ?: false,
+        labels = trailingLabels.orEmpty(),
+        createdAt = nowMs,
+        updatedAt = nowMs,
+      )
+    }
+
+    val firstTrimmed = contentLines[firstContentNonBlankIdx].trim()
     val title: String
     val rawBodyLines: List<String>
     if (firstTrimmed.startsWith("# ") || firstTrimmed == "#") {
       title = firstTrimmed.removePrefix("#").trim().ifBlank { fallbackTitle }
-      rawBodyLines = lines.drop(firstNonBlankIdx + 1)
+      rawBodyLines = contentLines.drop(firstContentNonBlankIdx + 1)
     } else {
       title = fallbackTitle
-      rawBodyLines = lines.drop(firstNonBlankIdx)
+      rawBodyLines = contentLines.drop(firstContentNonBlankIdx)
     }
 
     val firstBodyNonBlank = rawBodyLines.indexOfFirst { it.isNotBlank() }
@@ -831,11 +923,7 @@ object NotesEngine {
       val items = nonBlankBodyLines.mapNotNull { rawLine ->
         val checkedMatch = TTXT_CHECKED_LINE_REGEX.matchEntire(rawLine)
         val uncheckedMatch = if (checkedMatch == null) TTXT_UNCHECKED_LINE_REGEX.matchEntire(rawLine) else null
-        val leadingSpaces = rawLine
-          .takeWhile { it == ' ' || it == '\t' }
-          .replace("\t", "  ")
-          .length
-        val indentLevel = leadingSpaces / 2
+        val indentLevel = parseTtxtIndentLevel(rawLine)
         val (itemText, isChecked) = when {
           checkedMatch != null -> checkedMatch.groupValues[2].trim() to true
           uncheckedMatch != null -> uncheckedMatch.groupValues[2].trim() to false
@@ -871,6 +959,7 @@ object NotesEngine {
         content = "",
         isChecklist = true,
         checklistItems = items,
+        labels = trailingLabels.orEmpty(),
         createdAt = nowMs,
         updatedAt = nowMs,
       )
@@ -881,6 +970,7 @@ object NotesEngine {
         content = trimmedBodyLines.joinToString("\n").trimEnd(),
         isChecklist = false,
         checklistItems = emptyList(),
+        labels = trailingLabels.orEmpty(),
         createdAt = nowMs,
         updatedAt = nowMs,
       )
@@ -1050,7 +1140,7 @@ object NotesEngine {
           isPinned = meta.isPinned,
           isArchived = meta.isArchived,
           isTrashed = meta.isTrashed,
-          labels = meta.labels,
+          labels = parsed.labels.ifEmpty { meta.labels },
           createdAt = meta.createdAt,
           updatedAt = meta.updatedAt,
         )
@@ -1213,7 +1303,7 @@ object NotesEngine {
       title = draft.title.trim(),
       content = if (draft.isChecklist) "" else draft.content.trimEnd(),
       checklistItems = if (draft.isChecklist) cleanedItems else emptyList(),
-      labels = draft.labels.map { it.trim() }.filter { it.isNotEmpty() }.distinct(),
+      labels = draft.labels.map { normalizeLabelName(it) }.filter { it.isNotEmpty() }.distinct(),
       updatedAt = nowMs,
     )
 
@@ -1237,13 +1327,14 @@ object NotesEngine {
 
   /**
    * Parses [rawText] into one or more [NoteChecklistItem]s by splitting on return/newline
-   * characters (`\r\n`, `\n`, or `\r`), trimming whitespace and optional list/checkbox prefixes,
-   * and filtering out blank lines.
+   * characters (`\r\n`, `\n`, or `\r`), extracting leading tab indentation (`\t`) for nesting
+   * [NoteChecklistItem.indentLevel], trimming optional list/checkbox prefixes, and filtering out blank lines.
    */
   fun parseChecklistItems(rawText: String): List<NoteChecklistItem> {
     return rawText
       .split(Regex("\\r\\n|\\n|\\r"))
       .mapNotNull { rawLine ->
+        val indentLevel = parseTtxtIndentLevel(rawLine)
         val line = rawLine.trim()
         if (line.isEmpty()) {
           null
@@ -1251,29 +1342,37 @@ object NotesEngine {
           when {
             line.startsWith("+ ") -> {
               val itemText = line.substring(2).trim()
-              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = true) else null
+              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = true, indentLevel = indentLevel) else null
             }
             line.startsWith("- [x] ", ignoreCase = true) || line.startsWith("* [x] ", ignoreCase = true) -> {
               val itemText = line.substring(6).trim()
-              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = true) else null
+              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = true, indentLevel = indentLevel) else null
             }
             line.startsWith("- [ ] ") || line.startsWith("* [ ] ") -> {
               val itemText = line.substring(6).trim()
-              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = false) else null
+              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = false, indentLevel = indentLevel) else null
             }
             line.startsWith("[x] ", ignoreCase = true) -> {
               val itemText = line.substring(4).trim()
-              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = true) else null
+              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = true, indentLevel = indentLevel) else null
             }
             line.startsWith("[ ] ") -> {
               val itemText = line.substring(4).trim()
-              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = false) else null
+              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = false, indentLevel = indentLevel) else null
             }
             line.startsWith("- ") || line.startsWith("* ") || line.startsWith("• ") -> {
               val itemText = line.substring(2).trim()
-              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = false) else null
+              if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = false, indentLevel = indentLevel) else null
             }
-            else -> NoteChecklistItem(text = line, isChecked = false)
+            else -> {
+              val numberedMatch = Regex("""^\d+[.)]\s+(.+)$""").matchEntire(line)
+              if (numberedMatch != null) {
+                val itemText = numberedMatch.groupValues[1].trim()
+                if (itemText.isNotEmpty()) NoteChecklistItem(text = itemText, isChecked = false, indentLevel = indentLevel) else null
+              } else {
+                NoteChecklistItem(text = line, isChecked = false, indentLevel = indentLevel)
+              }
+            }
           }
         }
       }
@@ -1290,8 +1389,20 @@ object NotesEngine {
   ): NoteItem {
     if (!updatedText.contains('\n') && !updatedText.contains('\r')) {
       return note.copy(
-        checklistItems = note.checklistItems.map {
-          if (it.id == itemId) it.copy(text = updatedText) else it
+        checklistItems = note.checklistItems.map { item ->
+          if (item.id == itemId) {
+            if (updatedText.startsWith("\t")) {
+              val addedTabs = updatedText.takeWhile { it == '\t' }.length
+              item.copy(
+                text = updatedText.drop(addedTabs),
+                indentLevel = item.indentLevel + addedTabs,
+              )
+            } else {
+              item.copy(text = updatedText)
+            }
+          } else {
+            item
+          }
         },
       )
     }
@@ -1303,9 +1414,20 @@ object NotesEngine {
         if (parsed.isEmpty()) {
           updatedList.add(item.copy(text = ""))
         } else {
-          updatedList.add(item.copy(text = parsed.first().text))
+          val firstParsed = parsed.first()
+          updatedList.add(
+            item.copy(
+              text = firstParsed.text,
+              indentLevel = if (firstParsed.indentLevel > 0) firstParsed.indentLevel else item.indentLevel,
+            ),
+          )
           parsed.drop(1).forEach { extra ->
-            updatedList.add(extra.copy(isChecked = item.isChecked))
+            updatedList.add(
+              extra.copy(
+                isChecked = item.isChecked,
+                indentLevel = if (extra.indentLevel > 0) extra.indentLevel else item.indentLevel,
+              ),
+            )
           }
         }
       } else {
@@ -1316,11 +1438,32 @@ object NotesEngine {
   }
 
   /**
+   * Adjusts the nesting [NoteChecklistItem.indentLevel] of the checklist item with [itemId] by [delta]
+   * (clamped to `>= 0`).
+   */
+  fun adjustChecklistItemIndent(
+    note: NoteItem,
+    itemId: String,
+    delta: Int,
+  ): NoteItem {
+    if (delta == 0) return note
+    return note.copy(
+      checklistItems = note.checklistItems.map { item ->
+        if (item.id == itemId) {
+          item.copy(indentLevel = (item.indentLevel + delta).coerceAtLeast(0))
+        } else {
+          item
+        }
+      },
+    )
+  }
+
+  /**
    * Converts a [NoteItem] between plain text mode and interactive checklist mode.
    */
   fun toggleChecklistMode(note: NoteItem): NoteItem {
     return if (!note.isChecklist) {
-      // Plain text -> Checklist: split non-blank lines into checklist items
+      // Plain text -> Checklist: split non-blank lines into checklist items (preserving tab indentation)
       val items = parseChecklistItems(note.content)
       note.copy(
         isChecklist = true,
@@ -1328,10 +1471,12 @@ object NotesEngine {
         content = "",
       )
     } else {
-      // Checklist -> Plain text: join checklist items into lines
+      // Checklist -> Plain text: join checklist items into lines (preserving tab indentation)
       val joinedContent = note.checklistItems
-        .map { it.text.trim() }
-        .filter { it.isNotEmpty() }
+        .mapNotNull { item ->
+          val clean = item.text.trim()
+          if (clean.isEmpty()) null else "${"\t".repeat(item.indentLevel.coerceAtLeast(0))}$clean"
+        }
         .joinToString("\n")
       note.copy(
         isChecklist = false,
@@ -1656,7 +1801,7 @@ object NotesEngine {
       .filterNot { it.isTrashed }
       .flatMap { it.labels }
     return (savedLabels + fromNotes)
-      .map { it.trim() }
+      .map { normalizeLabelName(it) }
       .filter { it.isNotEmpty() }
       .distinctBy { it.lowercase(Locale.US) }
       .sortedWith(String.CASE_INSENSITIVE_ORDER)

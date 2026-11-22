@@ -121,8 +121,11 @@ object CameraWidgets {
 
   /**
    * Renders a mode pill background [Bitmap] for a single camera mode slot inside the compact pill bar.
-   * When [hexagonShape] is `true`, renders a sharp-edged horizontal hexagon matching
-   * `HorizontalHexagonShape` in `ToolboxPillNavigationItem`.
+   * When [hexagonShape] is `true`:
+   * - If [verticalHexagon] is `true` (the default for the Camera Pill Bar), renders a vertical-sided
+   *   hexagon (strictly vertical left and right edges with top and bottom points, matching
+   *   `createVerticalSidedHexagonVertices`) so the 5 mode buttons pack tightly side-by-side.
+   * - If [verticalHexagon] is `false`, renders a horizontal-sided hexagon with left and right points.
    */
   fun renderModePillBitmap(
     fillArgb: Int,
@@ -132,6 +135,7 @@ object CameraWidgets {
     cornerRadiusPx: Float = 28f,
     borderWidthPx: Float = 2f,
     hexagonShape: Boolean = false,
+    verticalHexagon: Boolean = true,
   ): Bitmap? {
     val safeW = widthPx.coerceIn(60, 600)
     val safeH = heightPx.coerceIn(48, 400)
@@ -148,21 +152,39 @@ object CameraWidgets {
 
       if (hexagonShape) {
         val inset = max(borderWidthPx, 1f)
-        val taper = min(w * 0.20f, h * 0.36f)
-        val path = Path().apply {
-          moveTo(inset + taper, inset)
-          lineTo(w - inset - taper, inset)
-          lineTo(w - inset, h * 0.5f)
-          lineTo(w - inset - taper, h - inset)
-          lineTo(inset + taper, h - inset)
-          lineTo(inset, h * 0.5f)
-          close()
+        val path = if (verticalHexagon) {
+          val cx = w * 0.5f
+          val cy = h * 0.5f
+          val halfH = (h - inset * 2f) * 0.5f
+          val halfVerticalEdge = halfH * 0.52f
+          Path().apply {
+            moveTo(cx, inset)
+            lineTo(w - inset, cy - halfVerticalEdge)
+            lineTo(w - inset, cy + halfVerticalEdge)
+            lineTo(cx, h - inset)
+            lineTo(inset, cy + halfVerticalEdge)
+            lineTo(inset, cy - halfVerticalEdge)
+            close()
+          }
+        } else {
+          val taper = min(w * 0.20f, h * 0.36f)
+          Path().apply {
+            moveTo(inset + taper, inset)
+            lineTo(w - inset - taper, inset)
+            lineTo(w - inset, h * 0.5f)
+            lineTo(w - inset - taper, h - inset)
+            lineTo(inset + taper, h - inset)
+            lineTo(inset, h * 0.5f)
+            close()
+          }
         }
         canvas.drawPath(path, fillPaint)
         if (borderWidthPx > 0f) {
           val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeWidth = borderWidthPx
+            strokeJoin = Paint.Join.ROUND
+            strokeCap = Paint.Cap.ROUND
             color = borderArgb
           }
           canvas.drawPath(path, borderPaint)

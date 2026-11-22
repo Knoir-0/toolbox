@@ -37,6 +37,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import com.example.toolbox.ui.theme.CircleShape
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -605,7 +607,9 @@ private fun TriggerButton(
   actions: GamepadInputActions,
   modifier: Modifier = Modifier,
 ) {
-  val shape: Shape = if (isLeft) {
+  val shape: Shape = if (currentHexagonIconButtons()) {
+    HorizontalHexagonShape
+  } else if (isLeft) {
     RoundedCornerShape(topStart = 22.dp, topEnd = 10.dp, bottomStart = 10.dp, bottomEnd = 10.dp)
   } else {
     RoundedCornerShape(topStart = 10.dp, topEnd = 22.dp, bottomStart = 10.dp, bottomEnd = 10.dp)
@@ -635,11 +639,16 @@ private fun BumperButton(
   actions: GamepadInputActions,
   modifier: Modifier = Modifier,
 ) {
+  val shape: Shape = if (currentHexagonIconButtons()) {
+    HorizontalHexagonShape
+  } else {
+    RoundedCornerShape(14.dp)
+  }
   PressableSurface(
     onPress = { actions.setButton(button, true) },
     onRelease = { actions.setButton(button, false) },
     contentDescription = contentDescription,
-    shape = RoundedCornerShape(14.dp),
+    shape = shape,
     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     contentColor = MaterialTheme.colorScheme.onSurface,
     modifier = modifier,

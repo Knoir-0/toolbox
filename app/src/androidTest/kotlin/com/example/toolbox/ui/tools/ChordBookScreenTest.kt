@@ -62,9 +62,7 @@ class ChordBookScreenTest {
 
   @Test
   fun tuningSearch_searchesSelectsAndSharesFavoriteTuningsWithGuitarTuner() {
-    val sharedRepo = InMemoryGuitarTunerRepository(
-      initialFavorites = setOf(GuitarTuningPreset.DROP_D),
-    )
+    val sharedRepo = InMemoryGuitarTunerRepository()
     composeTestRule.setContent {
       ToolboxTheme {
         ChordBookScreen(tuningRepository = sharedRepo)
@@ -79,8 +77,9 @@ class ChordBookScreenTest {
     // Search for DADGAD, favorite it, and select it
     composeTestRule.onNodeWithTag("tuning_search_input").performTextInput("DADGAD")
     composeTestRule.onNodeWithTag("catalog_favorite_button_DADGAD").performClick()
-    assertTrue(GuitarTuningPreset.DADGAD in sharedRepo.loadFavoritePresets())
+    assertTrue(GuitarTuningPreset.STANDARD in sharedRepo.loadFavoritePresets())
     assertTrue(GuitarTuningPreset.DROP_D in sharedRepo.loadFavoritePresets())
+    assertTrue(GuitarTuningPreset.DADGAD in sharedRepo.loadFavoritePresets())
 
     composeTestRule.onNodeWithTag("catalog_tuning_card_DADGAD").performClick()
     composeTestRule.onNodeWithTag("catalog_search_overlay").assertDoesNotExist()

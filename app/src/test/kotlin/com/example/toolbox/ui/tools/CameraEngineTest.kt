@@ -219,6 +219,40 @@ class CameraEngineTest {
       userRoot = fakeRoot,
     )
     assertEquals("/DCIM/Camera", resolvedFromTree)
+
+    // 1. Default detection falls back to /DCIM/Camera when no camera folders exist yet
+    val freshRoot = File(tempDir, "fresh_device").apply { mkdirs() }
+    val detectedFresh = CameraEngine.detectDefaultCameraDirectory(userRoot = freshRoot)
+    assertEquals(File(freshRoot, "DCIM/Camera").absolutePath, detectedFresh.absolutePath)
+
+    // 2. Weird OEM device (Sony Xperia / DCF style: DCIM/100ANDRO) without DCIM/Camera
+    val sonyRoot = File(tempDir, "sony_device").apply { mkdirs() }
+    val sonyCameraDir = File(sonyRoot, "DCIM/100ANDRO").apply { mkdirs() }
+    File(sonyRoot, "DCIM/Screenshots").apply { mkdirs() }
+    File(sonyRoot, "DCIM/.thumbnails").apply { mkdirs() }
+    val detectedSony = CameraEngine.detectDefaultCameraDirectory(userRoot = sonyRoot)
+    assertEquals(sonyCameraDir.absolutePath, detectedSony.absolutePath)
+
+    // 3. Weird OEM device (HTC style: DCIM/100MEDIA with existing photos, even if an empty DCIM/Camera folder exists)
+    val htcRoot = File(tempDir, "htc_device").apply { mkdirs() }
+    File(htcRoot, "DCIM/Camera").apply { mkdirs() }
+    val htcMediaDir = File(htcRoot, "DCIM/100MEDIA").apply { mkdirs() }
+    File(htcMediaDir, "IMAG0001.jpg").writeText("photo")
+    val detectedHtc = CameraEngine.detectDefaultCameraDirectory(userRoot = htcRoot)
+    assertEquals(htcMediaDir.absolutePath, detectedHtc.absolutePath)
+
+    // 4. Alternative OEM path: Pictures/Camera when DCIM/Camera does not exist
+    val altRoot = File(tempDir, "alt_pictures_device").apply { mkdirs() }
+    val picturesCameraDir = File(altRoot, "Pictures/Camera").apply { mkdirs() }
+    val detectedAlt = CameraEngine.detectDefaultCameraDirectory(userRoot = altRoot)
+    assertEquals(picturesCameraDir.absolutePath, detectedAlt.absolutePath)
+
+    // 5. Meizu-style device storing camera photos directly in /DCIM without a /Camera subfolder
+    val meizuRoot = File(tempDir, "meizu_device").apply { mkdirs() }
+    val meizuDcim = File(meizuRoot, "DCIM").apply { mkdirs() }
+    File(meizuDcim, "IMG_20261110_120000.jpg").writeText("photo")
+    val detectedMeizu = CameraEngine.detectDefaultCameraDirectory(userRoot = meizuRoot)
+    assertEquals(meizuDcim.absolutePath, detectedMeizu.absolutePath)
   }
 
   @Test

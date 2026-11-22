@@ -52,6 +52,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
@@ -105,7 +107,7 @@ import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import com.example.toolbox.ui.theme.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -124,7 +126,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.example.toolbox.ui.theme.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -245,7 +247,7 @@ fun resolveNoteSwatchColor(noteColor: NoteColor): Color {
   return lerp(scheme.surfaceVariant, tint, 0.62f)
 }
 
-private fun noteColorHue(noteColor: NoteColor): Float = when (noteColor) {
+internal fun noteColorHue(noteColor: NoteColor): Float = when (noteColor) {
   NoteColor.DEFAULT -> 0f
   NoteColor.CORAL -> 8f
   NoteColor.PEACH -> 28f
@@ -670,7 +672,7 @@ fun NotesScreen(
     if (!isAddNoteOpen) return
     val updatedNotes = NotesEngine.saveOrDiscardNote(notes, addingNoteDraft)
     val mergedLabels = (savedLabels + addingNoteNewLabels)
-      .map { it.trim() }
+      .map { NotesEngine.normalizeLabelName(it) }
       .filter { it.isNotEmpty() }
       .distinct()
     applyStateChange(updatedNotes, mergedLabels)
@@ -754,7 +756,7 @@ fun NotesScreen(
         CrossToolActions.shareText(
           context = context,
           title = note.title.ifBlank { "Note" },
-          text = note.toTtxt(),
+          text = note.toPlainText(),
         )
       },
       onToggleArchive = { note ->
@@ -790,18 +792,47 @@ fun NotesScreen(
   ) {
     val activeSingleNote = editingNote
     if (activeSingleNote != null) {
+      val persistSingleNoteDraft: (NoteItem, List<String>, Boolean) -> Unit =
+        { updatedDraft, newlyCreatedLabels, dismissAfterSave ->
+          val existing = notes.firstOrNull { it.id == updatedDraft.id }
+          val mergedLabels = (savedLabels + newlyCreatedLabels)
+            .map { NotesEngine.normalizeLabelName(it) }
+            .filter { it.isNotEmpty() }
+            .distinct()
+          val hasNoteContentChange = existing == null ||
+            existing.copy(updatedAt = 0L) != updatedDraft.copy(
+              title = updatedDraft.title.trim(),
+              content = if (updatedDraft.isChecklist) "" else updatedDraft.content.trimEnd(),
+              checklistItems = if (updatedDraft.isChecklist) {
+                updatedDraft.checklistItems
+                  .map { it.copy(text = it.text.trim()) }
+                  .filter { it.text.isNotEmpty() }
+              } else {
+                emptyList()
+              },
+              labels = updatedDraft.labels.map { NotesEngine.normalizeLabelName(it) }.filter { it.isNotEmpty() }.distinct(),
+              updatedAt = 0L,
+            )
+          if (hasNoteContentChange || mergedLabels != savedLabels) {
+            val updatedNotes = NotesEngine.saveOrDiscardNote(notes, updatedDraft)
+            applyStateChange(updatedNotes, mergedLabels)
+            if (!dismissAfterSave) {
+              editingNote = updatedNotes.firstOrNull { it.id == updatedDraft.id } ?: updatedDraft
+            }
+          }
+          if (dismissAfterSave) {
+            editingNote = null
+          }
+        }
       SingleNoteView(
         initialNote = activeSingleNote,
         availableLabels = allLabels,
         imeBottomPadding = extraImeBottomPadding,
+        onAutoSave = { updatedDraft, newlyCreatedLabels ->
+          persistSingleNoteDraft(updatedDraft, newlyCreatedLabels, false)
+        },
         onSaveAndDismiss = { updatedDraft, newlyCreatedLabels ->
-          val updatedNotes = NotesEngine.saveOrDiscardNote(notes, updatedDraft)
-          val mergedLabels = (savedLabels + newlyCreatedLabels)
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .distinct()
-          applyStateChange(updatedNotes, mergedLabels)
-          editingNote = null
+          persistSingleNoteDraft(updatedDraft, newlyCreatedLabels, true)
         },
         onMoveToTrash = { noteId ->
           haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -2895,7 +2926,7 @@ fun NoteCard(
               horizontalArrangement = Arrangement.spacedBy(6.dp),
               modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 1.dp)
+                .padding(start = (item.indentLevel.coerceAtLeast(0) * 14).dp, top = 1.dp, bottom = 1.dp)
                 .testTag("note_card_check_row_${item.id}"),
             ) {
               Box(
@@ -3344,6 +3375,7 @@ private fun AddNoteSlideUpPanel(
     Column(
       modifier = Modifier
         .fillMaxWidth()
+        .weight(1f, fill = false)
         .heightIn(max = 440.dp)
         .verticalScroll(scrollState)
         .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -3382,14 +3414,14 @@ private fun AddNoteSlideUpPanel(
       IconButton(
         onClick = onDiscard,
         modifier = Modifier
-          .size(28.dp)
+          .requiredSize(28.dp)
           .testTag("add_note_cancel_button"),
       ) {
         Icon(
           imageVector = Icons.Default.Close,
           contentDescription = "Discard note",
           tint = MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.size(18.dp),
+          modifier = Modifier.requiredSize(18.dp),
         )
       }
 
@@ -3401,13 +3433,13 @@ private fun AddNoteSlideUpPanel(
           contentColor = MaterialTheme.colorScheme.onPrimary,
         ),
         modifier = Modifier
-          .size(28.dp)
+          .requiredSize(28.dp)
           .testTag("add_note_confirm_button"),
       ) {
         Icon(
           imageVector = Icons.Default.Check,
           contentDescription = "Add note",
-          modifier = Modifier.size(18.dp),
+          modifier = Modifier.requiredSize(18.dp),
         )
       }
     }
@@ -3423,6 +3455,7 @@ private fun SingleNoteView(
   initialNote: NoteItem,
   availableLabels: List<String>,
   imeBottomPadding: androidx.compose.ui.unit.Dp = 0.dp,
+  onAutoSave: (NoteItem, List<String>) -> Unit = { _, _ -> },
   onSaveAndDismiss: (NoteItem, List<String>) -> Unit,
   onMoveToTrash: (String) -> Unit,
   onDeletePermanently: (String) -> Unit,
@@ -3438,6 +3471,21 @@ private fun SingleNoteView(
   val haptic = LocalHapticFeedback.current
   val checklistInputFocusRequester = remember { FocusRequester() }
   val keyboardController = LocalSoftwareKeyboardController.current
+  val currentDraft by rememberUpdatedState(draft)
+  val currentNewlyCreatedLabels by rememberUpdatedState(newlyCreatedLabels)
+  val currentOnAutoSave by rememberUpdatedState(onAutoSave)
+  val lifecycleOwner = LocalLifecycleOwner.current
+  DisposableEffect(lifecycleOwner, initialNote.id) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_PAUSE) {
+        currentOnAutoSave(currentDraft, currentNewlyCreatedLabels)
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+    }
+  }
   val handleEmptySpaceTap: () -> Unit = {
     if (draft.isChecklist) {
       if (!draft.isTrashed) {
@@ -3693,7 +3741,11 @@ private fun SingleNoteView(
           ) {
             NoteColorPickerSection(
               selectedColor = draft.color,
-              onSelectColor = { draft = draft.copy(color = it) },
+              onSelectColor = { newColor ->
+                val updated = draft.copy(color = newColor)
+                draft = updated
+                onAutoSave(updated, newlyCreatedLabels)
+              },
               modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -3831,7 +3883,19 @@ private fun ChecklistItemInputRow(
   val canAdd = trimmed.isNotEmpty()
   val submit = {
     if (canAdd) {
-      onAddItem(trimmed)
+      onAddItem(text)
+    }
+  }
+  val handleInputTextChange: (String) -> Unit = { updatedText ->
+    if (updatedText.contains('\n') || updatedText.contains('\r')) {
+      val parsed = NotesEngine.parseChecklistItems(updatedText)
+      if (parsed.isNotEmpty()) {
+        onAddItem(updatedText)
+      } else {
+        onTextChange("")
+      }
+    } else {
+      onTextChange(updatedText)
     }
   }
   Column(
@@ -3906,7 +3970,7 @@ private fun ChecklistItemInputRow(
 
           BasicTextField(
             value = text,
-            onValueChange = onTextChange,
+            onValueChange = handleInputTextChange,
             textStyle = MaterialTheme.typography.bodyLarge.copy(
               fontWeight = FontWeight.Medium,
               color = MaterialTheme.colorScheme.onSurface,
@@ -4344,7 +4408,7 @@ private fun NoteEditorContent(
                 .weight(1f)
                 .clip(RoundedCornerShape(8.dp))
                 .clickable { isCheckedSectionExpanded = !isCheckedSectionExpanded }
-                .padding(vertical = 2.dp, horizontal = 4.dp),
+                .padding(vertical = 2.dp),
             ) {
               Icon(
                 imageVector = if (isCheckedSectionExpanded) {
@@ -4525,7 +4589,7 @@ private fun NoteLabelsSection(
     }
 
     val combinedLabels = (availableLabels + newlyCreatedLabels + draft.labels)
-      .map { it.trim() }
+      .map { NotesEngine.normalizeLabelName(it) }
       .filter { it.isNotEmpty() }
       .distinct()
 
@@ -4557,7 +4621,7 @@ private fun NoteLabelsSection(
 
     AnimatedVisibility(visible = showLabelPicker) {
       val newLabelFocusRequester = remember { FocusRequester() }
-      val trimmedInlineLabel = newLabelInput.trim()
+      val trimmedInlineLabel = NotesEngine.normalizeLabelName(newLabelInput)
       val canAttachInlineLabel = trimmedInlineLabel.isNotEmpty()
       val attachInlineLabel = {
         if (canAttachInlineLabel) {
@@ -4570,64 +4634,135 @@ private fun NoteLabelsSection(
           newLabelInput = ""
         }
       }
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 6.dp,
+        border = BorderStroke(
+          width = 1.dp,
+          color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+        ),
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("editor_new_label_input_card"),
       ) {
-        OutlinedTextField(
-          value = newLabelInput,
-          onValueChange = { newLabelInput = it },
-          placeholder = { Text("New label name...") },
-          singleLine = true,
-          shape = CircleShape,
-          leadingIcon = {
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.Label,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.primary,
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Row(
+            modifier = Modifier
+              .weight(1f)
+              .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Box(
+              modifier = Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(
+                  if (canAttachInlineLabel) {
+                    MaterialTheme.colorScheme.primary
+                  } else {
+                    MaterialTheme.colorScheme.primaryContainer
+                  },
+                )
+                .clickable {
+                  if (canAttachInlineLabel) {
+                    attachInlineLabel()
+                  } else {
+                    newLabelFocusRequester.requestFocus()
+                  }
+                }
+                .testTag("editor_add_label_confirm"),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = "Attach label",
+                tint = if (canAttachInlineLabel) {
+                  MaterialTheme.colorScheme.onPrimary
+                } else {
+                  MaterialTheme.colorScheme.onPrimaryContainer
+                },
+                modifier = Modifier.size(18.dp),
+              )
+            }
+
+            BasicTextField(
+              value = newLabelInput,
+              onValueChange = { newLabelInput = it },
+              textStyle = MaterialTheme.typography.bodyLarge.copy(
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+              ),
+              cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+              singleLine = true,
+              keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+              keyboardActions = KeyboardActions(onDone = { attachInlineLabel() }),
+              decorationBox = { innerTextField ->
+                Box(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp),
+                  contentAlignment = Alignment.CenterStart,
+                ) {
+                  if (newLabelInput.isEmpty()) {
+                    Text(
+                      text = "New label name...",
+                      style = MaterialTheme.typography.bodyLarge,
+                      fontWeight = FontWeight.Medium,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                  innerTextField()
+                }
+              },
+              modifier = Modifier
+                .weight(1f)
+                .focusRequester(newLabelFocusRequester)
+                .testTag("editor_new_label_input"),
             )
-          },
-          trailingIcon = {
+          }
+
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
             if (newLabelInput.isNotEmpty()) {
-              IconButton(
-                onClick = { newLabelInput = "" },
-                modifier = Modifier.size(28.dp),
+              Box(
+                modifier = Modifier
+                  .size(28.dp)
+                  .clip(CircleShape)
+                  .clickable { newLabelInput = "" },
+                contentAlignment = Alignment.Center,
               ) {
                 Icon(
                   imageVector = Icons.Default.Clear,
                   contentDescription = "Clear label input",
-                  modifier = Modifier.size(16.dp),
+                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                  modifier = Modifier.size(18.dp),
                 )
               }
             }
-          },
-          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-          keyboardActions = KeyboardActions(onDone = { attachInlineLabel() }),
-          modifier = Modifier
-            .weight(1f)
-            .focusRequester(newLabelFocusRequester)
-            .testTag("editor_new_label_input"),
-        )
-        FilledIconButton(
-          onClick = attachInlineLabel,
-          enabled = canAttachInlineLabel,
-          shape = CircleShape,
-          colors = IconButtonDefaults.filledIconButtonColors(
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-          ),
-          modifier = Modifier
-            .size(28.dp)
-            .testTag("editor_add_label_confirm"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Add,
-            contentDescription = "Attach label",
-            modifier = Modifier.size(18.dp),
-          )
+            Box(
+              modifier = Modifier.size(28.dp),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.Label,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                  .size(18.dp)
+                  .testTag("editor_new_label_icon"),
+              )
+            }
+          }
         }
       }
       LaunchedEffect(Unit) {
@@ -4694,12 +4829,17 @@ private fun ChecklistEditorRow(
       Row(
         modifier = Modifier
           .fillMaxWidth()
-          .padding(start = 8.dp, end = 6.dp, top = 0.dp, bottom = 0.dp),
+          .padding(
+            start = (item.indentLevel.coerceAtLeast(0) * 16).dp,
+            end = 0.dp,
+            top = 0.dp,
+            bottom = 0.dp,
+          ),
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Box(
           modifier = Modifier
-            .size(28.dp)
+            .size(width = 20.dp, height = 28.dp)
             .clip(CircleShape)
             .pointerInput(item.id) {
               awaitPointerEventScope {
@@ -4758,7 +4898,7 @@ private fun ChecklistEditorRow(
           checked = item.isChecked,
           onCheckedChange = { onToggleChecked() },
           modifier = Modifier
-            .size(32.dp)
+            .size(28.dp)
             .testTag("editor_checkbox_${item.id}"),
         )
         BasicTextField(
@@ -4784,12 +4924,12 @@ private fun ChecklistEditorRow(
                 hasTypedWhileFocused = false
               }
             }
-            .padding(horizontal = 4.dp, vertical = 4.dp)
+            .padding(horizontal = 2.dp, vertical = 4.dp)
             .testTag("editor_checklist_text_${item.id}"),
         )
         IconButton(
           onClick = onDelete,
-          modifier = Modifier.size(28.dp),
+          modifier = Modifier.size(24.dp),
         ) {
           Icon(
             imageVector = Icons.Default.Close,
@@ -4808,7 +4948,7 @@ private fun ChecklistEditorRow(
           hasTypedWhileFocused = false
           onSelectCheckedSuggestion(suggestedItem)
         },
-        modifier = Modifier.padding(start = 36.dp, end = 6.dp, top = 2.dp, bottom = 4.dp),
+        modifier = Modifier.padding(start = 28.dp, end = 0.dp, top = 2.dp, bottom = 4.dp),
       )
     }
   }
@@ -4824,7 +4964,7 @@ private fun ManageLabelsDialog(
 ) {
   var labelText by remember { mutableStateOf("") }
   val focusRequester = remember { FocusRequester() }
-  val trimmed = labelText.trim()
+  val trimmed = NotesEngine.normalizeLabelName(labelText)
   val isDuplicate = labels.any { it.equals(trimmed, ignoreCase = true) }
   val canAdd = trimmed.isNotEmpty() && !isDuplicate
   val totalTaggedNotes = notesCountByLabel.values.sum()

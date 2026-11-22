@@ -303,13 +303,17 @@ class ChordBookEngineTest {
 
   @Test
   fun chordBookTunings_searchAndShareFavoritesWithGuitarTuner() {
-    val sharedRepo = InMemoryGuitarTunerRepository(
-      initialFavorites = setOf(GuitarTuningPreset.DROP_D),
-    )
+    val sharedRepo = InMemoryGuitarTunerRepository()
 
-    // Favorite set in Guitar Tuner is immediately recognized in Chord Book
+    // Standard and Drop D are favorited by default in both Guitar Tuner and Chord Book
     val initialFavIds = sharedRepo.loadFavoriteTuningIds()
+    val stdChordTuning = ChordBookEngine.BUILT_IN_TUNINGS.first { it.id == "guitar_std" }
     val dropDChordTuning = ChordBookEngine.BUILT_IN_TUNINGS.first { it.id == "guitar_drop_d" }
+    assertEquals(
+      setOf(GuitarTuningPreset.STANDARD, GuitarTuningPreset.DROP_D),
+      sharedRepo.loadFavoritePresets(),
+    )
+    assertTrue(ChordBookEngine.isTuningFavorite(stdChordTuning, initialFavIds))
     assertTrue(ChordBookEngine.isTuningFavorite(dropDChordTuning, initialFavIds))
 
     // Favoriting DADGAD in Chord Book updates shared repository for Guitar Tuner
@@ -318,7 +322,7 @@ class ChordBookEngineTest {
     sharedRepo.saveFavoriteTuningIds(updatedFavIds)
 
     assertEquals(
-      setOf(GuitarTuningPreset.DROP_D, GuitarTuningPreset.DADGAD),
+      setOf(GuitarTuningPreset.STANDARD, GuitarTuningPreset.DROP_D, GuitarTuningPreset.DADGAD),
       sharedRepo.loadFavoritePresets(),
     )
 
@@ -327,7 +331,7 @@ class ChordBookEngineTest {
       favoritesOnly = true,
       favoriteIds = sharedRepo.loadFavoriteTuningIds(),
     )
-    assertEquals(listOf(dropDChordTuning, dadgadChordTuning), favResults)
+    assertEquals(listOf(stdChordTuning, dropDChordTuning, dadgadChordTuning), favResults)
 
     val queryResults = ChordBookEngine.searchTunings(query = "DADGAD")
     assertEquals(listOf(dadgadChordTuning), queryResults)

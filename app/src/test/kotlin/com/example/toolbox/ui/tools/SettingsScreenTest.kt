@@ -5,9 +5,6 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Outline
-import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.LayoutDirection
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS_MINUS_30
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_COMPLEMENTARY
@@ -57,6 +54,7 @@ import com.example.toolbox.ui.theme.createTertiaryTokens
 import com.example.toolbox.ui.theme.createHorizontalHexagonVertices
 import com.example.toolbox.ui.theme.createVerticalSidedHexagonVertices
 import com.example.toolbox.ui.theme.shouldUseHexagonIconOutline
+import com.example.toolbox.ui.theme.shouldUseHorizontalHexagonActionButtonOutline
 import com.example.toolbox.ui.theme.isAutoAccentColorSetting
 import com.example.toolbox.ui.theme.isMusicPlayerAccentColorSetting
 import com.example.toolbox.ui.theme.isMusicPlayerThemeColorSetting
@@ -1289,8 +1287,10 @@ class SettingsScreenTest {
       assertFalse(repo.hexagonIconButtonsFlow.value)
       assertFalse(NavigationPreferencesBridge.hexagonIconButtons)
 
-      // When disabled, circular 40x40 button uses standard Circle outline
+      // When disabled, circular 40x40 button and wide 160x40 action button use standard rounded outlines
       assertFalse(shouldUseHexagonIconOutline(Size(40f, 40f)))
+      assertFalse(shouldUseHorizontalHexagonActionButtonOutline(Size(160f, 40f)))
+      assertFalse(shouldUseHorizontalHexagonActionButtonOutline(Size(96f, 36f)))
 
       // And Home Screen AppWidgets (Music Player, To-Do List, and Notes) use circular icon backgrounds & check circles
       val musicStateBefore = MusicPlayerWidgets.resolveWidgetState(
@@ -1324,9 +1324,13 @@ class SettingsScreenTest {
       assertTrue(repo.hexagonIconButtonsFlow.value)
       assertTrue(NavigationPreferencesBridge.hexagonIconButtons)
 
-      // Circular 40x40 icon button uses vertical-sided Hexagon outline, while wide pill buttons remain Rounded
+      // Circular 40x40 icon button uses vertical-sided Hexagon outline, while wide action buttons & modal buttons use horizontal Hexagon outline
       assertTrue(shouldUseHexagonIconOutline(Size(40f, 40f)))
       assertFalse(shouldUseHexagonIconOutline(Size(160f, 40f)))
+      assertTrue(shouldUseHorizontalHexagonActionButtonOutline(Size(160f, 40f)))
+      assertTrue(shouldUseHorizontalHexagonActionButtonOutline(Size(96f, 36f)))
+      // Ultra-thin drag handles (e.g. 36x4) remain rounded
+      assertFalse(shouldUseHorizontalHexagonActionButtonOutline(Size(36f, 4f)))
 
       // And all Home Screen AppWidgets (Music Player, To-Do List, and Notes) switch to vertical-sided hexagon backgrounds & check icons
       val musicStateAfter = MusicPlayerWidgets.resolveWidgetState(
@@ -1366,6 +1370,234 @@ class SettingsScreenTest {
       assertFalse(NavigationPreferencesBridge.hexagonIconButtons)
     } finally {
       NavigationPreferencesBridge.hexagonIconButtons = false
+    }
+  }
+
+  @Test
+  fun backgroundTextureWidget_listsNoneAndAllOptions_scalesRowsVertically_andSelectsTexture() {
+    BackgroundTextureWidgets.clearInMemoryStateForTesting()
+    val repo = InMemoryNavigationPreferencesRepository()
+    try {
+      // 1. Default 1-row state (heightDp = 84f < 118f) lists None first followed by all 13 presets
+      val defaultState = BackgroundTextureWidgets.resolveWidgetState(context = null)
+      assertEquals(BackgroundTexture.NONE, defaultState.activeTexture)
+      assertEquals(BackgroundTexture.entries, defaultState.textures)
+      assertEquals(BackgroundTexture.NONE, defaultState.textures.first())
+      assertEquals(14, defaultState.textures.size)
+      assertEquals(1, defaultState.rowCount)
+      assertEquals(14, defaultState.textureColumns.size)
+      assertTrue(defaultState.textureColumns.all { it.size == 1 })
+
+      // 2. Vertical resize thresholds scale from 1 row up to 4 rows
+      assertEquals(1, BackgroundTextureWidgets.resolveRowCountForHeight(72f))
+      assertEquals(1, BackgroundTextureWidgets.resolveRowCountForHeight(117f))
+      assertEquals(2, BackgroundTextureWidgets.resolveRowCountForHeight(118f))
+      assertEquals(2, BackgroundTextureWidgets.resolveRowCountForHeight(165f))
+      assertEquals(3, BackgroundTextureWidgets.resolveRowCountForHeight(198f))
+      assertEquals(3, BackgroundTextureWidgets.resolveRowCountForHeight(245f))
+      assertEquals(4, BackgroundTextureWidgets.resolveRowCountForHeight(278f))
+      assertEquals(4, BackgroundTextureWidgets.resolveRowCountForHeight(360f))
+
+      // 3. Column partitioning for 2, 3, and 4 rows preserves order starting with None
+      val twoRowColumns = BackgroundTextureWidgets.buildTextureColumns(rowCount = 2)
+      assertEquals(7, twoRowColumns.size)
+      assertEquals(listOf(BackgroundTexture.NONE, BackgroundTexture.FUZZY), twoRowColumns.first())
+      assertEquals(listOf(BackgroundTexture.CONFETTI, BackgroundTexture.CIRCUIT), twoRowColumns.last())
+      assertEquals(BackgroundTexture.entries, twoRowColumns.flatten())
+
+      val threeRowColumns = BackgroundTextureWidgets.buildTextureColumns(rowCount = 3)
+      assertEquals(5, threeRowColumns.size)
+      assertEquals(
+        listOf(BackgroundTexture.NONE, BackgroundTexture.FUZZY, BackgroundTexture.FADE),
+        threeRowColumns.first(),
+      )
+      assertEquals(
+        listOf(BackgroundTexture.CONFETTI, BackgroundTexture.CIRCUIT),
+        threeRowColumns.last(),
+      )
+      assertEquals(BackgroundTexture.entries, threeRowColumns.flatten())
+
+      val fourRowColumns = BackgroundTextureWidgets.buildTextureColumns(rowCount = 4)
+      assertEquals(4, fourRowColumns.size)
+      assertEquals(
+        listOf(
+          BackgroundTexture.NONE,
+          BackgroundTexture.FUZZY,
+          BackgroundTexture.FADE,
+          BackgroundTexture.CONCENTRIC,
+        ),
+        fourRowColumns.first(),
+      )
+      assertEquals(
+        listOf(BackgroundTexture.CONFETTI, BackgroundTexture.CIRCUIT),
+        fourRowColumns.last(),
+      )
+      assertEquals(BackgroundTexture.entries, fourRowColumns.flatten())
+
+      // 4. Saved per-widget vertical resize dimensions resolve multi-row widget state
+      val widgetId = 42
+      BackgroundTextureWidgets.saveWidgetDimensions(
+        context = null,
+        appWidgetId = widgetId,
+        widthDp = 340f,
+        heightDp = 160f,
+      )
+      val twoRowState = BackgroundTextureWidgets.resolveWidgetState(
+        context = null,
+        appWidgetId = widgetId,
+      )
+      assertEquals(2, twoRowState.rowCount)
+      assertEquals(7, twoRowState.textureColumns.size)
+
+      BackgroundTextureWidgets.saveWidgetDimensions(
+        context = null,
+        appWidgetId = widgetId,
+        widthDp = 340f,
+        heightDp = 230f,
+      )
+      val threeRowState = BackgroundTextureWidgets.resolveWidgetState(
+        context = null,
+        appWidgetId = widgetId,
+      )
+      assertEquals(3, threeRowState.rowCount)
+      assertEquals(5, threeRowState.textureColumns.size)
+
+      // 5. Selecting a texture from the widget updates repository and bridge state
+      BackgroundTextureWidgets.selectBackgroundTexture(
+        context = null,
+        texture = BackgroundTexture.AURORA,
+        repository = repo,
+        refreshWidgets = false,
+      )
+      assertEquals(BackgroundTexture.AURORA, repo.getBackgroundTexture())
+      assertEquals(BackgroundTexture.AURORA, repo.backgroundTextureFlow.value)
+      assertEquals(BackgroundTexture.AURORA, NavigationPreferencesBridge.backgroundTexture)
+      assertEquals(
+        BackgroundTexture.AURORA,
+        BackgroundTextureWidgets.resolveWidgetState(context = null, appWidgetId = widgetId).activeTexture,
+      )
+
+      // Selecting None from the widget restores BackgroundTexture.NONE
+      BackgroundTextureWidgets.selectBackgroundTexture(
+        context = null,
+        texture = BackgroundTexture.NONE,
+        repository = repo,
+        refreshWidgets = false,
+      )
+      assertEquals(BackgroundTexture.NONE, repo.getBackgroundTexture())
+      assertEquals(BackgroundTexture.NONE, NavigationPreferencesBridge.backgroundTexture)
+
+      BackgroundTextureWidgets.deleteWidgetDimensions(context = null, appWidgetId = widgetId)
+      assertNull(BackgroundTextureWidgets.loadWidgetDimensions(context = null, appWidgetId = widgetId))
+    } finally {
+      BackgroundTextureWidgets.clearInMemoryStateForTesting()
+      NavigationPreferencesBridge.backgroundTexture = BackgroundTexture.NONE
+    }
+  }
+
+  @Test
+  fun hexagonifyEasterEggWidget_togglesBetweenCircleAndHexagon_andFollowsBackgroundTexture() {
+    HexagonifyWidgets.clearInMemoryStateForTesting()
+    val repo = InMemoryNavigationPreferencesRepository()
+    try {
+      // 1. Default state is Circle (isHexagon = false) with BackgroundTexture.NONE
+      val initialState = HexagonifyWidgets.resolveWidgetState(
+        context = null,
+        repository = repo,
+      )
+      assertFalse(initialState.isHexagon)
+      assertFalse(initialState.hexagonIconButtons)
+      assertEquals(BackgroundTexture.NONE, initialState.backgroundTexture)
+      assertEquals(BackgroundTexture.NONE, initialState.palette.backgroundTexture)
+
+      // 2. Verify vertical-sided hexagon vertices geometry for the widget shape
+      val hexVertices = HexagonifyWidgets.createHexagonVertices(cx = 120f, cy = 120f, radius = 100f)
+      assertEquals(6, hexVertices.size)
+      // Top and bottom points are centered at x = 120f
+      assertEquals(120f, hexVertices[0].x, 0.001f)
+      assertEquals(20f, hexVertices[0].y, 0.001f)
+      assertEquals(120f, hexVertices[3].x, 0.001f)
+      assertEquals(220f, hexVertices[3].y, 0.001f)
+      // Right side (hexVertices[1] -> hexVertices[2]) is strictly vertical
+      assertEquals(hexVertices[1].x, hexVertices[2].x, 0.0001f)
+      assertTrue(hexVertices[2].y > hexVertices[1].y)
+      // Left side (hexVertices[4] -> hexVertices[5]) is strictly vertical
+      assertEquals(hexVertices[4].x, hexVertices[5].x, 0.0001f)
+      assertTrue(hexVertices[4].y > hexVertices[5].y)
+
+      // 3. Tapping the widget toggles Hexagonify ON (Circle -> Hexagon)
+      val toggledOn = HexagonifyWidgets.toggleHexagonify(
+        context = null,
+        repository = repo,
+        refreshWidgets = false,
+      )
+      assertTrue(toggledOn)
+      assertTrue(repo.getHexagonIconButtons())
+      assertTrue(repo.hexagonIconButtonsFlow.value)
+      assertTrue(NavigationPreferencesBridge.hexagonIconButtons)
+
+      val hexagonState = HexagonifyWidgets.resolveWidgetState(
+        context = null,
+        repository = repo,
+      )
+      assertTrue(hexagonState.isHexagon)
+      assertTrue(hexagonState.hexagonIconButtons)
+      assertTrue(hexagonState.palette.hexagonIconButtons)
+
+      // 4. Changing background texture updates the Hexagonify widget's background texture
+      BackgroundTextureWidgets.selectBackgroundTexture(
+        context = null,
+        texture = BackgroundTexture.HEXAGONS,
+        repository = repo,
+        refreshWidgets = false,
+      )
+      val honeycombHexState = HexagonifyWidgets.resolveWidgetState(
+        context = null,
+        repository = repo,
+      )
+      assertTrue(honeycombHexState.isHexagon)
+      assertEquals(BackgroundTexture.HEXAGONS, honeycombHexState.backgroundTexture)
+      assertEquals(BackgroundTexture.HEXAGONS, honeycombHexState.palette.backgroundTexture)
+
+      // 5. Tapping the widget again toggles Hexagonify OFF (Hexagon -> Circle) while keeping texture
+      val toggledOff = HexagonifyWidgets.toggleHexagonify(
+        context = null,
+        repository = repo,
+        refreshWidgets = false,
+      )
+      assertFalse(toggledOff)
+      assertFalse(repo.getHexagonIconButtons())
+      assertFalse(repo.hexagonIconButtonsFlow.value)
+      assertFalse(NavigationPreferencesBridge.hexagonIconButtons)
+
+      val circleHoneycombState = HexagonifyWidgets.resolveWidgetState(
+        context = null,
+        repository = repo,
+      )
+      assertFalse(circleHoneycombState.isHexagon)
+      assertEquals(BackgroundTexture.HEXAGONS, circleHoneycombState.backgroundTexture)
+
+      // 6. Per-widget resize dimensions save, load, and delete cleanly
+      val widgetId = 77
+      HexagonifyWidgets.saveWidgetDimensions(
+        context = null,
+        appWidgetId = widgetId,
+        widthDp = 140f,
+        heightDp = 140f,
+      )
+      val resizedState = HexagonifyWidgets.resolveWidgetState(
+        context = null,
+        appWidgetId = widgetId,
+        repository = repo,
+      )
+      assertEquals(140f, resizedState.widthDp, 0.01f)
+      assertEquals(140f, resizedState.heightDp, 0.01f)
+      HexagonifyWidgets.deleteWidgetDimensions(context = null, appWidgetId = widgetId)
+      assertNull(HexagonifyWidgets.loadWidgetDimensions(context = null, appWidgetId = widgetId))
+    } finally {
+      HexagonifyWidgets.clearInMemoryStateForTesting()
+      NavigationPreferencesBridge.hexagonIconButtons = false
+      NavigationPreferencesBridge.backgroundTexture = BackgroundTexture.NONE
     }
   }
 }

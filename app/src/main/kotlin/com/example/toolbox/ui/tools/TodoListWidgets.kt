@@ -26,6 +26,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import com.example.toolbox.R
+import com.example.toolbox.ui.main.BackgroundTexture
 import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
 import com.example.toolbox.ui.main.DEFAULT_MUSIC_PLAYER_COLOR_OPTION
 import com.example.toolbox.ui.main.DEFAULT_MUSIC_PLAYER_THEME_ENABLED
@@ -48,6 +49,7 @@ import com.example.toolbox.ui.theme.Purple8E66A6LightColorScheme
 import com.example.toolbox.ui.theme.calculateAccentHarmonyColor
 import com.example.toolbox.ui.theme.createCustomColorScheme
 import com.example.toolbox.ui.theme.createTertiaryTokens
+import com.example.toolbox.ui.theme.drawWidgetBackgroundTextureOverlay
 import com.example.toolbox.ui.theme.parseHexColor
 import org.json.JSONObject
 import kotlin.math.max
@@ -161,6 +163,10 @@ data class TodoWidgetPalette(
   val iconButtonBackgroundRes: Int = R.drawable.bg_music_widget_circle,
   val taskCheckUncheckedIconRes: Int = R.drawable.ic_todo_widget_circle_unchecked,
   val taskCheckCheckedIconRes: Int = R.drawable.ic_todo_widget_circle_checked,
+  val backgroundTexture: BackgroundTexture = BackgroundTexture.NONE,
+  val secondaryArgb: Int = primaryArgb,
+  val tertiaryArgb: Int = primaryArgb,
+  val isDarkTheme: Boolean = true,
 )
 
 /**
@@ -302,6 +308,7 @@ object TodoListWidgets {
       lerp(baseScheme.surface, baseScheme.primaryContainer, 0.45f)
     }
     val hexagonIconButtons = MusicPlayerWidgets.resolveHexagonIconButtonsEnabled(context)
+    val backgroundTexture = MusicPlayerWidgets.resolveBackgroundTexture(context)
 
     return TodoWidgetPalette(
       surfaceArgb = MusicPlayerWidgets.colorToArgb(surfaceColor),
@@ -332,6 +339,10 @@ object TodoListWidgets {
       } else {
         R.drawable.ic_todo_widget_circle_checked
       },
+      backgroundTexture = backgroundTexture,
+      secondaryArgb = MusicPlayerWidgets.colorToArgb(baseScheme.secondary),
+      tertiaryArgb = MusicPlayerWidgets.colorToArgb(tertiaryTokens.tertiary),
+      isDarkTheme = darkTheme,
     )
   }
 
@@ -625,6 +636,17 @@ object TodoListWidgets {
         color = palette.surfaceArgb
       }
       canvas.drawRoundRect(fillRect, fillRadius, fillRadius, fillPaint)
+
+      drawWidgetBackgroundTextureOverlay(
+        bitmap = bitmap,
+        cornerRadiusPx = fillRadius,
+        texture = palette.backgroundTexture,
+        primaryColor = Color(palette.primaryArgb),
+        tertiaryColor = Color(palette.tertiaryArgb),
+        secondaryColor = Color(palette.secondaryArgb),
+        onSurfaceColor = Color(palette.onSurfaceArgb),
+        isDarkTheme = palette.isDarkTheme,
+      )
 
       if (borderWidthPx > 0f) {
         val strokeInset = max(borderWidthPx * 1.25f, 1.5f)

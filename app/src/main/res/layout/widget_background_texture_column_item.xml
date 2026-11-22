@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_texture_column_outer"
+    android:layout_width="match_parent"
+    android:layout_height="96dp">
+
+    <!--
+        Rotated +90deg to counteract the parent ListView's -90deg rotation so each column
+        renders upright and stacks 1 to 4 rows vertically as the widget is resized vertically.
+    -->
+    <LinearLayout
+        android:id="@+id/widget_texture_column_inner"
+        android:layout_width="96dp"
+        android:layout_height="88dp"
+        android:layout_gravity="center"
+        android:baselineAligned="false"
+        android:orientation="vertical"
+        android:paddingStart="3dp"
+        android:paddingTop="5dp"
+        android:paddingEnd="3dp"
+        android:paddingBottom="5dp"
+        android:rotation="90">
+
+        <!-- Row 1 Slot -->
+        <FrameLayout
+            android:id="@+id/widget_texture_slot_1"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp">
+
+            <ImageView
+                android:id="@+id/widget_texture_slot_1_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:scaleType="fitXY"
+                android:src="@drawable/bg_todo_widget_item" />
+
+            <TextView
+                android:id="@+id/widget_texture_slot_1_label"
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:layout_gravity="bottom"
+                android:ellipsize="end"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                android:paddingBottom="2dp"
+                android:text="None"
+                android:textColor="#FFE7E1E6"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+        </FrameLayout>
+
+        <!-- Row 2 Slot (Shown when widget height supports 2+ rows) -->
+        <FrameLayout
+            android:id="@+id/widget_texture_slot_2"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/widget_texture_slot_2_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:scaleType="fitXY"
+                android:src="@drawable/bg_todo_widget_item" />
+
+            <TextView
+                android:id="@+id/widget_texture_slot_2_label"
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:layout_gravity="bottom"
+                android:ellipsize="end"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                android:paddingBottom="2dp"
+                android:text="Fuzzy"
+                android:textColor="#FFE7E1E6"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+        </FrameLayout>
+
+        <!-- Row 3 Slot (Shown when widget height supports 3+ rows) -->
+        <FrameLayout
+            android:id="@+id/widget_texture_slot_3"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/widget_texture_slot_3_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:scaleType="fitXY"
+                android:src="@drawable/bg_todo_widget_item" />
+
+            <TextView
+                android:id="@+id/widget_texture_slot_3_label"
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:layout_gravity="bottom"
+                android:ellipsize="end"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                android:paddingBottom="2dp"
+                android:text="Fade"
+                android:textColor="#FFE7E1E6"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+        </FrameLayout>
+
+        <!-- Row 4 Slot (Shown when widget height supports 4 rows) -->
+        <FrameLayout
+            android:id="@+id/widget_texture_slot_4"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/widget_texture_slot_4_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:scaleType="fitXY"
+                android:src="@drawable/bg_todo_widget_item" />
+
+            <TextView
+                android:id="@+id/widget_texture_slot_4_label"
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:layout_gravity="bottom"
+                android:ellipsize="end"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                android:paddingBottom="2dp"
+                android:text="Concentric"
+                android:textColor="#FFE7E1E6"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+        </FrameLayout>
+    </LinearLayout>
+</FrameLayout>

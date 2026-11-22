@@ -11,8 +11,23 @@
         android:id="@+id/widget_notes_item_root"
         android:layout_width="0dp"
         android:layout_height="match_parent"
-        android:layout_weight="1"
-        android:background="@drawable/bg_todo_widget_item">
+        android:layout_weight="1">
+
+        <ImageView
+            android:id="@+id/widget_notes_item_bg"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@null"
+            android:scaleType="fitXY"
+            android:src="@drawable/bg_notes_widget_item_fill" />
+
+        <ImageView
+            android:id="@+id/widget_notes_item_border"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@null"
+            android:scaleType="fitXY"
+            android:src="@drawable/bg_notes_widget_item_border" />
 
         <LinearLayout
             android:id="@+id/widget_notes_item_container"
@@ -106,8 +121,23 @@
         android:layout_height="match_parent"
         android:layout_marginStart="6dp"
         android:layout_weight="1"
-        android:background="@drawable/bg_todo_widget_item"
         android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/widget_notes_item_second_bg"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@null"
+            android:scaleType="fitXY"
+            android:src="@drawable/bg_notes_widget_item_fill" />
+
+        <ImageView
+            android:id="@+id/widget_notes_item_second_border"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@null"
+            android:scaleType="fitXY"
+            android:src="@drawable/bg_notes_widget_item_border" />
 
         <LinearLayout
             android:id="@+id/widget_notes_item_second_container"

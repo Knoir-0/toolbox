@@ -393,5 +393,10 @@ class AudioRecorderEngineTest {
     assertTrue(pending!!.startRecording)
     assertEquals(AudioCaptureSource.MICROPHONE, pending.source)
     assertEquals(null, AudioRecorderEngine.consumePendingQuickRecordRequest())
+
+    // Verify all 3 capture sources map to their quick-action modes
+    assertEquals("start_mic", AudioRecorderWidgets.quickActionModeForSource(AudioCaptureSource.MICROPHONE))
+    assertEquals("start_device", AudioRecorderWidgets.quickActionModeForSource(AudioCaptureSource.DEVICE_AUDIO))
+    assertEquals("start_both", AudioRecorderWidgets.quickActionModeForSource(AudioCaptureSource.DEVICE_AND_MIC))
   }
 }

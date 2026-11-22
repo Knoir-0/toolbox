@@ -5,18 +5,26 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonColors
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ButtonElevation
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.FloatingActionButtonElevation
 import androidx.compose.material3.IconButtonColors
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.IconToggleButtonColors
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.contentColorFor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -25,8 +33,11 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.Density
@@ -297,9 +308,60 @@ fun shouldUseHexagonIconOutline(
 }
 
 /**
- * Adaptive icon button [Shape] that renders a vertical-sided [HexagonShape] for circular (`1:1`)
- * icon buttons, badges, and FABs when [NavigationPreferencesBridge.hexagonIconButtons] is enabled,
- * and delegates to standard [androidx.compose.foundation.shape.CircleShape] otherwise (or for wide text pills).
+ * Returns `true` when [size] is a horizontal pill or action button (`width > height * 1.25f`,
+ * excluding ultra-thin track bars / drag handles with `height < 16f` or `width > height * 7f`)
+ * that should be rendered as a horizontal-sided [HorizontalHexagonShape] when [hexagonEnabled] is `true`.
+ */
+fun shouldUseHorizontalHexagonActionButtonOutline(
+  size: Size,
+  hexagonEnabled: Boolean = NavigationPreferencesBridge.hexagonIconButtons,
+): Boolean {
+  return hexagonEnabled &&
+    size.width > 0f &&
+    size.height >= 16f &&
+    size.width > size.height * 1.25f &&
+    size.width <= size.height * 7f
+}
+
+/**
+ * Adaptive action button [Shape] that always renders a horizontal-aligned [HorizontalHexagonShape]
+ * (flat horizontal top and bottom edges with left and right points) for horizontal action buttons
+ * (including full-width and modal action buttons) when [NavigationPreferencesBridge.hexagonIconButtons]
+ * is enabled, and delegates to [fallbackShape] (or [CircleShape] for `1:1` buttons) otherwise.
+ */
+class ToolboxActionButtonShape(
+  val fallbackShape: Shape = androidx.compose.foundation.shape.CircleShape,
+) : Shape {
+  override fun createOutline(
+    size: Size,
+    layoutDirection: LayoutDirection,
+    density: Density,
+  ): Outline {
+    if (NavigationPreferencesBridge.hexagonIconButtons && size.width > 0f && size.height > 0f) {
+      return if (shouldUseHexagonIconOutline(size, hexagonEnabled = true)) {
+        HexagonShape.createOutline(size, layoutDirection, density)
+      } else {
+        HorizontalHexagonShape.createOutline(size, layoutDirection, density)
+      }
+    }
+    return fallbackShape.createOutline(size, layoutDirection, density)
+  }
+}
+
+/**
+ * Default adaptive [Shape] for action buttons across the app and modal dialogs: renders
+ * [HorizontalHexagonShape] when "Hexagonify" is enabled in Settings, and pill-shaped
+ * [androidx.compose.foundation.shape.CircleShape] when disabled.
+ */
+val ActionButtonShape: Shape = ToolboxActionButtonShape()
+
+/**
+ * Adaptive icon & action button [Shape] that renders:
+ * - A vertical-sided [HexagonShape] for circular (`1:1`) icon buttons, badges, and FABs when
+ *   [NavigationPreferencesBridge.hexagonIconButtons] is enabled.
+ * - A horizontal-aligned [HorizontalHexagonShape] for wide (`width > height * 1.25f`) action buttons
+ *   and pills when [NavigationPreferencesBridge.hexagonIconButtons] is enabled.
+ * - Standard [androidx.compose.foundation.shape.CircleShape] otherwise (or for thin slider tracks / handles).
  */
 object ToolboxIconShape : Shape {
   override fun createOutline(
@@ -310,16 +372,171 @@ object ToolboxIconShape : Shape {
     if (shouldUseHexagonIconOutline(size)) {
       return HexagonShape.createOutline(size, layoutDirection, density)
     }
+    if (shouldUseHorizontalHexagonActionButtonOutline(size)) {
+      return HorizontalHexagonShape.createOutline(size, layoutDirection, density)
+    }
     return androidx.compose.foundation.shape.CircleShape.createOutline(size, layoutDirection, density)
   }
 }
 
 /**
  * Drop-in [CircleShape] token for Toolbox UI screens that automatically hexagonifies circular (`1:1`)
- * action icon buttons, icon badges, and FABs with vertical left and right sides when the user enables
- * "Hexagonify" in Settings.
+ * action icon buttons, icon badges, and FABs with vertical left and right sides, and wide pill
+ * action buttons with horizontal top and bottom sides, when the user enables "Hexagonify" in Settings.
  */
 val CircleShape: Shape = ToolboxIconShape
+
+/**
+ * Resolves the effective [Shape] for an action button (`Button`, `OutlinedButton`, `TextButton`,
+ * `FilledTonalButton`, `ElevatedButton`), converting it into a horizontal-aligned [HorizontalHexagonShape]
+ * whenever "Hexagonify" is enabled in Settings.
+ */
+@Composable
+fun resolveActionButtonShape(requestedShape: Shape): Shape {
+  val hexagonEnabled = currentHexagonIconButtons()
+  return if (hexagonEnabled) {
+    HorizontalHexagonShape
+  } else if (requestedShape === CircleShape || requestedShape === ActionButtonShape) {
+    androidx.compose.foundation.shape.CircleShape
+  } else {
+    requestedShape
+  }
+}
+
+@Composable
+fun Button(
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  shape: Shape = ActionButtonShape,
+  colors: ButtonColors = ButtonDefaults.buttonColors(),
+  elevation: ButtonElevation? = ButtonDefaults.buttonElevation(),
+  border: BorderStroke? = null,
+  contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
+  interactionSource: MutableInteractionSource? = null,
+  content: @Composable RowScope.() -> Unit,
+) {
+  androidx.compose.material3.Button(
+    onClick = onClick,
+    modifier = modifier,
+    enabled = enabled,
+    shape = resolveActionButtonShape(shape),
+    colors = colors,
+    elevation = elevation,
+    border = border,
+    contentPadding = contentPadding,
+    interactionSource = interactionSource,
+    content = content,
+  )
+}
+
+@Composable
+fun OutlinedButton(
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  shape: Shape = ActionButtonShape,
+  colors: ButtonColors = ButtonDefaults.outlinedButtonColors(),
+  elevation: ButtonElevation? = null,
+  border: BorderStroke? = ButtonDefaults.outlinedButtonBorder(enabled),
+  contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
+  interactionSource: MutableInteractionSource? = null,
+  content: @Composable RowScope.() -> Unit,
+) {
+  androidx.compose.material3.OutlinedButton(
+    onClick = onClick,
+    modifier = modifier,
+    enabled = enabled,
+    shape = resolveActionButtonShape(shape),
+    colors = colors,
+    elevation = elevation,
+    border = border,
+    contentPadding = contentPadding,
+    interactionSource = interactionSource,
+    content = content,
+  )
+}
+
+@Composable
+fun TextButton(
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  shape: Shape = ActionButtonShape,
+  colors: ButtonColors = ButtonDefaults.textButtonColors(),
+  elevation: ButtonElevation? = null,
+  border: BorderStroke? = null,
+  contentPadding: PaddingValues = ButtonDefaults.TextButtonContentPadding,
+  interactionSource: MutableInteractionSource? = null,
+  content: @Composable RowScope.() -> Unit,
+) {
+  androidx.compose.material3.TextButton(
+    onClick = onClick,
+    modifier = modifier,
+    enabled = enabled,
+    shape = resolveActionButtonShape(shape),
+    colors = colors,
+    elevation = elevation,
+    border = border,
+    contentPadding = contentPadding,
+    interactionSource = interactionSource,
+    content = content,
+  )
+}
+
+@Composable
+fun FilledTonalButton(
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  shape: Shape = ActionButtonShape,
+  colors: ButtonColors = ButtonDefaults.filledTonalButtonColors(),
+  elevation: ButtonElevation? = ButtonDefaults.filledTonalButtonElevation(),
+  border: BorderStroke? = null,
+  contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
+  interactionSource: MutableInteractionSource? = null,
+  content: @Composable RowScope.() -> Unit,
+) {
+  androidx.compose.material3.FilledTonalButton(
+    onClick = onClick,
+    modifier = modifier,
+    enabled = enabled,
+    shape = resolveActionButtonShape(shape),
+    colors = colors,
+    elevation = elevation,
+    border = border,
+    contentPadding = contentPadding,
+    interactionSource = interactionSource,
+    content = content,
+  )
+}
+
+@Composable
+fun ElevatedButton(
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  shape: Shape = ActionButtonShape,
+  colors: ButtonColors = ButtonDefaults.elevatedButtonColors(),
+  elevation: ButtonElevation? = ButtonDefaults.elevatedButtonElevation(),
+  border: BorderStroke? = null,
+  contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
+  interactionSource: MutableInteractionSource? = null,
+  content: @Composable RowScope.() -> Unit,
+) {
+  androidx.compose.material3.ElevatedButton(
+    onClick = onClick,
+    modifier = modifier,
+    enabled = enabled,
+    shape = resolveActionButtonShape(shape),
+    colors = colors,
+    elevation = elevation,
+    border = border,
+    contentPadding = contentPadding,
+    interactionSource = interactionSource,
+    content = content,
+  )
+}
 
 @Composable
 fun FilledIconButton(
@@ -354,6 +571,29 @@ fun FilledTonalIconButton(
 ) {
   androidx.compose.material3.FilledTonalIconButton(
     onClick = onClick,
+    modifier = modifier,
+    enabled = enabled,
+    shape = shape,
+    colors = colors,
+    interactionSource = interactionSource,
+    content = content,
+  )
+}
+
+@Composable
+fun FilledTonalIconToggleButton(
+  checked: Boolean,
+  onCheckedChange: (Boolean) -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  shape: Shape = CircleShape,
+  colors: IconToggleButtonColors = IconButtonDefaults.filledTonalIconToggleButtonColors(),
+  interactionSource: MutableInteractionSource? = null,
+  content: @Composable () -> Unit,
+) {
+  androidx.compose.material3.FilledTonalIconToggleButton(
+    checked = checked,
+    onCheckedChange = onCheckedChange,
     modifier = modifier,
     enabled = enabled,
     shape = shape,
@@ -545,6 +785,61 @@ internal fun proceduralHash(seed: Int): Int {
 
 internal fun proceduralFloat(seed: Int): Float =
   (proceduralHash(seed) % 10_000) / 10_000f
+
+/**
+ * Draws the procedural [texture] directly onto an [android.graphics.Bitmap] clipped to the rounded
+ * rectangle `[0, 0, bitmap.width, bitmap.height]` with [cornerRadiusPx], so Home Screen AppWidgets
+ * follow the user's selected Background Texture in Settings.
+ */
+fun drawWidgetBackgroundTextureOverlay(
+  bitmap: android.graphics.Bitmap,
+  cornerRadiusPx: Float,
+  texture: BackgroundTexture,
+  primaryColor: Color,
+  tertiaryColor: Color,
+  secondaryColor: Color,
+  onSurfaceColor: Color,
+  isDarkTheme: Boolean = true,
+) {
+  if (texture == BackgroundTexture.NONE) return
+  val w = bitmap.width.toFloat()
+  val h = bitmap.height.toFloat()
+  if (w <= 0f || h <= 0f) return
+  try {
+    val composeCanvas = androidx.compose.ui.graphics.Canvas(bitmap.asImageBitmap())
+    val drawScope = CanvasDrawScope()
+    val safeRadius = min(cornerRadiusPx.coerceAtLeast(0f), min(w, h) * 0.5f)
+    drawScope.draw(
+      density = Density(1f),
+      layoutDirection = LayoutDirection.Ltr,
+      canvas = composeCanvas,
+      size = Size(w, h),
+    ) {
+      val clipPath = Path().apply {
+        addRoundRect(
+          RoundRect(
+            left = 0f,
+            top = 0f,
+            right = w,
+            bottom = h,
+            cornerRadius = CornerRadius(safeRadius, safeRadius),
+          )
+        )
+      }
+      clipPath(clipPath) {
+        drawBackgroundTexture(
+          texture = texture,
+          primaryColor = primaryColor,
+          tertiaryColor = tertiaryColor,
+          secondaryColor = secondaryColor,
+          onSurfaceColor = onSurfaceColor,
+          isDarkTheme = isDarkTheme,
+          isPreview = false,
+        )
+      }
+    }
+  } catch (_: Throwable) {}
+}
 
 /**
  * Draws the procedural [texture] directly onto this [DrawScope].

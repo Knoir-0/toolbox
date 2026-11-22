@@ -46,6 +46,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -93,7 +95,7 @@ import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material.icons.filled.Update
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomSheetDefaults
-import androidx.compose.material3.Button
+import com.example.toolbox.ui.theme.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -112,7 +114,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
+import com.example.toolbox.ui.theme.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -120,7 +122,7 @@ import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.example.toolbox.ui.theme.TextButton
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -4585,9 +4587,10 @@ private fun ScheduleTaskPanel(
     Column(
       modifier = Modifier
         .fillMaxWidth()
+        .weight(1f, fill = false)
         .heightIn(max = 500.dp)
         .verticalScroll(rememberScrollState())
-        .padding(horizontal = 16.dp, vertical = 12.dp),
+        .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
       verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       // Context Preview Card
@@ -4930,65 +4933,67 @@ private fun ScheduleTaskPanel(
           )
         }
       }
+    }
 
-      // Bottom Action Buttons
+    // Bottom Action Buttons (pinned below the scrollable content so they are never squished or resized)
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
       Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Row(
-          horizontalArrangement = Arrangement.spacedBy(4.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          IconButton(
-            onClick = onDismiss,
-            modifier = Modifier
-              .size(28.dp)
-              .testTag("todo_schedule_cancel_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Close,
-              contentDescription = "Cancel",
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier.size(18.dp),
-            )
-          }
-          if (isExistingScheduled) {
-            TextButton(
-              onClick = onUnschedule,
-              shape = CircleShape,
-              contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-              modifier = Modifier
-                .height(28.dp)
-                .testTag("todo_schedule_clear_button"),
-            ) {
-              Text(
-                text = "Unschedule",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.error,
-              )
-            }
-          }
-        }
-
-        FilledIconButton(
-          onClick = onConfirmSchedule,
-          shape = CircleShape,
-          colors = IconButtonDefaults.filledIconButtonColors(
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-          ),
+        IconButton(
+          onClick = onDismiss,
           modifier = Modifier
-            .size(28.dp)
-            .testTag("todo_schedule_confirm_button"),
+            .requiredSize(28.dp)
+            .testTag("todo_schedule_cancel_button"),
         ) {
           Icon(
-            imageVector = Icons.Default.Check,
-            contentDescription = if (isExistingScheduled) "Reschedule" else "Schedule",
-            modifier = Modifier.size(18.dp),
+            imageVector = Icons.Default.Close,
+            contentDescription = "Cancel",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.requiredSize(18.dp),
           )
         }
+        if (isExistingScheduled) {
+          TextButton(
+            onClick = onUnschedule,
+            shape = CircleShape,
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+            modifier = Modifier
+              .requiredHeight(28.dp)
+              .testTag("todo_schedule_clear_button"),
+          ) {
+            Text(
+              text = "Unschedule",
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.error,
+            )
+          }
+        }
+      }
+
+      FilledIconButton(
+        onClick = onConfirmSchedule,
+        shape = CircleShape,
+        colors = IconButtonDefaults.filledIconButtonColors(
+          containerColor = MaterialTheme.colorScheme.primary,
+          contentColor = MaterialTheme.colorScheme.onPrimary,
+        ),
+        modifier = Modifier
+          .requiredSize(28.dp)
+          .testTag("todo_schedule_confirm_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Check,
+          contentDescription = if (isExistingScheduled) "Reschedule" else "Schedule",
+          modifier = Modifier.requiredSize(18.dp),
+        )
       }
     }
   }

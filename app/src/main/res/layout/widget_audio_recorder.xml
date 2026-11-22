@@ -20,15 +20,15 @@
         android:layout_height="match_parent"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingStart="12dp"
+        android:paddingStart="10dp"
         android:paddingTop="8dp"
-        android:paddingEnd="12dp"
+        android:paddingEnd="10dp"
         android:paddingBottom="8dp">
 
         <FrameLayout
             android:id="@+id/widget_audio_recorder_badge"
-            android:layout_width="36dp"
-            android:layout_height="36dp">
+            android:layout_width="34dp"
+            android:layout_height="34dp">
 
             <ImageView
                 android:id="@+id/widget_audio_recorder_badge_bg"
@@ -43,7 +43,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:contentDescription="@null"
-                android:padding="8dp"
+                android:padding="7dp"
                 android:scaleType="centerInside"
                 android:src="@drawable/ic_widget_mic"
                 android:tint="#FFDDB9F6" />
@@ -53,8 +53,8 @@
             android:id="@+id/widget_audio_recorder_text_container"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
-            android:layout_marginEnd="8dp"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="6dp"
             android:layout_weight="1"
             android:orientation="vertical">
 
@@ -66,7 +66,7 @@
                 android:maxLines="1"
                 android:text="Record"
                 android:textColor="#FFE7E1E6"
-                android:textSize="15sp"
+                android:textSize="14.5sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -77,33 +77,99 @@
                 android:maxLines="1"
                 android:text="M4A • /Audio"
                 android:textColor="#FFCDC4CF"
-                android:textSize="11.5sp" />
+                android:textSize="11sp" />
         </LinearLayout>
 
-        <FrameLayout
-            android:id="@+id/widget_audio_recorder_record_button"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:contentDescription="Start recording voice memo">
+        <!-- 3 Recording Buttons matching AudioRecorderScreen: [Device + Mic] [Primary Mic] [Device Audio] -->
+        <LinearLayout
+            android:id="@+id/widget_audio_recorder_buttons_row"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-            <ImageView
-                android:id="@+id/widget_audio_recorder_record_button_bg"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:contentDescription="@null"
-                android:src="@drawable/bg_music_widget_circle"
-                android:tint="#FFDDB9F6" />
+            <!-- 1. Left: Smaller Device + Microphone (Both) Button -->
+            <FrameLayout
+                android:id="@+id/widget_audio_recorder_both_button"
+                android:layout_width="34dp"
+                android:layout_height="34dp"
+                android:contentDescription="Record device and microphone audio">
 
-            <ImageView
-                android:id="@+id/widget_audio_recorder_record_button_icon"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:background="?android:attr/selectableItemBackgroundBorderless"
-                android:contentDescription="@null"
-                android:padding="9dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/ic_widget_mic"
-                android:tint="#FF2E1142" />
-        </FrameLayout>
+                <ImageView
+                    android:id="@+id/widget_audio_recorder_both_button_bg"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:src="@drawable/bg_music_widget_circle"
+                    android:tint="#FF4E4356" />
+
+                <ImageView
+                    android:id="@+id/widget_audio_recorder_both_button_icon"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@null"
+                    android:padding="7dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_widget_device_and_mic"
+                    android:tint="#FFEFDEF5" />
+            </FrameLayout>
+
+            <!-- 2. Middle: Primary Larger Microphone Button -->
+            <FrameLayout
+                android:id="@+id/widget_audio_recorder_record_button"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:layout_marginStart="6dp"
+                android:layout_marginEnd="6dp"
+                android:contentDescription="Start recording microphone voice memo">
+
+                <ImageView
+                    android:id="@+id/widget_audio_recorder_record_button_bg"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:src="@drawable/bg_music_widget_circle"
+                    android:tint="#FFDDB9F6" />
+
+                <ImageView
+                    android:id="@+id/widget_audio_recorder_record_button_icon"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@null"
+                    android:padding="9dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_widget_mic"
+                    android:tint="#FF2E1142" />
+            </FrameLayout>
+
+            <!-- 3. Right: Smaller Device Audio Button -->
+            <FrameLayout
+                android:id="@+id/widget_audio_recorder_device_button"
+                android:layout_width="34dp"
+                android:layout_height="34dp"
+                android:contentDescription="Record internal device audio">
+
+                <ImageView
+                    android:id="@+id/widget_audio_recorder_device_button_bg"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:src="@drawable/bg_music_widget_circle"
+                    android:tint="#FF4E4356" />
+
+                <ImageView
+                    android:id="@+id/widget_audio_recorder_device_button_icon"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@null"
+                    android:padding="7dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_widget_phone_android"
+                    android:tint="#FFEFDEF5" />
+            </FrameLayout>
+        </LinearLayout>
     </LinearLayout>
 </FrameLayout>

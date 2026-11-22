@@ -1887,16 +1887,30 @@ object FileManagerEngine {
     val lines = rawContent.lines()
 
     val firstNonBlankIdx = lines.indexOfFirst { it.isNotBlank() }
+    if (firstNonBlankIdx == -1) return null
+    val lastNonBlankIdx = lines.indexOfLast { it.isNotBlank() }
+    val trailingTtxtLabels = NotesEngine.parseLabelsFromTtxtLine(lines[lastNonBlankIdx])
+    val contentLines = if (trailingTtxtLabels != null) {
+      lines.subList(0, lastNonBlankIdx)
+    } else {
+      lines
+    }
+    val importedLabels = (trailingTtxtLabels.orEmpty() + "Files")
+      .map { NotesEngine.normalizeLabelName(it) }
+      .filter { it.isNotEmpty() }
+      .distinct()
+
+    val firstContentNonBlankIdx = contentLines.indexOfFirst { it.isNotBlank() }
     val defaultTitle = file.nameWithoutExtension.ifBlank { file.name }
     val title: String
     val bodyLines: List<String>
 
-    if (firstNonBlankIdx >= 0 && lines[firstNonBlankIdx].trim().startsWith("# ")) {
-      title = lines[firstNonBlankIdx].trim().removePrefix("# ").trim().ifBlank { defaultTitle }
-      bodyLines = lines.drop(firstNonBlankIdx + 1)
+    if (firstContentNonBlankIdx >= 0 && contentLines[firstContentNonBlankIdx].trim().startsWith("# ")) {
+      title = contentLines[firstContentNonBlankIdx].trim().removePrefix("# ").trim().ifBlank { defaultTitle }
+      bodyLines = contentLines.drop(firstContentNonBlankIdx + 1)
     } else {
       title = defaultTitle
-      bodyLines = lines
+      bodyLines = contentLines
     }
 
     val isTtxtFile = file.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true)
@@ -1911,7 +1925,9 @@ object FileManagerEngine {
     }
 
     return if (hasCheckboxLines && allChecklistCompatible) {
-      val checklistItems = nonBlankBody.mapIndexed { idx, line ->
+      val checklistItems = bodyLines.filter { it.isNotBlank() }.mapIndexed { idx, rawLine ->
+        val indentLevel = NotesEngine.parseTtxtIndentLevel(rawLine)
+        val line = rawLine.trim()
         val ttxtCheckedMatch = TTXT_CHECKED_LINE_REGEX.matchEntire(line)
         val checkboxMatch = if (ttxtCheckedMatch == null) CHECKBOX_LINE_REGEX.matchEntire(line) else null
         when {
@@ -1920,6 +1936,7 @@ object FileManagerEngine {
               id = "file_chk_${nowMs}_$idx",
               text = ttxtCheckedMatch.groupValues[1].trim(),
               isChecked = true,
+              indentLevel = indentLevel,
             )
           }
           checkboxMatch != null -> {
@@ -1929,6 +1946,7 @@ object FileManagerEngine {
               id = "file_chk_${nowMs}_$idx",
               text = itemText,
               isChecked = isChecked,
+              indentLevel = indentLevel,
             )
           }
           else -> {
@@ -1938,6 +1956,7 @@ object FileManagerEngine {
               id = "file_chk_${nowMs}_$idx",
               text = itemText,
               isChecked = false,
+              indentLevel = indentLevel,
             )
           }
         }
@@ -1948,7 +1967,7 @@ object FileManagerEngine {
         content = "",
         isChecklist = true,
         checklistItems = checklistItems,
-        labels = listOf("Files"),
+        labels = importedLabels,
         createdAt = nowMs,
         updatedAt = nowMs,
       )
@@ -1961,7 +1980,7 @@ object FileManagerEngine {
         content = bodyText,
         isChecklist = false,
         checklistItems = emptyList(),
-        labels = listOf("Files"),
+        labels = importedLabels,
         createdAt = nowMs,
         updatedAt = nowMs,
       )
@@ -1970,7 +1989,7 @@ object FileManagerEngine {
 
   /**
    * Imports a text/markdown [file] into [repository] as a new [NoteItem] and ensures the `"Files"`
-   * label is registered.
+   * label (and any labels parsed from a `.text` file) are registered.
    */
   fun importFileToNotes(
     file: File,
@@ -1981,8 +2000,13 @@ object FileManagerEngine {
     val updatedNotes = NotesEngine.saveOrDiscardNote(repository.loadNotes(), note, nowMs)
     repository.saveNotes(updatedNotes)
     val existingLabels = repository.loadLabels()
-    if (existingLabels.none { it.equals("Files", ignoreCase = true) }) {
-      repository.saveLabels((existingLabels + "Files").sorted())
+    val mergedLabels = (existingLabels + note.labels)
+      .map { NotesEngine.normalizeLabelName(it) }
+      .filter { it.isNotEmpty() }
+      .distinctBy { it.lowercase() }
+      .sorted()
+    if (mergedLabels != existingLabels) {
+      repository.saveLabels(mergedLabels)
     }
     return note
   }
@@ -2002,16 +2026,30 @@ object FileManagerEngine {
     val lines = rawContent.lines()
 
     val firstNonBlankIdx = lines.indexOfFirst { it.isNotBlank() }
+    if (firstNonBlankIdx == -1) return null
+    val lastNonBlankIdx = lines.indexOfLast { it.isNotBlank() }
+    val trailingTtxtLabels = NotesEngine.parseLabelsFromTtxtLine(lines[lastNonBlankIdx])
+    val contentLines = if (trailingTtxtLabels != null) {
+      lines.subList(0, lastNonBlankIdx)
+    } else {
+      lines
+    }
+    val importedLabels = (trailingTtxtLabels.orEmpty() + "Files")
+      .map { NotesEngine.normalizeLabelName(it) }
+      .filter { it.isNotEmpty() }
+      .distinct()
+
+    val firstContentNonBlankIdx = contentLines.indexOfFirst { it.isNotBlank() }
     val defaultTitle = file.nameWithoutExtension.ifBlank { file.name }
     val title: String
     val bodyLines: List<String>
 
-    if (firstNonBlankIdx >= 0 && lines[firstNonBlankIdx].trim().startsWith("# ")) {
-      title = lines[firstNonBlankIdx].trim().removePrefix("# ").trim().ifBlank { defaultTitle }
-      bodyLines = lines.drop(firstNonBlankIdx + 1)
+    if (firstContentNonBlankIdx >= 0 && contentLines[firstContentNonBlankIdx].trim().startsWith("# ")) {
+      title = contentLines[firstContentNonBlankIdx].trim().removePrefix("# ").trim().ifBlank { defaultTitle }
+      bodyLines = contentLines.drop(firstContentNonBlankIdx + 1)
     } else {
       title = defaultTitle
-      bodyLines = lines
+      bodyLines = contentLines
     }
 
     val nonBlankBody = bodyLines.map { it.trim() }.filter { it.isNotEmpty() }
