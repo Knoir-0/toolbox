@@ -147,6 +147,20 @@ val GOOD_POSITIVE_MESSAGES: List<String> = listOf(
   "i am as i am",
   "do you",
   "spread positivity",
+  "it's okay to feel",
+  "sometimes we fall",
+  "get back up",
+  "be strong",
+  "please rest",
+  "eat well",
+  "better every day",
+  "one day",
+  "you are",
+  "be",
+  "be adventurous",
+  "explore",
+  "create something",
+  "you are okay",
 )
 
 val DEFAULT_GOOD_MESSAGE: String = GOOD_POSITIVE_MESSAGES.first()

@@ -1892,6 +1892,20 @@ class SettingsScreenTest {
       "i am as i am",
       "do you",
       "spread positivity",
+      "it's okay to feel",
+      "sometimes we fall",
+      "get back up",
+      "be strong",
+      "please rest",
+      "eat well",
+      "better every day",
+      "one day",
+      "you are",
+      "be",
+      "be adventurous",
+      "explore",
+      "create something",
+      "you are okay",
     )
     assertEquals(expectedPositiveMessages, GOOD_POSITIVE_MESSAGES)
     assertFalse(GOOD_POSITIVE_MESSAGES.contains("100% free forever"))
