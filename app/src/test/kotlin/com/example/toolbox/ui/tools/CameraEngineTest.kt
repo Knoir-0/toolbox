@@ -1325,4 +1325,184 @@ class CameraEngineTest {
     assertEquals(1, updatedColors["flowerpot"])
     assertEquals(2, updatedColors["leaf"])
   }
+
+  @Test
+  fun stabilizeVisionTagsAcrossFrames_appliesMicroJitterDeadzoneEmaHysteresisAndDropoutCoasting() {
+    val initialTag = CameraVisionTag(
+      label = "Laptop",
+      confidence = 0.88f,
+      index = 174,
+      boundingBox = CameraVisionBoundingBox(0.20f, 0.25f, 0.70f, 0.65f),
+      trackingId = 11,
+      consecutiveFrames = 1,
+      missedFrames = 0,
+    )
+    val frame1Result = CameraEngine.buildVisionAnalysisResult(
+      rawTags = listOf(initialTag),
+      analyzedAtMs = 1000L,
+    )
+
+    // 1. Micro-jitter (< 1.2% edge delta) + confidence dip to 75% (within hysteresis hold >= 72%):
+    // Bounding box holds rock-solid at the previous coordinates and stabilized confidence stays >= 80%.
+    val frame2Raw = listOf(
+      CameraVisionTag(
+        label = "Laptop",
+        confidence = 0.75f,
+        index = 174,
+        boundingBox = CameraVisionBoundingBox(0.205f, 0.254f, 0.706f, 0.645f),
+        trackingId = 11,
+      )
+    )
+    val stabilizedFrame2 = CameraEngine.stabilizeVisionTagsAcrossFrames(
+      currentTags = frame2Raw,
+      previousResult = frame1Result,
+      confidenceThreshold = MIN_VISION_CONFIDENCE_THRESHOLD,
+      analyzedAtMs = 1260L,
+    )
+    assertEquals(1, stabilizedFrame2.size)
+    val tag2 = stabilizedFrame2.first()
+    assertEquals(2, tag2.consecutiveFrames)
+    assertEquals(0, tag2.missedFrames)
+    assertTrue("Hysteresis holds confirmed tag >= 80%", tag2.confidence >= MIN_VISION_CONFIDENCE_THRESHOLD)
+    assertEquals(0.20f, tag2.boundingBox!!.left, 0.001f)
+    assertEquals(0.25f, tag2.boundingBox!!.top, 0.001f)
+    assertEquals(0.70f, tag2.boundingBox!!.right, 0.001f)
+    assertEquals(0.65f, tag2.boundingBox!!.bottom, 0.001f)
+
+    val frame2Result = CameraEngine.buildVisionAnalysisResult(
+      rawTags = stabilizedFrame2,
+      analyzedAtMs = 1260L,
+    )
+
+    // 2. Real movement (> 1.2% deadzone): adaptive EMA smoothly moves the bounding box without a jarring jump
+    val frame3Raw = listOf(
+      CameraVisionTag(
+        label = "Laptop",
+        confidence = 0.90f,
+        index = 174,
+        boundingBox = CameraVisionBoundingBox(0.30f, 0.35f, 0.80f, 0.75f),
+        trackingId = 11,
+      )
+    )
+    val stabilizedFrame3 = CameraEngine.stabilizeVisionTagsAcrossFrames(
+      currentTags = frame3Raw,
+      previousResult = frame2Result,
+      confidenceThreshold = MIN_VISION_CONFIDENCE_THRESHOLD,
+      analyzedAtMs = 1520L,
+    )
+    val tag3 = stabilizedFrame3.first()
+    assertEquals(3, tag3.consecutiveFrames)
+    assertTrue(tag3.boundingBox!!.left > 0.23f && tag3.boundingBox!!.left < 0.29f)
+    assertTrue(tag3.boundingBox!!.top > 0.28f && tag3.boundingBox!!.top < 0.34f)
+
+    val frame3Result = CameraEngine.buildVisionAnalysisResult(
+      rawTags = stabilizedFrame3,
+      analyzedAtMs = 1520L,
+    )
+
+    // 3. Transient 1-2 frame dropout coasting: tag persists for 2 missed frames, then expires on frame 3
+    val dropout1 = CameraEngine.stabilizeVisionTagsAcrossFrames(
+      currentTags = emptyList(),
+      previousResult = frame3Result,
+      analyzedAtMs = 1780L,
+    )
+    assertEquals(1, dropout1.size)
+    assertEquals(1, dropout1.first().missedFrames)
+    val dropout1Result = CameraEngine.buildVisionAnalysisResult(rawTags = dropout1, analyzedAtMs = 1780L)
+
+    val dropout2 = CameraEngine.stabilizeVisionTagsAcrossFrames(
+      currentTags = emptyList(),
+      previousResult = dropout1Result,
+      analyzedAtMs = 2040L,
+    )
+    assertEquals(1, dropout2.size)
+    assertEquals(2, dropout2.first().missedFrames)
+    val dropout2Result = CameraEngine.buildVisionAnalysisResult(rawTags = dropout2, analyzedAtMs = 2040L)
+
+    val dropout3 = CameraEngine.stabilizeVisionTagsAcrossFrames(
+      currentTags = emptyList(),
+      previousResult = dropout2Result,
+      analyzedAtMs = 2300L,
+    )
+    assertTrue("Tag expires after exceeding max dropout hold frames", dropout3.isEmpty())
+  }
+
+  @Test
+  fun contextualCropAndTrackingIdContinuity_balanceCropAspectAndPreserveTrackColors() {
+    // 1. Contextual crop expands by 18% and balances elongated aspect ratio within frame bounds
+    val narrowTallBox = CameraVisionBoundingBox(0.40f, 0.20f, 0.52f, 0.70f)
+    val crop = CameraEngine.computeContextualCropBounds(
+      normBox = narrowTallBox,
+      frameWidth = 640,
+      frameHeight = 640,
+      paddingFraction = 0.18f,
+      maxAspectRatio = 1.35f,
+    )
+    assertTrue(crop.left < (0.40f * 640).toInt())
+    assertTrue(crop.right > (0.52f * 640).toInt())
+    assertTrue(crop.top < (0.20f * 640).toInt())
+    assertTrue(crop.bottom > (0.70f * 640).toInt())
+    val aspect = crop.height.toFloat() / crop.width.toFloat()
+    assertTrue("Elongated box crop is aspect-balanced ($aspect <= 1.38)", aspect <= 1.38f)
+
+    // 2. TrackingId continuity preserves box morphing and color slot even when label refines ("Plant" -> "Houseplant")
+    val prevTracked = listOf(
+      CameraVisionTag(
+        label = "Plant",
+        confidence = 0.86f,
+        boundingBox = CameraVisionBoundingBox(0.12f, 0.16f, 0.52f, 0.56f),
+        trackingId = 42,
+      )
+    )
+    val nextRefined = listOf(
+      CameraVisionTag(
+        label = "Houseplant",
+        confidence = 0.92f,
+        boundingBox = CameraVisionBoundingBox(0.24f, 0.24f, 0.64f, 0.64f),
+        trackingId = 42,
+      )
+    )
+    assertTrue(CameraEngine.hasMatchingVisionTagLabels(prevTracked, nextRefined))
+    val morphedMid = CameraEngine.interpolateVisionTags(prevTracked, nextRefined, fraction = 0.5f)
+    assertEquals(0.18f, morphedMid.first().boundingBox!!.left, 0.001f)
+
+    val prevColors = mapOf("plant" to 3)
+    val resolvedColors = CameraEngine.resolveStableVisionTagColorIndices(
+      previousTags = prevTracked,
+      currentTags = nextRefined,
+      previousColorIndices = prevColors,
+    )
+    assertEquals(3, resolvedColors["houseplant"])
+  }
+
+  @Test
+  fun selectStabilizedLiveOcrDocument_retainsCleanReadOverNoisyMotionBlurFrame() {
+    val cleanFullDoc = CameraEngine.analyzeScannedDocumentText(
+      rawText = "Hardware Store Receipt\nPrecision Screwdriver Set $18.50\nDigital Caliper 150mm $29.00\nTotal Paid: $47.50",
+      scannedAtMs = 1000L,
+    )
+    val noisyPartialBlurFrame = CameraEngine.analyzeScannedDocumentText(
+      rawText = "Hardware Store\nTotal",
+      scannedAtMs = 1400L,
+    )
+    // Partial subset during hand motion within 2.5s hold window keeps the fuller clean scan
+    val retained = CameraEngine.selectStabilizedLiveOcrDocument(
+      previousDoc = cleanFullDoc,
+      candidateDoc = noisyPartialBlurFrame,
+      nowMs = 1400L,
+    )
+    assertEquals(cleanFullDoc.rawText, retained?.rawText)
+
+    // Genuinely new document or fuller scan replaces the previous document immediately
+    val fullerNewScan = CameraEngine.analyzeScannedDocumentText(
+      rawText = "Product Roadmap Sync\nFinalize Q4 mobile release milestones\nReview camera OCR document scanner metrics\nSync recognized notes with offline board",
+      scannedAtMs = 1800L,
+    )
+    val updated = CameraEngine.selectStabilizedLiveOcrDocument(
+      previousDoc = cleanFullDoc,
+      candidateDoc = fullerNewScan,
+      nowMs = 1800L,
+    )
+    assertEquals(fullerNewScan.rawText, updated?.rawText)
+  }
 }

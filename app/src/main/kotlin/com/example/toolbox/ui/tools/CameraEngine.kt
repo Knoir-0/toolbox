@@ -14,13 +14,16 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.os.Build
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.label.ImageLabeler
 import com.google.mlkit.vision.label.ImageLabeling
 import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
 import com.google.mlkit.vision.objects.DetectedObject
 import com.google.mlkit.vision.objects.ObjectDetection
+import com.google.mlkit.vision.objects.ObjectDetector
 import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
 import com.google.mlkit.vision.text.Text as MlKitText
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
@@ -552,9 +555,32 @@ enum class CameraVisionThresholdPreset(
 
 /**
  * Duration (`280ms`) for smoothly animating (moving and resizing) Vision mode bounding boxes
- * when consecutive detections share the same label.
+ * when consecutive detections share the same label or tracking ID.
  */
 const val VISION_BOX_MORPH_DURATION_MS = 280
+
+/**
+ * Hysteresis confidence floor (`0.72f` = 72%) allowing an already-confirmed Vision tag (`>= 80%`)
+ * to remain stable when live frame confidence momentarily dips slightly below 80%.
+ */
+const val VISION_HYSTERESIS_HOLD_CONFIDENCE = 0.72f
+
+/**
+ * Maximum consecutive missed frames (`2`) for which a confirmed Vision tag is coasted/held
+ * before being dropped, preventing single-frame flicker.
+ */
+const val VISION_MAX_DROPOUT_HOLD_FRAMES = 2
+
+/**
+ * Maximum elapsed time (`1200ms`) for holding a confirmed Vision tag across transient frame dropouts.
+ */
+const val VISION_MAX_DROPOUT_HOLD_MS = 1200L
+
+/**
+ * Normalized bounding-box edge deadzone (`0.012f` = 1.2% of viewfinder) below which micro-jitter
+ * is suppressed so stationary object bounding boxes remain rock-solid.
+ */
+const val VISION_BOX_MICRO_JITTER_DEADZONE = 0.012f
 
 /**
  * Normalized bounding box (`0.0f..1.0f` in viewfinder coordinates) indicating where
@@ -691,13 +717,17 @@ data class CameraVisionLabelPlacement(
 
 /**
  * Represents a single ML Kit Image Labeling tag with its confidence score (`0.50f..1.0f`),
- * knowledge-graph label index, and spatial [boundingBox] in normalized viewfinder coordinates.
+ * knowledge-graph label index, spatial [boundingBox] in normalized viewfinder coordinates,
+ * optional multi-frame [trackingId], [consecutiveFrames] lock count, and [missedFrames] dropout counter.
  */
 data class CameraVisionTag(
   val label: String,
   val confidence: Float,
   val index: Int = -1,
   val boundingBox: CameraVisionBoundingBox? = null,
+  val trackingId: Int? = null,
+  val consecutiveFrames: Int = 1,
+  val missedFrames: Int = 0,
 ) {
   val confidenceClamped: Float get() = confidence.coerceIn(0f, 1f)
   val confidencePercent: Int get() = (confidenceClamped * 100f).roundToInt().coerceIn(0, 100)
@@ -5191,10 +5221,120 @@ object CameraEngine {
     }
   }
 
+  private val mlKitClientLock = Any()
+
+  @Volatile
+  private var cachedStreamObjectDetector: ObjectDetector? = null
+
+  @Volatile
+  private var cachedSingleImageObjectDetector: ObjectDetector? = null
+
+  @Volatile
+  private var cachedSharedImageLabeler: ImageLabeler? = null
+
+  @Volatile
+  private var cachedSharedTextRecognizer: TextRecognizer? = null
+
+  private fun getOrCreateObjectDetector(streamMode: Boolean): ObjectDetector {
+    return synchronized(mlKitClientLock) {
+      if (streamMode) {
+        cachedStreamObjectDetector ?: ObjectDetection.getClient(
+          ObjectDetectorOptions.Builder()
+            .setDetectorMode(ObjectDetectorOptions.STREAM_MODE)
+            .enableMultipleObjects()
+            .enableClassification()
+            .build()
+        ).also { cachedStreamObjectDetector = it }
+      } else {
+        cachedSingleImageObjectDetector ?: ObjectDetection.getClient(
+          ObjectDetectorOptions.Builder()
+            .setDetectorMode(ObjectDetectorOptions.SINGLE_IMAGE_MODE)
+            .enableMultipleObjects()
+            .enableClassification()
+            .build()
+        ).also { cachedSingleImageObjectDetector = it }
+      }
+    }
+  }
+
+  private fun getOrCreateSharedImageLabeler(): ImageLabeler {
+    return synchronized(mlKitClientLock) {
+      cachedSharedImageLabeler ?: ImageLabeling.getClient(
+        ImageLabelerOptions.Builder()
+          .setConfidenceThreshold(0.45f)
+          .build()
+      ).also { cachedSharedImageLabeler = it }
+    }
+  }
+
+  private fun getOrCreateSharedTextRecognizer(): TextRecognizer {
+    return synchronized(mlKitClientLock) {
+      cachedSharedTextRecognizer ?: TextRecognition.getClient(
+        TextRecognizerOptions.DEFAULT_OPTIONS
+      ).also { cachedSharedTextRecognizer = it }
+    }
+  }
+
+  /**
+   * Stabilizes consecutive live OCR document recognitions so that a momentary mid-motion frame
+   * (containing fewer words or truncated partial lines) does not overwrite a cleaner, fuller read
+   * captured moments earlier (within [maxHoldDurationMs]), while immediately adopting genuinely new
+   * or more complete text.
+   */
+  fun selectStabilizedLiveOcrDocument(
+    previousDoc: CameraScannedDocument?,
+    candidateDoc: CameraScannedDocument?,
+    nowMs: Long = System.currentTimeMillis(),
+    maxHoldDurationMs: Long = 2500L,
+  ): CameraScannedDocument? {
+    val cleanCandidate = candidateDoc?.takeIf { it.rawText.isNotBlank() && it.wordCount >= 1 }
+    val cleanPrev = previousDoc?.takeIf { it.rawText.isNotBlank() && it.wordCount >= 1 }
+    if (cleanCandidate == null) {
+      if (cleanPrev != null && (nowMs - cleanPrev.scannedAtMs) in 0L..maxHoldDurationMs) {
+        return cleanPrev
+      }
+      return null
+    }
+    if (cleanPrev == null) return cleanCandidate
+    val elapsedMs = (nowMs - cleanPrev.scannedAtMs).coerceAtLeast(0L)
+    if (elapsedMs > maxHoldDurationMs) return cleanCandidate
+
+    // If the candidate has at least 80% of the words (or more lines/words) than previous, accept the fresh scan
+    if (cleanCandidate.wordCount >= (cleanPrev.wordCount * 0.80f).toInt() &&
+      cleanCandidate.rawText.length >= (cleanPrev.rawText.length * 0.75f).toInt()
+    ) {
+      return cleanCandidate
+    }
+
+    // Check word overlap: if candidate is a strict partial subset of previousDoc (same document, motion blur frame),
+    // keep the fuller previousDoc rather than flickering down to a partial read.
+    val prevWords = cleanPrev.rawText
+      .lowercase(Locale.US)
+      .split(Regex("\\s+"))
+      .map { it.trim { ch -> !ch.isLetterOrDigit() } }
+      .filter { it.length >= 2 }
+      .toSet()
+    val candWords = cleanCandidate.rawText
+      .lowercase(Locale.US)
+      .split(Regex("\\s+"))
+      .map { it.trim { ch -> !ch.isLetterOrDigit() } }
+      .filter { it.length >= 2 }
+    if (candWords.isEmpty()) return cleanPrev
+    val sharedCount = candWords.count { it in prevWords }
+    val overlapRatio = sharedCount.toFloat() / candWords.size.toFloat()
+    return if (overlapRatio >= 0.50f && cleanPrev.wordCount > cleanCandidate.wordCount) {
+      cleanPrev
+    } else if (cleanCandidate.wordCount >= 2) {
+      cleanCandidate
+    } else {
+      cleanPrev
+    }
+  }
+
   /**
    * Runs Google ML Kit on-device Text Recognition v2 (`com.google.mlkit:text-recognition`) on [bitmap]
-   * and returns the recognized [CameraScannedDocument], or `null` if no text was recognized or ML Kit
-   * runtime is unavailable.
+   * using a persistent reusable [TextRecognizer] client and returns the recognized [CameraScannedDocument],
+   * or `null` if no text was recognized or ML Kit runtime is unavailable.
    */
   suspend fun recognizeTextFromBitmapWithMlKit(
     bitmap: Bitmap,
@@ -5203,18 +5343,16 @@ object CameraEngine {
   ): CameraScannedDocument? {
     if (bitmap.width <= 16 || bitmap.height <= 16) return null
     return try {
-      val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+      val recognizer = getOrCreateSharedTextRecognizer()
       val inputImage = InputImage.fromBitmap(bitmap, rotationDegrees)
       val visionText = suspendCancellableCoroutine<MlKitText?> { continuation ->
         recognizer.process(inputImage)
           .addOnSuccessListener { result ->
-            recognizer.close()
             if (continuation.isActive) {
               continuation.resume(result)
             }
           }
           .addOnFailureListener {
-            recognizer.close()
             if (continuation.isActive) {
               continuation.resume(null)
             }
@@ -5905,7 +6043,7 @@ object CameraEngine {
 
   /**
    * Returns `true` when [previousTags] and [targetTags] share at least one detection with the same
-   * case-insensitive label.
+   * case-insensitive label or the same non-null ML Kit [CameraVisionTag.trackingId].
    */
   fun hasMatchingVisionTagLabels(
     previousTags: List<CameraVisionTag>,
@@ -5916,13 +6054,20 @@ object CameraEngine {
       .map { it.label.trim().lowercase(Locale.US) }
       .filter { it.isNotEmpty() }
       .toSet()
-    return targetTags.any { it.label.trim().lowercase(Locale.US) in prevKeys }
+    val prevTrackingIds = previousTags
+      .mapNotNull { it.trackingId }
+      .toSet()
+    return targetTags.any { tag ->
+      tag.label.trim().lowercase(Locale.US) in prevKeys ||
+        (tag.trackingId != null && tag.trackingId in prevTrackingIds)
+    }
   }
 
   /**
    * Smoothly moves and resizes bounding boxes from [previousTags] into [targetTags] at progress
-   * [fraction] (`0.0f..1.0f`) for any detections that share the same label (case-insensitive).
-   * Detections with brand-new labels appear immediately at their target bounding box.
+   * [fraction] (`0.0f..1.0f`) for any detections that share the same label (case-insensitive)
+   * or the same non-null [CameraVisionTag.trackingId].
+   * Detections with brand-new labels/tracks appear immediately at their target bounding box.
    */
   fun interpolateVisionTags(
     previousTags: List<CameraVisionTag>,
@@ -5939,10 +6084,15 @@ object CameraEngine {
     }
 
     val previousByLabel = linkedMapOf<String, Pair<Int, CameraVisionTag>>()
+    val previousByTrackingId = linkedMapOf<Int, Pair<Int, CameraVisionTag>>()
     previousTags.forEachIndexed { idx, tag ->
       val key = tag.label.trim().lowercase(Locale.US)
       if (key.isNotEmpty() && !previousByLabel.containsKey(key)) {
         previousByLabel[key] = idx to tag
+      }
+      val tid = tag.trackingId
+      if (tid != null && !previousByTrackingId.containsKey(tid)) {
+        previousByTrackingId[tid] = idx to tag
       }
     }
 
@@ -5950,6 +6100,7 @@ object CameraEngine {
       val targetBox = (targetTag.boundingBox ?: defaultVisionBoundingBoxForRank(targetIdx)).coerceNormalized()
       val key = targetTag.label.trim().lowercase(Locale.US)
       val prevMatch = previousByLabel[key]
+        ?: targetTag.trackingId?.let { previousByTrackingId[it] }
       if (prevMatch != null) {
         val (prevIdx, prevTag) = prevMatch
         val prevBox = (prevTag.boundingBox ?: defaultVisionBoundingBoxForRank(prevIdx)).coerceNormalized()
@@ -5966,8 +6117,8 @@ object CameraEngine {
 
   /**
    * Assigns stable color palette indices (`0 until paletteSize`) to [currentTags] by preserving the
-   * color index of any tag whose label was already present in [previousTags] / [previousColorIndices],
-   * so same-label boxes keep their color as they move and resize into their new positions.
+   * color index of any tag whose label or [CameraVisionTag.trackingId] was already present in
+   * [previousTags] / [previousColorIndices], so tracked boxes keep their color as they move and resize.
    */
   fun resolveStableVisionTagColorIndices(
     previousTags: List<CameraVisionTag>,
@@ -5978,20 +6129,26 @@ object CameraEngine {
     if (currentTags.isEmpty()) return emptyMap()
     val safePalette = paletteSize.coerceAtLeast(1)
     val prevIndexLookup = linkedMapOf<String, Int>()
+    val prevTrackingSlotLookup = linkedMapOf<Int, Int>()
     previousTags.forEachIndexed { idx, tag ->
       val key = tag.label.trim().lowercase(Locale.US)
       if (key.isNotEmpty()) {
-        prevIndexLookup[key] = previousColorIndices[key] ?: (idx % safePalette)
+        val slot = previousColorIndices[key] ?: (idx % safePalette)
+        prevIndexLookup[key] = slot
+        if (tag.trackingId != null) {
+          prevTrackingSlotLookup[tag.trackingId] = slot
+        }
       }
     }
 
     val result = linkedMapOf<String, Int>()
     val usedSlots = mutableSetOf<Int>()
 
-    // 1. Preserve color slots for labels carried over from the previous detection
+    // 1. Preserve color slots for labels or trackingIds carried over from the previous detection
     for (tag in currentTags) {
       val key = tag.label.trim().lowercase(Locale.US)
       val prevSlot = prevIndexLookup[key]
+        ?: tag.trackingId?.let { prevTrackingSlotLookup[it] }
       if (prevSlot != null && key !in result) {
         val normalizedSlot = ((prevSlot % safePalette) + safePalette) % safePalette
         result[key] = normalizedSlot
@@ -6176,6 +6333,9 @@ object CameraEngine {
           confidence = item.confidence.coerceIn(0f, 1f),
           index = item.index,
           boundingBox = item.boundingBox,
+          trackingId = item.trackingId,
+          consecutiveFrames = item.consecutiveFrames.coerceAtLeast(1),
+          missedFrames = item.missedFrames.coerceAtLeast(0),
         )
       }
       .sortedByDescending { it.confidenceClamped }
@@ -6206,6 +6366,236 @@ object CameraEngine {
     )
   }
 
+  /**
+   * Computes a contextually padded and aspect-balanced pixel crop region (`left`, `top`, `right`, `bottom`)
+   * around a detected object [normBox] within a frame of size [frameWidth] × [frameHeight].
+   *
+   * - Adds [paddingFraction] (`18%` by default, at least `12px`) around each edge so ML Kit's MobileNet
+   *   `ImageLabeler` sees the object boundary and surrounding context rather than an isolated texture patch.
+   * - Gently expands the shorter crop axis toward a balanced aspect ratio (capped by [maxAspectRatio])
+   *   so square `224x224` input resizing inside ML Kit does not severely squash elongated objects.
+   */
+  fun computeContextualCropBounds(
+    normBox: CameraVisionBoundingBox,
+    frameWidth: Int,
+    frameHeight: Int,
+    paddingFraction: Float = 0.18f,
+    maxAspectRatio: Float = 1.35f,
+  ): CameraSensorMeteringRegion {
+    val safeW = frameWidth.coerceAtLeast(32)
+    val safeH = frameHeight.coerceAtLeast(32)
+    val coerced = normBox.coerceNormalized()
+
+    val rawLeft = (coerced.left * safeW).roundToInt()
+    val rawTop = (coerced.top * safeH).roundToInt()
+    val rawRight = (coerced.right * safeW).roundToInt()
+    val rawBottom = (coerced.bottom * safeH).roundToInt()
+    val rawW = (rawRight - rawLeft).coerceAtLeast(16)
+    val rawH = (rawBottom - rawTop).coerceAtLeast(16)
+
+    val padX = (rawW * paddingFraction).roundToInt().coerceAtLeast(12)
+    val padY = (rawH * paddingFraction).roundToInt().coerceAtLeast(12)
+
+    var left = (rawLeft - padX).coerceIn(0, safeW - 24)
+    var top = (rawTop - padY).coerceIn(0, safeH - 24)
+    var right = (rawRight + padX).coerceIn(left + 24, safeW)
+    var bottom = (rawBottom + padY).coerceIn(top + 24, safeH)
+
+    val currW = right - left
+    val currH = bottom - top
+    val safeMaxAspect = maxAspectRatio.coerceIn(1.05f, 2.5f)
+    if (currW > (currH * safeMaxAspect).roundToInt()) {
+      val desiredH = (currW / safeMaxAspect).roundToInt().coerceAtMost(safeH)
+      val extraY = ((desiredH - currH) / 2).coerceAtLeast(0)
+      top = (top - extraY).coerceIn(0, safeH - 24)
+      bottom = (bottom + extraY).coerceIn(top + 24, safeH)
+    } else if (currH > (currW * safeMaxAspect).roundToInt()) {
+      val desiredW = (currH / safeMaxAspect).roundToInt().coerceAtMost(safeW)
+      val extraX = ((desiredW - currW) / 2).coerceAtLeast(0)
+      left = (left - extraX).coerceIn(0, safeW - 24)
+      right = (right + extraX).coerceIn(left + 24, safeW)
+    }
+
+    return CameraSensorMeteringRegion(
+      left = left,
+      top = top,
+      right = right,
+      bottom = bottom,
+      weight = 1000,
+    )
+  }
+
+  /**
+   * Stabilizes detected [currentTags] against [previousResult] across consecutive live preview frames:
+   * 1. **Tracking ID, Label & Spatial IoU Matching**: Matches detections by ML Kit `trackingId`,
+   *    case-insensitive label, or high spatial overlap (`IoU >= 0.55f`).
+   * 2. **Bounding-Box Micro-Jitter Deadzone & Adaptive EMA Filtering**: Locks stationary boxes when edge
+   *    movement is below [VISION_BOX_MICRO_JITTER_DEADZONE] (`1.2%`) and smoothly filters moving boxes
+   *    with an adaptive Exponential Moving Average (`alpha = 0.45f..0.82f`).
+   * 3. **Confidence EMA & Hysteresis**: Smooths confidence scores across frames, applies a small
+   *    multi-frame confirmation bonus (`up to +3.2%`), and prevents confirmed tags (`>= 80%`) from
+   *    flickering off when raw confidence momentarily dips to [VISION_HYSTERESIS_HOLD_CONFIDENCE] (`72%`)
+   *    or drops out for up to [VISION_MAX_DROPOUT_HOLD_FRAMES] (`2` frames within [VISION_MAX_DROPOUT_HOLD_MS]).
+   */
+  fun stabilizeVisionTagsAcrossFrames(
+    currentTags: List<CameraVisionTag>,
+    previousResult: CameraVisionAnalysisResult?,
+    confidenceThreshold: Float = MIN_VISION_CONFIDENCE_THRESHOLD,
+    analyzedAtMs: Long = System.currentTimeMillis(),
+  ): List<CameraVisionTag> {
+    if (previousResult == null) {
+      return currentTags.map { tag ->
+        tag.copy(
+          consecutiveFrames = tag.consecutiveFrames.coerceAtLeast(1),
+          missedFrames = 0,
+        )
+      }
+    }
+
+    val elapsedMs = (analyzedAtMs - previousResult.analyzedAtMs).coerceAtLeast(0L)
+    val prevTags = (previousResult.tags + previousResult.allCandidateTags)
+      .distinctBy { "${it.label.trim().lowercase(Locale.US)}_${it.trackingId ?: -1}" }
+    if (prevTags.isEmpty()) {
+      return currentTags
+    }
+
+    val matchedPrevIndices = mutableSetOf<Int>()
+    val stabilized = mutableListOf<CameraVisionTag>()
+
+    for (currIdx in currentTags.indices) {
+      val curr = currentTags[currIdx]
+      val currBox = (curr.boundingBox ?: defaultVisionBoundingBoxForRank(currIdx)).coerceNormalized()
+      val currKey = curr.label.trim().lowercase(Locale.US)
+
+      var bestPrevIdx = -1
+      var bestMatchScore = -1f
+
+      for (pIdx in prevTags.indices) {
+        if (pIdx in matchedPrevIndices) continue
+        val prev = prevTags[pIdx]
+        val prevBox = (prev.boundingBox ?: defaultVisionBoundingBoxForRank(pIdx)).coerceNormalized()
+        val prevKey = prev.label.trim().lowercase(Locale.US)
+        val iou = currBox.intersectionOverUnion(prevBox)
+        val centerDist = kotlin.math.hypot(
+          (currBox.centerX - prevBox.centerX).toDouble(),
+          (currBox.centerY - prevBox.centerY).toDouble(),
+        ).toFloat()
+
+        val sameTrackingId = curr.trackingId != null &&
+          curr.trackingId == prev.trackingId &&
+          (iou >= 0.12f || centerDist <= 0.36f)
+        val sameLabel = currKey.isNotEmpty() &&
+          currKey == prevKey &&
+          (iou >= 0.16f || centerDist <= 0.34f)
+        val highSpatialOverlap = iou >= 0.56f
+
+        if (!sameTrackingId && !sameLabel && !highSpatialOverlap) continue
+
+        val matchScore = (if (sameTrackingId) 2.0f else 0f) +
+          (if (sameLabel) 1.4f else 0f) +
+          iou * 1.1f -
+          centerDist * 0.4f
+        if (matchScore > bestMatchScore) {
+          bestMatchScore = matchScore
+          bestPrevIdx = pIdx
+        }
+      }
+
+      if (bestPrevIdx >= 0) {
+        matchedPrevIndices.add(bestPrevIdx)
+        val prev = prevTags[bestPrevIdx]
+        val prevBox = (prev.boundingBox ?: defaultVisionBoundingBoxForRank(bestPrevIdx)).coerceNormalized()
+        val prevKey = prev.label.trim().lowercase(Locale.US)
+
+        // Bounding box stabilization: deadzone for micro-jitter + adaptive EMA for smooth motion
+        val maxEdgeDelta = maxOf(
+          abs(currBox.left - prevBox.left),
+          abs(currBox.top - prevBox.top),
+          abs(currBox.right - prevBox.right),
+          abs(currBox.bottom - prevBox.bottom),
+        )
+        val smoothedBox = if (maxEdgeDelta < VISION_BOX_MICRO_JITTER_DEADZONE) {
+          prevBox
+        } else {
+          val alpha = (0.45f + (maxEdgeDelta - VISION_BOX_MICRO_JITTER_DEADZONE) * 2.2f)
+            .coerceIn(0.45f, 0.82f)
+          prevBox.lerpTo(currBox, alpha)
+        }
+
+        val sameLabel = currKey == prevKey
+        val nextConsecutive = if (sameLabel) (prev.consecutiveFrames + 1).coerceAtMost(30) else 2
+        val consistencyBonus = (minOf(nextConsecutive - 1, 4) * 0.008f)
+        val rawEmaConf = if (sameLabel) {
+          (curr.confidenceClamped * 0.65f + prev.confidenceClamped * 0.35f + consistencyBonus).coerceIn(0f, 1f)
+        } else {
+          (curr.confidenceClamped * 0.82f + prev.confidenceClamped * 0.18f + consistencyBonus * 0.5f).coerceIn(0f, 1f)
+        }
+
+        val prevWasConfirmed = prev.confidenceClamped >= confidenceThreshold
+        val finalConf = if (sameLabel && prevWasConfirmed && curr.confidenceClamped >= VISION_HYSTERESIS_HOLD_CONFIDENCE) {
+          maxOf(rawEmaConf, confidenceThreshold)
+        } else {
+          rawEmaConf
+        }
+
+        stabilized.add(
+          curr.copy(
+            confidence = finalConf,
+            boundingBox = smoothedBox,
+            trackingId = curr.trackingId ?: prev.trackingId,
+            consecutiveFrames = nextConsecutive,
+            missedFrames = 0,
+          )
+        )
+      } else {
+        stabilized.add(
+          curr.copy(
+            boundingBox = currBox,
+            consecutiveFrames = 1,
+            missedFrames = 0,
+          )
+        )
+      }
+    }
+
+    // Dropout coasting: hold previously confirmed tags that momentarily dropped out for 1-2 frames
+    if (elapsedMs <= VISION_MAX_DROPOUT_HOLD_MS) {
+      val existingKeys = stabilized.map { it.label.trim().lowercase(Locale.US) }.toMutableSet()
+      val existingBoxes = stabilized.mapNotNull { it.boundingBox }.toMutableList()
+
+      for (pIdx in previousResult.tags.indices) {
+        val prev = previousResult.tags[pIdx]
+        val prevKey = prev.label.trim().lowercase(Locale.US)
+        if (prevKey.isEmpty() || prevKey in existingKeys) continue
+        if (prev.confidenceClamped < confidenceThreshold) continue
+        val nextMissed = prev.missedFrames + 1
+        if (nextMissed > VISION_MAX_DROPOUT_HOLD_FRAMES) continue
+
+        val prevBox = (prev.boundingBox ?: defaultVisionBoundingBoxForRank(pIdx)).coerceNormalized()
+        val heavilyOverlappedByCurrent = existingBoxes.any { box ->
+          box.intersectionOverUnion(prevBox) >= 0.52f || box.isFullyOverlappingWith(prevBox)
+        }
+        if (heavilyOverlappedByCurrent) continue
+
+        val decayedConf = maxOf(
+          confidenceThreshold,
+          (prev.confidenceClamped - 0.015f * nextMissed).coerceIn(confidenceThreshold, 0.99f),
+        )
+        existingKeys.add(prevKey)
+        existingBoxes.add(prevBox)
+        stabilized.add(
+          prev.copy(
+            confidence = decayedConf,
+            boundingBox = prevBox,
+            missedFrames = nextMissed,
+          )
+        )
+      }
+    }
+
+    return stabilized
+  }
+
   private fun rememberPreviousVisionBoxesByLabel(
     previousResult: CameraVisionAnalysisResult?,
   ): Map<String, CameraVisionBoundingBox> {
@@ -6221,15 +6611,31 @@ object CameraEngine {
     return map
   }
 
+  private fun rememberPreviousVisionTagsByTrackingId(
+    previousResult: CameraVisionAnalysisResult?,
+  ): Map<Int, CameraVisionTag> {
+    if (previousResult == null) return emptyMap()
+    val map = linkedMapOf<Int, CameraVisionTag>()
+    val sourceTags = previousResult.tags.ifEmpty { previousResult.allCandidateTags }
+    for (tag in sourceTags) {
+      val tid = tag.trackingId ?: continue
+      if (tid !in map) {
+        map[tid] = tag
+      }
+    }
+    return map
+  }
+
   /**
    * Runs a two-stage on-device Google ML Kit vision pipeline on [bitmap]:
-   * 1. **Object Detection** (`com.google.mlkit:object-detection`) in `SINGLE_IMAGE_MODE` with
-   *    multi-object detection and classification enabled to locate real physical object bounding
-   *    boxes (`DetectedObject.boundingBox`).
-   * 2. **Fine-Grained Classification** (`com.google.mlkit:image-labeling`) on each detected object's
-   *    bounding box crop (with contextual padding) and on the full frame, filtered through
-   *    [normalizeAndFilterMlKitLabel] and [suppressGenericHypernymVisionTags] to eliminate generic
-   *    ontology noise and uncorroborated crop hallucinations.
+   * 1. **Object Detection & Tracking** (`com.google.mlkit:object-detection`) using a persistent reusable
+   *    detector (`STREAM_MODE` for live camera preview frames so `DetectedObject.trackingId` tracks
+   *    objects across frames, or `SINGLE_IMAGE_MODE` when [streamMode] is `false`) with multi-object
+   *    detection and classification enabled.
+   * 2. **Fine-Grained Classification** (`com.google.mlkit:image-labeling`) using a persistent reusable
+   *    labeler on each detected object's aspect-balanced contextual crop ([computeContextualCropBounds])
+   *    and on the full frame, filtered through [normalizeAndFilterMlKitLabel],
+   *    [suppressGenericHypernymVisionTags], and [stabilizeVisionTagsAcrossFrames].
    */
   suspend fun recognizeVisionTagsFromBitmapWithMlKit(
     bitmap: Bitmap,
@@ -6240,11 +6646,12 @@ object CameraEngine {
     sourceDescription: String = "Live Camera Frame",
     analyzedAtMs: Long = System.currentTimeMillis(),
     previousResult: CameraVisionAnalysisResult? = null,
+    streamMode: Boolean = true,
   ): CameraVisionAnalysisResult? {
     if (bitmap.width <= 16 || bitmap.height <= 16) return null
     val effectiveThreshold = confidenceThreshold.coerceIn(MIN_VISION_CONFIDENCE_THRESHOLD, 0.98f)
-    val detectorMin = maxOf(0.50f, minOf(effectiveThreshold, baseDetectorMinConfidence) - 0.10f)
-      .coerceIn(0.50f, 0.90f)
+    val detectorMin = maxOf(0.48f, minOf(effectiveThreshold, baseDetectorMinConfidence) - 0.14f)
+      .coerceIn(0.48f, 0.88f)
     return try {
       val startNs = System.nanoTime()
       val orientedBitmap = orientBitmapIfNeeded(bitmap, rotationDegrees)
@@ -6252,13 +6659,8 @@ object CameraEngine {
       val bh = orientedBitmap.height
       if (bw <= 16 || bh <= 16) return null
 
-      // Stage 1: Real ML Kit Object Detector for true neural-network object bounding boxes
-      val objectDetectorOptions = ObjectDetectorOptions.Builder()
-        .setDetectorMode(ObjectDetectorOptions.SINGLE_IMAGE_MODE)
-        .enableMultipleObjects()
-        .enableClassification()
-        .build()
-      val objectDetector = ObjectDetection.getClient(objectDetectorOptions)
+      // Stage 1: Persistent ML Kit Object Detector for neural-network bounding boxes + trackingId
+      val objectDetector = getOrCreateObjectDetector(streamMode = streamMode)
       val fullInputImage = InputImage.fromBitmap(orientedBitmap, 0)
 
       val detectedObjects: List<DetectedObject> = try {
@@ -6277,17 +6679,10 @@ object CameraEngine {
         }
       } catch (_: Throwable) {
         emptyList()
-      } finally {
-        try {
-          objectDetector.close()
-        } catch (_: Throwable) {}
       }
 
-      // Stage 2: ML Kit Image Labeler (with generic/abstract label filtering & canonical normalization)
-      val labelerOptions = ImageLabelerOptions.Builder()
-        .setConfidenceThreshold(detectorMin)
-        .build()
-      val labeler = ImageLabeling.getClient(labelerOptions)
+      // Stage 2: Persistent ML Kit Image Labeler (with generic/abstract label filtering & canonical normalization)
+      val labeler = getOrCreateSharedImageLabeler()
 
       suspend fun runFilteredLabelerOnBitmap(targetBmp: Bitmap): List<Pair<String, Pair<Float, Int>>> {
         val img = InputImage.fromBitmap(targetBmp, 0)
@@ -6321,11 +6716,14 @@ object CameraEngine {
 
       data class RealObjectCandidate(
         val normBox: CameraVisionBoundingBox,
-        val rawRect: android.graphics.Rect,
+        val trackingId: Int?,
         val coarseCategoryLower: String?,
         val coarseConfidence: Float,
         val coarseIndex: Int,
       )
+
+      val previousBoxByLabel = rememberPreviousVisionBoxesByLabel(previousResult)
+      val previousTagByTrackingId = rememberPreviousVisionTagsByTrackingId(previousResult)
 
       val validObjectBoxes = detectedObjects.mapNotNull { obj ->
         val rect = obj.boundingBox
@@ -6341,39 +6739,41 @@ object CameraEngine {
           val topCoarse = obj.labels.maxByOrNull { it.confidence }
           RealObjectCandidate(
             normBox = box.coerceNormalized(),
-            rawRect = rect,
+            trackingId = obj.trackingId,
             coarseCategoryLower = topCoarse?.text?.trim()?.lowercase(Locale.US),
             coarseConfidence = topCoarse?.confidence ?: 0f,
             coarseIndex = topCoarse?.index ?: -1,
           )
         }
       }.sortedByDescending { candidate ->
-        // Prioritize prominent, centrally-framed or classified objects
+        // Prioritize prominent, centrally-framed, tracked, or classified objects
         val dx = candidate.normBox.centerX - 0.5f
         val dy = candidate.normBox.centerY - 0.5f
         val centerBonus = (1f - (dx * dx + dy * dy)).coerceIn(0.4f, 1f)
-        candidate.normBox.area.coerceIn(0.04f, 0.65f) * centerBonus + candidate.coarseConfidence * 0.35f
+        val trackBonus = if (candidate.trackingId != null && candidate.trackingId in previousTagByTrackingId) 0.14f else 0f
+        candidate.normBox.area.coerceIn(0.04f, 0.65f) * centerBonus +
+          candidate.coarseConfidence * 0.35f +
+          trackBonus
       }
 
       val localizedTags = mutableListOf<CameraVisionTag>()
       val claimedLabelsLower = mutableSetOf<String>()
-      val previousBoxByLabel = rememberPreviousVisionBoxesByLabel(previousResult)
 
-      // Classify each real DetectedObject bounding box using a contextual crop + full-frame corroboration
+      // Classify each real DetectedObject bounding box using an aspect-balanced contextual crop + multi-source corroboration
       for (objCandidate in validObjectBoxes.take(maxLabels.coerceAtLeast(1))) {
-        val rect = objCandidate.rawRect
-        val padX = (rect.width() * 0.08f).roundToInt().coerceAtLeast(6)
-        val padY = (rect.height() * 0.08f).roundToInt().coerceAtLeast(6)
-        val cropLeft = (rect.left - padX).coerceIn(0, bw - 16)
-        val cropTop = (rect.top - padY).coerceIn(0, bh - 16)
-        val cropRight = (rect.right + padX).coerceIn(cropLeft + 16, bw)
-        val cropBottom = (rect.bottom + padY).coerceIn(cropTop + 16, bh)
-        val cropW = cropRight - cropLeft
-        val cropH = cropBottom - cropTop
+        val cropRegion = computeContextualCropBounds(
+          normBox = objCandidate.normBox,
+          frameWidth = bw,
+          frameHeight = bh,
+          paddingFraction = 0.18f,
+          maxAspectRatio = 1.35f,
+        )
+        val cropW = cropRegion.width
+        val cropH = cropRegion.height
 
         val cropLabels = if (cropW >= 24 && cropH >= 24) {
           val cropBmp = try {
-            Bitmap.createBitmap(orientedBitmap, cropLeft, cropTop, cropW, cropH)
+            Bitmap.createBitmap(orientedBitmap, cropRegion.left, cropRegion.top, cropW, cropH)
           } catch (_: Throwable) {
             null
           }
@@ -6389,39 +6789,56 @@ object CameraEngine {
         val allowedKeywordsForCoarse = objCandidate.coarseCategoryLower?.let {
           OBJECT_DETECTOR_CATEGORY_KEYWORDS[it]
         }
+        val prevTrackedTag = objCandidate.trackingId?.let { previousTagByTrackingId[it] }
+        val prevTrackedKey = prevTrackedTag?.label?.trim()?.lowercase(Locale.US)
 
         var bestLabel: String? = null
         var bestConfidence = 0f
         var bestIndex = -1
         var bestRankingScore = -1f
 
-        // 1. Evaluate crop labels corroborated by full-frame labels or the object detector's category
+        // 1. Evaluate crop labels corroborated by full-frame labels, object detector category, or multi-frame tracking
         for ((labelText, scoreAndIdx) in cropLabels) {
           val key = labelText.lowercase(Locale.US)
           if (key in claimedLabelsLower) continue
           val cropConf = scoreAndIdx.first
           val fullMatch = fullFrameByKey[key]
           val matchesCoarseDomain = allowedKeywordsForCoarse != null && key in allowedKeywordsForCoarse
-          val isCorroborated = fullMatch != null || matchesCoarseDomain
+          val prevBoxForLabel = previousBoxByLabel[key]
+          val prevBoxIou = prevBoxForLabel?.let { objCandidate.normBox.intersectionOverUnion(it) } ?: 0f
+          val matchesTrackedHistory = (prevTrackedKey != null && prevTrackedKey == key) || prevBoxIou >= 0.35f
+          val isCorroborated = fullMatch != null || matchesCoarseDomain || matchesTrackedHistory
 
-          // Calibrate confidence: uncorroborated crop-only labels are discounted by 0.88x so zoomed-in
-          // texture hallucinations cannot pass the threshold, while corroborated labels combine scores.
+          // Multi-source confidence calibration:
+          // - Corroborated by both full-frame and coarse domain/track: fuse scores with a small agreement boost
+          // - Corroborated by full-frame, coarse domain, or temporal track: combine scores cleanly
+          // - Uncorroborated crop-only on a valid mid-sized object box: apply a gentle 0.93x calibration factor
           val calibratedConf = when {
-            fullMatch != null -> maxOf(fullMatch.second.first, cropConf * 0.97f)
-            matchesCoarseDomain -> maxOf(cropConf, objCandidate.coarseConfidence * 0.92f)
-            else -> cropConf * 0.88f
+            fullMatch != null && (matchesCoarseDomain || matchesTrackedHistory) ->
+              (maxOf(fullMatch.second.first, cropConf * 0.98f) + 0.025f).coerceAtMost(0.99f)
+            fullMatch != null ->
+              maxOf(fullMatch.second.first, cropConf * 0.97f)
+            matchesCoarseDomain ->
+              maxOf(cropConf * 0.98f, objCandidate.coarseConfidence * 0.93f)
+            matchesTrackedHistory ->
+              maxOf(cropConf * 0.98f, (prevTrackedTag?.confidenceClamped ?: cropConf) * 0.92f)
+            objCandidate.normBox.area >= 0.025f ->
+              cropConf * 0.93f
+            else ->
+              cropConf * 0.88f
           }
-          if (!isCorroborated && calibratedConf < maxOf(effectiveThreshold, 0.78f)) {
+
+          val minRequiredForCandidate = if (matchesTrackedHistory) {
+            VISION_HYSTERESIS_HOLD_CONFIDENCE
+          } else {
+            MIN_VISION_CONFIDENCE_THRESHOLD
+          }
+          if (!isCorroborated && calibratedConf < maxOf(effectiveThreshold, 0.80f)) {
             continue
           }
-          if (calibratedConf < MIN_VISION_CONFIDENCE_THRESHOLD) continue
+          if (calibratedConf < minRequiredForCandidate) continue
 
-          val prevBoxForLabel = previousBoxByLabel[key]
-          val temporalOverlapBonus = if (prevBoxForLabel != null) {
-            objCandidate.normBox.intersectionOverUnion(prevBoxForLabel) * 0.06f
-          } else {
-            0f
-          }
+          val temporalOverlapBonus = prevBoxIou * 0.07f + (if (matchesTrackedHistory) 0.05f else 0f)
 
           val rankScore = calibratedConf +
             computeVisionLabelSpecificityBonus(labelText) +
@@ -6446,7 +6863,7 @@ object CameraEngine {
             }
             .maxByOrNull { (lbl, scoreAndIdx) ->
               val prevBox = previousBoxByLabel[lbl.lowercase(Locale.US)]
-              val iouBonus = prevBox?.let { objCandidate.normBox.intersectionOverUnion(it) * 0.06f } ?: 0f
+              val iouBonus = prevBox?.let { objCandidate.normBox.intersectionOverUnion(it) * 0.07f } ?: 0f
               scoreAndIdx.first + computeVisionLabelSpecificityBonus(lbl) + iouBonus
             }
           if (domainFullMatch != null) {
@@ -6456,13 +6873,29 @@ object CameraEngine {
           }
         }
 
-        // 3. If still unmatched and this is the primary detected object, pair with the top specific full-frame label
+        // 3. If this object has a persistent STREAM_MODE trackingId from the previous frame, retain its verified label
+        // when the bounding box remains consistent
+        if (bestLabel == null &&
+          prevTrackedTag != null &&
+          prevTrackedKey != null &&
+          prevTrackedKey !in claimedLabelsLower &&
+          prevTrackedTag.missedFrames < VISION_MAX_DROPOUT_HOLD_FRAMES
+        ) {
+          bestLabel = prevTrackedTag.label
+          bestConfidence = maxOf(
+            VISION_HYSTERESIS_HOLD_CONFIDENCE,
+            prevTrackedTag.confidenceClamped * 0.96f,
+          )
+          bestIndex = prevTrackedTag.index
+        }
+
+        // 4. If still unmatched and this is the primary detected object, pair with the top specific full-frame label
         if (bestLabel == null && localizedTags.isEmpty() && fullFrameLabels.isNotEmpty()) {
           val topFull = fullFrameLabels
             .filter { (lbl, _) -> lbl.lowercase(Locale.US) !in claimedLabelsLower }
             .maxByOrNull { (lbl, scoreAndIdx) ->
               val prevBox = previousBoxByLabel[lbl.lowercase(Locale.US)]
-              val iouBonus = prevBox?.let { objCandidate.normBox.intersectionOverUnion(it) * 0.06f } ?: 0f
+              val iouBonus = prevBox?.let { objCandidate.normBox.intersectionOverUnion(it) * 0.07f } ?: 0f
               scoreAndIdx.first + computeVisionLabelSpecificityBonus(lbl) + iouBonus
             }
           if (topFull != null) {
@@ -6472,7 +6905,7 @@ object CameraEngine {
           }
         }
 
-        // 4. Fallback to ObjectDetector's own coarse category ONLY if it is a concrete noun ("Plant" or "Food"),
+        // 5. Fallback to ObjectDetector's own coarse category ONLY if it is a concrete noun ("Plant" or "Food"),
         // never internal categories like "Home good", "Fashion good", or "Place".
         if (bestLabel == null &&
           objCandidate.coarseCategoryLower in setOf("plant", "food") &&
@@ -6486,7 +6919,7 @@ object CameraEngine {
           }
         }
 
-        if (bestLabel != null && bestConfidence >= MIN_VISION_CONFIDENCE_THRESHOLD) {
+        if (bestLabel != null && bestConfidence >= VISION_HYSTERESIS_HOLD_CONFIDENCE) {
           claimedLabelsLower.add(bestLabel.lowercase(Locale.US))
           localizedTags.add(
             CameraVisionTag(
@@ -6494,14 +6927,11 @@ object CameraEngine {
               confidence = bestConfidence.coerceIn(0f, 1f),
               index = bestIndex,
               boundingBox = objCandidate.normBox,
+              trackingId = objCandidate.trackingId,
             )
           )
         }
       }
-
-      try {
-        labeler.close()
-      } catch (_: Throwable) {}
 
       // Only fall back to foreground contour extraction if ObjectDetector found 0 objects in the frame
       if (localizedTags.isEmpty() && fullFrameLabels.isNotEmpty()) {
@@ -6515,7 +6945,7 @@ object CameraEngine {
           .forEach { (labelText, scoreAndIdx) ->
             val adjustedConfidence = (scoreAndIdx.first + minOf(0f, computeVisionLabelSpecificityBonus(labelText)))
               .coerceIn(0f, 1f)
-            if (adjustedConfidence >= MIN_VISION_CONFIDENCE_THRESHOLD && remainingContours.isNotEmpty()) {
+            if (adjustedConfidence >= VISION_HYSTERESIS_HOLD_CONFIDENCE && remainingContours.isNotEmpty()) {
               val prevBox = previousBoxByLabel[labelText.lowercase(Locale.US)]
               val chosenContour = if (prevBox != null) {
                 remainingContours.maxByOrNull { contour ->
@@ -6542,7 +6972,13 @@ object CameraEngine {
           }
       }
 
-      val hypernymFiltered = suppressGenericHypernymVisionTags(localizedTags)
+      val temporallyStabilized = stabilizeVisionTagsAcrossFrames(
+        currentTags = localizedTags,
+        previousResult = previousResult,
+        confidenceThreshold = effectiveThreshold,
+        analyzedAtMs = analyzedAtMs,
+      )
+      val hypernymFiltered = suppressGenericHypernymVisionTags(temporallyStabilized)
       val latencyMs = ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(1L)
       buildVisionAnalysisResult(
         rawTags = hypernymFiltered,
@@ -7431,7 +7867,7 @@ object CameraEngine {
       if (isBlockedGenericVisionLabel(tag.label)) return@mapNotNull null
       RawDetectedObjectForFocus(
         boundingBox = box,
-        trackingId = if (tag.index >= 0) tag.index else null,
+        trackingId = tag.trackingId ?: if (tag.index >= 0) tag.index else null,
         label = tag.label,
         confidence = tag.confidenceClamped,
       )
@@ -7467,8 +7903,9 @@ object CameraEngine {
 
   /**
    * Runs on-device Google ML Kit Object Detection (`com.google.mlkit.vision.objects.ObjectDetection`)
-   * on [bitmap] to locate physical objects and determine the optimal smart autofocus target.
-   * When ML Kit detects multiple objects, prioritizes central, prominent subjects with temporal stability.
+   * on [bitmap] using a persistent reusable detector (`STREAM_MODE` by default so ML Kit maintains
+   * multi-frame `trackingId`s and Kalman box filtering) to locate physical objects and determine
+   * the optimal smart autofocus target.
    */
   suspend fun detectSmartFocusObjectWithMlKit(
     bitmap: Bitmap,
@@ -7476,6 +7913,7 @@ object CameraEngine {
     previousTarget: CameraSmartFocusTarget? = null,
     fallbackToSalientRegion: Boolean = true,
     analyzedAtMs: Long = System.currentTimeMillis(),
+    streamMode: Boolean = true,
   ): CameraSmartFocusTarget? {
     if (bitmap.width <= 16 || bitmap.height <= 16) return null
     return try {
@@ -7484,12 +7922,7 @@ object CameraEngine {
       val bh = orientedBitmap.height
       if (bw <= 16 || bh <= 16) return null
 
-      val objectDetectorOptions = ObjectDetectorOptions.Builder()
-        .setDetectorMode(ObjectDetectorOptions.SINGLE_IMAGE_MODE)
-        .enableMultipleObjects()
-        .enableClassification()
-        .build()
-      val objectDetector = ObjectDetection.getClient(objectDetectorOptions)
+      val objectDetector = getOrCreateObjectDetector(streamMode = streamMode)
       val inputImage = InputImage.fromBitmap(orientedBitmap, 0)
 
       val detectedObjects: List<DetectedObject> = try {
@@ -7508,10 +7941,6 @@ object CameraEngine {
         }
       } catch (_: Throwable) {
         emptyList()
-      } finally {
-        try {
-          objectDetector.close()
-        } catch (_: Throwable) {}
       }
 
       val mlKitCandidates = detectedObjects.mapNotNull { obj ->
@@ -7520,13 +7949,33 @@ object CameraEngine {
         val top = (rect.top.toFloat() / bh.toFloat()).coerceIn(0f, 1f)
         val right = (rect.right.toFloat() / bw.toFloat()).coerceIn(0f, 1f)
         val bottom = (rect.bottom.toFloat() / bh.toFloat()).coerceIn(0f, 1f)
-        val box = CameraVisionBoundingBox(left, top, right, bottom)
-        if (box.width < 0.04f || box.height < 0.04f || box.area > 0.92f) {
+        val rawBox = CameraVisionBoundingBox(left, top, right, bottom)
+        if (rawBox.width < 0.04f || rawBox.height < 0.04f || rawBox.area > 0.92f) {
           null
         } else {
+          val prevBox = previousTarget?.targetBoundingBox ?: previousTarget?.boundingBox
+          val smoothedBox = if (prevBox != null &&
+            obj.trackingId != null &&
+            obj.trackingId == previousTarget?.trackingId &&
+            rawBox.intersectionOverUnion(prevBox) >= 0.30f
+          ) {
+            val maxEdgeDelta = maxOf(
+              abs(rawBox.left - prevBox.left),
+              abs(rawBox.top - prevBox.top),
+              abs(rawBox.right - prevBox.right),
+              abs(rawBox.bottom - prevBox.bottom),
+            )
+            if (maxEdgeDelta < VISION_BOX_MICRO_JITTER_DEADZONE) {
+              prevBox
+            } else {
+              prevBox.lerpTo(rawBox, 0.58f)
+            }
+          } else {
+            rawBox
+          }
           val topLabel = obj.labels.maxByOrNull { it.confidence }
           RawDetectedObjectForFocus(
-            boundingBox = box,
+            boundingBox = smoothedBox,
             trackingId = obj.trackingId,
             label = topLabel?.text,
             confidence = topLabel?.confidence ?: 0.75f,

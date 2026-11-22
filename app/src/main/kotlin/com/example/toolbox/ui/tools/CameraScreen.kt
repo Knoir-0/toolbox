@@ -714,33 +714,64 @@ fun CameraScreen(
   var scannedCodeToInspect by remember { mutableStateOf<CameraScannedCode?>(null) }
   var directoryForGallery by remember { mutableStateOf<File?>(null) }
 
+  // Live autofocus hex color sampling and transformed analysis frame capture from the active TextureView preview stream.
+  // Keeps a lightweight raw preview bitmap cached and maps frames/coordinates through the TextureView
+  // center-crop, zoom, and front-mirror transform.
+  var latestRawPreviewBitmap by remember { mutableStateOf<Bitmap?>(null) }
+  var lastPreviewGrabUptimeMs by remember { mutableLongStateOf(0L) }
+
+  fun captureTransformedAnalysisBitmap(maxEdgePx: Int = 640): Bitmap? {
+    return try {
+      val tv = activeTextureView ?: return null
+      if (!tv.isAvailable) return null
+      val vw = tv.width
+      val vh = tv.height
+      val raw = if (vw > 32 && vh > 32) {
+        val scale = minOf(1f, maxEdgePx.toFloat() / maxOf(vw, vh).toFloat())
+        val targetW = (vw * scale).roundToInt().coerceAtLeast(64)
+        val targetH = (vh * scale).roundToInt().coerceAtLeast(64)
+        tv.getBitmap(targetW, targetH)
+      } else {
+        tv.getBitmap(maxEdgePx, maxEdgePx)
+      } ?: return null
+
+      if (raw.width <= 16 || raw.height <= 16) return null
+      latestRawPreviewBitmap = raw
+      lastPreviewGrabUptimeMs = android.os.SystemClock.uptimeMillis()
+      CameraEngine.transformCapturedPreviewBitmap(
+        rawBitmap = raw,
+        textureTransformMatrix = tv.getTransform(null),
+        zoom = zoomLevel,
+        lensFacing = lensFacing,
+        mirrorFront = mirrorFrontCamera,
+        viewWidth = if (vw > 32) vw else raw.width,
+        viewHeight = if (vh > 32) vh else raw.height,
+      )
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
   // Continuous live frame QR & Barcode scanning when in SCANNER mode and hardware TextureView is rendering
-  LaunchedEffect(captureMode, scanFilter, activeTextureView) {
+  LaunchedEffect(captureMode, scanFilter, activeTextureView, zoomLevel, lensFacing, mirrorFrontCamera) {
     if (captureMode != CameraCaptureMode.SCANNER || isInspection) {
       return@LaunchedEffect
     }
     while (isActive && captureMode == CameraCaptureMode.SCANNER) {
-      val tv = activeTextureView
-      if (tv != null && tv.isAvailable) {
-        val rawFrame = try {
-          tv.getBitmap(480, 480)
-        } catch (_: Throwable) {
-          null
+      val alignedFrame = captureTransformedAnalysisBitmap(maxEdgePx = 640)
+      if (alignedFrame != null && alignedFrame.width > 32 && alignedFrame.height > 32) {
+        val decoded = withContext(Dispatchers.Default) {
+          CameraEngine.decodeCodesFromBitmap(alignedFrame, filter = scanFilter)
         }
-        if (rawFrame != null && rawFrame.width > 32 && rawFrame.height > 32) {
-          val decoded = withContext(Dispatchers.Default) {
-            CameraEngine.decodeCodesFromBitmap(rawFrame, filter = scanFilter)
-          }
-          if (decoded.isNotEmpty()) {
-            val first = decoded.first()
-            if (latestScannedCode?.rawValue != first.rawValue || latestScannedCode?.format != first.format) {
-              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-              recordScannedCode(first, showToast = false)
-            }
+        if (decoded.isNotEmpty()) {
+          val first = decoded.first()
+          if (latestScannedCode?.rawValue != first.rawValue || latestScannedCode?.format != first.format) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            recordScannedCode(first, showToast = false)
           }
         }
       }
-      delay(400L)
+      delay(350L)
     }
   }
 
@@ -748,12 +779,11 @@ fun CameraScreen(
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     showShutterFlash = true
 
-    // 1. Try decoding from live hardware TextureView frame first
+    // 1. Try decoding from live hardware TextureView frame first (aspect- and zoom-aligned)
     val hwDecoded = try {
-      val tv = activeTextureView
-      val raw = if (tv != null && tv.isAvailable) tv.bitmap else null
-      if (raw != null && raw.width > 32 && raw.height > 32) {
-        CameraEngine.decodeCodesFromBitmap(raw, filter = scanFilter)
+      val aligned = captureTransformedAnalysisBitmap(maxEdgePx = 800)
+      if (aligned != null && aligned.width > 32 && aligned.height > 32) {
+        CameraEngine.decodeCodesFromBitmap(aligned, filter = scanFilter)
       } else {
         emptyList()
       }
@@ -798,28 +828,25 @@ fun CameraScreen(
   }
 
   // Continuous live frame OCR document scanning when in NOTE mode and hardware TextureView is rendering
-  LaunchedEffect(captureMode, activeTextureView) {
+  LaunchedEffect(captureMode, activeTextureView, zoomLevel, lensFacing, mirrorFrontCamera) {
     if (captureMode != CameraCaptureMode.NOTE || isInspection) {
       return@LaunchedEffect
     }
     while (isActive && captureMode == CameraCaptureMode.NOTE) {
-      val tv = activeTextureView
-      if (tv != null && tv.isAvailable) {
-        val rawFrame = try {
-          tv.getBitmap(640, 640)
-        } catch (_: Throwable) {
-          null
+      val alignedFrame = captureTransformedAnalysisBitmap(maxEdgePx = 960)
+      if (alignedFrame != null && alignedFrame.width > 32 && alignedFrame.height > 32) {
+        val recognized = withContext(Dispatchers.Default) {
+          CameraEngine.recognizeTextFromBitmapWithMlKit(alignedFrame)
         }
-        if (rawFrame != null && rawFrame.width > 32 && rawFrame.height > 32) {
-          val recognized = withContext(Dispatchers.Default) {
-            CameraEngine.recognizeTextFromBitmapWithMlKit(rawFrame)
-          }
-          if (recognized != null && recognized.rawText.isNotBlank()) {
-            liveOcrDetectedDocument = recognized
-          }
+        val stabilizedDoc = CameraEngine.selectStabilizedLiveOcrDocument(
+          previousDoc = liveOcrDetectedDocument,
+          candidateDoc = recognized,
+        )
+        if (stabilizedDoc != null) {
+          liveOcrDetectedDocument = stabilizedDoc
         }
       }
-      delay(500L)
+      delay(420L)
     }
   }
 
@@ -839,23 +866,23 @@ fun CameraScreen(
       Toast.makeText(context, "Scanned document: review and tap Add Note", Toast.LENGTH_SHORT).show()
     }
 
-    // Also run on-device ML Kit OCR on the live hardware frame (if available) to refine the previewed document
-    val tv = activeTextureView
-    val rawHardwareBitmap = try {
-      if (tv != null && tv.isAvailable) tv.bitmap else null
-    } catch (_: Throwable) {
-      null
-    }
-    if (rawHardwareBitmap != null && rawHardwareBitmap.width > 32 && rawHardwareBitmap.height > 32 && liveOcrDetectedDocument == null) {
+    // Also run on-device ML Kit OCR on the aligned high-res live hardware frame (if available) to refine the previewed document
+    val alignedHardwareBitmap = captureTransformedAnalysisBitmap(maxEdgePx = 1080)
+    if (alignedHardwareBitmap != null && alignedHardwareBitmap.width > 32 && alignedHardwareBitmap.height > 32) {
       coroutineScope.launch {
         val mlKitDoc = withContext(Dispatchers.Default) {
-          CameraEngine.recognizeTextFromBitmapWithMlKit(rawHardwareBitmap)
+          CameraEngine.recognizeTextFromBitmapWithMlKit(alignedHardwareBitmap)
         }
-        if (mlKitDoc != null && mlKitDoc.rawText.isNotBlank()) {
+        val stabilized = CameraEngine.selectStabilizedLiveOcrDocument(
+          previousDoc = liveOcrDetectedDocument,
+          candidateDoc = mlKitDoc,
+        )
+        if (stabilized != null && stabilized.rawText.isNotBlank()) {
+          liveOcrDetectedDocument = stabilized
           val currentDoc = latestScannedDocument
           // Only update in-place if the user hasn't already dismissed or saved the note
           if (currentDoc != null && currentDoc.savedNoteId == null) {
-            latestScannedDocument = mlKitDoc.copy(savedNoteId = null)
+            latestScannedDocument = stabilized.copy(savedNoteId = null)
           }
         }
       }
@@ -873,44 +900,6 @@ fun CameraScreen(
     latestScannedDocument = savedDoc
     if (!isInspection) {
       Toast.makeText(context, "Added note: ${savedNote.title}", Toast.LENGTH_SHORT).show()
-    }
-  }
-
-  // Live autofocus hex color sampling from the active TextureView preview stream.
-  // Keeps a lightweight raw preview bitmap cached and maps the current focus coordinates
-  // through the inverse TextureView center-crop, zoom, and front-mirror transform.
-  var latestRawPreviewBitmap by remember { mutableStateOf<Bitmap?>(null) }
-  var lastPreviewGrabUptimeMs by remember { mutableLongStateOf(0L) }
-
-  fun captureTransformedAnalysisBitmap(maxEdgePx: Int = 640): Bitmap? {
-    return try {
-      val tv = activeTextureView ?: return null
-      if (!tv.isAvailable) return null
-      val vw = tv.width
-      val vh = tv.height
-      val raw = if (vw > 32 && vh > 32) {
-        val scale = minOf(1f, maxEdgePx.toFloat() / maxOf(vw, vh).toFloat())
-        val targetW = (vw * scale).roundToInt().coerceAtLeast(64)
-        val targetH = (vh * scale).roundToInt().coerceAtLeast(64)
-        tv.getBitmap(targetW, targetH)
-      } else {
-        tv.getBitmap(maxEdgePx, maxEdgePx)
-      } ?: return null
-
-      if (raw.width <= 16 || raw.height <= 16) return null
-      latestRawPreviewBitmap = raw
-      lastPreviewGrabUptimeMs = android.os.SystemClock.uptimeMillis()
-      CameraEngine.transformCapturedPreviewBitmap(
-        rawBitmap = raw,
-        textureTransformMatrix = tv.getTransform(null),
-        zoom = zoomLevel,
-        lensFacing = lensFacing,
-        mirrorFront = mirrorFrontCamera,
-        viewWidth = if (vw > 32) vw else raw.width,
-        viewHeight = if (vh > 32) vh else raw.height,
-      )
-    } catch (_: Throwable) {
-      null
     }
   }
 
@@ -1052,6 +1041,7 @@ fun CameraScreen(
             bitmap = alignedFrame,
             previousTarget = smartAutoFocusTarget,
             fallbackToSalientRegion = true,
+            streamMode = true,
           )
         }
         if (detectedTarget != null && manualFocusTarget == null) {
@@ -1066,7 +1056,7 @@ fun CameraScreen(
           )
         }
       }
-      delay(400L)
+      delay(280L)
     }
   }
 
@@ -1143,6 +1133,7 @@ fun CameraScreen(
             confidenceThreshold = MIN_VISION_CONFIDENCE_THRESHOLD,
             sourceDescription = "Live Camera Frame",
             previousResult = latestVisionResult,
+            streamMode = true,
           )
         }
         if (analyzed != null) {
@@ -1153,7 +1144,7 @@ fun CameraScreen(
           }
         }
       }
-      delay(350L)
+      delay(260L)
     }
   }
 
@@ -1190,6 +1181,7 @@ fun CameraScreen(
             confidenceThreshold = MIN_VISION_CONFIDENCE_THRESHOLD,
             sourceDescription = "Live Camera Frame",
             previousResult = latestVisionResult,
+            streamMode = false,
           )
         }
         if (hwResult != null && hwResult.tags.isNotEmpty()) {
