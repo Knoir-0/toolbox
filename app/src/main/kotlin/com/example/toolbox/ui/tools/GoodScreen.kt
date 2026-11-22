@@ -49,6 +49,22 @@ import kotlin.random.Random
 const val GOOD_PREFS_NAME = "good_tool_prefs"
 const val PREF_KEY_GOOD_CURRENT_MESSAGE = "good_current_message"
 const val GOOD_TAP_TO_REFRESH_TEXT = "tap to refresh"
+const val GOOD_WORD_BLACKLIST_PROBABILITY = 0.8f
+
+private val GOOD_WORD_SPLIT_REGEX = Regex("""[^\p{L}\p{N}']+""")
+
+/**
+ * Extracts normalized (lowercase) words from [message] so messages sharing words can be identified.
+ */
+fun extractGoodMessageWords(message: String): Set<String> {
+  if (message.isBlank()) return emptySet()
+  return message
+    .lowercase()
+    .split(GOOD_WORD_SPLIT_REGEX)
+    .map { it.trim('\'') }
+    .filter { it.isNotEmpty() }
+    .toSet()
+}
 
 val GOOD_POSITIVE_MESSAGES: List<String> = listOf(
   "do good today",
@@ -165,6 +181,26 @@ val GOOD_POSITIVE_MESSAGES: List<String> = listOf(
   "explore",
   "create something",
   "you are okay",
+  "touch some grass",
+  "rest your eyes",
+  "sunlight, please",
+  "stay weird",
+  "step outside",
+  "learn from mistakes",
+  "learn today",
+  "learn something new",
+  "care",
+  "laugh at your worries",
+  "it's not so big anymore",
+  "you can do it",
+  "do it",
+  "do well",
+  "no need to rush",
+  "still here",
+  "good things take time",
+  "go easy on yourself",
+  "good enough",
+  "grow a bit",
 )
 
 val DEFAULT_GOOD_MESSAGE: String = GOOD_POSITIVE_MESSAGES.first()
@@ -172,16 +208,33 @@ val DEFAULT_GOOD_MESSAGE: String = GOOD_POSITIVE_MESSAGES.first()
 /**
  * Picks a new positive message from [messages], guaranteed to be different from [currentMessage]
  * whenever [messages] has more than 1 distinct entry.
+ *
+ * To make consecutive messages feel more random to humans, [wordBlacklistProbability] (80% by
+ * default) of the time all words present in [currentMessage] are blacklisted when filtering
+ * candidate messages (falling back to any distinct message if every candidate shares a word).
  */
 fun pickNextGoodMessage(
   currentMessage: String? = null,
   random: Random = Random.Default,
   messages: List<String> = GOOD_POSITIVE_MESSAGES,
+  wordBlacklistProbability: Float = GOOD_WORD_BLACKLIST_PROBABILITY,
 ): String {
   if (messages.isEmpty()) return ""
   if (messages.size == 1) return messages.first()
-  val candidates = messages.filter { it != currentMessage }
-  val pool = if (candidates.isNotEmpty()) candidates else messages
+  val distinctCandidates = messages.filter { it != currentMessage }
+  val basePool = if (distinctCandidates.isNotEmpty()) distinctCandidates else messages
+  val blacklistedWords = currentMessage?.let(::extractGoodMessageWords).orEmpty()
+  val shouldBlacklistCurrentWords = blacklistedWords.isNotEmpty() &&
+    wordBlacklistProbability > 0f &&
+    (wordBlacklistProbability >= 1f || random.nextFloat() < wordBlacklistProbability)
+  val pool = if (shouldBlacklistCurrentWords) {
+    val nonOverlapping = basePool.filter { candidate ->
+      extractGoodMessageWords(candidate).none { it in blacklistedWords }
+    }
+    if (nonOverlapping.isNotEmpty()) nonOverlapping else basePool
+  } else {
+    basePool
+  }
   return pool[random.nextInt(pool.size)]
 }
 

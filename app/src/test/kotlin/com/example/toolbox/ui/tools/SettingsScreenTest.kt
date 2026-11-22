@@ -1906,6 +1906,26 @@ class SettingsScreenTest {
       "explore",
       "create something",
       "you are okay",
+      "touch some grass",
+      "rest your eyes",
+      "sunlight, please",
+      "stay weird",
+      "step outside",
+      "learn from mistakes",
+      "learn today",
+      "learn something new",
+      "care",
+      "laugh at your worries",
+      "it's not so big anymore",
+      "you can do it",
+      "do it",
+      "do well",
+      "no need to rush",
+      "still here",
+      "good things take time",
+      "go easy on yourself",
+      "good enough",
+      "grow a bit",
     )
     assertEquals(expectedPositiveMessages, GOOD_POSITIVE_MESSAGES)
     assertFalse(GOOD_POSITIVE_MESSAGES.contains("100% free forever"))
@@ -1932,6 +1952,57 @@ class SettingsScreenTest {
     // Now "please be kind" is excluded, so index 0 of candidates is "do good today"
     assertEquals("do good today", next2)
     assertEquals("do good today", repo.getCurrentMessage())
+
+    // 80% of the time (random.nextFloat() < 0.8f), all words in the current message are blacklisted
+    assertEquals(0.8f, GOOD_WORD_BLACKLIST_PROBABILITY, 0.0001f)
+    assertEquals(setOf("do", "good", "today"), extractGoodMessageWords("do good today"))
+    assertEquals(setOf("clean", "a", "bit", "it", "helps"), extractGoodMessageWords("clean a bit, it helps"))
+    assertEquals(setOf("you're", "doing", "great"), extractGoodMessageWords("you're doing great"))
+
+    val testPool = listOf(
+      "be kind",
+      "please be gentle",
+      "say something kind",
+      "stay hydrated",
+    )
+    val blacklistHitRandom = object : kotlin.random.Random() {
+      override fun nextBits(bitCount: Int): Int = 0
+      override fun nextFloat(): Float = 0.79f // < 0.80 -> blacklists "be" and "kind"
+      override fun nextInt(until: Int): Int = 0
+    }
+    assertEquals(
+      "stay hydrated",
+      pickNextGoodMessage(
+        currentMessage = "be kind",
+        random = blacklistHitRandom,
+        messages = testPool,
+      ),
+    )
+
+    val blacklistMissRandom = object : kotlin.random.Random() {
+      override fun nextBits(bitCount: Int): Int = 0
+      override fun nextFloat(): Float = 0.80f // >= 0.80 -> does not blacklist words, only currentMessage
+      override fun nextInt(until: Int): Int = 0
+    }
+    assertEquals(
+      "please be gentle",
+      pickNextGoodMessage(
+        currentMessage = "be kind",
+        random = blacklistMissRandom,
+        messages = testPool,
+      ),
+    )
+
+    // Falls back gracefully if every other message shares at least one word with currentMessage
+    val allOverlappingPool = listOf("be kind", "be gentle", "kind soul")
+    assertEquals(
+      "be gentle",
+      pickNextGoodMessage(
+        currentMessage = "be kind",
+        random = blacklistHitRandom,
+        messages = allOverlappingPool,
+      ),
+    )
 
     // Explicit state persistence
     repo.setCurrentMessage("proud of you")
