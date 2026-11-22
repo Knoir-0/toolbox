@@ -206,7 +206,7 @@ internal val LocalTodoItemActions = compositionLocalOf { TodoItemActionDispatche
 
 private fun formatTodoTaskPlainText(task: TodoItem): String {
   return buildString {
-    appendLine(task.title)
+    appendLine(task.toTtxt())
     if (task.notes.isNotBlank()) {
       appendLine(task.notes)
     }
@@ -214,13 +214,6 @@ private fun formatTodoTaskPlainText(task: TodoItem): String {
       val sched = TodoListEngine.formatScheduleLabel(task.scheduledAtMillis, task.scheduledEndMillis)
       val repeatSuffix = task.recurrenceRule?.let { " (${it.formatLabel()})" } ?: ""
       appendLine("Scheduled: $sched$repeatSuffix")
-    }
-    if (task.subtasks.isNotEmpty()) {
-      appendLine()
-      task.subtasks.forEach { sub ->
-        val box = if (sub.isCompleted) "[x]" else "[ ]"
-        appendLine("$box ${sub.title}")
-      }
     }
   }.trim()
 }

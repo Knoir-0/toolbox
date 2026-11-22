@@ -2025,34 +2025,47 @@ object FileManagerEngine {
     val notes: String
 
     if (hasStructuredList || nonBlankBody.size > 1) {
-      subtasks = nonBlankBody.mapIndexedNotNull { idx, line ->
-        val cleanLine = line.removePrefix("#").trim()
-        if (cleanLine.isEmpty()) return@mapIndexedNotNull null
-        val ttxtCheckedMatch = TTXT_CHECKED_LINE_REGEX.matchEntire(line)
-        val checkboxMatch = if (ttxtCheckedMatch == null) CHECKBOX_LINE_REGEX.matchEntire(line) else null
-        when {
-          ttxtCheckedMatch != null -> {
-            TodoSubTask(
-              id = "todo_sub_${nowMs}_$idx",
-              title = ttxtCheckedMatch.groupValues[1].trim(),
-              isCompleted = true,
-            )
-          }
-          checkboxMatch != null -> {
-            TodoSubTask(
-              id = "todo_sub_${nowMs}_$idx",
-              title = checkboxMatch.groupValues[2].trim(),
-              isCompleted = checkboxMatch.groupValues[1].equals("x", ignoreCase = true),
-            )
-          }
-          else -> {
-            val bulletMatch = BULLET_LINE_REGEX.matchEntire(line)
-            val itemText = bulletMatch?.groupValues?.get(1)?.trim() ?: line
-            TodoSubTask(
-              id = "todo_sub_${nowMs}_$idx",
-              title = itemText,
-              isCompleted = false,
-            )
+      val hasNestedTtxtLines = bodyLines.any { rawLine ->
+        val leadingSpaces = rawLine.takeWhile { it == ' ' || it == '\t' }.replace("\t", "  ").length
+        leadingSpaces >= 2 && (rawLine.trimStart().startsWith("- ") || rawLine.trimStart().startsWith("+ "))
+      }
+      if (hasNestedTtxtLines) {
+        val parsed = TodoListEngine.parseTaskFromTtxt(
+          rawTtxt = "# ${title.ifBlank { "Imported Task" }}\n\n${bodyLines.joinToString("\n")}",
+          id = "todo_from_file_${nowMs}_${file.name.hashCode()}",
+          nowMs = nowMs,
+        )
+        subtasks = parsed.subtasks
+      } else {
+        subtasks = nonBlankBody.mapIndexedNotNull { idx, line ->
+          val cleanLine = line.removePrefix("#").trim()
+          if (cleanLine.isEmpty()) return@mapIndexedNotNull null
+          val ttxtCheckedMatch = TTXT_CHECKED_LINE_REGEX.matchEntire(line)
+          val checkboxMatch = if (ttxtCheckedMatch == null) CHECKBOX_LINE_REGEX.matchEntire(line) else null
+          when {
+            ttxtCheckedMatch != null -> {
+              TodoSubTask(
+                id = "todo_sub_${nowMs}_$idx",
+                title = ttxtCheckedMatch.groupValues[1].trim(),
+                isCompleted = true,
+              )
+            }
+            checkboxMatch != null -> {
+              TodoSubTask(
+                id = "todo_sub_${nowMs}_$idx",
+                title = checkboxMatch.groupValues[2].trim(),
+                isCompleted = checkboxMatch.groupValues[1].equals("x", ignoreCase = true),
+              )
+            }
+            else -> {
+              val bulletMatch = BULLET_LINE_REGEX.matchEntire(line)
+              val itemText = bulletMatch?.groupValues?.get(1)?.trim() ?: line
+              TodoSubTask(
+                id = "todo_sub_${nowMs}_$idx",
+                title = itemText,
+                isCompleted = false,
+              )
+            }
           }
         }
       }

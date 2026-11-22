@@ -74,6 +74,7 @@ data class NoteChecklistItem(
   val id: String = UUID.randomUUID().toString(),
   val text: String,
   val isChecked: Boolean = false,
+  val indentLevel: Int = 0,
 ) {
   /**
    * Internal `.ttxt` list marker: `-` when unchecked, `+` when checked.
@@ -82,14 +83,21 @@ data class NoteChecklistItem(
     get() = if (isChecked) '+' else '-'
 
   /**
-   * Formats this item as a `.ttxt` checklist line (`- <text>` for unchecked, `+ <text>` for checked).
+   * Formats this item as a `.ttxt` checklist line (`- <text>` for unchecked, `+ <text>` for checked),
+   * indented by 2 spaces per [indentLevel] following YAML list nesting conventions.
    */
-  fun toTtxtLine(): String = "$ttxtPrefix ${text.trim()}"
+  fun toTtxtLine(): String {
+    val indent = "  ".repeat(indentLevel.coerceAtLeast(0))
+    return "$indent$ttxtPrefix ${text.trim()}"
+  }
 
   fun toJson(): JSONObject = JSONObject().apply {
     put("id", id)
     put("text", text)
     put("isChecked", isChecked)
+    if (indentLevel > 0) {
+      put("indentLevel", indentLevel)
+    }
     put("ttxtLine", toTtxtLine())
   }
 
@@ -98,16 +106,25 @@ data class NoteChecklistItem(
       rawLine: String,
       id: String = UUID.randomUUID().toString(),
     ): NoteChecklistItem? {
+      val leadingSpaces = rawLine
+        .takeWhile { it == ' ' || it == '\t' }
+        .replace("\t", "  ")
+        .length
+      val indentLevel = leadingSpaces / 2
       val trimmed = rawLine.trim()
       if (trimmed.isEmpty()) return null
       return when {
         trimmed.startsWith("+ ") -> {
           val itemText = trimmed.substring(2).trim()
-          if (itemText.isNotEmpty()) NoteChecklistItem(id = id, text = itemText, isChecked = true) else null
+          if (itemText.isNotEmpty()) {
+            NoteChecklistItem(id = id, text = itemText, isChecked = true, indentLevel = indentLevel)
+          } else null
         }
         trimmed.startsWith("- ") -> {
           val itemText = trimmed.substring(2).trim()
-          if (itemText.isNotEmpty()) NoteChecklistItem(id = id, text = itemText, isChecked = false) else null
+          if (itemText.isNotEmpty()) {
+            NoteChecklistItem(id = id, text = itemText, isChecked = false, indentLevel = indentLevel)
+          } else null
         }
         else -> null
       }
@@ -115,14 +132,15 @@ data class NoteChecklistItem(
 
     fun fromJson(json: JSONObject): NoteChecklistItem {
       val itemId = json.optString("id", UUID.randomUUID().toString())
-      val ttxtLine = json.optString("ttxtLine", "").trim()
-      if (ttxtLine.isNotEmpty() && !json.has("text")) {
-        fromTtxtLine(ttxtLine, id = itemId)?.let { return it }
+      val rawTtxtLine = json.optString("ttxtLine", "")
+      if (rawTtxtLine.isNotBlank() && !json.has("text")) {
+        fromTtxtLine(rawTtxtLine, id = itemId)?.let { return it }
       }
       return NoteChecklistItem(
         id = itemId,
         text = json.optString("text", ""),
         isChecked = json.optBoolean("isChecked", false),
+        indentLevel = json.optInt("indentLevel", 0).coerceAtLeast(0),
       )
     }
   }
@@ -385,9 +403,7 @@ class InMemoryNotesRepository(
   override fun loadNotes(): List<NoteItem> {
     val dir = notesDirectory
     if (dir != null && dir.exists()) {
-      val ttxtFiles = dir.listFiles { f ->
-        f.isFile && f.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true)
-      }
+      val ttxtFiles = dir.listFiles { f -> NotesEngine.isNoteTtxtFile(f) }
       if (ttxtFiles != null && (ttxtFiles.isNotEmpty() || notes.isEmpty())) {
         val synced = NotesEngine.loadNotesFromDirectory(
           directory = dir,
@@ -482,9 +498,7 @@ class SharedPreferencesNotesRepository(
         } else {
           // SharedPreferences was cleared and /Notes access is not granted: remove stale managed .ttxt files
           try {
-            dir.listFiles { f ->
-              f.isFile && f.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true)
-            }?.forEach { it.delete() }
+            dir.listFiles { f -> NotesEngine.isNoteTtxtFile(f) }?.forEach { it.delete() }
           } catch (_: Throwable) {}
         }
       }
@@ -513,9 +527,7 @@ class SharedPreferencesNotesRepository(
     if (dir != null) {
       try {
         val existingTtxtFiles = if (dir.exists()) {
-          dir.listFiles { f ->
-            f.isFile && f.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true)
-          }?.toList().orEmpty()
+          dir.listFiles { f -> NotesEngine.isNoteTtxtFile(f) }?.toList().orEmpty()
         } else {
           emptyList()
         }
@@ -648,8 +660,20 @@ object NotesEngine {
 
   val DEFAULT_NOTES_FOLDER: NotesFolder = DEFAULT_NOTES_SCOPED_FOLDER
 
-  private val TTXT_UNCHECKED_LINE_REGEX = Regex("""^\s*-\s+(.+)$""")
-  private val TTXT_CHECKED_LINE_REGEX = Regex("""^\s*\+\s+(.+)$""")
+  private val RESERVED_TODO_TTXT_FILES = setOf(
+    TODO_LIST_TTXT_FILE_NAME.lowercase(Locale.ROOT),
+    TODO_COMPLETED_TTXT_FILE_NAME.lowercase(Locale.ROOT),
+    TODO_SAVED_TTXT_FILE_NAME.lowercase(Locale.ROOT),
+  )
+
+  fun isNoteTtxtFile(file: File): Boolean {
+    return file.isFile &&
+      file.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true) &&
+      file.name.lowercase(Locale.ROOT) !in RESERVED_TODO_TTXT_FILES
+  }
+
+  private val TTXT_UNCHECKED_LINE_REGEX = Regex("""^([ \t]*)-\s+(.+)$""")
+  private val TTXT_CHECKED_LINE_REGEX = Regex("""^([ \t]*)\+\s+(.+)$""")
 
   data class PendingQuickCaptureRequest(
     val isChecklist: Boolean,
@@ -749,8 +773,8 @@ object NotesEngine {
       emptyList()
     }
 
-    val nonBlankBody = trimmedBodyLines.map { it.trim() }.filter { it.isNotEmpty() }
-    val allTtxtChecklistLines = nonBlankBody.isNotEmpty() && nonBlankBody.all { line ->
+    val nonBlankBodyLines = trimmedBodyLines.filter { it.isNotBlank() }
+    val allTtxtChecklistLines = nonBlankBodyLines.isNotEmpty() && nonBlankBodyLines.all { line ->
       TTXT_UNCHECKED_LINE_REGEX.matches(line) || TTXT_CHECKED_LINE_REGEX.matches(line)
     }
 
@@ -762,22 +786,29 @@ object NotesEngine {
 
     return if (isChecklist) {
       val remainingExisting = existingChecklistItems.toMutableList()
-      val items = nonBlankBody.mapNotNull { line ->
-        val checkedMatch = TTXT_CHECKED_LINE_REGEX.matchEntire(line)
-        val uncheckedMatch = if (checkedMatch == null) TTXT_UNCHECKED_LINE_REGEX.matchEntire(line) else null
+      val items = nonBlankBodyLines.mapNotNull { rawLine ->
+        val checkedMatch = TTXT_CHECKED_LINE_REGEX.matchEntire(rawLine)
+        val uncheckedMatch = if (checkedMatch == null) TTXT_UNCHECKED_LINE_REGEX.matchEntire(rawLine) else null
+        val leadingSpaces = rawLine
+          .takeWhile { it == ' ' || it == '\t' }
+          .replace("\t", "  ")
+          .length
+        val indentLevel = leadingSpaces / 2
         val (itemText, isChecked) = when {
-          checkedMatch != null -> checkedMatch.groupValues[1].trim() to true
-          uncheckedMatch != null -> uncheckedMatch.groupValues[1].trim() to false
+          checkedMatch != null -> checkedMatch.groupValues[2].trim() to true
+          uncheckedMatch != null -> uncheckedMatch.groupValues[2].trim() to false
           else -> {
-            val parsed = parseChecklistItems(line).firstOrNull()
-            if (parsed != null) parsed.text to parsed.isChecked else line to false
+            val parsed = parseChecklistItems(rawLine).firstOrNull()
+            if (parsed != null) parsed.text to parsed.isChecked else rawLine.trim() to false
           }
         }
         if (itemText.isEmpty()) {
           null
         } else {
-          val matchIdx = remainingExisting.indexOfFirst { it.text == itemText && it.isChecked == isChecked }
-            .takeIf { it >= 0 }
+          val matchIdx = remainingExisting.indexOfFirst {
+            it.text == itemText && it.isChecked == isChecked && it.indentLevel == indentLevel
+          }.takeIf { it >= 0 }
+            ?: remainingExisting.indexOfFirst { it.text == itemText && it.isChecked == isChecked }.takeIf { it >= 0 }
             ?: remainingExisting.indexOfFirst { it.text == itemText }.takeIf { it >= 0 }
           val matchedId = if (matchIdx != null) {
             remainingExisting.removeAt(matchIdx).id
@@ -788,6 +819,7 @@ object NotesEngine {
             id = matchedId,
             text = itemText,
             isChecked = isChecked,
+            indentLevel = indentLevel,
           )
         }
       }
@@ -884,9 +916,7 @@ object NotesEngine {
       } catch (_: Throwable) {}
     }
 
-    directory.listFiles { f ->
-      f.isFile && f.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true)
-    }?.forEach { existingFile ->
+    directory.listFiles { f -> isNoteTtxtFile(f) }?.forEach { existingFile ->
       if (existingFile.name.lowercase(Locale.ROOT) !in activeNamesLower) {
         try {
           existingFile.delete()
@@ -909,9 +939,7 @@ object NotesEngine {
     if (!directory.exists() || !directory.isDirectory) {
       return metadataNotes
     }
-    val ttxtFiles = directory.listFiles { f ->
-      f.isFile && f.extension.equals(NOTES_FILE_EXTENSION, ignoreCase = true)
-    }?.toList().orEmpty()
+    val ttxtFiles = directory.listFiles { f -> isNoteTtxtFile(f) }?.toList().orEmpty()
 
     if (ttxtFiles.isEmpty()) {
       return emptyList()

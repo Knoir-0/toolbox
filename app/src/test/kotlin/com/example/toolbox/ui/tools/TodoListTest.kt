@@ -996,4 +996,125 @@ class TodoListTest {
     assertTrue(checklistRequest!!.isChecklist)
     assertNull(NotesEngine.pendingQuickCaptureRequest)
   }
+
+  @Test
+  fun todoList_savesAndLoadsTtxtFormat_withYamlNestedSubtaskLists() {
+    val activeTask1 = TodoItem(
+      id = "t1",
+      title = "Prepare electronics kit",
+      subtasks = listOf(
+        TodoSubTask(id = "s1", title = "Pack multimeter", isCompleted = true),
+        TodoSubTask(
+          id = "s2",
+          title = "Charge soldering iron",
+          isCompleted = false,
+          subtasks = listOf(
+            TodoSubTask(id = "s2-1", title = "Find USB-C PD cable", isCompleted = false),
+            TodoSubTask(id = "s2-2", title = "Inspect chisel tip", isCompleted = true),
+          ),
+        ),
+      ),
+    )
+    val activeTask2 = TodoItem(
+      id = "t2",
+      title = "Order replacement fuses",
+    )
+    val completedTask = TodoItem(
+      id = "c1",
+      title = "Clean workbench",
+      subtasks = listOf(
+        TodoSubTask(id = "cs1", title = "Wipe ESD mat", isCompleted = true),
+      ),
+    )
+
+    // 1. Single task .ttxt serialization follows YAML 2-space nested list indentation with '-' and '+'
+    val expectedTask1Ttxt = """
+      - Prepare electronics kit
+        + Pack multimeter
+        - Charge soldering iron
+          - Find USB-C PD cable
+          + Inspect chisel tip
+    """.trimIndent()
+    assertEquals(expectedTask1Ttxt, activeTask1.toTtxt())
+
+    // 2. Full To Do list .ttxt document includes '# To Do', active '-' tasks, completed '+' tasks, and nested lists
+    val expectedFullTtxt = """
+      # To Do
+
+      - Prepare electronics kit
+        + Pack multimeter
+        - Charge soldering iron
+          - Find USB-C PD cable
+          + Inspect chisel tip
+      - Order replacement fuses
+      + Clean workbench
+        + Wipe ESD mat
+    """.trimIndent()
+    assertEquals(
+      expectedFullTtxt,
+      TodoListEngine.formatTodoListToTtxt(
+        tasks = listOf(activeTask1, activeTask2),
+        completedTasks = listOf(completedTask),
+      ),
+    )
+
+    // 3. Repository saves and loads .ttxt file on disk, preserving multi-level YAML list nesting
+    val tempDir = java.nio.file.Files.createTempDirectory("todo_ttxt_test").toFile()
+    val todoTtxtFile = java.io.File(tempDir, TODO_LIST_TTXT_FILE_NAME)
+    try {
+      val repo = InMemoryTodoListRepository(
+        initialTasks = listOf(activeTask1, activeTask2),
+        initialCompletedTasks = listOf(completedTask),
+        completedCount = 1,
+        todoFile = todoTtxtFile,
+      )
+      assertTrue(todoTtxtFile.exists())
+      assertEquals(expectedFullTtxt, todoTtxtFile.readText())
+      assertEquals(expectedFullTtxt, repo.toTtxt())
+
+      // Toggle deeply nested subtask 's2-1' ("Find USB-C PD cable") -> '-' becomes '+' at indent level 2 (4 spaces)
+      val afterNestedToggle = TodoListEngine.toggleSubTask(repo.loadTasks(), taskId = "t1", subtaskId = "s2-1")
+      repo.saveTasks(afterNestedToggle)
+
+      val expectedAfterToggle = """
+        # To Do
+
+        - Prepare electronics kit
+          + Pack multimeter
+          - Charge soldering iron
+            + Find USB-C PD cable
+            + Inspect chisel tip
+        - Order replacement fuses
+        + Clean workbench
+          + Wipe ESD mat
+      """.trimIndent()
+      assertEquals(expectedAfterToggle, todoTtxtFile.readText())
+
+      // Load into a fresh repository from the .ttxt file on disk
+      val freshRepo = InMemoryTodoListRepository(todoFile = todoTtxtFile)
+      val loadedActive = freshRepo.loadTasks()
+      val loadedCompleted = freshRepo.loadCompletedTasks()
+
+      assertEquals(2, loadedActive.size)
+      assertEquals("Prepare electronics kit", loadedActive[0].title)
+      assertEquals(2, loadedActive[0].subtasks.size)
+      assertTrue(loadedActive[0].subtasks[0].isCompleted)
+      assertEquals("Pack multimeter", loadedActive[0].subtasks[0].title)
+      assertFalse(loadedActive[0].subtasks[1].isCompleted)
+      assertEquals("Charge soldering iron", loadedActive[0].subtasks[1].title)
+      assertEquals(2, loadedActive[0].subtasks[1].subtasks.size)
+      assertTrue(loadedActive[0].subtasks[1].subtasks[0].isCompleted)
+      assertEquals("Find USB-C PD cable", loadedActive[0].subtasks[1].subtasks[0].title)
+      assertTrue(loadedActive[0].subtasks[1].subtasks[1].isCompleted)
+      assertEquals("Inspect chisel tip", loadedActive[0].subtasks[1].subtasks[1].title)
+
+      assertEquals(1, loadedCompleted.size)
+      assertEquals("Clean workbench", loadedCompleted[0].title)
+      assertEquals(1, loadedCompleted[0].subtasks.size)
+      assertTrue(loadedCompleted[0].subtasks[0].isCompleted)
+      assertEquals("Wipe ESD mat", loadedCompleted[0].subtasks[0].title)
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
 }
