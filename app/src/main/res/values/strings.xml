@@ -21,4 +21,6 @@
     <string name="dice_roller_widget_description">Interactive D20 hero card roller with 3D polyhedral die, critical hit/miss badges, and Disadvantage / Normal / Advantage selector</string>
     <string name="background_texture_widget_label">Style</string>
     <string name="background_texture_widget_description">Vertically scrollable style and background texture selector that adapts columns as resized horizontally</string>
+    <string name="good_widget_label">Good</string>
+    <string name="good_widget_description">Simple bar displaying a positive message on the left and a one-tap refresh button on the right</string>
 </resources>

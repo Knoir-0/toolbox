@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import com.example.toolbox.ui.theme.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,7 +36,10 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -202,10 +206,12 @@ interface GoodRepository {
  */
 class SharedPreferencesGoodRepository(
   private val sharedPreferences: SharedPreferences,
+  private val appContext: Context? = null,
 ) : GoodRepository {
 
   constructor(context: Context) : this(
     sharedPreferences = context.getSharedPreferences(GOOD_PREFS_NAME, Context.MODE_PRIVATE),
+    appContext = context.applicationContext ?: context,
   )
 
   override fun getCurrentMessage(): String {
@@ -220,6 +226,7 @@ class SharedPreferencesGoodRepository(
     sharedPreferences.edit()
       .putString(PREF_KEY_GOOD_CURRENT_MESSAGE, sanitized)
       .apply()
+    GoodWidgets.updateAllWidgets(appContext)
   }
 }
 
@@ -263,8 +270,25 @@ fun GoodScreen(
   random: Random = Random.Default,
 ) {
   val haptic = LocalHapticFeedback.current
+  val isInspection = LocalInspectionMode.current
+  val lifecycleOwner = LocalLifecycleOwner.current
   var currentMessage by rememberSaveable {
     mutableStateOf(repository.getCurrentMessage())
+  }
+  DisposableEffect(lifecycleOwner, repository, isInspection) {
+    if (isInspection) {
+      onDispose {}
+    } else {
+      val observer = LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+          currentMessage = repository.getCurrentMessage()
+        }
+      }
+      lifecycleOwner.lifecycle.addObserver(observer)
+      onDispose {
+        lifecycleOwner.lifecycle.removeObserver(observer)
+      }
+    }
   }
   val interactionSource = remember { MutableInteractionSource() }
 

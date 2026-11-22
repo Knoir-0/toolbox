@@ -13,6 +13,7 @@ import com.example.toolbox.ui.tools.AudioRecorderWidgets
 import com.example.toolbox.ui.tools.BackgroundTextureWidgets
 import com.example.toolbox.ui.tools.CameraWidgets
 import com.example.toolbox.ui.tools.DiceRollerWidgets
+import com.example.toolbox.ui.tools.GoodWidgets
 import com.example.toolbox.ui.tools.MusicPlayerWidgets
 import com.example.toolbox.ui.tools.NotesWidgets
 import com.example.toolbox.ui.tools.PlantScheduleWidgets
@@ -1073,6 +1074,7 @@ class DefaultNavigationPreferencesRepository(
     CameraWidgets.updateAllWidgets(ctx)
     DiceRollerWidgets.updateAllWidgets(ctx)
     BackgroundTextureWidgets.updateAllWidgets(ctx)
+    GoodWidgets.updateAllWidgets(ctx)
   }
 
   private val _toolsPerRowFlow = MutableStateFlow(getToolsPerRow())

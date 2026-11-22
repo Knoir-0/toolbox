@@ -1936,5 +1936,48 @@ class SettingsScreenTest {
     // Explicit state persistence
     repo.setCurrentMessage("proud of you")
     assertEquals("proud of you", repo.getCurrentMessage())
+
+    // Good Home Screen AppWidget state resolution, refresh action, and Hexagonify support
+    GoodWidgets.clearInMemoryStateForTesting()
+    try {
+      val widgetState = GoodWidgets.resolveWidgetState(context = null, repository = repo)
+      assertEquals("proud of you", widgetState.currentMessage)
+      assertFalse(widgetState.hexagonIconButtons)
+      assertEquals(com.example.toolbox.R.drawable.bg_music_widget_circle, widgetState.iconButtonBackgroundRes)
+
+      // Refreshing via GoodWidgets advances the message in the repository
+      val refreshedFromWidget = GoodWidgets.refreshGoodMessage(
+        context = null,
+        repository = repo,
+        random = zeroRandom,
+        refreshWidgets = false,
+      )
+      assertEquals("do good today", refreshedFromWidget)
+      assertEquals("do good today", repo.getCurrentMessage())
+      assertEquals(
+        "do good today",
+        GoodWidgets.resolveWidgetState(context = null, repository = repo).currentMessage,
+      )
+
+      // Handling ACTION_WIDGET_NEXT_MESSAGE broadcast refreshes the message
+      assertTrue(
+        GoodWidgets.handleWidgetAction(
+          context = null,
+          action = GoodWidgets.ACTION_WIDGET_NEXT_MESSAGE,
+          repository = repo,
+          random = zeroRandom,
+        )
+      )
+      assertEquals("please be kind", repo.getCurrentMessage())
+
+      // Enabling Hexagonify switches the widget refresh button background to vertical-sided hexagon
+      NavigationPreferencesBridge.hexagonIconButtons = true
+      val hexWidgetState = GoodWidgets.resolveWidgetState(context = null, repository = repo)
+      assertTrue(hexWidgetState.hexagonIconButtons)
+      assertEquals(com.example.toolbox.R.drawable.bg_music_widget_hexagon, hexWidgetState.iconButtonBackgroundRes)
+    } finally {
+      GoodWidgets.clearInMemoryStateForTesting()
+      NavigationPreferencesBridge.hexagonIconButtons = false
+    }
   }
 }
