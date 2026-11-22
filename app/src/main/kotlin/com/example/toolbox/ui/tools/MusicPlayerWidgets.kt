@@ -31,6 +31,10 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import com.example.toolbox.R
+import com.example.toolbox.ui.main.DEFAULT_HEXAGON_ICON_BUTTONS
+import com.example.toolbox.ui.main.NAVIGATION_PREFERENCES_NAME
+import com.example.toolbox.ui.main.NavigationPreferencesBridge
+import com.example.toolbox.ui.main.PREF_KEY_HEXAGON_ICON_BUTTONS
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
@@ -103,6 +107,8 @@ data class MusicPlayerWidgetState(
   val rightCustomActionIconBitmap: Bitmap? = null,
   val isLeftControlVisible: Boolean = true,
   val isRightControlVisible: Boolean = true,
+  val hexagonIconButtons: Boolean = false,
+  val iconButtonBackgroundRes: Int = R.drawable.bg_music_widget_circle,
 )
 
 /**
@@ -179,6 +185,35 @@ object MusicPlayerWidgets {
   fun resolvePlayPauseContentArgb(accentColor: Color): Int {
     val perceivedLuma = accentColor.red * 0.299f + accentColor.green * 0.587f + accentColor.blue * 0.114f
     return if (perceivedLuma > 0.55f) DARK_PLAY_ICON_TINT_ARGB else LIGHT_PLAY_ICON_TINT_ARGB
+  }
+
+  /**
+   * Resolves whether "Hexagonify" is enabled for Home Screen AppWidgets from
+   * persisted navigation [Context.getSharedPreferences] or [NavigationPreferencesBridge.hexagonIconButtons].
+   */
+  fun resolveHexagonIconButtonsEnabled(context: Context? = null): Boolean {
+    if (context != null) {
+      try {
+        val prefs = context.getSharedPreferences(NAVIGATION_PREFERENCES_NAME, Context.MODE_PRIVATE)
+        if (prefs != null && prefs.contains(PREF_KEY_HEXAGON_ICON_BUTTONS)) {
+          return prefs.getBoolean(PREF_KEY_HEXAGON_ICON_BUTTONS, DEFAULT_HEXAGON_ICON_BUTTONS)
+        }
+      } catch (_: Throwable) {}
+    }
+    return NavigationPreferencesBridge.hexagonIconButtons
+  }
+
+  /**
+   * Returns the background drawable resource (`R.drawable.bg_music_widget_hexagon` when
+   * [hexagonIconButtons] is `true`, or `R.drawable.bg_music_widget_circle` when `false`) for
+   * circular (`1:1`) widget action icon buttons, header/empty icon badges, transport buttons, and FABs.
+   */
+  fun resolveIconButtonBackgroundRes(
+    hexagonIconButtons: Boolean = NavigationPreferencesBridge.hexagonIconButtons,
+  ): Int = if (hexagonIconButtons) {
+    R.drawable.bg_music_widget_hexagon
+  } else {
+    R.drawable.bg_music_widget_circle
   }
 
   /**
@@ -315,6 +350,8 @@ object MusicPlayerWidgets {
     },
     decodeArtwork: Boolean = true,
   ): MusicPlayerWidgetState {
+    val hexagonIconButtons = resolveHexagonIconButtonsEnabled(context)
+    val iconButtonBackgroundRes = resolveIconButtonBackgroundRes(hexagonIconButtons)
     val internalPlaying = session?.let { it.isPlaying && it.currentTrack != null } == true
 
     if (!internalPlaying && externalMedia != null && MusicPlayerEngine.isMusicPlayingOverride != true) {
@@ -425,6 +462,8 @@ object MusicPlayerWidgets {
         rightCustomActionIconBitmap = rightIconBitmap,
         isLeftControlVisible = leftAction != null,
         isRightControlVisible = rightAction != null,
+        hexagonIconButtons = hexagonIconButtons,
+        iconButtonBackgroundRes = iconButtonBackgroundRes,
       )
     }
 
@@ -524,6 +563,8 @@ object MusicPlayerWidgets {
       rightCustomActionIconBitmap = null,
       isLeftControlVisible = true,
       isRightControlVisible = true,
+      hexagonIconButtons = hexagonIconButtons,
+      iconButtonBackgroundRes = iconButtonBackgroundRes,
     )
   }
 
@@ -1050,6 +1091,9 @@ object MusicPlayerWidgets {
     views.setTextViewText(R.id.widget_mini_title, state.title)
     views.setTextViewText(R.id.widget_mini_subtitle, state.miniBarSubtitle)
 
+    views.setImageViewResource(R.id.widget_mini_favorite_bg, state.iconButtonBackgroundRes)
+    views.setImageViewResource(R.id.widget_mini_play_pause_bg, state.iconButtonBackgroundRes)
+
     // Favorite Star button (or extracted Left Custom Action when controlling external Android system media)
     if (state.isExternalMedia) {
       if (!state.isLeftControlVisible) {
@@ -1210,6 +1254,11 @@ object MusicPlayerWidgets {
 
     views.setTextViewText(R.id.widget_medium_title, state.title)
     views.setTextViewText(R.id.widget_medium_subtitle, state.miniBarSubtitle)
+
+    views.setImageViewResource(R.id.widget_medium_favorite_bg, state.iconButtonBackgroundRes)
+    views.setImageViewResource(R.id.widget_medium_shuffle_bg, state.iconButtonBackgroundRes)
+    views.setImageViewResource(R.id.widget_medium_play_pause_bg, state.iconButtonBackgroundRes)
+    views.setImageViewResource(R.id.widget_medium_repeat_bg, state.iconButtonBackgroundRes)
 
     // Favorite Star button in top info row (hidden when controlling external media, since external
     // custom actions are displayed in the 5-button playback row below)
@@ -1404,6 +1453,11 @@ object MusicPlayerWidgets {
     )?.let { artBmp ->
       views.setImageViewBitmap(R.id.widget_album_art, artBmp)
     }
+
+    views.setImageViewResource(R.id.widget_album_favorite_bg, state.iconButtonBackgroundRes)
+    views.setImageViewResource(R.id.widget_album_shuffle_bg, state.iconButtonBackgroundRes)
+    views.setImageViewResource(R.id.widget_album_play_pause_bg, state.iconButtonBackgroundRes)
+    views.setImageViewResource(R.id.widget_album_repeat_bg, state.iconButtonBackgroundRes)
 
     // Favorite Star overlaid at the bottom-right of the album art
     if (state.isExternalMedia) {

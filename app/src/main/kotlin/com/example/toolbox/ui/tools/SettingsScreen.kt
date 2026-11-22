@@ -3379,7 +3379,7 @@ fun SettingsScreen(
       }
     }
 
-    // Section 5: Background Texture (Collapsible)
+    // Section 5: Style (Collapsible)
     val backgroundTextureSummary = remember(backgroundTexture, hexagonIconButtons) {
       val base = if (backgroundTexture == BackgroundTexture.NONE) {
         "None (Default)"
@@ -3387,7 +3387,7 @@ fun SettingsScreen(
         "${backgroundTexture.displayName} • ${backgroundTexture.subtitle}"
       }
       if (hexagonIconButtons) {
-        "$base • Hexagon icons"
+        "$base • Hexagonify"
       } else {
         base
       }
@@ -3429,7 +3429,7 @@ fun SettingsScreen(
             )
             Column {
               Text(
-                text = "Background Texture",
+                text = "Style",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
               )
@@ -3577,7 +3577,7 @@ fun SettingsScreen(
               }
             }
 
-            // Hexagonify Icon Buttons Toggle Card (Vertical left and right sides)
+            // Hexagonify Toggle Card (Vertical left and right sides)
             OutlinedCard(
               modifier = Modifier
                 .fillMaxWidth()
@@ -3588,6 +3588,9 @@ fun SettingsScreen(
                   onValueChange = { checked ->
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     preferencesRepository.setHexagonIconButtons(checked)
+                    MusicPlayerWidgets.updateAllWidgets(localContext)
+                    TodoListWidgets.updateAllWidgets(localContext)
+                    NotesWidgets.updateAllWidgets(localContext)
                   },
                 )
                 .testTag("hexagon_icon_buttons_toggle"),
@@ -3643,12 +3646,12 @@ fun SettingsScreen(
                   }
                   Column {
                     Text(
-                      text = "Hexagonify Icon Buttons",
+                      text = "Hexagonify",
                       style = MaterialTheme.typography.titleSmall,
                       fontWeight = FontWeight.Bold,
                     )
                     Text(
-                      text = "Transform circular action icon buttons, badges, and FABs into vertical-sided hexagons",
+                      text = "Hexagons are the bestagons",
                       style = MaterialTheme.typography.bodySmall,
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

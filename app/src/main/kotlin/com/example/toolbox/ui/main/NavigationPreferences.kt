@@ -9,6 +9,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
+import com.example.toolbox.ui.tools.MusicPlayerWidgets
+import com.example.toolbox.ui.tools.NotesWidgets
+import com.example.toolbox.ui.tools.TodoListWidgets
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -1041,11 +1044,20 @@ interface NavigationPreferencesRepository {
  */
 class DefaultNavigationPreferencesRepository(
   private val sharedPreferences: SharedPreferences,
+  private val appContext: Context? = null,
 ) : NavigationPreferencesRepository {
 
   constructor(context: Context) : this(
-    context.getSharedPreferences(NAVIGATION_PREFERENCES_NAME, Context.MODE_PRIVATE)
+    sharedPreferences = context.getSharedPreferences(NAVIGATION_PREFERENCES_NAME, Context.MODE_PRIVATE),
+    appContext = context.applicationContext ?: context,
   )
+
+  private fun refreshHomeScreenWidgets() {
+    val ctx = appContext ?: return
+    MusicPlayerWidgets.updateAllWidgets(ctx)
+    TodoListWidgets.updateAllWidgets(ctx)
+    NotesWidgets.updateAllWidgets(ctx)
+  }
 
   private val _toolsPerRowFlow = MutableStateFlow(getToolsPerRow())
   override val toolsPerRowFlow: StateFlow<Int> = _toolsPerRowFlow.asStateFlow()
@@ -1156,6 +1168,7 @@ class DefaultNavigationPreferencesRepository(
     sharedPreferences.edit().putString(PREF_KEY_THEME_MODE, mode.name).apply()
     _themeModeFlow.value = mode
     NavigationPreferencesBridge.themeMode = mode
+    refreshHomeScreenWidgets()
   }
 
   override fun getThemeColor(): String {
@@ -1173,6 +1186,8 @@ class DefaultNavigationPreferencesRepository(
     ) {
       setMusicPlayerColorOption(color)
       setMusicPlayerThemeEnabled(true)
+    } else {
+      refreshHomeScreenWidgets()
     }
   }
 
@@ -1187,6 +1202,7 @@ class DefaultNavigationPreferencesRepository(
     sharedPreferences.edit().putBoolean(PREF_KEY_MUSIC_PLAYER_THEME_ENABLED, enabled).apply()
     _musicPlayerThemeEnabledFlow.value = enabled
     NavigationPreferencesBridge.musicPlayerThemeEnabled = enabled
+    refreshHomeScreenWidgets()
   }
 
   override fun getMusicPlayerColorOption(): String {
@@ -1223,6 +1239,7 @@ class DefaultNavigationPreferencesRepository(
     sharedPreferences.edit().putString(PREF_KEY_MUSIC_PLAYER_COLOR_OPTION, sanitized).apply()
     _musicPlayerColorOptionFlow.value = sanitized
     NavigationPreferencesBridge.musicPlayerColorOption = sanitized
+    refreshHomeScreenWidgets()
   }
 
   override fun getAccentColor(): String {
@@ -1233,6 +1250,7 @@ class DefaultNavigationPreferencesRepository(
   override fun setAccentColor(color: String) {
     sharedPreferences.edit().putString(PREF_KEY_ACCENT_COLOR, color).apply()
     _accentColorFlow.value = color
+    refreshHomeScreenWidgets()
   }
 
   override fun getBackgroundTexture(): BackgroundTexture {
@@ -1254,6 +1272,7 @@ class DefaultNavigationPreferencesRepository(
     sharedPreferences.edit().putBoolean(PREF_KEY_HEXAGON_ICON_BUTTONS, enabled).apply()
     _hexagonIconButtonsFlow.value = enabled
     NavigationPreferencesBridge.hexagonIconButtons = enabled
+    refreshHomeScreenWidgets()
   }
 
   override fun getHiddenTools(): Set<Tool> {

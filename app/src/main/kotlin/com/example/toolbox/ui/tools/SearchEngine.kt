@@ -2284,7 +2284,7 @@ object SearchEngine {
       title = "Background Texture Presets",
       subtitle = "Appearance • None, Fuzzy, Fade, Concentric, Halftone, Topography, Aurora, Starfield & More",
       snippet = "Apply a procedural background texture across all tool screens matching your active theme and accent colors.",
-      keywords = "settings background texture pattern fuzzy fade concentric halftone topography aurora starfield sunburst honeycomb hexagons blueprint waves confetti circuit",
+      keywords = "settings background texture pattern fuzzy fade concentric halftone topography aurora starfield sunburst honeycomb hexagons hexagonify bestagons blueprint waves confetti circuit",
     ),
     SettingCatalogEntry(
       id = "setting_tool_sorting",

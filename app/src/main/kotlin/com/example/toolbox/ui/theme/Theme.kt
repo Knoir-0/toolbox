@@ -749,6 +749,7 @@ fun createCustomColorScheme(
 }
 
 val LocalIsDarkTheme = compositionLocalOf { false }
+private val LocalHasActiveToolboxThemeMonitor = compositionLocalOf { false }
 
 @Composable
 fun ToolboxTheme(
@@ -771,11 +772,14 @@ fun ToolboxTheme(
 ) {
     val context = LocalContext.current
     val isInspection = LocalInspectionMode.current
-    LaunchedEffect(context, musicPlayerThemeEnabled, themeColor, accentColor, isInspection) {
-        if (!isInspection && (musicPlayerThemeEnabled || isMusicPlayerThemeColorSetting(themeColor) || isMusicPlayerAccentColorSetting(accentColor))) {
+    val hasParentThemeMonitor = LocalHasActiveToolboxThemeMonitor.current
+    LaunchedEffect(context, musicPlayerThemeEnabled, themeColor, accentColor, isInspection, hasParentThemeMonitor) {
+        if (!hasParentThemeMonitor && !isInspection && (musicPlayerThemeEnabled || isMusicPlayerThemeColorSetting(themeColor) || isMusicPlayerAccentColorSetting(accentColor))) {
             MusicPlayerEngine.ensureSystemMediaMonitoring(context)
             while (true) {
-                MusicPlayerEngine.syncExternalSystemMediaSessions(context)
+                if (!MusicPlayerEngine.isInAppVideoPlaybackActive) {
+                    MusicPlayerEngine.syncExternalSystemMediaSessions(context)
+                }
                 delay(2_000L)
             }
         }
@@ -865,6 +869,7 @@ fun ToolboxTheme(
         LocalIsDarkTheme provides darkTheme,
         LocalBackgroundTexture provides backgroundTexture,
         LocalHexagonIconButtons provides hexagonIconButtons,
+        LocalHasActiveToolboxThemeMonitor provides true,
     ) {
         MaterialTheme(
             colorScheme = colorScheme,

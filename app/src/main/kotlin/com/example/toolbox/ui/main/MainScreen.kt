@@ -37,6 +37,7 @@ import com.example.toolbox.ui.theme.CircleShape
 import com.example.toolbox.ui.theme.FilledIconButton
 import com.example.toolbox.ui.theme.FilledTonalIconButton
 import com.example.toolbox.ui.theme.HexagonShape
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
 import com.example.toolbox.ui.theme.LocalHexagonIconButtons
 import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.material.icons.Icons
@@ -2494,9 +2495,9 @@ private fun ToolGridItem(
     val hexagonEnabled = currentHexagonIconButtons()
     Box(
       modifier = Modifier
-        .width(if (hexagonEnabled) 34.dp else 56.dp)
+        .width(if (hexagonEnabled) 46.dp else 56.dp)
         .height(32.dp)
-        .clip(if (hexagonEnabled) HexagonShape else CircleShape)
+        .clip(if (hexagonEnabled) HorizontalHexagonShape else CircleShape)
         .background(indicatorColor),
       contentAlignment = Alignment.Center,
     ) {

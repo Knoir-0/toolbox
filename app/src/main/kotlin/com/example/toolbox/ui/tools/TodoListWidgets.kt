@@ -68,6 +68,7 @@ data class TodoWidgetState(
   val isUndoToastVisible: Boolean,
   val undoToastMessage: String,
   val palette: TodoWidgetPalette,
+  val hexagonIconButtons: Boolean = palette.hexagonIconButtons,
 )
 
 /**
@@ -156,6 +157,10 @@ data class TodoWidgetPalette(
   val outlineArgb: Int,
   val toastSurfaceArgb: Int,
   val toastBorderArgb: Int,
+  val hexagonIconButtons: Boolean = false,
+  val iconButtonBackgroundRes: Int = R.drawable.bg_music_widget_circle,
+  val taskCheckUncheckedIconRes: Int = R.drawable.ic_todo_widget_circle_unchecked,
+  val taskCheckCheckedIconRes: Int = R.drawable.ic_todo_widget_circle_checked,
 )
 
 /**
@@ -296,6 +301,7 @@ object TodoListWidgets {
     } else {
       lerp(baseScheme.surface, baseScheme.primaryContainer, 0.45f)
     }
+    val hexagonIconButtons = MusicPlayerWidgets.resolveHexagonIconButtonsEnabled(context)
 
     return TodoWidgetPalette(
       surfaceArgb = MusicPlayerWidgets.colorToArgb(surfaceColor),
@@ -314,6 +320,18 @@ object TodoListWidgets {
       outlineArgb = MusicPlayerWidgets.colorToArgb(baseScheme.outline),
       toastSurfaceArgb = MusicPlayerWidgets.colorToArgb(toastSurfaceColor),
       toastBorderArgb = MusicPlayerWidgets.colorToArgb(baseScheme.primary, alphaOverride = 0.55f),
+      hexagonIconButtons = hexagonIconButtons,
+      iconButtonBackgroundRes = MusicPlayerWidgets.resolveIconButtonBackgroundRes(hexagonIconButtons),
+      taskCheckUncheckedIconRes = if (hexagonIconButtons) {
+        R.drawable.ic_todo_widget_hexagon_unchecked
+      } else {
+        R.drawable.ic_todo_widget_circle_unchecked
+      },
+      taskCheckCheckedIconRes = if (hexagonIconButtons) {
+        R.drawable.ic_todo_widget_hexagon_checked
+      } else {
+        R.drawable.ic_todo_widget_circle_checked
+      },
     )
   }
 
@@ -764,7 +782,7 @@ object TodoListWidgets {
 
     views.setImageViewResource(
       R.id.widget_todo_item_check_circle,
-      R.drawable.ic_todo_widget_circle_unchecked,
+      palette.taskCheckUncheckedIconRes,
     )
     views.setInt(R.id.widget_todo_item_check_circle, "setColorFilter", palette.primaryArgb)
     views.setContentDescription(
@@ -833,6 +851,7 @@ object TodoListWidgets {
     }
 
     // Header styling
+    views.setImageViewResource(R.id.widget_todo_header_badge_bg, palette.iconButtonBackgroundRes)
     views.setInt(R.id.widget_todo_header_badge_bg, "setColorFilter", palette.primaryContainerArgb)
     views.setInt(R.id.widget_todo_header_badge_icon, "setColorFilter", palette.primaryArgb)
     views.setTextViewText(R.id.widget_todo_title, "To Do")
@@ -845,7 +864,9 @@ object TodoListWidgets {
     views.setOnClickPendingIntent(R.id.widget_todo_empty_view, openTodoIntent)
 
     // Empty state styling
+    views.setImageViewResource(R.id.widget_todo_empty_badge_bg, palette.iconButtonBackgroundRes)
     views.setInt(R.id.widget_todo_empty_badge_bg, "setColorFilter", palette.primaryContainerArgb)
+    views.setImageViewResource(R.id.widget_todo_empty_badge_icon, palette.taskCheckCheckedIconRes)
     views.setInt(R.id.widget_todo_empty_badge_icon, "setColorFilter", palette.primaryArgb)
     views.setTextColor(R.id.widget_todo_empty_title, palette.onSurfaceArgb)
     views.setTextColor(R.id.widget_todo_empty_subtitle, palette.onSurfaceVariantArgb)
@@ -898,6 +919,10 @@ object TodoListWidgets {
 
     // Two Floating FABs at Bottom Right:
     // 1. Schedule FAB -> opens To Do tool with Schedule view opened
+    views.setImageViewResource(
+      R.id.widget_todo_fab_schedule_bg,
+      palette.iconButtonBackgroundRes,
+    )
     views.setInt(
       R.id.widget_todo_fab_schedule_bg,
       "setColorFilter",
@@ -914,6 +939,10 @@ object TodoListWidgets {
     )
 
     // 2. Plus (+) FAB -> opens To Do tool with Add a task focused
+    views.setImageViewResource(
+      R.id.widget_todo_fab_plus_bg,
+      palette.iconButtonBackgroundRes,
+    )
     views.setInt(
       R.id.widget_todo_fab_plus_bg,
       "setColorFilter",

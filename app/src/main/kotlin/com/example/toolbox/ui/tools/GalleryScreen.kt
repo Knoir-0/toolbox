@@ -1207,8 +1207,27 @@ fun GalleryScreen(
     }
   }
 
-  // Background OCR, QR/barcode & ML Kit auto-tagging indexer
-  LaunchedEffect(allGalleryPhotos, isInspection) {
+  var selectedPhotoForViewer by remember(initialPhotoFile?.absolutePath) {
+    mutableStateOf(
+      initialPhotoFile?.takeIf { it.exists() && it.isFile }?.let { file ->
+        GalleryPhoto(
+          file = file,
+          name = file.name,
+          path = file.absolutePath,
+          sizeBytes = file.length(),
+          lastModifiedMs = file.lastModified(),
+          extension = file.extension.lowercase(Locale.ROOT),
+        )
+      }
+    )
+  }
+  val isViewerPlayingVideo = selectedPhotoForViewer?.isVideo == true
+
+  // Background OCR, QR/barcode & ML Kit auto-tagging indexer (paused while a video is playing in the viewer)
+  LaunchedEffect(allGalleryPhotos, isInspection, isViewerPlayingVideo) {
+    if (isViewerPlayingVideo) {
+      return@LaunchedEffect
+    }
     if (allGalleryPhotos.isEmpty()) {
       isIndexingPhotos = false
       indexedProgressCount = 0
@@ -1391,20 +1410,7 @@ fun GalleryScreen(
     }
   }
 
-  var selectedPhotoForViewer by remember(initialPhotoFile?.absolutePath) {
-    mutableStateOf(
-      initialPhotoFile?.takeIf { it.exists() && it.isFile }?.let { file ->
-        GalleryPhoto(
-          file = file,
-          name = file.name,
-          path = file.absolutePath,
-          sizeBytes = file.length(),
-          lastModifiedMs = file.lastModified(),
-          extension = file.extension.lowercase(Locale.ROOT),
-        )
-      }
-    )
-  }
+  val galleryScope = rememberCoroutineScope()
   var addAlbumDialogTarget by remember { mutableStateOf<AddAlbumTarget?>(null) }
   var fileForImageEditor by remember { mutableStateOf<File?>(null) }
   var fileForVideoEditor by remember { mutableStateOf<File?>(null) }
@@ -2311,8 +2317,11 @@ fun GalleryScreen(
       initialPhoto = photo,
       photoIndexMap = photoIndexMap,
       onPhotoIndexed = { entry ->
-        photoIndexMap = photoIndexMap + (entry.path to entry)
-        GalleryEngine.saveIndexCacheToDisk(indexCacheFile, photoIndexMap)
+        val updatedMap = photoIndexMap + (entry.path to entry)
+        photoIndexMap = updatedMap
+        galleryScope.launch(Dispatchers.IO) {
+          GalleryEngine.saveIndexCacheToDisk(indexCacheFile, updatedMap)
+        }
       },
       onDismiss = { selectedPhotoForViewer = null },
       onEdit = { editedPhoto ->
@@ -4173,6 +4182,7 @@ private fun PhotoTileCard(
         contentDescription = photo.name,
         iconSize = if (isCompact) 22.dp else 32.dp,
         isPlayingVideoPreview = isPlayingVideoPreview,
+        lastModifiedMs = photo.lastModifiedMs,
         modifier = Modifier.fillMaxSize(),
       )
 
@@ -4713,6 +4723,7 @@ private fun PhotoListRow(
           contentDescription = photo.name,
           iconSize = 26.dp,
           isPlayingVideoPreview = isPlayingVideoPreview,
+          lastModifiedMs = photo.lastModifiedMs,
           modifier = Modifier.fillMaxSize(),
         )
       }
@@ -5082,18 +5093,24 @@ internal fun PhotoThumbnailBox(
   contentDescription: String,
   iconSize: Dp,
   isPlayingVideoPreview: Boolean = false,
+  lastModifiedMs: Long = 0L,
   modifier: Modifier = Modifier,
 ) {
   val isInspectionMode = LocalInspectionMode.current
   val density = LocalDensity.current
   val filePath = photoFile.absolutePath
-  val fileLastMod = photoFile.lastModified()
+  val fileLastMod = remember(filePath, lastModifiedMs) {
+    if (lastModifiedMs > 0L) lastModifiedMs else photoFile.lastModified()
+  }
   val isVideoFile = remember(filePath) { VideoEditorEngine.isVideoFile(photoFile) }
   val isAnimatedImageFile = remember(filePath, fileLastMod) {
     !isVideoFile && GalleryEngine.isAnimatedImageFile(photoFile)
   }
   var bitmap by remember(filePath, fileLastMod) {
     mutableStateOf(GalleryEngine.getCachedThumbnailBitmap(photoFile))
+  }
+  val imageBitmap = remember(bitmap) {
+    bitmap?.asImageBitmap()
   }
 
   LaunchedEffect(filePath, fileLastMod) {
@@ -5106,9 +5123,9 @@ internal fun PhotoThumbnailBox(
     modifier = modifier.clipToBounds(),
     contentAlignment = Alignment.Center,
   ) {
-    if (bitmap != null) {
+    if (imageBitmap != null) {
       Image(
-        bitmap = bitmap!!.asImageBitmap(),
+        bitmap = imageBitmap,
         contentDescription = contentDescription,
         contentScale = ContentScale.Crop,
         modifier = Modifier.fillMaxSize(),
@@ -5135,11 +5152,39 @@ internal fun PhotoThumbnailBox(
 
     if (isPlayingVideoPreview && isVideoFile) {
       var mediaPlayerRef by remember(filePath, fileLastMod) { mutableStateOf<MediaPlayer?>(null) }
+      var surfaceRef by remember(filePath, fileLastMod) { mutableStateOf<AndroidSurface?>(null) }
       var textureViewRef by remember(filePath, fileLastMod) { mutableStateOf<TextureView?>(null) }
       var isPlayerPrepared by remember(filePath, fileLastMod) { mutableStateOf(false) }
       var videoWidth by remember(filePath, fileLastMod) { mutableIntStateOf(0) }
       var videoHeight by remember(filePath, fileLastMod) { mutableIntStateOf(0) }
       var videoRotationDegrees by remember(filePath, fileLastMod) { mutableIntStateOf(0) }
+
+      fun releasePreviewPlayer() {
+        isPlayerPrepared = false
+        mediaPlayerRef?.let { mp ->
+          try {
+            mp.setOnPreparedListener(null)
+            mp.setOnVideoSizeChangedListener(null)
+            mp.setOnErrorListener(null)
+          } catch (_: Throwable) {}
+          try {
+            mp.setSurface(null)
+          } catch (_: Throwable) {}
+          try {
+            mp.stop()
+          } catch (_: Throwable) {}
+          try {
+            mp.release()
+          } catch (_: Throwable) {}
+        }
+        mediaPlayerRef = null
+        surfaceRef?.let { s ->
+          try {
+            s.release()
+          } catch (_: Throwable) {}
+        }
+        surfaceRef = null
+      }
 
       LaunchedEffect(filePath, fileLastMod, isInspectionMode) {
         if (!isInspectionMode && photoFile.exists()) {
@@ -5151,17 +5196,8 @@ internal fun PhotoThumbnailBox(
 
       DisposableEffect(filePath, fileLastMod) {
         onDispose {
-          isPlayerPrepared = false
           textureViewRef = null
-          mediaPlayerRef?.let { mp ->
-            try {
-              mp.stop()
-            } catch (_: Throwable) {}
-            try {
-              mp.release()
-            } catch (_: Throwable) {}
-          }
-          mediaPlayerRef = null
+          releasePreviewPlayer()
         }
       }
 
@@ -5233,9 +5269,12 @@ internal fun PhotoThumbnailBox(
                       width: Int,
                       height: Int,
                     ) {
+                      releasePreviewPlayer()
                       applyCenterCropTransform(this@apply, viewW = width, viewH = height)
                       val surface = AndroidSurface(surfaceTexture)
                       val mp = MediaPlayer()
+                      surfaceRef = surface
+                      mediaPlayerRef = mp
                       try {
                         mp.setDataSource(photoFile.absolutePath)
                         mp.setSurface(surface)
@@ -5256,6 +5295,12 @@ internal fun PhotoThumbnailBox(
                           }
                         }
                         mp.setOnPreparedListener { preparedMp ->
+                          if (mediaPlayerRef !== preparedMp) {
+                            try {
+                              preparedMp.release()
+                            } catch (_: Throwable) {}
+                            return@setOnPreparedListener
+                          }
                           if (preparedMp.videoWidth > 0 && preparedMp.videoHeight > 0) {
                             videoWidth = preparedMp.videoWidth
                             videoHeight = preparedMp.videoHeight
@@ -5272,7 +5317,6 @@ internal fun PhotoThumbnailBox(
                           try {
                             preparedMp.setVolume(0f, 0f)
                           } catch (_: Throwable) {}
-                          mediaPlayerRef = preparedMp
                           isPlayerPrepared = true
                           try {
                             preparedMp.start()
@@ -5284,11 +5328,7 @@ internal fun PhotoThumbnailBox(
                         }
                         mp.prepareAsync()
                       } catch (_: Throwable) {
-                        isPlayerPrepared = false
-                        try {
-                          mp.release()
-                        } catch (_: Throwable) {}
-                        surface.release()
+                        releasePreviewPlayer()
                       }
                     }
 
@@ -5301,14 +5341,7 @@ internal fun PhotoThumbnailBox(
                     }
 
                     override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                      isPlayerPrepared = false
-                      mediaPlayerRef?.let { mp ->
-                        try {
-                          mp.setSurface(null)
-                          mp.release()
-                        } catch (_: Throwable) {}
-                      }
-                      mediaPlayerRef = null
+                      releasePreviewPlayer()
                       return true
                     }
 

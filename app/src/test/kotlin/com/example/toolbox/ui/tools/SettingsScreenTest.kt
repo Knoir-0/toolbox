@@ -54,6 +54,7 @@ import com.example.toolbox.ui.theme.calculateComplementaryColor
 import com.example.toolbox.ui.theme.calculateMusicPlayerBackgroundColor
 import com.example.toolbox.ui.theme.createCustomColorScheme
 import com.example.toolbox.ui.theme.createTertiaryTokens
+import com.example.toolbox.ui.theme.createHorizontalHexagonVertices
 import com.example.toolbox.ui.theme.createVerticalSidedHexagonVertices
 import com.example.toolbox.ui.theme.shouldUseHexagonIconOutline
 import com.example.toolbox.ui.theme.isAutoAccentColorSetting
@@ -1256,6 +1257,32 @@ class SettingsScreenTest {
       assertEquals(20f, edgeLen, 0.01f)
     }
 
+    // Verify horizontal hexagon geometry for a 120x32 horizontal navigation pill
+    val pillVertices = createHorizontalHexagonVertices(Size(120f, 32f))
+    assertEquals(6, pillVertices.size)
+    // Left and right points are vertically centered at y = 16f
+    assertEquals(0f, pillVertices[0].x, 0.001f)
+    assertEquals(16f, pillVertices[0].y, 0.001f)
+    assertEquals(120f, pillVertices[3].x, 0.001f)
+    assertEquals(16f, pillVertices[3].y, 0.001f)
+    // Top side (pillVertices[1] -> pillVertices[2]) is strictly horizontal (y = 0f)
+    assertEquals(0f, pillVertices[1].y, 0.0001f)
+    assertEquals(0f, pillVertices[2].y, 0.0001f)
+    assertTrue(pillVertices[2].x > pillVertices[1].x)
+    // Bottom side (pillVertices[4] -> pillVertices[5]) is strictly horizontal (y = 32f)
+    assertEquals(32f, pillVertices[4].y, 0.0001f)
+    assertEquals(32f, pillVertices[5].y, 0.0001f)
+    assertTrue(pillVertices[4].x > pillVertices[5].x)
+
+    // Verify horizontal hexagon geometry for the 46x32 toolbox navigation panel tool icon highlight
+    val navIconVertices = createHorizontalHexagonVertices(Size(46f, 32f))
+    assertEquals(0f, navIconVertices[1].y, 0.0001f)
+    assertEquals(0f, navIconVertices[2].y, 0.0001f)
+    assertEquals(32f, navIconVertices[4].y, 0.0001f)
+    assertEquals(32f, navIconVertices[5].y, 0.0001f)
+    // Flat horizontal top/bottom span is > 24f so the 24dp tool icon fits with generous room inside
+    assertTrue((navIconVertices[2].x - navIconVertices[1].x) > 24f)
+
     val repo = InMemoryNavigationPreferencesRepository()
     try {
       assertFalse(repo.getHexagonIconButtons())
@@ -1264,6 +1291,32 @@ class SettingsScreenTest {
 
       // When disabled, circular 40x40 button uses standard Circle outline
       assertFalse(shouldUseHexagonIconOutline(Size(40f, 40f)))
+
+      // And Home Screen AppWidgets (Music Player, To-Do List, and Notes) use circular icon backgrounds & check circles
+      val musicStateBefore = MusicPlayerWidgets.resolveWidgetState(
+        context = null,
+        session = null,
+        externalMedia = null,
+        decodeArtwork = false,
+      )
+      assertFalse(musicStateBefore.hexagonIconButtons)
+      assertEquals(com.example.toolbox.R.drawable.bg_music_widget_circle, musicStateBefore.iconButtonBackgroundRes)
+
+      val todoStateBefore = TodoListWidgets.resolveWidgetState(context = null)
+      assertFalse(todoStateBefore.hexagonIconButtons)
+      assertEquals(com.example.toolbox.R.drawable.bg_music_widget_circle, todoStateBefore.palette.iconButtonBackgroundRes)
+      assertEquals(
+        com.example.toolbox.R.drawable.ic_todo_widget_circle_unchecked,
+        todoStateBefore.palette.taskCheckUncheckedIconRes,
+      )
+      assertEquals(
+        com.example.toolbox.R.drawable.ic_todo_widget_circle_checked,
+        todoStateBefore.palette.taskCheckCheckedIconRes,
+      )
+
+      val notesStateBefore = NotesWidgets.resolveWidgetState(context = null)
+      assertFalse(notesStateBefore.hexagonIconButtons)
+      assertEquals(com.example.toolbox.R.drawable.bg_music_widget_circle, notesStateBefore.iconButtonBackgroundRes)
 
       // Enable Hexagonify Icon Buttons
       repo.setHexagonIconButtons(true)
@@ -1274,6 +1327,32 @@ class SettingsScreenTest {
       // Circular 40x40 icon button uses vertical-sided Hexagon outline, while wide pill buttons remain Rounded
       assertTrue(shouldUseHexagonIconOutline(Size(40f, 40f)))
       assertFalse(shouldUseHexagonIconOutline(Size(160f, 40f)))
+
+      // And all Home Screen AppWidgets (Music Player, To-Do List, and Notes) switch to vertical-sided hexagon backgrounds & check icons
+      val musicStateAfter = MusicPlayerWidgets.resolveWidgetState(
+        context = null,
+        session = null,
+        externalMedia = null,
+        decodeArtwork = false,
+      )
+      assertTrue(musicStateAfter.hexagonIconButtons)
+      assertEquals(com.example.toolbox.R.drawable.bg_music_widget_hexagon, musicStateAfter.iconButtonBackgroundRes)
+
+      val todoStateAfter = TodoListWidgets.resolveWidgetState(context = null)
+      assertTrue(todoStateAfter.hexagonIconButtons)
+      assertEquals(com.example.toolbox.R.drawable.bg_music_widget_hexagon, todoStateAfter.palette.iconButtonBackgroundRes)
+      assertEquals(
+        com.example.toolbox.R.drawable.ic_todo_widget_hexagon_unchecked,
+        todoStateAfter.palette.taskCheckUncheckedIconRes,
+      )
+      assertEquals(
+        com.example.toolbox.R.drawable.ic_todo_widget_hexagon_checked,
+        todoStateAfter.palette.taskCheckCheckedIconRes,
+      )
+
+      val notesStateAfter = NotesWidgets.resolveWidgetState(context = null)
+      assertTrue(notesStateAfter.hexagonIconButtons)
+      assertEquals(com.example.toolbox.R.drawable.bg_music_widget_hexagon, notesStateAfter.iconButtonBackgroundRes)
 
       // Export & Import settings preserves hexagonIconButtons
       val exportedJson = com.example.toolbox.ui.main.exportSettingsToJson(repo)

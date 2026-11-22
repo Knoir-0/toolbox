@@ -204,6 +204,8 @@ data class NotesWidgetState(
   val emptyStateTitle: String,
   val emptyStateSubtitle: String,
   val palette: TodoWidgetPalette,
+  val hexagonIconButtons: Boolean = palette.hexagonIconButtons,
+  val iconButtonBackgroundRes: Int = palette.iconButtonBackgroundRes,
 )
 
 /**
@@ -639,6 +641,7 @@ object NotesWidgets {
     }
 
     // Header styling
+    views.setImageViewResource(R.id.widget_notes_header_badge_bg, palette.iconButtonBackgroundRes)
     views.setInt(R.id.widget_notes_header_badge_bg, "setColorFilter", palette.primaryContainerArgb)
     views.setImageViewResource(R.id.widget_notes_header_badge_icon, headerIconRes)
     views.setInt(R.id.widget_notes_header_badge_icon, "setColorFilter", palette.primaryArgb)
@@ -654,6 +657,7 @@ object NotesWidgets {
     views.setOnClickPendingIntent(R.id.widget_notes_empty_view, openNotesIntent)
 
     // Empty state styling
+    views.setImageViewResource(R.id.widget_notes_empty_badge_bg, palette.iconButtonBackgroundRes)
     views.setInt(R.id.widget_notes_empty_badge_bg, "setColorFilter", palette.primaryContainerArgb)
     views.setImageViewResource(R.id.widget_notes_empty_badge_icon, headerIconRes)
     views.setInt(R.id.widget_notes_empty_badge_icon, "setColorFilter", palette.primaryArgb)
@@ -685,6 +689,10 @@ object NotesWidgets {
 
     // Two Floating FABs at Bottom Right (removed from To-Do List widget and placed here):
     // 1. Checklist FAB -> opens Notes tool to take a new checklist
+    views.setImageViewResource(
+      R.id.widget_notes_fab_checklist_bg,
+      palette.iconButtonBackgroundRes,
+    )
     views.setInt(
       R.id.widget_notes_fab_checklist_bg,
       "setColorFilter",
@@ -701,6 +709,10 @@ object NotesWidgets {
     )
 
     // 2. Plus (+) FAB -> opens Notes tool to take a new note
+    views.setImageViewResource(
+      R.id.widget_notes_fab_plus_bg,
+      palette.iconButtonBackgroundRes,
+    )
     views.setInt(
       R.id.widget_notes_fab_plus_bg,
       "setColorFilter",
@@ -1026,6 +1038,8 @@ class NotesWidgetConfigureActivity : ComponentActivity() {
       val musicPlayerThemeEnabled by preferencesRepository.musicPlayerThemeEnabledFlow.collectAsState()
       val musicPlayerColorOption by preferencesRepository.musicPlayerColorOptionFlow.collectAsState()
       val accentColor by preferencesRepository.accentColorFlow.collectAsState()
+      val backgroundTexture by preferencesRepository.backgroundTextureFlow.collectAsState()
+      val hexagonIconButtons by preferencesRepository.hexagonIconButtonsFlow.collectAsState()
 
       ToolboxTheme(
         themeMode = themeMode,
@@ -1033,6 +1047,8 @@ class NotesWidgetConfigureActivity : ComponentActivity() {
         accentColor = accentColor,
         musicPlayerThemeEnabled = musicPlayerThemeEnabled,
         musicPlayerColorOption = musicPlayerColorOption,
+        backgroundTexture = backgroundTexture,
+        hexagonIconButtons = hexagonIconButtons,
       ) {
         Surface(
           modifier = Modifier.fillMaxSize(),

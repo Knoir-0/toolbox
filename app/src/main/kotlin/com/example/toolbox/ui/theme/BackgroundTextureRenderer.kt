@@ -5,6 +5,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.FloatingActionButtonElevation
 import androidx.compose.material3.IconButtonColors
@@ -30,6 +31,7 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
 import com.example.toolbox.ui.main.BackgroundTexture
 import com.example.toolbox.ui.main.NavigationPreferencesBridge
 import kotlin.math.PI
@@ -173,6 +175,114 @@ object HexagonShape : Shape {
 }
 
 /**
+ * Computes the 6 clockwise vertices of a flat-topped/bottomed horizontal hexagon for [size] where
+ * the top and bottom sides are strictly horizontal (`y_topLeft == y_topRight` and
+ * `y_bottomRight == y_bottomLeft`) and the left and right ends come to sharp points.
+ *
+ * Vertex order (clockwise):
+ * - `0`: Left point `(0, cy)`
+ * - `1`: Top-left corner `(tipInset, 0)`
+ * - `2`: Top-right corner `(w - tipInset, 0)` (Top side is strictly horizontal)
+ * - `3`: Right point `(w, cy)`
+ * - `4`: Bottom-right corner `(w - tipInset, h)`
+ * - `5`: Bottom-left corner `(tipInset, h)` (Bottom side is strictly horizontal)
+ */
+fun createHorizontalHexagonVertices(size: Size): List<Offset> {
+  val w = size.width
+  val h = size.height
+  val cy = h * 0.5f
+  val tipInset = min(w * 0.35f, (h * 0.5f) / sqrt(3f))
+  return listOf(
+    Offset(0f, cy),
+    Offset(tipInset, 0f),
+    Offset(w - tipInset, 0f),
+    Offset(w, cy),
+    Offset(w - tipInset, h),
+    Offset(tipInset, h),
+  )
+}
+
+/**
+ * Builds a [Path] for a horizontal hexagon with strictly horizontal top and bottom sides and
+ * sharp left and right points.
+ */
+fun createHorizontalHexagonPath(
+  size: Size,
+  cornerRadiusFraction: Float = 0f,
+): Path {
+  val vertices = createHorizontalHexagonVertices(size)
+  val path = Path()
+  if (size.width <= 0f || size.height <= 0f) return path
+
+  val cornerRadius = (min(size.width, size.height) * cornerRadiusFraction).coerceAtLeast(0f)
+  if (cornerRadius <= 0.01f) {
+    vertices.forEachIndexed { idx, pt ->
+      if (idx == 0) path.moveTo(pt.x, pt.y) else path.lineTo(pt.x, pt.y)
+    }
+    path.close()
+    return path
+  }
+
+  for (i in 0 until 6) {
+    val prev = vertices[(i + 5) % 6]
+    val curr = vertices[i]
+    val next = vertices[(i + 1) % 6]
+
+    val dx1 = prev.x - curr.x
+    val dy1 = prev.y - curr.y
+    val len1 = hypot(dx1, dy1).coerceAtLeast(0.001f)
+
+    val dx2 = next.x - curr.x
+    val dy2 = next.y - curr.y
+    val len2 = hypot(dx2, dy2).coerceAtLeast(0.001f)
+
+    val d = minOf(cornerRadius, len1 * 0.35f, len2 * 0.35f)
+    val startX = curr.x + (dx1 / len1) * d
+    val startY = curr.y + (dy1 / len1) * d
+    val endX = curr.x + (dx2 / len2) * d
+    val endY = curr.y + (dy2 / len2) * d
+
+    if (i == 0) {
+      path.moveTo(startX, startY)
+    } else {
+      path.lineTo(startX, startY)
+    }
+    path.quadraticTo(curr.x, curr.y, endX, endY)
+  }
+  path.close()
+  return path
+}
+
+/**
+ * Horizontal hexagon [Shape] with strictly horizontal top and bottom sides and sharp left/right points,
+ * designed for horizontal navigation pills.
+ */
+object HorizontalHexagonShape : Shape {
+  override fun createOutline(
+    size: Size,
+    layoutDirection: LayoutDirection,
+    density: Density,
+  ): Outline = Outline.Generic(createHorizontalHexagonPath(size))
+}
+
+/**
+ * Adaptive navigation pill [Shape] that renders a sharp-edged [HorizontalHexagonShape] when
+ * [NavigationPreferencesBridge.hexagonIconButtons] is enabled, and `RoundedCornerShape(20.dp)` otherwise.
+ */
+object ToolboxPillShape : Shape {
+  override fun createOutline(
+    size: Size,
+    layoutDirection: LayoutDirection,
+    density: Density,
+  ): Outline {
+    if (NavigationPreferencesBridge.hexagonIconButtons && size.width > 0f && size.height > 0f) {
+      return HorizontalHexagonShape.createOutline(size, layoutDirection, density)
+    }
+    return RoundedCornerShape(20.dp).createOutline(size, layoutDirection, density)
+  }
+}
+
+/**
  * Returns `true` when [size] is a circular (`1:1`) icon button, badge, or FAB container
  * that should be rendered as a vertical-sided hexagon when [hexagonEnabled] is `true`.
  */
@@ -207,7 +317,7 @@ object ToolboxIconShape : Shape {
 /**
  * Drop-in [CircleShape] token for Toolbox UI screens that automatically hexagonifies circular (`1:1`)
  * action icon buttons, icon badges, and FABs with vertical left and right sides when the user enables
- * "Hexagonify Icon Buttons" in Settings.
+ * "Hexagonify" in Settings.
  */
 val CircleShape: Shape = ToolboxIconShape
 

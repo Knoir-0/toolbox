@@ -7244,23 +7244,49 @@ object MusicPlayerEngine {
     customActions: List<SystemMediaCustomAction> = emptyList(),
     fromSystemSync: Boolean = false,
   ): SystemMediaPlayingInfo {
-    val safeArtwork = normalizeExternalArtworkBitmap(artworkBitmap)
-    val palette = resolveSystemMediaPalette(
-      artworkBitmap = safeArtwork,
-      notificationColorRgb = notificationColorRgb,
-      title = title,
-      artist = artist,
-      album = album,
-      genre = genre,
-    )
+    val cleanTitle = title.ifBlank { "External Media" }
     val safeDuration = durationMs.coerceAtLeast(0L)
     val safePosition = if (safeDuration > 0L) {
       positionMs.coerceIn(0L, safeDuration)
     } else {
       positionMs.coerceAtLeast(0L)
     }
+    val safeSpeed = playbackSpeed.takeIf { it > 0f } ?: 1.0f
+    val safeCanSeek = canSeek && safeDuration > 0L
+
+    val existing = externalSystemMediaInfo
+    val canReuseExistingArtworkAndPalette = existing != null &&
+      existing.isExternalApp &&
+      existing.title == cleanTitle &&
+      existing.artist == artist &&
+      existing.album == album &&
+      existing.genre == genre &&
+      existing.sourcePackage == sourcePackage &&
+      existing.sourceAppName == sourceAppName &&
+      ((artworkBitmap === null && existing.artworkBitmap === null) ||
+        (artworkBitmap != null && existing.artworkBitmap != null &&
+          (artworkBitmap === existing.artworkBitmap ||
+            artworkBitmap.generationId == existing.artworkBitmap.generationId)))
+
+    val safeArtwork = if (canReuseExistingArtworkAndPalette) {
+      existing.artworkBitmap
+    } else {
+      normalizeExternalArtworkBitmap(artworkBitmap)
+    }
+    val palette = if (canReuseExistingArtworkAndPalette && notificationColorRgb == null) {
+      existing.palette
+    } else {
+      resolveSystemMediaPalette(
+        artworkBitmap = safeArtwork,
+        notificationColorRgb = notificationColorRgb,
+        title = title,
+        artist = artist,
+        album = album,
+        genre = genre,
+      )
+    }
     val info = SystemMediaPlayingInfo(
-      title = title.ifBlank { "External Media" },
+      title = cleanTitle,
       artist = artist,
       album = album,
       genre = genre,
@@ -7273,8 +7299,8 @@ object MusicPlayerEngine {
       durationMs = safeDuration,
       positionMs = safePosition,
       positionUpdateElapsedRealtimeMs = positionUpdateElapsedRealtimeMs,
-      playbackSpeed = playbackSpeed.takeIf { it > 0f } ?: 1.0f,
-      canSeek = canSeek && safeDuration > 0L,
+      playbackSpeed = safeSpeed,
+      canSeek = safeCanSeek,
       canSkipNext = canSkipNext,
       canSkipPrevious = canSkipPrevious,
       customActions = customActions,
@@ -7286,11 +7312,36 @@ object MusicPlayerEngine {
       return info
     }
     externalMediaSetFromSystemSync = fromSystemSync
-    if (externalSystemMediaInfo != info) {
+    val isSemanticallyUnchangedFromPoll = fromSystemSync &&
+      existing != null &&
+      existing.title == info.title &&
+      existing.artist == info.artist &&
+      existing.album == info.album &&
+      existing.genre == info.genre &&
+      existing.sourcePackage == info.sourcePackage &&
+      existing.sourceAppName == info.sourceAppName &&
+      existing.isExternalApp == info.isExternalApp &&
+      existing.isPlaying == info.isPlaying &&
+      existing.palette == info.palette &&
+      existing.artworkBitmap === info.artworkBitmap &&
+      existing.durationMs == info.durationMs &&
+      existing.playbackSpeed == info.playbackSpeed &&
+      existing.canSeek == info.canSeek &&
+      existing.canSkipNext == info.canSkipNext &&
+      existing.canSkipPrevious == info.canSkipPrevious &&
+      existing.customActions.size == info.customActions.size &&
+      existing.customActions.indices.all { idx ->
+        val a = existing.customActions[idx]
+        val b = info.customActions[idx]
+        a.action == b.action && a.label == b.label && a.iconResId == b.iconResId
+      } &&
+      kotlin.math.abs(currentExternalSystemMediaPositionMs(positionUpdateElapsedRealtimeMs) - safePosition) <= 1_500L
+
+    if (!isSemanticallyUnchangedFromPoll && externalSystemMediaInfo != info) {
       externalSystemMediaInfo = info
       MusicPlayerWidgets.updateAllWidgets(monitoredAppContext)
     }
-    return info
+    return externalSystemMediaInfo ?: info
   }
 
   internal data class CachedExternalMediaNotification(
@@ -7954,6 +8005,14 @@ object MusicPlayerEngine {
   }
 
   /**
+   * Tracks whether an in-app video player (such as the Image Viewer or Video Editor) is currently
+   * playing so [isExternalAudioPlaybackActive] does not mistake Toolbox's own `STREAM_MUSIC`
+   * video playback for an external music player.
+   */
+  @Volatile
+  internal var isInAppVideoPlaybackActive: Boolean = false
+
+  /**
    * Returns `true` if another application is currently outputting media audio on the device
    * (either via [AudioManager.isMusicActive] or an active media [AudioPlaybackConfiguration]),
    * excluding Toolbox's own built-in player and phone call / ringtone audio streams.
@@ -7965,10 +8024,10 @@ object MusicPlayerEngine {
     return try {
       val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
       if (isPhoneCallAudioMode(audioManager.mode)) return false
-      if (audioManager.isMusicActive) return true
       val configs = audioManager.activePlaybackConfigurations.orEmpty()
       val myUid = Process.myUid()
       val uidRegex = Regex("""u/pid:(\d+)/""")
+      var sawOwnActiveConfig = false
       for (cfg in configs) {
         val attrs = cfg.audioAttributes
         val usage = attrs?.usage ?: AudioAttributes.USAGE_UNKNOWN
@@ -7983,7 +8042,10 @@ object MusicPlayerEngine {
           continue
         }
         val uidMatch = uidRegex.find(dump)?.groupValues?.getOrNull(1)?.toIntOrNull()
-        if (uidMatch != null && uidMatch == myUid) continue
+        if (uidMatch != null && uidMatch == myUid) {
+          sawOwnActiveConfig = true
+          continue
+        }
         if (uidMatch != null && uidMatch > 1000) {
           val pkgs = try { context.packageManager.getPackagesForUid(uidMatch) } catch (_: Throwable) { null }
           if (pkgs != null && pkgs.any { isIgnoredPhoneOrCallPackage(context, it) }) {
@@ -7994,7 +8056,11 @@ object MusicPlayerEngine {
           return true
         }
       }
-      false
+      if (isInAppVideoPlaybackActive || sawOwnActiveConfig) {
+        false
+      } else {
+        audioManager.isMusicActive
+      }
     } catch (_: Throwable) {
       false
     }
@@ -13363,8 +13429,21 @@ class ToolboxMediaListenerService : NotificationListenerService() {
       } catch (_: Throwable) { "" }
       val isOngoing = (notification.flags and Notification.FLAG_ONGOING_EVENT) != 0
       val colorRgb = notification.color.takeIf { it != 0 }
-      val artworkBitmap = MusicPlayerEngine.extractNotificationArtworkBitmap(applicationContext, notification)
+      val postedAtMs = sbn.postTime.takeIf { it > 0L } ?: System.currentTimeMillis()
       val sessionToken = MusicPlayerEngine.extractNotificationMediaSessionToken(notification)
+      val existingCached = MusicPlayerEngine.activeMediaNotifications[pkg]
+      if (existingCached != null &&
+        existingCached.postedAtMs == postedAtMs &&
+        existingCached.title == title &&
+        existingCached.artist == artist &&
+        existingCached.album == album &&
+        existingCached.isOngoing == isOngoing &&
+        existingCached.colorRgb == colorRgb &&
+        existingCached.sessionToken == sessionToken
+      ) {
+        return existingCached
+      }
+      val artworkBitmap = MusicPlayerEngine.extractNotificationArtworkBitmap(applicationContext, notification)
       val customActions = MusicPlayerEngine.extractNotificationCustomActions(applicationContext, notification)
 
       MusicPlayerEngine.CachedExternalMediaNotification(
@@ -13378,7 +13457,7 @@ class ToolboxMediaListenerService : NotificationListenerService() {
         sessionToken = sessionToken,
         contentIntent = notification.contentIntent,
         customActions = customActions,
-        postedAtMs = sbn.postTime.takeIf { it > 0L } ?: System.currentTimeMillis(),
+        postedAtMs = postedAtMs,
       )
     } catch (_: Throwable) {
       null

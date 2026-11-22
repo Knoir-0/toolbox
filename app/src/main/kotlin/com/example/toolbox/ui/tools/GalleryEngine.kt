@@ -900,6 +900,26 @@ object GalleryEngine {
   }
 
   /**
+   * Extracts the video duration in milliseconds from [file] using [MediaMetadataRetriever],
+   * returning `0L` if unavailable.
+   */
+  fun extractVideoDurationMs(file: File): Long {
+    if (!file.exists() || !file.isFile || file.length() <= 0L) return 0L
+    val retriever = MediaMetadataRetriever()
+    val retrieverDuration = try {
+      retriever.setDataSource(file.absolutePath)
+      retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+    } catch (_: Throwable) {
+      0L
+    } finally {
+      try {
+        retriever.release()
+      } catch (_: Throwable) {}
+    }
+    return retrieverDuration.coerceAtLeast(0L)
+  }
+
+  /**
    * Calculates the updated albums-per-row count (2..5) from a pinch gesture [zoomFactor].
    *
    * - Pinching in (`zoomFactor < 1f`, fingers moving together) shrinks tiles to show MORE albums per row (up to 5).

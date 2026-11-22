@@ -42,6 +42,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import com.example.toolbox.ui.theme.CircleShape
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Backspace
@@ -758,17 +760,20 @@ private fun AngleModePill(
   modifier: Modifier = Modifier,
 ) {
   val haptic = LocalHapticFeedback.current
+  val hexagonEnabled = currentHexagonIconButtons()
+  val outerShape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(20.dp)
+  val segmentShape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(16.dp)
 
   Surface(
     modifier = modifier
       .height(32.dp)
-      .clip(RoundedCornerShape(20.dp))
+      .clip(outerShape)
       .clickable {
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         onToggle()
       }
       .testTag("calculator_angle_mode_chip"),
-    shape = RoundedCornerShape(20.dp),
+    shape = outerShape,
     color = MaterialTheme.colorScheme.surface,
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
   ) {
@@ -790,7 +795,7 @@ private fun AngleModePill(
       )
       Box(
         modifier = Modifier
-          .clip(RoundedCornerShape(16.dp))
+          .clip(segmentShape)
           .background(degBg)
           .padding(horizontal = 10.dp, vertical = 4.dp),
         contentAlignment = Alignment.Center,
@@ -816,7 +821,7 @@ private fun AngleModePill(
       )
       Box(
         modifier = Modifier
-          .clip(RoundedCornerShape(16.dp))
+          .clip(segmentShape)
           .background(radBg)
           .padding(horizontal = 10.dp, vertical = 4.dp),
         contentAlignment = Alignment.Center,
@@ -839,6 +844,7 @@ private fun ScientificTogglePill(
   modifier: Modifier = Modifier,
 ) {
   val haptic = LocalHapticFeedback.current
+  val hexagonEnabled = currentHexagonIconButtons()
   val chevronRotation by animateFloatAsState(
     targetValue = if (isExpanded) 180f else 0f,
     animationSpec = tween(durationMillis = 250),
@@ -851,7 +857,7 @@ private fun ScientificTogglePill(
       haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
       onToggle()
     },
-    shape = RoundedCornerShape(20.dp),
+    shape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(20.dp),
     leadingIcon = {
       Icon(
         imageVector = Icons.Default.Functions,

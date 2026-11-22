@@ -10,7 +10,9 @@ import android.graphics.BitmapFactory
 import android.graphics.SurfaceTexture
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
+import android.os.SystemClock
 import android.view.Surface as AndroidSurface
 import android.view.TextureView
 import android.widget.Toast
@@ -104,6 +106,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -383,9 +386,12 @@ fun ImageScreen(
           if (onPhotoIndexed != null) {
             onPhotoIndexed(entry)
           } else {
-            localPhotoIndexMap = localPhotoIndexMap + (entry.path to entry)
+            val updatedMap = localPhotoIndexMap + (entry.path to entry)
+            localPhotoIndexMap = updatedMap
             if (!isInspection) {
-              GalleryEngine.saveIndexCacheToDisk(indexCacheFile, localPhotoIndexMap)
+              scope.launch(Dispatchers.IO) {
+                GalleryEngine.saveIndexCacheToDisk(indexCacheFile, updatedMap)
+              }
             }
           }
         },
@@ -642,35 +648,16 @@ internal fun ImageViewerContent(
   val currentPhoto = viewerPhotos.getOrElse(pagerState.currentPage) { initialPhoto }
   val currentIndexEntry = photoIndexMap[currentPhoto.path]
 
-  var videoDurationMs by remember(currentPhoto.path, currentPhoto.lastModifiedMs) {
-    mutableLongStateOf(5_000L)
-  }
-  var videoPositionMs by remember(currentPhoto.path, currentPhoto.lastModifiedMs) {
-    mutableLongStateOf(0L)
-  }
-  var isDraggingVideoSeek by remember(currentPhoto.path, currentPhoto.lastModifiedMs) {
-    mutableStateOf(false)
-  }
-  var videoSeekDragFraction by remember(currentPhoto.path, currentPhoto.lastModifiedMs) {
-    mutableFloatStateOf(0f)
-  }
-  var videoSeekTargetMs by remember(currentPhoto.path, currentPhoto.lastModifiedMs) {
-    mutableLongStateOf(0L)
-  }
-  var videoSeekRequestToken by remember(currentPhoto.path, currentPhoto.lastModifiedMs) {
-    mutableLongStateOf(0L)
-  }
-
-  val videoSeekProgress = if (isDraggingVideoSeek) {
-    videoSeekDragFraction
-  } else if (videoDurationMs > 0L) {
-    (videoPositionMs.toFloat() / videoDurationMs.toFloat()).coerceIn(0f, 1f)
-  } else {
-    0f
-  }
+  val videoDurationsByPath = remember { mutableStateMapOf<String, Long>() }
+  var videoDurationMs by remember { mutableLongStateOf(0L) }
+  var videoPositionMs by remember { mutableLongStateOf(0L) }
+  var isDraggingVideoSeek by remember { mutableStateOf(false) }
+  var videoSeekDragFraction by remember { mutableFloatStateOf(0f) }
+  var videoSeekTargetMs by remember { mutableLongStateOf(0L) }
+  var videoSeekRequestToken by remember { mutableLongStateOf(0L) }
 
   // Reset zoom, active tag box overlay, and auto-play muted when swiping to a different photo/video
-  LaunchedEffect(pagerState.currentPage) {
+  LaunchedEffect(pagerState.currentPage, currentPhoto.path, currentPhoto.lastModifiedMs) {
     currentZoomScale = DEFAULT_PHOTO_ZOOM
     selectedOverlayTag = null
     isVideoPlaying = true
@@ -678,9 +665,21 @@ internal fun ImageViewerContent(
     videoPositionMs = 0L
     isDraggingVideoSeek = false
     videoSeekDragFraction = 0f
-    if (viewerPhotos.isNotEmpty() && pagerState.currentPage in viewerPhotos.indices) {
-      if (viewerPhotos[pagerState.currentPage].isVideo) {
-        isColorPickerActive = false
+    videoSeekTargetMs = 0L
+    val cachedDuration = videoDurationsByPath[currentPhoto.path]?.takeIf { it > 0L } ?: 0L
+    videoDurationMs = cachedDuration
+    if (currentPhoto.isVideo) {
+      isColorPickerActive = false
+      if (cachedDuration <= 0L) {
+        val extracted = withContext(Dispatchers.IO) {
+          GalleryEngine.extractVideoDurationMs(currentPhoto.file)
+        }
+        if (extracted > 0L) {
+          videoDurationsByPath[currentPhoto.path] = extracted
+          if (videoDurationMs <= 0L) {
+            videoDurationMs = extracted
+          }
+        }
       }
     }
   }
@@ -761,17 +760,31 @@ internal fun ImageViewerContent(
         isCurrentPage = isCurrentPage,
         isVideoPlaying = isCurrentPage && isVideoPlaying,
         isVideoMuted = isVideoMuted,
+        isControlsVisible = showPreviewBar,
         isDraggingVideoSeek = isCurrentPage && isDraggingVideoSeek,
         videoSeekTargetMs = if (isCurrentPage) videoSeekTargetMs else 0L,
         videoSeekRequestToken = if (isCurrentPage) videoSeekRequestToken else 0L,
         onVideoDurationChange = { duration ->
-          if (isCurrentPage && duration > 0L) {
-            videoDurationMs = duration
+          if (duration > 0L) {
+            videoDurationsByPath[pagePhoto.path] = duration
+            if (isCurrentPage) {
+              videoDurationMs = duration
+            }
           }
         },
         onVideoPositionChange = { position ->
           if (isCurrentPage && !isDraggingVideoSeek) {
-            videoPositionMs = position.coerceIn(0L, videoDurationMs)
+            val nonNegativePos = position.coerceAtLeast(0L)
+            if (nonNegativePos > videoDurationMs && nonNegativePos > 0L) {
+              videoDurationMs = nonNegativePos
+              videoDurationsByPath[pagePhoto.path] = nonNegativePos
+            }
+            val activeDuration = videoDurationMs
+            videoPositionMs = if (activeDuration > 0L) {
+              nonNegativePos.coerceIn(0L, activeDuration)
+            } else {
+              nonNegativePos
+            }
           }
         },
         isColorPickerActive = isCurrentPage && isColorPickerActive && !pagePhoto.isVideo,
@@ -948,73 +961,42 @@ internal fun ImageViewerContent(
             modifier = Modifier.fillMaxWidth(),
           ) {
             if (currentPhoto.isVideo) {
-              Row(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .padding(
-                    start = effStartInset + 12.dp,
-                    end = effEndInset + 12.dp,
-                    top = 6.dp,
-                    bottom = 2.dp,
-                  )
-                  .testTag("photo_viewer_video_controls"),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                IconButton(
-                  onClick = { isVideoPlaying = !isVideoPlaying },
-                  modifier = Modifier.testTag("photo_viewer_play_pause_button"),
-                ) {
-                  Icon(
-                    imageVector = if (isVideoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isVideoPlaying) "Pause" else "Play",
-                    tint = Color.White,
-                  )
-                }
-
-                SlimDotSlider(
-                  value = videoSeekProgress,
-                  onValueChange = { newFraction ->
-                    val clamped = newFraction.coerceIn(0f, 1f)
-                    isDraggingVideoSeek = true
-                    videoSeekDragFraction = clamped
-                    val targetMs = (clamped * videoDurationMs).roundToLong()
-                    videoPositionMs = targetMs
-                    videoSeekTargetMs = targetMs
-                    videoSeekRequestToken++
-                  },
-                  onValueChangeFinished = {
-                    val clamped = videoSeekDragFraction.coerceIn(0f, 1f)
-                    val targetMs = (clamped * videoDurationMs).roundToLong()
-                    videoPositionMs = targetMs
-                    videoSeekTargetMs = targetMs
-                    videoSeekRequestToken++
-                    isDraggingVideoSeek = false
-                  },
-                  valueRange = 0f..1f,
-                  modifier = Modifier
-                    .weight(1f)
-                    .testTag("photo_viewer_video_seek_bar")
-                    .semantics {
-                      contentDescription = "Video seek bar"
-                    },
-                )
-
-                IconButton(
-                  onClick = { isVideoMuted = !isVideoMuted },
-                  modifier = Modifier.testTag("photo_viewer_mute_button"),
-                ) {
-                  Icon(
-                    imageVector = if (isVideoMuted) {
-                      Icons.AutoMirrored.Filled.VolumeOff
-                    } else {
-                      Icons.AutoMirrored.Filled.VolumeUp
-                    },
-                    contentDescription = if (isVideoMuted) "Unmute video" else "Mute video",
-                    tint = Color.White,
-                  )
-                }
-              }
+              PhotoViewerVideoControlsRow(
+                isVideoPlaying = isVideoPlaying,
+                isVideoMuted = isVideoMuted,
+                isDraggingVideoSeek = isDraggingVideoSeek,
+                videoSeekDragFraction = videoSeekDragFraction,
+                videoPositionMsProvider = { videoPositionMs },
+                videoDurationMsProvider = {
+                  videoDurationMs.takeIf { it > 0L }
+                    ?: (videoDurationsByPath[currentPhoto.path]?.takeIf { it > 0L } ?: 0L)
+                },
+                startInset = effStartInset,
+                endInset = effEndInset,
+                onTogglePlayPause = { isVideoPlaying = !isVideoPlaying },
+                onToggleMute = { isVideoMuted = !isVideoMuted },
+                onSeekFractionChange = { newFraction ->
+                  val clamped = newFraction.coerceIn(0f, 1f)
+                  isDraggingVideoSeek = true
+                  videoSeekDragFraction = clamped
+                  val effectiveDurationMs = videoDurationMs.takeIf { it > 0L }
+                    ?: (videoDurationsByPath[currentPhoto.path]?.takeIf { it > 0L } ?: 5_000L)
+                  val targetMs = (clamped * effectiveDurationMs).roundToLong()
+                  videoPositionMs = targetMs
+                  videoSeekTargetMs = targetMs
+                  videoSeekRequestToken++
+                },
+                onSeekFinished = {
+                  val clamped = videoSeekDragFraction.coerceIn(0f, 1f)
+                  val effectiveDurationMs = videoDurationMs.takeIf { it > 0L }
+                    ?: (videoDurationsByPath[currentPhoto.path]?.takeIf { it > 0L } ?: 5_000L)
+                  val targetMs = (clamped * effectiveDurationMs).roundToLong()
+                  videoPositionMs = targetMs
+                  videoSeekTargetMs = targetMs
+                  isDraggingVideoSeek = false
+                  videoSeekRequestToken++
+                },
+              )
             }
             if (currentIndexEntry != null &&
               (currentIndexEntry.autoTags.isNotEmpty() || currentIndexEntry.hasOcrText || currentIndexEntry.hasBarcodes)
@@ -1274,6 +1256,7 @@ internal fun ImageViewerContent(
                       photoFile = itemPhoto.file,
                       contentDescription = "Preview ${itemPhoto.name}",
                       iconSize = 22.dp,
+                      lastModifiedMs = itemPhoto.lastModifiedMs,
                       modifier = Modifier.fillMaxSize(),
                     )
                   }
@@ -1726,11 +1709,91 @@ internal fun GalleryPhotoRecognitionInfoDialog(
 }
 
 @Composable
+private fun PhotoViewerVideoControlsRow(
+  isVideoPlaying: Boolean,
+  isVideoMuted: Boolean,
+  isDraggingVideoSeek: Boolean,
+  videoSeekDragFraction: Float,
+  videoPositionMsProvider: () -> Long,
+  videoDurationMsProvider: () -> Long,
+  startInset: Dp,
+  endInset: Dp,
+  onTogglePlayPause: () -> Unit,
+  onToggleMute: () -> Unit,
+  onSeekFractionChange: (Float) -> Unit,
+  onSeekFinished: () -> Unit,
+) {
+  val durationMs = videoDurationMsProvider()
+  val positionMs = videoPositionMsProvider()
+  val videoSeekProgress = if (isDraggingVideoSeek) {
+    videoSeekDragFraction
+  } else if (durationMs > 0L) {
+    (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+  } else {
+    0f
+  }
+
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(
+        start = startInset + 12.dp,
+        end = endInset + 12.dp,
+        top = 6.dp,
+        bottom = 2.dp,
+      )
+      .testTag("photo_viewer_video_controls"),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    IconButton(
+      onClick = onTogglePlayPause,
+      modifier = Modifier.testTag("photo_viewer_play_pause_button"),
+    ) {
+      Icon(
+        imageVector = if (isVideoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+        contentDescription = if (isVideoPlaying) "Pause" else "Play",
+        tint = Color.White,
+      )
+    }
+
+    SlimDotSlider(
+      value = videoSeekProgress,
+      onValueChange = onSeekFractionChange,
+      onValueChangeFinished = onSeekFinished,
+      valueRange = 0f..1f,
+      modifier = Modifier
+        .weight(1f)
+        .testTag("photo_viewer_video_seek_bar")
+        .semantics {
+          contentDescription = "Video seek bar"
+        },
+    )
+
+    IconButton(
+      onClick = onToggleMute,
+      modifier = Modifier.testTag("photo_viewer_mute_button"),
+    ) {
+      Icon(
+        imageVector = if (isVideoMuted) {
+          Icons.AutoMirrored.Filled.VolumeOff
+        } else {
+          Icons.AutoMirrored.Filled.VolumeUp
+        },
+        contentDescription = if (isVideoMuted) "Unmute video" else "Mute video",
+        tint = Color.White,
+      )
+    }
+  }
+}
+
+@Composable
 internal fun PhotoViewerPageContent(
   photo: GalleryPhoto,
   isCurrentPage: Boolean,
   isVideoPlaying: Boolean = isCurrentPage,
   isVideoMuted: Boolean = true,
+  isControlsVisible: Boolean = true,
   isDraggingVideoSeek: Boolean = false,
   videoSeekTargetMs: Long = 0L,
   videoSeekRequestToken: Long = 0L,
@@ -1795,11 +1858,15 @@ internal fun PhotoViewerPageContent(
   val currentIsCurrentPage by rememberUpdatedState(isCurrentPage)
   val currentIsVideoPlaying by rememberUpdatedState(isVideoPlaying)
   val currentIsVideoMuted by rememberUpdatedState(isVideoMuted)
+  val currentIsDraggingVideoSeek by rememberUpdatedState(isDraggingVideoSeek)
   val currentIsColorPickerActive by rememberUpdatedState(isColorPickerActive)
   val currentOnVideoDurationChange by rememberUpdatedState(onVideoDurationChange)
   val currentOnVideoPositionChange by rememberUpdatedState(onVideoPositionChange)
 
   val currentBitmap = bitmap
+  val currentImageBitmap = remember(currentBitmap) {
+    currentBitmap?.asImageBitmap()
+  }
 
   val sampledColorHex = remember(
     photo.path,
@@ -1930,10 +1997,111 @@ internal fun PhotoViewerPageContent(
     ) {
       if (isVideo) {
         var mediaPlayerRef by remember(photo.path, photo.lastModifiedMs) { mutableStateOf<MediaPlayer?>(null) }
+        var surfaceRef by remember(photo.path, photo.lastModifiedMs) { mutableStateOf<AndroidSurface?>(null) }
         var isPlayerPrepared by remember(photo.path, photo.lastModifiedMs) { mutableStateOf(false) }
+        var hasRenderedFirstFrame by remember(photo.path, photo.lastModifiedMs) { mutableStateOf(false) }
+        var preparedDurationMs by remember(photo.path, photo.lastModifiedMs) { mutableLongStateOf(0L) }
+        var maxObservedPositionMs by remember(photo.path, photo.lastModifiedMs) { mutableLongStateOf(0L) }
         var isSeekingMp by remember(photo.path, photo.lastModifiedMs) { mutableStateOf(false) }
+        var seekStartedAtUptimeMs by remember(photo.path, photo.lastModifiedMs) { mutableLongStateOf(0L) }
+        var pendingSeekTargetMs by remember(photo.path, photo.lastModifiedMs) { mutableLongStateOf(-1L) }
+        var lastDispatchedSeekTargetMs by remember(photo.path, photo.lastModifiedMs) { mutableLongStateOf(-1L) }
+        var lastSeekCompletedAtUptimeMs by remember(photo.path, photo.lastModifiedMs) { mutableLongStateOf(0L) }
+        var lastAppliedSeekToken by remember(photo.path, photo.lastModifiedMs) { mutableLongStateOf(0L) }
         var videoWidth by remember(photo.path, photo.lastModifiedMs) { mutableIntStateOf(0) }
         var videoHeight by remember(photo.path, photo.lastModifiedMs) { mutableIntStateOf(0) }
+
+        LaunchedEffect(photo.path, photo.lastModifiedMs) {
+          val metadataDuration = withContext(Dispatchers.IO) {
+            GalleryEngine.extractVideoDurationMs(photo.file)
+          }
+          if (metadataDuration > 0L && preparedDurationMs <= 0L) {
+            preparedDurationMs = metadataDuration
+            currentOnVideoDurationChange(metadataDuration)
+          }
+        }
+
+        fun dispatchSeekToMediaPlayer(mp: MediaPlayer, targetMs: Long, isDragging: Boolean) {
+          val upperBound = preparedDurationMs.takeIf { it > 0L } ?: Long.MAX_VALUE
+          val clampedTarget = targetMs.coerceIn(0L, upperBound)
+          isSeekingMp = true
+          seekStartedAtUptimeMs = SystemClock.uptimeMillis()
+          lastDispatchedSeekTargetMs = clampedTarget
+          if (clampedTarget > maxObservedPositionMs) {
+            maxObservedPositionMs = clampedTarget
+          }
+          try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+              // Always use frame-accurate SEEK_CLOSEST so the playback clock matches the user's seek bar position
+              // instead of snapping back to a distant keyframe (such as 0ms on short clips with a single I-frame).
+              val mode = if (isDragging && preparedDurationMs > 30_000L) {
+                MediaPlayer.SEEK_CLOSEST_SYNC
+              } else {
+                MediaPlayer.SEEK_CLOSEST
+              }
+              mp.seekTo(clampedTarget, mode)
+            } else {
+              mp.seekTo(clampedTarget.toInt())
+            }
+          } catch (_: Throwable) {
+            try {
+              mp.seekTo(clampedTarget.toInt())
+            } catch (_: Throwable) {
+              isSeekingMp = false
+            }
+          }
+        }
+
+        fun releaseActiveVideoPlayer() {
+          isPlayerPrepared = false
+          hasRenderedFirstFrame = false
+          isSeekingMp = false
+          pendingSeekTargetMs = -1L
+          lastDispatchedSeekTargetMs = -1L
+          mediaPlayerRef?.let { mp ->
+            try {
+              mp.setOnPreparedListener(null)
+              mp.setOnVideoSizeChangedListener(null)
+              mp.setOnSeekCompleteListener(null)
+              mp.setOnCompletionListener(null)
+              mp.setOnInfoListener(null)
+              mp.setOnErrorListener(null)
+            } catch (_: Throwable) {}
+            try {
+              mp.setSurface(null)
+            } catch (_: Throwable) {}
+            try {
+              mp.stop()
+            } catch (_: Throwable) {}
+            try {
+              mp.release()
+            } catch (_: Throwable) {}
+          }
+          mediaPlayerRef = null
+          surfaceRef?.let { s ->
+            try {
+              s.release()
+            } catch (_: Throwable) {}
+          }
+          surfaceRef = null
+        }
+
+        LaunchedEffect(isCurrentPage, preparedDurationMs) {
+          if (preparedDurationMs > 0L) {
+            currentOnVideoDurationChange(preparedDurationMs)
+          }
+        }
+
+        DisposableEffect(isCurrentPage, isVideoPlaying) {
+          if (isCurrentPage && isVideoPlaying) {
+            MusicPlayerEngine.isInAppVideoPlaybackActive = true
+          }
+          onDispose {
+            if (isCurrentPage) {
+              MusicPlayerEngine.isInAppVideoPlaybackActive = false
+            }
+          }
+        }
 
         LaunchedEffect(mediaPlayerRef, isPlayerPrepared, isCurrentPage, isVideoPlaying, isVideoMuted) {
           val mp = mediaPlayerRef ?: return@LaunchedEffect
@@ -1953,6 +2121,8 @@ internal fun PhotoViewerPageContent(
                 mp.pause()
               }
               if (!isCurrentPage) {
+                maxObservedPositionMs = 0L
+                lastDispatchedSeekTargetMs = -1L
                 mp.seekTo(0)
                 currentOnVideoPositionChange(0L)
               }
@@ -1961,47 +2131,117 @@ internal fun PhotoViewerPageContent(
         }
 
         LaunchedEffect(videoSeekRequestToken, mediaPlayerRef, isPlayerPrepared) {
-          if (videoSeekRequestToken <= 0L) return@LaunchedEffect
-          val mp = mediaPlayerRef ?: return@LaunchedEffect
-          if (!isPlayerPrepared) return@LaunchedEffect
-          try {
-            isSeekingMp = true
-            mp.seekTo(videoSeekTargetMs.toInt().coerceAtLeast(0))
-          } catch (_: Throwable) {
-            isSeekingMp = false
-          }
-        }
-
-        LaunchedEffect(mediaPlayerRef, isPlayerPrepared, isCurrentPage, isVideoPlaying, isDraggingVideoSeek) {
-          val mp = mediaPlayerRef ?: return@LaunchedEffect
-          if (!isPlayerPrepared || !isCurrentPage || !isVideoPlaying || isDraggingVideoSeek) {
+          if (videoSeekRequestToken <= 0L || videoSeekRequestToken == lastAppliedSeekToken) {
             return@LaunchedEffect
           }
-          while (isActive && isPlayerPrepared && isCurrentPage && isVideoPlaying && !isDraggingVideoSeek) {
-            if (!isSeekingMp) {
-              try {
-                val pos = mp.currentPosition.toLong().coerceAtLeast(0L)
-                currentOnVideoPositionChange(pos)
-              } catch (_: Throwable) {}
-            }
-            delay(80L)
+          val mp = mediaPlayerRef ?: return@LaunchedEffect
+          if (!isPlayerPrepared) return@LaunchedEffect
+          lastAppliedSeekToken = videoSeekRequestToken
+          val targetMs = videoSeekTargetMs.coerceAtLeast(0L)
+          val nowUptime = SystemClock.uptimeMillis()
+          if (isSeekingMp && currentIsDraggingVideoSeek && (nowUptime - seekStartedAtUptimeMs) < 280L) {
+            pendingSeekTargetMs = targetMs
+          } else {
+            pendingSeekTargetMs = -1L
+            dispatchSeekToMediaPlayer(mp, targetMs, isDragging = currentIsDraggingVideoSeek)
           }
         }
 
-        DisposableEffect(photo.path, photo.lastModifiedMs) {
-          onDispose {
-            isPlayerPrepared = false
-            mediaPlayerRef?.let { mp ->
-              try {
-                mp.stop()
-              } catch (_: Throwable) {}
-              try {
-                mp.release()
-              } catch (_: Throwable) {}
+        LaunchedEffect(
+          mediaPlayerRef,
+          isPlayerPrepared,
+          isCurrentPage,
+          isVideoPlaying,
+          isDraggingVideoSeek,
+        ) {
+          val mp = mediaPlayerRef ?: return@LaunchedEffect
+          if (!isPlayerPrepared || !isCurrentPage || isDraggingVideoSeek) {
+            return@LaunchedEffect
+          }
+          fun syncPlayerClockAndDuration() {
+            val now = SystemClock.uptimeMillis()
+            if (isSeekingMp && (now - seekStartedAtUptimeMs) > 350L) {
+              isSeekingMp = false
             }
-            mediaPlayerRef = null
+            if (isSeekingMp) return
+            try {
+              val reportedDuration = mp.duration.toLong()
+              if (reportedDuration > 0L && preparedDurationMs <= 0L) {
+                preparedDurationMs = reportedDuration
+                currentOnVideoDurationChange(reportedDuration)
+              }
+              val rawPos = mp.currentPosition.toLong().coerceAtLeast(0L)
+              // Avoid immediate post-seek snap-back while NuPlayer's audio/video clock settles on the seek target
+              val heldTarget = lastDispatchedSeekTargetMs
+              val pos = if (
+                heldTarget >= 0L &&
+                (now - lastSeekCompletedAtUptimeMs) < 180L &&
+                kotlin.math.abs(rawPos - heldTarget) > 400L
+              ) {
+                heldTarget
+              } else {
+                if (heldTarget >= 0L && (now - lastSeekCompletedAtUptimeMs) >= 180L) {
+                  lastDispatchedSeekTargetMs = -1L
+                }
+                rawPos
+              }
+              if (pos > maxObservedPositionMs) {
+                maxObservedPositionMs = pos
+              }
+              if (pos > preparedDurationMs && pos > 0L) {
+                preparedDurationMs = pos
+                currentOnVideoDurationChange(pos)
+              }
+              currentOnVideoPositionChange(pos)
+            } catch (_: Throwable) {}
+          }
+
+          if (!isVideoPlaying) {
+            syncPlayerClockAndDuration()
+            return@LaunchedEffect
+          }
+          while (
+            isActive &&
+            isPlayerPrepared &&
+            isCurrentPage &&
+            isVideoPlaying &&
+            !isDraggingVideoSeek
+          ) {
+            syncPlayerClockAndDuration()
+            delay(40L)
           }
         }
+
+        DisposableEffect(photo.path, photo.lastModifiedMs, isCurrentPage) {
+          onDispose {
+            releaseActiveVideoPlayer()
+          }
+        }
+
+        val (displayVideoWidth, displayVideoHeight) = GalleryEngine.resolveVideoDisplayDimensions(
+          rawVideoWidth = videoWidth,
+          rawVideoHeight = videoHeight,
+          thumbnailWidth = currentBitmap?.width ?: 0,
+          thumbnailHeight = currentBitmap?.height ?: 0,
+        )
+        val videoAspect = if (displayVideoWidth > 0 && displayVideoHeight > 0) {
+          displayVideoWidth.toFloat() / displayVideoHeight.toFloat()
+        } else {
+          16f / 9f
+        }
+        val availWPx = containerSizePx.width.toFloat()
+        val availHPx = containerSizePx.height.toFloat()
+        val (fitWPx, fitHPx) = if (availWPx > 0f && availHPx > 0f) {
+          if (availWPx / availHPx > videoAspect) {
+            (availHPx * videoAspect) to availHPx
+          } else {
+            availWPx to (availWPx / videoAspect)
+          }
+        } else {
+          320f to 180f
+        }
+        val fitW = with(density) { fitWPx.toDp() }
+        val fitH = with(density) { fitHPx.toDp() }
 
         Box(
           modifier = Modifier
@@ -2009,7 +2249,7 @@ internal fun PhotoViewerPageContent(
             .testTag("photo_viewer_image_${photo.name}"),
           contentAlignment = Alignment.Center,
         ) {
-          BoxWithConstraints(
+          Box(
             modifier = Modifier
               .fillMaxSize()
               .graphicsLayer {
@@ -2021,30 +2261,10 @@ internal fun PhotoViewerPageContent(
               .testTag("photo_viewer_video_${photo.name}"),
             contentAlignment = Alignment.Center,
           ) {
-            val availWPx = with(density) { maxWidth.toPx() }
-            val availHPx = with(density) { maxHeight.toPx() }
-            val videoAspect = when {
-              videoWidth > 0 && videoHeight > 0 -> videoWidth.toFloat() / videoHeight.toFloat()
-              currentBitmap != null && currentBitmap.width > 0 && currentBitmap.height > 0 ->
-                currentBitmap.width.toFloat() / currentBitmap.height.toFloat()
-              else -> 16f / 9f
-            }
-            val (fitWPx, fitHPx) = if (availWPx > 0f && availHPx > 0f) {
-              if (availWPx / availHPx > videoAspect) {
-                (availHPx * videoAspect) to availHPx
-              } else {
-                availWPx to (availWPx / videoAspect)
-              }
-            } else {
-              320f to 180f
-            }
-            val fitW = with(density) { fitWPx.toDp() }
-            val fitH = with(density) { fitHPx.toDp() }
-
-            if (!isPlayerPrepared) {
-              if (currentBitmap != null) {
+            if (!isPlayerPrepared || !hasRenderedFirstFrame || !isCurrentPage) {
+              if (currentImageBitmap != null) {
                 Image(
-                  bitmap = currentBitmap.asImageBitmap(),
+                  bitmap = currentImageBitmap,
                   contentDescription = photo.name,
                   contentScale = ContentScale.Fit,
                   modifier = Modifier.fillMaxSize(),
@@ -2069,48 +2289,105 @@ internal fun PhotoViewerPageContent(
               }
             }
 
-            if (!isInspectionMode && photo.file.exists()) {
+            if (isCurrentPage && !isInspectionMode && photo.file.exists()) {
               key(photo.path, photo.lastModifiedMs) {
                 AndroidView(
                   factory = { ctx ->
                     TextureView(ctx).apply {
-                      isOpaque = false
                       surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                         override fun onSurfaceTextureAvailable(
                           surfaceTexture: SurfaceTexture,
                           width: Int,
                           height: Int,
                         ) {
+                          releaseActiveVideoPlayer()
                           val surface = AndroidSurface(surfaceTexture)
                           val mp = MediaPlayer()
+                          surfaceRef = surface
+                          mediaPlayerRef = mp
                           try {
                             mp.setDataSource(photo.file.absolutePath)
                             mp.setSurface(surface)
-                            mp.isLooping = true
+                            // Manage looping manually via OnCompletionListener so that:
+                            // 1) OnCompletionListener fires at true stream EOS, calibrating the seek bar
+                            //    duration if the container/audio header duration differs from actual playable video length.
+                            // 2) NuPlayer's playback clock always resets cleanly to 0ms on each loop.
+                            mp.isLooping = false
                             mp.setOnVideoSizeChangedListener { _, w, h ->
                               if (w > 0 && h > 0) {
                                 videoWidth = w
                                 videoHeight = h
                               }
                             }
-                            mp.setOnSeekCompleteListener {
+                            mp.setOnInfoListener { _, what, _ ->
+                              if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                                hasRenderedFirstFrame = true
+                              }
+                              false
+                            }
+                            mp.setOnSeekCompleteListener { seekMp ->
+                              val nextTarget = pendingSeekTargetMs
+                              if (nextTarget >= 0L) {
+                                pendingSeekTargetMs = -1L
+                                dispatchSeekToMediaPlayer(
+                                  mp = seekMp,
+                                  targetMs = nextTarget,
+                                  isDragging = currentIsDraggingVideoSeek,
+                                )
+                              } else {
+                                lastSeekCompletedAtUptimeMs = SystemClock.uptimeMillis()
+                                isSeekingMp = false
+                              }
+                            }
+                            mp.setOnCompletionListener { completedMp ->
+                              if (mediaPlayerRef !== completedMp) return@setOnCompletionListener
+                              val finalPos = try {
+                                completedMp.currentPosition.toLong().coerceAtLeast(0L)
+                              } catch (_: Throwable) {
+                                0L
+                              }
+                              val observedEndMs = maxOf(maxObservedPositionMs, finalPos)
+                              if (
+                                !currentIsDraggingVideoSeek &&
+                                observedEndMs > 250L &&
+                                (preparedDurationMs <= 0L || kotlin.math.abs(preparedDurationMs - observedEndMs) > 120L)
+                              ) {
+                                preparedDurationMs = observedEndMs
+                                currentOnVideoDurationChange(observedEndMs)
+                              }
+                              maxObservedPositionMs = 0L
+                              lastDispatchedSeekTargetMs = -1L
                               isSeekingMp = false
+                              pendingSeekTargetMs = -1L
+                              try {
+                                completedMp.seekTo(0)
+                                currentOnVideoPositionChange(0L)
+                                if (currentIsCurrentPage && currentIsVideoPlaying && !currentIsDraggingVideoSeek) {
+                                  completedMp.start()
+                                }
+                              } catch (_: Throwable) {}
                             }
                             mp.setOnPreparedListener { preparedMp ->
+                              if (mediaPlayerRef !== preparedMp) {
+                                try {
+                                  preparedMp.release()
+                                } catch (_: Throwable) {}
+                                return@setOnPreparedListener
+                              }
                               if (preparedMp.videoWidth > 0 && preparedMp.videoHeight > 0) {
                                 videoWidth = preparedMp.videoWidth
                                 videoHeight = preparedMp.videoHeight
                               }
                               val duration = preparedMp.duration.toLong()
                               if (duration > 0L) {
+                                preparedDurationMs = duration
                                 currentOnVideoDurationChange(duration)
                               }
-                              preparedMp.isLooping = true
+                              preparedMp.isLooping = false
                               val vol = if (currentIsVideoMuted) 0f else 1f
                               try {
                                 preparedMp.setVolume(vol, vol)
                               } catch (_: Throwable) {}
-                              mediaPlayerRef = preparedMp
                               isPlayerPrepared = true
                               if (currentIsCurrentPage && currentIsVideoPlaying) {
                                 try {
@@ -2120,15 +2397,12 @@ internal fun PhotoViewerPageContent(
                             }
                             mp.setOnErrorListener { _, _, _ ->
                               isPlayerPrepared = false
+                              hasRenderedFirstFrame = false
                               true
                             }
                             mp.prepareAsync()
                           } catch (_: Throwable) {
-                            isPlayerPrepared = false
-                            try {
-                              mp.release()
-                            } catch (_: Throwable) {}
-                            surface.release()
+                            releaseActiveVideoPlayer()
                           }
                         }
 
@@ -2139,24 +2413,23 @@ internal fun PhotoViewerPageContent(
                         ) = Unit
 
                         override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                          isPlayerPrepared = false
-                          mediaPlayerRef?.let { mp ->
-                            try {
-                              mp.setSurface(null)
-                              mp.release()
-                            } catch (_: Throwable) {}
-                          }
-                          mediaPlayerRef = null
+                          releaseActiveVideoPlayer()
                           return true
                         }
 
-                        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
+                        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
+                          if (isPlayerPrepared && !hasRenderedFirstFrame) {
+                            hasRenderedFirstFrame = true
+                          }
+                        }
                       }
                     }
                   },
-                  modifier = Modifier
-                    .size(fitW, fitH)
-                    .alpha(if (isPlayerPrepared) 1f else 0f),
+                  modifier = if (containerSizePx.width > 0 && containerSizePx.height > 0) {
+                    Modifier.size(fitW, fitH)
+                  } else {
+                    Modifier.fillMaxSize()
+                  },
                 )
               }
             }
@@ -2180,9 +2453,9 @@ internal fun PhotoViewerPageContent(
             .testTag("photo_viewer_image_${photo.name}")
             .testTag("photo_viewer_animated_${photo.name}"),
         )
-      } else if (currentBitmap != null) {
+      } else if (currentImageBitmap != null) {
         Image(
-          bitmap = currentBitmap.asImageBitmap(),
+          bitmap = currentImageBitmap,
           contentDescription = photo.name,
           contentScale = ContentScale.Fit,
           modifier = Modifier

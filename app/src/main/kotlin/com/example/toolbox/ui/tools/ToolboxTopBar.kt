@@ -31,6 +31,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import com.example.toolbox.ui.theme.CircleShape
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -841,11 +843,16 @@ fun ToolboxPillNavigationItem(
   trailingIcon: (@Composable () -> Unit)? = null,
   testTag: String? = null,
 ) {
+  val pillShape = if (currentHexagonIconButtons()) {
+    HorizontalHexagonShape
+  } else {
+    RoundedCornerShape(20.dp)
+  }
   FilterChip(
     selected = selected,
     onClick = onClick,
     enabled = enabled,
-    shape = RoundedCornerShape(20.dp),
+    shape = pillShape,
     leadingIcon = when {
       leadingIconContent != null -> leadingIconContent
       leadingIcon != null -> {
