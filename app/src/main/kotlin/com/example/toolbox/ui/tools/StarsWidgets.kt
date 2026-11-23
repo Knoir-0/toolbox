@@ -82,11 +82,6 @@ object StarsWidgets {
 
   fun saveOverrideSign(context: Context?, sign: ZodiacSign?) {
     inMemoryOverrideSign = sign
-    if (sign != null) {
-      StarsEngine.updateActiveSign(sign)
-    } else {
-      StarsEngine.resolveCurrentSign(context = context)
-    }
     if (context != null) {
       try {
         val prefs = context.getSharedPreferences(STARS_PREFS_NAME, Context.MODE_PRIVATE)
@@ -102,7 +97,8 @@ object StarsWidgets {
   }
 
   /**
-   * Resolves the current [StarsWidgetState] from persisted birth profiles and today's real sky transits.
+   * Resolves the current [StarsWidgetState] from persisted birth profiles (or the current birth sign
+   * when no profiles are filled out) and today's real sky transits.
    */
   fun resolveWidgetState(
     context: Context? = null,
@@ -117,12 +113,13 @@ object StarsWidgets {
       }
     } ?: InMemoryStarsRepository()
 
+    val currentBirthSign = StarsEngine.getCurrentZodiacSign(calendar)
     val profiles = repo.loadProfiles()
     val activeId = repo.getActiveProfileId()
-    val activeProfile = profiles.firstOrNull { it.id == activeId } ?: profiles.first()
-    val natalChart = StarsEngine.calculateNatalChart(activeProfile)
+    val activeProfile = profiles.firstOrNull { it.id == activeId } ?: profiles.firstOrNull()
+    val natalChart = activeProfile?.let { StarsEngine.calculateNatalChart(it) }
 
-    val displaySign = loadOverrideSign(context) ?: natalChart.sunSign
+    val displaySign = loadOverrideSign(context) ?: natalChart?.sunSign ?: currentBirthSign
     val reading = StarsEngine.generateDailyHoroscope(
       year = calendar.get(Calendar.YEAR),
       month = calendar.get(Calendar.MONTH) + 1,
@@ -131,17 +128,25 @@ object StarsWidgets {
       natalChart = natalChart,
     )
 
+    val sunSign = natalChart?.sunSign ?: displaySign
+    val moonSign = natalChart?.moonSign ?: reading.moonSnapshot.moonSign
+    val risingSign = natalChart?.risingSign ?: displaySign
+
     val rxSuffix = if (reading.isMercuryRetrograde) " • ☿ Rx" else ""
     val moonBadge = "${reading.moonSnapshot.phaseType.emoji} ${reading.moonSnapshot.phaseType.displayName} (${reading.moonSnapshot.moonSign.glyph})$rxSuffix"
-    val subtext = "☉ ${natalChart.sunSign.displayName} • ☽ ${natalChart.moonSign.displayName} • ↑ ${natalChart.risingSign.displayName} • Lucky #${reading.luckyNumber}"
+    val subtext = if (natalChart != null) {
+      "☉ ${natalChart.sunSign.displayName} • ☽ ${natalChart.moonSign.displayName} • ↑ ${natalChart.risingSign.displayName} • Lucky #${reading.luckyNumber}"
+    } else {
+      "☉ ${displaySign.displayName} (${displaySign.dateRange}) • ☽ ${reading.moonSnapshot.moonSign.displayName} Moon • Lucky #${reading.luckyNumber}"
+    }
 
     val palette = TodoListWidgets.resolveWidgetPalette(context)
     return StarsWidgetState(
-      profileName = activeProfile.name,
+      profileName = activeProfile?.name ?: displaySign.displayName,
       activeSign = displaySign,
-      sunSign = natalChart.sunSign,
-      moonSign = natalChart.moonSign,
-      risingSign = natalChart.risingSign,
+      sunSign = sunSign,
+      moonSign = moonSign,
+      risingSign = risingSign,
       vibeWord = reading.cosmicVibeWord,
       mantraText = reading.headlineMantra,
       moonBadgeText = moonBadge,

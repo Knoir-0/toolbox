@@ -535,13 +535,14 @@ fun DecibelMeterScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
           ) {
+            val headerPillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(50)
             Row(
               modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically,
             ) {
               Surface(
-                shape = RoundedCornerShape(50),
+                shape = headerPillShape,
                 color = MaterialTheme.colorScheme.surface,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
               ) {

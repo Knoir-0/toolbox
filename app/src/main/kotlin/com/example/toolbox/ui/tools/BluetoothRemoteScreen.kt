@@ -50,6 +50,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import com.example.toolbox.ui.theme.CircleShape
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -263,7 +265,7 @@ internal fun BluetoothConnectedToolbarActions(
   onDisconnect: () -> Unit,
 ) {
   Surface(
-    shape = RoundedCornerShape(20.dp),
+    shape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp),
     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
     modifier = Modifier.testTag("bt_connection_mode_pill"),
   ) {
@@ -1618,8 +1620,9 @@ private fun MediaBar(
   actions: RemoteInputActions,
   modifier: Modifier = Modifier,
 ) {
+  val barShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(32.dp)
   Surface(
-    shape = RoundedCornerShape(32.dp),
+    shape = barShape,
     color = MaterialTheme.colorScheme.surfaceContainerHigh,
     modifier = modifier.testTag("bt_media_bar"),
   ) {
@@ -1680,8 +1683,9 @@ private fun VolumeBar(
   actions: RemoteInputActions,
   modifier: Modifier = Modifier,
 ) {
+  val barShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(32.dp)
   Surface(
-    shape = RoundedCornerShape(32.dp),
+    shape = barShape,
     color = MaterialTheme.colorScheme.surfaceContainerHigh,
     modifier = modifier.testTag("bt_volume_bar"),
   ) {
@@ -1830,18 +1834,19 @@ private fun MousePanel(actions: RemoteInputActions, modifier: Modifier = Modifie
     modifier = modifier.fillMaxWidth(),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
+    val hexagonEnabled = currentHexagonIconButtons()
     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
       SegmentedButton(
         selected = pointerMode == PointerMode.TOUCHPAD,
         onClick = { pointerMode = PointerMode.TOUCHPAD },
-        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+        shape = if (hexagonEnabled) HorizontalHexagonShape else SegmentedButtonDefaults.itemShape(index = 0, count = 2),
         icon = { Icon(Icons.Default.TouchApp, contentDescription = null, modifier = Modifier.size(18.dp)) },
       ) { Text("Touchpad") }
       SegmentedButton(
         selected = pointerMode == PointerMode.GYRO,
         onClick = { pointerMode = PointerMode.GYRO },
         enabled = hasGyro,
-        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+        shape = if (hexagonEnabled) HorizontalHexagonShape else SegmentedButtonDefaults.itemShape(index = 1, count = 2),
         icon = { Icon(Icons.Default.ScreenRotation, contentDescription = null, modifier = Modifier.size(18.dp)) },
       ) { Text(if (hasGyro) "Gyroscope" else "No gyroscope") }
     }

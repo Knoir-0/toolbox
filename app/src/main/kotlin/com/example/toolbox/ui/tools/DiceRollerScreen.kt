@@ -1764,12 +1764,13 @@ internal fun RollResultHero(
         verticalArrangement = Arrangement.spacedBy(if (isCompactDie) 6.dp else 8.dp),
       ) {
         // Top Header: Notation Pill (Start) + Optional Roll Label (Top Center) + Mode / Crit Badges (End)
+        val heroPillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(50)
         Box(
           modifier = Modifier.fillMaxWidth(),
         ) {
           Surface(
             modifier = Modifier.align(Alignment.CenterStart),
-            shape = RoundedCornerShape(50),
+            shape = heroPillShape,
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.75f),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
           ) {
@@ -1799,7 +1800,7 @@ internal fun RollResultHero(
                 .padding(horizontal = 68.dp)
                 .semantics(mergeDescendants = true) {}
                 .testTag("dice_roller_hero_label"),
-              shape = RoundedCornerShape(50),
+              shape = heroPillShape,
               color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
               border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
             ) {

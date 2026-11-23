@@ -37,6 +37,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import com.example.toolbox.ui.theme.CircleShape
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -698,13 +700,14 @@ private fun ColorHeroCard(
           verticalArrangement = Arrangement.SpaceBetween,
         ) {
           // Top Row: Closest Color Name Pill + Copy Status Badge
+          val hexagonEnabled = currentHexagonIconButtons()
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
           ) {
             Surface(
-              shape = RoundedCornerShape(50),
+              shape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(50),
               color = foregroundColor.copy(alpha = 0.16f),
               border = BorderStroke(1.dp, foregroundColor.copy(alpha = 0.28f)),
             ) {
@@ -878,7 +881,7 @@ private fun ContrastBadgePill(
 ) {
   val rating = ColorMath.wcagRating(ratio)
   Surface(
-    shape = RoundedCornerShape(50),
+    shape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(50),
     color = bgColor,
   ) {
     Text(
@@ -1125,15 +1128,20 @@ private fun PrecisionSlidersCard(
         }
       }
 
+      val hexagonEnabled = currentHexagonIconButtons()
       SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
         ColorSliderMode.entries.forEachIndexed { index, mode ->
           SegmentedButton(
             selected = sliderMode == mode,
             onClick = { onSelectSliderMode(mode) },
-            shape = SegmentedButtonDefaults.itemShape(
-              index = index,
-              count = ColorSliderMode.entries.size,
-            ),
+            shape = if (hexagonEnabled) {
+              HorizontalHexagonShape
+            } else {
+              SegmentedButtonDefaults.itemShape(
+                index = index,
+                count = ColorSliderMode.entries.size,
+              )
+            },
           ) {
             Text(
               text = mode.label,
@@ -1619,9 +1627,10 @@ private fun SavedPaletteCard(
             val swatchColor = Color(rgb.first, rgb.second, rgb.third)
             val isSelected = hex.equals(activeHex, ignoreCase = true)
 
+            val swatchPillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(50)
             Surface(
               onClick = { onSelectHex(hex) },
-              shape = RoundedCornerShape(50),
+              shape = swatchPillShape,
               color = if (isSelected) {
                 MaterialTheme.colorScheme.primaryContainer
               } else {

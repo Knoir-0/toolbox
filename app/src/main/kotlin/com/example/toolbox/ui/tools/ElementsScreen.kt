@@ -48,11 +48,9 @@ import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
@@ -369,8 +367,11 @@ fun ElementsScreen(
   var isSearchActive by rememberSaveable { mutableStateOf(false) }
   var searchQuery by rememberSaveable { mutableStateOf("") }
 
-  // Detailed Element Inspector modal dialog state (Section 5.2 of DESIGN_LANGUAGE.md)
-  var inspectingElement by remember { mutableStateOf<ChemicalElement?>(null) }
+  // Detailed Element Inspector full-screen view state
+  var inspectingAtomicNumber by rememberSaveable { mutableStateOf<Int?>(null) }
+  val inspectingElement = remember(inspectingAtomicNumber) {
+    inspectingAtomicNumber?.let { PeriodicTableEngine.byAtomicNumber(it) }
+  }
 
   // Molar Mass Calculator state
   var formulaInput by rememberSaveable { mutableStateOf("H2O") }
@@ -383,7 +384,7 @@ fun ElementsScreen(
 
   BackHandler(enabled = isSearchActive || inspectingElement != null) {
     when {
-      inspectingElement != null -> inspectingElement = null
+      inspectingElement != null -> inspectingAtomicNumber = null
       isSearchActive -> closeSearch()
     }
   }
@@ -428,371 +429,380 @@ fun ElementsScreen(
     }
   }
 
-  Column(
+  Box(
     modifier = modifier
       .fillMaxSize()
       .toolboxScreenBackground(MaterialTheme.colorScheme.background)
       .testTag("elements_screen"),
   ) {
-    // ==================== 1. UNIFIED 68.DP TOP TOOLBAR ====================
-    ToolboxTopBar(
-      title = "Elements",
-      subtext = subtext,
-      icon = Icons.Default.Science,
-      onNavigateBack = onNavigateBack,
-      titleTestTag = "elements_toolbar_title",
-      subtextTestTag = "elements_toolbar_subtext",
-      actions = {
-        // Temperature Unit Cycle Pill (K -> °C -> °F)
-        val unitPillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp)
-        Surface(
-          shape = unitPillShape,
-          color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
-          modifier = Modifier
-            .clip(unitPillShape)
-            .clickable {
-              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-              tempUnit = tempUnit.next()
-            }
-            .testTag("elements_temp_unit_toggle"),
-        ) {
-          Text(
-            text = tempUnit.symbol,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-          )
-        }
-
-        // Interactive Temperature Simulator Toggle
-        IconButton(
-          onClick = {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            showTempSimulator = !showTempSimulator
-          },
-          modifier = Modifier
-            .size(36.dp)
-            .testTag("elements_temp_simulator_toggle"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Thermostat,
-            contentDescription = "Toggle phase temperature simulator",
-            tint = if (showTempSimulator) {
-              MaterialTheme.colorScheme.primary
-            } else {
-              MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier.size(20.dp),
-          )
-        }
-
-        // Display Mode Toggle (Table -> List -> Molar Mass -> Table)
-        IconButton(
-          onClick = {
-            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            displayMode = when (displayMode) {
-              ElementsDisplayMode.TABLE -> ElementsDisplayMode.LIST
-              ElementsDisplayMode.LIST -> ElementsDisplayMode.MOLAR_MASS
-              ElementsDisplayMode.MOLAR_MASS -> ElementsDisplayMode.TABLE
-            }
-          },
-          modifier = Modifier
-            .size(36.dp)
-            .testTag("elements_display_mode_toggle"),
-        ) {
-          Icon(
-            imageVector = when (displayMode) {
-              ElementsDisplayMode.TABLE -> Icons.AutoMirrored.Filled.ViewList
-              ElementsDisplayMode.LIST -> Icons.Default.Calculate
-              ElementsDisplayMode.MOLAR_MASS -> Icons.Default.GridOn
-            },
-            contentDescription = "Switch view mode",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp),
-          )
-        }
-      },
-      searchState = ToolboxTopBarSearchState(
-        isActive = isSearchActive,
-        query = searchQuery,
-        onQueryChange = { searchQuery = it },
-        onOpenSearch = {
-          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-          isSearchActive = true
-        },
-        onCloseSearch = { closeSearch() },
-        placeholder = "Search element name, symbol (Fe, Au), # or scientist...",
-        searchContentDescription = "Search elements",
-        toggleButtonTestTag = "elements_toggle_search_button",
-        searchBarTestTag = "elements_toolbar_search_bar",
-        closeButtonTestTag = "elements_close_search_button",
-        inputTestTag = "elements_search_input",
-        clearButtonTestTag = "elements_clear_search_button",
-      ),
-    )
-
-    // ==================== 2. UNIFIED PILL NAVIGATION & FILTER BAR ====================
-    ToolboxPillNavigationBar(
-      rowTestTag = "elements_pill_navigation_bar",
-    ) {
-      // View Mode Pills
-      ElementsDisplayMode.entries.forEach { mode ->
-        ToolboxPillNavigationItem(
-          selected = displayMode == mode,
-          onClick = {
-            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            displayMode = mode
-          },
-          leadingIcon = when (mode) {
-            ElementsDisplayMode.TABLE -> Icons.Default.GridOn
-            ElementsDisplayMode.LIST -> Icons.AutoMirrored.Filled.ViewList
-            ElementsDisplayMode.MOLAR_MASS -> Icons.Default.Calculate
-          },
-          label = mode.label,
-          testTag = "elements_mode_pill_${mode.name}",
-        )
-      }
-
-      // All Reset Chip
-      ToolboxPillNavigationItem(
-        selected = !filterFavoritesOnly && selectedCategory == null && selectedPhase == null,
-        onClick = {
-          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-          filterFavoritesOnly = false
-          selectedCategoryName = null
-          selectedPhaseName = null
-        },
-        label = "All (118)",
-        testTag = "elements_filter_all",
-      )
-
-      // Favorites Filter Chip
-      ToolboxPillNavigationItem(
-        selected = filterFavoritesOnly,
-        onClick = {
-          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-          filterFavoritesOnly = !filterFavoritesOnly
-        },
-        leadingIcon = if (filterFavoritesOnly) Icons.Default.Star else Icons.Default.StarBorder,
-        label = if (favoriteAtomicNumbers.isNotEmpty()) {
-          "Favorites (${favoriteAtomicNumbers.size})"
-        } else {
-          "Favorites"
-        },
-        testTag = "elements_filter_favorites",
-      )
-
-      // Phase Filter Chips (Solid, Liquid, Gas)
-      listOf(MatterPhase.SOLID, MatterPhase.LIQUID, MatterPhase.GAS).forEach { phase ->
-        val isPhaseSelected = selectedPhase == phase
-        ToolboxPillNavigationItem(
-          selected = isPhaseSelected,
-          onClick = {
-            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            selectedPhaseName = if (isPhaseSelected) null else phase.name
-          },
-          label = "${phase.label} (${phase.badge})",
-          testTag = "elements_filter_phase_${phase.name}",
-        )
-      }
-
-      // Chemical Category Filter Chips
-      ElementCategory.entries.forEach { category ->
-        val isCatSelected = selectedCategory == category
-        ToolboxPillNavigationItem(
-          selected = isCatSelected,
-          onClick = {
-            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            selectedCategoryName = if (isCatSelected) null else category.name
-          },
-          label = category.shortLabel,
-          testTag = "elements_filter_category_${category.name}",
-        )
-      }
-    }
-
-    // ==================== 3. OPTIONAL TEMPERATURE PHASE SIMULATOR BAR ====================
-    AnimatedVisibility(
-      visible = showTempSimulator,
-      enter = fadeIn(tween(180)) + expandVertically(expandFrom = Alignment.Top),
-      exit = fadeOut(tween(150)) + shrinkVertically(shrinkTowards = Alignment.Top),
-    ) {
-      TemperaturePhaseSimulatorCard(
-        temperatureK = simulatorTempK,
+    val activeInspectingElement = inspectingElement
+    if (activeInspectingElement != null) {
+      // ==================== FULL-SCREEN ELEMENT INSPECTOR VIEW ====================
+      ElementInspectorFullScreenView(
+        element = activeInspectingElement,
+        isFavorite = activeInspectingElement.atomicNumber in favoriteAtomicNumbers,
+        activeTemperatureK = activeTempK,
         tempUnit = tempUnit,
-        onTemperatureChange = { simulatorTempK = it.coerceIn(0f, PeriodicTableEngine.MAX_SIMULATOR_TEMP_K) },
-        onResetToStp = {
-          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-          simulatorTempK = PeriodicTableEngine.STP_TEMPERATURE_K.toFloat()
+        onCycleTempUnit = {
+          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+          tempUnit = tempUnit.next()
         },
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 12.dp, vertical = 4.dp),
+        onToggleFavorite = { toggleFavoriteElement(activeInspectingElement.atomicNumber) },
+        onNavigateElement = { nextAtomicNum ->
+          val next = PeriodicTableEngine.byAtomicNumber(nextAtomicNum)
+          if (next != null) {
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            selectedAtomicNumber = next.atomicNumber
+            inspectingAtomicNumber = next.atomicNumber
+          }
+        },
+        onCopySummary = {
+          CrossToolActions.copyTextToClipboard(
+            context = context,
+            label = "${activeInspectingElement.name} (${activeInspectingElement.symbol})",
+            text = formatElementSummaryText(activeInspectingElement, tempUnit),
+          )
+        },
+        onShareSummary = {
+          CrossToolActions.shareText(
+            context = context,
+            title = "${activeInspectingElement.name} (${activeInspectingElement.symbol}) — Element #${activeInspectingElement.atomicNumber}",
+            text = formatElementSummaryText(activeInspectingElement, tempUnit),
+          )
+        },
+        onSaveToNotes = {
+          CrossToolActions.saveTextToNotes(
+            context = context,
+            title = "${activeInspectingElement.name} (${activeInspectingElement.symbol}) — #${activeInspectingElement.atomicNumber}",
+            content = formatElementSummaryText(activeInspectingElement, tempUnit),
+            labels = listOf("Elements", activeInspectingElement.category.shortLabel),
+          )
+        },
+        onOpenInCalculator = onOpenCalculator?.let { openCalc ->
+          {
+            inspectingAtomicNumber = null
+            openCalc(activeInspectingElement.atomicMass.toString())
+          }
+        },
+        onOpenMeltingPointInConverter = if (onOpenUnitConverter != null && activeInspectingElement.meltingPointK != null) {
+          {
+            val meltK = activeInspectingElement.meltingPointK
+            inspectingAtomicNumber = null
+            onOpenUnitConverter(String.format(Locale.US, "%.2f", meltK), "k")
+          }
+        } else {
+          null
+        },
+        onDismiss = { inspectingAtomicNumber = null },
       )
-    }
-
-    // ==================== 4. MAIN CONTENT + SEARCH OVERLAY ====================
-    Box(
-      modifier = Modifier
-        .fillMaxSize()
-        .weight(1f),
-    ) {
-      AnimatedContent(
-        targetState = displayMode,
-        transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(140)) },
-        modifier = Modifier.fillMaxSize(),
-        label = "elements_display_mode_content",
-      ) { mode ->
-        when (mode) {
-          ElementsDisplayMode.TABLE -> {
-            PeriodicTableInteractiveContent(
-              selectedElement = selectedElement,
-              matchingAtomicNumbers = matchingAtomicNumbers,
-              hasActiveFilter = hasActiveFilter,
-              favoriteAtomicNumbers = favoriteAtomicNumbers,
-              colorMode = colorMode,
-              onColorModeChange = {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                colorMode = it
-              },
-              activeTemperatureK = activeTempK,
-              tempUnit = tempUnit,
-              onSelectElement = { element ->
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                selectedAtomicNumber = element.atomicNumber
-              },
-              onInspectElement = { element ->
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                selectedAtomicNumber = element.atomicNumber
-                inspectingElement = element
-              },
-              onToggleFavorite = { element ->
-                toggleFavoriteElement(element.atomicNumber)
-              },
-            )
-          }
-          ElementsDisplayMode.LIST -> {
-            ElementsCatalogListView(
-              elements = filteredElements,
-              selectedElement = selectedElement,
-              favoriteAtomicNumbers = favoriteAtomicNumbers,
-              activeTemperatureK = activeTempK,
-              tempUnit = tempUnit,
-              onSelectElement = { element ->
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                selectedAtomicNumber = element.atomicNumber
-                inspectingElement = element
-              },
-              onToggleFavorite = { element ->
-                toggleFavoriteElement(element.atomicNumber)
-              },
-            )
-          }
-          ElementsDisplayMode.MOLAR_MASS -> {
-            MolarMassCalculatorContent(
-              formulaInput = formulaInput,
-              onFormulaChange = { formulaInput = it },
-              onInspectElement = { element ->
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                selectedAtomicNumber = element.atomicNumber
-                inspectingElement = element
-              },
-              onSendToCalculator = onOpenCalculator,
-              onCopyResult = { text ->
-                CrossToolActions.copyTextToClipboard(
-                  context = context,
-                  label = "Molar Mass",
-                  text = text,
-                )
-              },
-            )
-          }
-        }
-      }
-
-      // Top-Expanding Search Catalog Overlay (Section 5.7 of DESIGN_LANGUAGE.md)
-      androidx.compose.animation.AnimatedVisibility(
-        visible = isSearchActive,
-        enter = fadeIn(tween(200)) + expandVertically(expandFrom = Alignment.Top),
-        exit = fadeOut(tween(180)) + shrinkVertically(shrinkTowards = Alignment.Top),
+    } else {
+      Column(
         modifier = Modifier.fillMaxSize(),
       ) {
-        ElementsSearchOverlay(
-          matchingElements = filteredElements,
-          selectedElement = selectedElement,
-          favoriteAtomicNumbers = favoriteAtomicNumbers,
-          activeTemperatureK = activeTempK,
-          tempUnit = tempUnit,
-          onSelectElement = { element ->
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            selectedAtomicNumber = element.atomicNumber
-            inspectingElement = element
-            closeSearch()
+        // ==================== 1. UNIFIED 68.DP TOP TOOLBAR ====================
+        ToolboxTopBar(
+          title = "Elements",
+          subtext = subtext,
+          icon = Icons.Default.Science,
+          onNavigateBack = onNavigateBack,
+          titleTestTag = "elements_toolbar_title",
+          subtextTestTag = "elements_toolbar_subtext",
+          actions = {
+            // Temperature Unit Cycle Pill (K -> °C -> °F)
+            val unitPillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp)
+            Surface(
+              shape = unitPillShape,
+              color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+              modifier = Modifier
+                .clip(unitPillShape)
+                .clickable {
+                  haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                  tempUnit = tempUnit.next()
+                }
+                .testTag("elements_temp_unit_toggle"),
+            ) {
+              Text(
+                text = tempUnit.symbol,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+              )
+            }
+
+            // Interactive Temperature Simulator Toggle
+            IconButton(
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                showTempSimulator = !showTempSimulator
+              },
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("elements_temp_simulator_toggle"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Thermostat,
+                contentDescription = "Toggle phase temperature simulator",
+                tint = if (showTempSimulator) {
+                  MaterialTheme.colorScheme.primary
+                } else {
+                  MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(20.dp),
+              )
+            }
+
+            // Display Mode Toggle (Table -> List -> Molar Mass -> Table)
+            IconButton(
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                displayMode = when (displayMode) {
+                  ElementsDisplayMode.TABLE -> ElementsDisplayMode.LIST
+                  ElementsDisplayMode.LIST -> ElementsDisplayMode.MOLAR_MASS
+                  ElementsDisplayMode.MOLAR_MASS -> ElementsDisplayMode.TABLE
+                }
+              },
+              modifier = Modifier
+                .size(36.dp)
+                .testTag("elements_display_mode_toggle"),
+            ) {
+              Icon(
+                imageVector = when (displayMode) {
+                  ElementsDisplayMode.TABLE -> Icons.AutoMirrored.Filled.ViewList
+                  ElementsDisplayMode.LIST -> Icons.Default.Calculate
+                  ElementsDisplayMode.MOLAR_MASS -> Icons.Default.GridOn
+                },
+                contentDescription = "Switch view mode",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+              )
+            }
           },
-          onToggleFavorite = { element ->
-            toggleFavoriteElement(element.atomicNumber)
-          },
+          searchState = ToolboxTopBarSearchState(
+            isActive = isSearchActive,
+            query = searchQuery,
+            onQueryChange = { searchQuery = it },
+            onOpenSearch = {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              isSearchActive = true
+            },
+            onCloseSearch = { closeSearch() },
+            placeholder = "Search element name, symbol (Fe, Au), # or scientist...",
+            searchContentDescription = "Search elements",
+            toggleButtonTestTag = "elements_toggle_search_button",
+            searchBarTestTag = "elements_toolbar_search_bar",
+            closeButtonTestTag = "elements_close_search_button",
+            inputTestTag = "elements_search_input",
+            clearButtonTestTag = "elements_clear_search_button",
+          ),
         )
+
+        // ==================== 2. UNIFIED PILL NAVIGATION & FILTER BAR ====================
+        ToolboxPillNavigationBar(
+          rowTestTag = "elements_pill_navigation_bar",
+        ) {
+          // View Mode Pills
+          ElementsDisplayMode.entries.forEach { mode ->
+            ToolboxPillNavigationItem(
+              selected = displayMode == mode,
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                displayMode = mode
+              },
+              leadingIcon = when (mode) {
+                ElementsDisplayMode.TABLE -> Icons.Default.GridOn
+                ElementsDisplayMode.LIST -> Icons.AutoMirrored.Filled.ViewList
+                ElementsDisplayMode.MOLAR_MASS -> Icons.Default.Calculate
+              },
+              label = mode.label,
+              testTag = "elements_mode_pill_${mode.name}",
+            )
+          }
+
+          // All Reset Chip
+          ToolboxPillNavigationItem(
+            selected = !filterFavoritesOnly && selectedCategory == null && selectedPhase == null,
+            onClick = {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              filterFavoritesOnly = false
+              selectedCategoryName = null
+              selectedPhaseName = null
+            },
+            label = "All (118)",
+            testTag = "elements_filter_all",
+          )
+
+          // Favorites Filter Chip
+          ToolboxPillNavigationItem(
+            selected = filterFavoritesOnly,
+            onClick = {
+              haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+              filterFavoritesOnly = !filterFavoritesOnly
+            },
+            leadingIcon = if (filterFavoritesOnly) Icons.Default.Star else Icons.Default.StarBorder,
+            label = if (favoriteAtomicNumbers.isNotEmpty()) {
+              "Favorites (${favoriteAtomicNumbers.size})"
+            } else {
+              "Favorites"
+            },
+            testTag = "elements_filter_favorites",
+          )
+
+          // Phase Filter Chips (Solid, Liquid, Gas)
+          listOf(MatterPhase.SOLID, MatterPhase.LIQUID, MatterPhase.GAS).forEach { phase ->
+            val isPhaseSelected = selectedPhase == phase
+            ToolboxPillNavigationItem(
+              selected = isPhaseSelected,
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                selectedPhaseName = if (isPhaseSelected) null else phase.name
+              },
+              label = "${phase.label} (${phase.badge})",
+              testTag = "elements_filter_phase_${phase.name}",
+            )
+          }
+
+          // Chemical Category Filter Chips
+          ElementCategory.entries.forEach { category ->
+            val isCatSelected = selectedCategory == category
+            ToolboxPillNavigationItem(
+              selected = isCatSelected,
+              onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                selectedCategoryName = if (isCatSelected) null else category.name
+              },
+              label = category.shortLabel,
+              testTag = "elements_filter_category_${category.name}",
+            )
+          }
+        }
+
+        // ==================== 3. OPTIONAL TEMPERATURE PHASE SIMULATOR BAR ====================
+        AnimatedVisibility(
+          visible = showTempSimulator,
+          enter = fadeIn(tween(180)) + expandVertically(expandFrom = Alignment.Top),
+          exit = fadeOut(tween(150)) + shrinkVertically(shrinkTowards = Alignment.Top),
+        ) {
+          TemperaturePhaseSimulatorCard(
+            temperatureK = simulatorTempK,
+            tempUnit = tempUnit,
+            onTemperatureChange = { simulatorTempK = it.coerceIn(0f, PeriodicTableEngine.MAX_SIMULATOR_TEMP_K) },
+            onResetToStp = {
+              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+              simulatorTempK = PeriodicTableEngine.STP_TEMPERATURE_K.toFloat()
+            },
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 12.dp, vertical = 4.dp),
+          )
+        }
+
+        // ==================== 4. MAIN CONTENT + SEARCH OVERLAY ====================
+        Box(
+          modifier = Modifier
+            .fillMaxSize()
+            .weight(1f),
+        ) {
+          AnimatedContent(
+            targetState = displayMode,
+            transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(140)) },
+            modifier = Modifier.fillMaxSize(),
+            label = "elements_display_mode_content",
+          ) { mode ->
+            when (mode) {
+              ElementsDisplayMode.TABLE -> {
+                PeriodicTableInteractiveContent(
+                  selectedElement = selectedElement,
+                  matchingAtomicNumbers = matchingAtomicNumbers,
+                  hasActiveFilter = hasActiveFilter,
+                  favoriteAtomicNumbers = favoriteAtomicNumbers,
+                  colorMode = colorMode,
+                  onColorModeChange = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    colorMode = it
+                  },
+                  activeTemperatureK = activeTempK,
+                  tempUnit = tempUnit,
+                  onSelectElement = { element ->
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    selectedAtomicNumber = element.atomicNumber
+                  },
+                  onInspectElement = { element ->
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    selectedAtomicNumber = element.atomicNumber
+                    inspectingAtomicNumber = element.atomicNumber
+                  },
+                  onToggleFavorite = { element ->
+                    toggleFavoriteElement(element.atomicNumber)
+                  },
+                )
+              }
+              ElementsDisplayMode.LIST -> {
+                ElementsCatalogListView(
+                  elements = filteredElements,
+                  selectedElement = selectedElement,
+                  favoriteAtomicNumbers = favoriteAtomicNumbers,
+                  activeTemperatureK = activeTempK,
+                  tempUnit = tempUnit,
+                  onSelectElement = { element ->
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    selectedAtomicNumber = element.atomicNumber
+                    inspectingAtomicNumber = element.atomicNumber
+                  },
+                  onToggleFavorite = { element ->
+                    toggleFavoriteElement(element.atomicNumber)
+                  },
+                )
+              }
+              ElementsDisplayMode.MOLAR_MASS -> {
+                MolarMassCalculatorContent(
+                  formulaInput = formulaInput,
+                  onFormulaChange = { formulaInput = it },
+                  onInspectElement = { element ->
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    selectedAtomicNumber = element.atomicNumber
+                    inspectingAtomicNumber = element.atomicNumber
+                  },
+                  onSendToCalculator = onOpenCalculator,
+                  onCopyResult = { text ->
+                    CrossToolActions.copyTextToClipboard(
+                      context = context,
+                      label = "Molar Mass",
+                      text = text,
+                    )
+                  },
+                )
+              }
+            }
+          }
+
+          // Top-Expanding Search Catalog Overlay (Section 5.7 of DESIGN_LANGUAGE.md)
+          androidx.compose.animation.AnimatedVisibility(
+            visible = isSearchActive,
+            enter = fadeIn(tween(200)) + expandVertically(expandFrom = Alignment.Top),
+            exit = fadeOut(tween(180)) + shrinkVertically(shrinkTowards = Alignment.Top),
+            modifier = Modifier.fillMaxSize(),
+          ) {
+            ElementsSearchOverlay(
+              matchingElements = filteredElements,
+              selectedElement = selectedElement,
+              favoriteAtomicNumbers = favoriteAtomicNumbers,
+              activeTemperatureK = activeTempK,
+              tempUnit = tempUnit,
+              onSelectElement = { element ->
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                selectedAtomicNumber = element.atomicNumber
+                inspectingAtomicNumber = element.atomicNumber
+                closeSearch()
+              },
+              onToggleFavorite = { element ->
+                toggleFavoriteElement(element.atomicNumber)
+              },
+            )
+          }
+        }
       }
     }
-  }
-
-  // ==================== 5. DETAILED ELEMENT INSPECTOR DIALOG ====================
-  inspectingElement?.let { element ->
-    ElementInspectorDialog(
-      element = element,
-      isFavorite = element.atomicNumber in favoriteAtomicNumbers,
-      activeTemperatureK = activeTempK,
-      tempUnit = tempUnit,
-      onToggleFavorite = { toggleFavoriteElement(element.atomicNumber) },
-      onNavigateElement = { nextAtomicNum ->
-        val next = PeriodicTableEngine.byAtomicNumber(nextAtomicNum)
-        if (next != null) {
-          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-          selectedAtomicNumber = next.atomicNumber
-          inspectingElement = next
-        }
-      },
-      onCopySummary = {
-        CrossToolActions.copyTextToClipboard(
-          context = context,
-          label = "${element.name} (${element.symbol})",
-          text = formatElementSummaryText(element, tempUnit),
-        )
-      },
-      onShareSummary = {
-        CrossToolActions.shareText(
-          context = context,
-          title = "${element.name} (${element.symbol}) — Element #${element.atomicNumber}",
-          text = formatElementSummaryText(element, tempUnit),
-        )
-      },
-      onSaveToNotes = {
-        CrossToolActions.saveTextToNotes(
-          context = context,
-          title = "${element.name} (${element.symbol}) — #${element.atomicNumber}",
-          content = formatElementSummaryText(element, tempUnit),
-          labels = listOf("Elements", element.category.shortLabel),
-        )
-      },
-      onOpenInCalculator = onOpenCalculator?.let { openCalc ->
-        {
-          inspectingElement = null
-          openCalc(element.atomicMass.toString())
-        }
-      },
-      onOpenMeltingPointInConverter = if (onOpenUnitConverter != null && element.meltingPointK != null) {
-        {
-          val meltK = element.meltingPointK
-          inspectingElement = null
-          onOpenUnitConverter(String.format(Locale.US, "%.2f", meltK), "k")
-        }
-      } else {
-        null
-      },
-      onDismiss = { inspectingElement = null },
-    )
   }
 }
 
@@ -2219,19 +2229,20 @@ private fun MolarMassCalculatorContent(
 }
 
 /**
- * Rich Material 3 Element Inspector Dialog following Section 5.2 of DESIGN_LANGUAGE.md:
- * - 28.dp rounded corners, `surfaceContainerHigh`, `tonalElevation = 6.dp`
- * - 44.dp circular icon badge + title + subtext header
- * - Interactive 2D Bohr Electron Shell Diagram canvas
+ * Full-Screen Element Inspector View following DESIGN_LANGUAGE.md:
+ * - Unified 68.dp [ToolboxTopBar] with plain 36.dp ArrowBack navigation button, title, subtext, temperature unit pill, and favorite star
+ * - Prev / Next element navigation strip with phase & radioactivity status badge
+ * - Expansive hero identity card and 2D Bohr Electron Shell Diagram canvas
  * - Comprehensive physical, atomic, thermodynamic, and historical metadata table
  * - Cross-tool actions (Copy, Share, Save to Notes, Open in Calculate / Units)
  */
 @Composable
-private fun ElementInspectorDialog(
+private fun ElementInspectorFullScreenView(
   element: ChemicalElement,
   isFavorite: Boolean,
   activeTemperatureK: Double,
   tempUnit: ElementTempUnit,
+  onCycleTempUnit: () -> Unit,
   onToggleFavorite: () -> Unit,
   onNavigateElement: (Int) -> Unit,
   onCopySummary: () -> Unit,
@@ -2243,46 +2254,43 @@ private fun ElementInspectorDialog(
 ) {
   val visualColors = rememberCategoryVisualColors(element.category)
   val phaseAtTemp = element.phaseAtTemperature(activeTemperatureK)
+  val scrollState = rememberScrollState()
 
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    shape = RoundedCornerShape(28.dp),
-    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-    tonalElevation = 6.dp,
-    modifier = Modifier.testTag("element_inspector_dialog"),
-    title = {
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Box(
+  Column(
+    modifier = Modifier
+      .fillMaxSize()
+      .testTag("element_inspector_view"),
+  ) {
+    // 1. Unified 68.dp Top Bar with Back navigation
+    ToolboxTopBar(
+      title = "${element.name} (#${element.atomicNumber})",
+      subtext = "${element.category.label} • ${element.formattedAtomicMass}",
+      icon = Icons.Default.Science,
+      onNavigateBack = onDismiss,
+      backContentDescription = "Back to elements",
+      backButtonTestTag = "inspector_back_button",
+      additionalBackButtonTestTag = "dialog_close_button",
+      titleTestTag = "inspector_toolbar_title",
+      subtextTestTag = "inspector_toolbar_subtext",
+      actions = {
+        val unitPillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp)
+        Surface(
+          shape = unitPillShape,
+          color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
           modifier = Modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .background(visualColors.container),
-          contentAlignment = Alignment.Center,
+            .clip(unitPillShape)
+            .clickable(onClick = onCycleTempUnit)
+            .testTag("inspector_temp_unit_toggle"),
         ) {
           Text(
-            text = element.symbol,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.ExtraBold,
-            color = visualColors.onContainer,
-          )
-        }
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = "${element.name} (#${element.atomicNumber})",
-            style = MaterialTheme.typography.titleLarge,
+            text = tempUnit.symbol,
+            style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
-          )
-          Text(
-            text = "${element.category.label} • ${element.formattedAtomicMass}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
           )
         }
+
         IconButton(
           onClick = onToggleFavorite,
           modifier = Modifier
@@ -2297,283 +2305,409 @@ private fun ElementInspectorDialog(
             } else {
               MaterialTheme.colorScheme.onSurfaceVariant
             },
+            modifier = Modifier.size(20.dp),
+          )
+        }
+
+        IconButton(
+          onClick = onCopySummary,
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("inspector_toolbar_copy_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.ContentCopy,
+            contentDescription = "Copy element data",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+          )
+        }
+
+        IconButton(
+          onClick = onShareSummary,
+          modifier = Modifier
+            .size(36.dp)
+            .testTag("inspector_toolbar_share_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Share,
+            contentDescription = "Share element data",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+          )
+        }
+      },
+    )
+
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+    // 2. Scrollable Full-Screen Inspector Content
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .weight(1f)
+        .verticalScroll(scrollState)
+        .padding(horizontal = 16.dp, vertical = 14.dp)
+        .testTag("element_inspector_dialog"),
+      verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+      // Prev / Next Element Navigation Strip
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        val prevElement = PeriodicTableEngine.byAtomicNumber(element.atomicNumber - 1)
+        val nextElement = PeriodicTableEngine.byAtomicNumber(element.atomicNumber + 1)
+
+        FilledTonalButton(
+          onClick = { if (prevElement != null) onNavigateElement(prevElement.atomicNumber) },
+          enabled = prevElement != null,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+          modifier = Modifier.testTag("dialog_prev_element_button"),
+        ) {
+          Text(
+            text = if (prevElement != null) "← #${prevElement.atomicNumber} ${prevElement.symbol}" else "←",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+          )
+        }
+
+        Surface(
+          shape = RoundedCornerShape(20.dp),
+          color = visualColors.container,
+          border = BorderStroke(1.dp, visualColors.border),
+        ) {
+          Text(
+            text = "${phaseAtTemp.label}${if (element.isRadioactive) " • ☢ Radioactive" else ""}",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = visualColors.onContainer,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+          )
+        }
+
+        FilledTonalButton(
+          onClick = { if (nextElement != null) onNavigateElement(nextElement.atomicNumber) },
+          enabled = nextElement != null,
+          shape = CircleShape,
+          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+          modifier = Modifier.testTag("dialog_next_element_button"),
+        ) {
+          Text(
+            text = if (nextElement != null) "#${nextElement.atomicNumber} ${nextElement.symbol} →" else "→",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
           )
         }
       }
-    },
-    text = {
-      Column(
-        modifier = Modifier
-          .fillMaxWidth()
-          .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+
+      // Hero Element Identity & Bohr Electron Shell Diagram Card
+      Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+          containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        modifier = Modifier.fillMaxWidth(),
       ) {
-        // Prev / Next Element Navigation Strip
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
+        Column(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-          val prevElement = PeriodicTableEngine.byAtomicNumber(element.atomicNumber - 1)
-          val nextElement = PeriodicTableEngine.byAtomicNumber(element.atomicNumber + 1)
-
-          TextButton(
-            onClick = { if (prevElement != null) onNavigateElement(prevElement.atomicNumber) },
-            enabled = prevElement != null,
-            shape = CircleShape,
-            modifier = Modifier.testTag("dialog_prev_element_button"),
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
           ) {
-            Text(
-              text = if (prevElement != null) "← #${prevElement.atomicNumber} ${prevElement.symbol}" else "←",
-              style = MaterialTheme.typography.labelMedium,
-            )
-          }
-
-          Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = visualColors.container,
-          ) {
-            Text(
-              text = "${phaseAtTemp.label}${if (element.isRadioactive) " • ☢ Radioactive" else ""}",
-              style = MaterialTheme.typography.labelSmall,
-              fontWeight = FontWeight.Bold,
-              color = visualColors.onContainer,
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-            )
-          }
-
-          TextButton(
-            onClick = { if (nextElement != null) onNavigateElement(nextElement.atomicNumber) },
-            enabled = nextElement != null,
-            shape = CircleShape,
-            modifier = Modifier.testTag("dialog_next_element_button"),
-          ) {
-            Text(
-              text = if (nextElement != null) "#${nextElement.atomicNumber} ${nextElement.symbol} →" else "→",
-              style = MaterialTheme.typography.labelMedium,
-            )
-          }
-        }
-
-        // Context Preview & Bohr Electron Shell Diagram Card
-        Card(
-          shape = RoundedCornerShape(16.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-          ),
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(12.dp),
+            // Large Element Tile Badge
+            Surface(
+              shape = RoundedCornerShape(16.dp),
+              color = visualColors.container,
+              border = BorderStroke(1.5.dp, visualColors.border),
+              modifier = Modifier.size(88.dp),
             ) {
-              BohrElectronShellDiagram(
-                element = element,
-                accentColor = visualColors.accent,
-                modifier = Modifier.size(104.dp),
-              )
               Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier
+                  .fillMaxSize()
+                  .padding(8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceBetween,
               ) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                  Text(
+                    text = "#${element.atomicNumber}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = visualColors.onContainer,
+                  )
+                  Text(
+                    text = phaseAtTemp.badge.uppercase(Locale.ROOT),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = visualColors.accent,
+                  )
+                }
                 Text(
-                  text = "Electron Shells (${element.electronShells.size} shells)",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.onSurface,
+                  text = element.symbol,
+                  style = MaterialTheme.typography.headlineMedium,
+                  fontWeight = FontWeight.ExtraBold,
+                  color = visualColors.onContainer,
                 )
                 Text(
-                  text = element.shellsFormatted,
-                  style = MaterialTheme.typography.bodyMedium,
-                  fontFamily = FontFamily.Monospace,
-                  fontWeight = FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                  text = element.electronConfiguration,
-                  style = MaterialTheme.typography.bodySmall,
-                  fontFamily = FontFamily.Monospace,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                  text = "Oxidation: ${element.oxidationStates}",
+                  text = element.compactAtomicMass,
                   style = MaterialTheme.typography.labelSmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  fontFamily = FontFamily.Monospace,
+                  color = visualColors.onContainer.copy(alpha = 0.85f),
+                  maxLines = 1,
                 )
               }
             }
 
-            Text(
-              text = element.summary,
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
+            Column(
+              modifier = Modifier.weight(1f),
+              verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              Text(
+                text = element.name,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Text(
+                text = "Period ${element.period} • ${element.groupLabel} • ${element.block.label}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+              Text(
+                text = element.category.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
           }
-        }
 
-        // Structured Properties Table Card
-        Card(
-          shape = RoundedCornerShape(16.dp),
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-          ),
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+          HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+
+          // Large 2D Bohr Electron Shell Diagram + Shell Configuration Details
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
           ) {
-            ElementPropertyRow("Atomic Number (Z)", element.atomicNumber.toString(), monospace = true)
-            ElementPropertyRow("Atomic Mass", element.formattedAtomicMass, monospace = true)
-            ElementPropertyRow("Period & Group", "Period ${element.period} • ${element.groupLabel}")
-            ElementPropertyRow("Orbital Block", element.block.label)
-            ElementPropertyRow("Phase at STP (25 °C)", element.standardPhase.label)
-            ElementPropertyRow(
-              "Melting Point",
-              "${tempUnit.formatKelvin(element.meltingPointK)} (${ElementTempUnit.KELVIN.formatKelvin(element.meltingPointK)})",
-              monospace = true,
+            BohrElectronShellDiagram(
+              element = element,
+              accentColor = visualColors.accent,
+              modifier = Modifier.size(148.dp),
             )
-            ElementPropertyRow(
-              "Boiling Point",
-              "${tempUnit.formatKelvin(element.boilingPointK)} (${ElementTempUnit.KELVIN.formatKelvin(element.boilingPointK)})",
-              monospace = true,
-            )
-            ElementPropertyRow(
-              "Density",
-              element.density?.let { "$it g/cm³" } ?: "—",
-              monospace = true,
-            )
-            ElementPropertyRow(
-              "Electronegativity",
-              element.electronegativity?.let { "$it (Pauling)" } ?: "—",
-              monospace = true,
-            )
-            ElementPropertyRow(
-              "Atomic Radius",
-              element.atomicRadiusPm?.let { "$it pm" } ?: "—",
-              monospace = true,
-            )
-            ElementPropertyRow(
-              "1st Ionization Energy",
-              element.ionizationEnergyKjMol?.let { "$it kJ/mol" } ?: "—",
-              monospace = true,
-            )
-            ElementPropertyRow("Discovered", "${element.discoveryYear} • ${element.discoveredBy}")
+            Column(
+              modifier = Modifier.weight(1f),
+              verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Text(
+                text = "Electron Shells (${element.electronShells.size} shells)",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Text(
+                text = element.shellsFormatted,
+                style = MaterialTheme.typography.bodyLarge,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+              )
+              Text(
+                text = "Configuration: ${element.electronConfiguration}",
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Text(
+                text = "Oxidation States: ${element.oxidationStates}",
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
           }
+
+          HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+
+          Text(
+            text = element.summary,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+        }
+      }
+
+      // Structured Properties Table Card
+      Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+          containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Column(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Text(
+            text = "Atomic, Physical & Thermodynamic Properties",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+          )
+          HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+
+          ElementPropertyRow("Atomic Number (Z)", element.atomicNumber.toString(), monospace = true)
+          ElementPropertyRow("Atomic Mass", element.formattedAtomicMass, monospace = true)
+          ElementPropertyRow("Chemical Category", element.category.label)
+          ElementPropertyRow("Period & Group", "Period ${element.period} • ${element.groupLabel}")
+          ElementPropertyRow("Orbital Block", element.block.label)
+          ElementPropertyRow("Electron Configuration", element.electronConfiguration, monospace = true)
+          ElementPropertyRow("Electrons per Shell", element.shellsFormatted, monospace = true)
+          ElementPropertyRow("Oxidation States", element.oxidationStates, monospace = true)
+          ElementPropertyRow("Phase at STP (25 °C)", element.standardPhase.label)
+          ElementPropertyRow(
+            "Melting Point",
+            "${tempUnit.formatKelvin(element.meltingPointK)} (${ElementTempUnit.KELVIN.formatKelvin(element.meltingPointK)})",
+            monospace = true,
+          )
+          ElementPropertyRow(
+            "Boiling Point",
+            "${tempUnit.formatKelvin(element.boilingPointK)} (${ElementTempUnit.KELVIN.formatKelvin(element.boilingPointK)})",
+            monospace = true,
+          )
+          ElementPropertyRow(
+            "Density",
+            element.density?.let { "$it g/cm³" } ?: "—",
+            monospace = true,
+          )
+          ElementPropertyRow(
+            "Electronegativity",
+            element.electronegativity?.let { "$it (Pauling)" } ?: "—",
+            monospace = true,
+          )
+          ElementPropertyRow(
+            "Atomic Radius",
+            element.atomicRadiusPm?.let { "$it pm" } ?: "—",
+            monospace = true,
+          )
+          ElementPropertyRow(
+            "1st Ionization Energy",
+            element.ionizationEnergyKjMol?.let { "$it kJ/mol" } ?: "—",
+            monospace = true,
+          )
+          ElementPropertyRow("Discovered", "${element.discoveryYear} • ${element.discoveredBy}")
+        }
+      }
+
+      // Cross-Tool Actions Row
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Button(
+          onClick = onCopySummary,
+          shape = CircleShape,
+          modifier = Modifier
+            .weight(1f)
+            .testTag("dialog_copy_summary_button"),
+        ) {
+          Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("Copy Data", maxLines = 1)
         }
 
-        // Cross-Tool Actions Row
+        FilledTonalButton(
+          onClick = onSaveToNotes,
+          shape = CircleShape,
+          modifier = Modifier
+            .weight(1f)
+            .testTag("dialog_save_to_notes_button"),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.NoteAdd,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("Save Note", maxLines = 1)
+        }
+
+        OutlinedButton(
+          onClick = onShareSummary,
+          shape = CircleShape,
+          modifier = Modifier
+            .weight(1f)
+            .testTag("dialog_share_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Share,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("Share", maxLines = 1)
+        }
+      }
+
+      if (onOpenInCalculator != null || onOpenMeltingPointInConverter != null) {
         Row(
           modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          FilledTonalButton(
-            onClick = onSaveToNotes,
-            shape = CircleShape,
-            modifier = Modifier
-              .weight(1f)
-              .testTag("dialog_save_to_notes_button"),
-          ) {
-            Icon(
-              imageVector = Icons.AutoMirrored.Filled.NoteAdd,
-              contentDescription = null,
-              modifier = Modifier.size(16.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Save Note", maxLines = 1)
-          }
-
-          OutlinedButton(
-            onClick = onShareSummary,
-            shape = CircleShape,
-            modifier = Modifier
-              .weight(1f)
-              .testTag("dialog_share_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.Share,
-              contentDescription = null,
-              modifier = Modifier.size(16.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Share", maxLines = 1)
-          }
-        }
-
-        if (onOpenInCalculator != null || onOpenMeltingPointInConverter != null) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            if (onOpenInCalculator != null) {
-              OutlinedButton(
-                onClick = onOpenInCalculator,
-                shape = CircleShape,
-                modifier = Modifier
-                  .weight(1f)
-                  .testTag("dialog_open_calculator_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Calculate,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Mass → Calc", maxLines = 1)
-              }
+          if (onOpenInCalculator != null) {
+            OutlinedButton(
+              onClick = onOpenInCalculator,
+              shape = CircleShape,
+              modifier = Modifier
+                .weight(1f)
+                .testTag("dialog_open_calculator_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Calculate,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text("Mass → Calc", maxLines = 1)
             }
-            if (onOpenMeltingPointInConverter != null) {
-              OutlinedButton(
-                onClick = onOpenMeltingPointInConverter,
-                shape = CircleShape,
-                modifier = Modifier
-                  .weight(1f)
-                  .testTag("dialog_open_converter_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Straighten,
-                  contentDescription = null,
-                  modifier = Modifier.size(16.dp),
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Melt → Units", maxLines = 1)
-              }
+          }
+          if (onOpenMeltingPointInConverter != null) {
+            OutlinedButton(
+              onClick = onOpenMeltingPointInConverter,
+              shape = CircleShape,
+              modifier = Modifier
+                .weight(1f)
+                .testTag("dialog_open_converter_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Straighten,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text("Melt → Units", maxLines = 1)
             }
           }
         }
       }
-    },
-    confirmButton = {
-      Button(
-        onClick = onCopySummary,
-        shape = CircleShape,
-        modifier = Modifier.testTag("dialog_copy_summary_button"),
-      ) {
-        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
-        Text("Copy Data")
-      }
-    },
-    dismissButton = {
-      TextButton(
-        onClick = onDismiss,
-        shape = CircleShape,
-        modifier = Modifier.testTag("dialog_close_button"),
-      ) {
-        Text("Close")
-      }
-    },
-  )
+    }
+  }
 }
 
 @Composable

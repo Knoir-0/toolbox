@@ -60,6 +60,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -230,32 +232,37 @@ fun StarsScreen(
   var partnerProfileId by remember { mutableStateOf(starsRepo.getMatchPartnerProfileId()) }
   var favoriteGuideIds by remember { mutableStateOf(starsRepo.loadFavoriteGuideIds()) }
 
+  val currentBirthSign = remember { StarsEngine.getCurrentZodiacSign() }
+  val fallbackProfile = remember(currentBirthSign) {
+    StarsEngine.createCurrentBirthSignFallbackProfile()
+  }
+  val fallbackNatalChart = remember(fallbackProfile, currentBirthSign) {
+    StarsEngine.calculateNatalChart(fallbackProfile).copy(sunSign = currentBirthSign)
+  }
+
   val activeProfile = remember(profiles, activeProfileId) {
-    profiles.firstOrNull { it.id == activeProfileId } ?: profiles.first()
+    profiles.firstOrNull { it.id == activeProfileId } ?: profiles.firstOrNull()
   }
   val partnerProfile = remember(profiles, partnerProfileId, activeProfile) {
     profiles.firstOrNull { it.id == partnerProfileId }
-      ?: profiles.firstOrNull { it.id != activeProfile.id }
+      ?: profiles.firstOrNull { it.id != activeProfile?.id }
       ?: activeProfile
   }
 
   val activeNatalChart = remember(activeProfile) {
-    StarsEngine.calculateNatalChart(activeProfile)
+    activeProfile?.let { StarsEngine.calculateNatalChart(it) }
   }
   val partnerNatalChart = remember(partnerProfile) {
-    StarsEngine.calculateNatalChart(partnerProfile)
+    partnerProfile?.let { StarsEngine.calculateNatalChart(it) }
   }
 
   var selectedTab by rememberSaveable { mutableStateOf(StarsTab.TODAY) }
   var dayOffset by rememberSaveable { mutableIntStateOf(0) } // -1 Yesterday, 0 Today, +1 Tomorrow, etc.
   var overrideSignName by rememberSaveable { mutableStateOf<String?>(null) }
-  val selectedDailySign = remember(overrideSignName, activeNatalChart) {
+  val defaultSign = activeNatalChart?.sunSign ?: currentBirthSign
+  val selectedDailySign = remember(overrideSignName, defaultSign) {
     overrideSignName?.let { name -> ZodiacSign.entries.firstOrNull { it.name == name } }
-      ?: activeNatalChart.sunSign
-  }
-
-  LaunchedEffect(selectedDailySign) {
-    StarsEngine.updateActiveSign(selectedDailySign)
+      ?: defaultSign
   }
 
   val targetCalendar = remember(dayOffset) {
@@ -315,8 +322,31 @@ fun StarsScreen(
     }
   }
 
-  val topBarSubtext = remember(activeProfile, activeNatalChart, dailyHoroscope) {
-    "${activeProfile.name} • ☉ ${activeNatalChart.sunSign.displayName} • ☽ ${activeNatalChart.moonSign.displayName} • ↑ ${activeNatalChart.risingSign.displayName}"
+  val topBarSubtext = remember(activeProfile, activeNatalChart, selectedDailySign, dailyHoroscope) {
+    if (activeProfile != null && activeNatalChart != null) {
+      "${activeProfile.name} • ☉ ${activeNatalChart.sunSign.displayName} • ☽ ${activeNatalChart.moonSign.displayName} • ↑ ${activeNatalChart.risingSign.displayName}"
+    } else {
+      "☉ ${selectedDailySign.displayName} (${selectedDailySign.dateRange}) • ${dailyHoroscope.moonSnapshot.phaseType.emoji} ${dailyHoroscope.moonSnapshot.phaseType.displayName}"
+    }
+  }
+
+  fun createBlankBirthProfile(defaultRelationshipTag: String = if (profiles.isEmpty()) "Me" else "Friend"): BirthProfile {
+    val now = Calendar.getInstance()
+    return BirthProfile(
+      id = "profile_${UUID.randomUUID().toString().take(8)}",
+      name = "",
+      relationshipTag = defaultRelationshipTag,
+      birthYear = now.get(Calendar.YEAR),
+      birthMonth = now.get(Calendar.MONTH) + 1,
+      birthDay = now.get(Calendar.DAY_OF_MONTH),
+      birthHour = 12,
+      birthMinute = 0,
+      hasExactBirthTime = false,
+      cityName = "New York, NY, USA",
+      latitude = 40.7128,
+      longitude = -74.0060,
+      timeZoneId = "America/New_York",
+    )
   }
 
   Column(
@@ -403,6 +433,7 @@ fun StarsScreen(
           StarsTab.TODAY -> StarsTodayTabContent(
             reading = dailyHoroscope,
             natalChart = activeNatalChart,
+            defaultSign = defaultSign,
             dayOffset = dayOffset,
             onChangeDayOffset = { newOffset ->
               haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -448,72 +479,63 @@ fun StarsScreen(
             },
           )
 
-          StarsTab.CHART -> StarsChartTabContent(
-            profiles = profiles,
-            activeProfile = activeProfile,
-            natalChart = activeNatalChart,
-            onSelectProfile = { profile ->
-              haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-              activeProfileId = profile.id
-              starsRepo.setActiveProfileId(profile.id)
-              overrideSignName = null
-              StarsWidgets.saveOverrideSign(context, null)
-              StarsWidgets.updateAllWidgets(context)
-            },
-            onEditProfile = { profile ->
-              haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-              isCreatingNewProfile = false
-              profileToEdit = profile
-            },
-            onAddProfile = {
-              haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-              isCreatingNewProfile = true
-              profileToEdit = BirthProfile(
-                id = "profile_${UUID.randomUUID().toString().take(8)}",
-                name = "",
-                relationshipTag = "Friend",
-                birthYear = 1999,
-                birthMonth = 6,
-                birthDay = 15,
-                birthHour = 12,
-                birthMinute = 0,
-                hasExactBirthTime = true,
-                cityName = "New York, NY, USA",
-                latitude = 40.7128,
-                longitude = -74.0060,
-                timeZoneId = "America/New_York",
-              )
-            },
-            onInspectPlacement = { placement ->
-              haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-              inspectedPlacement = placement
-            },
-            onSaveChartToNotes = {
-              haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-              val body = buildString {
-                appendLine("Profile: ${activeProfile.name} (${activeProfile.formattedBirthDate} • ${activeProfile.formattedBirthTime} • ${activeProfile.cityName})")
-                appendLine("Big Three: ☉ ${activeNatalChart.sunSign.displayName} Sun • ☽ ${activeNatalChart.moonSign.displayName} Moon • ↑ ${activeNatalChart.risingSign.displayName} Rising")
-                appendLine()
-                appendLine(activeNatalChart.bigThreeSummary)
-                appendLine()
-                appendLine("## Planetary Placements")
-                activeNatalChart.placements.forEach { p ->
-                  val rx = if (p.isRetrograde) " (Rx)" else ""
-                  appendLine("- ${p.body.glyph} ${p.body.displayName}: ${p.sign.glyph} ${p.sign.displayName} ${p.formattedDegree}$rx • House ${p.house}")
+          StarsTab.CHART -> {
+            val effectiveChart = activeNatalChart ?: fallbackNatalChart
+            val effectiveProfile = activeProfile ?: fallbackProfile
+            StarsChartTabContent(
+              profiles = profiles,
+              activeProfile = activeProfile,
+              natalChart = effectiveChart,
+              currentBirthSign = currentBirthSign,
+              onSelectProfile = { profile ->
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                activeProfileId = profile.id
+                starsRepo.setActiveProfileId(profile.id)
+                overrideSignName = null
+                StarsWidgets.saveOverrideSign(context, null)
+                StarsWidgets.updateAllWidgets(context)
+              },
+              onEditProfile = { profile ->
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                isCreatingNewProfile = false
+                profileToEdit = profile
+              },
+              onAddProfile = {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                isCreatingNewProfile = true
+                profileToEdit = createBlankBirthProfile()
+              },
+              onInspectPlacement = { placement ->
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                inspectedPlacement = placement
+              },
+              onSaveChartToNotes = {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                val body = buildString {
+                  appendLine("Profile: ${effectiveProfile.name} (${effectiveProfile.formattedBirthDate} • ${effectiveProfile.formattedBirthTime} • ${effectiveProfile.cityName})")
+                  appendLine("Big Three: ☉ ${effectiveChart.sunSign.displayName} Sun • ☽ ${effectiveChart.moonSign.displayName} Moon • ↑ ${effectiveChart.risingSign.displayName} Rising")
+                  appendLine()
+                  appendLine(effectiveChart.bigThreeSummary)
+                  appendLine()
+                  appendLine("## Planetary Placements")
+                  effectiveChart.placements.forEach { p ->
+                    val rx = if (p.isRetrograde) " (Rx)" else ""
+                    appendLine("- ${p.body.glyph} ${p.body.displayName}: ${p.sign.glyph} ${p.sign.displayName} ${p.formattedDegree}$rx • House ${p.house}")
+                  }
                 }
-              }
-              CrossToolActions.saveTextToNotes(
-                context = context,
-                title = "${activeProfile.name} — Natal Birth Chart",
-                content = body.trim(),
-                labels = listOf("stars", "birth chart"),
-              )
-              onOpenNotes?.invoke()
-            },
-          )
+                CrossToolActions.saveTextToNotes(
+                  context = context,
+                  title = "${effectiveProfile.name} — Natal Birth Chart",
+                  content = body.trim(),
+                  labels = listOf("stars", "birth chart"),
+                )
+                onOpenNotes?.invoke()
+              },
+            )
+          }
 
           StarsTab.SKY_AR -> StarsSkyArCameraTabContent(
-            activeProfile = activeProfile,
+            activeProfile = activeProfile ?: fallbackProfile,
             dailyHoroscope = dailyHoroscope,
             onInspectConstellation = { constellation ->
               haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -525,8 +547,9 @@ fun StarsScreen(
 
           StarsTab.MATCH -> StarsMatchTabContent(
             profiles = profiles,
-            firstChart = activeNatalChart,
-            secondChart = partnerNatalChart,
+            firstChart = activeNatalChart ?: fallbackNatalChart,
+            secondChart = partnerNatalChart ?: fallbackNatalChart,
+            currentBirthSign = currentBirthSign,
             onSelectFirstProfile = { p ->
               haptics.performHapticFeedback(HapticFeedbackType.LongPress)
               activeProfileId = p.id
@@ -541,20 +564,8 @@ fun StarsScreen(
             onAddProfile = {
               haptics.performHapticFeedback(HapticFeedbackType.LongPress)
               isCreatingNewProfile = true
-              profileToEdit = BirthProfile(
-                id = "profile_${UUID.randomUUID().toString().take(8)}",
-                name = "",
-                relationshipTag = "Partner",
-                birthYear = 1998,
-                birthMonth = 10,
-                birthDay = 28,
-                birthHour = 12,
-                birthMinute = 0,
-                hasExactBirthTime = true,
-                cityName = "Chicago, IL, USA",
-                latitude = 41.8781,
-                longitude = -87.6298,
-                timeZoneId = "America/Chicago",
+              profileToEdit = createBlankBirthProfile(
+                defaultRelationshipTag = if (profiles.isEmpty()) "Me" else "Partner",
               )
             },
           )
@@ -702,14 +713,18 @@ fun StarsScreen(
     BirthProfileEditDialog(
       initialProfile = editingProfile,
       isNewProfile = isCreatingNewProfile,
-      canDelete = !isCreatingNewProfile && profiles.size > 1,
+      canDelete = !isCreatingNewProfile,
       onDismiss = { profileToEdit = null },
       onDelete = {
-        val updated = profiles.filterNot { it.id == editingProfile.id }.ifEmpty { DEFAULT_BIRTH_PROFILES }
+        val updated = profiles.filterNot { it.id == editingProfile.id }
         profiles = updated
         starsRepo.saveProfiles(updated)
         activeProfileId = starsRepo.getActiveProfileId()
         partnerProfileId = starsRepo.getMatchPartnerProfileId()
+        if (updated.isEmpty()) {
+          overrideSignName = null
+          StarsWidgets.saveOverrideSign(context, null)
+        }
         profileToEdit = null
         StarsWidgets.updateAllWidgets(context)
       },
@@ -724,6 +739,7 @@ fun StarsScreen(
         activeProfileId = savedProfile.id
         starsRepo.setActiveProfileId(savedProfile.id)
         overrideSignName = null
+        StarsWidgets.saveOverrideSign(context, null)
         profileToEdit = null
         StarsWidgets.updateAllWidgets(context)
       },
@@ -733,12 +749,14 @@ fun StarsScreen(
   if (showProfileSwitcherDialog) {
     BirthProfileSwitcherDialog(
       profiles = profiles,
-      activeProfileId = activeProfile.id,
+      activeProfileId = activeProfile?.id ?: "",
+      currentBirthSign = currentBirthSign,
       onSelectProfile = { selected ->
         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
         activeProfileId = selected.id
         starsRepo.setActiveProfileId(selected.id)
         overrideSignName = null
+        StarsWidgets.saveOverrideSign(context, null)
         showProfileSwitcherDialog = false
         StarsWidgets.updateAllWidgets(context)
       },
@@ -750,21 +768,7 @@ fun StarsScreen(
       onAddProfile = {
         showProfileSwitcherDialog = false
         isCreatingNewProfile = true
-        profileToEdit = BirthProfile(
-          id = "profile_${UUID.randomUUID().toString().take(8)}",
-          name = "",
-          relationshipTag = "Friend",
-          birthYear = 1999,
-          birthMonth = 5,
-          birthDay = 15,
-          birthHour = 12,
-          birthMinute = 0,
-          hasExactBirthTime = true,
-          cityName = "New York, NY, USA",
-          latitude = 40.7128,
-          longitude = -74.0060,
-          timeZoneId = "America/New_York",
-        )
+        profileToEdit = createBlankBirthProfile()
       },
       onDismiss = { showProfileSwitcherDialog = false },
     )
@@ -775,7 +779,8 @@ fun StarsScreen(
 @Composable
 private fun StarsTodayTabContent(
   reading: DailyHoroscopeReading,
-  natalChart: NatalChartCalculation,
+  natalChart: NatalChartCalculation?,
+  defaultSign: ZodiacSign,
   dayOffset: Int,
   onChangeDayOffset: (Int) -> Unit,
   onSelectSign: (ZodiacSign) -> Unit,
@@ -794,7 +799,7 @@ private fun StarsTodayTabContent(
     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
-    // 1. Horizontal Zodiac Sign Selector Row (defaults to active profile's Sun sign)
+    // 1. Horizontal Zodiac Sign Selector Row (defaults to active profile's Sun sign or current birth sign)
     item {
       Row(
         modifier = Modifier
@@ -805,14 +810,14 @@ private fun StarsTodayTabContent(
       ) {
         ZodiacSign.entries.forEach { sign ->
           val isSelected = sign == reading.targetSign
-          val isNatalSun = sign == natalChart.sunSign
+          val isNatalOrCurrentSun = sign == (natalChart?.sunSign ?: defaultSign)
           FilterChip(
             selected = isSelected,
             onClick = { onSelectSign(sign) },
             shape = RoundedCornerShape(20.dp),
             label = {
               Text(
-                text = "${sign.glyph} ${sign.displayName}" + if (isNatalSun) " ★" else "",
+                text = "${sign.glyph} ${sign.displayName}" + if (isNatalOrCurrentSun) " ★" else "",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
               )
@@ -1480,8 +1485,9 @@ private fun RetrogradeAndSkyCard(
 @Composable
 private fun StarsChartTabContent(
   profiles: List<BirthProfile>,
-  activeProfile: BirthProfile,
+  activeProfile: BirthProfile?,
   natalChart: NatalChartCalculation,
+  currentBirthSign: ZodiacSign,
   onSelectProfile: (BirthProfile) -> Unit,
   onEditProfile: (BirthProfile) -> Unit,
   onAddProfile: () -> Unit,
@@ -1504,32 +1510,51 @@ private fun StarsChartTabContent(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        profiles.forEach { profile ->
-          val isSelected = profile.id == activeProfile.id
+        if (profiles.isEmpty()) {
           FilterChip(
-            selected = isSelected,
-            onClick = { onSelectProfile(profile) },
+            selected = true,
+            onClick = {},
             shape = RoundedCornerShape(20.dp),
-            leadingIcon = {
-              Icon(
-                imageVector = Icons.Default.Person,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-              )
-            },
             label = {
               Text(
-                text = "${profile.name} (${profile.relationshipTag})",
+                text = "${currentBirthSign.glyph} ${currentBirthSign.displayName} (Current Sign)",
                 style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                fontWeight = FontWeight.Bold,
               )
             },
             colors = FilterChipDefaults.filterChipColors(
               selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
               selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-              selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
             ),
           )
+        } else {
+          profiles.forEach { profile ->
+            val isSelected = profile.id == activeProfile?.id
+            FilterChip(
+              selected = isSelected,
+              onClick = { onSelectProfile(profile) },
+              shape = RoundedCornerShape(20.dp),
+              leadingIcon = {
+                Icon(
+                  imageVector = Icons.Default.Person,
+                  contentDescription = null,
+                  modifier = Modifier.size(16.dp),
+                )
+              },
+              label = {
+                Text(
+                  text = "${profile.name} (${profile.relationshipTag})",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                )
+              },
+              colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                selectedLeadingIconColor = MaterialTheme.colorScheme.primary,
+              ),
+            )
+          }
         }
 
         OutlinedButton(
@@ -1567,13 +1592,21 @@ private fun StarsChartTabContent(
           ) {
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "${activeProfile.name}'s Natal Chart",
+                text = if (activeProfile != null) {
+                  "${activeProfile.name}'s Natal Chart"
+                } else {
+                  "${currentBirthSign.displayName} — Current Birth Sign"
+                },
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
               )
               Text(
-                text = "${activeProfile.formattedBirthDate} • ${activeProfile.formattedBirthTime} • ${activeProfile.cityName}",
+                text = if (activeProfile != null) {
+                  "${activeProfile.formattedBirthDate} • ${activeProfile.formattedBirthTime} • ${activeProfile.cityName}"
+                } else {
+                  "No birth profile saved • Defaulting to current star sign (${currentBirthSign.dateRange})"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
@@ -1590,18 +1623,34 @@ private fun StarsChartTabContent(
                   modifier = Modifier.size(20.dp),
                 )
               }
-              IconButton(
-                onClick = { onEditProfile(activeProfile) },
-                modifier = Modifier
-                  .size(36.dp)
-                  .testTag("action_edit_birth_profile"),
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Edit,
-                  contentDescription = "Edit birth details",
-                  tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                  modifier = Modifier.size(20.dp),
-                )
+              if (activeProfile != null) {
+                IconButton(
+                  onClick = { onEditProfile(activeProfile) },
+                  modifier = Modifier
+                    .size(36.dp)
+                    .testTag("action_edit_birth_profile"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Edit,
+                    contentDescription = "Edit birth details",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                  )
+                }
+              } else {
+                IconButton(
+                  onClick = onAddProfile,
+                  modifier = Modifier
+                    .size(36.dp)
+                    .testTag("action_edit_birth_profile"),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Add birth profile",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                  )
+                }
               }
             }
           }
@@ -2051,6 +2100,7 @@ private fun StarsMatchTabContent(
   profiles: List<BirthProfile>,
   firstChart: NatalChartCalculation,
   secondChart: NatalChartCalculation,
+  currentBirthSign: ZodiacSign,
   onSelectFirstProfile: (BirthProfile) -> Unit,
   onSelectSecondProfile: (BirthProfile) -> Unit,
   onAddProfile: () -> Unit,
@@ -2062,9 +2112,11 @@ private fun StarsMatchTabContent(
   var customSignA by rememberSaveable { mutableStateOf(firstChart.sunSign) }
   var customSignB by rememberSaveable { mutableStateOf(secondChart.sunSign) }
 
-  val report = remember(compareBySignsOnly, firstChart, secondChart, customSignA, customSignB) {
+  val report = remember(compareBySignsOnly, profiles, firstChart, secondChart, customSignA, customSignB, currentBirthSign) {
     if (compareBySignsOnly) {
       StarsEngine.calculateSignPairSynastry(customSignA, customSignB)
+    } else if (profiles.isEmpty()) {
+      StarsEngine.calculateSignPairSynastry(currentBirthSign, currentBirthSign)
     } else {
       StarsEngine.calculateSynastry(firstChart, secondChart)
     }
@@ -2142,49 +2194,12 @@ private fun StarsMatchTabContent(
           verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
           if (!compareBySignsOnly) {
-            Text(
-              text = "Person 1",
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              profiles.forEach { p ->
-                val selected = p.id == firstChart.profile.id
-                FilterChip(
-                  selected = selected,
-                  onClick = { onSelectFirstProfile(p) },
-                  shape = RoundedCornerShape(20.dp),
-                  label = { Text(p.name) },
-                )
-              }
-            }
-
-            Text(
-              text = "Person 2",
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              profiles.forEach { p ->
-                val selected = p.id == secondChart.profile.id
-                FilterChip(
-                  selected = selected,
-                  onClick = { onSelectSecondProfile(p) },
-                  shape = RoundedCornerShape(20.dp),
-                  label = { Text(p.name) },
-                )
-              }
+            if (profiles.isEmpty()) {
+              Text(
+                text = "No birth profiles filled out yet — defaulting to current birth sign (${currentBirthSign.glyph} ${currentBirthSign.displayName}).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
               OutlinedButton(
                 onClick = onAddProfile,
                 shape = CircleShape,
@@ -2193,6 +2208,60 @@ private fun StarsMatchTabContent(
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(4.dp))
                 Text("Add Partner/Friend", style = MaterialTheme.typography.labelSmall)
+              }
+            } else {
+              Text(
+                text = "Person 1",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                profiles.forEach { p ->
+                  val selected = p.id == firstChart.profile.id
+                  FilterChip(
+                    selected = selected,
+                    onClick = { onSelectFirstProfile(p) },
+                    shape = RoundedCornerShape(20.dp),
+                    label = { Text(p.name) },
+                  )
+                }
+              }
+
+              Text(
+                text = "Person 2",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                profiles.forEach { p ->
+                  val selected = p.id == secondChart.profile.id
+                  FilterChip(
+                    selected = selected,
+                    onClick = { onSelectSecondProfile(p) },
+                    shape = RoundedCornerShape(20.dp),
+                    label = { Text(p.name) },
+                  )
+                }
+                OutlinedButton(
+                  onClick = onAddProfile,
+                  shape = CircleShape,
+                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                ) {
+                  Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text("Add Partner/Friend", style = MaterialTheme.typography.labelSmall)
+                }
               }
             }
           } else {
@@ -2908,6 +2977,7 @@ private fun PlanetaryPlacementDetailDialog(
 private fun BirthProfileSwitcherDialog(
   profiles: List<BirthProfile>,
   activeProfileId: String,
+  currentBirthSign: ZodiacSign,
   onSelectProfile: (BirthProfile) -> Unit,
   onEditProfile: (BirthProfile) -> Unit,
   onAddProfile: () -> Unit,
@@ -2960,6 +3030,34 @@ private fun BirthProfileSwitcherDialog(
           .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
+        if (profiles.isEmpty()) {
+          Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            ),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+              verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              Text(
+                text = "No Birth Profiles Saved",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Text(
+                text = "Currently defaulting to the current birth sign (${currentBirthSign.glyph} ${currentBirthSign.displayName}). Add a birth profile below to calculate personalized Sun, Moon, and Rising placements.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
         profiles.forEach { profile ->
           val chart = remember(profile) { StarsEngine.calculateNatalChart(profile) }
           val isSelected = profile.id == activeProfileId
@@ -3065,6 +3163,7 @@ private fun BirthProfileEditDialog(
   onConfirm: (BirthProfile) -> Unit,
 ) {
   val focusRequester = remember { FocusRequester() }
+  val nowCalendar = remember { Calendar.getInstance() }
   var nameField by remember {
     mutableStateOf(
       TextFieldValue(
@@ -3074,12 +3173,12 @@ private fun BirthProfileEditDialog(
     )
   }
   var relationshipTag by remember { mutableStateOf(initialProfile.relationshipTag) }
-  var yearText by remember { mutableStateOf(initialProfile.birthYear.toString()) }
-  var monthText by remember { mutableStateOf(initialProfile.birthMonth.toString()) }
-  var dayText by remember { mutableStateOf(initialProfile.birthDay.toString()) }
-  var hasExactTime by remember { mutableStateOf(initialProfile.hasExactBirthTime) }
-  var hourText by remember { mutableStateOf(initialProfile.birthHour.toString()) }
-  var minuteText by remember { mutableStateOf(initialProfile.birthMinute.toString()) }
+  var yearText by remember { mutableStateOf(if (isNewProfile) "" else initialProfile.birthYear.toString()) }
+  var monthText by remember { mutableStateOf(if (isNewProfile) "" else initialProfile.birthMonth.toString()) }
+  var dayText by remember { mutableStateOf(if (isNewProfile) "" else initialProfile.birthDay.toString()) }
+  var hasExactTime by remember { mutableStateOf(if (isNewProfile) false else initialProfile.hasExactBirthTime) }
+  var hourText by remember { mutableStateOf(if (isNewProfile) "" else initialProfile.birthHour.toString()) }
+  var minuteText by remember { mutableStateOf(if (isNewProfile) "" else initialProfile.birthMinute.toString()) }
 
   var selectedCity by remember {
     mutableStateOf(
@@ -3133,9 +3232,9 @@ private fun BirthProfileEditDialog(
       id = initialProfile.id,
       name = nameField.text.trim().ifEmpty { "Preview" },
       relationshipTag = relationshipTag,
-      birthYear = (parsedYear ?: 1999).coerceIn(1900, 2100),
-      birthMonth = (parsedMonth ?: 5).coerceIn(1, 12),
-      birthDay = (parsedDay ?: 15).coerceIn(1, 31),
+      birthYear = (parsedYear ?: nowCalendar.get(Calendar.YEAR)).coerceIn(1900, 2100),
+      birthMonth = (parsedMonth ?: (nowCalendar.get(Calendar.MONTH) + 1)).coerceIn(1, 12),
+      birthDay = (parsedDay ?: nowCalendar.get(Calendar.DAY_OF_MONTH)).coerceIn(1, 31),
       birthHour = (parsedHour ?: 12).coerceIn(0, 23),
       birthMinute = (parsedMinute ?: 0).coerceIn(0, 59),
       hasExactBirthTime = hasExactTime,
@@ -4364,8 +4463,9 @@ private fun StarsSkyArCameraTabContent(
           horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically,
         ) {
+          val hudPillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp)
           Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = hudPillShape,
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.84f),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
           ) {
@@ -4398,12 +4498,14 @@ private fun StarsSkyArCameraTabContent(
           Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             if (isManualPanMode) {
               Surface(
-                shape = RoundedCornerShape(20.dp),
+                shape = hudPillShape,
                 color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.clickable {
-                  haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                  isManualPanMode = false
-                },
+                modifier = Modifier
+                  .clip(hudPillShape)
+                  .clickable {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    isManualPanMode = false
+                  },
               ) {
                 Row(
                   modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -4427,16 +4529,18 @@ private fun StarsSkyArCameraTabContent(
             }
 
             Surface(
-              shape = RoundedCornerShape(20.dp),
+              shape = hudPillShape,
               color = if (starSnapVisionEnabled) {
                 MaterialTheme.colorScheme.tertiaryContainer
               } else {
                 MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
               },
-              modifier = Modifier.clickable {
-                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                starSnapVisionEnabled = !starSnapVisionEnabled
-              },
+              modifier = Modifier
+                .clip(hudPillShape)
+                .clickable {
+                  haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                  starSnapVisionEnabled = !starSnapVisionEnabled
+                },
             ) {
               Row(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),

@@ -2778,13 +2778,18 @@ private fun AudioExportDialog(
             false to "Save as Copy",
             true to "Overwrite Original",
           )
+          val hexagonEnabled = currentHexagonIconButtons()
           SingleChoiceSegmentedButtonRow(
             modifier = Modifier.fillMaxWidth(),
           ) {
             saveModes.forEachIndexed { index, (isOverwriteOption, label) ->
               val selected = overwriteOriginal == isOverwriteOption
               SegmentedButton(
-                shape = SegmentedButtonDefaults.itemShape(index = index, count = saveModes.size),
+                shape = if (hexagonEnabled) {
+                  HorizontalHexagonShape
+                } else {
+                  SegmentedButtonDefaults.itemShape(index = index, count = saveModes.size)
+                },
                 onClick = { overwriteOriginal = isOverwriteOption },
                 selected = selected,
                 icon = {},

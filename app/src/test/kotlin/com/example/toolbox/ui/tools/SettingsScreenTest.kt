@@ -1810,7 +1810,7 @@ class SettingsScreenTest {
       "stay hydrated",
       "you got this",
       "made for you",
-      "i'm doing my best",
+      "do your best",
       "be you today",
       "be good",
       "help someone today",
@@ -1867,7 +1867,6 @@ class SettingsScreenTest {
       "this too shall pass",
       "endure",
       "please forgive",
-      "explore, somehow",
       "know that you are loved",
       "love you",
       "explore today",
@@ -1888,7 +1887,7 @@ class SettingsScreenTest {
       "forget about it",
       "make it happen",
       "stop waiting",
-      "you know what you must do",
+      "you know what to do",
       "i am as i am",
       "do you",
       "spread positivity",
@@ -1926,6 +1925,10 @@ class SettingsScreenTest {
       "go easy on yourself",
       "good enough",
       "grow a bit",
+      "you are enough",
+      "trust yourself",
+      "take your time",
+      "touch grass",
     )
     assertEquals(expectedPositiveMessages, GOOD_POSITIVE_MESSAGES)
     assertFalse(GOOD_POSITIVE_MESSAGES.contains("100% free forever"))

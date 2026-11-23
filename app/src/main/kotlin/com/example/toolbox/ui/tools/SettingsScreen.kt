@@ -190,6 +190,7 @@ import com.example.toolbox.ui.main.resetAllSettingsToDefaults
 import com.example.toolbox.ui.theme.AccentHarmonyOption
 import com.example.toolbox.ui.theme.BackgroundTexturePreviewBox
 import com.example.toolbox.ui.theme.HexagonShape
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
 import com.example.toolbox.ui.theme.MusicPlayerColorOption
 import com.example.toolbox.ui.theme.calculateAccentHarmonyColor
 import com.example.toolbox.ui.theme.colorToHexString
@@ -2141,7 +2142,11 @@ fun SettingsScreen(
                   SegmentedButton(
                     selected = toolSorting == option,
                     onClick = { preferencesRepository.setToolSorting(option) },
-                    shape = SegmentedButtonDefaults.itemShape(index = index, count = sortingOptions.size),
+                    shape = if (hexagonIconButtons) {
+                      HorizontalHexagonShape
+                    } else {
+                      SegmentedButtonDefaults.itemShape(index = index, count = sortingOptions.size)
+                    },
                     icon = {},
                     contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
                     modifier = Modifier
@@ -2203,7 +2208,11 @@ fun SettingsScreen(
                         SegmentedButton(
                           selected = categorySorting == option,
                           onClick = { preferencesRepository.setCategorySorting(option) },
-                          shape = SegmentedButtonDefaults.itemShape(index = index, count = categoryOptions.size),
+                          shape = if (hexagonIconButtons) {
+                            HorizontalHexagonShape
+                          } else {
+                            SegmentedButtonDefaults.itemShape(index = index, count = categoryOptions.size)
+                          },
                           icon = {},
                           contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                           modifier = Modifier
@@ -2267,7 +2276,11 @@ fun SettingsScreen(
                         SegmentedButton(
                           selected = categoryToolSorting == option,
                           onClick = { preferencesRepository.setCategoryToolSorting(option) },
-                          shape = SegmentedButtonDefaults.itemShape(index = index, count = toolOptions.size),
+                          shape = if (hexagonIconButtons) {
+                            HorizontalHexagonShape
+                          } else {
+                            SegmentedButtonDefaults.itemShape(index = index, count = toolOptions.size)
+                          },
                           icon = {},
                           contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                           modifier = Modifier
@@ -2329,7 +2342,11 @@ fun SettingsScreen(
                       SegmentedButton(
                         selected = toolSortOrder == order,
                         onClick = { preferencesRepository.setToolSortOrder(order) },
-                        shape = SegmentedButtonDefaults.itemShape(index = index, count = sortOrders.size),
+                        shape = if (hexagonIconButtons) {
+                          HorizontalHexagonShape
+                        } else {
+                          SegmentedButtonDefaults.itemShape(index = index, count = sortOrders.size)
+                        },
                         icon = {},
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                         modifier = Modifier.testTag("sort_order_${order.name.lowercase()}"),
@@ -2546,7 +2563,11 @@ fun SettingsScreen(
             SegmentedButton(
               selected = themeMode == mode,
               onClick = { preferencesRepository.setThemeMode(mode) },
-              shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
+              shape = if (hexagonIconButtons) {
+                HorizontalHexagonShape
+              } else {
+                SegmentedButtonDefaults.itemShape(index = index, count = modes.size)
+              },
               icon = {},
               modifier = Modifier.testTag("theme_mode_${mode.name.lowercase()}"),
             ) {
@@ -2595,6 +2616,7 @@ fun SettingsScreen(
           if (event == Lifecycle.Event.ON_RESUME) {
             isSystemMediaListenerEnabled = MusicPlayerEngine.isSystemMediaListenerEnabled(localContext)
             MusicPlayerEngine.syncExternalSystemMediaSessions(localContext)
+            StarsEngine.resolveCurrentSign(context = localContext)
           }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -2896,7 +2918,7 @@ fun SettingsScreen(
                       fontWeight = FontWeight.Bold,
                     )
                     Text(
-                      text = "${currentStarsSign.powerColorName} (${currentStarsSign.powerColorHex}) • Syncs with active sign in Stars",
+                      text = "${currentStarsSign.powerColorName} (${currentStarsSign.powerColorHex}) • ${currentStarsSign.dateRange}",
                       style = MaterialTheme.typography.bodySmall,
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
                       maxLines = 1,

@@ -64,8 +64,40 @@ class StarsEngineTest {
   }
 
   @Test
+  fun defaultProfiles_areEmptyByDefault_andFallBackToCurrentBirthSign() {
+    assertTrue(DEFAULT_BIRTH_PROFILES.isEmpty())
+    val repo = InMemoryStarsRepository()
+    assertTrue(repo.loadProfiles().isEmpty())
+    assertEquals("", repo.getActiveProfileId())
+
+    val novCal = Calendar.getInstance().apply {
+      set(2026, Calendar.NOVEMBER, 23, 12, 0, 0)
+    }
+    assertEquals(ZodiacSign.SAGITTARIUS, StarsEngine.getCurrentZodiacSign(novCal))
+
+    val mayCal = Calendar.getInstance().apply {
+      set(2026, Calendar.MAY, 14, 12, 0, 0)
+    }
+    assertEquals(ZodiacSign.TAURUS, StarsEngine.getCurrentZodiacSign(mayCal))
+  }
+
+  @Test
   fun generateDailyHoroscope_producesDeterministicTransitBackedReadingAndMoonPhase() {
-    val profile = DEFAULT_BIRTH_PROFILES.first()
+    val profile = BirthProfile(
+      id = "test_her",
+      name = "Her Chart",
+      relationshipTag = "Me",
+      birthYear = 1999,
+      birthMonth = 5,
+      birthDay = 14,
+      birthHour = 16,
+      birthMinute = 20,
+      hasExactBirthTime = true,
+      cityName = "Chicago, IL, USA",
+      latitude = 41.8781,
+      longitude = -87.6298,
+      timeZoneId = "America/Chicago",
+    )
     val chart = StarsEngine.calculateNatalChart(profile)
     val reading1 = StarsEngine.generateDailyHoroscope(
       year = 2026,
@@ -95,8 +127,36 @@ class StarsEngineTest {
 
   @Test
   fun calculateSynastry_computesDimensionsCrossAspectsAndSummary() {
-    val p1 = DEFAULT_BIRTH_PROFILES[0]
-    val p2 = DEFAULT_BIRTH_PROFILES[1]
+    val p1 = BirthProfile(
+      id = "test_her",
+      name = "My Chart",
+      relationshipTag = "Me",
+      birthYear = 1999,
+      birthMonth = 5,
+      birthDay = 14,
+      birthHour = 16,
+      birthMinute = 20,
+      hasExactBirthTime = true,
+      cityName = "Chicago, IL, USA",
+      latitude = 41.8781,
+      longitude = -87.6298,
+      timeZoneId = "America/Chicago",
+    )
+    val p2 = BirthProfile(
+      id = "test_partner",
+      name = "Partner",
+      relationshipTag = "Partner",
+      birthYear = 1998,
+      birthMonth = 10,
+      birthDay = 28,
+      birthHour = 9,
+      birthMinute = 45,
+      hasExactBirthTime = true,
+      cityName = "Chicago, IL, USA",
+      latitude = 41.8781,
+      longitude = -87.6298,
+      timeZoneId = "America/Chicago",
+    )
     val c1 = StarsEngine.calculateNatalChart(p1)
     val c2 = StarsEngine.calculateNatalChart(p2)
 
@@ -124,41 +184,58 @@ class StarsEngineTest {
   }
 
   @Test
-  fun starsWidget_resolvesStateAndCyclesSigns() {
+  fun starsWidget_defaultsToCurrentBirthSignWhenNoProfiles_andCyclesSigns() {
     StarsWidgets.clearInMemoryStateForTesting()
     val repo = InMemoryStarsRepository()
     val cal = Calendar.getInstance().apply {
-      set(2026, Calendar.NOVEMBER, 22, 12, 0, 0)
+      set(2026, Calendar.NOVEMBER, 23, 12, 0, 0)
     }
 
     val initialState = StarsWidgets.resolveWidgetState(context = null, repository = repo, calendar = cal)
-    assertEquals(ZodiacSign.TAURUS, initialState.activeSign)
+    assertEquals(ZodiacSign.SAGITTARIUS, initialState.activeSign)
     assertTrue(initialState.mantraText.isNotBlank())
 
-    val nextSign = StarsWidgets.cycleWidgetSign(context = null, repository = repo, refreshWidgets = false)
-    assertEquals(ZodiacSign.GEMINI, nextSign)
+    val nextSign = ZodiacSign.entries[(initialState.activeSign.ordinal + 1) % ZodiacSign.entries.size]
+    StarsWidgets.saveOverrideSign(null, nextSign)
 
     val cycledState = StarsWidgets.resolveWidgetState(context = null, repository = repo, calendar = cal)
-    assertEquals(ZodiacSign.GEMINI, cycledState.activeSign)
+    assertEquals(ZodiacSign.CAPRICORN, cycledState.activeSign)
     StarsWidgets.clearInMemoryStateForTesting()
   }
 
   @Test
-  fun starsSignThemeColor_tracksActiveSignFromStarsTool() {
+  fun starsSignThemeColor_followsCurrentCalendarStarSignRatherThanFocusedSign() {
     assertTrue(isStarsSignThemeColorSetting(THEME_COLOR_STARS_SIGN))
     assertFalse(isStarsSignThemeColorSetting("SYSTEM"))
 
-    StarsEngine.updateActiveSign(ZodiacSign.SCORPIO)
+    val scorpioCal = Calendar.getInstance().apply {
+      set(2026, Calendar.NOVEMBER, 5, 12, 0, 0)
+    }
+    val resolvedScorpio = StarsEngine.resolveCurrentSign(calendar = scorpioCal)
+    assertEquals(ZodiacSign.SCORPIO, resolvedScorpio)
     assertEquals(
       parseHexColor(ZodiacSign.SCORPIO.powerColorHex),
       resolveStarsSignThemeColor(),
     )
 
-    StarsEngine.updateActiveSign(ZodiacSign.TAURUS)
+    // Focusing/overriding a different sign in the Stars tool or widget must not alter the current star sign theme color
+    StarsWidgets.saveOverrideSign(null, ZodiacSign.ARIES)
     assertEquals(
-      parseHexColor(ZodiacSign.TAURUS.powerColorHex),
+      parseHexColor(ZodiacSign.SCORPIO.powerColorHex),
       resolveStarsSignThemeColor(),
     )
+    StarsWidgets.clearInMemoryStateForTesting()
+
+    val sagCal = Calendar.getInstance().apply {
+      set(2026, Calendar.NOVEMBER, 23, 12, 0, 0)
+    }
+    val resolvedSag = StarsEngine.resolveCurrentSign(calendar = sagCal)
+    assertEquals(ZodiacSign.SAGITTARIUS, resolvedSag)
+    assertEquals(
+      parseHexColor(ZodiacSign.SAGITTARIUS.powerColorHex),
+      resolveStarsSignThemeColor(),
+    )
+    StarsEngine.resolveCurrentSign()
   }
 
   @Test

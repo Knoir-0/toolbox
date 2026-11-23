@@ -8964,7 +8964,7 @@ private fun ExpandedMusicPlayerOverlay(
         modifier = Modifier
           .fillMaxWidth()
           .then(
-            if (queueFraction < 0.999f) {
+            if (queueFraction < 0.995f) {
               Modifier.weight(artworkWeight)
             } else {
               Modifier
@@ -9058,7 +9058,6 @@ private fun ExpandedMusicPlayerOverlay(
                 val collapseScale = 0.72f + 0.28f * artVisibilityFraction
                 scaleX = collapseScale
                 scaleY = collapseScale
-                translationY = -queueFraction * size.height * 0.35f
               },
             contentAlignment = Alignment.Center,
           ) {
@@ -9528,55 +9527,45 @@ private fun ExpandedMusicPlayerOverlay(
             targetValue = if (isQueueExpanded) 180f else 0f,
             label = "QueueChevronRotation",
           )
-          val handleContainerColor = lerp(
-            Color.White.copy(alpha = 0.12f),
-            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
-            queueFraction,
-          )
-          val handlePrimaryTextColor = lerp(
-            Color.White,
-            MaterialTheme.colorScheme.onSurface,
-            queueFraction,
-          )
-          val handleSecondaryTextColor = lerp(
-            Color.White.copy(alpha = 0.72f),
-            MaterialTheme.colorScheme.onSurfaceVariant,
-            queueFraction,
-          )
-          val handlePillColor = lerp(
-            Color.White.copy(alpha = 0.45f),
-            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-            queueFraction,
-          )
+          val handlePrimaryTextColor = Color.White
+          val handleSecondaryTextColor = Color.White.copy(alpha = 0.72f)
+          val handlePillColor = Color.White.copy(alpha = 0.45f)
+          var handleLayoutCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
-          Surface(
-            shape = RoundedCornerShape(
-              topStart = 20.dp,
-              topEnd = 20.dp,
-              bottomStart = ((1f - queueFraction) * 20f).dp,
-              bottomEnd = ((1f - queueFraction) * 20f).dp,
-            ),
-            color = handleContainerColor,
-            border = BorderStroke(
-              width = 1.dp,
-              color = Color.White.copy(alpha = 0.16f * (1f - queueFraction * 0.5f)),
-            ),
+          Box(
             modifier = Modifier
               .fillMaxWidth()
               .padding(bottom = ((1f - queueFraction) * 6f).dp)
+              .onGloballyPositioned { coords ->
+                handleLayoutCoordinates = coords
+              }
               .pointerInput(queueDragRangePx) {
                 var dragStartFraction = 0f
-                var totalDragY = 0f
+                var dragStartRootY = 0f
+                var totalRootDragY = 0f
+                var lastStepRootDeltaY = 0f
                 detectVerticalDragGestures(
-                  onDragStart = {
+                  onDragStart = { startOffset ->
                     dragStartFraction = queueExpandAnimatable.value
-                    totalDragY = 0f
+                    dragStartRootY = handleLayoutCoordinates?.localToRoot(startOffset)?.y ?: startOffset.y
+                    totalRootDragY = 0f
+                    lastStepRootDeltaY = 0f
                   },
                   onVerticalDrag = { change, dragAmount ->
                     change.consume()
-                    totalDragY += dragAmount
-                    val deltaFraction = -totalDragY / queueDragRangePx.coerceAtLeast(1f)
-                    val nextFraction = (dragStartFraction + deltaFraction).coerceIn(0f, 1f)
+                    val currentRootY = handleLayoutCoordinates?.localToRoot(change.position)?.y
+                    val newTotalRootDragY = if (currentRootY != null) {
+                      currentRootY - dragStartRootY
+                    } else {
+                      totalRootDragY + dragAmount
+                    }
+                    val stepDelta = newTotalRootDragY - totalRootDragY
+                    if (abs(stepDelta) > 0.5f) {
+                      lastStepRootDeltaY = stepDelta
+                    }
+                    totalRootDragY = newTotalRootDragY
+                    val rangePx = queueDragRangePx.coerceAtLeast(1f)
+                    val nextFraction = (dragStartFraction - (totalRootDragY / rangePx)).coerceIn(0f, 1f)
                     coroutineScope.launch {
                       queueExpandAnimatable.snapTo(nextFraction)
                     }
@@ -9584,8 +9573,8 @@ private fun ExpandedMusicPlayerOverlay(
                   onDragEnd = {
                     val cur = queueExpandAnimatable.value
                     val shouldExpand = when {
-                      totalDragY < -24f -> true
-                      totalDragY > 24f -> false
+                      lastStepRootDeltaY < -6f || (totalRootDragY < -24f && lastStepRootDeltaY <= 0f) -> true
+                      lastStepRootDeltaY > 6f || (totalRootDragY > 24f && lastStepRootDeltaY >= 0f) -> false
                       else -> cur >= 0.5f
                     }
                     animateQueueTo(shouldExpand)
@@ -9595,23 +9584,57 @@ private fun ExpandedMusicPlayerOverlay(
                   },
                 )
               }
-              .pointerInput(Unit) {
-                detectTapGestures { toggleQueueSheet() }
-              }
+              .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = { toggleQueueSheet() },
+              )
               .testTag("music_queue_panel_toggle"),
           ) {
-            Column(
+            Box(
               modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-              horizontalAlignment = Alignment.CenterHorizontally,
-              verticalArrangement = Arrangement.Center,
+                .padding(horizontal = 4.dp, vertical = 10.dp)
+                .testTag("expanded_player_up_next_button"),
+              contentAlignment = Alignment.Center,
             ) {
-              // Grab handle pill integrated at top of bar
+              // Left: Queue icon, label, and song count badge
+              Row(
+                modifier = Modifier.align(Alignment.CenterStart),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                  contentDescription = null,
+                  tint = accentColor,
+                  modifier = Modifier.size(16.dp),
+                )
+                Text(
+                  text = "Queue",
+                  style = MaterialTheme.typography.labelLarge,
+                  fontWeight = FontWeight.Bold,
+                  color = handlePrimaryTextColor,
+                )
+                if (queue.isNotEmpty()) {
+                  Badge(
+                    containerColor = accentColor.copy(alpha = 0.25f),
+                    contentColor = handlePrimaryTextColor,
+                  ) {
+                    Text(
+                      text = queue.size.toString(),
+                      modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                  }
+                }
+              }
+
+              // Center: Drag bar pill aligned vertically with the middle of the queue drag handle
               Box(
                 modifier = Modifier
-                  .width(34.dp)
-                  .height(3.5.dp)
+                  .align(Alignment.Center)
+                  .width(36.dp)
+                  .height(4.dp)
                   .background(
                     color = handlePillColor,
                     shape = CircleShape,
@@ -9619,74 +9642,36 @@ private fun ExpandedMusicPlayerOverlay(
                   .testTag("music_queue_grab_handle"),
               )
 
-              Spacer(modifier = Modifier.height(4.dp))
-
+              // Right: Next track preview & chevron
               Row(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .clickable(onClick = { toggleQueueSheet() })
-                  .testTag("expanded_player_up_next_button"),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.align(Alignment.CenterEnd),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
               ) {
-                Row(
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                  Icon(
-                    imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-                    contentDescription = null,
-                    tint = accentColor,
-                    modifier = Modifier.size(16.dp),
-                  )
+                if (!isQueueExpanded && queue.isNotEmpty()) {
+                  val nextTrack = queue.getOrNull((currentQueueIndex + 1) % queue.size)
+                  val previewText = if (queue.size > 1 && nextTrack != null) {
+                    "Next: ${nextTrack.title}"
+                  } else {
+                    "Track ${currentQueueIndex + 1}/${queue.size}"
+                  }
                   Text(
-                    text = "Queue",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = handlePrimaryTextColor,
-                  )
-                  if (queue.isNotEmpty()) {
-                    Badge(
-                      containerColor = accentColor.copy(alpha = 0.25f),
-                      contentColor = handlePrimaryTextColor,
-                    ) {
-                      Text(
-                        text = queue.size.toString(),
-                        modifier = Modifier.padding(horizontal = 4.dp),
-                      )
-                    }
-                  }
-                }
-
-                Row(
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                  if (!isQueueExpanded && queue.isNotEmpty()) {
-                    val nextTrack = queue.getOrNull((currentQueueIndex + 1) % queue.size)
-                    val previewText = if (queue.size > 1 && nextTrack != null) {
-                      "Next: ${nextTrack.title}"
-                    } else {
-                      "Track ${currentQueueIndex + 1}/${queue.size}"
-                    }
-                    Text(
-                      text = previewText,
-                      style = MaterialTheme.typography.labelSmall,
-                      color = handleSecondaryTextColor,
-                      maxLines = 1,
-                      overflow = TextOverflow.Ellipsis,
-                      modifier = Modifier.widthIn(max = 160.dp),
-                    )
-                  }
-                  Icon(
-                    imageVector = Icons.Default.KeyboardArrowUp,
-                    contentDescription = "Toggle queue panel",
-                    modifier = Modifier
-                      .size(18.dp)
-                      .rotate(arrowRotation),
-                    tint = handleSecondaryTextColor,
+                    text = previewText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = handleSecondaryTextColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 120.dp),
                   )
                 }
+                Icon(
+                  imageVector = Icons.Default.KeyboardArrowUp,
+                  contentDescription = "Toggle queue panel",
+                  modifier = Modifier
+                    .size(18.dp)
+                    .rotate(arrowRotation),
+                  tint = handleSecondaryTextColor,
+                )
               }
             }
           }
@@ -9695,13 +9680,9 @@ private fun ExpandedMusicPlayerOverlay(
         }
       }
 
-      // 8. Slide-Up Queue Panel (pushes album art out of the way while keeping controls & title visible)
+      // 8. Slide-Up Queue Panel (shares the same view & album-art gradient background while pushing controls up and hiding album art)
       if (!isExternal && queueFraction > 0.001f) {
-        Surface(
-          shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-          color = MaterialTheme.colorScheme.surfaceContainerHigh,
-          tonalElevation = 6.dp,
-          shadowElevation = 12.dp,
+        Box(
           modifier = Modifier
             .fillMaxWidth()
             .weight(queueWeight)
@@ -9718,6 +9699,8 @@ private fun ExpandedMusicPlayerOverlay(
             isExpanded = isQueueExpanded,
             isSheetSettledExpanded = isSheetSettledExpanded,
             queueOpenCount = queueOpenCount,
+            accentColor = accentColor,
+            usePlayerBackground = true,
             onSelectQueueIndex = onSelectQueueIndex,
             onMoveQueueItem = onMoveQueueItem,
             onSaveQueueAsPlaylist = onSaveQueueAsPlaylist,
@@ -9815,6 +9798,8 @@ private fun PlaybackQueueSheetContent(
   isExpanded: Boolean,
   isSheetSettledExpanded: Boolean = isExpanded,
   queueOpenCount: Int = 0,
+  accentColor: Color = MaterialTheme.colorScheme.primary,
+  usePlayerBackground: Boolean = false,
   onSelectQueueIndex: (Int) -> Unit,
   onMoveQueueItem: (fromIndex: Int, toIndex: Int) -> Unit,
   onSaveQueueAsPlaylist: () -> Unit,
@@ -9838,6 +9823,10 @@ private fun PlaybackQueueSheetContent(
   val itemHeightsPx = remember { mutableMapOf<Int, Float>() }
   val currentQueue by rememberUpdatedState(queue)
   val currentOnMoveQueueItem by rememberUpdatedState(onMoveQueueItem)
+
+  val primaryTextColor = if (usePlayerBackground) Color.White else MaterialTheme.colorScheme.onSurface
+  val secondaryTextColor = if (usePlayerBackground) Color.White.copy(alpha = 0.72f) else MaterialTheme.colorScheme.onSurfaceVariant
+  val activeHighlightColor = if (usePlayerBackground) accentColor else MaterialTheme.colorScheme.primary
 
   LaunchedEffect(isExpanded, isSheetSettledExpanded, queueOpenCount) {
     if ((isExpanded || isSheetSettledExpanded) && focusedQueueIndex in queue.indices && draggedIndex == null) {
@@ -9863,7 +9852,7 @@ private fun PlaybackQueueSheetContent(
       Row(
         modifier = Modifier
           .fillMaxWidth()
-          .padding(horizontal = 16.dp, vertical = 8.dp),
+          .padding(horizontal = 20.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
@@ -9874,11 +9863,19 @@ private fun PlaybackQueueSheetContent(
             "${queue.size} songs in queue"
           },
           style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          color = secondaryTextColor,
         )
         FilledTonalButton(
           onClick = onSaveQueueAsPlaylist,
           shape = CircleShape,
+          colors = if (usePlayerBackground) {
+            ButtonDefaults.filledTonalButtonColors(
+              containerColor = Color.White.copy(alpha = 0.16f),
+              contentColor = Color.White,
+            )
+          } else {
+            ButtonDefaults.filledTonalButtonColors()
+          },
           contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
           modifier = Modifier.testTag("save_queue_as_playlist_button"),
         ) {
@@ -9908,7 +9905,7 @@ private fun PlaybackQueueSheetContent(
         Text(
           text = "No songs in queue — select a track or album to start listening!",
           style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          color = secondaryTextColor,
           textAlign = TextAlign.Center,
         )
       }
@@ -9920,7 +9917,7 @@ private fun PlaybackQueueSheetContent(
           .fillMaxWidth()
           .weight(1f)
           .testTag("music_queue_list"),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         itemsIndexed(queue, key = { idx, t -> "${idx}_${t.id}" }) { index, item ->
@@ -9928,14 +9925,20 @@ private fun PlaybackQueueSheetContent(
           val isDragging = draggedIndex == index
           Surface(
             shape = RoundedCornerShape(14.dp),
-            color = if (isCurrent) {
-              MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+            color = if (usePlayerBackground) {
+              if (isCurrent) accentColor.copy(alpha = 0.24f) else Color.White.copy(alpha = 0.10f)
             } else {
-              MaterialTheme.colorScheme.surfaceContainer
+              if (isCurrent) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+              } else {
+                MaterialTheme.colorScheme.surfaceContainer
+              }
             },
             shadowElevation = if (isDragging) 8.dp else 0.dp,
             border = if (isCurrent || isDragging) {
-              BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
+              BorderStroke(1.dp, activeHighlightColor.copy(alpha = if (usePlayerBackground) 0.7f else 0.6f))
+            } else if (usePlayerBackground) {
+              BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
             } else {
               null
             },
@@ -10021,7 +10024,7 @@ private fun PlaybackQueueSheetContent(
                   Icon(
                     imageVector = Icons.Default.DragHandle,
                     contentDescription = "Drag to reorder",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = secondaryTextColor,
                     modifier = Modifier.size(20.dp),
                   )
                 }
@@ -10060,9 +10063,9 @@ private fun PlaybackQueueSheetContent(
                       fontFamily = FontFamily.Monospace,
                       fontWeight = FontWeight.Bold,
                       color = if (isCurrent) {
-                        MaterialTheme.colorScheme.primary
+                        activeHighlightColor
                       } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
+                        secondaryTextColor
                       },
                     )
                     Text(
@@ -10070,9 +10073,9 @@ private fun PlaybackQueueSheetContent(
                       style = MaterialTheme.typography.bodyLarge,
                       fontWeight = FontWeight.Bold,
                       color = if (isCurrent) {
-                        MaterialTheme.colorScheme.primary
+                        activeHighlightColor
                       } else {
-                        MaterialTheme.colorScheme.onSurface
+                        primaryTextColor
                       },
                       maxLines = 1,
                       overflow = TextOverflow.Ellipsis,
@@ -10082,7 +10085,7 @@ private fun PlaybackQueueSheetContent(
                   Text(
                     text = "${item.artist} • ${item.album}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = secondaryTextColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                   )
@@ -10095,9 +10098,9 @@ private fun PlaybackQueueSheetContent(
                 fontWeight = FontWeight.ExtraBold,
                 fontFamily = FontFamily.Monospace,
                 color = if (isCurrent) {
-                  MaterialTheme.colorScheme.primary
+                  activeHighlightColor
                 } else {
-                  MaterialTheme.colorScheme.onSurface
+                  primaryTextColor
                 },
               )
             }

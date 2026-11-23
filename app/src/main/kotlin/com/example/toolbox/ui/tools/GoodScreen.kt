@@ -85,7 +85,7 @@ val GOOD_POSITIVE_MESSAGES: List<String> = listOf(
   "stay hydrated",
   "you got this",
   "made for you",
-  "i'm doing my best",
+  "do your best",
   "be you today",
   "be good",
   "help someone today",
@@ -142,7 +142,6 @@ val GOOD_POSITIVE_MESSAGES: List<String> = listOf(
   "this too shall pass",
   "endure",
   "please forgive",
-  "explore, somehow",
   "know that you are loved",
   "love you",
   "explore today",
@@ -163,7 +162,7 @@ val GOOD_POSITIVE_MESSAGES: List<String> = listOf(
   "forget about it",
   "make it happen",
   "stop waiting",
-  "you know what you must do",
+  "you know what to do",
   "i am as i am",
   "do you",
   "spread positivity",
@@ -201,6 +200,10 @@ val GOOD_POSITIVE_MESSAGES: List<String> = listOf(
   "go easy on yourself",
   "good enough",
   "grow a bit",
+  "you are enough",
+  "trust yourself",
+  "take your time",
+  "touch grass",
 )
 
 val DEFAULT_GOOD_MESSAGE: String = GOOD_POSITIVE_MESSAGES.first()

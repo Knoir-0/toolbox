@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import com.example.toolbox.ui.theme.CircleShape
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Calculate
@@ -501,10 +503,11 @@ private fun MinimizedRulerHudPill(
   onExpandHud: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val hexagonEnabled = currentHexagonIconButtons()
   Surface(
     onClick = onExpandHud,
     modifier = modifier.testTag("minimized_ruler_hud"),
-    shape = RoundedCornerShape(50),
+    shape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(50),
     color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
     shadowElevation = 6.dp,
@@ -582,6 +585,9 @@ private fun RulerHeroCard(
           .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
+        val hexagonEnabled = currentHexagonIconButtons()
+        val unitTogglePillShape = if (hexagonEnabled) HorizontalHexagonShape else RoundedCornerShape(50)
+
         // Top Header: Metric / Imperial Toggle + Calibrate + Minimize HUD
         Row(
           modifier = Modifier.fillMaxWidth(),
@@ -591,7 +597,7 @@ private fun RulerHeroCard(
           Surface(
             onClick = onToggleUnit,
             modifier = Modifier.testTag("ruler_unit_toggle"),
-            shape = RoundedCornerShape(50),
+            shape = unitTogglePillShape,
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
           ) {
@@ -603,7 +609,7 @@ private fun RulerHeroCard(
               RulerUnitSystem.entries.forEach { unit ->
                 val isSelected = primaryUnit == unit
                 Surface(
-                  shape = RoundedCornerShape(50),
+                  shape = unitTogglePillShape,
                   color = if (isSelected) {
                     MaterialTheme.colorScheme.primary
                   } else {
@@ -761,10 +767,14 @@ private fun RulerHeroCard(
             SegmentedButton(
               selected = rulerMode == mode,
               onClick = { onSelectMode(mode) },
-              shape = SegmentedButtonDefaults.itemShape(
-                index = index,
-                count = RulerMode.entries.size,
-              ),
+              shape = if (hexagonEnabled) {
+                HorizontalHexagonShape
+              } else {
+                SegmentedButtonDefaults.itemShape(
+                  index = index,
+                  count = RulerMode.entries.size,
+                )
+              },
             ) {
               Text(
                 text = mode.label,

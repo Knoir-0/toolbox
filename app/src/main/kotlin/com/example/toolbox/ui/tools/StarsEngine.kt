@@ -1514,42 +1514,23 @@ val BUILTIN_BIRTH_CITIES: List<BirthCityPreset> = listOf(
 )
 
 /**
- * Default starter profiles so the user and her partner can explore charts and compatibility immediately.
+ * By default, no birth profiles are pre-filled; when no profiles exist, the Stars tool defaults
+ * to the current birth sign for today's date.
  */
-val DEFAULT_BIRTH_PROFILES: List<BirthProfile> = listOf(
-  BirthProfile(
-    id = "profile_her_stars",
-    name = "My Chart",
-    relationshipTag = "Me",
-    birthYear = 1999,
-    birthMonth = 5,
-    birthDay = 14,
-    birthHour = 16,
-    birthMinute = 20,
-    hasExactBirthTime = true,
-    cityName = "Chicago, IL, USA",
-    latitude = 41.8781,
-    longitude = -87.6298,
-    timeZoneId = "America/Chicago",
-    notes = "Primary natal chart profile",
-  ),
-  BirthProfile(
-    id = "profile_partner_stars",
-    name = "Partner",
-    relationshipTag = "Partner",
-    birthYear = 1998,
-    birthMonth = 10,
-    birthDay = 28,
-    birthHour = 9,
-    birthMinute = 45,
-    hasExactBirthTime = true,
-    cityName = "Chicago, IL, USA",
-    latitude = 41.8781,
-    longitude = -87.6298,
-    timeZoneId = "America/Chicago",
-    notes = "Partner synastry profile",
-  ),
-)
+val DEFAULT_BIRTH_PROFILES: List<BirthProfile> = emptyList()
+
+private fun isLegacyPrefilledDefaultProfile(profile: BirthProfile): Boolean {
+  return (profile.id == "profile_her_stars" &&
+    profile.name == "My Chart" &&
+    profile.birthYear == 1999 &&
+    profile.birthMonth == 5 &&
+    profile.birthDay == 14) ||
+    (profile.id == "profile_partner_stars" &&
+      profile.name == "Partner" &&
+      profile.birthYear == 1998 &&
+      profile.birthMonth == 10 &&
+      profile.birthDay == 28)
+}
 
 /**
  * Repository interface for persisting birth profiles, active chart selection, and favorite guide items.
@@ -1568,11 +1549,11 @@ interface StarsRepository {
 
 class InMemoryStarsRepository(
   initialProfiles: List<BirthProfile> = DEFAULT_BIRTH_PROFILES,
-  initialActiveId: String = initialProfiles.firstOrNull()?.id ?: "profile_her_stars",
+  initialActiveId: String = initialProfiles.firstOrNull()?.id ?: "",
   initialPartnerId: String = initialProfiles.getOrNull(1)?.id ?: initialActiveId,
   initialFavorites: Set<String> = setOf("sign_TAURUS", "sign_SCORPIO", "planet_MOON", "planet_VENUS"),
 ) : StarsRepository {
-  private var profiles: List<BirthProfile> = initialProfiles.ifEmpty { DEFAULT_BIRTH_PROFILES }
+  private var profiles: List<BirthProfile> = initialProfiles
   private var activeId: String = initialActiveId
   private var partnerId: String = initialPartnerId
   private var favorites: Set<String> = initialFavorites
@@ -1580,28 +1561,33 @@ class InMemoryStarsRepository(
   override fun loadProfiles(): List<BirthProfile> = profiles
 
   override fun saveProfiles(profiles: List<BirthProfile>) {
-    this.profiles = profiles.ifEmpty { DEFAULT_BIRTH_PROFILES }
-    if (this.profiles.none { it.id == activeId }) {
-      activeId = this.profiles.first().id
+    this.profiles = profiles
+    if (this.profiles.isEmpty()) {
+      activeId = ""
+      partnerId = ""
+    } else {
+      if (this.profiles.none { it.id == activeId }) {
+        activeId = this.profiles.first().id
+      }
+      if (this.profiles.none { it.id == partnerId }) {
+        partnerId = this.profiles.getOrNull(1)?.id ?: this.profiles.first().id
+      }
     }
-    val active = this.profiles.firstOrNull { it.id == activeId } ?: this.profiles.first()
-    StarsEngine.updateActiveSign(StarsEngine.calculateNatalChart(active).sunSign)
   }
 
   override fun getActiveProfileId(): String {
-    return profiles.firstOrNull { it.id == activeId }?.id ?: profiles.first().id
+    return profiles.firstOrNull { it.id == activeId }?.id ?: profiles.firstOrNull()?.id ?: ""
   }
 
   override fun setActiveProfileId(profileId: String) {
     activeId = profileId
-    val active = profiles.firstOrNull { it.id == activeId } ?: profiles.first()
-    StarsEngine.updateActiveSign(StarsEngine.calculateNatalChart(active).sunSign)
   }
 
   override fun getMatchPartnerProfileId(): String {
     return profiles.firstOrNull { it.id == partnerId }?.id
       ?: profiles.getOrNull(1)?.id
-      ?: profiles.first().id
+      ?: profiles.firstOrNull()?.id
+      ?: ""
   }
 
   override fun setMatchPartnerProfileId(profileId: String) {
@@ -1630,45 +1616,43 @@ class SharedPreferencesStarsRepository(
 
   override fun loadProfiles(): List<BirthProfile> {
     val raw = prefs.getString(PREF_KEY_STARS_PROFILES_JSON, null)
-    if (raw.isNullOrBlank()) return DEFAULT_BIRTH_PROFILES
+    if (raw.isNullOrBlank()) return emptyList()
     return try {
       val arr = JSONArray(raw)
       val list = mutableListOf<BirthProfile>()
       for (i in 0 until arr.length()) {
         val obj = arr.optJSONObject(i) ?: continue
-        list.add(BirthProfile.fromJson(obj))
+        val profile = BirthProfile.fromJson(obj)
+        if (!isLegacyPrefilledDefaultProfile(profile)) {
+          list.add(profile)
+        }
       }
-      list.ifEmpty { DEFAULT_BIRTH_PROFILES }
+      list
     } catch (_: Exception) {
-      DEFAULT_BIRTH_PROFILES
+      emptyList()
     }
   }
 
   override fun saveProfiles(profiles: List<BirthProfile>) {
-    val nonEmpty = profiles.ifEmpty { DEFAULT_BIRTH_PROFILES }
     val arr = JSONArray()
-    nonEmpty.forEach { arr.put(it.toJson()) }
+    profiles.forEach { arr.put(it.toJson()) }
     prefs.edit().putString(PREF_KEY_STARS_PROFILES_JSON, arr.toString()).apply()
-    val activeId = getActiveProfileId()
-    val active = nonEmpty.firstOrNull { it.id == activeId } ?: nonEmpty.first()
-    StarsEngine.updateActiveSign(StarsEngine.calculateNatalChart(active).sunSign)
   }
 
   override fun getActiveProfileId(): String {
     val all = loadProfiles()
+    if (all.isEmpty()) return ""
     val saved = prefs.getString(PREF_KEY_STARS_ACTIVE_PROFILE_ID, null)
     return all.firstOrNull { it.id == saved }?.id ?: all.first().id
   }
 
   override fun setActiveProfileId(profileId: String) {
     prefs.edit().putString(PREF_KEY_STARS_ACTIVE_PROFILE_ID, profileId).apply()
-    val all = loadProfiles()
-    val active = all.firstOrNull { it.id == profileId } ?: all.first()
-    StarsEngine.updateActiveSign(StarsEngine.calculateNatalChart(active).sunSign)
   }
 
   override fun getMatchPartnerProfileId(): String {
     val all = loadProfiles()
+    if (all.isEmpty()) return ""
     val saved = prefs.getString(PREF_KEY_STARS_MATCH_PARTNER_ID, null)
     return all.firstOrNull { it.id == saved }?.id
       ?: all.getOrNull(1)?.id
@@ -1714,10 +1698,45 @@ object StarsEngine {
   val pendingWidgetTabFlow: StateFlow<String?> = _pendingWidgetTabFlow.asStateFlow()
 
   /**
-   * Observable current sign from the Stars tool so [com.example.toolbox.ui.theme.ToolboxTheme]
-   * and Settings can dynamically theme the application according to the active sign's power color.
+   * Returns the current birth sign ([ZodiacSign]) for the given calendar date (defaults to today).
    */
-  var activeSignState by mutableStateOf(ZodiacSign.TAURUS)
+  fun getCurrentZodiacSign(calendar: Calendar = Calendar.getInstance()): ZodiacSign {
+    val month = calendar.get(Calendar.MONTH) + 1
+    val day = calendar.get(Calendar.DAY_OF_MONTH)
+    return ZodiacSign.fromMonthDay(month, day)
+  }
+
+  /**
+   * Creates a fallback [BirthProfile] representing the current sky and current birth sign when
+   * no user birth profiles have been filled out yet.
+   */
+  fun createCurrentBirthSignFallbackProfile(
+    calendar: Calendar = Calendar.getInstance(),
+  ): BirthProfile {
+    val currentSign = getCurrentZodiacSign(calendar)
+    return BirthProfile(
+      id = "current_birth_sign_default",
+      name = currentSign.displayName,
+      relationshipTag = "Current Sign",
+      birthYear = calendar.get(Calendar.YEAR),
+      birthMonth = calendar.get(Calendar.MONTH) + 1,
+      birthDay = calendar.get(Calendar.DAY_OF_MONTH),
+      birthHour = 12,
+      birthMinute = 0,
+      hasExactBirthTime = false,
+      cityName = "New York, NY, USA",
+      latitude = 40.7128,
+      longitude = -74.0060,
+      timeZoneId = calendar.timeZone.id.ifBlank { "UTC" },
+    )
+  }
+
+  /**
+   * Observable current calendar star sign so [com.example.toolbox.ui.theme.ToolboxTheme]
+   * and Settings can dynamically theme the application according to the current star sign's
+   * power color (independent of whichever sign the user is currently browsing in the Stars tool).
+   */
+  var activeSignState by mutableStateOf(getCurrentZodiacSign())
     private set
 
   fun updateActiveSign(sign: ZodiacSign) {
@@ -1725,36 +1744,16 @@ object StarsEngine {
   }
 
   /**
-   * Resolves the current [ZodiacSign] from the Stars tool (checking any widget/today sign override
-   * first, then the active birth profile's Sun sign, and updating [activeSignState]).
+   * Resolves the current calendar [ZodiacSign] for today's date and updates [activeSignState].
    */
   fun resolveCurrentSign(
     context: Context? = null,
     repository: StarsRepository? = null,
+    calendar: Calendar = Calendar.getInstance(),
   ): ZodiacSign {
-    val overrideSign = StarsWidgets.loadOverrideSign(context)
-    if (overrideSign != null) {
-      activeSignState = overrideSign
-      return overrideSign
-    }
-    val repo = repository ?: context?.let {
-      try {
-        SharedPreferencesStarsRepository(it)
-      } catch (_: Throwable) {
-        null
-      }
-    }
-    if (repo != null) {
-      val profiles = repo.loadProfiles()
-      val activeId = repo.getActiveProfileId()
-      val active = profiles.firstOrNull { it.id == activeId } ?: profiles.firstOrNull()
-      if (active != null) {
-        val sign = calculateNatalChart(active).sunSign
-        activeSignState = sign
-        return sign
-      }
-    }
-    return activeSignState
+    val currentSign = getCurrentZodiacSign(calendar)
+    activeSignState = currentSign
+    return currentSign
   }
 
   fun requestWidgetTab(tabName: String?) {

@@ -43,13 +43,22 @@ class ElementsScreenTest {
     composeTestRule.onNodeWithTag("element_tile_Li").performClick()
     composeTestRule.waitForIdle()
 
-    // Tap spotlight inspect button to open the Element Inspector dialog
+    // Tap spotlight inspect button to open the full-screen Element Inspector view
     composeTestRule.onNodeWithTag("spotlight_inspect_button").performClick()
     composeTestRule.waitForIdle()
 
+    composeTestRule.onNodeWithTag("element_inspector_view").assertIsDisplayed()
     composeTestRule.onNodeWithTag("element_inspector_dialog").assertIsDisplayed()
     composeTestRule.onNodeWithText("Lithium (#3)").assertIsDisplayed()
-    composeTestRule.onNodeWithTag("dialog_close_button").performClick()
+
+    val screenBounds = composeTestRule.onNodeWithTag("elements_screen")
+      .fetchSemanticsNode().boundsInRoot
+    val inspectorBounds = composeTestRule.onNodeWithTag("element_inspector_view")
+      .fetchSemanticsNode().boundsInRoot
+    assertEquals(screenBounds.width, inspectorBounds.width, 2f)
+    assertEquals(screenBounds.height, inspectorBounds.height, 2f)
+
+    composeTestRule.onNodeWithTag("inspector_back_button").performClick()
     composeTestRule.waitForIdle()
 
     // Switch to Molar Mass calculator tab

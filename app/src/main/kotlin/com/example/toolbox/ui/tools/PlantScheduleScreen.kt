@@ -45,6 +45,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import com.example.toolbox.ui.theme.CircleShape
+import com.example.toolbox.ui.theme.HorizontalHexagonShape
+import com.example.toolbox.ui.theme.currentHexagonIconButtons
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -2914,6 +2916,7 @@ private fun MonthMultiSelectorRow(
   tagPrefix: String,
   onToggleMonth: (Int) -> Unit,
 ) {
+  val monthPillShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp)
   FlowRow(
     modifier = Modifier.fillMaxWidth(),
     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -2922,11 +2925,11 @@ private fun MonthMultiSelectorRow(
     CalendarMonth.entries.forEach { month ->
       val isSelected = month.number in selectedMonths
       Surface(
-        shape = RoundedCornerShape(20.dp),
+        shape = monthPillShape,
         color = if (isSelected) activeContainerColor else MaterialTheme.colorScheme.surfaceVariant,
         contentColor = if (isSelected) activeContentColor else MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier
-          .clip(RoundedCornerShape(20.dp))
+          .clip(monthPillShape)
           .clickable { onToggleMonth(month.number) }
           .testTag("${tagPrefix}_${month.number}"),
       ) {

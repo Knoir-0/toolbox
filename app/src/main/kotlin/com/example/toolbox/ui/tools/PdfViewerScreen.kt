@@ -632,6 +632,7 @@ fun PdfViewerScreen(
 
           Spacer(Modifier.height(8.dp))
 
+          val hexagonEnabled = currentHexagonIconButtons()
           SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             PdfEditMode.entries.forEachIndexed { index, mode ->
               SegmentedButton(
@@ -644,11 +645,14 @@ fun PdfViewerScreen(
                   }
                   editMode = mode
                 },
-                shape =
+                shape = if (hexagonEnabled) {
+                  HorizontalHexagonShape
+                } else {
                   SegmentedButtonDefaults.itemShape(
                     index = index,
                     count = PdfEditMode.entries.size,
-                  ),
+                  )
+                },
                 icon = {
                   val modeIcon =
                     when (mode) {
