@@ -1727,12 +1727,13 @@ class MainScreenTest {
     composeTestRule.onNodeWithTag("error_logs_screen").assertDoesNotExist()
     composeTestRule.onNodeWithTag("settings_screen").assertIsDisplayed()
 
-    // Verify License button is positioned below Error Logs button and opens the License view
+    // Verify License button is positioned side by side with Error Logs button and opens the License view
     composeTestRule.onNodeWithTag("error_logs_button").performScrollTo()
     composeTestRule.onNodeWithTag("license_button").performScrollTo()
     val errorLogsBounds = composeTestRule.onNodeWithTag("error_logs_button").fetchSemanticsNode().boundsInRoot
     val licenseBounds = composeTestRule.onNodeWithTag("license_button").fetchSemanticsNode().boundsInRoot
-    assertTrue(licenseBounds.top >= errorLogsBounds.bottom)
+    assertTrue(licenseBounds.left >= errorLogsBounds.right)
+    assertEquals(errorLogsBounds.top, licenseBounds.top, 2f)
 
     composeTestRule.onNodeWithTag("license_button").performClick()
     composeTestRule.waitForIdle()

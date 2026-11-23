@@ -61,10 +61,13 @@ import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_ACCENT
 import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_DOMINANT
 import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_PLAYER
 import com.example.toolbox.ui.main.THEME_COLOR_MUSIC_SECONDARY
+import com.example.toolbox.ui.main.THEME_COLOR_STARS_SIGN
 import com.example.toolbox.ui.main.ThemeMode
 import com.example.toolbox.ui.tools.AlbumArtPalette
 import com.example.toolbox.ui.tools.HarmonyMode
 import com.example.toolbox.ui.tools.MusicPlayerEngine
+import com.example.toolbox.ui.tools.StarsEngine
+import com.example.toolbox.ui.tools.ZodiacSign
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -485,6 +488,16 @@ fun isMusicPlayerAccentColorSetting(accentColorSetting: String?): Boolean {
     return MusicPlayerColorOption.fromPrefValue(accentColorSetting) != null
 }
 
+fun isStarsSignThemeColorSetting(themeColorSetting: String?): Boolean {
+    return themeColorSetting?.trim().equals(THEME_COLOR_STARS_SIGN, ignoreCase = true)
+}
+
+fun resolveStarsSignThemeColor(
+    sign: ZodiacSign = StarsEngine.activeSignState,
+): Color {
+    return parseHexColor(sign.powerColorHex) ?: Color(0xFF8E66A6)
+}
+
 fun colorToHexString(color: Color): String {
     val r = (color.red * 255f).roundToInt().coerceIn(0, 255)
     val g = (color.green * 255f).roundToInt().coerceIn(0, 255)
@@ -677,6 +690,7 @@ fun resolveEffectiveAccentColor(
         else -> explicitMusicThemeOption
     }
     val primary = musicThemeOption?.resolveColor(musicPalette)
+        ?: (if (isStarsSignThemeColorSetting(themeColorHex)) resolveStarsSignThemeColor() else null)
         ?: parseHexColor(themeColorHex)
         ?: fallbackPrimary
     val harmonyOption = AccentHarmonyOption.fromPrefValue(accentColorSetting, darkTheme = darkTheme)
@@ -792,10 +806,20 @@ fun ToolboxTheme(
     } else {
         null
     }
+    val isStarsSignTheme = isStarsSignThemeColorSetting(themeColor)
+    LaunchedEffect(context, isStarsSignTheme, isInspection) {
+        if (!isInspection && isStarsSignTheme) {
+            StarsEngine.resolveCurrentSign(context = context)
+        }
+    }
+    val activeStarsSign = StarsEngine.activeSignState
     val musicPalette = MusicPlayerEngine.activeTrackPalette
     val baseColorScheme = when {
         musicThemeOption != null -> {
             createCustomColorScheme(musicThemeOption.resolveColor(musicPalette), darkTheme)
+        }
+        isStarsSignTheme -> {
+            createCustomColorScheme(resolveStarsSignThemeColor(activeStarsSign), darkTheme)
         }
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)

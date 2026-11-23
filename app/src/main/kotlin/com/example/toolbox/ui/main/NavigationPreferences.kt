@@ -17,6 +17,7 @@ import com.example.toolbox.ui.tools.GoodWidgets
 import com.example.toolbox.ui.tools.MusicPlayerWidgets
 import com.example.toolbox.ui.tools.NotesWidgets
 import com.example.toolbox.ui.tools.PlantScheduleWidgets
+import com.example.toolbox.ui.tools.StarsWidgets
 import com.example.toolbox.ui.tools.TodoListWidgets
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -71,6 +72,7 @@ const val THEME_COLOR_MUSIC_PLAYER = "MUSIC_PLAYER"
 const val THEME_COLOR_MUSIC_DOMINANT = "MUSIC_PLAYER_DOMINANT"
 const val THEME_COLOR_MUSIC_SECONDARY = "MUSIC_PLAYER_SECONDARY"
 const val THEME_COLOR_MUSIC_ACCENT = "MUSIC_PLAYER_ACCENT"
+const val THEME_COLOR_STARS_SIGN = "STARS_CURRENT_SIGN"
 const val DEFAULT_MUSIC_PLAYER_THEME_ENABLED = true
 const val DEFAULT_MUSIC_PLAYER_COLOR_OPTION = THEME_COLOR_MUSIC_PLAYER
 const val ACCENT_COLOR_MUSIC_PLAYER = THEME_COLOR_MUSIC_PLAYER
@@ -94,10 +96,11 @@ enum class AppPermission(
     title = "Camera",
     manifestPermission = "android.permission.CAMERA",
     manifestPermissions = listOf("android.permission.CAMERA"),
-    description = "Capture photos, record video, and sample live camera colors",
+    description = "Capture photos, record video, sample live camera colors, and overlay Sky AR constellations",
     toolsUsingPermission = listOf(
       Tool.CAMERA,
       Tool.COLOR_PICKER,
+      Tool.STARS,
     ),
   ),
   RECORD_AUDIO(
@@ -1075,6 +1078,7 @@ class DefaultNavigationPreferencesRepository(
     DiceRollerWidgets.updateAllWidgets(ctx)
     BackgroundTextureWidgets.updateAllWidgets(ctx)
     GoodWidgets.updateAllWidgets(ctx)
+    StarsWidgets.updateAllWidgets(ctx)
   }
 
   private val _toolsPerRowFlow = MutableStateFlow(getToolsPerRow())
@@ -2126,6 +2130,7 @@ val TOOL_DATA_SHARED_PREFERENCES_NAMES: List<String> = listOf(
   com.example.toolbox.ui.tools.FILE_CONVERTER_PREFS_NAME,
   com.example.toolbox.ui.tools.ELEMENTS_PREFS_NAME,
   com.example.toolbox.ui.tools.GOOD_PREFS_NAME,
+  com.example.toolbox.ui.tools.STARS_PREFS_NAME,
   "files_tool_preferences",
 )
 

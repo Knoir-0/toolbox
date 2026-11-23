@@ -52,6 +52,7 @@ enum class SearchResultType(val label: String) {
   COLOR_SWATCH("Color Swatch"),
   OBD2_DTC("Trouble Code"),
   CHEMICAL_ELEMENT("Chemical Element"),
+  ASTROLOGY("Astrology & Stars"),
   FILE_FORMAT("File Format"),
   MUSIC_TRACK("Music Track"),
   AUDIO_RECORDING("Audio Format"),
@@ -382,6 +383,27 @@ object SearchEngine {
       keywords = listOf("good", "positive", "affirmation", "kindness", "encouragement", "quote", "vibes", "mindfulness", "motivation", "love"),
       sampleQueries = listOf("Good", "Positive", "Kindness"),
     ),
+    Tool.STARS to ToolSearchMetadata(
+      tool = Tool.STARS,
+      summary = "Daily horoscopes, Big Three natal chart calculator, Sky AR constellation camera, synastry & lunar tracker",
+      description = "Calculate Sun, Moon, and Rising (Ascendant) signs with an interactive 2D Natal Chart Wheel, point your camera at the night sky in Sky AR to draw constellations like Orion's Belt live over the viewfinder, read personalized transit-backed daily horoscopes, track live Moon phases & Mercury retrograde, compare partner compatibility, and browse the complete zodiac & constellation encyclopedia.",
+      capabilities = listOf(
+        "Daily Horoscope (Overview, Love, Career, Do's & Don'ts, Lucky # & Power Color)",
+        "Big Three (Sun, Moon, Rising) & 10-Planet Natal Chart Wheel Calculator",
+        "Sky AR Live Camera Constellation Overlay & Orion's Belt Star-Snap CV",
+        "Live Moon Phase Canvas & Retrograde Watch",
+        "Synastry Partner & Sign Compatibility Matcher",
+        "Searchable Zodiac Signs, Planets, 12 Houses, Aspects & 16 Constellations Guide",
+      ),
+      keywords = listOf(
+        "stars", "astrology", "horoscope", "zodiac", "natal chart", "birth chart", "big three",
+        "sun sign", "moon sign", "rising sign", "ascendant", "synastry", "compatibility",
+        "moon phase", "full moon", "new moon", "retrograde", "mercury retrograde",
+        "sky ar", "constellation", "orion", "orions belt", "big dipper", "cassiopeia", "stargazing",
+        "aries", "taurus", "gemini", "cancer", "leo", "virgo", "libra", "scorpio", "sagittarius", "capricorn", "aquarius", "pisces",
+      ),
+      sampleQueries = listOf("Orion", "Taurus", "Scorpio", "Mercury Retrograde"),
+    ),
     Tool.SEARCH to ToolSearchMetadata(
       tool = Tool.SEARCH,
       summary = "Universal search across all tools, calculators, converters, user data & catalogs",
@@ -483,6 +505,7 @@ object SearchEngine {
     allResults.addAll(searchColorSwatchesAndHarmonies(normalizedQuery, tokens))
     allResults.addAll(searchObd2Catalog(rawTrimmed, normalizedQuery, tokens))
     allResults.addAll(searchElementsCatalog(normalizedQuery, tokens))
+    allResults.addAll(searchStarsCatalog(normalizedQuery, tokens))
     allResults.addAll(searchFileConverterFormats(normalizedQuery, tokens))
     allResults.addAll(searchMusicTracks(normalizedQuery, tokens))
     allResults.addAll(searchAudioRecorderCatalog(normalizedQuery, tokens))
@@ -1913,6 +1936,36 @@ object SearchEngine {
           SearchResultDetailRow("Phase at STP", element.standardPhase.label),
           SearchResultDetailRow("Discovered", "${element.discoveryYear} (${element.discoveredBy})"),
         ),
+      )
+    }
+  }
+
+  private fun searchStarsCatalog(
+    normalizedQuery: String,
+    tokens: List<String>,
+  ): List<SearchResultItem> {
+    return StarsEngine.GUIDE_CATALOG.mapNotNull { entry ->
+      val score = scoreTextMatch(
+        normalizedQuery = normalizedQuery,
+        tokens = tokens,
+        primaryText = "${entry.glyph} ${entry.title}",
+        secondaryText = "${entry.subtitle} • ${entry.summary}",
+        keywordsText = "${entry.keywords} stars astrology horoscope zodiac chart",
+        baseWeight = 135,
+      )
+      if (score <= 0) return@mapNotNull null
+
+      SearchResultItem(
+        id = "stars_${entry.id}",
+        title = "${entry.glyph} ${entry.title}",
+        subtitle = entry.subtitle,
+        snippet = entry.summary,
+        badgeLabel = entry.badgeLabel,
+        tool = Tool.STARS,
+        resultType = SearchResultType.ASTROLOGY,
+        score = score,
+        colorHex = entry.powerColorHex,
+        detailRows = entry.details.map { (k, v) -> SearchResultDetailRow(k, v) },
       )
     }
   }

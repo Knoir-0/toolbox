@@ -50,7 +50,9 @@ import com.example.toolbox.ui.theme.calculateAccentHarmonyColor
 import com.example.toolbox.ui.theme.createCustomColorScheme
 import com.example.toolbox.ui.theme.createTertiaryTokens
 import com.example.toolbox.ui.theme.drawWidgetBackgroundTextureOverlay
+import com.example.toolbox.ui.theme.isStarsSignThemeColorSetting
 import com.example.toolbox.ui.theme.parseHexColor
+import com.example.toolbox.ui.theme.resolveStarsSignThemeColor
 import org.json.JSONObject
 import kotlin.math.max
 import kotlin.math.min
@@ -262,6 +264,10 @@ object TodoListWidgets {
     val baseScheme: ColorScheme = when {
       musicOption != null -> {
         createCustomColorScheme(musicOption.resolveColor(MusicPlayerEngine.activeTrackPalette), darkTheme)
+      }
+      isStarsSignThemeColorSetting(themeColor) -> {
+        val currentSign = StarsEngine.resolveCurrentSign(context = context)
+        createCustomColorScheme(resolveStarsSignThemeColor(currentSign), darkTheme)
       }
       themeColor == DEFAULT_THEME_COLOR_SYSTEM &&
         context != null &&

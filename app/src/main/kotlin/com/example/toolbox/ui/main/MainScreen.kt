@@ -139,6 +139,7 @@ import com.example.toolbox.ui.tools.RecipeBookScreen
 import com.example.toolbox.ui.tools.RulerScreen
 import com.example.toolbox.ui.tools.SearchScreen
 import com.example.toolbox.ui.tools.SettingsScreen
+import com.example.toolbox.ui.tools.StarsScreen
 import com.example.toolbox.ui.tools.TodoListScreen
 import com.example.toolbox.ui.tools.UnitConverterScreen
 import com.example.toolbox.ui.tools.VideoEditorScreen
@@ -2517,6 +2518,11 @@ fun ToolContentView(
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.GOOD -> GoodScreen(
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.STARS -> StarsScreen(
+        onOpenColorPicker = onOpenColorPicker,
+        onOpenNotes = { preferencesRepository?.incrementToolUsage(Tool.NOTES) },
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.SEARCH -> SearchScreen(

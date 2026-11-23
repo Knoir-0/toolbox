@@ -522,6 +522,20 @@
         </activity-alias>
 
         <activity-alias
+            android:name=".MainActivityToolStars"
+            android:targetActivity=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_stars"
+            android:roundIcon="@mipmap/ic_tool_stars"
+            android:label="Stars">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
             android:name=".MainActivityToolSearch"
             android:targetActivity=".MainActivity"
             android:enabled="true"
@@ -774,6 +788,22 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/good_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".ui.tools.StarsWidgetProvider"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_stars"
+            android:roundIcon="@mipmap/ic_tool_stars"
+            android:label="@string/stars_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.toolbox.stars.ACTION_WIDGET_REFRESH" />
+                <action android:name="com.example.toolbox.stars.ACTION_WIDGET_CYCLE_SIGN" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/stars_widget_info" />
         </receiver>
 
         <service

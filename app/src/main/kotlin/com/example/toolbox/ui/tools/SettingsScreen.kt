@@ -174,6 +174,7 @@ import com.example.toolbox.ui.main.MAX_TOOLS_PER_ROW
 import com.example.toolbox.ui.main.MIN_TOOLS_PER_ROW
 import com.example.toolbox.ui.main.NavigationPreferencesRepository
 import com.example.toolbox.ui.main.PermissionToolUsageStat
+import com.example.toolbox.ui.main.THEME_COLOR_STARS_SIGN
 import com.example.toolbox.ui.main.ThemeMode
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.ToolSortOrder
@@ -194,7 +195,9 @@ import com.example.toolbox.ui.theme.calculateAccentHarmonyColor
 import com.example.toolbox.ui.theme.colorToHexString
 import com.example.toolbox.ui.theme.isAutoAccentColorSetting
 import com.example.toolbox.ui.theme.isMusicPlayerThemeColorSetting
+import com.example.toolbox.ui.theme.isStarsSignThemeColorSetting
 import com.example.toolbox.ui.theme.parseHexColor
+import com.example.toolbox.ui.theme.resolveStarsSignThemeColor
 import com.example.toolbox.ui.theme.toolboxScreenBackground
 import kotlin.math.roundToInt
 import kotlin.random.Random
@@ -2577,10 +2580,11 @@ fun SettingsScreen(
     val currentMusicTrack = MusicPlayerEngine.activeTrack
     val activeSystemMediaInfo = MusicPlayerEngine.activeSystemMediaInfo
     val isMusicPlaying = MusicPlayerEngine.isMusicPlaying
-    LaunchedEffect(localContext, isThemeColorExpanded, musicPlayerThemeEnabled) {
+    LaunchedEffect(localContext, isThemeColorExpanded, musicPlayerThemeEnabled, themeColor) {
       if (!isInspection) {
         isSystemMediaListenerEnabled = MusicPlayerEngine.isSystemMediaListenerEnabled(localContext)
         MusicPlayerEngine.syncExternalSystemMediaSessions(localContext)
+        StarsEngine.resolveCurrentSign(context = localContext)
       }
     }
     DisposableEffect(lifecycleOwner, localContext, isInspection) {
@@ -2607,10 +2611,16 @@ fun SettingsScreen(
     val activeMusicThemeColor = remember(currentMusicPalette, selectedMusicColorOption) {
       selectedMusicColorOption.resolveColor(currentMusicPalette)
     }
+    val currentStarsSign = StarsEngine.activeSignState
+    val currentStarsSignColor = remember(currentStarsSign) {
+      resolveStarsSignThemeColor(currentStarsSign)
+    }
+    val isStarsSignSelected = isStarsSignThemeColorSetting(themeColor)
     val isMusicThemeCurrentlyActive = musicPlayerThemeEnabled && isMusicPlaying
     val activeThemeColorPreset = PRESET_COLORS.find { it.hex.equals(themeColor, ignoreCase = true) }
     val fallbackThemeColorSummary = when {
       themeColor == DEFAULT_THEME_COLOR_SYSTEM || isMusicPlayerThemeColorSetting(themeColor) -> "System Preset"
+      isStarsSignSelected -> "Current Star Sign (${currentStarsSign.displayName})"
       activeThemeColorPreset != null -> "${activeThemeColorPreset.name} (${activeThemeColorPreset.hex})"
       else -> "Custom ($themeColor)"
     }
@@ -2621,6 +2631,7 @@ fun SettingsScreen(
     }
     val activeThemeColorBadge = when {
       isMusicThemeCurrentlyActive -> activeMusicThemeColor
+      isStarsSignSelected -> currentStarsSignColor
       themeColor == DEFAULT_THEME_COLOR_SYSTEM || isMusicPlayerThemeColorSetting(themeColor) -> {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
           MaterialTheme.colorScheme.primary
@@ -2801,6 +2812,100 @@ fun SettingsScreen(
                 }
 
                 if (isSystemSelected) {
+                  Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                  ) {
+                    Text(
+                      text = "Active",
+                      style = MaterialTheme.typography.labelSmall,
+                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                  }
+                }
+              }
+            }
+
+            // Current Stars Sign Option Card (directly under System Preset)
+            OutlinedCard(
+              onClick = {
+                if (!isInspection) {
+                  StarsEngine.resolveCurrentSign(context = localContext)
+                }
+                preferencesRepository.setThemeColor(THEME_COLOR_STARS_SIGN)
+                customHexInput = ""
+              },
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("color_preset_stars_sign"),
+              shape = RoundedCornerShape(12.dp),
+              border = CardDefaults.outlinedCardBorder().copy(
+                brush = androidx.compose.ui.graphics.SolidColor(
+                  if (isStarsSignSelected) MaterialTheme.colorScheme.primary
+                  else MaterialTheme.colorScheme.outlineVariant
+                ),
+              ),
+              colors = CardDefaults.outlinedCardColors(
+                containerColor = if (isStarsSignSelected) {
+                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                } else {
+                  Color.Transparent
+                },
+              ),
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                  modifier = Modifier.weight(1f),
+                ) {
+                  Box(
+                    modifier = Modifier
+                      .size(24.dp)
+                      .clip(CircleShape)
+                      .background(currentStarsSignColor),
+                    contentAlignment = Alignment.Center,
+                  ) {
+                    if (isStarsSignSelected) {
+                      Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp),
+                      )
+                    } else {
+                      Text(
+                        text = currentStarsSign.glyph,
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                      )
+                    }
+                  }
+                  Column {
+                    Text(
+                      text = "Current Star Sign (${currentStarsSign.displayName})",
+                      style = MaterialTheme.typography.titleSmall,
+                      fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                      text = "${currentStarsSign.powerColorName} (${currentStarsSign.powerColorHex}) • Syncs with active sign in Stars",
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                    )
+                  }
+                }
+
+                if (isStarsSignSelected) {
                   Surface(
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.primary,
@@ -5360,42 +5465,58 @@ fun SettingsScreen(
       }
     }
 
-    // Error Logs button
-    OutlinedButton(
-      onClick = {
-        showErrorLogsDialog = true
-      },
-      shape = CircleShape,
+    // Error Logs & License (side-by-side rounded buttons)
+    Row(
       modifier = Modifier
         .fillMaxWidth()
-        .testTag("error_logs_button"),
+        .testTag("error_logs_license_buttons_row"),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      Icon(
-        imageVector = Icons.Default.BugReport,
-        contentDescription = null,
-        modifier = Modifier.size(18.dp),
-      )
-      Spacer(modifier = Modifier.width(8.dp))
-      Text("Error Logs")
-    }
+      OutlinedButton(
+        onClick = {
+          showErrorLogsDialog = true
+        },
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+        modifier = Modifier
+          .weight(1f)
+          .testTag("error_logs_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.BugReport,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+          text = "Error Logs",
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
 
-    // License button below Error Logs
-    OutlinedButton(
-      onClick = {
-        showLicenseDialog = true
-      },
-      shape = CircleShape,
-      modifier = Modifier
-        .fillMaxWidth()
-        .testTag("license_button"),
-    ) {
-      Icon(
-        imageVector = Icons.Default.Gavel,
-        contentDescription = null,
-        modifier = Modifier.size(18.dp),
-      )
-      Spacer(modifier = Modifier.width(8.dp))
-      Text("License")
+      OutlinedButton(
+        onClick = {
+          showLicenseDialog = true
+        },
+        shape = CircleShape,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+        modifier = Modifier
+          .weight(1f)
+          .testTag("license_button"),
+      ) {
+        Icon(
+          imageVector = Icons.Default.Gavel,
+          contentDescription = null,
+          modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+          text = "License",
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
     }
 
     // Donate button at the very bottom of Settings (unless the 1% top-position easter egg moved it to the top)

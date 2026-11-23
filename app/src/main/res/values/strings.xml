@@ -23,4 +23,6 @@
     <string name="background_texture_widget_description">Vertically scrollable style and background texture selector that adapts columns as resized horizontally</string>
     <string name="good_widget_label">Good</string>
     <string name="good_widget_description">Simple bar displaying a positive message on the left and a one-tap refresh button on the right</string>
+    <string name="stars_widget_label">Stars</string>
+    <string name="stars_widget_description">Daily horoscope mantra, current Moon phase &amp; sign, Big Three natal summary, and one-tap sign switcher</string>
 </resources>

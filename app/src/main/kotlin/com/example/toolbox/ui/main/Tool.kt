@@ -2,6 +2,7 @@ package com.example.toolbox.ui.main
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.StickyNote2
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Camera
 import androidx.compose.material.icons.filled.Casino
@@ -212,6 +213,11 @@ enum class Tool(
   GOOD(
     title = "Good",
     icon = Icons.Default.Mood,
+    category = ToolCategory.MISCELLANEOUS,
+  ),
+  STARS(
+    title = "Stars",
+    icon = Icons.Default.AutoAwesome,
     category = ToolCategory.MISCELLANEOUS,
   ),
   SEARCH(
