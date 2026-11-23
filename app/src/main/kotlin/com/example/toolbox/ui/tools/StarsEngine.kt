@@ -1547,11 +1547,14 @@ interface StarsRepository {
   fun toggleFavoriteGuideId(id: String): Set<String>
 }
 
+private val LEGACY_PREFILLED_DEFAULT_FAVORITE_IDS: Set<String> =
+  setOf("sign_TAURUS", "sign_SCORPIO", "planet_MOON", "planet_VENUS")
+
 class InMemoryStarsRepository(
   initialProfiles: List<BirthProfile> = DEFAULT_BIRTH_PROFILES,
   initialActiveId: String = initialProfiles.firstOrNull()?.id ?: "",
   initialPartnerId: String = initialProfiles.getOrNull(1)?.id ?: initialActiveId,
-  initialFavorites: Set<String> = setOf("sign_TAURUS", "sign_SCORPIO", "planet_MOON", "planet_VENUS"),
+  initialFavorites: Set<String> = emptySet(),
 ) : StarsRepository {
   private var profiles: List<BirthProfile> = initialProfiles
   private var activeId: String = initialActiveId
@@ -1664,8 +1667,12 @@ class SharedPreferencesStarsRepository(
   }
 
   override fun loadFavoriteGuideIds(): Set<String> {
-    val saved = prefs.getStringSet(PREF_KEY_STARS_FAVORITE_IDS, null)
-    return saved?.toSet() ?: setOf("sign_TAURUS", "sign_SCORPIO", "planet_MOON", "planet_VENUS")
+    val saved = prefs.getStringSet(PREF_KEY_STARS_FAVORITE_IDS, null)?.toSet() ?: return emptySet()
+    if (saved == LEGACY_PREFILLED_DEFAULT_FAVORITE_IDS) {
+      prefs.edit().remove(PREF_KEY_STARS_FAVORITE_IDS).apply()
+      return emptySet()
+    }
+    return saved
   }
 
   override fun saveFavoriteGuideIds(ids: Set<String>) {

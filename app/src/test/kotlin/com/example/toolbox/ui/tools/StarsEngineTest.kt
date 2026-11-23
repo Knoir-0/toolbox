@@ -64,11 +64,14 @@ class StarsEngineTest {
   }
 
   @Test
-  fun defaultProfiles_areEmptyByDefault_andFallBackToCurrentBirthSign() {
+  fun defaultProfiles_andFavorites_areEmptyByDefault_andFallBackToCurrentBirthSign() {
     assertTrue(DEFAULT_BIRTH_PROFILES.isEmpty())
     val repo = InMemoryStarsRepository()
     assertTrue(repo.loadProfiles().isEmpty())
+    assertTrue(repo.loadFavoriteGuideIds().isEmpty())
     assertEquals("", repo.getActiveProfileId())
+    assertEquals("Night Sky", StarsTab.SKY_AR.label)
+    assertEquals("StarsMoonSparkles", Tool.STARS.icon.name)
 
     val novCal = Calendar.getInstance().apply {
       set(2026, Calendar.NOVEMBER, 23, 12, 0, 0)

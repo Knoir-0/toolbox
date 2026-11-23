@@ -2,7 +2,6 @@ package com.example.toolbox.ui.main
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.StickyNote2
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Camera
 import androidx.compose.material.icons.filled.Casino
@@ -217,7 +216,7 @@ enum class Tool(
   ),
   STARS(
     title = "Stars",
-    icon = Icons.Default.AutoAwesome,
+    icon = StarsMoonSparklesIcon,
     category = ToolCategory.MISCELLANEOUS,
   ),
   SEARCH(
@@ -333,6 +332,67 @@ val MetronomeIcon: ImageVector by lazy {
       lineTo(17.3f, 11.53f)
       lineTo(16.43f, 11.03f)
       lineTo(13.45f, 16.2f)
+      close()
+    }
+  }.build()
+}
+
+/**
+ * Custom vector icon representing a crescent moon with two 4-point sparkles.
+ */
+val StarsMoonSparklesIcon: ImageVector by lazy {
+  ImageVector.Builder(
+    name = "StarsMoonSparkles",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+  ).apply {
+    // Crescent moon
+    path(fill = SolidColor(Color.Black)) {
+      moveTo(9.4f, 4.15f)
+      arcTo(
+        horizontalEllipseRadius = 9f,
+        verticalEllipseRadius = 9f,
+        theta = 0f,
+        isMoreThanHalf = true,
+        isPositiveArc = false,
+        x1 = 19.85f,
+        y1 = 14.6f,
+      )
+      arcTo(
+        horizontalEllipseRadius = 7.5f,
+        verticalEllipseRadius = 7.5f,
+        theta = 0f,
+        isMoreThanHalf = false,
+        isPositiveArc = true,
+        x1 = 9.4f,
+        y1 = 4.15f,
+      )
+      close()
+    }
+    // Primary 4-point sparkle
+    path(fill = SolidColor(Color.Black)) {
+      moveTo(18.5f, 2.5f)
+      lineTo(19.6f, 4.9f)
+      lineTo(22f, 6f)
+      lineTo(19.6f, 7.1f)
+      lineTo(18.5f, 9.5f)
+      lineTo(17.4f, 7.1f)
+      lineTo(15f, 6f)
+      lineTo(17.4f, 4.9f)
+      close()
+    }
+    // Secondary smaller 4-point sparkle
+    path(fill = SolidColor(Color.Black)) {
+      moveTo(13.5f, 1.5f)
+      lineTo(14.15f, 2.85f)
+      lineTo(15.5f, 3.5f)
+      lineTo(14.15f, 4.15f)
+      lineTo(13.5f, 5.5f)
+      lineTo(12.85f, 4.15f)
+      lineTo(11.5f, 3.5f)
+      lineTo(12.85f, 2.85f)
       close()
     }
   }.build()

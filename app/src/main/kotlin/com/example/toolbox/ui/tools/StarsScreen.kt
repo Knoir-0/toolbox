@@ -197,7 +197,7 @@ enum class StarsTab(
 ) {
   TODAY("Today"),
   CHART("Chart"),
-  SKY_AR("Sky AR"),
+  SKY_AR("Night Sky"),
   MATCH("Match"),
   GUIDE("Guide"),
 }
@@ -3267,7 +3267,7 @@ private fun BirthProfileEditDialog(
           contentAlignment = Alignment.Center,
         ) {
           Icon(
-            imageVector = Icons.Default.AutoAwesome,
+            imageVector = Tool.STARS.icon,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(24.dp),
@@ -4064,7 +4064,7 @@ private fun StarsSkyArCameraTabContent(
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
           }
           canvas.drawText(
-            "Stars Sky AR • ${aimedConstellation.glyph} ${aimedConstellation.name} (${aimedConstellation.subtitle})",
+            "Stars Night Sky • ${aimedConstellation.glyph} ${aimedConstellation.name} (${aimedConstellation.subtitle})",
             36f,
             outH - 48f,
             titlePaint,

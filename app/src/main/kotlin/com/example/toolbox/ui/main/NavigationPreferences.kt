@@ -97,7 +97,7 @@ enum class AppPermission(
     title = "Camera",
     manifestPermission = "android.permission.CAMERA",
     manifestPermissions = listOf("android.permission.CAMERA"),
-    description = "Capture photos, record video, sample live camera colors, and overlay Sky AR constellations",
+    description = "Capture photos, record video, sample live camera colors, and overlay Night Sky constellations",
     toolsUsingPermission = listOf(
       Tool.CAMERA,
       Tool.COLOR_PICKER,
