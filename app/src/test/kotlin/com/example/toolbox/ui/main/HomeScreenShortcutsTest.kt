@@ -86,6 +86,9 @@ class HomeScreenShortcutsTest {
   fun resolveShortcutBackgroundColor_defaultsToFallbackPurpleWhenContextIsNull() {
     assertEquals(Color(0xFF8E66A6), resolveShortcutBackgroundColor())
     assertEquals(Color(0xFF8E66A6), resolveShortcutBackgroundColor(null))
+    assertEquals(Color(0xFF8E66A6), resolveShortcutBackgroundColor(DEFAULT_THEME_COLOR_SYSTEM))
+    assertEquals(Color(0xFF8E66A6), resolveShortcutBackgroundColor("#8E66A6"))
+    assertEquals(Color(0xFF00668B), resolveShortcutBackgroundColor("#00668B"))
   }
 
   @Test

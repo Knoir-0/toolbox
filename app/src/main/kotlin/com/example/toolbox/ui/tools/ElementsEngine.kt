@@ -13,6 +13,7 @@ const val ELEMENTS_PREFS_NAME = "elements_tool_preferences"
 private const val PREF_KEY_FAVORITE_ATOMIC_NUMBERS = "favorite_atomic_numbers"
 const val PREF_KEY_SELECTED_ATOMIC_NUMBER = "selected_atomic_number"
 const val PREF_KEY_WIDGET_ATOMIC_NUMBER = "elements_widget_atomic_number"
+const val PREF_KEY_WIDGET_VIEW_MODE = "elements_widget_view_mode"
 
 /**
  * Primary chemical categories of the Periodic Table of Elements.
@@ -94,11 +95,70 @@ enum class MatterPhase(
 enum class ElementBlock(
   val symbol: String,
   val label: String,
+  val maxElectrons: Int,
+  val orbitalBoxCount: Int,
 ) {
-  S("s", "s-block"),
-  P("p", "p-block"),
-  D("d", "d-block"),
-  F("f", "f-block"),
+  S("s", "s-block", maxElectrons = 2, orbitalBoxCount = 1),
+  P("p", "p-block", maxElectrons = 6, orbitalBoxCount = 3),
+  D("d", "d-block", maxElectrons = 10, orbitalBoxCount = 5),
+  F("f", "f-block", maxElectrons = 14, orbitalBoxCount = 7),
+}
+
+/**
+ * Represents a populated atomic suborbital / subshell (e.g., `1s²`, `2p⁶`, `3d⁶`, `4f¹⁴`) with its
+ * principal quantum number [principalShell] (`n = 1..7`), orbital [block] (`s`, `p`, `d`, `f`),
+ * occupied [electrons], capacity, and Hund's-rule spin-pair orbital box distribution (`⇅` / `↑`).
+ */
+data class ElementSuborbital(
+  val principalShell: Int,
+  val block: ElementBlock,
+  val electrons: Int,
+  val isCore: Boolean = false,
+) {
+  val subshellLabel: String
+    get() = "$principalShell${block.symbol}"
+
+  val maxElectrons: Int
+    get() = block.maxElectrons
+
+  val orbitalBoxCount: Int
+    get() = block.orbitalBoxCount
+
+  val formattedNotation: String
+    get() = "$subshellLabel${PeriodicTableEngine.toSuperscriptDigits(electrons)}"
+
+  /**
+   * Computes the electron occupancy (`0`, `1`, or `2`) in each spatial orbital box of this subshell
+   * according to Hund's Rule of Maximum Multiplicity (each orbital box receives 1 spin-up `↑`
+   * electron first before pairing with a spin-down `↓` electron `⇅`).
+   */
+  val orbitalBoxOccupancies: List<Int>
+    get() {
+      val boxes = orbitalBoxCount
+      val clamped = electrons.coerceIn(0, maxElectrons)
+      return List(boxes) { boxIdx ->
+        when {
+          clamped > boxes + boxIdx -> 2 // paired spin-up + spin-down (⇅)
+          clamped > boxIdx -> 1         // single unpaired spin-up (↑)
+          else -> 0                     // empty orbital (□)
+        }
+      }
+    }
+
+  val unpairedElectrons: Int
+    get() = orbitalBoxOccupancies.count { it == 1 }
+
+  /**
+   * Formats the Hund's rule orbital spin box diagram for this suborbital (e.g., `[⇅][↑][↑][↑][↑]`).
+   */
+  val spinBoxesFormatted: String
+    get() = orbitalBoxOccupancies.joinToString("") { occ ->
+      when (occ) {
+        2 -> "[⇅]"
+        1 -> "[↑]"
+        else -> "[ ]"
+      }
+    }
 }
 
 /**
@@ -189,6 +249,33 @@ data class ChemicalElement(
 
   val shellsFormatted: String
     get() = electronShells.joinToString(" · ")
+
+  /**
+   * All populated atomic suborbitals from `1s` up to the outermost subshell, expanding any
+   * noble-gas core (`[He]`, `[Ne]`, `[Ar]`, `[Kr]`, `[Xe]`, `[Rn]`) with [ElementSuborbital.isCore] = `true`.
+   */
+  val suborbitals: List<ElementSuborbital>
+    get() = PeriodicTableEngine.parseElementSuborbitals(this)
+
+  /**
+   * The outer / valence suborbitals beyond the preceding noble-gas core (or all suborbitals for H and He).
+   */
+  val valenceSuborbitals: List<ElementSuborbital>
+    get() = suborbitals.filter { !it.isCore }.ifEmpty { suborbitals }
+
+  /**
+   * Complete expanded suborbital electron configuration without noble-gas shorthand
+   * (e.g. `"1s² 2s² 2p⁶ 3s² 3p⁶ 3d⁶ 4s²"`).
+   */
+  val fullElectronConfiguration: String
+    get() = suborbitals.joinToString(" ") { it.formattedNotation }
+
+  /**
+   * Compact Hund's-rule orbital spin box representation of the outer/valence suborbitals
+   * (e.g. `"3d⁶ [⇅][↑][↑][↑][↑] • 4s² [⇅]"`).
+   */
+  val valenceSuborbitalsSpinSummary: String
+    get() = valenceSuborbitals.joinToString(" • ") { "${it.formattedNotation} ${it.spinBoxesFormatted}" }
 
   val groupLabel: String
     get() = group?.let { "Group $it" } ?: when (category) {
@@ -1467,6 +1554,96 @@ object PeriodicTableEngine {
     BY_SYMBOL_LOWER[symbol.trim().lowercase(Locale.ROOT)]
 
   fun byGridPosition(row: Int, col: Int): ChemicalElement? = BY_GRID_CELL[row to col]
+
+  private val SUPERSCRIPT_DIGITS = charArrayOf('⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹')
+
+  fun toSuperscriptDigits(number: Int): String {
+    return number.toString().map { ch ->
+      if (ch in '0'..'9') SUPERSCRIPT_DIGITS[ch - '0'] else ch
+    }.joinToString("")
+  }
+
+  private fun parseSuperscriptOrAsciiInt(raw: String): Int? {
+    if (raw.isEmpty()) return null
+    var acc = 0
+    for (ch in raw) {
+      val digit = when (ch) {
+        in '0'..'9' -> ch - '0'
+        '⁰' -> 0
+        '¹' -> 1
+        '²' -> 2
+        '³' -> 3
+        '⁴' -> 4
+        '⁵' -> 5
+        '⁶' -> 6
+        '⁷' -> 7
+        '⁸' -> 8
+        '⁹' -> 9
+        else -> return null
+      }
+      acc = acc * 10 + digit
+    }
+    return acc
+  }
+
+  private val SUBORBITALS_CACHE: Map<Int, List<ElementSuborbital>> by lazy {
+    val cache = HashMap<Int, List<ElementSuborbital>>(128)
+    fun resolveFor(element: ChemicalElement): List<ElementSuborbital> {
+      cache[element.atomicNumber]?.let { return it }
+      val result = ArrayList<ElementSuborbital>()
+      val tokens = element.electronConfiguration.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+      for (token in tokens) {
+        if (token.startsWith("[") && token.endsWith("]") && token.length > 2) {
+          val coreSymbol = token.substring(1, token.length - 1)
+          val coreElement = BY_SYMBOL_CASE_SENSITIVE[coreSymbol] ?: bySymbol(coreSymbol)
+          if (coreElement != null && coreElement.atomicNumber != element.atomicNumber) {
+            resolveFor(coreElement).forEach { sub ->
+              result.add(sub.copy(isCore = true))
+            }
+          }
+        } else {
+          var idx = 0
+          while (idx < token.length && token[idx].isDigit()) {
+            idx++
+          }
+          val shell = token.substring(0, idx).toIntOrNull() ?: continue
+          if (idx >= token.length) continue
+          val blockChar = token[idx].lowercaseChar()
+          val block = when (blockChar) {
+            's' -> ElementBlock.S
+            'p' -> ElementBlock.P
+            'd' -> ElementBlock.D
+            'f' -> ElementBlock.F
+            else -> continue
+          }
+          val countStr = token.substring(idx + 1)
+          val electrons = parseSuperscriptOrAsciiInt(countStr) ?: 1
+          result.add(
+            ElementSuborbital(
+              principalShell = shell,
+              block = block,
+              electrons = electrons,
+              isCore = false,
+            )
+          )
+        }
+      }
+      cache[element.atomicNumber] = result
+      return result
+    }
+    for (el in ALL_ELEMENTS) {
+      resolveFor(el)
+    }
+    cache
+  }
+
+  /**
+   * Returns the complete ordered list of populated [ElementSuborbital]s for [element],
+   * expanding any noble-gas core (`[He]`, `[Ne]`, `[Ar]`, `[Kr]`, `[Xe]`, `[Rn]`).
+   */
+  fun parseElementSuborbitals(element: ChemicalElement): List<ElementSuborbital> {
+    return SUBORBITALS_CACHE[element.atomicNumber].orEmpty()
+  }
 
   /**
    * Filters and sorts elements according to optional search query, category filter, phase filter,

@@ -44,6 +44,13 @@ class ElementsEngineTest {
         el.atomicNumber,
         el.electronShells.sum(),
       )
+      assertTrue("Suborbitals must not be empty for ${el.symbol}", el.suborbitals.isNotEmpty())
+      assertTrue("Valence suborbitals must not be empty for ${el.symbol}", el.valenceSuborbitals.isNotEmpty())
+      assertEquals(
+        "Suborbitals electron sum for ${el.symbol} (${el.fullElectronConfiguration}) must equal atomicNumber ${el.atomicNumber}",
+        el.atomicNumber,
+        el.suborbitals.sumOf { it.electrons },
+      )
       assertEquals(el, PeriodicTableEngine.byAtomicNumber(el.atomicNumber))
       assertEquals(el, PeriodicTableEngine.bySymbol(el.symbol))
       assertEquals(el, PeriodicTableEngine.bySymbol(el.symbol.lowercase()))
@@ -228,46 +235,83 @@ class ElementsEngineTest {
   }
 
   @Test
-  fun elementsWidgets_resolvesStateStepsPrevNextPicksRandomAndTogglesFavorites() {
+  fun elementsWidgets_defaultsToMainPeriodicTableView_andTappingElementSwitchesToElementInfoWithSuborbitals() {
     ElementsWidgets.clearInMemoryStateForTesting()
     val repo = InMemoryElementsRepository(initialFavorites = setOf(79))
 
-    // 1. Default widget state resolves Hydrogen (#1)
+    // 1. All 118 element cells in the Periodic Table widget have distinct, valid view IDs
+    val cellIds = (1..118).map { ElementsWidgets.cellViewIdForAtomicNumber(it) }
+    assertTrue(cellIds.all { it != 0 })
+    assertEquals(118, cellIds.distinct().size)
+
+    // 2. Default widget state starts in TABLE view (main view is the Periodic Table) with Hydrogen (#1)
     val initialState = ElementsWidgets.resolveWidgetState(context = null, repository = repo)
+    assertEquals(ElementsWidgetViewMode.TABLE, initialState.viewMode)
     assertEquals(1, initialState.element.atomicNumber)
     assertEquals("H", initialState.element.symbol)
     assertFalse(initialState.isFavorite)
     assertTrue(initialState.titleText.contains("Hydrogen (#1)"))
     assertTrue(initialState.subtitleText.contains(initialState.element.formattedAtomicMass))
     assertTrue(initialState.configText.contains("1s¹"))
+    assertEquals("Suborbitals: 1s¹ [↑]", initialState.suborbitalsText)
+    assertEquals("1s¹", initialState.fullSuborbitalsText)
 
-    // 2. Step backward from #1 wraps around to Oganesson (#118)
+    // 3. Tapping Iron (#26) on the Periodic Table switches the widget to ELEMENT_INFO view with suborbitals
+    val tappedIron = ElementsWidgets.selectElementInWidget(
+      context = null,
+      atomicNumber = 26,
+      refreshWidgets = false,
+    )
+    assertEquals(26, tappedIron.atomicNumber)
+    assertEquals("Fe", tappedIron.symbol)
+    val ironState = ElementsWidgets.resolveWidgetState(context = null, repository = repo)
+    assertEquals(ElementsWidgetViewMode.ELEMENT_INFO, ironState.viewMode)
+    assertEquals(26, ironState.element.atomicNumber)
+    assertEquals("Suborbitals: 3d⁶ [⇅][↑][↑][↑][↑] • 4s² [⇅]", ironState.suborbitalsText)
+    assertEquals("1s² 2s² 2p⁶ 3s² 3p⁶ 3d⁶ 4s²", ironState.fullSuborbitalsText)
+
+    // 4. Tapping Back to Periodic Table returns the widget to TABLE main view
+    assertEquals(
+      ElementsWidgetViewMode.TABLE,
+      ElementsWidgets.showPeriodicTableInWidget(context = null, refreshWidgets = false),
+    )
+    assertEquals(
+      ElementsWidgetViewMode.TABLE,
+      ElementsWidgets.resolveWidgetState(context = null, repository = repo).viewMode,
+    )
+
+    // 5. Step backward/forward from #1 wraps around to Oganesson (#118) and shows ELEMENT_INFO
+    ElementsWidgets.saveFocusedAtomicNumber(null, 1)
     val wrappedBack = ElementsWidgets.stepFocusedElement(context = null, delta = -1, refreshWidgets = false)
     assertEquals(118, wrappedBack.atomicNumber)
     assertEquals("Og", wrappedBack.symbol)
+    assertEquals(ElementsWidgetViewMode.ELEMENT_INFO, ElementsWidgets.loadWidgetViewMode(null))
 
-    // 3. Step forward from #118 wraps around to Hydrogen (#1), then to Helium (#2)
     val wrappedForward = ElementsWidgets.stepFocusedElement(context = null, delta = 1, refreshWidgets = false)
     assertEquals(1, wrappedForward.atomicNumber)
     val second = ElementsWidgets.stepFocusedElement(context = null, delta = 1, refreshWidgets = false)
     assertEquals(2, second.atomicNumber)
     assertEquals("He", second.symbol)
 
-    // 4. Focus Gold (#79) and verify favorite state & category colors
-    ElementsWidgets.saveFocusedAtomicNumber(null, 79)
+    // 6. Select Gold (#79) and verify favorite state, category colors, and 4f/5d/6s suborbitals
+    ElementsWidgets.selectElementInWidget(null, 79, refreshWidgets = false)
     val goldState = ElementsWidgets.resolveWidgetState(context = null, repository = repo)
+    assertEquals(ElementsWidgetViewMode.ELEMENT_INFO, goldState.viewMode)
     assertEquals(79, goldState.element.atomicNumber)
     assertEquals("Au", goldState.element.symbol)
     assertTrue(goldState.isFavorite)
     assertTrue(goldState.titleText.startsWith("★ Gold (#79)"))
+    assertTrue(goldState.suborbitalsText.contains("4f¹⁴"))
+    assertTrue(goldState.suborbitalsText.contains("5d¹⁰"))
+    assertTrue(goldState.suborbitalsText.contains("6s¹ [↑]"))
 
-    // 5. Toggle favorite from widget
+    // 7. Toggle favorite from widget
     ElementsWidgets.toggleFavoriteFromWidget(context = null, repository = repo, refreshWidgets = false)
     assertFalse(79 in repo.loadFavoriteAtomicNumbers())
     ElementsWidgets.toggleFavoriteFromWidget(context = null, repository = repo, refreshWidgets = false)
     assertTrue(79 in repo.loadFavoriteAtomicNumbers())
 
-    // 6. Pick random element always picks a valid element (1..118) distinct from current
+    // 8. Pick random element always picks a valid element (1..118) distinct from current and shows ELEMENT_INFO
     val randomEl = ElementsWidgets.pickRandomElement(
       context = null,
       random = kotlin.random.Random(42),
@@ -276,8 +320,9 @@ class ElementsEngineTest {
     )
     assertTrue(randomEl.atomicNumber in 1..118)
     assertTrue(randomEl.atomicNumber != 79)
+    assertEquals(ElementsWidgetViewMode.ELEMENT_INFO, ElementsWidgets.loadWidgetViewMode(null))
 
-    // 7. Widget navigation request round-trip
+    // 9. Widget navigation request round-trip
     PeriodicTableEngine.requestWidgetNavigation(
       atomicNumber = 26,
       openInspector = true,

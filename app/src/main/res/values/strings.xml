@@ -32,5 +32,5 @@
     <string name="calendar_month_widget_label">Calendar Month</string>
     <string name="calendar_month_widget_description">Monthly 6×7 calendar grid view with colored event dots, month switcher, Today badge jump, and one-tap event creation</string>
     <string name="elements_widget_label">Periodic Table</string>
-    <string name="elements_widget_description">Interactive Periodic Table of Elements spotlight with 18-column IUPAC table map, 2D Bohr electron shell diagram, and element browser</string>
+    <string name="elements_widget_description">Interactive 18-column IUPAC Periodic Table where tapping any element switches to its atomic properties, suborbitals, and 2D Bohr shell diagram</string>
 </resources>

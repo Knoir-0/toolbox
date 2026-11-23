@@ -34,7 +34,6 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
-import kotlinx.coroutines.delay
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_ANALOGOUS_MINUS_30
 import com.example.toolbox.ui.main.ACCENT_COLOR_AUTO_COMPLEMENTARY
@@ -899,11 +898,8 @@ fun ToolboxTheme(
     LaunchedEffect(context, musicPlayerThemeEnabled, themeColor, accentColor, isInspection, hasParentThemeMonitor) {
         if (!hasParentThemeMonitor && !isInspection && (musicPlayerThemeEnabled || isMusicPlayerThemeColorSetting(themeColor) || isMusicPlayerAccentColorSetting(accentColor))) {
             MusicPlayerEngine.ensureSystemMediaMonitoring(context)
-            while (true) {
-                if (!MusicPlayerEngine.isInAppVideoPlaybackActive) {
-                    MusicPlayerEngine.syncExternalSystemMediaSessions(context)
-                }
-                delay(2_000L)
+            if (!MusicPlayerEngine.isInAppVideoPlaybackActive) {
+                MusicPlayerEngine.syncExternalSystemMediaSessions(context)
             }
         }
     }

@@ -6784,14 +6784,50 @@ object MusicPlayerEngine {
       )
     }
 
+  @Volatile
+  internal var lastSyncedMediaWidgetPalette: TodoWidgetPalette? = null
+
+  @Volatile
+  internal var mediaMusicWidgetRefreshCount: Int = 0
+
+  @Volatile
+  internal var mediaThemeWidgetsRefreshCount: Int = 0
+
   /**
-   * Refreshes all pinned Toolbox Home Screen AppWidgets (the Music Player widget as well as
-   * theme-synchronized tool widgets) whenever active media playback state, track, or artwork
-   * palette changes.
+   * Refreshes pinned Toolbox Home Screen AppWidgets whenever active media playback state, track,
+   * or artwork palette changes:
+   * - Always refreshes [MusicPlayerWidgets].
+   * - Only refreshes the non-music theme-synchronized tool widgets ([TodoListWidgets],
+   *   [NotesWidgets], [BackgroundTextureWidgets], etc.) when [forceThemeWidgetsRefresh] is `true`
+   *   (e.g. system configuration/wallpaper change) or when the effective [TodoWidgetPalette] has
+   *   actually changed (such as on a track change or playback start/stop when Music Player theme
+   *   colors are active).
    */
-  internal fun refreshAllWidgetsForMediaStateChange(context: Context? = monitoredAppContext) {
+  internal fun refreshAllWidgetsForMediaStateChange(
+    context: Context? = monitoredAppContext,
+    forceThemeWidgetsRefresh: Boolean = false,
+  ) {
+    mediaMusicWidgetRefreshCount += 1
+    val currentPalette = try {
+      TodoListWidgets.resolveWidgetPalette(context)
+    } catch (_: Throwable) {
+      null
+    }
+    val shouldRefreshThemeWidgets = forceThemeWidgetsRefresh ||
+      currentPalette == null ||
+      lastSyncedMediaWidgetPalette != currentPalette
+    if (currentPalette != null) {
+      lastSyncedMediaWidgetPalette = currentPalette
+    }
+    if (shouldRefreshThemeWidgets) {
+      mediaThemeWidgetsRefreshCount += 1
+    }
     val ctx = context?.applicationContext ?: context ?: monitoredAppContext ?: return
-    TodoListWidgets.refreshAllToolboxWidgets(ctx)
+    if (shouldRefreshThemeWidgets) {
+      TodoListWidgets.refreshAllToolboxWidgets(ctx)
+    } else {
+      MusicPlayerWidgets.updateAllWidgets(ctx)
+    }
   }
 
   /**
@@ -6876,6 +6912,29 @@ object MusicPlayerEngine {
       normalized
     } catch (_: Throwable) {
       bitmap
+    }
+  }
+
+  internal fun areBitmapsVisuallyEquivalent(a: Bitmap?, b: Bitmap?): Boolean {
+    if (a === b) return true
+    if (a == null || b == null) return false
+    return try {
+      if (a.isRecycled || b.isRecycled) return false
+      if (a.generationId == b.generationId) return true
+      val w = a.width
+      val h = a.height
+      if (w <= 0 || h <= 0 || w != b.width || h != b.height) return false
+      val sampleSteps = 4
+      for (iy in 0..sampleSteps) {
+        val y = ((h - 1) * iy / sampleSteps).coerceIn(0, h - 1)
+        for (ix in 0..sampleSteps) {
+          val x = ((w - 1) * ix / sampleSteps).coerceIn(0, w - 1)
+          if (a.getPixel(x, y) != b.getPixel(x, y)) return false
+        }
+      }
+      true
+    } catch (_: Throwable) {
+      false
     }
   }
 
@@ -7424,23 +7483,31 @@ object MusicPlayerEngine {
     val safeCanSeek = canSeek && safeDuration > 0L
 
     val existing = externalSystemMediaInfo
-    val canReuseExistingArtworkAndPalette = existing != null &&
+    val sameTrackIdentity = existing != null &&
       existing.isExternalApp &&
       existing.title == cleanTitle &&
       existing.artist == artist &&
       existing.album == album &&
       existing.genre == genre &&
       existing.sourcePackage == sourcePackage &&
-      existing.sourceAppName == sourceAppName &&
-      ((artworkBitmap === null && existing.artworkBitmap === null) ||
-        (artworkBitmap != null && existing.artworkBitmap != null &&
-          (artworkBitmap === existing.artworkBitmap ||
-            artworkBitmap.generationId == existing.artworkBitmap.generationId)))
+      existing.sourceAppName == sourceAppName
+
+    val normalizedInputArtwork = when {
+      artworkBitmap == null -> null
+      sameTrackIdentity &&
+        existing.artworkBitmap != null &&
+        (artworkBitmap === existing.artworkBitmap ||
+          artworkBitmap.generationId == existing.artworkBitmap.generationId) -> existing.artworkBitmap
+      else -> normalizeExternalArtworkBitmap(artworkBitmap)
+    }
+
+    val canReuseExistingArtworkAndPalette = sameTrackIdentity &&
+      areBitmapsVisuallyEquivalent(normalizedInputArtwork, existing.artworkBitmap)
 
     val safeArtwork = if (canReuseExistingArtworkAndPalette) {
       existing.artworkBitmap
     } else {
-      normalizeExternalArtworkBitmap(artworkBitmap)
+      normalizedInputArtwork
     }
     val palette = if (canReuseExistingArtworkAndPalette && notificationColorRgb == null) {
       existing.palette
@@ -7453,6 +7520,35 @@ object MusicPlayerEngine {
         album = album,
         genre = genre,
       )
+    }
+    val stabilizedCustomActions = if (sameTrackIdentity && customActions.size == existing.customActions.size) {
+      customActions.mapIndexed { idx, act ->
+        val prevAct = existing.customActions[idx]
+        if (
+          act.action == prevAct.action &&
+          act.label == prevAct.label &&
+          act.iconResId == prevAct.iconResId &&
+          areBitmapsVisuallyEquivalent(act.iconBitmap, prevAct.iconBitmap)
+        ) {
+          act.copy(iconBitmap = prevAct.iconBitmap)
+        } else {
+          act
+        }
+      }
+    } else {
+      customActions
+    }
+    val effectivePosUpdateElapsedMs = if (
+      fromSystemSync &&
+      sameTrackIdentity &&
+      existing.isPlaying == isPlaying &&
+      safePosition == 0L &&
+      existing.positionMs == 0L &&
+      existing.positionUpdateElapsedRealtimeMs > 0L
+    ) {
+      existing.positionUpdateElapsedRealtimeMs
+    } else {
+      positionUpdateElapsedRealtimeMs
     }
     val info = SystemMediaPlayingInfo(
       title = cleanTitle,
@@ -7467,12 +7563,12 @@ object MusicPlayerEngine {
       artworkBitmap = safeArtwork,
       durationMs = safeDuration,
       positionMs = safePosition,
-      positionUpdateElapsedRealtimeMs = positionUpdateElapsedRealtimeMs,
+      positionUpdateElapsedRealtimeMs = effectivePosUpdateElapsedMs,
       playbackSpeed = safeSpeed,
       canSeek = safeCanSeek,
       canSkipNext = canSkipNext,
       canSkipPrevious = canSkipPrevious,
-      customActions = customActions,
+      customActions = stabilizedCustomActions,
     )
     if (isIgnoredPhoneOrCallSystemMediaInfo(info)) {
       if (isIgnoredPhoneOrCallSystemMediaInfo(externalSystemMediaInfo)) {
@@ -7482,8 +7578,7 @@ object MusicPlayerEngine {
       return info
     }
     externalMediaSetFromSystemSync = fromSystemSync
-    val isSemanticallyUnchangedFromPoll = fromSystemSync &&
-      existing != null &&
+    val isWidgetRelevantStateSame = existing != null &&
       existing.title == info.title &&
       existing.artist == info.artist &&
       existing.album == info.album &&
@@ -7494,9 +7589,6 @@ object MusicPlayerEngine {
       existing.isPlaying == info.isPlaying &&
       existing.palette == info.palette &&
       existing.artworkBitmap === info.artworkBitmap &&
-      existing.durationMs == info.durationMs &&
-      existing.playbackSpeed == info.playbackSpeed &&
-      existing.canSeek == info.canSeek &&
       existing.canSkipNext == info.canSkipNext &&
       existing.canSkipPrevious == info.canSkipPrevious &&
       existing.customActions.size == info.customActions.size &&
@@ -7504,12 +7596,25 @@ object MusicPlayerEngine {
         val a = existing.customActions[idx]
         val b = info.customActions[idx]
         a.action == b.action && a.label == b.label && a.iconResId == b.iconResId
-      } &&
-      kotlin.math.abs(currentExternalSystemMediaPositionMs(positionUpdateElapsedRealtimeMs) - safePosition) <= 1_500L
+      }
+
+    val isPositionUnchangedFromPoll = fromSystemSync &&
+      existing != null &&
+      existing.durationMs == info.durationMs &&
+      existing.playbackSpeed == info.playbackSpeed &&
+      existing.canSeek == info.canSeek &&
+      (
+        (safePosition == 0L && existing.positionMs == 0L) ||
+          kotlin.math.abs(currentExternalSystemMediaPositionMs(effectivePosUpdateElapsedMs) - safePosition) <= 1_500L
+        )
+
+    val isSemanticallyUnchangedFromPoll = isWidgetRelevantStateSame && isPositionUnchangedFromPoll
 
     if (!isSemanticallyUnchangedFromPoll && externalSystemMediaInfo != info) {
       externalSystemMediaInfo = info
-      refreshAllWidgetsForMediaStateChange(monitoredAppContext)
+      if (!isWidgetRelevantStateSame) {
+        refreshAllWidgetsForMediaStateChange(monitoredAppContext)
+      }
     }
     return externalSystemMediaInfo ?: info
   }
@@ -7953,12 +8058,22 @@ object MusicPlayerEngine {
 
   internal fun loadAppIconBitmap(context: Context, packageName: String): Bitmap? {
     if (packageName.isBlank() || packageName == context.packageName) return null
-    return try {
+    val cacheKey = "app_icon:${packageName.trim()}"
+    synchronized(externalMediaCacheLock) {
+      externalFallbackArtworkCache[cacheKey]?.takeIf { !it.isRecycled }?.let { return it }
+    }
+    val loaded = try {
       val drawable = context.packageManager.getApplicationIcon(packageName)
       drawableToBitmap(drawable)
     } catch (_: Throwable) {
       null
     }
+    if (loaded != null) {
+      synchronized(externalMediaCacheLock) {
+        externalFallbackArtworkCache[cacheKey] = loaded
+      }
+    }
+    return loaded
   }
 
   internal fun resolveAppLabel(context: Context, packageName: String): String {
@@ -8039,7 +8154,10 @@ object MusicPlayerEngine {
           }
           val configReceiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
-              refreshAllWidgetsForMediaStateChange(appCtx)
+              refreshAllWidgetsForMediaStateChange(
+                context = appCtx,
+                forceThemeWidgetsRefresh = true,
+              )
             }
           }
           ContextCompat.registerReceiver(
@@ -8164,16 +8282,29 @@ object MusicPlayerEngine {
   ) {
     val ownPkg = context.packageName
     synchronized(systemMediaMonitorLock) {
+      val validControllers = controllers.orEmpty().filter {
+        try {
+          it.packageName != ownPkg && !isIgnoredPhoneOrCallMediaController(context, it)
+        } catch (_: Throwable) {
+          false
+        }
+      }
+      val currentTokens = engineTrackedControllers.keys.mapNotNull {
+        try { it.sessionToken } catch (_: Throwable) { null }
+      }.toSet()
+      val desiredTokens = validControllers.mapNotNull {
+        try { it.sessionToken } catch (_: Throwable) { null }
+      }.toSet()
+      if (currentTokens == desiredTokens && engineTrackedControllers.size == validControllers.size) {
+        return
+      }
       for ((ctrl, cb) in engineTrackedControllers) {
         try {
           ctrl.unregisterCallback(cb)
         } catch (_: Throwable) {}
       }
       engineTrackedControllers.clear()
-      val list = controllers ?: return
-      for (controller in list) {
-        if (controller.packageName == ownPkg) continue
-        if (isIgnoredPhoneOrCallMediaController(context, controller)) continue
+      for (controller in validControllers) {
         val callback = object : MediaController.Callback() {
           override fun onPlaybackStateChanged(state: PlaybackState?) {
             syncExternalSystemMediaSessions(context)
@@ -9647,6 +9778,7 @@ object MusicPlayerEngine {
     lastBroadcastMediaInfo = null
     activeMediaNotifications.clear()
     clearExternalMediaArtworkCaches()
+    lastSyncedMediaWidgetPalette = null
     if (activity is LifecycleOwner && observer != null) {
       try {
         activity.lifecycle.removeObserver(observer)
@@ -9655,6 +9787,8 @@ object MusicPlayerEngine {
     sessionToRelease?.release()
     val defaultTrack = DEFAULT_SAMPLE_TRACKS.firstOrNull()
     updateActiveTrackPalette(defaultTrack, resolveTrackPalette(defaultTrack))
+    mediaMusicWidgetRefreshCount = 0
+    mediaThemeWidgetsRefreshCount = 0
   }
 
   /**
@@ -13061,8 +13195,10 @@ class MusicPlaybackSession(
     if (isInspection || appContext == null) return
     val session = mediaSession ?: return
 
+    var shouldRefreshWidgets = false
     val applyPlatformSync = {
       if (track == null || isReleased) {
+        shouldRefreshWidgets = lastNotifiedTrackId != null || lastSyncedMediaMetadataTrackId != null
         try {
           session.isActive = false
           val stopState = PlaybackState.Builder()
@@ -13194,6 +13330,7 @@ class MusicPlaybackSession(
           lastNotifiedArtworkBitmap !== cachedArt ||
           lastNotifiedColorRgb != notifColorRgb
         if (notificationNeedsUpdate) {
+          shouldRefreshWidgets = true
           lastNotifiedTrackId = track.id
           lastNotifiedIsPlaying = snapshotIsPlaying
           lastNotifiedShuffleIconRes = shuffleIconRes
@@ -13236,11 +13373,15 @@ class MusicPlaybackSession(
       mediaControlSyncJob?.cancel()
       mediaControlSyncJob = scope.launch(ioCoroutineContext) {
         applyPlatformSync()
-        MusicPlayerEngine.refreshAllWidgetsForMediaStateChange(appContext)
+        if (shouldRefreshWidgets) {
+          MusicPlayerEngine.refreshAllWidgetsForMediaStateChange(appContext)
+        }
       }
     } else {
       applyPlatformSync()
-      MusicPlayerEngine.refreshAllWidgetsForMediaStateChange(appContext)
+      if (shouldRefreshWidgets) {
+        MusicPlayerEngine.refreshAllWidgetsForMediaStateChange(appContext)
+      }
     }
   }
 
@@ -13542,7 +13683,10 @@ class ToolboxMediaListenerService : NotificationListenerService() {
 
   override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
     super.onConfigurationChanged(newConfig)
-    MusicPlayerEngine.refreshAllWidgetsForMediaStateChange(applicationContext)
+    MusicPlayerEngine.refreshAllWidgetsForMediaStateChange(
+      context = applicationContext,
+      forceThemeWidgetsRefresh = true,
+    )
   }
 
   override fun onDestroy() {
@@ -13633,19 +13777,49 @@ class ToolboxMediaListenerService : NotificationListenerService() {
       val postedAtMs = sbn.postTime.takeIf { it > 0L } ?: System.currentTimeMillis()
       val sessionToken = MusicPlayerEngine.extractNotificationMediaSessionToken(notification)
       val existingCached = MusicPlayerEngine.activeMediaNotifications[pkg]
-      if (existingCached != null &&
-        existingCached.postedAtMs == postedAtMs &&
+      val sameNotificationMetadata = existingCached != null &&
         existingCached.title == title &&
         existingCached.artist == artist &&
         existingCached.album == album &&
         existingCached.isOngoing == isOngoing &&
         existingCached.colorRgb == colorRgb &&
         existingCached.sessionToken == sessionToken
+      if (sameNotificationMetadata && existingCached.postedAtMs == postedAtMs) {
+        return existingCached
+      }
+      val rawArtworkBitmap = MusicPlayerEngine.extractNotificationArtworkBitmap(applicationContext, notification)
+      val artworkBitmap = if (
+        sameNotificationMetadata &&
+        MusicPlayerEngine.areBitmapsVisuallyEquivalent(rawArtworkBitmap, existingCached.artworkBitmap)
+      ) {
+        existingCached.artworkBitmap
+      } else {
+        rawArtworkBitmap
+      }
+      val rawCustomActions = MusicPlayerEngine.extractNotificationCustomActions(applicationContext, notification)
+      val customActions = if (
+        sameNotificationMetadata &&
+        rawCustomActions.size == existingCached.customActions.size &&
+        rawCustomActions.indices.all { idx ->
+          val a = rawCustomActions[idx]
+          val b = existingCached.customActions[idx]
+          a.action == b.action &&
+            a.label == b.label &&
+            a.iconResId == b.iconResId &&
+            MusicPlayerEngine.areBitmapsVisuallyEquivalent(a.iconBitmap, b.iconBitmap)
+        }
+      ) {
+        existingCached.customActions
+      } else {
+        rawCustomActions
+      }
+      if (
+        sameNotificationMetadata &&
+        artworkBitmap === existingCached.artworkBitmap &&
+        customActions === existingCached.customActions
       ) {
         return existingCached
       }
-      val artworkBitmap = MusicPlayerEngine.extractNotificationArtworkBitmap(applicationContext, notification)
-      val customActions = MusicPlayerEngine.extractNotificationCustomActions(applicationContext, notification)
 
       MusicPlayerEngine.CachedExternalMediaNotification(
         packageName = pkg,
@@ -13698,11 +13872,25 @@ class ToolboxMediaListenerService : NotificationListenerService() {
   }
 
   private fun bindExternalControllers(controllers: List<MediaController>?) {
+    val validControllers = controllers.orEmpty().filter {
+      try {
+        it.packageName != packageName &&
+          !MusicPlayerEngine.isIgnoredPhoneOrCallMediaController(applicationContext, it)
+      } catch (_: Throwable) {
+        false
+      }
+    }
+    val currentTokens = trackedControllers.keys.mapNotNull {
+      try { it.sessionToken } catch (_: Throwable) { null }
+    }.toSet()
+    val desiredTokens = validControllers.mapNotNull {
+      try { it.sessionToken } catch (_: Throwable) { null }
+    }.toSet()
+    if (currentTokens == desiredTokens && trackedControllers.size == validControllers.size) {
+      return
+    }
     clearTrackedControllers()
-    val list = controllers ?: return
-    for (controller in list) {
-      if (controller.packageName == packageName) continue
-      if (MusicPlayerEngine.isIgnoredPhoneOrCallMediaController(applicationContext, controller)) continue
+    for (controller in validControllers) {
       val callback = object : MediaController.Callback() {
         override fun onPlaybackStateChanged(state: PlaybackState?) {
           MusicPlayerEngine.syncExternalSystemMediaSessions(applicationContext)

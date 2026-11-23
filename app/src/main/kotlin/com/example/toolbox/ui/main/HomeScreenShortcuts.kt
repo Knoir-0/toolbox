@@ -11,7 +11,6 @@ import android.widget.Toast
 import androidx.annotation.DrawableRes
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
@@ -743,19 +742,33 @@ fun createFolderShortcutIntent(context: Context, folder: File): Intent {
 }
 
 /**
- * Resolves the system preset background [Color] for shortcut icons (Material You dynamic primary
- * color on Android 12+ when [context] is provided, falling back to Toolbox Purple `#8E66A6`).
+ * Resolves the background [Color] for shortcut icons according to [themeColor].
+ *
+ * When [themeColor] is a valid hex string (preset or custom), returns the parsed color.
+ * When [themeColor] is [DEFAULT_THEME_COLOR_SYSTEM] (or null/invalid), uses Toolbox Purple (`#8E66A6`)
+ * to match the default app launcher icon (`@drawable/ic_launcher_background`), while in-app
+ * theme colors continue to follow the user's selection in Settings.
  */
 fun resolveShortcutBackgroundColor(
+  themeColor: String? = null,
   context: Context? = null,
 ): Color {
-  if (context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-    try {
-      return dynamicLightColorScheme(context).primary
-    } catch (_: Exception) {
-      // Fall back to default theme color below
+  val effectiveThemeColor = themeColor ?: run {
+    if (context != null) {
+      try {
+        DefaultNavigationPreferencesRepository(context.applicationContext ?: context).getThemeColor()
+      } catch (_: Exception) {
+        DEFAULT_THEME_COLOR_SYSTEM
+      }
+    } else {
+      DEFAULT_THEME_COLOR_SYSTEM
     }
   }
+
+  if (!effectiveThemeColor.equals(DEFAULT_THEME_COLOR_SYSTEM, ignoreCase = true)) {
+    parseHexColor(effectiveThemeColor)?.let { return it }
+  }
+
   return parseHexColor(FALLBACK_THEME_COLOR_HEX) ?: Color(0xFF8E66A6)
 }
 

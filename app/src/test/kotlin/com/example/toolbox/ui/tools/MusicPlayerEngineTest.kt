@@ -2838,4 +2838,137 @@ class MusicPlayerEngineTest {
       MusicPlayerEngine.resetPlaybackSession()
     }
   }
+
+  @Test
+  fun widgetRefreshes_onlyTriggerOnTrackOrThemePaletteChange_notDuringContinuousPlayback() {
+    val repo = com.example.toolbox.ui.main.InMemoryNavigationPreferencesRepository()
+    com.example.toolbox.ui.main.NavigationPreferencesBridge.activeRepository = repo
+    MusicPlayerEngine.resetPlaybackSession()
+    try {
+      repo.setMusicPlayerThemeEnabled(true)
+      repo.setMusicPlayerColorOption(com.example.toolbox.ui.main.THEME_COLOR_MUSIC_PLAYER)
+
+      assertEquals(0, MusicPlayerEngine.mediaMusicWidgetRefreshCount)
+      assertEquals(0, MusicPlayerEngine.mediaThemeWidgetsRefreshCount)
+
+      // 1. Starting playback of Track A refreshes both Music widget and theme-synced widgets (Style, To-Do, Notes) once
+      MusicPlayerEngine.applyExternalSystemMediaMetadata(
+        title = "Digital Love",
+        artist = "Daft Punk",
+        album = "Discovery",
+        sourcePackage = "com.spotify.music",
+        sourceAppName = "Spotify",
+        isPlaying = true,
+        durationMs = 300_000L,
+        positionMs = 0L,
+        positionUpdateElapsedRealtimeMs = 1_000L,
+        fromSystemSync = true,
+      )
+      assertEquals(1, MusicPlayerEngine.mediaMusicWidgetRefreshCount)
+      assertEquals(1, MusicPlayerEngine.mediaThemeWidgetsRefreshCount)
+
+      // 2. Repeated playback syncs/callbacks while Track A continues playing (including position = 0 notification syncs
+      //    and advancing playback positions / user seeks) do NOT refresh Style, To-Do, Notes, or Music widgets
+      MusicPlayerEngine.applyExternalSystemMediaMetadata(
+        title = "Digital Love",
+        artist = "Daft Punk",
+        album = "Discovery",
+        sourcePackage = "com.spotify.music",
+        sourceAppName = "Spotify",
+        isPlaying = true,
+        durationMs = 300_000L,
+        positionMs = 0L,
+        positionUpdateElapsedRealtimeMs = 3_500L,
+        fromSystemSync = true,
+      )
+      assertEquals(1, MusicPlayerEngine.mediaMusicWidgetRefreshCount)
+      assertEquals(1, MusicPlayerEngine.mediaThemeWidgetsRefreshCount)
+
+      // Natural playback progression (45s elapsed at 1x speed) does not churn state or refresh widgets
+      MusicPlayerEngine.applyExternalSystemMediaMetadata(
+        title = "Digital Love",
+        artist = "Daft Punk",
+        album = "Discovery",
+        sourcePackage = "com.spotify.music",
+        sourceAppName = "Spotify",
+        isPlaying = true,
+        durationMs = 300_000L,
+        positionMs = 45_000L,
+        positionUpdateElapsedRealtimeMs = 46_000L,
+        fromSystemSync = true,
+      )
+      assertEquals(1, MusicPlayerEngine.mediaMusicWidgetRefreshCount)
+      assertEquals(1, MusicPlayerEngine.mediaThemeWidgetsRefreshCount)
+
+      // User seeking to 120s updates in-app positionMs without triggering any widget refresh
+      MusicPlayerEngine.applyExternalSystemMediaMetadata(
+        title = "Digital Love",
+        artist = "Daft Punk",
+        album = "Discovery",
+        sourcePackage = "com.spotify.music",
+        sourceAppName = "Spotify",
+        isPlaying = true,
+        durationMs = 300_000L,
+        positionMs = 120_000L,
+        positionUpdateElapsedRealtimeMs = 46_000L,
+        fromSystemSync = true,
+      )
+      assertEquals(1, MusicPlayerEngine.mediaMusicWidgetRefreshCount)
+      assertEquals(1, MusicPlayerEngine.mediaThemeWidgetsRefreshCount)
+      assertEquals(120_000L, MusicPlayerEngine.externalSystemMediaInfo?.positionMs)
+
+      // 3. Changing custom action state on the same track refreshes the Music widget but NOT Style/To-Do/Notes widgets
+      //    because the theme palette did not change
+      MusicPlayerEngine.applyExternalSystemMediaMetadata(
+        title = "Digital Love",
+        artist = "Daft Punk",
+        album = "Discovery",
+        sourcePackage = "com.spotify.music",
+        sourceAppName = "Spotify",
+        isPlaying = true,
+        durationMs = 300_000L,
+        positionMs = 48_000L,
+        positionUpdateElapsedRealtimeMs = 49_000L,
+        customActions = listOf(SystemMediaCustomAction(action = "LIKE", label = "Liked")),
+        fromSystemSync = true,
+      )
+      assertEquals(2, MusicPlayerEngine.mediaMusicWidgetRefreshCount)
+      assertEquals(1, MusicPlayerEngine.mediaThemeWidgetsRefreshCount)
+
+      // 4. Switching to Track B (different album/artist palette) refreshes both Music widget and Style/To-Do/Notes widgets
+      MusicPlayerEngine.applyExternalSystemMediaMetadata(
+        title = "Starlight",
+        artist = "Muse",
+        album = "Black Holes and Revelations",
+        sourcePackage = "com.spotify.music",
+        sourceAppName = "Spotify",
+        isPlaying = true,
+        durationMs = 240_000L,
+        positionMs = 0L,
+        positionUpdateElapsedRealtimeMs = 50_000L,
+        fromSystemSync = true,
+      )
+      assertEquals(3, MusicPlayerEngine.mediaMusicWidgetRefreshCount)
+      assertEquals(2, MusicPlayerEngine.mediaThemeWidgetsRefreshCount)
+
+      // 5. Pausing playback refreshes both Music widget and Style/To-Do/Notes widgets (reverting from music palette)
+      MusicPlayerEngine.applyExternalSystemMediaMetadata(
+        title = "Starlight",
+        artist = "Muse",
+        album = "Black Holes and Revelations",
+        sourcePackage = "com.spotify.music",
+        sourceAppName = "Spotify",
+        isPlaying = false,
+        durationMs = 240_000L,
+        positionMs = 12_000L,
+        positionUpdateElapsedRealtimeMs = 62_000L,
+        fromSystemSync = true,
+      )
+      assertEquals(4, MusicPlayerEngine.mediaMusicWidgetRefreshCount)
+      assertEquals(3, MusicPlayerEngine.mediaThemeWidgetsRefreshCount)
+    } finally {
+      MusicPlayerEngine.resetPlaybackSession()
+      com.example.toolbox.ui.main.resetAllSettingsToDefaults(repo)
+    }
+  }
 }

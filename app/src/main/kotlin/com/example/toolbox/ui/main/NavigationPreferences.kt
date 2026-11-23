@@ -383,6 +383,10 @@ object NavigationPreferencesBridge {
    */
   fun refreshAllWidgets(context: Context?) {
     val ctx = context?.applicationContext ?: context ?: return
+    try {
+      com.example.toolbox.ui.tools.MusicPlayerEngine.lastSyncedMediaWidgetPalette =
+        TodoListWidgets.resolveWidgetPalette(ctx)
+    } catch (_: Throwable) {}
     MusicPlayerWidgets.updateAllWidgets(ctx)
     TodoListWidgets.updateAllWidgets(ctx)
     NotesWidgets.updateAllWidgets(ctx)
