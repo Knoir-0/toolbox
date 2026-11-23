@@ -6,6 +6,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -23,10 +24,13 @@ import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.util.Range
 import android.view.Surface
 import android.view.TextureView
@@ -1036,11 +1040,15 @@ fun CameraScreen(
           )
         }
         if (detectedTarget != null && manualFocusTarget == null) {
-          smartAutoFocusTarget = detectedTarget
+          val mergedTarget = CameraEngine.mergeAsyncSmartFocusDetection(
+            liveCurrentTarget = smartAutoFocusTarget,
+            resolvedTarget = detectedTarget,
+          ) ?: detectedTarget
+          smartAutoFocusTarget = mergedTarget
           smartFocusSampledColorHex = CameraEngine.sampleCenterRadiusColorHexFromBitmap(
             bitmap = alignedFrame,
-            normX = detectedTarget.clampedX,
-            normY = detectedTarget.clampedY,
+            normX = mergedTarget.clampedX,
+            normY = mergedTarget.clampedY,
             radiusPx = 6,
             filter = colorFilter,
             exposureEv = exposureEv,
@@ -1051,15 +1059,19 @@ fun CameraScreen(
     }
   }
 
-  // Keep smart autofocus target synced with detected Vision objects when not in a manual override
+  // Keep smart autofocus target synced with non-live Vision preset/snapshot results when not in a manual override
   LaunchedEffect(latestVisionResult, manualFocusTarget) {
-    if (manualFocusTarget == null && latestVisionResult != null) {
+    val result = latestVisionResult
+    if (manualFocusTarget == null && result != null && result.sourceDescription != "Live Camera Frame") {
       val fromVision = CameraEngine.selectSmartAutofocusTargetFromVisionResult(
-        result = latestVisionResult,
+        result = result,
         previousTarget = smartAutoFocusTarget,
       )
       if (fromVision != null) {
-        smartAutoFocusTarget = fromVision
+        smartAutoFocusTarget = CameraEngine.mergeAsyncSmartFocusDetection(
+          liveCurrentTarget = smartAutoFocusTarget,
+          resolvedTarget = fromVision,
+        ) ?: fromVision
         refreshLiveFocusColorSample(forceGrabBitmap = false)
       }
     }
@@ -1100,7 +1112,17 @@ fun CameraScreen(
   }
 
   // Continuous live frame ML Kit Object Detection & Image Labeling when in VISION mode and hardware TextureView is rendering
-  LaunchedEffect(captureMode, activeTextureView, zoomLevel, lensFacing, mirrorFrontCamera, colorFilter, exposureEv) {
+  LaunchedEffect(
+    captureMode,
+    activeTextureView,
+    selectedCamera.cameraId,
+    zoomLevel,
+    lensFacing,
+    mirrorFrontCamera,
+    manualFocusTarget,
+    colorFilter,
+    exposureEv,
+  ) {
     if (captureMode != CameraCaptureMode.VISION || isInspection) {
       return@LaunchedEffect
     }
@@ -1133,15 +1155,62 @@ fun CameraScreen(
           } else if (latestVisionResult?.sourceDescription == "Live Camera Frame") {
             latestVisionResult = null
           }
+          if (manualFocusTarget == null) {
+            val visionFocus = CameraEngine.selectSmartAutofocusTargetFromVisionResult(
+              result = analyzed,
+              previousTarget = smartAutoFocusTarget,
+            )
+            if (visionFocus != null) {
+              val mergedFocus = CameraEngine.mergeAsyncSmartFocusDetection(
+                liveCurrentTarget = smartAutoFocusTarget,
+                resolvedTarget = visionFocus,
+              ) ?: visionFocus
+              smartAutoFocusTarget = mergedFocus
+              smartFocusSampledColorHex = CameraEngine.sampleCenterRadiusColorHexFromBitmap(
+                bitmap = alignedFrame,
+                normX = mergedFocus.clampedX,
+                normY = mergedFocus.clampedY,
+                radiusPx = 6,
+                filter = colorFilter,
+                exposureEv = exposureEv,
+              )
+            }
+          }
+        } else if (manualFocusTarget == null) {
+          val fallbackFocus = withContext(Dispatchers.Default) {
+            CameraEngine.detectSmartFocusObjectWithMlKit(
+              bitmap = alignedFrame,
+              previousTarget = smartAutoFocusTarget,
+              fallbackToSalientRegion = true,
+              streamMode = true,
+            )
+          }
+          if (fallbackFocus != null && manualFocusTarget == null) {
+            val mergedFocus = CameraEngine.mergeAsyncSmartFocusDetection(
+              liveCurrentTarget = smartAutoFocusTarget,
+              resolvedTarget = fallbackFocus,
+            ) ?: fallbackFocus
+            smartAutoFocusTarget = mergedFocus
+            smartFocusSampledColorHex = CameraEngine.sampleCenterRadiusColorHexFromBitmap(
+              bitmap = alignedFrame,
+              normX = mergedFocus.clampedX,
+              normY = mergedFocus.clampedY,
+              radiusPx = 6,
+              filter = colorFilter,
+              exposureEv = exposureEv,
+            )
+          }
         }
       }
       delay(260L)
     }
   }
 
-  fun performVisionAnalysis() {
-    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-    showShutterFlash = true
+  fun performVisionAnalysis(triggerFeedback: Boolean = true) {
+    if (triggerFeedback) {
+      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+      showShutterFlash = true
+    }
 
     val fallbackResult = CameraEngine.buildVisionAnalysisResult(
       rawTags = visionSamplePreset.sampleTags,
@@ -1207,6 +1276,76 @@ fun CameraScreen(
     }
   }
 
+  fun scanSavedMediaInGallery(file: File, mimeType: String) {
+    if (isInspection || !file.exists() || file.length() <= 0L) return
+    try {
+      MediaScannerConnection.scanFile(
+        context,
+        arrayOf(file.absolutePath),
+        arrayOf(mimeType),
+        null,
+      )
+    } catch (_: Throwable) {}
+  }
+
+  fun writePhotoBytesAndPublishToGallery(
+    outputFile: File,
+    bytes: ByteArray,
+    mimeType: String,
+  ): Boolean {
+    if (bytes.size <= 64) return false
+    val wroteDirectFile = try {
+      outputFile.parentFile?.mkdirs()
+      FileOutputStream(outputFile).use { fos ->
+        fos.write(bytes)
+        fos.flush()
+      }
+      outputFile.exists() && outputFile.length() > 64L
+    } catch (_: Throwable) {
+      false
+    }
+    if (wroteDirectFile) {
+      scanSavedMediaInGallery(outputFile, mimeType)
+      return true
+    }
+    if (!isInspection && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      val savedViaMediaStore = try {
+        val relativeSubpath = if (FileManagerEngine.isSameOrDescendant(cameraDirectory, userRoot)) {
+          CameraEngine.formatDirectoryDisplayPath(cameraDirectory, userRoot)
+            .trim('/')
+            .ifEmpty { Environment.DIRECTORY_DCIM + "/Camera" }
+        } else {
+          Environment.DIRECTORY_DCIM + "/Camera"
+        }
+        val values = ContentValues().apply {
+          put(MediaStore.Images.Media.DISPLAY_NAME, outputFile.name)
+          put(MediaStore.Images.Media.MIME_TYPE, mimeType)
+          put(MediaStore.Images.Media.RELATIVE_PATH, relativeSubpath)
+          put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        if (uri != null) {
+          context.contentResolver.openOutputStream(uri)?.use { out ->
+            out.write(bytes)
+            out.flush()
+          }
+          values.clear()
+          values.put(MediaStore.Images.Media.IS_PENDING, 0)
+          context.contentResolver.update(uri, values, null, null)
+          true
+        } else {
+          false
+        }
+      } catch (_: Throwable) {
+        false
+      }
+      if (savedViaMediaStore) {
+        return true
+      }
+    }
+    return false
+  }
+
   fun finishPanoramaSweep() {
     if (!isCapturingPanorama) return
     isCapturingPanorama = false
@@ -1258,13 +1397,12 @@ fun CameraScreen(
         val fmt = if (photoFormat == CameraPhotoFormat.PNG) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
         val compressed = stitchedHardware.compress(fmt, 92, bos)
         val bytes = bos.toByteArray()
-        if (compressed && bytes.size > 64) {
-          outputFile.parentFile?.mkdirs()
-          FileOutputStream(outputFile).use { fos ->
-            fos.write(bytes)
-            fos.flush()
-          }
-          true
+        if (compressed) {
+          writePhotoBytesAndPublishToGallery(
+            outputFile = outputFile,
+            bytes = bytes,
+            mimeType = photoFormat.mimeType,
+          )
         } else {
           false
         }
@@ -1285,6 +1423,7 @@ fun CameraScreen(
         nightMode = nightMode,
         segments = panoramaCapturedCount.coerceAtLeast(PANORAMA_TARGET_SEGMENTS),
       )
+      scanSavedMediaInGallery(outputFile, photoFormat.mimeType)
     }
 
     panoramaCapturedFrames.clear()
@@ -1467,6 +1606,7 @@ fun CameraScreen(
           subMode = CameraPhotoSubMode.BURST,
           nightMode = nightMode,
         )
+        scanSavedMediaInGallery(file, photoFormat.mimeType)
       }
       refreshTrigger++
       if (!isInspection && burstFiles.isNotEmpty()) {
@@ -1519,13 +1659,12 @@ fun CameraScreen(
         val fmt = if (photoFormat == CameraPhotoFormat.PNG) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
         val compressed = hwBitmap.compress(fmt, 92, bos)
         val bytes = bos.toByteArray()
-        if (compressed && bytes.size > 64) {
-          outputFile.parentFile?.mkdirs()
-          FileOutputStream(outputFile).use { fos ->
-            fos.write(bytes)
-            fos.flush()
-          }
-          true
+        if (compressed) {
+          writePhotoBytesAndPublishToGallery(
+            outputFile = outputFile,
+            bytes = bytes,
+            mimeType = photoFormat.mimeType,
+          )
         } else {
           false
         }
@@ -1547,6 +1686,7 @@ fun CameraScreen(
         subMode = activeSubMode,
         nightMode = nightMode,
       )
+      scanSavedMediaInGallery(outputFile, photoFormat.mimeType)
     }
 
     refreshTrigger++
@@ -1573,6 +1713,9 @@ fun CameraScreen(
     activeVideoSession = null
     isRecordingVideo = false
     val savedFile = session?.stop()
+    if (savedFile != null) {
+      scanSavedMediaInGallery(savedFile, "video/mp4")
+    }
     refreshTrigger++
     if (savedFile != null && !isInspection) {
       Toast.makeText(context, "Saved ${savedFile.name}", Toast.LENGTH_SHORT).show()
@@ -1598,7 +1741,23 @@ fun CameraScreen(
     }
 
     if (captureMode == CameraCaptureMode.VISION) {
-      performVisionAnalysis()
+      if (timerDuration.seconds > 0) {
+        coroutineScope.launch {
+          var remaining = timerDuration.seconds
+          while (remaining > 0) {
+            countdownSecondsRemaining = remaining
+            delay(1000L)
+            if (countdownSecondsRemaining == 0) return@launch
+            remaining--
+          }
+          countdownSecondsRemaining = 0
+          performVisionAnalysis(triggerFeedback = false)
+          performPhotoCapture()
+        }
+      } else {
+        performVisionAnalysis(triggerFeedback = false)
+        performPhotoCapture()
+      }
       return
     }
 
@@ -3090,7 +3249,7 @@ fun CameraScreen(
                       "Start panorama sweep"
                     captureMode == CameraCaptureMode.SCANNER -> "Scan QR code or barcode"
                     captureMode == CameraCaptureMode.NOTE -> "Scan document to note"
-                    captureMode == CameraCaptureMode.VISION -> "Analyze frame with ML Kit Vision"
+                    captureMode == CameraCaptureMode.VISION -> "Capture photo and analyze with ML Kit Vision"
                     else -> "Take photo"
                   }
                 },

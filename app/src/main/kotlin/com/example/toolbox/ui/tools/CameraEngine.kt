@@ -106,10 +106,10 @@ const val STICKY_AF_NATURAL_FREQUENCY_RAD_PER_SEC = 5.8f
 const val STICKY_AF_STEERING_TIME_CONSTANT_SEC = 0.16f
 
 /**
- * Maximum normalized viewfinder travel speed (`0.64f` = 64% of viewfinder width/height per second)
- * allowing the autofocus reticle to move smoothly across long distances after building up speed.
+ * Maximum normalized viewfinder travel speed (`0.40f` = 40% of viewfinder width/height per second)
+ * keeping autofocus reticle movement calm and smooth even across long distances.
  */
-const val STICKY_AF_MAX_SPEED_NORM_PER_SEC = 0.64f
+const val STICKY_AF_MAX_SPEED_NORM_PER_SEC = 0.40f
 
 /**
  * Normalized radial threshold (`0.26f` = 26% of viewfinder from the center `(0.5f, 0.5f)`)
@@ -119,16 +119,16 @@ const val STICKY_AF_MAX_SPEED_NORM_PER_SEC = 0.64f
 const val STICKY_AF_NEAR_CENTER_RADIUS_NORM = 0.26f
 
 /**
- * Maximum velocity increment (`0.22f` normalized units/sec) that a single trajectory update
+ * Maximum velocity increment (`0.15f` normalized units/sec) that a single trajectory update
  * can add to the autofocus cursor's current speed, preventing abrupt velocity jumps while
  * allowing consecutive steps to accelerate smoothly up to [STICKY_AF_MAX_SPEED_NORM_PER_SEC].
  */
-const val STICKY_AF_MAX_VELOCITY_ADD_NORM_PER_SEC = 0.22f
+const val STICKY_AF_MAX_VELOCITY_ADD_NORM_PER_SEC = 0.15f
 
 /**
- * Maximum normalized tangential acceleration (`1.80f` units/s²) for smooth velocity gain and deceleration.
+ * Maximum normalized tangential acceleration (`1.40f` units/s²) for smooth velocity gain and deceleration.
  */
-const val STICKY_AF_MAX_ACCEL_NORM_PER_SEC_SQ = 1.80f
+const val STICKY_AF_MAX_ACCEL_NORM_PER_SEC_SQ = 1.40f
 
 /**
  * Elliptical cornering aspect ratio (`b / a = 0.58f`, where `a > b`) for the initial elliptical
@@ -978,6 +978,7 @@ data class CameraVisionAnalysisResult(
   val id: String,
   val tags: List<CameraVisionTag>,
   val allCandidateTags: List<CameraVisionTag> = tags,
+  val focusCandidates: List<RawDetectedObjectForFocus> = emptyList(),
   val confidenceThreshold: Float = MIN_VISION_CONFIDENCE_THRESHOLD,
   val inferenceLatencyMs: Long = 0L,
   val frameWidth: Int = 0,
@@ -6626,6 +6627,7 @@ object CameraEngine {
     sourceDescription: String = "Live Camera Frame",
     analyzedAtMs: Long = System.currentTimeMillis(),
     maxLabels: Int = 10,
+    focusCandidates: List<RawDetectedObjectForFocus> = emptyList(),
   ): CameraVisionAnalysisResult {
     val clampedThreshold = confidenceThreshold.coerceIn(MIN_VISION_CONFIDENCE_THRESHOLD, 0.99f)
     val dedupByLabel = linkedMapOf<String, CameraVisionTag>()
@@ -6666,6 +6668,7 @@ object CameraEngine {
       id = "VISION_${analyzedAtMs}_${sourceDescription.hashCode()}",
       tags = nonOverlappingTags,
       allCandidateTags = allCandidates,
+      focusCandidates = focusCandidates,
       confidenceThreshold = clampedThreshold,
       inferenceLatencyMs = inferenceLatencyMs.coerceAtLeast(1L),
       frameWidth = frameWidth.coerceAtLeast(0),
@@ -7242,8 +7245,10 @@ object CameraEngine {
       }
 
       // Only fall back to foreground contour extraction if ObjectDetector found 0 objects in the frame
+      var cachedForegroundContours: List<CameraVisionBoundingBox>? = null
       if (localizedTags.isEmpty() && fullFrameLabels.isNotEmpty()) {
         val foregroundContours = extractSalientRegionsFromBitmap(orientedBitmap, maxRegions = 3)
+        cachedForegroundContours = foregroundContours
         val remainingContours = foregroundContours.toMutableList()
         fullFrameLabels
           .sortedByDescending { (lbl, scoreAndIdx) ->
@@ -7287,6 +7292,30 @@ object CameraEngine {
         analyzedAtMs = analyzedAtMs,
       )
       val hypernymFiltered = suppressGenericHypernymVisionTags(temporallyStabilized)
+
+      // Provide unlabeled ML Kit object boxes or salient foreground regions so Smart Autofocus
+      // continues tracking smoothly in Vision mode even when no >=80% Vision tags are on screen.
+      val fallbackFocusCandidates: List<RawDetectedObjectForFocus> = if (validObjectBoxes.isNotEmpty()) {
+        validObjectBoxes.map { candidate ->
+          RawDetectedObjectForFocus(
+            boundingBox = candidate.normBox,
+            trackingId = candidate.trackingId,
+            label = candidate.coarseCategoryLower?.let { cleanFocusCategoryLabel(it) },
+            confidence = if (candidate.coarseConfidence > 0f) candidate.coarseConfidence else 0.75f,
+          )
+        }
+      } else {
+        val salientBoxes = cachedForegroundContours ?: extractSalientRegionsFromBitmap(orientedBitmap, maxRegions = 3)
+        salientBoxes.mapIndexed { idx, box ->
+          RawDetectedObjectForFocus(
+            boundingBox = box,
+            trackingId = null,
+            label = null,
+            confidence = (0.82f - idx * 0.08f).coerceAtLeast(0.60f),
+          )
+        }
+      }
+
       val latencyMs = ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(1L)
       buildVisionAnalysisResult(
         rawTags = hypernymFiltered,
@@ -7297,6 +7326,7 @@ object CameraEngine {
         sourceDescription = sourceDescription,
         analyzedAtMs = analyzedAtMs,
         maxLabels = maxLabels,
+        focusCandidates = fallbackFocusCandidates,
       )
     } catch (_: Throwable) {
       null
@@ -8360,7 +8390,9 @@ object CameraEngine {
   }
 
   /**
-   * Extracts the primary smart autofocus target from a [CameraVisionAnalysisResult].
+   * Extracts the primary smart autofocus target from a [CameraVisionAnalysisResult],
+   * smoothly falling back to unlabeled ML Kit object boxes or salient foreground regions
+   * ([CameraVisionAnalysisResult.focusCandidates]) when no high-confidence Vision tags are present.
    */
   fun selectSmartAutofocusTargetFromVisionResult(
     result: CameraVisionAnalysisResult?,
@@ -8374,10 +8406,101 @@ object CameraEngine {
       )
     }
     val sourceTags = result.tags.ifEmpty { result.allCandidateTags }
-    return selectSmartAutofocusTargetFromVisionTags(
-      tags = sourceTags,
+    val tagCandidates = sourceTags.mapNotNull { tag ->
+      val box = tag.boundingBox ?: return@mapNotNull null
+      if (isBlockedGenericVisionLabel(tag.label)) return@mapNotNull null
+      RawDetectedObjectForFocus(
+        boundingBox = box,
+        trackingId = tag.trackingId ?: if (tag.index >= 0) tag.index else null,
+        label = tag.label,
+        confidence = tag.confidenceClamped,
+      )
+    }
+    if (tagCandidates.isNotEmpty()) {
+      return selectSmartAutofocusTargetFromObjects(
+        objects = tagCandidates,
+        previousTarget = previousTarget,
+        timestampMs = timestampMs,
+      )
+    }
+    if (result.focusCandidates.isNotEmpty()) {
+      if (previousTarget != null &&
+        previousTarget.source == CameraFocusSource.ML_OBJECT_AUTO &&
+        previousTarget.categoryLabel != null &&
+        previousTarget.missedDetectionFrames < 2
+      ) {
+        val matchingFallback = result.focusCandidates.filter { isSameTrackedSubject(it, previousTarget) }
+        if (matchingFallback.isEmpty()) {
+          retainSmartFocusTargetOnDropout(
+            previousTarget = previousTarget,
+            timestampMs = timestampMs,
+          )?.let { return it }
+        }
+      }
+      return selectSmartAutofocusTargetFromObjects(
+        objects = result.focusCandidates,
+        previousTarget = previousTarget,
+        timestampMs = timestampMs,
+      )
+    }
+    return retainSmartFocusTargetOnDropout(
       previousTarget = previousTarget,
       timestampMs = timestampMs,
+    )
+  }
+
+  /**
+   * Merges an asynchronously computed [resolvedTarget] onto the live 60fps main-thread
+   * [liveCurrentTarget] without snapping the reticle's instantaneous position (`normX`, `normY`)
+   * or velocity (`velocityX`, `velocityY`), allowing [stepStickyAutofocusTrajectory] to glide
+   * smoothly at up to [STICKY_AF_MAX_SPEED_NORM_PER_SEC].
+   */
+  fun mergeAsyncSmartFocusDetection(
+    liveCurrentTarget: CameraSmartFocusTarget?,
+    resolvedTarget: CameraSmartFocusTarget?,
+    nowMs: Long = System.currentTimeMillis(),
+  ): CameraSmartFocusTarget? {
+    if (resolvedTarget == null) return liveCurrentTarget
+    if (liveCurrentTarget == null || liveCurrentTarget.source != CameraFocusSource.ML_OBJECT_AUTO) {
+      return resolvedTarget.copy(timestampMs = nowMs)
+    }
+    val startX = liveCurrentTarget.clampedX
+    val startY = liveCurrentTarget.clampedY
+    val goalX = resolvedTarget.clampedTargetX
+    val goalY = resolvedTarget.clampedTargetY
+    val dx = goalX - startX
+    val dy = goalY - startY
+    val distSq = dx * dx + dy * dy
+    val speedSq = liveCurrentTarget.velocityX * liveCurrentTarget.velocityX +
+      liveCurrentTarget.velocityY * liveCurrentTarget.velocityY
+    val alreadySettled = liveCurrentTarget.distanceToDesiredTarget < 0.002f && speedSq < 0.000225f
+    if (alreadySettled && distSq < 0.0004f) {
+      return liveCurrentTarget.copy(
+        normX = startX,
+        normY = startY,
+        targetNormX = startX,
+        targetNormY = startY,
+        trackingId = resolvedTarget.trackingId,
+        categoryLabel = resolvedTarget.categoryLabel,
+        confidence = resolvedTarget.confidence,
+        lockStrength = resolvedTarget.lockStrength,
+        missedDetectionFrames = resolvedTarget.missedDetectionFrames,
+        velocityX = 0f,
+        velocityY = 0f,
+        cornerPath = null,
+        timestampMs = nowMs,
+      )
+    }
+    return liveCurrentTarget.copy(
+      targetNormX = goalX,
+      targetNormY = goalY,
+      targetBoundingBox = resolvedTarget.targetBoundingBox ?: resolvedTarget.boundingBox,
+      trackingId = resolvedTarget.trackingId,
+      categoryLabel = resolvedTarget.categoryLabel,
+      confidence = resolvedTarget.confidence,
+      lockStrength = resolvedTarget.lockStrength,
+      missedDetectionFrames = resolvedTarget.missedDetectionFrames,
+      timestampMs = nowMs,
     )
   }
 

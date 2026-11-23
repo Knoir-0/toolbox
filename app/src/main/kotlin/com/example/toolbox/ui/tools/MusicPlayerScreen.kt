@@ -193,6 +193,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
@@ -216,6 +217,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -8896,8 +8898,20 @@ private fun ExpandedMusicPlayerOverlay(
   val density = LocalDensity.current
   val dismissThresholdPx = with(density) { 64.dp.toPx() }
   val defaultDragRangePx = with(density) { 300.dp.toPx() }
+  val collapsedHandleBottomPaddingPx = with(density) { 6.dp.toPx() }
   var maxAlbumArtHeightPx by remember { mutableFloatStateOf(0f) }
-  val queueDragRangePx = if (maxAlbumArtHeightPx > 80f) maxAlbumArtHeightPx else defaultDragRangePx
+  var settledQueueHeightPx by remember { mutableIntStateOf(0) }
+  val queueDragRangePx = when {
+    maxAlbumArtHeightPx > 80f -> maxAlbumArtHeightPx + collapsedHandleBottomPaddingPx
+    settledQueueHeightPx > 80 -> settledQueueHeightPx.toFloat()
+    else -> defaultDragRangePx
+  }
+  val currentQueueDragRangePx by rememberUpdatedState(queueDragRangePx)
+  val targetQueueHeightPx = when {
+    settledQueueHeightPx > 0 -> settledQueueHeightPx
+    maxAlbumArtHeightPx > 0f -> (maxAlbumArtHeightPx + collapsedHandleBottomPaddingPx).roundToInt()
+    else -> 0
+  }
   var swipeDismissOffsetPx by remember { mutableFloatStateOf(0f) }
   val animatedDismissOffsetPx by animateFloatAsState(
     targetValue = swipeDismissOffsetPx,
@@ -8951,158 +8965,164 @@ private fun ExpandedMusicPlayerOverlay(
         contentDescription = "Expanded player background $dominantHex accent $accentHex"
       },
   ) {
+    val showAlbumArt = isExternal || queueFraction < 0.999f
+    val showQueuePanel = !isExternal && queueFraction > 0.001f
+    val artworkWeight = (1f - queueFraction).coerceAtLeast(0.0001f)
+    val queueWeight = queueFraction.coerceAtLeast(0.0001f)
+
     Column(
       modifier = Modifier
         .fillMaxSize()
         .padding(top = 6.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-      // Upper Player Section (Header, Collapsing Album Art, Title/Metadata, Seek, Transport, Speed/Sleep, Grab Handle)
-      val artworkWeight = (1f - queueFraction).coerceAtLeast(0.0001f)
-      val queueWeight = queueFraction.coerceAtLeast(0.0001f)
+      // 1. Top Header with Collapse Button, Now Playing Context, and Track Info Button
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        IconButton(
+          onClick = onCollapse,
+          modifier = Modifier
+            .size(40.dp)
+            .testTag("music_player_collapse_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.ExpandMore,
+            contentDescription = "Collapse player",
+            tint = Color.White,
+          )
+        }
+
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+          Text(
+            text = if (externalMedia != null) {
+              val appName = externalMedia.sourceAppName.trim()
+              if (appName.isNotEmpty()) "PLAYING FROM ${appName.uppercase()}" else "ANDROID MEDIA PLAYER"
+            } else {
+              "NOW PLAYING"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = Color.White.copy(alpha = 0.72f),
+          )
+          Text(
+            text = if (externalMedia != null) {
+              externalMedia.album.ifBlank {
+                externalMedia.sourceAppName.ifBlank { "Android Media Player" }
+              }
+            } else {
+              "${track.album} (${currentQueueIndex + 1}/$queueSize)"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+
+        if (!isExternal) {
+          IconButton(
+            onClick = onOpenTrackInfo,
+            modifier = Modifier
+              .size(40.dp)
+              .testTag("expanded_player_info_button"),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Info,
+              contentDescription = "Track details",
+              tint = Color.White.copy(alpha = 0.85f),
+              modifier = Modifier.size(20.dp),
+            )
+          }
+        } else {
+          Spacer(modifier = Modifier.size(40.dp))
+        }
+      }
+
+      Spacer(modifier = Modifier.height(8.dp))
+
+      // 2. Large Album Art Card — smoothly pushed out of the way as the queue slides up.
+      // Shares flexible height directly with the slide-up queue panel so player controls never collapse or snap.
+      if (showAlbumArt) {
+        val artVisibilityFraction = (1f - queueFraction).coerceIn(0f, 1f)
+        Box(
+          modifier = Modifier
+            .weight(artworkWeight)
+            .fillMaxWidth()
+            .padding(
+              start = 20.dp,
+              end = 20.dp,
+              top = (2f * artVisibilityFraction).dp,
+              bottom = (10f * artVisibilityFraction).dp,
+            )
+            .onSizeChanged { size ->
+              if (queueFraction <= 0.001f && size.height > 0) {
+                maxAlbumArtHeightPx = size.height.toFloat()
+              }
+            }
+            .graphicsLayer {
+              alpha = (1f - queueFraction * 1.15f).coerceIn(0f, 1f)
+              val collapseScale = 0.72f + 0.28f * artVisibilityFraction
+              scaleX = collapseScale
+              scaleY = collapseScale
+            },
+          contentAlignment = Alignment.Center,
+        ) {
+          Card(
+            shape = RoundedCornerShape(24.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+            border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.25f)),
+            modifier = Modifier
+              .aspectRatio(1f)
+              .fillMaxSize()
+              .scale(artworkScale)
+              .testTag("expanded_player_album_art"),
+          ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+              TrackArtworkBanner(
+                track = track,
+                overrideBitmap = externalMedia?.artworkBitmap,
+                overridePalette = externalMedia?.palette,
+                modifier = Modifier.fillMaxSize(),
+              )
+              if (!isExternal) {
+                IconButton(
+                  onClick = onToggleFavorite,
+                  colors = IconButtonDefaults.iconButtonColors(
+                    containerColor = ArtworkOverlayButtonBackground,
+                  ),
+                  modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp)
+                    .size(30.dp)
+                    .testTag("expanded_player_favorite_button"),
+                ) {
+                  Icon(
+                    imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                    contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
+                    tint = if (isFavorite) accentColor else Color.White,
+                    modifier = Modifier.size(16.dp),
+                  )
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Fixed-height Player Controls Section (Title/Metadata, Seek, Transport, Speed/Sleep, Grab Handle)
       Column(
         modifier = Modifier
           .fillMaxWidth()
-          .then(
-            if (queueFraction < 0.995f) {
-              Modifier.weight(artworkWeight)
-            } else {
-              Modifier
-            }
-          )
           .padding(horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        // 1. Top Header with Collapse Button, Now Playing Context, and Track Info Button
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          IconButton(
-            onClick = onCollapse,
-            modifier = Modifier
-              .size(40.dp)
-              .testTag("music_player_collapse_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.ExpandMore,
-              contentDescription = "Collapse player",
-              tint = Color.White,
-            )
-          }
-
-          Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-              text = if (externalMedia != null) {
-                val appName = externalMedia.sourceAppName.trim()
-                if (appName.isNotEmpty()) "PLAYING FROM ${appName.uppercase()}" else "ANDROID MEDIA PLAYER"
-              } else {
-                "NOW PLAYING"
-              },
-              style = MaterialTheme.typography.labelSmall,
-              fontWeight = FontWeight.Bold,
-              color = Color.White.copy(alpha = 0.72f),
-            )
-            Text(
-              text = if (externalMedia != null) {
-                externalMedia.album.ifBlank {
-                  externalMedia.sourceAppName.ifBlank { "Android Media Player" }
-                }
-              } else {
-                "${track.album} (${currentQueueIndex + 1}/$queueSize)"
-              },
-              style = MaterialTheme.typography.bodySmall,
-              fontWeight = FontWeight.Medium,
-              color = Color.White,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-          }
-
-          if (!isExternal) {
-            IconButton(
-              onClick = onOpenTrackInfo,
-              modifier = Modifier
-                .size(40.dp)
-                .testTag("expanded_player_info_button"),
-            ) {
-              Icon(
-                imageVector = Icons.Default.Info,
-                contentDescription = "Track details",
-                tint = Color.White.copy(alpha = 0.85f),
-                modifier = Modifier.size(20.dp),
-              )
-            }
-          } else {
-            Spacer(modifier = Modifier.size(40.dp))
-          }
-        }
-
-        // 2. Large Album Art Card — smoothly pushed out of the way as the queue slides up
-        if (queueFraction < 0.995f) {
-          val artVisibilityFraction = (1f - queueFraction).coerceIn(0f, 1f)
-          Box(
-            modifier = Modifier
-              .weight(1f)
-              .fillMaxWidth()
-              .padding(vertical = 2.dp)
-              .onSizeChanged { size ->
-                if (queueFraction < 0.05f && size.height > 0) {
-                  maxAlbumArtHeightPx = size.height.toFloat()
-                }
-              }
-              .graphicsLayer {
-                alpha = (1f - queueFraction * 1.15f).coerceIn(0f, 1f)
-                val collapseScale = 0.72f + 0.28f * artVisibilityFraction
-                scaleX = collapseScale
-                scaleY = collapseScale
-              },
-            contentAlignment = Alignment.Center,
-          ) {
-            Card(
-              shape = RoundedCornerShape(24.dp),
-              elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-              border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.25f)),
-              modifier = Modifier
-                .aspectRatio(1f)
-                .fillMaxSize()
-                .scale(artworkScale)
-                .testTag("expanded_player_album_art"),
-            ) {
-              Box(modifier = Modifier.fillMaxSize()) {
-                TrackArtworkBanner(
-                  track = track,
-                  overrideBitmap = externalMedia?.artworkBitmap,
-                  overridePalette = externalMedia?.palette,
-                  modifier = Modifier.fillMaxSize(),
-                )
-                if (!isExternal) {
-                  IconButton(
-                    onClick = onToggleFavorite,
-                    colors = IconButtonDefaults.iconButtonColors(
-                      containerColor = ArtworkOverlayButtonBackground,
-                    ),
-                    modifier = Modifier
-                      .align(Alignment.BottomEnd)
-                      .padding(8.dp)
-                      .size(30.dp)
-                      .testTag("expanded_player_favorite_button"),
-                  ) {
-                    Icon(
-                      imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                      contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
-                      tint = if (isFavorite) accentColor else Color.White,
-                      modifier = Modifier.size(16.dp),
-                    )
-                  }
-                }
-              }
-            }
-          }
-        }
-
         // 3. Track Title, Artist, Album & Genre / Source Badge
         val displayTitle = externalMedia?.title ?: track.title
         val displayArtist = if (externalMedia != null) {
@@ -9121,7 +9141,9 @@ private fun ExpandedMusicPlayerOverlay(
           modifier = Modifier.fillMaxWidth(),
         ) {
           Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+              .fillMaxWidth()
+              .heightIn(min = 32.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
           ) {
@@ -9136,7 +9158,7 @@ private fun ExpandedMusicPlayerOverlay(
                 .weight(1f)
                 .testTag("expanded_player_title"),
             )
-            if (!isExternal && queueFraction >= 0.995f) {
+            if (!isExternal && !showAlbumArt) {
               IconButton(
                 onClick = onToggleFavorite,
                 modifier = Modifier
@@ -9539,7 +9561,7 @@ private fun ExpandedMusicPlayerOverlay(
               .onGloballyPositioned { coords ->
                 handleLayoutCoordinates = coords
               }
-              .pointerInput(queueDragRangePx) {
+              .pointerInput(Unit) {
                 var dragStartFraction = 0f
                 var dragStartRootY = 0f
                 var totalRootDragY = 0f
@@ -9550,6 +9572,9 @@ private fun ExpandedMusicPlayerOverlay(
                     dragStartRootY = handleLayoutCoordinates?.localToRoot(startOffset)?.y ?: startOffset.y
                     totalRootDragY = 0f
                     lastStepRootDeltaY = 0f
+                    coroutineScope.launch {
+                      queueExpandAnimatable.stop()
+                    }
                   },
                   onVerticalDrag = { change, dragAmount ->
                     change.consume()
@@ -9564,7 +9589,7 @@ private fun ExpandedMusicPlayerOverlay(
                       lastStepRootDeltaY = stepDelta
                     }
                     totalRootDragY = newTotalRootDragY
-                    val rangePx = queueDragRangePx.coerceAtLeast(1f)
+                    val rangePx = currentQueueDragRangePx.coerceAtLeast(1f)
                     val nextFraction = (dragStartFraction - (totalRootDragY / rangePx)).coerceIn(0f, 1f)
                     coroutineScope.launch {
                       queueExpandAnimatable.snapTo(nextFraction)
@@ -9584,17 +9609,24 @@ private fun ExpandedMusicPlayerOverlay(
                   },
                 )
               }
-              .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = { toggleQueueSheet() },
-              )
+              .pointerInput(Unit) {
+                detectTapGestures(
+                  onTap = { toggleQueueSheet() },
+                )
+              }
+              .semantics {
+                onClick {
+                  toggleQueueSheet()
+                  true
+                }
+              }
               .testTag("music_queue_panel_toggle"),
           ) {
             Box(
               modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp, vertical = 10.dp)
+                .heightIn(min = 22.dp)
                 .testTag("expanded_player_up_next_button"),
               contentAlignment = Alignment.Center,
             ) {
@@ -9680,14 +9712,42 @@ private fun ExpandedMusicPlayerOverlay(
         }
       }
 
-      // 8. Slide-Up Queue Panel (shares the same view & album-art gradient background while pushing controls up and hiding album art)
-      if (!isExternal && queueFraction > 0.001f) {
+      // 8. Slide-Up Queue Panel (shares flexible height directly with Album Art while keeping controls intact)
+      if (showQueuePanel) {
         Box(
           modifier = Modifier
             .fillMaxWidth()
             .weight(queueWeight)
+            .onSizeChanged { size ->
+              if (queueFraction >= 0.999f && size.height > 0) {
+                settledQueueHeightPx = size.height
+              }
+            }
+            .clipToBounds()
             .graphicsLayer {
               alpha = (queueFraction * 1.35f).coerceIn(0f, 1f)
+            }
+            .layout { measurable, constraints ->
+              val hasBoundedHeight = constraints.hasBoundedHeight
+              val boxHeight = if (hasBoundedHeight) constraints.maxHeight else 0
+              val desiredHeight = if (hasBoundedHeight && targetQueueHeightPx > 0 && queueFraction < 0.999f) {
+                targetQueueHeightPx.coerceAtLeast(boxHeight)
+              } else {
+                boxHeight
+              }
+              val childConstraints = if (hasBoundedHeight) {
+                constraints.copy(
+                  minHeight = desiredHeight.coerceAtLeast(0),
+                  maxHeight = desiredHeight.coerceAtLeast(0),
+                )
+              } else {
+                constraints
+              }
+              val placeable = measurable.measure(childConstraints)
+              val layoutHeight = if (hasBoundedHeight) boxHeight else placeable.height
+              layout(placeable.width, layoutHeight) {
+                placeable.placeRelative(0, 0)
+              }
             },
         ) {
           PlaybackQueueSheetContent(

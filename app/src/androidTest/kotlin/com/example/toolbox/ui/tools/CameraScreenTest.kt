@@ -292,9 +292,13 @@ class CameraScreenTest {
     composeTestRule.onNodeWithTag("camera_vision_reticle_overlay").assertIsDisplayed()
     composeTestRule.onNodeWithTag("camera_shutter_vision_icon", useUnmergedTree = true).assertIsDisplayed()
 
-    // Trigger ML Kit Vision analysis via the shutter button and verify dynamic colored bounding boxes with labels & percentages >= 65%
+    // Trigger ML Kit Vision capture via the shutter button and verify both photo saving to Gallery and dynamic colored bounding boxes
+    val mediaCountBeforeVision = CameraEngine.listCapturedMedia(tempCameraDir).size
     composeTestRule.onNodeWithTag("camera_shutter_button").performClick()
     composeTestRule.waitForIdle()
+    val mediaAfterVision = CameraEngine.listCapturedMedia(tempCameraDir)
+    assertEquals(mediaCountBeforeVision + 1, mediaAfterVision.size)
+    assertTrue(mediaAfterVision.first().name.startsWith("IMG_"))
     composeTestRule.onNodeWithTag("vision_detected_card").assertIsDisplayed()
     composeTestRule.onNodeWithTag("vision_box_badge_Plant").assertIsDisplayed()
     composeTestRule.onNodeWithTag("vision_box_badge_Flowerpot").assertIsDisplayed()

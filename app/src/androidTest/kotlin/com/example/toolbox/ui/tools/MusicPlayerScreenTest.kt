@@ -20,6 +20,7 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -1639,5 +1640,125 @@ class MusicPlayerScreenTest {
       assertEquals(android.view.View.VISIBLE, mediumRepeatBg.visibility)
       assertEquals("Repeat All", mediumRepeat.contentDescription.toString())
     }
+  }
+
+  @Test
+  fun playbackQueueSlideUp_glidesMonotonicallyWithoutFullscreenOvershootOrSnapBack() {
+    composeTestRule.setContent {
+      ToolboxTheme {
+        MusicPlayerScreen(
+          initialTracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS,
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Start playback and expand the full music player
+    composeTestRule.onNodeWithTag("music_play_all_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("mini_player_album_art").performClick()
+    composeTestRule.waitForIdle()
+
+    val rootBounds = composeTestRule.onNodeWithTag("music_player_expanded").fetchSemanticsNode().boundsInRoot
+    val headerCollapseBounds = composeTestRule.onNodeWithTag("music_player_collapse_button").fetchSemanticsNode().boundsInRoot
+    val initialPlayPauseBounds = composeTestRule.onNodeWithTag("expanded_player_play_pause_button").fetchSemanticsNode().boundsInRoot
+    val initialHandleBounds = composeTestRule.onNodeWithTag("music_queue_panel_toggle").fetchSemanticsNode().boundsInRoot
+    composeTestRule.onNodeWithTag("expanded_player_up_next_button").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("music_queue_grab_handle").assertIsDisplayed()
+
+    try {
+      composeTestRule.mainClock.autoAdvance = false
+
+      // Trigger the playback queue slide-up transition
+      composeTestRule.onNodeWithTag("music_queue_panel_toggle").performClick()
+
+      var previousHandleTop = initialHandleBounds.top
+      var previousQueueTop = rootBounds.bottom
+      var observedMidAnimationQueue = false
+
+      repeat(60) {
+        composeTestRule.mainClock.advanceTimeBy(16L)
+
+        val handleBounds = composeTestRule.onNodeWithTag("music_queue_panel_toggle").fetchSemanticsNode().boundsInRoot
+        val titleBounds = composeTestRule.onNodeWithTag("expanded_player_title").fetchSemanticsNode().boundsInRoot
+        val playPauseBounds = composeTestRule.onNodeWithTag("expanded_player_play_pause_button").fetchSemanticsNode().boundsInRoot
+
+        // Player controls must remain intact and below the header on every animation frame
+        assertTrue(
+          "Title pushed above header (${titleBounds.top} < ${headerCollapseBounds.bottom})",
+          titleBounds.top >= headerCollapseBounds.bottom - 2f,
+        )
+        assertTrue(
+          "Play/Pause squished during slide-up (${playPauseBounds.height} vs ${initialPlayPauseBounds.height})",
+          playPauseBounds.height >= initialPlayPauseBounds.height - 2f,
+        )
+        // Grab handle must move monotonically upward without snapping back down
+        assertTrue(
+          "Grab handle snapped downward during slide-up (${handleBounds.top} > $previousHandleTop)",
+          handleBounds.top <= previousHandleTop + 1.5f,
+        )
+        previousHandleTop = handleBounds.top
+
+        val queueNodes = composeTestRule.onAllNodesWithTag("music_queue_sheet").fetchSemanticsNodes()
+        if (queueNodes.isNotEmpty()) {
+          val queueBounds = queueNodes.single().boundsInRoot
+          if (queueBounds.height < rootBounds.height * 0.4f && queueBounds.height > 8f) {
+            observedMidAnimationQueue = true
+          }
+          // Queue must stay strictly below the grab handle (never pulling fullscreen over the player controls)
+          assertTrue(
+            "Queue pulled above grab handle (${queueBounds.top} < ${handleBounds.bottom})",
+            queueBounds.top >= handleBounds.bottom - 2f,
+          )
+          // Queue top must move monotonically upward and never overshoot then snap back down
+          assertTrue(
+            "Queue top snapped downward during slide-up (${queueBounds.top} > $previousQueueTop)",
+            queueBounds.top <= previousQueueTop + 1.5f,
+          )
+          previousQueueTop = queueBounds.top
+        }
+      }
+
+      assertTrue("Expected to observe mid-animation queue frames", observedMidAnimationQueue)
+    } finally {
+      composeTestRule.mainClock.autoAdvance = true
+    }
+
+    composeTestRule.waitForIdle()
+    val settledQueueBounds = composeTestRule.onNodeWithTag("music_queue_sheet").fetchSemanticsNode().boundsInRoot
+    val settledHandleBounds = composeTestRule.onNodeWithTag("music_queue_panel_toggle").fetchSemanticsNode().boundsInRoot
+    assertTrue(settledQueueBounds.top >= settledHandleBounds.bottom - 2f)
+    assertTrue(settledQueueBounds.height > 100f)
+
+    // Also verify slide-down collapse glides smoothly back without snapping
+    try {
+      composeTestRule.mainClock.autoAdvance = false
+      composeTestRule.onNodeWithTag("music_queue_panel_toggle").performClick()
+
+      var prevHandleTopDown = settledHandleBounds.top
+      repeat(60) {
+        composeTestRule.mainClock.advanceTimeBy(16L)
+        val handleBounds = composeTestRule.onNodeWithTag("music_queue_panel_toggle").fetchSemanticsNode().boundsInRoot
+        assertTrue(
+          "Grab handle snapped upward during slide-down (${handleBounds.top} < $prevHandleTopDown)",
+          handleBounds.top >= prevHandleTopDown - 1.5f,
+        )
+        prevHandleTopDown = handleBounds.top
+
+        val queueNodes = composeTestRule.onAllNodesWithTag("music_queue_sheet").fetchSemanticsNodes()
+        if (queueNodes.isNotEmpty()) {
+          val queueBounds = queueNodes.single().boundsInRoot
+          assertTrue(
+            "Queue pulled above grab handle during slide-down (${queueBounds.top} < ${handleBounds.bottom})",
+            queueBounds.top >= handleBounds.bottom - 2f,
+          )
+        }
+      }
+    } finally {
+      composeTestRule.mainClock.autoAdvance = true
+    }
+
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("expanded_player_album_art").assertIsDisplayed()
   }
 }

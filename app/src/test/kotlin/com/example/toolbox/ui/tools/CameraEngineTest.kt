@@ -1272,7 +1272,7 @@ class CameraEngineTest {
     var simCorner = movingRightTarget
     var sawEllipticalArcPoints = 0
     var sawStraightLinePoints = 0
-    for (stepIdx in 0 until 24) {
+    for (stepIdx in 0 until 36) {
       val prevSpeed = simCorner.speedNormPerSec
       simCorner = CameraEngine.stepStickyAutofocusTrajectory(
         currentTarget = simCorner,
@@ -1281,18 +1281,20 @@ class CameraEngineTest {
         dtSeconds = 0.04f,
         timestampMs = simCorner.timestampMs + 40L,
       )
-      val activeCorner = simCorner.cornerPath!!
+      val activeCorner = simCorner.cornerPath
       // Velocity added to its own speed in any step is strictly capped by STICKY_AF_MAX_VELOCITY_ADD_NORM_PER_SEC
       val speedAdded = simCorner.speedNormPerSec - prevSpeed
       assertTrue(speedAdded <= STICKY_AF_MAX_VELOCITY_ADD_NORM_PER_SEC + 1e-4f)
       assertTrue(speedAdded <= STICKY_AF_MAX_ACCEL_NORM_PER_SEC_SQ * 0.04f + 1e-4f)
 
-      if (activeCorner.isOnEllipticalArc) {
-        sawEllipticalArcPoints++
-        assertEquals(1.0f, activeCorner.evaluateEllipseEquation(simCorner.clampedX, simCorner.clampedY), 0.01f)
-      } else if (simCorner.distanceToDesiredTarget > 0.002f) {
-        sawStraightLinePoints++
-        assertEquals(0.0f, activeCorner.crossTrackDistanceToStraightLine(simCorner.clampedX, simCorner.clampedY), 1e-3f)
+      if (activeCorner != null) {
+        if (activeCorner.isOnEllipticalArc) {
+          sawEllipticalArcPoints++
+          assertEquals(1.0f, activeCorner.evaluateEllipseEquation(simCorner.clampedX, simCorner.clampedY), 0.01f)
+        } else if (simCorner.distanceToDesiredTarget > 0.002f) {
+          sawStraightLinePoints++
+          assertEquals(0.0f, activeCorner.crossTrackDistanceToStraightLine(simCorner.clampedX, simCorner.clampedY), 1e-3f)
+        }
       }
     }
     assertTrue("Path traces an elliptical arc at the start of movement", sawEllipticalArcPoints >= 2)
@@ -1300,9 +1302,9 @@ class CameraEngineTest {
     assertEquals(0.40f, simCorner.clampedX, 0.01f)
     assertEquals(0.82f, simCorner.clampedY, 0.01f)
 
-    // 7. Long-distance traverse: reaches cruise speed up to STICKY_AF_MAX_SPEED_NORM_PER_SEC (0.64f, reduced slightly from 0.72f),
+    // 7. Long-distance traverse: strictly caps top speed at the reduced STICKY_AF_MAX_SPEED_NORM_PER_SEC (0.40f),
     // respects the per-step velocity-addition limit from rest, and smoothly decelerates as it reaches the target.
-    assertEquals(0.64f, STICKY_AF_MAX_SPEED_NORM_PER_SEC, 0.001f)
+    assertEquals(0.40f, STICKY_AF_MAX_SPEED_NORM_PER_SEC, 0.001f)
     var longTraverse = CameraSmartFocusTarget(
       normX = 0.12f,
       normY = 0.14f,
@@ -1314,7 +1316,7 @@ class CameraEngineTest {
     )
     val speedHistory = mutableListOf<Float>()
     val distHistory = mutableListOf<Float>()
-    for (stepIdx in 0 until 38) {
+    for (stepIdx in 0 until 56) {
       val prevSpeed = longTraverse.speedNormPerSec
       longTraverse = CameraEngine.stepStickyAutofocusTrajectory(
         currentTarget = longTraverse,
@@ -1331,9 +1333,8 @@ class CameraEngineTest {
     }
     val peakSpeed = speedHistory.maxOrNull() ?: 0f
     val peakIndex = speedHistory.indexOfFirst { it == peakSpeed }
-    // Reaches a faster cruise speed well above the old 0.36f limit
-    assertTrue("Peak speed ($peakSpeed) exceeds old 0.36f cap", peakSpeed > 0.48f)
-    assertTrue("peakIndex=$peakIndex, speedHistory=$speedHistory", peakIndex in 2..15)
+    assertTrue("Peak speed ($peakSpeed) stays within reduced 0.40f cap", peakSpeed in 0.35f..0.401f)
+    assertTrue("peakIndex=$peakIndex, speedHistory=$speedHistory", peakIndex in 2..20)
     // After peak speed, smoothly decelerates monotonically all the way to the target
     for (i in (peakIndex + 1) until speedHistory.size) {
       assertTrue(
@@ -1345,6 +1346,76 @@ class CameraEngineTest {
     assertEquals(0.88f, longTraverse.clampedX, 0.01f)
     assertEquals(0.86f, longTraverse.clampedY, 0.01f)
     assertTrue(longTraverse.speedNormPerSec <= 0.03f)
+  }
+
+  @Test
+  fun visionModeSmartAutofocus_continuesTrackingFallbackCandidatesWhenNoVisionTagsAreDetected() {
+    val initialVisionResult = CameraEngine.buildVisionAnalysisResult(
+      rawTags = listOf(
+        CameraVisionTag(
+          label = "Plant",
+          confidence = 0.92f,
+          index = 284,
+          boundingBox = CameraVisionBoundingBox(0.18f, 0.20f, 0.48f, 0.50f),
+        )
+      ),
+      analyzedAtMs = 1000L,
+    )
+    var focusTarget = CameraEngine.selectSmartAutofocusTargetFromVisionResult(
+      result = initialVisionResult,
+      previousTarget = null,
+      timestampMs = 1000L,
+    )
+    assertNotNull(focusTarget)
+    assertEquals(0.33f, focusTarget!!.normX, 0.01f)
+    assertEquals(0.35f, focusTarget.normY, 0.01f)
+
+    // Simulate Vision mode frames with ZERO >=80% Vision detections for > 3 seconds (past dropout hold),
+    // while salient/unlabeled focusCandidates move toward (0.68, 0.64).
+    val unlabeledSalientBox = CameraVisionBoundingBox(0.52f, 0.48f, 0.84f, 0.80f) // center (0.68, 0.64)
+    for (frameIdx in 1..10) {
+      val tMs = 1000L + frameIdx * 300L
+      val emptyVisionResultWithFallback = CameraEngine.buildVisionAnalysisResult(
+        rawTags = emptyList(),
+        analyzedAtMs = tMs,
+        focusCandidates = listOf(
+          RawDetectedObjectForFocus(
+            boundingBox = unlabeledSalientBox,
+            trackingId = null,
+            label = null,
+            confidence = 0.80f,
+          )
+        ),
+      )
+      assertTrue(emptyVisionResultWithFallback.tags.isEmpty())
+      val resolved = CameraEngine.selectSmartAutofocusTargetFromVisionResult(
+        result = emptyVisionResultWithFallback,
+        previousTarget = focusTarget,
+        timestampMs = tMs,
+      )
+      assertNotNull("Autofocus reticle must keep working in Vision mode even with 0 Vision detections", resolved)
+      // Merge asynchronously without snapping instantaneous position, then step at 60fps
+      focusTarget = CameraEngine.mergeAsyncSmartFocusDetection(
+        liveCurrentTarget = focusTarget,
+        resolvedTarget = resolved,
+        nowMs = tMs,
+      )
+      var stepClock = tMs
+      repeat(18) {
+        stepClock += 16L
+        val stepped = CameraEngine.stepStickyAutofocusTrajectory(
+          currentTarget = focusTarget!!,
+          dtSeconds = 0.016f,
+          timestampMs = stepClock,
+        )
+        assertTrue(stepped.speedNormPerSec <= STICKY_AF_MAX_SPEED_NORM_PER_SEC + 1e-4f)
+        focusTarget = stepped
+      }
+    }
+
+    assertNotNull(focusTarget)
+    assertEquals(0.68f, focusTarget!!.clampedX, 0.02f)
+    assertEquals(0.64f, focusTarget!!.clampedY, 0.02f)
   }
 
   @Test
