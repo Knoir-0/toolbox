@@ -68,6 +68,8 @@ data class ElementsWidgetState(
   val configText: String,
   val suborbitalsText: String,
   val fullSuborbitalsText: String,
+  val descriptionText: String,
+  val infoDetailsText: String,
   val suborbitals: List<ElementSuborbital>,
   val valenceSuborbitals: List<ElementSuborbital>,
   val categoryColors: ElementWidgetCategoryColors,
@@ -78,9 +80,8 @@ data class ElementsWidgetState(
 
 /**
  * Central state resolver, interactive 18-column IUPAC Periodic Table main view renderer,
- * Suborbital Spin-Box Diagram Canvas renderer, 2D Bohr Electron Shell Diagram Canvas renderer,
- * and RemoteViews builder for the Periodic Table of Elements Home Screen AppWidget
- * ([ElementsWidgetProvider]):
+ * 2D Bohr Electron Shell Diagram Canvas renderer, and RemoteViews builder for the Periodic Table
+ * of Elements Home Screen AppWidget ([ElementsWidgetProvider]):
  * - **Main View ([ElementsWidgetViewMode.TABLE])**: Displays the complete 18-column IUPAC Periodic
  *   Table (Periods 1–7 + Lanthanides & Actinides f-block rows) with category color-coding and
  *   individual tap targets for all 118 elements. Tapping any element switches the widget to
@@ -88,9 +89,10 @@ data class ElementsWidgetState(
  * - **Element Information View ([ElementsWidgetViewMode.ELEMENT_INFO])**: Displays the tapped
  *   element's tile badge (`#Z`, phase badge, symbol, atomic mass), element name & category/orbital
  *   block pill, atomic mass/phase/period/group summary, suborbital electron configuration and
- *   Hund's-rule spin-pair orbital boxes (`⇅` / `↑`), visual Suborbitals Diagram card, 2D Bohr
- *   electron shell diagram, and a `←` button to return to the Periodic Table main view (alongside
- *   `<` Previous, `>` Next, `★` Favorite, `⟳` Random, and `🔍` Search controls).
+ *   Hund's-rule spin-pair orbital boxes (`⇅` / `↑`), an Element Description & Info card on the
+ *   left, a 2D Bohr electron shell diagram on the right, and a `←` button to return to the
+ *   Periodic Table main view (alongside `<` Previous, `>` Next, `★` Favorite, `⟳` Random, and
+ *   `🔍` Search controls).
  * - Strictly follows `DESIGN_LANGUAGE.md` Section 5.8 (`16.dp` outer corner radius,
  *   `@android:id/background` + `clipToOutline="true"` launcher opt-out, inset `1.dp` border stroke,
  *   and automatic Hexagonify badge support).
@@ -623,6 +625,12 @@ object ElementsWidgets {
     val valenceSuborbitals = element.valenceSuborbitals
     val suborbitalsText = "Suborbitals: ${element.valenceSuborbitalsSpinSummary}"
     val fullSuborbitalsText = element.fullElectronConfiguration
+    val descriptionText = element.summary
+
+    val meltStr = ElementTempUnit.CELSIUS.formatKelvin(element.meltingPointK)
+    val boilStr = ElementTempUnit.CELSIUS.formatKelvin(element.boilingPointK)
+    val densityPart = element.density?.let { " • Density: $it g/cm³" }.orEmpty()
+    val infoDetailsText = "Oxidation: ${element.oxidationStates} • Melt: $meltStr • Boil: $boilStr$densityPart • Discovered: ${element.discoveryYear} (${element.discoveredBy})"
 
     return ElementsWidgetState(
       viewMode = viewMode,
@@ -635,6 +643,8 @@ object ElementsWidgets {
       configText = configText,
       suborbitalsText = suborbitalsText,
       fullSuborbitalsText = fullSuborbitalsText,
+      descriptionText = descriptionText,
+      infoDetailsText = infoDetailsText,
       suborbitals = suborbitals,
       valenceSuborbitals = valenceSuborbitals,
       categoryColors = categoryColors,
@@ -1471,12 +1481,19 @@ object ElementsWidgets {
     views.setInt(R.id.widget_elements_search_button_bg, "setColorFilter", palette.secondaryContainerArgb)
     views.setInt(R.id.widget_elements_search_button_icon, "setColorFilter", palette.onSecondaryContainerArgb)
 
-    // 5. Bottom Visual Section in Element Info View: Suborbitals Diagram Card + 2D Bohr Shell Diagram
+    // 5. Bottom Visual Section in Element Info View: Element Description / Info Card (Left) + 2D Bohr Shell Diagram (Right)
     val showVisualSection = heightDp >= COMPACT_HEIGHT_THRESHOLD_DP
     views.setViewVisibility(
       R.id.widget_elements_visual_section,
       if (showVisualSection) View.VISIBLE else View.GONE,
     )
+    views.setInt(R.id.widget_elements_description_card_bg, "setColorFilter", palette.itemCardArgb)
+    views.setInt(R.id.widget_elements_description_card_border, "setColorFilter", palette.borderArgb)
+    views.setTextViewText(R.id.widget_elements_description_text, state.descriptionText)
+    views.setTextColor(R.id.widget_elements_description_text, palette.onSurfaceArgb)
+    views.setTextViewText(R.id.widget_elements_info_meta_text, state.infoDetailsText)
+    views.setTextColor(R.id.widget_elements_info_meta_text, palette.onSurfaceVariantArgb)
+
     if (showVisualSection) {
       val showBohr = widthDp >= SHOW_BOHR_WIDTH_THRESHOLD_DP
       views.setViewVisibility(
@@ -1485,22 +1502,16 @@ object ElementsWidgets {
       )
 
       val visualHeightDp = (heightDp - 82f).coerceAtLeast(56f)
-      val bohrSizeDp = if (showBohr) min(88f, visualHeightDp) else 0f
-      val suborbitalsWidthDp = (widthDp - 20f - if (showBohr) (bohrSizeDp + 6f) else 0f).coerceAtLeast(120f)
-
-      val suborbitalsWidthPx = (suborbitalsWidthDp * density * scaleFactor).roundToInt().coerceIn(140, 900)
-      val suborbitalsHeightPx = (visualHeightDp * density * scaleFactor).roundToInt().coerceIn(72, 600)
-
-      renderSuborbitalsDiagramBitmap(
-        state = state,
-        widthPx = suborbitalsWidthPx,
-        heightPx = suborbitalsHeightPx,
-        cornerRadiusPx = innerCornerPx,
-      )?.let { subBmp ->
-        views.setImageViewBitmap(R.id.widget_elements_suborbitals_image, subBmp)
+      val descriptionMaxLines = when {
+        visualHeightDp >= 140f -> 6
+        visualHeightDp >= 110f -> 5
+        visualHeightDp >= 82f -> 4
+        else -> 3
       }
+      views.setInt(R.id.widget_elements_description_text, "setMaxLines", descriptionMaxLines)
 
       if (showBohr) {
+        val bohrSizeDp = min(88f, visualHeightDp)
         val bohrSizePx = (bohrSizeDp * density * scaleFactor).roundToInt().coerceIn(72, 360)
         renderBohrDiagramBitmap(
           state = state,
@@ -1570,7 +1581,10 @@ object ElementsWidgets {
     views.setOnClickPendingIntent(R.id.widget_elements_back_to_table_icon, showTableIntent)
     views.setOnClickPendingIntent(R.id.widget_elements_tile_image, openInspectorIntent)
     views.setOnClickPendingIntent(R.id.widget_elements_text_container, openInspectorIntent)
-    views.setOnClickPendingIntent(R.id.widget_elements_suborbitals_image, openInspectorIntent)
+    views.setOnClickPendingIntent(R.id.widget_elements_description_card, openInspectorIntent)
+    views.setOnClickPendingIntent(R.id.widget_elements_description_container, openInspectorIntent)
+    views.setOnClickPendingIntent(R.id.widget_elements_description_text, openInspectorIntent)
+    views.setOnClickPendingIntent(R.id.widget_elements_info_meta_text, openInspectorIntent)
     views.setOnClickPendingIntent(R.id.widget_elements_bohr_image, openInspectorIntent)
     views.setOnClickPendingIntent(R.id.widget_elements_prev_button, prevIntent)
     views.setOnClickPendingIntent(R.id.widget_elements_next_button, nextIntent)

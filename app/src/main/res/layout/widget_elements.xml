@@ -488,7 +488,7 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- Bottom Visual Section: Suborbitals & Spin-Box Diagram Card + 2D Bohr Electron Shell Diagram -->
+        <!-- Bottom Visual Section: Element Description / Info Card (Left) + 2D Bohr Electron Shell Diagram (Right) -->
         <LinearLayout
             android:id="@+id/widget_elements_visual_section"
             android:layout_width="match_parent"
@@ -498,14 +498,63 @@
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
-            <ImageView
-                android:id="@+id/widget_elements_suborbitals_image"
+            <FrameLayout
+                android:id="@+id/widget_elements_description_card"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_weight="1"
-                android:contentDescription="Element suborbitals and atomic properties"
-                android:scaleType="fitXY"
-                android:src="@drawable/bg_todo_widget_item" />
+                android:contentDescription="Element description and properties">
+
+                <ImageView
+                    android:id="@+id/widget_elements_description_card_bg"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:scaleType="fitXY"
+                    android:src="@drawable/bg_notes_widget_item_fill" />
+
+                <ImageView
+                    android:id="@+id/widget_elements_description_card_border"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:scaleType="fitXY"
+                    android:src="@drawable/bg_notes_widget_item_border" />
+
+                <LinearLayout
+                    android:id="@+id/widget_elements_description_container"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:gravity="center_vertical"
+                    android:orientation="vertical"
+                    android:paddingStart="10dp"
+                    android:paddingTop="6dp"
+                    android:paddingEnd="10dp"
+                    android:paddingBottom="6dp">
+
+                    <TextView
+                        android:id="@+id/widget_elements_description_text"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:lineSpacingExtra="1dp"
+                        android:maxLines="3"
+                        android:text="The lightest and most abundant chemical element in the universe (~75% of normal matter by mass), powering stellar fusion and forming water and all organic compounds."
+                        android:textColor="#FFE7E1E6"
+                        android:textSize="10.5sp" />
+
+                    <TextView
+                        android:id="@+id/widget_elements_info_meta_text"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="3dp"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="Oxidation: −1, +1 • Melt: −259.16 °C • Boil: −252.87 °C • Discovered: 1766 (Henry Cavendish)"
+                        android:textColor="#FFCDC4CF"
+                        android:textSize="9.5sp" />
+                </LinearLayout>
+            </FrameLayout>
 
             <ImageView
                 android:id="@+id/widget_elements_bohr_image"

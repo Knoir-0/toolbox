@@ -156,7 +156,7 @@ import com.example.toolbox.ui.theme.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import com.example.toolbox.ui.theme.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -247,6 +247,7 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.Dp
 import com.example.toolbox.ui.theme.HorizontalHexagonShape
 import com.example.toolbox.ui.theme.currentHexagonIconButtons
+import com.example.toolbox.ui.theme.resolveIconButtonShape
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.toolbox.ui.theme.ToolboxTheme
@@ -4066,12 +4067,14 @@ private fun HomeTabContent(
                         .testTag("select_checkbox_$selectionKey"),
                     )
                   } else {
+                    val timeBadgeShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(8.dp)
                     Surface(
-                      shape = RoundedCornerShape(8.dp),
+                      shape = timeBadgeShape,
                       color = Color.Black.copy(alpha = 0.55f),
                       modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(6.dp),
+                        .padding(6.dp)
+                        .testTag("playlist_time_badge_${playlist.name}"),
                     ) {
                       Text(
                         text = playlist.totalDurationFormatted,
@@ -7669,12 +7672,14 @@ private fun SongGridItemCard(
               .testTag("select_checkbox_$selectionKey"),
           )
         } else {
+          val timeBadgeShape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(8.dp)
           Surface(
-            shape = RoundedCornerShape(8.dp),
+            shape = timeBadgeShape,
             color = Color.Black.copy(alpha = 0.55f),
             modifier = Modifier
               .align(Alignment.TopStart)
-              .padding(6.dp),
+              .padding(6.dp)
+              .testTag("song_time_badge_${track.id}"),
           ) {
             Text(
               text = track.durationFormatted,
@@ -7715,13 +7720,14 @@ private fun SongGridItemCard(
             .padding(6.dp),
         )
         if (isCurrent) {
+          val indicatorShape = resolveIconButtonShape(CircleShape)
           Box(
             modifier = Modifier
               .align(Alignment.BottomEnd)
               .padding(6.dp)
               .size(30.dp)
-              .clip(CircleShape)
-              .background(ArtworkOverlayButtonBackground, CircleShape),
+              .clip(indicatorShape)
+              .background(ArtworkOverlayButtonBackground, indicatorShape),
             contentAlignment = Alignment.Center,
           ) {
             Icon(

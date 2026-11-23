@@ -24,6 +24,7 @@ import androidx.compose.material3.contentColorFor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -572,6 +573,43 @@ fun FilterChip(
   )
 }
 
+/**
+ * Resolves the effective [Shape] for a circular (`1:1`) icon button (`IconButton`, `FilledIconButton`,
+ * `FilledTonalIconButton`, `OutlinedIconButton`), converting [CircleShape] into [HexagonShape]
+ * whenever "Hexagonify" is enabled in Settings (or via [LocalHexagonIconButtons]), and standard
+ * [androidx.compose.foundation.shape.CircleShape] when disabled.
+ */
+@Composable
+fun resolveIconButtonShape(requestedShape: Shape): Shape {
+  val hexagonEnabled = currentHexagonIconButtons()
+  return if (requestedShape === CircleShape) {
+    if (hexagonEnabled) HexagonShape else androidx.compose.foundation.shape.CircleShape
+  } else {
+    requestedShape
+  }
+}
+
+@Composable
+fun IconButton(
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  shape: Shape = CircleShape,
+  colors: IconButtonColors = IconButtonDefaults.iconButtonColors(),
+  interactionSource: MutableInteractionSource? = null,
+  content: @Composable () -> Unit,
+) {
+  val effectiveShape = resolveIconButtonShape(shape)
+  androidx.compose.material3.IconButton(
+    onClick = onClick,
+    modifier = modifier.clip(effectiveShape),
+    enabled = enabled,
+    colors = colors,
+    interactionSource = interactionSource,
+    content = content,
+  )
+}
+
 @Composable
 fun FilledIconButton(
   onClick: () -> Unit,
@@ -586,7 +624,7 @@ fun FilledIconButton(
     onClick = onClick,
     modifier = modifier,
     enabled = enabled,
-    shape = shape,
+    shape = resolveIconButtonShape(shape),
     colors = colors,
     interactionSource = interactionSource,
     content = content,
@@ -607,7 +645,7 @@ fun FilledTonalIconButton(
     onClick = onClick,
     modifier = modifier,
     enabled = enabled,
-    shape = shape,
+    shape = resolveIconButtonShape(shape),
     colors = colors,
     interactionSource = interactionSource,
     content = content,
@@ -630,7 +668,7 @@ fun FilledTonalIconToggleButton(
     onCheckedChange = onCheckedChange,
     modifier = modifier,
     enabled = enabled,
-    shape = shape,
+    shape = resolveIconButtonShape(shape),
     colors = colors,
     interactionSource = interactionSource,
     content = content,
@@ -652,7 +690,7 @@ fun OutlinedIconButton(
     onClick = onClick,
     modifier = modifier,
     enabled = enabled,
-    shape = shape,
+    shape = resolveIconButtonShape(shape),
     colors = colors,
     border = border,
     interactionSource = interactionSource,

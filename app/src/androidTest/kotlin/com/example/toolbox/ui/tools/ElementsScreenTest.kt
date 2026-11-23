@@ -242,8 +242,14 @@ class ElementsScreenTest {
 
       val titleView = root.findViewById<TextView>(R.id.widget_elements_title)
       val suborbitalsView = root.findViewById<TextView>(R.id.widget_elements_suborbitals_text)
+      val descriptionCard = root.findViewById<View>(R.id.widget_elements_description_card)
+      val descriptionView = root.findViewById<TextView>(R.id.widget_elements_description_text)
+      val infoMetaView = root.findViewById<TextView>(R.id.widget_elements_info_meta_text)
       assertTrue(titleView.text.toString().contains("Iron (#26)"))
       assertEquals("Suborbitals: 3d⁶ [⇅][↑][↑][↑][↑] • 4s² [⇅]", suborbitalsView.text.toString())
+      assertEquals(View.VISIBLE, descriptionCard.visibility)
+      assertEquals(ironState.element.summary, descriptionView.text.toString())
+      assertTrue(infoMetaView.text.toString().contains("Oxidation: +2, +3, +6"))
     }
 
     // 3. Tapping Back to Periodic Table returns the widget to the Periodic Table main view

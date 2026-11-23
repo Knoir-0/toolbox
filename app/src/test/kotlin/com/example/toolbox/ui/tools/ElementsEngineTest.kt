@@ -255,8 +255,10 @@ class ElementsEngineTest {
     assertTrue(initialState.configText.contains("1s¹"))
     assertEquals("Suborbitals: 1s¹ [↑]", initialState.suborbitalsText)
     assertEquals("1s¹", initialState.fullSuborbitalsText)
+    assertEquals(initialState.element.summary, initialState.descriptionText)
+    assertTrue(initialState.infoDetailsText.contains("Henry Cavendish"))
 
-    // 3. Tapping Iron (#26) on the Periodic Table switches the widget to ELEMENT_INFO view with suborbitals
+    // 3. Tapping Iron (#26) on the Periodic Table switches the widget to ELEMENT_INFO view with suborbitals & description
     val tappedIron = ElementsWidgets.selectElementInWidget(
       context = null,
       atomicNumber = 26,
@@ -269,6 +271,9 @@ class ElementsEngineTest {
     assertEquals(26, ironState.element.atomicNumber)
     assertEquals("Suborbitals: 3d⁶ [⇅][↑][↑][↑][↑] • 4s² [⇅]", ironState.suborbitalsText)
     assertEquals("1s² 2s² 2p⁶ 3s² 3p⁶ 3d⁶ 4s²", ironState.fullSuborbitalsText)
+    assertEquals(ironState.element.summary, ironState.descriptionText)
+    assertTrue(ironState.descriptionText.contains("most mass-abundant element on Earth"))
+    assertTrue(ironState.infoDetailsText.contains("Oxidation: +2, +3, +6"))
 
     // 4. Tapping Back to Periodic Table returns the widget to TABLE main view
     assertEquals(

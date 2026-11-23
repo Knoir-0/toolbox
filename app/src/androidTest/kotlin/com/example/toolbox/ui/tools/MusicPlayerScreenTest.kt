@@ -1761,4 +1761,33 @@ class MusicPlayerScreenTest {
     composeTestRule.waitForIdle()
     composeTestRule.onNodeWithTag("expanded_player_album_art").assertIsDisplayed()
   }
+
+  @Test
+  fun musicPlayer_hexagonifiesArtworkOverlayButtonsAndTimeBadgesWhenEnabled() {
+    composeTestRule.setContent {
+      ToolboxTheme(hexagonIconButtons = true) {
+        MusicPlayerScreen(
+          initialTracks = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS,
+        )
+      }
+    }
+    composeTestRule.waitForIdle()
+
+    // Switch Home tab to Card view and verify overlaid duration badge, context menu (...), and play button
+    composeTestRule.onNodeWithTag("music_view_mode_toggle").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("home_card_view").assertIsDisplayed()
+    val firstHomeMix = MusicPlayerEngine.getActivePlaybackSession()!!.homePlaylists.first()
+    composeTestRule.onNodeWithTag("playlist_time_badge_${firstHomeMix.name}").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("playlist_more_${firstHomeMix.name}").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("play_playlist_${firstHomeMix.name}").assertIsDisplayed()
+
+    // Switch Songs tab (now in 2-column Card view) and verify overlaid duration badge, favorite star, and context menu (...)
+    composeTestRule.onNodeWithTag("music_tab_SONGS").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("song_card_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("song_time_badge_sample_neon_horizon").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("favorite_song_sample_neon_horizon").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("song_more_sample_neon_horizon").assertIsDisplayed()
+  }
 }
