@@ -103,4 +103,68 @@ class PdfViewerEngineTest {
     assertFalse(history.hasAnyEdits)
     assertTrue(history.pageEdits(0).isEmpty)
   }
+
+  @Test
+  fun calculateFitWidthPageSize_fitsContainerWidthAndPreservesAspectRatio() {
+    // Portrait A4 page (595 x 842) inside a 1080px wide container
+    val (portraitW, portraitH) =
+      PdfViewerEngine.calculateFitWidthPageSize(
+        containerWidth = 1080f,
+        bitmapWidth = 595,
+        bitmapHeight = 842,
+      )
+    assertEquals(1080f, portraitW, 0.01f)
+    assertEquals(1080f * (842f / 595f), portraitH, 0.1f)
+    assertTrue("Portrait page height should exceed width when fitting width", portraitH > portraitW)
+
+    // Landscape page (1200 x 800) inside a 900px wide container
+    val (landscapeW, landscapeH) =
+      PdfViewerEngine.calculateFitWidthPageSize(
+        containerWidth = 900f,
+        bitmapWidth = 1200,
+        bitmapHeight = 800,
+      )
+    assertEquals(900f, landscapeW, 0.01f)
+    assertEquals(600f, landscapeH, 0.01f)
+  }
+
+  @Test
+  fun resolveVisiblePageIndex_tracksCurrentPageAcrossVerticalScroll() {
+    val pageHeights = listOf(1400f, 1400f, 1400f)
+    val spacing = 24f
+    val viewportHeight = 1000f
+
+    // At initial load (scroll = 0), viewport center is 500 -> Page 0
+    assertEquals(
+      0,
+      PdfViewerEngine.resolveVisiblePageIndex(
+        scrollOffsetPx = 0,
+        viewportHeightPx = viewportHeight,
+        pageHeightsPx = pageHeights,
+        pageSpacingPx = spacing,
+      ),
+    )
+
+    // Scrolled to middle of Page 1 (page 1 spans 1424..2824, scroll = 1500 -> center = 2000)
+    assertEquals(
+      1,
+      PdfViewerEngine.resolveVisiblePageIndex(
+        scrollOffsetPx = 1500,
+        viewportHeightPx = viewportHeight,
+        pageHeightsPx = pageHeights,
+        pageSpacingPx = spacing,
+      ),
+    )
+
+    // Scrolled to Page 2 (page 2 spans 2848..4248, scroll = 3000 -> center = 3500)
+    assertEquals(
+      2,
+      PdfViewerEngine.resolveVisiblePageIndex(
+        scrollOffsetPx = 3000,
+        viewportHeightPx = viewportHeight,
+        pageHeightsPx = pageHeights,
+        pageSpacingPx = spacing,
+      ),
+    )
+  }
 }

@@ -1,8 +1,10 @@
 package com.example.toolbox.ui.main
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.automirrored.filled.StickyNote2
 import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Camera
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Checklist
@@ -164,6 +166,11 @@ enum class Tool(
     icon = Icons.Default.Movie,
     category = ToolCategory.PHOTO_AND_VIDEO,
   ),
+  SCREEN_RECORDER(
+    title = "Screen Recorder",
+    icon = Icons.AutoMirrored.Filled.ScreenShare,
+    category = ToolCategory.PHOTO_AND_VIDEO,
+  ),
   AUDIO_EDITOR(
     title = "Audio Editor",
     icon = Icons.Default.GraphicEq,
@@ -218,6 +225,11 @@ enum class Tool(
     title = "Stars",
     icon = StarsMoonSparklesIcon,
     category = ToolCategory.MISCELLANEOUS,
+  ),
+  CALENDAR(
+    title = "Calendar",
+    icon = Icons.Default.CalendarMonth,
+    category = ToolCategory.PRODUCTIVITY,
   ),
   SEARCH(
     title = "Search",

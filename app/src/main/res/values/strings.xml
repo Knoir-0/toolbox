@@ -13,6 +13,8 @@
     <string name="notes_widget_description">Scrollable Notes list filtered by All Notes, Pinned Notes, or a Specific Label, with quick Note &amp; Checklist FABs</string>
     <string name="audio_recorder_widget_label">Record</string>
     <string name="audio_recorder_widget_description">Compact voice memo widget with one-tap instant audio recording</string>
+    <string name="screen_recorder_widget_label">Screen Recorder</string>
+    <string name="screen_recorder_widget_description">Compact screen recorder widget with one-tap Mic, Device Audio, or Combined screen recording</string>
     <string name="plant_schedule_widget_label">Planting Schedule</string>
     <string name="plant_schedule_widget_description">Monthly planting and harvest schedule with month switcher and seasonal checklist</string>
     <string name="camera_widget_label">Camera Modes</string>
@@ -25,4 +27,6 @@
     <string name="good_widget_description">Simple bar displaying a positive message on the left and a one-tap refresh button on the right</string>
     <string name="stars_widget_label">Stars</string>
     <string name="stars_widget_description">Daily horoscope mantra, current Moon phase &amp; sign, Big Three natal summary, and one-tap sign switcher</string>
+    <string name="calendar_widget_label">Calendar</string>
+    <string name="calendar_widget_description">Daily Google Calendar schedule with day switcher, Today badge jump, and one-tap event creation</string>
 </resources>

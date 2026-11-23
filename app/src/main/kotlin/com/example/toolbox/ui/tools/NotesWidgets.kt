@@ -709,6 +709,8 @@ object NotesWidgets {
       containerId = R.id.widget_notes_item_container,
       titleId = R.id.widget_notes_item_title,
       pinIconId = R.id.widget_notes_item_pin_icon,
+      checklistBadgeContainerId = R.id.widget_notes_item_checklist_badge_container,
+      checklistBadgeBgId = R.id.widget_notes_item_checklist_badge_bg,
       checklistBadgeId = R.id.widget_notes_item_checklist_badge,
       bodyId = R.id.widget_notes_item_body,
       metaId = R.id.widget_notes_item_meta,
@@ -730,6 +732,8 @@ object NotesWidgets {
         containerId = R.id.widget_notes_item_second_container,
         titleId = R.id.widget_notes_item_second_title,
         pinIconId = R.id.widget_notes_item_second_pin_icon,
+        checklistBadgeContainerId = R.id.widget_notes_item_second_checklist_badge_container,
+        checklistBadgeBgId = R.id.widget_notes_item_second_checklist_badge_bg,
         checklistBadgeId = R.id.widget_notes_item_second_checklist_badge,
         bodyId = R.id.widget_notes_item_second_body,
         metaId = R.id.widget_notes_item_second_meta,
@@ -753,6 +757,8 @@ object NotesWidgets {
     containerId: Int,
     titleId: Int,
     pinIconId: Int,
+    checklistBadgeContainerId: Int,
+    checklistBadgeBgId: Int,
     checklistBadgeId: Int,
     bodyId: Int,
     metaId: Int,
@@ -775,10 +781,13 @@ object NotesWidgets {
 
     val checklistBadge = formatChecklistBadgeText(note)
     if (checklistBadge != null) {
+      views.setViewVisibility(checklistBadgeContainerId, View.VISIBLE)
       views.setViewVisibility(checklistBadgeId, View.VISIBLE)
+      views.setInt(checklistBadgeBgId, "setColorFilter", palette.primaryContainerArgb)
       views.setTextViewText(checklistBadgeId, checklistBadge)
       views.setTextColor(checklistBadgeId, palette.onPrimaryContainerArgb)
     } else {
+      views.setViewVisibility(checklistBadgeContainerId, View.GONE)
       views.setViewVisibility(checklistBadgeId, View.GONE)
     }
 
@@ -1270,7 +1279,8 @@ internal class NotesWidgetRemoteViewsFactory(
 
   override fun getItemId(position: Int): Long {
     val row = noteRows.getOrNull(position) ?: return position.toLong()
-    return row.joinToString("|") { it.id }.hashCode().toLong()
+    val rowHash = row.joinToString("|") { "${it.id}:${it.color.name}:${it.updatedAt}" }.hashCode().toLong()
+    return (rowHash shl 32) xor (palette.hashCode().toLong() and 0xFFFFFFFFL)
   }
 
   override fun hasStableIds(): Boolean = true

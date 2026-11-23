@@ -1746,8 +1746,12 @@ object StarsEngine {
   var activeSignState by mutableStateOf(getCurrentZodiacSign())
     private set
 
-  fun updateActiveSign(sign: ZodiacSign) {
+  fun updateActiveSign(sign: ZodiacSign, context: Context? = null) {
+    val changed = activeSignState != sign
     activeSignState = sign
+    if (changed && context != null) {
+      TodoListWidgets.refreshAllToolboxWidgets(context)
+    }
   }
 
   /**
@@ -1759,7 +1763,11 @@ object StarsEngine {
     calendar: Calendar = Calendar.getInstance(),
   ): ZodiacSign {
     val currentSign = getCurrentZodiacSign(calendar)
+    val changed = activeSignState != currentSign
     activeSignState = currentSign
+    if (changed && context != null) {
+      TodoListWidgets.refreshAllToolboxWidgets(context)
+    }
     return currentSign
   }
 

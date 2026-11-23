@@ -31,8 +31,9 @@ import com.example.toolbox.ui.main.DEFAULT_ACCENT_COLOR_AUTO
 import com.example.toolbox.ui.main.DEFAULT_MUSIC_PLAYER_COLOR_OPTION
 import com.example.toolbox.ui.main.DEFAULT_MUSIC_PLAYER_THEME_ENABLED
 import com.example.toolbox.ui.main.DEFAULT_THEME_COLOR_SYSTEM
-import com.example.toolbox.ui.main.FALLBACK_THEME_COLOR_HEX
+import com.example.toolbox.ui.main.InMemoryNavigationPreferencesRepository
 import com.example.toolbox.ui.main.NAVIGATION_PREFERENCES_NAME
+import com.example.toolbox.ui.main.NavigationPreferencesBridge
 import com.example.toolbox.ui.main.PREF_KEY_ACCENT_COLOR
 import com.example.toolbox.ui.main.PREF_KEY_MUSIC_PLAYER_COLOR_OPTION
 import com.example.toolbox.ui.main.PREF_KEY_MUSIC_PLAYER_THEME_ENABLED
@@ -42,17 +43,11 @@ import com.example.toolbox.ui.main.ThemeMode
 import com.example.toolbox.ui.main.Tool
 import com.example.toolbox.ui.main.createStandaloneToolIntent
 import com.example.toolbox.ui.main.createTodoQuickActionIntent
-import com.example.toolbox.ui.theme.AccentHarmonyOption
-import com.example.toolbox.ui.theme.MusicPlayerColorOption
-import com.example.toolbox.ui.theme.Purple8E66A6DarkColorScheme
-import com.example.toolbox.ui.theme.Purple8E66A6LightColorScheme
-import com.example.toolbox.ui.theme.calculateAccentHarmonyColor
-import com.example.toolbox.ui.theme.createCustomColorScheme
-import com.example.toolbox.ui.theme.createTertiaryTokens
 import com.example.toolbox.ui.theme.drawWidgetBackgroundTextureOverlay
+import com.example.toolbox.ui.theme.isMusicPlayerAccentColorSetting
+import com.example.toolbox.ui.theme.isMusicPlayerThemeColorSetting
 import com.example.toolbox.ui.theme.isStarsSignThemeColorSetting
-import com.example.toolbox.ui.theme.parseHexColor
-import com.example.toolbox.ui.theme.resolveStarsSignThemeColor
+import com.example.toolbox.ui.theme.resolveToolboxColorScheme
 import org.json.JSONObject
 import kotlin.math.max
 import kotlin.math.min
@@ -169,7 +164,9 @@ data class TodoWidgetPalette(
   val secondaryArgb: Int = primaryArgb,
   val tertiaryArgb: Int = primaryArgb,
   val isDarkTheme: Boolean = true,
-)
+) {
+  val itemSurfaceArgb: Int get() = itemCardArgb
+}
 
 /**
  * Central state resolver, RemoteViews builder, and action handler for the To-Do List Home Screen
@@ -215,7 +212,17 @@ object TodoListWidgets {
   private var inMemoryUndoRecord: TodoWidgetUndoRecord? = null
 
   /**
-   * Resolves the current Material 3 [TodoWidgetPalette] matching the user's theme settings.
+   * Refreshes all pinned Home Screen AppWidgets across every Toolbox tool whenever theme colors,
+   * accent colors, dynamic media colors, Star Sign colors, background textures, or Hexagonify change.
+   */
+  fun refreshAllToolboxWidgets(context: Context?) {
+    NavigationPreferencesBridge.refreshAllWidgets(context)
+  }
+
+  /**
+   * Resolves the current Material 3 [TodoWidgetPalette] matching the user's theme settings
+   * (using [resolveToolboxColorScheme] so widget colors and in-app [com.example.toolbox.ui.theme.ToolboxTheme]
+   * colors stay 100% synchronized).
    */
   fun resolveWidgetPalette(context: Context? = null): TodoWidgetPalette {
     val isSystemDark = try {
@@ -230,88 +237,114 @@ object TodoListWidgets {
     } catch (_: Throwable) {
       null
     }
+    val activeRepo = NavigationPreferencesBridge.activeRepository
+    val useInMemoryRepo = activeRepo is InMemoryNavigationPreferencesRepository
 
-    val themeModeName = prefs?.getString(PREF_KEY_THEME_MODE, ThemeMode.SYSTEM.name)
-    val themeMode = ThemeMode.entries.find { it.name.equals(themeModeName, ignoreCase = true) }
-      ?: ThemeMode.SYSTEM
+    val themeMode = if (!useInMemoryRepo && prefs != null && prefs.contains(PREF_KEY_THEME_MODE)) {
+      val themeModeName = prefs.getString(PREF_KEY_THEME_MODE, ThemeMode.SYSTEM.name)
+      ThemeMode.entries.find { it.name.equals(themeModeName, ignoreCase = true) } ?: ThemeMode.SYSTEM
+    } else {
+      NavigationPreferencesBridge.themeMode
+    }
     val darkTheme = when (themeMode) {
       ThemeMode.SYSTEM -> isSystemDark
       ThemeMode.LIGHT -> false
       ThemeMode.DARK -> true
     }
 
-    val themeColor = prefs?.getString(PREF_KEY_THEME_COLOR, DEFAULT_THEME_COLOR_SYSTEM)
-      ?: DEFAULT_THEME_COLOR_SYSTEM
-    val accentColor = prefs?.getString(PREF_KEY_ACCENT_COLOR, DEFAULT_ACCENT_COLOR_AUTO)
-      ?: DEFAULT_ACCENT_COLOR_AUTO
-    val musicThemeEnabled = prefs?.getBoolean(
-      PREF_KEY_MUSIC_PLAYER_THEME_ENABLED,
-      DEFAULT_MUSIC_PLAYER_THEME_ENABLED,
-    ) ?: DEFAULT_MUSIC_PLAYER_THEME_ENABLED
-    val musicColorOption = prefs?.getString(
-      PREF_KEY_MUSIC_PLAYER_COLOR_OPTION,
-      DEFAULT_MUSIC_PLAYER_COLOR_OPTION,
-    ) ?: DEFAULT_MUSIC_PLAYER_COLOR_OPTION
-
-    val musicOption = if (musicThemeEnabled && MusicPlayerEngine.isMusicPlaying) {
-      MusicPlayerColorOption.fromPrefValue(themeColor)
-        ?: MusicPlayerColorOption.fromPrefValue(musicColorOption)
-        ?: MusicPlayerColorOption.DOMINANT
+    val themeColor = if (!useInMemoryRepo && prefs != null && prefs.contains(PREF_KEY_THEME_COLOR)) {
+      prefs.getString(PREF_KEY_THEME_COLOR, DEFAULT_THEME_COLOR_SYSTEM) ?: DEFAULT_THEME_COLOR_SYSTEM
     } else {
-      null
+      NavigationPreferencesBridge.themeColor
+    }
+    val accentColor = if (!useInMemoryRepo && prefs != null && prefs.contains(PREF_KEY_ACCENT_COLOR)) {
+      prefs.getString(PREF_KEY_ACCENT_COLOR, DEFAULT_ACCENT_COLOR_AUTO) ?: DEFAULT_ACCENT_COLOR_AUTO
+    } else {
+      NavigationPreferencesBridge.accentColor
+    }
+    val musicThemeEnabled = if (
+      !useInMemoryRepo &&
+      prefs != null &&
+      prefs.contains(PREF_KEY_MUSIC_PLAYER_THEME_ENABLED)
+    ) {
+      prefs.getBoolean(PREF_KEY_MUSIC_PLAYER_THEME_ENABLED, DEFAULT_MUSIC_PLAYER_THEME_ENABLED)
+    } else {
+      NavigationPreferencesBridge.musicPlayerThemeEnabled
+    }
+    val musicColorOption = if (
+      !useInMemoryRepo &&
+      prefs != null &&
+      prefs.contains(PREF_KEY_MUSIC_PLAYER_COLOR_OPTION)
+    ) {
+      prefs.getString(PREF_KEY_MUSIC_PLAYER_COLOR_OPTION, DEFAULT_MUSIC_PLAYER_COLOR_OPTION)
+        ?: DEFAULT_MUSIC_PLAYER_COLOR_OPTION
+    } else {
+      NavigationPreferencesBridge.musicPlayerColorOption
     }
 
-    val baseScheme: ColorScheme = when {
-      musicOption != null -> {
-        createCustomColorScheme(musicOption.resolveColor(MusicPlayerEngine.activeTrackPalette), darkTheme)
-      }
-      isStarsSignThemeColorSetting(themeColor) -> {
-        val currentSign = StarsEngine.resolveCurrentSign(context = context)
-        createCustomColorScheme(resolveStarsSignThemeColor(currentSign), darkTheme)
-      }
-      themeColor == DEFAULT_THEME_COLOR_SYSTEM &&
-        context != null &&
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+    val usesMusicColors = musicThemeEnabled ||
+      isMusicPlayerThemeColorSetting(themeColor) ||
+      isMusicPlayerAccentColorSetting(accentColor)
+    val session = MusicPlayerEngine.getActivePlaybackSession()?.takeIf { !it.isReleased }
+    val internalActive = session?.let { it.isPlaying && it.currentTrack != null } == true
+    if (context != null && usesMusicColors) {
+      try {
+        MusicPlayerEngine.ensureSystemMediaMonitoring(context)
+      } catch (_: Throwable) {}
+      if (
+        !internalActive &&
+        MusicPlayerEngine.externalSystemMediaInfo == null &&
+        MusicPlayerEngine.isMusicPlayingOverride != true
+      ) {
         try {
-          if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        } catch (_: Throwable) {
-          if (darkTheme) Purple8E66A6DarkColorScheme else Purple8E66A6LightColorScheme
-        }
-      }
-      themeColor == DEFAULT_THEME_COLOR_SYSTEM ||
-        themeColor.equals(FALLBACK_THEME_COLOR_HEX, ignoreCase = true) -> {
-        if (darkTheme) Purple8E66A6DarkColorScheme else Purple8E66A6LightColorScheme
-      }
-      else -> {
-        val parsed = parseHexColor(themeColor)
-        if (parsed != null) {
-          createCustomColorScheme(parsed, darkTheme)
-        } else {
-          if (darkTheme) Purple8E66A6DarkColorScheme else Purple8E66A6LightColorScheme
-        }
+          MusicPlayerEngine.syncExternalSystemMediaSessions(context)
+        } catch (_: Throwable) {}
       }
     }
+    val externalMedia = MusicPlayerEngine.externalSystemMediaInfo
+      ?.takeUnless { MusicPlayerEngine.isIgnoredPhoneOrCallSystemMediaInfo(it, context) }
+    val isMusicPlaying = MusicPlayerEngine.isMusicPlayingOverride
+      ?: (internalActive || (externalMedia?.isPlaying == true))
+    val musicPalette = when {
+      !internalActive && externalMedia != null && MusicPlayerEngine.isMusicPlayingOverride != true ->
+        externalMedia.palette
+      session != null && session.currentTrack != null ->
+        session.activePalette
+      else ->
+        MusicPlayerEngine.activeTrackPalette
+    }
+    val activeStarsSign = if (isStarsSignThemeColorSetting(themeColor)) {
+      StarsEngine.resolveCurrentSign(context = context)
+    } else {
+      StarsEngine.activeSignState
+    }
 
-    val harmonyOption = AccentHarmonyOption.fromPrefValue(accentColor, darkTheme = darkTheme)
-    val resolvedAccent = harmonyOption?.let { calculateAccentHarmonyColor(baseScheme.primary, it) }
-      ?: parseHexColor(accentColor)
-      ?: calculateAccentHarmonyColor(baseScheme.primary, AccentHarmonyOption.defaultForTheme(darkTheme))
-    val tertiaryTokens = createTertiaryTokens(resolvedAccent, darkTheme)
+    val colorScheme: ColorScheme = resolveToolboxColorScheme(
+      context = context,
+      darkTheme = darkTheme,
+      themeColor = themeColor,
+      accentColor = accentColor,
+      musicPlayerThemeEnabled = musicThemeEnabled,
+      musicPlayerColorOption = musicColorOption,
+      isMusicPlaying = isMusicPlaying,
+      musicPalette = musicPalette,
+      activeStarsSign = activeStarsSign,
+    )
 
     val surfaceColor = if (darkTheme) {
-      lerp(baseScheme.surface, baseScheme.primary, 0.08f)
+      lerp(colorScheme.surface, colorScheme.primary, 0.08f)
     } else {
-      baseScheme.surface
+      colorScheme.surface
     }
     val itemCardColor = if (darkTheme) {
       lerp(surfaceColor, Color.White, 0.07f)
     } else {
-      lerp(baseScheme.surfaceVariant, Color.White, 0.45f)
+      lerp(colorScheme.surfaceVariant, Color.White, 0.45f)
     }
     val toastSurfaceColor = if (darkTheme) {
-      lerp(surfaceColor, baseScheme.primaryContainer, 0.38f)
+      lerp(surfaceColor, colorScheme.primaryContainer, 0.38f)
     } else {
-      lerp(baseScheme.surface, baseScheme.primaryContainer, 0.45f)
+      lerp(colorScheme.surface, colorScheme.primaryContainer, 0.45f)
     }
     val hexagonIconButtons = MusicPlayerWidgets.resolveHexagonIconButtonsEnabled(context)
     val backgroundTexture = MusicPlayerWidgets.resolveBackgroundTexture(context)
@@ -319,20 +352,20 @@ object TodoListWidgets {
     return TodoWidgetPalette(
       surfaceArgb = MusicPlayerWidgets.colorToArgb(surfaceColor),
       itemCardArgb = MusicPlayerWidgets.colorToArgb(itemCardColor),
-      borderArgb = MusicPlayerWidgets.colorToArgb(baseScheme.outlineVariant, alphaOverride = 0.5f),
-      primaryArgb = MusicPlayerWidgets.colorToArgb(baseScheme.primary),
-      onPrimaryArgb = MusicPlayerWidgets.colorToArgb(baseScheme.onPrimary),
-      primaryContainerArgb = MusicPlayerWidgets.colorToArgb(baseScheme.primaryContainer),
-      onPrimaryContainerArgb = MusicPlayerWidgets.colorToArgb(baseScheme.onPrimaryContainer),
-      secondaryContainerArgb = MusicPlayerWidgets.colorToArgb(baseScheme.secondaryContainer),
-      onSecondaryContainerArgb = MusicPlayerWidgets.colorToArgb(baseScheme.onSecondaryContainer),
-      tertiaryContainerArgb = MusicPlayerWidgets.colorToArgb(tertiaryTokens.tertiaryContainer),
-      onTertiaryContainerArgb = MusicPlayerWidgets.colorToArgb(tertiaryTokens.onTertiaryContainer),
-      onSurfaceArgb = MusicPlayerWidgets.colorToArgb(baseScheme.onSurface),
-      onSurfaceVariantArgb = MusicPlayerWidgets.colorToArgb(baseScheme.onSurfaceVariant),
-      outlineArgb = MusicPlayerWidgets.colorToArgb(baseScheme.outline),
+      borderArgb = MusicPlayerWidgets.colorToArgb(colorScheme.outlineVariant, alphaOverride = 0.5f),
+      primaryArgb = MusicPlayerWidgets.colorToArgb(colorScheme.primary),
+      onPrimaryArgb = MusicPlayerWidgets.colorToArgb(colorScheme.onPrimary),
+      primaryContainerArgb = MusicPlayerWidgets.colorToArgb(colorScheme.primaryContainer),
+      onPrimaryContainerArgb = MusicPlayerWidgets.colorToArgb(colorScheme.onPrimaryContainer),
+      secondaryContainerArgb = MusicPlayerWidgets.colorToArgb(colorScheme.secondaryContainer),
+      onSecondaryContainerArgb = MusicPlayerWidgets.colorToArgb(colorScheme.onSecondaryContainer),
+      tertiaryContainerArgb = MusicPlayerWidgets.colorToArgb(colorScheme.tertiaryContainer),
+      onTertiaryContainerArgb = MusicPlayerWidgets.colorToArgb(colorScheme.onTertiaryContainer),
+      onSurfaceArgb = MusicPlayerWidgets.colorToArgb(colorScheme.onSurface),
+      onSurfaceVariantArgb = MusicPlayerWidgets.colorToArgb(colorScheme.onSurfaceVariant),
+      outlineArgb = MusicPlayerWidgets.colorToArgb(colorScheme.outline),
       toastSurfaceArgb = MusicPlayerWidgets.colorToArgb(toastSurfaceColor),
-      toastBorderArgb = MusicPlayerWidgets.colorToArgb(baseScheme.primary, alphaOverride = 0.55f),
+      toastBorderArgb = MusicPlayerWidgets.colorToArgb(colorScheme.primary, alphaOverride = 0.55f),
       hexagonIconButtons = hexagonIconButtons,
       iconButtonBackgroundRes = MusicPlayerWidgets.resolveIconButtonBackgroundRes(hexagonIconButtons),
       taskCheckUncheckedIconRes = if (hexagonIconButtons) {
@@ -346,8 +379,8 @@ object TodoListWidgets {
         R.drawable.ic_todo_widget_circle_checked
       },
       backgroundTexture = backgroundTexture,
-      secondaryArgb = MusicPlayerWidgets.colorToArgb(baseScheme.secondary),
-      tertiaryArgb = MusicPlayerWidgets.colorToArgb(tertiaryTokens.tertiary),
+      secondaryArgb = MusicPlayerWidgets.colorToArgb(colorScheme.secondary),
+      tertiaryArgb = MusicPlayerWidgets.colorToArgb(colorScheme.tertiary),
       isDarkTheme = darkTheme,
     )
   }
@@ -784,6 +817,16 @@ object TodoListWidgets {
     nowMillis: Long = System.currentTimeMillis(),
   ): RemoteViews {
     val views = RemoteViews(context.packageName, R.layout.widget_todo_list_item)
+    val cardBorderArgb = MusicPlayerWidgets.colorToArgb(
+      lerp(
+        Color(palette.itemCardArgb),
+        Color(palette.borderArgb or 0xFF000000.toInt()),
+        0.5f,
+      )
+    )
+    views.setInt(R.id.widget_todo_item_bg, "setColorFilter", palette.itemCardArgb)
+    views.setInt(R.id.widget_todo_item_border, "setColorFilter", cardBorderArgb)
+
     views.setTextViewText(R.id.widget_todo_item_title, task.title)
     views.setTextColor(R.id.widget_todo_item_title, palette.onSurfaceArgb)
 
@@ -801,10 +844,17 @@ object TodoListWidgets {
 
     val badgeText = formatSubtaskBadgeText(task)
     if (badgeText != null) {
+      views.setViewVisibility(R.id.widget_todo_item_subtask_badge_container, View.VISIBLE)
       views.setViewVisibility(R.id.widget_todo_item_subtask_badge, View.VISIBLE)
+      views.setInt(
+        R.id.widget_todo_item_subtask_badge_bg,
+        "setColorFilter",
+        palette.primaryContainerArgb,
+      )
       views.setTextViewText(R.id.widget_todo_item_subtask_badge, badgeText)
       views.setTextColor(R.id.widget_todo_item_subtask_badge, palette.onPrimaryContainerArgb)
     } else {
+      views.setViewVisibility(R.id.widget_todo_item_subtask_badge_container, View.GONE)
       views.setViewVisibility(R.id.widget_todo_item_subtask_badge, View.GONE)
     }
 
@@ -833,6 +883,8 @@ object TodoListWidgets {
     }
     views.setOnClickFillInIntent(R.id.widget_todo_item_text_container, openFillIn)
     views.setOnClickFillInIntent(R.id.widget_todo_item_root, openFillIn)
+    views.setOnClickFillInIntent(R.id.widget_todo_item_bg, openFillIn)
+    views.setOnClickFillInIntent(R.id.widget_todo_item_border, openFillIn)
 
     return views
   }
@@ -930,6 +982,7 @@ object TodoListWidgets {
       }
       views.setTextViewText(R.id.widget_todo_undo_toast_text, state.undoToastMessage)
       views.setTextColor(R.id.widget_todo_undo_toast_text, palette.onSurfaceArgb)
+      views.setInt(R.id.widget_todo_undo_button_bg, "setColorFilter", palette.primaryContainerArgb)
       views.setInt(R.id.widget_todo_undo_icon, "setColorFilter", palette.onPrimaryContainerArgb)
       views.setTextColor(R.id.widget_todo_undo_button_text, palette.onPrimaryContainerArgb)
 
@@ -1201,7 +1254,8 @@ internal class TodoWidgetRemoteViewsFactory(
   override fun getViewTypeCount(): Int = 1
 
   override fun getItemId(position: Int): Long {
-    return tasks.getOrNull(position)?.id?.hashCode()?.toLong() ?: position.toLong()
+    val itemHash = tasks.getOrNull(position)?.id?.hashCode()?.toLong() ?: position.toLong()
+    return (itemHash shl 32) xor (palette.hashCode().toLong() and 0xFFFFFFFFL)
   }
 
   override fun hasStableIds(): Boolean = true

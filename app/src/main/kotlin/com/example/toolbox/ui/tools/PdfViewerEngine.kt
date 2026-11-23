@@ -166,6 +166,80 @@ object PdfViewerEngine {
     }
   }
 
+  fun calculateFitWidthPageSize(
+    containerWidth: Float,
+    bitmapWidth: Int,
+    bitmapHeight: Int,
+  ): Pair<Float, Float> {
+    val safeContainerW = containerWidth.coerceAtLeast(1f)
+    val safeBmpW = bitmapWidth.coerceAtLeast(1).toFloat()
+    val safeBmpH = bitmapHeight.coerceAtLeast(1).toFloat()
+    val aspectRatio = safeBmpW / safeBmpH
+    val displayW = safeContainerW
+    val displayH = (safeContainerW / aspectRatio).coerceAtLeast(1f)
+    return displayW to displayH
+  }
+
+  fun resolveVisiblePageIndex(
+    scrollOffsetPx: Int,
+    viewportHeightPx: Float,
+    pageHeightsPx: List<Float>,
+    pageSpacingPx: Float = 0f,
+  ): Int {
+    if (pageHeightsPx.isEmpty()) return 0
+    val viewportCenterY = scrollOffsetPx.toFloat() + (viewportHeightPx.coerceAtLeast(1f) / 2f)
+    var accumulatedY = 0f
+    for (i in pageHeightsPx.indices) {
+      val pageH = pageHeightsPx[i].coerceAtLeast(1f)
+      val pageBottom = accumulatedY + pageH
+      if (viewportCenterY <= pageBottom + (pageSpacingPx / 2f)) {
+        return i
+      }
+      accumulatedY = pageBottom + pageSpacingPx
+    }
+    return pageHeightsPx.lastIndex
+  }
+
+  fun renderAllPagesToBitmaps(
+    file: File,
+    maxDimension: Int = 1600,
+  ): List<Bitmap> {
+    if (!file.exists() || !file.isFile) return emptyList()
+    return try {
+      ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+        PdfRenderer(pfd).use { renderer ->
+          val count = renderer.pageCount
+          if (count <= 0) return emptyList()
+          val effectiveMaxDim =
+            when {
+              count > 30 -> min(maxDimension, 960)
+              count > 12 -> min(maxDimension, 1200)
+              else -> maxDimension
+            }
+          val bitmaps = ArrayList<Bitmap>(count)
+          for (pageIndex in 0 until count) {
+            renderer.openPage(pageIndex).use { page ->
+              val rawW = page.width.coerceAtLeast(1)
+              val rawH = page.height.coerceAtLeast(1)
+              val scale = effectiveMaxDim.toFloat() / max(rawW, rawH).toFloat()
+              val targetW = (rawW * scale).roundToInt().coerceAtLeast(1)
+              val targetH = (rawH * scale).roundToInt().coerceAtLeast(1)
+
+              val bitmap = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+              val canvas = Canvas(bitmap)
+              canvas.drawColor(android.graphics.Color.WHITE)
+              page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+              bitmaps.add(bitmap)
+            }
+          }
+          bitmaps
+        }
+      }
+    } catch (_: Exception) {
+      emptyList()
+    }
+  }
+
   fun renderPageToBitmap(
     file: File,
     pageIndex: Int,

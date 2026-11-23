@@ -34,26 +34,546 @@ data class CalculatorHistoryItem(
   val isDegreeMode: Boolean = true,
 )
 
+data class GraphPoint(
+  val x: Double,
+  val y: Double,
+)
+
+enum class GraphFeatureType {
+  ROOT,
+  Y_INTERCEPT,
+  LOCAL_MAX,
+  LOCAL_MIN,
+  INTERSECTION,
+}
+
+data class GraphFeaturePoint(
+  val x: Double,
+  val y: Double,
+  val type: GraphFeatureType,
+  val label: String,
+  val functionIndex: Int = 0,
+  val secondaryFunctionIndex: Int? = null,
+)
+
 object CalculatorEngine {
+
+  /**
+   * Strips optional leading function assignment prefixes such as `y =`, `f(x) =`, or `f1(x) =`
+   * so expressions entered in Graph mode evaluate cleanly.
+   */
+  fun normalizeGraphExpression(expression: String): String {
+    val trimmed = expression.trim()
+    val prefixRegex = Regex("""^(?:y|f[₀₁₂₃₄₅₆₇₈₉\d]*\s*\(\s*x\s*\))\s*=\s*""", RegexOption.IGNORE_CASE)
+    return prefixRegex.replace(trimmed, "").trim()
+  }
+
+  /**
+   * Returns true if [expression] contains the variable `x` as an identifier token.
+   */
+  fun containsVariableX(expression: String): Boolean {
+    return try {
+      val sanitized = sanitize(normalizeGraphExpression(expression))
+      if (sanitized.isBlank()) return false
+      tokenize(sanitized).any { it is Token.Identifier && it.name == "x" }
+    } catch (_: Exception) {
+      false
+    }
+  }
 
   /**
    * Evaluates a mathematical expression string.
    * Supports standard arithmetic, scientific functions, constants (pi, e),
-   * implicit multiplication, percentages, factorials, and powers.
+   * optional variable `x` ([xValue]), implicit multiplication, percentages, factorials, and powers.
    */
-  fun evaluate(expression: String, isDegreeMode: Boolean = true): Double {
-    val sanitized = sanitize(expression)
+  fun evaluate(
+    expression: String,
+    isDegreeMode: Boolean = true,
+    xValue: Double? = null,
+  ): Double {
+    val normalized = if (xValue != null) normalizeGraphExpression(expression) else expression
+    val sanitized = sanitize(normalized)
     if (sanitized.isBlank()) {
       throw CalculatorException("Empty expression")
     }
     val tokens = tokenize(sanitized)
     val tokensWithImplicitMul = insertImplicitMultiplication(tokens)
-    val parser = Parser(tokensWithImplicitMul, isDegreeMode)
+    val parser = Parser(tokensWithImplicitMul, isDegreeMode, xValue)
     val result = parser.parse()
     if (result.isNaN()) {
       throw CalculatorException("Invalid calculation")
     }
     return cleanDouble(result)
+  }
+
+  /**
+   * Pre-tokenizes [expression] into a reusable [CompiledFunction] for fast repeated evaluation
+   * across hundreds of `x` samples during graphing.
+   */
+  class CompiledFunction internal constructor(
+    val expression: String,
+    private val tokens: List<Token>,
+    val isDegreeMode: Boolean,
+  ) {
+    fun evaluateAtOrNull(x: Double): Double? {
+      if (!x.isFinite()) return null
+      return try {
+        val raw = Parser(tokens, isDegreeMode, x).parse()
+        if (raw.isFinite()) cleanDouble(raw) else null
+      } catch (_: Exception) {
+        null
+      }
+    }
+  }
+
+  fun compileFunctionOrNull(
+    expression: String,
+    isDegreeMode: Boolean = true,
+  ): CompiledFunction? {
+    return try {
+      val normalized = normalizeGraphExpression(expression)
+      val sanitized = sanitize(normalized)
+      if (sanitized.isBlank()) return null
+      val tokens = insertImplicitMultiplication(tokenize(sanitized))
+      if (tokens.isEmpty()) return null
+      // Verify syntactic validity by running a dry parse at a probe x value (ignoring domain errors)
+      val probeParser = Parser(tokens, isDegreeMode, 1.2345)
+      try {
+        probeParser.parse()
+      } catch (e: CalculatorException) {
+        val msg = e.message.orEmpty()
+        if (
+          msg.startsWith("Unexpected") ||
+          msg.startsWith("Unknown function") ||
+          msg.startsWith("Invalid number") ||
+          msg.startsWith("Empty expression")
+        ) {
+          return null
+        }
+      }
+      CompiledFunction(normalized, tokens, isDegreeMode)
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  fun evaluateAtOrNull(
+    expression: String,
+    x: Double,
+    isDegreeMode: Boolean = true,
+  ): Double? {
+    val compiled = compileFunctionOrNull(expression, isDegreeMode) ?: return null
+    return compiled.evaluateAtOrNull(x)
+  }
+
+  /**
+   * Samples [expression] across `[xMin, xMax]` and splits the curve into continuous segments,
+   * automatically breaking segments at domain gaps and vertical asymptotes (such as `1/x` or `tan(x)`).
+   */
+  fun sampleFunctionSegments(
+    expression: String,
+    xMin: Double,
+    xMax: Double,
+    yMin: Double,
+    yMax: Double,
+    sampleCount: Int = 320,
+    isDegreeMode: Boolean = true,
+  ): List<List<GraphPoint>> {
+    if (xMax <= xMin || sampleCount < 2) return emptyList()
+    val compiled = compileFunctionOrNull(expression, isDegreeMode) ?: return emptyList()
+    val segments = mutableListOf<MutableList<GraphPoint>>()
+    var currentSegment = mutableListOf<GraphPoint>()
+    val ySpan = (yMax - yMin).coerceAtLeast(1e-6)
+    val asymptoteJumpThreshold = ySpan * 2.5
+    val yClipMargin = ySpan * 6.0
+    val step = (xMax - xMin) / sampleCount.toDouble()
+
+    var prevPoint: GraphPoint? = null
+    var prevDy: Double? = null
+
+    for (i in 0..sampleCount) {
+      val x = if (i == sampleCount) xMax else xMin + i * step
+      val y = compiled.evaluateAtOrNull(x)
+      if (y == null || !y.isFinite() || y < yMin - yClipMargin || y > yMax + yClipMargin) {
+        if (currentSegment.isNotEmpty()) {
+          segments.add(currentSegment)
+          currentSegment = mutableListOf()
+        }
+        prevPoint = null
+        prevDy = null
+        continue
+      }
+
+      val point = GraphPoint(x, y)
+      val last = prevPoint
+      if (last != null) {
+        val dy = y - last.y
+        val crossesZeroSteeply = (last.y * y < 0.0) && abs(dy) > asymptoteJumpThreshold
+        val reversesSteeply = prevDy != null && (prevDy * dy < 0.0) && abs(dy) > asymptoteJumpThreshold
+        if (crossesZeroSteeply || reversesSteeply) {
+          if (currentSegment.isNotEmpty()) {
+            segments.add(currentSegment)
+            currentSegment = mutableListOf()
+          }
+          prevDy = null
+        } else {
+          prevDy = dy
+        }
+      }
+
+      currentSegment.add(point)
+      prevPoint = point
+    }
+
+    if (currentSegment.isNotEmpty()) {
+      segments.add(currentSegment)
+    }
+    return segments
+  }
+
+  /**
+   * Computes the numerical derivative `f'(x)` (`dy/dx`) at [x] using central finite differences.
+   */
+  fun numericalDerivative(
+    expression: String,
+    x: Double,
+    isDegreeMode: Boolean = true,
+  ): Double? {
+    val compiled = compileFunctionOrNull(expression, isDegreeMode) ?: return null
+    val h = (abs(x) * 1e-5).coerceAtLeast(1e-6)
+    val yPlus = compiled.evaluateAtOrNull(x + h) ?: return null
+    val yMinus = compiled.evaluateAtOrNull(x - h) ?: return null
+    val slope = (yPlus - yMinus) / (2.0 * h)
+    return if (slope.isFinite()) cleanDouble(slope) else null
+  }
+
+  /**
+   * Computes the definite integral `∫ f(x) dx` from [a] to [b] using composite Simpson's rule.
+   */
+  fun definiteIntegral(
+    expression: String,
+    a: Double,
+    b: Double,
+    isDegreeMode: Boolean = true,
+    intervals: Int = 200,
+  ): Double? {
+    if (!a.isFinite() || !b.isFinite()) return null
+    if (abs(b - a) < 1e-12) return 0.0
+    val compiled = compileFunctionOrNull(expression, isDegreeMode) ?: return null
+    val n = if (intervals % 2 == 0) intervals else intervals + 1
+    val h = (b - a) / n.toDouble()
+    var sum = 0.0
+    for (i in 0..n) {
+      val x = a + i * h
+      val y = compiled.evaluateAtOrNull(x) ?: return null
+      val weight = when {
+        i == 0 || i == n -> 1.0
+        i % 2 == 1 -> 4.0
+        else -> 2.0
+      }
+      sum += weight * y
+    }
+    val integral = (h / 3.0) * sum
+    return if (integral.isFinite()) cleanDouble(integral) else null
+  }
+
+  /**
+   * Finds key feature points (roots, y-intercept, and local extrema) for [expression] within `[xMin, xMax]`.
+   */
+  fun findFunctionFeatures(
+    expression: String,
+    xMin: Double,
+    xMax: Double,
+    yMin: Double,
+    yMax: Double,
+    isDegreeMode: Boolean = true,
+    functionIndex: Int = 0,
+    steps: Int = 240,
+  ): List<GraphFeaturePoint> {
+    if (xMax <= xMin || steps < 4) return emptyList()
+    val compiled = compileFunctionOrNull(expression, isDegreeMode) ?: return emptyList()
+    val features = mutableListOf<GraphFeaturePoint>()
+    val ySpan = (yMax - yMin).coerceAtLeast(1e-6)
+    val dx = (xMax - xMin) / steps.toDouble()
+
+    // 1. Y-intercept (x = 0)
+    if (0.0 in xMin..xMax) {
+      val y0 = compiled.evaluateAtOrNull(0.0)
+      if (y0 != null && y0.isFinite() && y0 in (yMin - ySpan)..(yMax + ySpan)) {
+        features.add(
+          GraphFeaturePoint(
+            x = 0.0,
+            y = y0,
+            type = GraphFeatureType.Y_INTERCEPT,
+            label = "Y-intercept (0, ${formatResult(y0)})",
+            functionIndex = functionIndex,
+          ),
+        )
+      }
+    }
+
+    // 2. Roots (f(x) = 0) and Local Extrema (f'(x) = 0)
+    var prevX = xMin
+    var prevY = compiled.evaluateAtOrNull(prevX)
+    var prevSlope: Double? = null
+
+    for (i in 1..steps) {
+      val currX = if (i == steps) xMax else xMin + i * dx
+      val currY = compiled.evaluateAtOrNull(currX)
+
+      if (prevY != null && currY != null) {
+        // Check root bracket
+        if (abs(prevY) < 1e-10) {
+          addUniqueFeature(
+            features,
+            GraphFeaturePoint(
+              x = cleanDouble(prevX),
+              y = 0.0,
+              type = GraphFeatureType.ROOT,
+              label = "Root (${formatResult(prevX)}, 0)",
+              functionIndex = functionIndex,
+            ),
+            minDistance = dx * 0.6,
+          )
+        } else if (prevY * currY < 0.0 && abs(currY - prevY) < ySpan * 2.5) {
+          val rootX = refineRootBisection(compiled, prevX, currX)
+          val rootY = compiled.evaluateAtOrNull(rootX)
+          if (rootY != null && abs(rootY) < ySpan * 0.05) {
+            addUniqueFeature(
+              features,
+              GraphFeaturePoint(
+                x = cleanDouble(rootX),
+                y = 0.0,
+                type = GraphFeatureType.ROOT,
+                label = "Root (${formatResult(rootX)}, 0)",
+                functionIndex = functionIndex,
+              ),
+              minDistance = dx * 0.6,
+            )
+          }
+        }
+
+        // Check local extrema via slope sign change
+        val currSlope = (currY - prevY) / dx
+        val lastSlope = prevSlope
+        if (
+          lastSlope != null &&
+          abs(lastSlope) > 1e-7 &&
+          abs(currSlope) > 1e-7 &&
+          lastSlope * currSlope < 0.0 &&
+          abs(currY - prevY) < ySpan * 1.5
+        ) {
+          val isMax = lastSlope > 0.0 && currSlope < 0.0
+          val extremum = refineExtremumGoldenSection(
+            compiled = compiled,
+            left = (prevX - dx).coerceAtLeast(xMin),
+            right = currX,
+            findMax = isMax,
+          )
+          if (extremum != null && extremum.y in (yMin - ySpan)..(yMax + ySpan)) {
+            val type = if (isMax) GraphFeatureType.LOCAL_MAX else GraphFeatureType.LOCAL_MIN
+            val title = if (isMax) "Max" else "Min"
+            addUniqueFeature(
+              features,
+              GraphFeaturePoint(
+                x = cleanDouble(extremum.x),
+                y = cleanDouble(extremum.y),
+                type = type,
+                label = "$title (${formatResult(extremum.x)}, ${formatResult(extremum.y)})",
+                functionIndex = functionIndex,
+              ),
+              minDistance = dx * 0.75,
+            )
+          }
+        }
+        prevSlope = currSlope
+      } else {
+        prevSlope = null
+      }
+
+      prevX = currX
+      prevY = currY
+    }
+
+    return features.take(24)
+  }
+
+  /**
+   * Finds intersections between [exprA] and [exprB] within `[xMin, xMax]`.
+   */
+  fun findIntersections(
+    exprA: String,
+    exprB: String,
+    xMin: Double,
+    xMax: Double,
+    yMin: Double,
+    yMax: Double,
+    isDegreeMode: Boolean = true,
+    indexA: Int = 0,
+    indexB: Int = 1,
+    steps: Int = 240,
+  ): List<GraphFeaturePoint> {
+    if (xMax <= xMin || steps < 4) return emptyList()
+    val compiledA = compileFunctionOrNull(exprA, isDegreeMode) ?: return emptyList()
+    val compiledB = compileFunctionOrNull(exprB, isDegreeMode) ?: return emptyList()
+    val results = mutableListOf<GraphFeaturePoint>()
+    val ySpan = (yMax - yMin).coerceAtLeast(1e-6)
+    val dx = (xMax - xMin) / steps.toDouble()
+
+    var prevX = xMin
+    var prevDiff: Double? = run {
+      val ya = compiledA.evaluateAtOrNull(prevX)
+      val yb = compiledB.evaluateAtOrNull(prevX)
+      if (ya != null && yb != null) ya - yb else null
+    }
+
+    for (i in 1..steps) {
+      val currX = if (i == steps) xMax else xMin + i * dx
+      val ya = compiledA.evaluateAtOrNull(currX)
+      val yb = compiledB.evaluateAtOrNull(currX)
+      val currDiff = if (ya != null && yb != null) ya - yb else null
+
+      val lastDiff = prevDiff
+      if (lastDiff != null && currDiff != null) {
+        if (abs(lastDiff) < 1e-10) {
+          val yVal = compiledA.evaluateAtOrNull(prevX)
+          if (yVal != null && yVal in (yMin - ySpan)..(yMax + ySpan)) {
+            addUniqueFeature(
+              results,
+              GraphFeaturePoint(
+                x = cleanDouble(prevX),
+                y = cleanDouble(yVal),
+                type = GraphFeatureType.INTERSECTION,
+                label = "Intersection (${formatResult(prevX)}, ${formatResult(yVal)})",
+                functionIndex = indexA,
+                secondaryFunctionIndex = indexB,
+              ),
+              minDistance = dx * 0.6,
+            )
+          }
+        } else if (lastDiff * currDiff < 0.0 && abs(currDiff - lastDiff) < ySpan * 2.5) {
+          var lo = prevX
+          var hi = currX
+          var fLo: Double = lastDiff
+          for (iter in 0 until 28) {
+            val mid = 0.5 * (lo + hi)
+            val mA = compiledA.evaluateAtOrNull(mid) ?: break
+            val mB = compiledB.evaluateAtOrNull(mid) ?: break
+            val fMid = mA - mB
+            if (abs(fMid) < 1e-11) {
+              lo = mid
+              hi = mid
+              break
+            }
+            if (fLo * fMid <= 0.0) {
+              hi = mid
+            } else {
+              lo = mid
+              fLo = fMid
+            }
+          }
+          val ix = 0.5 * (lo + hi)
+          val iyA = compiledA.evaluateAtOrNull(ix)
+          val iyB = compiledB.evaluateAtOrNull(ix)
+          if (
+            iyA != null &&
+            iyB != null &&
+            abs(iyA - iyB) < ySpan * 0.05 &&
+            iyA in (yMin - ySpan)..(yMax + ySpan)
+          ) {
+            val iy = 0.5 * (iyA + iyB)
+            addUniqueFeature(
+              results,
+              GraphFeaturePoint(
+                x = cleanDouble(ix),
+                y = cleanDouble(iy),
+                type = GraphFeatureType.INTERSECTION,
+                label = "Intersection (${formatResult(ix)}, ${formatResult(iy)})",
+                functionIndex = indexA,
+                secondaryFunctionIndex = indexB,
+              ),
+              minDistance = dx * 0.6,
+            )
+          }
+        }
+      }
+      prevX = currX
+      prevDiff = currDiff
+    }
+
+    return results.take(16)
+  }
+
+  private fun refineRootBisection(
+    compiled: CompiledFunction,
+    left: Double,
+    right: Double,
+  ): Double {
+    var lo = left
+    var hi = right
+    var fLo = compiled.evaluateAtOrNull(lo) ?: return 0.5 * (left + right)
+    for (iter in 0 until 28) {
+      val mid = 0.5 * (lo + hi)
+      val fMid = compiled.evaluateAtOrNull(mid) ?: break
+      if (abs(fMid) < 1e-12) return mid
+      if (fLo * fMid <= 0.0) {
+        hi = mid
+      } else {
+        lo = mid
+        fLo = fMid
+      }
+    }
+    return 0.5 * (lo + hi)
+  }
+
+  private fun refineExtremumGoldenSection(
+    compiled: CompiledFunction,
+    left: Double,
+    right: Double,
+    findMax: Boolean,
+  ): GraphPoint? {
+    val phi = (sqrt(5.0) - 1.0) / 2.0
+    var a = left
+    var b = right
+    var c = b - phi * (b - a)
+    var d = a + phi * (b - a)
+    var fc = compiled.evaluateAtOrNull(c) ?: return null
+    var fd = compiled.evaluateAtOrNull(d) ?: return null
+
+    for (iter in 0 until 26) {
+      val cBetter = if (findMax) fc > fd else fc < fd
+      if (cBetter) {
+        b = d
+        d = c
+        fd = fc
+        c = b - phi * (b - a)
+        fc = compiled.evaluateAtOrNull(c) ?: return null
+      } else {
+        a = c
+        c = d
+        fc = fd
+        d = a + phi * (b - a)
+        fd = compiled.evaluateAtOrNull(d) ?: return null
+      }
+    }
+    val x = 0.5 * (a + b)
+    val y = compiled.evaluateAtOrNull(x) ?: return null
+    return GraphPoint(x, y)
+  }
+
+  private fun addUniqueFeature(
+    list: MutableList<GraphFeaturePoint>,
+    candidate: GraphFeaturePoint,
+    minDistance: Double,
+  ) {
+    val exists = list.any { existing ->
+      existing.type == candidate.type &&
+        existing.functionIndex == candidate.functionIndex &&
+        abs(existing.x - candidate.x) <= minDistance
+    }
+    if (!exists) {
+      list.add(candidate)
+    }
   }
 
   /**
@@ -179,7 +699,7 @@ object CalculatorEngine {
     return value
   }
 
-  private sealed interface Token {
+  internal sealed interface Token {
     data class Number(val value: Double) : Token
     data class Identifier(val name: String) : Token
     data class Operator(val op: Char) : Token
@@ -264,7 +784,7 @@ object CalculatorEngine {
           current is Token.CloseParen ||
           current is Token.Factorial ||
           current is Token.Percent ||
-          (current is Token.Identifier && current.name in listOf("pi", "e"))
+          (current is Token.Identifier && current.name in listOf("pi", "e", "x"))
 
         val canStartFactor = next is Token.Number ||
           next is Token.OpenParen ||
@@ -281,6 +801,7 @@ object CalculatorEngine {
   private class Parser(
     private val tokens: List<Token>,
     private val isDegreeMode: Boolean,
+    private val xValue: Double? = null,
   ) {
     private var index = 0
 
@@ -316,14 +837,14 @@ object CalculatorEngine {
       return left
     }
 
-    // Term := Power (('*' | '/') Power)*
+    // Term := Unary (('*' | '/') Unary)*
     private fun parseTerm(): Double {
-      var left = parsePower()
+      var left = parseUnary()
       while (true) {
         val next = peek()
         if (next is Token.Operator && (next.op == '*' || next.op == '/')) {
           consume()
-          val right = parsePower()
+          val right = parseUnary()
           if (next.op == '*') {
             left *= right
           } else {
@@ -339,23 +860,7 @@ object CalculatorEngine {
       return left
     }
 
-    // Power := Unary ('^' Power)? (right-associative)
-    private fun parsePower(): Double {
-      val base = parseUnary()
-      val next = peek()
-      return if (next is Token.Operator && next.op == '^') {
-        consume()
-        val exp = parsePower()
-        if (base < 0 && exp != round(exp)) {
-          throw CalculatorException("Invalid power of negative number")
-        }
-        base.pow(exp)
-      } else {
-        base
-      }
-    }
-
-    // Unary := ('+' | '-') Unary | Postfix
+    // Unary := ('+' | '-') Unary | Power
     private fun parseUnary(): Double {
       val next = peek()
       if (next is Token.Operator) {
@@ -368,7 +873,23 @@ object CalculatorEngine {
           return -parseUnary()
         }
       }
-      return parsePostfix()
+      return parsePower()
+    }
+
+    // Power := Postfix ('^' Unary)? (right-associative, higher precedence than unary minus so -x^2 = -(x^2))
+    private fun parsePower(): Double {
+      val base = parsePostfix()
+      val next = peek()
+      return if (next is Token.Operator && next.op == '^') {
+        consume()
+        val exp = parseUnary()
+        if (base < 0 && exp != round(exp)) {
+          throw CalculatorException("Invalid power of negative number")
+        }
+        base.pow(exp)
+      } else {
+        base
+      }
     }
 
     // Postfix := Primary ('!' | '%')*
@@ -390,7 +911,7 @@ object CalculatorEngine {
       return value
     }
 
-    // Primary := Number | Constant | Function '(' Expression ')' | '(' Expression ')'
+    // Primary := Number | Constant | Variable | Function '(' Expression ')' | '(' Expression ')'
     private fun parsePrimary(): Double {
       return when (val token = peek()) {
         is Token.Number -> {
@@ -417,6 +938,7 @@ object CalculatorEngine {
       when (name) {
         "pi" -> return Math.PI
         "e" -> return Math.E
+        "x" -> return xValue ?: throw CalculatorException("Variable x requires Graph mode")
       }
 
       // Check if followed by parentheses, e.g. sin(30)

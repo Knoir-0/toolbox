@@ -2675,6 +2675,25 @@ fun SettingsScreen(
         StarsEngine.resolveCurrentSign(context = localContext)
       }
     }
+    LaunchedEffect(
+      localContext,
+      isInspection,
+      themeMode,
+      themeColor,
+      accentColor,
+      musicPlayerThemeEnabled,
+      musicPlayerColorOption,
+      backgroundTexture,
+      hexagonIconButtons,
+      isMusicPlaying,
+      currentMusicPalette.dominantHex,
+      currentMusicPalette.secondaryHex,
+      currentMusicPalette.accentHex,
+    ) {
+      if (!isInspection) {
+        TodoListWidgets.refreshAllToolboxWidgets(localContext)
+      }
+    }
     DisposableEffect(lifecycleOwner, localContext, isInspection) {
       if (isInspection) {
         onDispose {}
@@ -4106,10 +4125,7 @@ fun SettingsScreen(
                   onValueChange = { checked ->
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     preferencesRepository.setHexagonIconButtons(checked)
-                    MusicPlayerWidgets.updateAllWidgets(localContext)
-                    TodoListWidgets.updateAllWidgets(localContext)
-                    NotesWidgets.updateAllWidgets(localContext)
-                    BackgroundTextureWidgets.updateAllWidgets(localContext)
+                    TodoListWidgets.refreshAllToolboxWidgets(localContext)
                   },
                 )
                 .testTag("hexagon_icon_buttons_toggle"),

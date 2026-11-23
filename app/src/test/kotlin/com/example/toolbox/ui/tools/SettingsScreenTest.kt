@@ -386,6 +386,7 @@ class SettingsScreenTest {
     assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.GALLERY.category)
     assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.CAMERA.category)
     assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.VIDEO_EDITOR.category)
+    assertEquals(ToolCategory.PHOTO_AND_VIDEO, Tool.SCREEN_RECORDER.category)
     assertEquals(ToolCategory.PRODUCTIVITY, Tool.TODO_LIST.category)
     assertEquals(ToolCategory.FILES_AND_STORAGE, Tool.FILES.category)
     assertEquals(ToolCategory.PRODUCTIVITY, Tool.NOTES.category)
@@ -400,6 +401,7 @@ class SettingsScreenTest {
     assertEquals(ToolCategory.REMOTES_AND_DEVICES, Tool.OBD2_SCANNER.category)
     assertEquals(ToolCategory.MATH_AND_MEASUREMENT, Tool.ELEMENTS.category)
     assertEquals(ToolCategory.MISCELLANEOUS, Tool.GOOD.category)
+    assertEquals(ToolCategory.PRODUCTIVITY, Tool.CALENDAR.category)
     assertEquals(ToolCategory.SYSTEM, Tool.SEARCH.category)
     assertEquals(ToolCategory.SYSTEM, Tool.SETTINGS.category)
   }

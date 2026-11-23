@@ -190,4 +190,38 @@ class CalculatorScreenTest {
     composeTestRule.onNodeWithTag("unit_converter_category_chip_WEIGHT").assertIsDisplayed()
     composeTestRule.onNodeWithTag("unit_converter_input").assertTextEquals("42")
   }
+
+  @Test
+  fun testGraphModeToggleAndAnalysisTabs() {
+    composeTestRule.onNodeWithTag("calculator_graph_toggle_chip").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("calculator_graph_view").assertDoesNotExist()
+
+    // Switch to Graph mode
+    composeTestRule.onNodeWithTag("calculator_graph_toggle_chip").performClick()
+    composeTestRule.waitForIdle()
+
+    composeTestRule.onNodeWithTag("calculator_graph_view").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("calculator_graph_canvas").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("calculator_graph_readout_card").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("calculator_graph_fn_chip_0").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("calculator_graph_fn_chip_1").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("calculator_graph_trace_slider").assertIsDisplayed()
+
+    // Switch analysis tabs: Table & Integral
+    composeTestRule.onNodeWithTag("calculator_graph_analysis_tab_table").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("calculator_graph_table_list").assertIsDisplayed()
+
+    composeTestRule.onNodeWithTag("calculator_graph_analysis_tab_integral").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("calculator_graph_integral_result").assertIsDisplayed()
+
+    // Open Add Function dialog
+    composeTestRule.onNodeWithTag("calculator_graph_add_fn_button").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("calculator_graph_fn_dialog").assertIsDisplayed()
+    composeTestRule.onNodeWithTag("calculator_graph_fn_cancel").performClick()
+    composeTestRule.waitForIdle()
+    composeTestRule.onNodeWithTag("calculator_graph_fn_dialog").assertDoesNotExist()
+  }
 }

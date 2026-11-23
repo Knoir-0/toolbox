@@ -70,21 +70,35 @@
                     android:tint="#FFDDB9F6"
                     android:visibility="gone" />
 
-                <TextView
-                    android:id="@+id/widget_notes_item_checklist_badge"
+                <FrameLayout
+                    android:id="@+id/widget_notes_item_checklist_badge_container"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
-                    android:background="@drawable/bg_todo_widget_pill"
-                    android:paddingStart="7dp"
-                    android:paddingTop="2dp"
-                    android:paddingEnd="7dp"
-                    android:paddingBottom="2dp"
-                    android:text="0/0"
-                    android:textColor="#FFF3DAFF"
-                    android:textSize="10.5sp"
-                    android:textStyle="bold"
-                    android:visibility="gone" />
+                    android:visibility="gone">
+
+                    <ImageView
+                        android:id="@+id/widget_notes_item_checklist_badge_bg"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:contentDescription="@null"
+                        android:scaleType="fitXY"
+                        android:src="@drawable/bg_todo_widget_pill" />
+
+                    <TextView
+                        android:id="@+id/widget_notes_item_checklist_badge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:paddingStart="7dp"
+                        android:paddingTop="2dp"
+                        android:paddingEnd="7dp"
+                        android:paddingBottom="2dp"
+                        android:text="0/0"
+                        android:textColor="#FFF3DAFF"
+                        android:textSize="10.5sp"
+                        android:textStyle="bold"
+                        android:visibility="gone" />
+                </FrameLayout>
             </LinearLayout>
 
             <!-- Note Content or Checklist Preview -->
@@ -180,21 +194,35 @@
                     android:tint="#FFDDB9F6"
                     android:visibility="gone" />
 
-                <TextView
-                    android:id="@+id/widget_notes_item_second_checklist_badge"
+                <FrameLayout
+                    android:id="@+id/widget_notes_item_second_checklist_badge_container"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
-                    android:background="@drawable/bg_todo_widget_pill"
-                    android:paddingStart="7dp"
-                    android:paddingTop="2dp"
-                    android:paddingEnd="7dp"
-                    android:paddingBottom="2dp"
-                    android:text="0/0"
-                    android:textColor="#FFF3DAFF"
-                    android:textSize="10.5sp"
-                    android:textStyle="bold"
-                    android:visibility="gone" />
+                    android:visibility="gone">
+
+                    <ImageView
+                        android:id="@+id/widget_notes_item_second_checklist_badge_bg"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:contentDescription="@null"
+                        android:scaleType="fitXY"
+                        android:src="@drawable/bg_todo_widget_pill" />
+
+                    <TextView
+                        android:id="@+id/widget_notes_item_second_checklist_badge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:paddingStart="7dp"
+                        android:paddingTop="2dp"
+                        android:paddingEnd="7dp"
+                        android:paddingBottom="2dp"
+                        android:text="0/0"
+                        android:textColor="#FFF3DAFF"
+                        android:textSize="10.5sp"
+                        android:textStyle="bold"
+                        android:visibility="gone" />
+                </FrameLayout>
             </LinearLayout>
 
             <!-- Note Content or Checklist Preview -->

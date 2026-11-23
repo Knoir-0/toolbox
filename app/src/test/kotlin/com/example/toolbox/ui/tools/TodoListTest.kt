@@ -1251,4 +1251,65 @@ class TodoListTest {
       0.001f,
     )
   }
+
+  @Test
+  fun resolveWidgetPalette_synchronizesWithThemeAccentMusicAndStarSignColors() {
+    val repo = com.example.toolbox.ui.main.InMemoryNavigationPreferencesRepository()
+    try {
+      // 1. Light vs Dark theme mode updates widget palette immediately
+      repo.setMusicPlayerThemeEnabled(false)
+      repo.setThemeMode(com.example.toolbox.ui.main.ThemeMode.LIGHT)
+      repo.setThemeColor("#2E7D32")
+      repo.setAccentColor("#E65100")
+
+      val lightGreenPalette = TodoListWidgets.resolveWidgetPalette()
+      assertFalse(lightGreenPalette.isDarkTheme)
+
+      repo.setThemeMode(com.example.toolbox.ui.main.ThemeMode.DARK)
+      val darkGreenPalette = TodoListWidgets.resolveWidgetPalette()
+      assertTrue(darkGreenPalette.isDarkTheme)
+      org.junit.Assert.assertNotEquals(lightGreenPalette.surfaceArgb, darkGreenPalette.surfaceArgb)
+
+      // 2. Changing Theme Color updates primary & container tokens across widgets
+      repo.setThemeColor("#C62828")
+      val darkRedPalette = TodoListWidgets.resolveWidgetPalette()
+      org.junit.Assert.assertNotEquals(darkGreenPalette.primaryArgb, darkRedPalette.primaryArgb)
+      org.junit.Assert.assertNotEquals(darkGreenPalette.primaryContainerArgb, darkRedPalette.primaryContainerArgb)
+
+      // 3. Changing Accent Color updates tertiary tokens across widgets
+      repo.setAccentColor("#00ACC1")
+      val cyanAccentPalette = TodoListWidgets.resolveWidgetPalette()
+      org.junit.Assert.assertNotEquals(darkRedPalette.tertiaryArgb, cyanAccentPalette.tertiaryArgb)
+      org.junit.Assert.assertNotEquals(darkRedPalette.tertiaryContainerArgb, cyanAccentPalette.tertiaryContainerArgb)
+
+      // 4. Enabling Music Player theme while music is playing synchronizes widget colors with active track palette
+      repo.setMusicPlayerThemeEnabled(true)
+      repo.setMusicPlayerColorOption(com.example.toolbox.ui.main.THEME_COLOR_MUSIC_PLAYER)
+      val track1 = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS[0]
+      val track2 = MusicPlayerEngine.DEFAULT_SAMPLE_TRACKS[2]
+      MusicPlayerEngine.updateActiveTrackPalette(track1, MusicPlayerEngine.resolveTrackPalette(track1))
+      MusicPlayerEngine.setMusicPlayingForTest(true)
+
+      val musicTrack1Palette = TodoListWidgets.resolveWidgetPalette()
+      org.junit.Assert.assertNotEquals(cyanAccentPalette.primaryArgb, musicTrack1Palette.primaryArgb)
+
+      // Switching track palette updates widget palette
+      MusicPlayerEngine.updateActiveTrackPalette(track2, MusicPlayerEngine.resolveTrackPalette(track2))
+      val musicTrack2Palette = TodoListWidgets.resolveWidgetPalette()
+      org.junit.Assert.assertNotEquals(musicTrack1Palette.primaryArgb, musicTrack2Palette.primaryArgb)
+
+      // Pausing music falls back to user's selected theme color (#C62828)
+      MusicPlayerEngine.setMusicPlayingForTest(false)
+      val pausedFallbackPalette = TodoListWidgets.resolveWidgetPalette()
+      assertEquals(cyanAccentPalette.primaryArgb, pausedFallbackPalette.primaryArgb)
+
+      // 5. Star Sign theme color synchronizes widget palette with active sign's power color
+      repo.setThemeColor(com.example.toolbox.ui.main.THEME_COLOR_STARS_SIGN)
+      val starsPalette = TodoListWidgets.resolveWidgetPalette()
+      org.junit.Assert.assertNotEquals(cyanAccentPalette.primaryArgb, starsPalette.primaryArgb)
+    } finally {
+      MusicPlayerEngine.resetPlaybackSession()
+      com.example.toolbox.ui.main.resetAllSettingsToDefaults(repo)
+    }
+  }
 }

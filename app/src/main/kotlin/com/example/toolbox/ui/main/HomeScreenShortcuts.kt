@@ -51,9 +51,15 @@ const val EXTRA_AUDIO_RECORDER_QUICK_ACTION = "extra_audio_recorder_quick_action
 const val AUDIO_RECORDER_QUICK_ACTION_START_MIC = "start_mic"
 const val AUDIO_RECORDER_QUICK_ACTION_START_DEVICE = "start_device"
 const val AUDIO_RECORDER_QUICK_ACTION_START_BOTH = "start_both"
+const val EXTRA_SCREEN_RECORDER_QUICK_ACTION = "extra_screen_recorder_quick_action"
+const val SCREEN_RECORDER_QUICK_ACTION_START_MIC = "start_mic"
+const val SCREEN_RECORDER_QUICK_ACTION_START_DEVICE = "start_device"
+const val SCREEN_RECORDER_QUICK_ACTION_START_BOTH = "start_both"
 const val EXTRA_PLANT_SCHEDULE_MONTH = "extra_plant_schedule_month"
 const val EXTRA_PLANT_SCHEDULE_OPEN_SEARCH = "extra_plant_schedule_open_search"
 const val EXTRA_CAMERA_CAPTURE_MODE = "extra_camera_capture_mode"
+const val EXTRA_CALENDAR_DATE_KEY = "extra_calendar_date_key"
+const val EXTRA_CALENDAR_OPEN_ADD_EVENT = "extra_calendar_open_add_event"
 
 const val STANDALONE_SHORTCUT_INTENT_FLAGS =
   Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -115,6 +121,7 @@ fun resolveToolShortcutAliasClassName(tool: Tool): String {
     Tool.FILE_CONVERTER -> "com.example.toolbox.MainActivityToolFileConverter"
     Tool.RULER -> "com.example.toolbox.MainActivityToolRuler"
     Tool.VIDEO_EDITOR -> "com.example.toolbox.MainActivityToolVideoEditor"
+    Tool.SCREEN_RECORDER -> "com.example.toolbox.MainActivityToolScreenRecorder"
     Tool.AUDIO_EDITOR -> "com.example.toolbox.MainActivityToolAudioEditor"
     Tool.COLOR_PICKER -> "com.example.toolbox.MainActivityToolColorPicker"
     Tool.DICE_ROLLER -> "com.example.toolbox.MainActivityToolDiceRoller"
@@ -132,6 +139,7 @@ fun resolveToolShortcutAliasClassName(tool: Tool): String {
     Tool.ELEMENTS -> "com.example.toolbox.MainActivityToolElements"
     Tool.GOOD -> "com.example.toolbox.MainActivityToolGood"
     Tool.STARS -> "com.example.toolbox.MainActivityToolStars"
+    Tool.CALENDAR -> "com.example.toolbox.MainActivityToolCalendar"
     Tool.SEARCH -> "com.example.toolbox.MainActivityToolSearch"
     Tool.SETTINGS -> "com.example.toolbox.MainActivityToolSettings"
   }
@@ -159,6 +167,7 @@ fun resolveToolShortcutMipmapResId(tool: Tool): Int {
     Tool.FILE_CONVERTER -> R.mipmap.ic_tool_file_converter
     Tool.RULER -> R.mipmap.ic_tool_ruler
     Tool.VIDEO_EDITOR -> R.mipmap.ic_tool_video_editor
+    Tool.SCREEN_RECORDER -> R.mipmap.ic_tool_screen_recorder
     Tool.AUDIO_EDITOR -> R.mipmap.ic_tool_audio_editor
     Tool.COLOR_PICKER -> R.mipmap.ic_tool_color_picker
     Tool.DICE_ROLLER -> R.mipmap.ic_tool_dice_roller
@@ -176,6 +185,7 @@ fun resolveToolShortcutMipmapResId(tool: Tool): Int {
     Tool.ELEMENTS -> R.mipmap.ic_tool_elements
     Tool.GOOD -> R.mipmap.ic_tool_good
     Tool.STARS -> R.mipmap.ic_tool_stars
+    Tool.CALENDAR -> R.mipmap.ic_tool_calendar
     Tool.SEARCH -> R.mipmap.ic_tool_search
     Tool.SETTINGS -> R.mipmap.ic_tool_settings
   }
@@ -423,6 +433,43 @@ fun createAudioRecorderQuickActionIntent(
 }
 
 /**
+ * Parses the requested Screen Recorder quick-action mode ([SCREEN_RECORDER_QUICK_ACTION_START_MIC],
+ * [SCREEN_RECORDER_QUICK_ACTION_START_DEVICE], or [SCREEN_RECORDER_QUICK_ACTION_START_BOTH])
+ * from an incoming [Intent], or `null` if none was requested.
+ */
+fun parseScreenRecorderQuickAction(intent: Intent?): String? {
+  val raw = intent?.getStringExtra(EXTRA_SCREEN_RECORDER_QUICK_ACTION)
+    ?: intent?.data?.getQueryParameter("screen_recorder_action")
+    ?: return null
+  return when {
+    raw.equals(SCREEN_RECORDER_QUICK_ACTION_START_MIC, ignoreCase = true) ->
+      SCREEN_RECORDER_QUICK_ACTION_START_MIC
+    raw.equals(SCREEN_RECORDER_QUICK_ACTION_START_DEVICE, ignoreCase = true) ->
+      SCREEN_RECORDER_QUICK_ACTION_START_DEVICE
+    raw.equals(SCREEN_RECORDER_QUICK_ACTION_START_BOTH, ignoreCase = true) ->
+      SCREEN_RECORDER_QUICK_ACTION_START_BOTH
+    else -> null
+  }
+}
+
+/**
+ * Creates an [Intent] that launches [Tool.SCREEN_RECORDER] and optionally immediately begins
+ * recording with the requested [quickActionMode] ([SCREEN_RECORDER_QUICK_ACTION_START_MIC],
+ * [SCREEN_RECORDER_QUICK_ACTION_START_DEVICE], or [SCREEN_RECORDER_QUICK_ACTION_START_BOTH]).
+ */
+fun createScreenRecorderQuickActionIntent(
+  context: Context,
+  startRecording: Boolean = true,
+  quickActionMode: String = SCREEN_RECORDER_QUICK_ACTION_START_MIC,
+): Intent {
+  return createStandaloneToolIntent(context, Tool.SCREEN_RECORDER).apply {
+    if (startRecording) {
+      putExtra(EXTRA_SCREEN_RECORDER_QUICK_ACTION, quickActionMode)
+    }
+  }
+}
+
+/**
  * Parses the requested focus month (`1..12`) for [Tool.PLANT_SCHEDULE] from an incoming [Intent],
  * or `null` if none was specified.
  */
@@ -480,6 +527,44 @@ fun createCameraModeQuickActionIntent(
 ): Intent {
   return createStandaloneToolIntent(context, Tool.CAMERA).apply {
     putExtra(EXTRA_CAMERA_CAPTURE_MODE, modeName)
+  }
+}
+
+/**
+ * Parses the requested focus date key (`yyyy-MM-dd`) for [Tool.CALENDAR] from an incoming [Intent],
+ * or `null` if none was specified.
+ */
+fun parseCalendarDateKey(intent: Intent?): String? {
+  val fromExtra = intent?.getStringExtra(EXTRA_CALENDAR_DATE_KEY)?.trim()?.takeIf { it.isNotEmpty() }
+  if (fromExtra != null) return fromExtra
+  return intent?.data?.getQueryParameter("calendar_date")?.trim()?.takeIf { it.isNotEmpty() }
+}
+
+/**
+ * Returns `true` if the incoming [Intent] requests opening [Tool.CALENDAR] with the
+ * New Calendar Event dialog open.
+ */
+fun parseCalendarOpenAddEvent(intent: Intent?): Boolean {
+  return intent?.getBooleanExtra(EXTRA_CALENDAR_OPEN_ADD_EVENT, false) == true ||
+    intent?.data?.getQueryParameter("calendar_add")?.equals("true", ignoreCase = true) == true
+}
+
+/**
+ * Creates an [Intent] that launches [Tool.CALENDAR] focused on [dateKey] (`yyyy-MM-dd`)
+ * and optionally opens the New Calendar Event dialog ([openAddEvent] = `true`).
+ */
+fun createCalendarWidgetIntent(
+  context: Context,
+  dateKey: String? = null,
+  openAddEvent: Boolean = false,
+): Intent {
+  return createStandaloneToolIntent(context, Tool.CALENDAR).apply {
+    if (!dateKey.isNullOrBlank()) {
+      putExtra(EXTRA_CALENDAR_DATE_KEY, dateKey)
+    }
+    if (openAddEvent) {
+      putExtra(EXTRA_CALENDAR_OPEN_ADD_EVENT, true)
+    }
   }
 }
 

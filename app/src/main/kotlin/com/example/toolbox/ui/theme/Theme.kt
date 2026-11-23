@@ -16,6 +16,7 @@
 
 package com.example.toolbox.ui.theme
 
+import android.content.Context
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
@@ -765,55 +766,37 @@ fun createCustomColorScheme(
 val LocalIsDarkTheme = compositionLocalOf { false }
 private val LocalHasActiveToolboxThemeMonitor = compositionLocalOf { false }
 
-@Composable
-fun ToolboxTheme(
-    themeMode: ThemeMode = NavigationPreferencesBridge.themeMode,
+/**
+ * Resolves the complete Material 3 [ColorScheme] for Toolbox according to the user's active
+ * [darkTheme], [themeColor], [accentColor], [musicPlayerThemeEnabled], [musicPlayerColorOption],
+ * [isMusicPlaying], [musicPalette], and [activeStarsSign].
+ *
+ * Shared between [ToolboxTheme] (in-app Compose UI) and `TodoListWidgets.resolveWidgetPalette`
+ * (all Home Screen AppWidgets) so widget colors and app colors stay 100% synchronized.
+ */
+fun resolveToolboxColorScheme(
+    context: Context? = null,
+    darkTheme: Boolean,
     themeColor: String = DEFAULT_THEME_COLOR_SYSTEM,
     accentColor: String = DEFAULT_ACCENT_COLOR_AUTO,
-    musicPlayerThemeEnabled: Boolean = NavigationPreferencesBridge.musicPlayerThemeEnabled,
-    musicPlayerColorOption: String = NavigationPreferencesBridge.musicPlayerColorOption,
-    backgroundTexture: BackgroundTexture = NavigationPreferencesBridge.backgroundTexture,
-    hexagonIconButtons: Boolean = NavigationPreferencesBridge.hexagonIconButtons,
+    musicPlayerThemeEnabled: Boolean = DEFAULT_MUSIC_PLAYER_THEME_ENABLED,
+    musicPlayerColorOption: String = DEFAULT_MUSIC_PLAYER_COLOR_OPTION,
     isMusicPlaying: Boolean = MusicPlayerEngine.isMusicPlaying,
-    darkTheme: Boolean = when (themeMode) {
-        ThemeMode.SYSTEM -> isSystemInDarkTheme()
-        ThemeMode.LIGHT -> false
-        ThemeMode.DARK -> true
-    },
-    // Dynamic color is available on Android 12+
+    musicPalette: AlbumArtPalette = MusicPlayerEngine.activeTrackPalette,
+    activeStarsSign: ZodiacSign = StarsEngine.activeSignState,
     dynamicColor: Boolean = (themeColor == DEFAULT_THEME_COLOR_SYSTEM),
-    content: @Composable () -> Unit,
-) {
-    val context = LocalContext.current
-    val isInspection = LocalInspectionMode.current
-    val hasParentThemeMonitor = LocalHasActiveToolboxThemeMonitor.current
-    LaunchedEffect(context, musicPlayerThemeEnabled, themeColor, accentColor, isInspection, hasParentThemeMonitor) {
-        if (!hasParentThemeMonitor && !isInspection && (musicPlayerThemeEnabled || isMusicPlayerThemeColorSetting(themeColor) || isMusicPlayerAccentColorSetting(accentColor))) {
-            MusicPlayerEngine.ensureSystemMediaMonitoring(context)
-            while (true) {
-                if (!MusicPlayerEngine.isInAppVideoPlaybackActive) {
-                    MusicPlayerEngine.syncExternalSystemMediaSessions(context)
-                }
-                delay(2_000L)
-            }
+): ColorScheme {
+    val explicitMusicThemeOption = MusicPlayerColorOption.fromPrefValue(themeColor)
+    val musicThemeOption = when {
+        musicPlayerThemeEnabled && isMusicPlaying -> {
+            explicitMusicThemeOption
+                ?: MusicPlayerColorOption.fromPrefValue(musicPlayerColorOption)
+                ?: MusicPlayerColorOption.DOMINANT
         }
-    }
-
-    val musicThemeOption = if (musicPlayerThemeEnabled && isMusicPlaying) {
-        MusicPlayerColorOption.fromPrefValue(themeColor)
-            ?: MusicPlayerColorOption.fromPrefValue(musicPlayerColorOption)
-            ?: MusicPlayerColorOption.DOMINANT
-    } else {
-        null
+        explicitMusicThemeOption != null && isMusicPlaying -> explicitMusicThemeOption
+        else -> null
     }
     val isStarsSignTheme = isStarsSignThemeColorSetting(themeColor)
-    LaunchedEffect(context, isStarsSignTheme, isInspection) {
-        if (!isInspection && isStarsSignTheme) {
-            StarsEngine.resolveCurrentSign(context = context)
-        }
-    }
-    val activeStarsSign = StarsEngine.activeSignState
-    val musicPalette = MusicPlayerEngine.activeTrackPalette
     val baseColorScheme = when {
         musicThemeOption != null -> {
             createCustomColorScheme(musicThemeOption.resolveColor(musicPalette), darkTheme)
@@ -821,14 +804,15 @@ fun ToolboxTheme(
         isStarsSignTheme -> {
             createCustomColorScheme(resolveStarsSignThemeColor(activeStarsSign), darkTheme)
         }
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        dynamicColor && context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+            try {
+                if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            } catch (_: Throwable) {
+                if (darkTheme) Purple8E66A6DarkColorScheme else Purple8E66A6LightColorScheme
+            }
         }
-        themeColor == DEFAULT_THEME_COLOR_SYSTEM -> {
-            // Fallback to #8E66A6 for older Android versions
-            if (darkTheme) Purple8E66A6DarkColorScheme else Purple8E66A6LightColorScheme
-        }
-        themeColor.equals(FALLBACK_THEME_COLOR_HEX, ignoreCase = true) -> {
+        themeColor == DEFAULT_THEME_COLOR_SYSTEM ||
+            themeColor.equals(FALLBACK_THEME_COLOR_HEX, ignoreCase = true) -> {
             if (darkTheme) Purple8E66A6DarkColorScheme else Purple8E66A6LightColorScheme
         }
         themeColor.equals("#00668B", ignoreCase = true) -> {
@@ -864,7 +848,7 @@ fun ToolboxTheme(
 
     val tertiaryTokens = createTertiaryTokens(resolvedAccentColor, darkTheme)
     val activeMusicOption = musicThemeOption ?: legacyMusicAccentOption
-    val colorScheme = if (activeMusicOption != null) {
+    return if (activeMusicOption != null) {
         val musicBaseColor = activeMusicOption.resolveColor(musicPalette)
         val musicBg = calculateMusicPlayerBackgroundColor(baseColorScheme.background, musicPalette, activeMusicOption)
         baseColorScheme.copy(
@@ -887,6 +871,89 @@ fun ToolboxTheme(
             tertiaryContainer = tertiaryTokens.tertiaryContainer,
             onTertiaryContainer = tertiaryTokens.onTertiaryContainer,
         )
+    }
+}
+
+@Composable
+fun ToolboxTheme(
+    themeMode: ThemeMode = NavigationPreferencesBridge.themeMode,
+    themeColor: String = DEFAULT_THEME_COLOR_SYSTEM,
+    accentColor: String = DEFAULT_ACCENT_COLOR_AUTO,
+    musicPlayerThemeEnabled: Boolean = NavigationPreferencesBridge.musicPlayerThemeEnabled,
+    musicPlayerColorOption: String = NavigationPreferencesBridge.musicPlayerColorOption,
+    backgroundTexture: BackgroundTexture = NavigationPreferencesBridge.backgroundTexture,
+    hexagonIconButtons: Boolean = NavigationPreferencesBridge.hexagonIconButtons,
+    isMusicPlaying: Boolean = MusicPlayerEngine.isMusicPlaying,
+    darkTheme: Boolean = when (themeMode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    },
+    // Dynamic color is available on Android 12+
+    dynamicColor: Boolean = (themeColor == DEFAULT_THEME_COLOR_SYSTEM),
+    content: @Composable () -> Unit,
+) {
+    val context = LocalContext.current
+    val isInspection = LocalInspectionMode.current
+    val hasParentThemeMonitor = LocalHasActiveToolboxThemeMonitor.current
+    LaunchedEffect(context, musicPlayerThemeEnabled, themeColor, accentColor, isInspection, hasParentThemeMonitor) {
+        if (!hasParentThemeMonitor && !isInspection && (musicPlayerThemeEnabled || isMusicPlayerThemeColorSetting(themeColor) || isMusicPlayerAccentColorSetting(accentColor))) {
+            MusicPlayerEngine.ensureSystemMediaMonitoring(context)
+            while (true) {
+                if (!MusicPlayerEngine.isInAppVideoPlaybackActive) {
+                    MusicPlayerEngine.syncExternalSystemMediaSessions(context)
+                }
+                delay(2_000L)
+            }
+        }
+    }
+
+    val isStarsSignTheme = isStarsSignThemeColorSetting(themeColor)
+    LaunchedEffect(context, isStarsSignTheme, isInspection) {
+        if (!isInspection && isStarsSignTheme) {
+            StarsEngine.resolveCurrentSign(context = context)
+        }
+    }
+    val activeStarsSign = StarsEngine.activeSignState
+    val musicPalette = MusicPlayerEngine.activeTrackPalette
+    val colorScheme = resolveToolboxColorScheme(
+        context = context,
+        darkTheme = darkTheme,
+        themeColor = themeColor,
+        accentColor = accentColor,
+        musicPlayerThemeEnabled = musicPlayerThemeEnabled,
+        musicPlayerColorOption = musicPlayerColorOption,
+        isMusicPlaying = isMusicPlaying,
+        musicPalette = musicPalette,
+        activeStarsSign = activeStarsSign,
+        dynamicColor = dynamicColor,
+    )
+
+    // Ensure all Home Screen AppWidgets refresh whenever effective theme colors, music palette,
+    // dark/light mode, background texture, or Hexagonify state change while the app is active.
+    LaunchedEffect(
+        context,
+        isInspection,
+        hasParentThemeMonitor,
+        darkTheme,
+        themeColor,
+        accentColor,
+        musicPlayerThemeEnabled,
+        musicPlayerColorOption,
+        isMusicPlaying,
+        activeStarsSign,
+        musicPalette.dominantHex,
+        musicPalette.secondaryHex,
+        musicPalette.accentHex,
+        colorScheme.primary,
+        colorScheme.tertiary,
+        colorScheme.surface,
+        backgroundTexture,
+        hexagonIconButtons,
+    ) {
+        if (!hasParentThemeMonitor && !isInspection) {
+            NavigationPreferencesBridge.refreshAllWidgets(context)
+        }
     }
 
     CompositionLocalProvider(

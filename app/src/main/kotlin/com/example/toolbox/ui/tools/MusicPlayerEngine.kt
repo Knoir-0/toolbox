@@ -3238,7 +3238,8 @@ object MusicPlayerEngine {
       }
     }
     runComposeStateUpdate {
-      if (activeTrack?.id == track.id) {
+      val activeUpdated = activeTrack?.id == track.id
+      if (activeUpdated) {
         activeTrack = updatedTrack
         internalTrackPalette = extractedPalette
       }
@@ -3249,6 +3250,8 @@ object MusicPlayerEngine {
           forceMetadataUpdate = false,
           notifyPlatformInBackground = true,
         )
+      } else if (activeUpdated) {
+        refreshAllWidgetsForMediaStateChange(monitoredAppContext)
       }
     }
   }
@@ -6782,10 +6785,24 @@ object MusicPlayerEngine {
     }
 
   /**
+   * Refreshes all pinned Toolbox Home Screen AppWidgets (the Music Player widget as well as
+   * theme-synchronized tool widgets) whenever active media playback state, track, or artwork
+   * palette changes.
+   */
+  internal fun refreshAllWidgetsForMediaStateChange(context: Context? = monitoredAppContext) {
+    val ctx = context?.applicationContext ?: context ?: monitoredAppContext ?: return
+    TodoListWidgets.refreshAllToolboxWidgets(ctx)
+  }
+
+  /**
    * Sets or clears a test override for [isMusicPlaying].
    */
   fun setMusicPlayingForTest(isPlaying: Boolean?) {
+    val changed = isMusicPlayingOverride != isPlaying
     isMusicPlayingOverride = isPlaying
+    if (changed) {
+      refreshAllWidgetsForMediaStateChange(monitoredAppContext)
+    }
   }
 
   /**
@@ -6795,8 +6812,12 @@ object MusicPlayerEngine {
     track: MusicTrack?,
     palette: AlbumArtPalette = resolveTrackPalette(track),
   ) {
+    val changed = activeTrack?.id != track?.id || internalTrackPalette != palette
     activeTrack = track
     internalTrackPalette = palette
+    if (changed) {
+      refreshAllWidgetsForMediaStateChange(monitoredAppContext)
+    }
   }
 
   private val externalMediaCacheLock = Any()
@@ -7320,11 +7341,12 @@ object MusicPlayerEngine {
     if (info != null && isIgnoredPhoneOrCallSystemMediaInfo(info)) {
       if (isIgnoredPhoneOrCallSystemMediaInfo(externalSystemMediaInfo)) {
         externalSystemMediaInfo = null
+        refreshAllWidgetsForMediaStateChange(monitoredAppContext)
       }
       return
     }
     externalSystemMediaInfo = info
-    MusicPlayerWidgets.updateAllWidgets(monitoredAppContext)
+    refreshAllWidgetsForMediaStateChange(monitoredAppContext)
   }
 
   /**
@@ -7455,6 +7477,7 @@ object MusicPlayerEngine {
     if (isIgnoredPhoneOrCallSystemMediaInfo(info)) {
       if (isIgnoredPhoneOrCallSystemMediaInfo(externalSystemMediaInfo)) {
         externalSystemMediaInfo = null
+        refreshAllWidgetsForMediaStateChange(monitoredAppContext)
       }
       return info
     }
@@ -7486,7 +7509,7 @@ object MusicPlayerEngine {
 
     if (!isSemanticallyUnchangedFromPoll && externalSystemMediaInfo != info) {
       externalSystemMediaInfo = info
-      MusicPlayerWidgets.updateAllWidgets(monitoredAppContext)
+      refreshAllWidgetsForMediaStateChange(monitoredAppContext)
     }
     return externalSystemMediaInfo ?: info
   }
@@ -8005,6 +8028,27 @@ object MusicPlayerEngine {
             ContextCompat.RECEIVER_EXPORTED,
           )
         } catch (_: Throwable) {}
+
+        // 2b. Register system configuration / theme / wallpaper change receiver so dark/light mode
+        // toggles and Android 12+ Material You dynamic color changes immediately refresh widgets
+        try {
+          val configFilter = IntentFilter().apply {
+            addAction(Intent.ACTION_CONFIGURATION_CHANGED)
+            @Suppress("DEPRECATION")
+            addAction(Intent.ACTION_WALLPAPER_CHANGED)
+          }
+          val configReceiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+              refreshAllWidgetsForMediaStateChange(appCtx)
+            }
+          }
+          ContextCompat.registerReceiver(
+            appCtx,
+            configReceiver,
+            configFilter,
+            ContextCompat.RECEIVER_EXPORTED,
+          )
+        } catch (_: Throwable) {}
       }
 
       // 3. If Notification Listener is enabled, request rebind and register session listener
@@ -8317,6 +8361,7 @@ object MusicPlayerEngine {
       // Purge any phone/call session that may have been cached previously
       if (isIgnoredPhoneOrCallSystemMediaInfo(externalSystemMediaInfo, context)) {
         externalSystemMediaInfo = null
+        refreshAllWidgetsForMediaStateChange(context)
       }
       if (isIgnoredPhoneOrCallSystemMediaInfo(lastBroadcastMediaInfo, context)) {
         lastBroadcastMediaInfo = null
@@ -8399,6 +8444,7 @@ object MusicPlayerEngine {
           externalMediaSetFromSystemSync = true
           if (externalSystemMediaInfo != updatedBroadcast) {
             externalSystemMediaInfo = updatedBroadcast
+            refreshAllWidgetsForMediaStateChange(context)
           }
           return
         }
@@ -8413,6 +8459,7 @@ object MusicPlayerEngine {
               externalMediaSetFromSystemSync = true
               if (!existing.isPlaying) {
                 externalSystemMediaInfo = existing.copy(isPlaying = true)
+                refreshAllWidgetsForMediaStateChange(context)
               }
             } else {
               val iconBmp = loadAppIconBitmap(context, activeExternalPkg)
@@ -8450,6 +8497,7 @@ object MusicPlayerEngine {
                 isPlaying = true,
                 positionUpdateElapsedRealtimeMs = safeElapsedRealtimeMs(),
               )
+              refreshAllWidgetsForMediaStateChange(context)
             }
           } else {
             val iconBmp = loadAppIconBitmap(context, fallbackPkg)
@@ -8471,6 +8519,7 @@ object MusicPlayerEngine {
           activeExternalMediaController = null
           if (externalSystemMediaInfo?.isPlaying == true) {
             externalSystemMediaInfo = externalSystemMediaInfo?.copy(isPlaying = false)
+            refreshAllWidgetsForMediaStateChange(context)
           }
         }
         return
@@ -8768,10 +8817,10 @@ object MusicPlayerEngine {
         positionMs = frozenPos,
         positionUpdateElapsedRealtimeMs = nowElapsed,
       )
-      MusicPlayerWidgets.updateAllWidgets(context ?: monitoredAppContext)
+      refreshAllWidgetsForMediaStateChange(context ?: monitoredAppContext)
       return true
     }
-    MusicPlayerWidgets.updateAllWidgets(context ?: monitoredAppContext)
+    refreshAllWidgetsForMediaStateChange(context ?: monitoredAppContext)
     return dispatched
   }
 
@@ -13187,11 +13236,11 @@ class MusicPlaybackSession(
       mediaControlSyncJob?.cancel()
       mediaControlSyncJob = scope.launch(ioCoroutineContext) {
         applyPlatformSync()
-        MusicPlayerWidgets.updateAllWidgets(appContext)
+        MusicPlayerEngine.refreshAllWidgetsForMediaStateChange(appContext)
       }
     } else {
       applyPlatformSync()
-      MusicPlayerWidgets.updateAllWidgets(appContext)
+      MusicPlayerEngine.refreshAllWidgetsForMediaStateChange(appContext)
     }
   }
 
@@ -13489,6 +13538,11 @@ class ToolboxMediaListenerService : NotificationListenerService() {
   override fun onCreate() {
     super.onCreate()
     activeInstance = this
+  }
+
+  override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+    super.onConfigurationChanged(newConfig)
+    MusicPlayerEngine.refreshAllWidgetsForMediaStateChange(applicationContext)
   }
 
   override fun onDestroy() {

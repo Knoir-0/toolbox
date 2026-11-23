@@ -2,8 +2,23 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_todo_item_root"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:background="@drawable/bg_todo_widget_item">
+    android:layout_height="wrap_content">
+
+    <ImageView
+        android:id="@+id/widget_todo_item_bg"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="fitXY"
+        android:src="@drawable/bg_notes_widget_item_fill" />
+
+    <ImageView
+        android:id="@+id/widget_todo_item_border"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="fitXY"
+        android:src="@drawable/bg_notes_widget_item_border" />
 
     <LinearLayout
         android:id="@+id/widget_todo_item_row"
@@ -69,20 +84,34 @@
         </LinearLayout>
 
         <!-- Subtask Count Pill Badge (if task has subtasks) -->
-        <TextView
-            android:id="@+id/widget_todo_item_subtask_badge"
+        <FrameLayout
+            android:id="@+id/widget_todo_item_subtask_badge_container"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
-            android:background="@drawable/bg_todo_widget_pill"
-            android:paddingStart="8dp"
-            android:paddingTop="3dp"
-            android:paddingEnd="8dp"
-            android:paddingBottom="3dp"
-            android:text="0/0"
-            android:textColor="#FFF3DAFF"
-            android:textSize="11sp"
-            android:textStyle="bold"
-            android:visibility="gone" />
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/widget_todo_item_subtask_badge_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:scaleType="fitXY"
+                android:src="@drawable/bg_todo_widget_pill" />
+
+            <TextView
+                android:id="@+id/widget_todo_item_subtask_badge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingStart="8dp"
+                android:paddingTop="3dp"
+                android:paddingEnd="8dp"
+                android:paddingBottom="3dp"
+                android:text="0/0"
+                android:textColor="#FFF3DAFF"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+        </FrameLayout>
     </LinearLayout>
 </FrameLayout>

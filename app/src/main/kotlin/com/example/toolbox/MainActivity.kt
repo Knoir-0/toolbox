@@ -17,7 +17,12 @@ import androidx.compose.ui.Modifier
 import com.example.toolbox.ui.main.AUDIO_RECORDER_QUICK_ACTION_START_BOTH
 import com.example.toolbox.ui.main.AUDIO_RECORDER_QUICK_ACTION_START_DEVICE
 import com.example.toolbox.ui.main.AUDIO_RECORDER_QUICK_ACTION_START_MIC
+import com.example.toolbox.ui.main.SCREEN_RECORDER_QUICK_ACTION_START_BOTH
+import com.example.toolbox.ui.main.SCREEN_RECORDER_QUICK_ACTION_START_DEVICE
+import com.example.toolbox.ui.main.SCREEN_RECORDER_QUICK_ACTION_START_MIC
 import com.example.toolbox.ui.main.EXTRA_AUDIO_RECORDER_QUICK_ACTION
+import com.example.toolbox.ui.main.EXTRA_CALENDAR_DATE_KEY
+import com.example.toolbox.ui.main.EXTRA_CALENDAR_OPEN_ADD_EVENT
 import com.example.toolbox.ui.main.EXTRA_CAMERA_CAPTURE_MODE
 import com.example.toolbox.ui.main.EXTRA_EXPAND_MUSIC_PLAYER
 import com.example.toolbox.ui.main.EXTRA_NOTES_INITIAL_FILTER_LABEL
@@ -38,12 +43,15 @@ import com.example.toolbox.ui.main.createStandaloneToolIntent
 import com.example.toolbox.ui.main.findExistingStandaloneAppTask
 import com.example.toolbox.ui.main.isSameStandaloneTarget
 import com.example.toolbox.ui.main.parseAudioRecorderQuickAction
+import com.example.toolbox.ui.main.parseCalendarDateKey
+import com.example.toolbox.ui.main.parseCalendarOpenAddEvent
 import com.example.toolbox.ui.main.parseCameraCaptureModeName
 import com.example.toolbox.ui.main.parseExpandMusicPlayer
 import com.example.toolbox.ui.main.parseFolderShortcut
 import com.example.toolbox.ui.main.parseNotesQuickCaptureMode
 import com.example.toolbox.ui.main.parsePlantScheduleMonth
 import com.example.toolbox.ui.main.parsePlantScheduleOpenSearch
+import com.example.toolbox.ui.main.parseScreenRecorderQuickAction
 import com.example.toolbox.ui.main.parseStandaloneTool
 import com.example.toolbox.ui.main.parseTodoQuickActionMode
 import com.example.toolbox.ui.main.rememberNavigationPreferencesRepository
@@ -52,6 +60,8 @@ import com.example.toolbox.ui.main.syncStandaloneTaskDescription
 import com.example.toolbox.ui.theme.ToolboxTheme
 import com.example.toolbox.ui.tools.AudioCaptureSource
 import com.example.toolbox.ui.tools.AudioRecorderEngine
+import com.example.toolbox.ui.tools.CalendarDay
+import com.example.toolbox.ui.tools.CalendarEngine
 import com.example.toolbox.ui.tools.CameraCaptureMode
 import com.example.toolbox.ui.tools.CameraEngine
 import com.example.toolbox.ui.tools.CameraWidgets
@@ -59,6 +69,8 @@ import com.example.toolbox.ui.tools.MusicPlayerEngine
 import com.example.toolbox.ui.tools.NotesEngine
 import com.example.toolbox.ui.tools.NotesFilter
 import com.example.toolbox.ui.tools.PlantScheduleEngine
+import com.example.toolbox.ui.tools.ScreenAudioSource
+import com.example.toolbox.ui.tools.ScreenRecorderEngine
 import com.example.toolbox.ui.tools.TodoListEngine
 import java.io.File
 
@@ -85,9 +97,12 @@ class MainActivity : ComponentActivity() {
     notesQuickCaptureMode: String?,
     todoQuickActionMode: String?,
     audioRecorderQuickAction: String? = parseAudioRecorderQuickAction(intent),
+    screenRecorderQuickAction: String? = parseScreenRecorderQuickAction(intent),
     plantScheduleMonth: Int? = parsePlantScheduleMonth(intent),
     plantScheduleOpenSearch: Boolean = parsePlantScheduleOpenSearch(intent),
     cameraCaptureModeName: String? = parseCameraCaptureModeName(intent),
+    calendarDateKey: String? = parseCalendarDateKey(intent),
+    calendarOpenAddEvent: Boolean = parseCalendarOpenAddEvent(intent),
   ) {
     if (expandMusicPlayer) {
       MusicPlayerEngine.requestExpandFullPlayer()
@@ -121,6 +136,14 @@ class MainActivity : ComponentActivity() {
       }
       AudioRecorderEngine.requestQuickRecord(startRecording = true, source = source)
     }
+    if (screenRecorderQuickAction != null) {
+      val source = when (screenRecorderQuickAction) {
+        SCREEN_RECORDER_QUICK_ACTION_START_DEVICE -> ScreenAudioSource.DEVICE_AUDIO
+        SCREEN_RECORDER_QUICK_ACTION_START_BOTH -> ScreenAudioSource.DEVICE_AND_MIC
+        else -> ScreenAudioSource.MICROPHONE
+      }
+      ScreenRecorderEngine.requestQuickRecord(startRecording = true, source = source)
+    }
     if (plantScheduleMonth != null || plantScheduleOpenSearch) {
       PlantScheduleEngine.requestWidgetNavigation(
         monthNumber = plantScheduleMonth,
@@ -131,6 +154,12 @@ class MainActivity : ComponentActivity() {
       val mode = CameraCaptureMode.fromNameOrDefault(cameraCaptureModeName)
       CameraWidgets.saveActiveCaptureMode(this, mode)
       CameraEngine.requestCaptureMode(mode)
+    }
+    if (calendarDateKey != null || calendarOpenAddEvent) {
+      CalendarEngine.requestNavigation(
+        targetDay = CalendarDay.fromDateKeyOrNull(calendarDateKey),
+        openAddEvent = calendarOpenAddEvent,
+      )
     }
   }
 
@@ -145,9 +174,12 @@ class MainActivity : ComponentActivity() {
     val notesQuickCaptureMode = parseNotesQuickCaptureMode(intent)
     val todoQuickActionMode = parseTodoQuickActionMode(intent)
     val audioRecorderQuickAction = parseAudioRecorderQuickAction(intent)
+    val screenRecorderQuickAction = parseScreenRecorderQuickAction(intent)
     val plantScheduleMonth = parsePlantScheduleMonth(intent)
     val plantScheduleOpenSearch = parsePlantScheduleOpenSearch(intent)
     val cameraCaptureModeName = parseCameraCaptureModeName(intent)
+    val calendarDateKey = parseCalendarDateKey(intent)
+    val calendarOpenAddEvent = parseCalendarOpenAddEvent(intent)
     val hasNotesNavigationExtras = parseNotesFilterFromIntent(intent) != null ||
       !intent?.getStringExtra(EXTRA_NOTES_OPEN_NOTE_ID).isNullOrBlank()
     val resolvedTool = when {
@@ -156,8 +188,10 @@ class MainActivity : ComponentActivity() {
       notesQuickCaptureMode != null || hasNotesNavigationExtras -> parsedTool ?: Tool.NOTES
       todoQuickActionMode != null -> parsedTool ?: Tool.TODO_LIST
       audioRecorderQuickAction != null -> parsedTool ?: Tool.AUDIO_RECORDER
+      screenRecorderQuickAction != null -> parsedTool ?: Tool.SCREEN_RECORDER
       plantScheduleMonth != null || plantScheduleOpenSearch -> parsedTool ?: Tool.PLANT_SCHEDULE
       cameraCaptureModeName != null -> parsedTool ?: Tool.CAMERA
+      calendarDateKey != null || calendarOpenAddEvent -> parsedTool ?: Tool.CALENDAR
       else -> parsedTool
     }
     if (resolvedTool != null || parsedFolder != null) {
@@ -221,6 +255,8 @@ class MainActivity : ComponentActivity() {
       val musicPlayerThemeEnabled by preferencesRepository.musicPlayerThemeEnabledFlow.collectAsState()
       val musicPlayerColorOption by preferencesRepository.musicPlayerColorOptionFlow.collectAsState()
       val accentColor by preferencesRepository.accentColorFlow.collectAsState()
+      val backgroundTexture by preferencesRepository.backgroundTextureFlow.collectAsState()
+      val hexagonIconButtons by preferencesRepository.hexagonIconButtonsFlow.collectAsState()
       val standaloneTool by standaloneToolState
       val initialFolder by initialFolderState
       val expandMusicPlayerInitial by expandMusicPlayerState
@@ -239,6 +275,8 @@ class MainActivity : ComponentActivity() {
         accentColor = accentColor,
         musicPlayerThemeEnabled = musicPlayerThemeEnabled,
         musicPlayerColorOption = musicPlayerColorOption,
+        backgroundTexture = backgroundTexture,
+        hexagonIconButtons = hexagonIconButtons,
       ) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
           MainNavigation(
@@ -259,9 +297,12 @@ class MainActivity : ComponentActivity() {
     val notesQuickCaptureMode = parseNotesQuickCaptureMode(intent)
     val todoQuickActionMode = parseTodoQuickActionMode(intent)
     val audioRecorderQuickAction = parseAudioRecorderQuickAction(intent)
+    val screenRecorderQuickAction = parseScreenRecorderQuickAction(intent)
     val plantScheduleMonth = parsePlantScheduleMonth(intent)
     val plantScheduleOpenSearch = parsePlantScheduleOpenSearch(intent)
     val cameraCaptureModeName = parseCameraCaptureModeName(intent)
+    val calendarDateKey = parseCalendarDateKey(intent)
+    val calendarOpenAddEvent = parseCalendarOpenAddEvent(intent)
     val hasNotesNavigationExtras = parseNotesFilterFromIntent(intent) != null ||
       !intent.getStringExtra(EXTRA_NOTES_OPEN_NOTE_ID).isNullOrBlank()
     val incomingTool = when {
@@ -270,8 +311,10 @@ class MainActivity : ComponentActivity() {
       notesQuickCaptureMode != null || hasNotesNavigationExtras -> parsedTool ?: Tool.NOTES
       todoQuickActionMode != null -> parsedTool ?: Tool.TODO_LIST
       audioRecorderQuickAction != null -> parsedTool ?: Tool.AUDIO_RECORDER
+      screenRecorderQuickAction != null -> parsedTool ?: Tool.SCREEN_RECORDER
       plantScheduleMonth != null || plantScheduleOpenSearch -> parsedTool ?: Tool.PLANT_SCHEDULE
       cameraCaptureModeName != null -> parsedTool ?: Tool.CAMERA
+      calendarDateKey != null || calendarOpenAddEvent -> parsedTool ?: Tool.CALENDAR
       else -> parsedTool
     }
     if ((incomingTool != null || parsedFolder != null) &&
@@ -337,6 +380,12 @@ class MainActivity : ComponentActivity() {
             if (cameraCaptureModeName != null) {
               putExtra(EXTRA_CAMERA_CAPTURE_MODE, cameraCaptureModeName)
             }
+            if (calendarDateKey != null) {
+              putExtra(EXTRA_CALENDAR_DATE_KEY, calendarDateKey)
+            }
+            if (calendarOpenAddEvent) {
+              putExtra(EXTRA_CALENDAR_OPEN_ADD_EVENT, true)
+            }
           }
         }
         startActivity(launchIntent)
@@ -368,6 +417,9 @@ class MainActivity : ComponentActivity() {
     } else if (cameraCaptureModeName != null) {
       initialFolderState.value = null
       standaloneToolState.value = parsedTool ?: Tool.CAMERA
+    } else if (calendarDateKey != null || calendarOpenAddEvent) {
+      initialFolderState.value = null
+      standaloneToolState.value = parsedTool ?: Tool.CALENDAR
     } else if (parsedTool != null) {
       initialFolderState.value = null
       standaloneToolState.value = parsedTool

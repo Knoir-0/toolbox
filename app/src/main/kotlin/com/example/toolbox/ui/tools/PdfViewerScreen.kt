@@ -13,13 +13,22 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -100,6 +109,7 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -152,9 +162,11 @@ fun PdfViewerScreen(
   val scope = rememberCoroutineScope()
 
   var currentFile by remember(initialFile) { mutableStateOf(initialFile) }
-  var pageCount by remember { mutableIntStateOf(0) }
+  var pageBitmaps by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
+  val pageCount = pageBitmaps.size
   var currentPageIndex by remember { mutableIntStateOf(0) }
-  var basePageBitmap by remember { mutableStateOf<Bitmap?>(null) }
+  var visibleCenterYRatio by remember { mutableFloatStateOf(0.5f) }
+  val documentScrollState = rememberScrollState()
   var isLoadingPage by remember { mutableStateOf(false) }
   var isSavingPdf by remember { mutableStateOf(false) }
 
@@ -185,18 +197,20 @@ fun PdfViewerScreen(
   val editHistory = remember { PdfEditHistory() }
   var pageEditsMap by remember { mutableStateOf<Map<Int, PdfPageEdits>>(emptyMap()) }
 
-  // View zoom & pan
+  // View zoom & horizontal pan
   var zoomScale by remember { mutableFloatStateOf(1f) }
-  var panOffset by remember { mutableStateOf(Offset.Zero) }
+  var panOffsetX by remember { mutableFloatStateOf(0f) }
 
   // Draw controls state
   var brushType by remember { mutableStateOf(PdfBrushType.PEN) }
   var brushColor by remember { mutableStateOf(PDF_PEN_COLORS[0]) }
   var brushWidth by remember { mutableFloatStateOf(8f) }
+  var activeStrokePageIndex by remember { mutableIntStateOf(0) }
   val activeStrokePoints = remember { mutableStateListOf<Offset>() }
 
   // Text annotation dialog state
   var showTextDialog by remember { mutableStateOf(false) }
+  var editingTextPageIndex by remember { mutableIntStateOf(0) }
   var editingTextItem by remember { mutableStateOf<PdfTextItem?>(null) }
   var pendingTextPosition by remember { mutableStateOf(Offset(0.5f, 0.5f)) }
 
@@ -204,47 +218,32 @@ fun PdfViewerScreen(
     pageEditsMap = editHistory.currentEdits
   }
 
-  // Load PDF document when currentFile changes
+  // Load all PDF pages when currentFile changes
   LaunchedEffect(currentFile) {
     val file = currentFile
     if (file == null || !file.exists()) {
-      pageCount = 0
+      pageBitmaps = emptyList()
       currentPageIndex = 0
-      basePageBitmap = null
+      visibleCenterYRatio = 0.5f
       editHistory.reset()
       syncHistoryState()
       return@LaunchedEffect
     }
     isLoadingPage = true
-    val count = withContext(Dispatchers.IO) { PdfViewerEngine.getPageCount(file) }
-    pageCount = count
-    currentPageIndex = 0
-    zoomScale = 1f
-    panOffset = Offset.Zero
-    editHistory.reset()
-    syncHistoryState()
-    if (count > 0) {
-      basePageBitmap =
-        withContext(Dispatchers.IO) { PdfViewerEngine.renderPageToBitmap(file, 0) }
-    } else {
-      basePageBitmap = null
-      Toast.makeText(context, "Unable to read PDF document", Toast.LENGTH_SHORT).show()
-    }
-    isLoadingPage = false
-  }
-
-  // Render active page when currentPageIndex changes
-  LaunchedEffect(currentFile, currentPageIndex) {
-    val file = currentFile ?: return@LaunchedEffect
-    if (pageCount <= 0 || currentPageIndex !in 0 until pageCount) return@LaunchedEffect
-    isLoadingPage = true
     activeStrokePoints.clear()
     zoomScale = 1f
-    panOffset = Offset.Zero
-    basePageBitmap =
-      withContext(Dispatchers.IO) {
-        PdfViewerEngine.renderPageToBitmap(file, currentPageIndex)
-      }
+    panOffsetX = 0f
+    editHistory.reset()
+    syncHistoryState()
+    val renderedPages =
+      withContext(Dispatchers.IO) { PdfViewerEngine.renderAllPagesToBitmaps(file) }
+    pageBitmaps = renderedPages
+    currentPageIndex = 0
+    visibleCenterYRatio = 0.5f
+    documentScrollState.scrollTo(0)
+    if (renderedPages.isEmpty()) {
+      Toast.makeText(context, "Unable to read PDF document", Toast.LENGTH_SHORT).show()
+    }
     isLoadingPage = false
   }
 
@@ -252,7 +251,9 @@ fun PdfViewerScreen(
     BackHandler { onNavigateBack() }
   }
 
-  val currentPageEdits = pageEditsMap[currentPageIndex] ?: PdfPageEdits()
+  val safeCurrentPageIndex =
+    if (pageCount > 0) currentPageIndex.coerceIn(0, pageCount - 1) else 0
+  val currentPageEdits = pageEditsMap[safeCurrentPageIndex] ?: PdfPageEdits()
 
   if (showTextDialog) {
     PdfTextEditDialog(
@@ -263,10 +264,12 @@ fun PdfViewerScreen(
         editingTextItem = null
       },
       onConfirm = { text, color, fontSizeSp, hasBg ->
+        val targetPage =
+          if (pageCount > 0) editingTextPageIndex.coerceIn(0, pageCount - 1) else 0
         val existing = editingTextItem
         if (existing != null) {
           editHistory.updateText(
-            currentPageIndex,
+            targetPage,
             existing.copy(
               text = text,
               color = color,
@@ -276,7 +279,7 @@ fun PdfViewerScreen(
           )
         } else {
           editHistory.addText(
-            currentPageIndex,
+            targetPage,
             PdfTextItem(
               text = text,
               xRatio = pendingTextPosition.x.coerceIn(0.05f, 0.95f),
@@ -341,14 +344,17 @@ fun PdfViewerScreen(
                   Toast.LENGTH_SHORT,
                 )
                 .show()
-              val savedPage = currentPageIndex
+              val savedScroll = documentScrollState.value
+              val savedPage = safeCurrentPageIndex
               currentFile = savedFile
               editHistory.reset()
               syncHistoryState()
-              basePageBitmap =
+              pageBitmaps =
                 withContext(Dispatchers.IO) {
-                  PdfViewerEngine.renderPageToBitmap(savedFile, savedPage)
+                  PdfViewerEngine.renderAllPagesToBitmaps(savedFile)
                 }
+              currentPageIndex = savedPage
+              documentScrollState.scrollTo(savedScroll)
             }
             .onFailure { err ->
               Toast.makeText(
@@ -372,6 +378,8 @@ fun PdfViewerScreen(
   ) {
     PdfViewerTopBar(
       fileName = currentFile?.name,
+      currentPageIndex = safeCurrentPageIndex,
+      pageCount = pageCount,
       hasDocument = currentFile != null && pageCount > 0,
       canUndo = editHistory.canUndo,
       canRedo = editHistory.canRedo,
@@ -418,8 +426,8 @@ fun PdfViewerScreen(
       },
       onClose = {
         currentFile = null
-        pageCount = 0
-        basePageBitmap = null
+        pageBitmaps = emptyList()
+        currentPageIndex = 0
         editHistory.reset()
         syncHistoryState()
       },
@@ -444,57 +452,49 @@ fun PdfViewerScreen(
         sampleButtonTestTag = "open_sample_pdf_button",
       )
     } else {
-      // Page Navigation Strip
-      PdfPageNavigationBar(
-        currentPageIndex = currentPageIndex,
-        pageCount = pageCount,
-        pageEditsMap = pageEditsMap,
-        onSelectPage = { newIndex ->
-          if (newIndex in 0 until pageCount && newIndex != currentPageIndex) {
-            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            currentPageIndex = newIndex
-          }
-        },
-      )
-
-      // Main Interactive PDF Page Viewport
+      // Main Scrollable PDF Document Viewport (fits screen width when first loaded)
       Box(
         modifier =
           Modifier.weight(1f)
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-            .border(
-              1.dp,
-              MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
-              RoundedCornerShape(16.dp),
-            )
             .clipToBounds(),
         contentAlignment = Alignment.Center,
       ) {
-        val pageBitmap = basePageBitmap
-        if (isLoadingPage || pageBitmap == null) {
+        if (isLoadingPage || pageBitmaps.isEmpty()) {
           CircularProgressIndicator()
         } else {
-          PdfPageInteractiveCanvas(
-            pageBitmap = pageBitmap,
+          PdfDocumentScrollableViewport(
+            pageBitmaps = pageBitmaps,
+            scrollState = documentScrollState,
             editMode = editMode,
-            pageEdits = currentPageEdits,
+            pageEditsMap = pageEditsMap,
+            activeStrokePageIndex = activeStrokePageIndex,
             activeStrokePoints = activeStrokePoints,
             brushType = brushType,
             brushColor = brushColor,
             brushWidth = brushWidth,
             zoomScale = zoomScale,
-            panOffset = panOffset,
-            onZoomPanChange = { newZoom, newPan ->
+            panOffsetX = panOffsetX,
+            onZoomPanChange = { newZoom, newPanX ->
               zoomScale = newZoom
-              panOffset = newPan
+              panOffsetX = newPanX
             },
-            onCommitStroke = { points ->
+            onVisiblePageChange = { visiblePageIdx, centerRatioY ->
+              if (visiblePageIdx in 0 until pageCount) {
+                currentPageIndex = visiblePageIdx
+                visibleCenterYRatio = centerRatioY
+              }
+            },
+            onStartStrokeOnPage = { pageIdx ->
+              activeStrokePageIndex = pageIdx
+              currentPageIndex = pageIdx
+            },
+            onCommitStroke = { pageIdx, points ->
               if (points.isNotEmpty()) {
+                currentPageIndex = pageIdx
                 editHistory.addStroke(
-                  currentPageIndex,
+                  pageIdx,
                   PdfDrawStroke(
                     points = points,
                     color = brushColor,
@@ -513,16 +513,21 @@ fun PdfViewerScreen(
                 syncHistoryState()
               }
             },
-            onTapAddTextAt = { normalizedOffset ->
+            onTapAddTextAt = { pageIdx, normalizedOffset ->
+              currentPageIndex = pageIdx
+              editingTextPageIndex = pageIdx
               pendingTextPosition = normalizedOffset
               editingTextItem = null
               showTextDialog = true
             },
-            onUpdateTextPosition = { itemId, newXRatio, newYRatio ->
+            onUpdateTextPosition = { pageIdx, itemId, newXRatio, newYRatio ->
+              currentPageIndex = pageIdx
+              val pageEditsForTarget = pageEditsMap[pageIdx] ?: PdfPageEdits()
               val currentItem =
-                currentPageEdits.texts.find { it.id == itemId } ?: return@PdfPageInteractiveCanvas
+                pageEditsForTarget.texts.find { it.id == itemId }
+                  ?: return@PdfDocumentScrollableViewport
               editHistory.updateText(
-                currentPageIndex,
+                pageIdx,
                 currentItem.copy(
                   xRatio = newXRatio.coerceIn(0.04f, 0.96f),
                   yRatio = newYRatio.coerceIn(0.04f, 0.96f),
@@ -530,20 +535,51 @@ fun PdfViewerScreen(
               )
               syncHistoryState()
             },
-            onTapEditText = { item ->
+            onTapEditText = { pageIdx, item ->
+              currentPageIndex = pageIdx
+              editingTextPageIndex = pageIdx
               editingTextItem = item
               showTextDialog = true
             },
           )
+
+          // Floating current page indicator pill
+          Surface(
+            shape =
+              if (currentHexagonIconButtons()) {
+                HorizontalHexagonShape
+              } else {
+                RoundedCornerShape(20.dp)
+              },
+            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.88f),
+            tonalElevation = 3.dp,
+            modifier =
+              Modifier.align(Alignment.TopStart)
+                .padding(12.dp)
+                .testTag("pdf_page_indicator"),
+          ) {
+            Text(
+              text = "Page ${safeCurrentPageIndex + 1} / $pageCount",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+          }
 
           // Reset zoom pill when zoomed in
           if (zoomScale > 1.02f) {
             Surface(
               onClick = {
                 zoomScale = 1f
-                panOffset = Offset.Zero
+                panOffsetX = 0f
               },
-              shape = if (currentHexagonIconButtons()) HorizontalHexagonShape else RoundedCornerShape(20.dp),
+              shape =
+                if (currentHexagonIconButtons()) {
+                  HorizontalHexagonShape
+                } else {
+                  RoundedCornerShape(20.dp)
+                },
               color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
               tonalElevation = 4.dp,
               modifier =
@@ -586,7 +622,7 @@ fun PdfViewerScreen(
                 currentPageEditsCount = currentPageEdits.editCount,
                 onZoomChange = { targetZoom ->
                   zoomScale = targetZoom.coerceIn(1f, 4f)
-                  if (zoomScale <= 1.01f) panOffset = Offset.Zero
+                  if (zoomScale <= 1.01f) panOffsetX = 0f
                 },
                 onSwitchToDraw = { editMode = PdfEditMode.DRAW },
                 onSwitchToText = { editMode = PdfEditMode.TEXT },
@@ -605,7 +641,7 @@ fun PdfViewerScreen(
                   if (editHistory.undo()) syncHistoryState()
                 },
                 onClearPage = {
-                  editHistory.clearPage(currentPageIndex)
+                  editHistory.clearPage(safeCurrentPageIndex)
                   syncHistoryState()
                 },
               )
@@ -614,16 +650,18 @@ fun PdfViewerScreen(
               PdfTextModeControls(
                 texts = currentPageEdits.texts,
                 onAddTextClick = {
-                  pendingTextPosition = Offset(0.5f, 0.5f)
+                  editingTextPageIndex = safeCurrentPageIndex
+                  pendingTextPosition = Offset(0.5f, visibleCenterYRatio.coerceIn(0.1f, 0.9f))
                   editingTextItem = null
                   showTextDialog = true
                 },
                 onEditTextClick = { item ->
+                  editingTextPageIndex = safeCurrentPageIndex
                   editingTextItem = item
                   showTextDialog = true
                 },
                 onDeleteTextClick = { item ->
-                  editHistory.removeText(currentPageIndex, item.id)
+                  editHistory.removeText(safeCurrentPageIndex, item.id)
                   syncHistoryState()
                 },
               )
@@ -639,10 +677,6 @@ fun PdfViewerScreen(
                 selected = editMode == mode,
                 onClick = {
                   haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                  if (mode != PdfEditMode.VIEW) {
-                    zoomScale = 1f
-                    panOffset = Offset.Zero
-                  }
                   editMode = mode
                 },
                 shape = if (hexagonEnabled) {
@@ -677,6 +711,8 @@ fun PdfViewerScreen(
 @Composable
 private fun PdfViewerTopBar(
   fileName: String?,
+  currentPageIndex: Int,
+  pageCount: Int,
   hasDocument: Boolean,
   canUndo: Boolean,
   canRedo: Boolean,
@@ -687,9 +723,15 @@ private fun PdfViewerTopBar(
   onClose: () -> Unit,
   onSave: () -> Unit,
 ) {
+  val subtext =
+    if (fileName != null && pageCount > 0) {
+      "$fileName • Page ${currentPageIndex + 1} of $pageCount"
+    } else {
+      fileName ?: "View, draw & add text to PDFs"
+    }
   ToolboxTopBar(
     title = "PDF Viewer",
-    subtext = fileName ?: "View, draw & add text to PDFs",
+    subtext = subtext,
     icon = Icons.Default.PictureAsPdf,
     onNavigateBack = onNavigateBack,
     backButtonTestTag = "action_navigate_back",
@@ -755,110 +797,161 @@ private fun PdfViewerTopBar(
 }
 
 @Composable
-private fun PdfPageNavigationBar(
-  currentPageIndex: Int,
-  pageCount: Int,
+private fun PdfDocumentScrollableViewport(
+  pageBitmaps: List<Bitmap>,
+  scrollState: ScrollState,
+  editMode: PdfEditMode,
   pageEditsMap: Map<Int, PdfPageEdits>,
-  onSelectPage: (Int) -> Unit,
+  activeStrokePageIndex: Int,
+  activeStrokePoints: MutableList<Offset>,
+  brushType: PdfBrushType,
+  brushColor: Color,
+  brushWidth: Float,
+  zoomScale: Float,
+  panOffsetX: Float,
+  onZoomPanChange: (Float, Float) -> Unit,
+  onVisiblePageChange: (Int, Float) -> Unit,
+  onStartStrokeOnPage: (Int) -> Unit,
+  onCommitStroke: (Int, List<Offset>) -> Unit,
+  onTapAddTextAt: (Int, Offset) -> Unit,
+  onUpdateTextPosition: (Int, Long, Float, Float) -> Unit,
+  onTapEditText: (Int, PdfTextItem) -> Unit,
 ) {
-  Surface(
-    color = MaterialTheme.colorScheme.surfaceContainer,
-    modifier = Modifier.fillMaxWidth(),
+  val density = LocalDensity.current
+  val currentZoom by rememberUpdatedState(zoomScale)
+  val currentPanX by rememberUpdatedState(panOffsetX)
+  val currentOnZoomPanChange by rememberUpdatedState(onZoomPanChange)
+  val currentOnVisiblePageChange by rememberUpdatedState(onVisiblePageChange)
+
+  val pageSpacingDp = 12.dp
+  val pageSpacingPx = with(density) { pageSpacingDp.toPx() }
+
+  BoxWithConstraints(
+    modifier = Modifier.fillMaxSize().testTag("pdf_document_scroll_container"),
+    contentAlignment = Alignment.TopCenter,
   ) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-      IconButton(
-        onClick = { onSelectPage(currentPageIndex - 1) },
-        enabled = currentPageIndex > 0,
-        modifier = Modifier.size(32.dp).testTag("pdf_prev_page_button"),
-      ) {
-        Icon(
-          Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-          contentDescription = "Previous Page",
-        )
+    val containerW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+    val containerH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+
+    // Each page fits the full width of the screen when loaded (zoomScale == 1f)
+    val basePageSizes =
+      remember(pageBitmaps, containerW) {
+        pageBitmaps.map { bmp ->
+          PdfViewerEngine.calculateFitWidthPageSize(
+            containerWidth = containerW,
+            bitmapWidth = bmp.width,
+            bitmapHeight = bmp.height,
+          )
+        }
+      }
+    val scaledPageHeights =
+      remember(basePageSizes, zoomScale) {
+        basePageSizes.map { (_, h) -> h * zoomScale }
       }
 
-      Row(
-        modifier =
-          Modifier.weight(1f)
-            .padding(horizontal = 8.dp)
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        for (idx in 0 until pageCount) {
-          val isSelected = idx == currentPageIndex
-          val hasEdits = pageEditsMap[idx]?.isEmpty == false
-          Surface(
-            onClick = { onSelectPage(idx) },
-            shape = RoundedCornerShape(8.dp),
-            color =
-              if (isSelected) {
-                MaterialTheme.colorScheme.primary
-              } else {
-                MaterialTheme.colorScheme.surfaceContainerHigh
-              },
-            border =
-              if (!isSelected && hasEdits) {
-                BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
-              } else {
-                null
-              },
-            modifier = Modifier.testTag("pdf_page_chip_${idx + 1}"),
-          ) {
-            Row(
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-              Text(
-                text = "${idx + 1}",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                color =
-                  if (isSelected) {
-                    MaterialTheme.colorScheme.onPrimary
-                  } else {
-                    MaterialTheme.colorScheme.onSurface
-                  },
-              )
-              if (hasEdits) {
-                Box(
-                  modifier =
-                    Modifier.size(6.dp)
-                      .clip(CircleShape)
-                      .background(
-                        if (isSelected) {
-                          MaterialTheme.colorScheme.onPrimary
+    // Track active page and visible center ratio as the user scrolls
+    LaunchedEffect(scrollState.value, containerH, scaledPageHeights, pageSpacingPx) {
+      if (scaledPageHeights.isNotEmpty()) {
+        val visibleIdx =
+          PdfViewerEngine.resolveVisiblePageIndex(
+            scrollOffsetPx = scrollState.value,
+            viewportHeightPx = containerH,
+            pageHeightsPx = scaledPageHeights,
+            pageSpacingPx = pageSpacingPx,
+          )
+        var pageTopY = 0f
+        for (i in 0 until visibleIdx) {
+          pageTopY += scaledPageHeights[i] + pageSpacingPx
+        }
+        val pageH = scaledPageHeights[visibleIdx].coerceAtLeast(1f)
+        val viewportCenterY = scrollState.value.toFloat() + (containerH / 2f)
+        val centerRatio = ((viewportCenterY - pageTopY) / pageH).coerceIn(0.1f, 0.9f)
+        currentOnVisiblePageChange(visibleIdx, centerRatio)
+      }
+    }
+
+    val horizontalDragState = rememberDraggableState { deltaX ->
+      if (currentZoom > 1.01f) {
+        val maxPanX = (containerW * (currentZoom - 1f)) / 2f
+        val nextPanX = (currentPanX + deltaX).coerceIn(-maxPanX, maxPanX)
+        currentOnZoomPanChange(currentZoom, nextPanX)
+      }
+    }
+
+    val isScrollEnabled = editMode == PdfEditMode.VIEW
+
+    Column(
+      modifier =
+        Modifier.fillMaxSize()
+          .pointerInput(editMode, containerW) {
+            if (editMode == PdfEditMode.VIEW) {
+              awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                do {
+                  val event = awaitPointerEvent()
+                  val pressedCount = event.changes.count { it.pressed }
+                  if (pressedCount >= 2) {
+                    val zoomChange = event.calculateZoom()
+                    val panChange = event.calculatePan()
+                    if (zoomChange != 1f || panChange != Offset.Zero) {
+                      val newZoom = (currentZoom * zoomChange).coerceIn(1f, 4f)
+                      val maxPanX = (containerW * (newZoom - 1f)) / 2f
+                      val nextPanX =
+                        if (newZoom <= 1.01f) {
+                          0f
                         } else {
-                          MaterialTheme.colorScheme.primary
+                          (currentPanX + panChange.x).coerceIn(-maxPanX, maxPanX)
                         }
-                      )
-                )
+                      currentOnZoomPanChange(newZoom, nextPanX)
+                      if (panChange.y != 0f) {
+                        scrollState.dispatchRawDelta(-panChange.y)
+                      }
+                      event.changes.forEach { it.consume() }
+                    }
+                  }
+                } while (event.changes.any { it.pressed })
               }
             }
           }
-        }
-      }
+          .draggable(
+            state = horizontalDragState,
+            orientation = Orientation.Horizontal,
+            enabled = isScrollEnabled && zoomScale > 1.01f,
+          )
+          .verticalScroll(
+            state = scrollState,
+            enabled = isScrollEnabled,
+          )
+          .testTag("pdf_pages_column"),
+      verticalArrangement = Arrangement.spacedBy(pageSpacingDp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+      pageBitmaps.forEachIndexed { pageIndex, pageBitmap ->
+        val (pageDisplayW, pageDisplayH) = basePageSizes[pageIndex]
+        val pageEdits = pageEditsMap[pageIndex] ?: PdfPageEdits()
+        val isActiveStrokePage = activeStrokePageIndex == pageIndex
 
-      Text(
-        text = "Page ${currentPageIndex + 1} / $pageCount",
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 6.dp).testTag("pdf_page_indicator"),
-      )
-
-      IconButton(
-        onClick = { onSelectPage(currentPageIndex + 1) },
-        enabled = currentPageIndex < pageCount - 1,
-        modifier = Modifier.size(32.dp).testTag("pdf_next_page_button"),
-      ) {
-        Icon(
-          Icons.AutoMirrored.Filled.KeyboardArrowRight,
-          contentDescription = "Next Page",
+        PdfSinglePageInteractiveSurface(
+          pageIndex = pageIndex,
+          pageBitmap = pageBitmap,
+          pageDisplayW = pageDisplayW,
+          pageDisplayH = pageDisplayH,
+          editMode = editMode,
+          pageEdits = pageEdits,
+          isActiveStrokePage = isActiveStrokePage,
+          activeStrokePoints = activeStrokePoints,
+          brushType = brushType,
+          brushColor = brushColor,
+          brushWidth = brushWidth,
+          zoomScale = zoomScale,
+          panOffsetX = panOffsetX,
+          onStartStroke = { onStartStrokeOnPage(pageIndex) },
+          onCommitStroke = { points -> onCommitStroke(pageIndex, points) },
+          onTapAddTextAt = { normalizedOffset -> onTapAddTextAt(pageIndex, normalizedOffset) },
+          onUpdateTextPosition = { itemId, newX, newY ->
+            onUpdateTextPosition(pageIndex, itemId, newX, newY)
+          },
+          onTapEditText = { item -> onTapEditText(pageIndex, item) },
         )
       }
     }
@@ -866,17 +959,21 @@ private fun PdfPageNavigationBar(
 }
 
 @Composable
-private fun PdfPageInteractiveCanvas(
+private fun PdfSinglePageInteractiveSurface(
+  pageIndex: Int,
   pageBitmap: Bitmap,
+  pageDisplayW: Float,
+  pageDisplayH: Float,
   editMode: PdfEditMode,
   pageEdits: PdfPageEdits,
+  isActiveStrokePage: Boolean,
   activeStrokePoints: MutableList<Offset>,
   brushType: PdfBrushType,
   brushColor: Color,
   brushWidth: Float,
   zoomScale: Float,
-  panOffset: Offset,
-  onZoomPanChange: (Float, Offset) -> Unit,
+  panOffsetX: Float,
+  onStartStroke: () -> Unit,
   onCommitStroke: (List<Offset>) -> Unit,
   onTapAddTextAt: (Offset) -> Unit,
   onUpdateTextPosition: (Long, Float, Float) -> Unit,
@@ -886,68 +983,42 @@ private fun PdfPageInteractiveCanvas(
   val currentBrushType by rememberUpdatedState(brushType)
   val currentBrushColor by rememberUpdatedState(brushColor)
   val currentBrushWidth by rememberUpdatedState(brushWidth)
-  val currentZoom by rememberUpdatedState(zoomScale)
-  val currentPan by rememberUpdatedState(panOffset)
+  val currentOnStartStroke by rememberUpdatedState(onStartStroke)
   val currentOnCommitStroke by rememberUpdatedState(onCommitStroke)
   val currentOnTapAddTextAt by rememberUpdatedState(onTapAddTextAt)
 
-  BoxWithConstraints(
-    modifier = Modifier.fillMaxSize().padding(8.dp),
-    contentAlignment = Alignment.Center,
+  val pageWidthDp = with(density) { pageDisplayW.toDp() }
+  val pageHeightDp = with(density) { pageDisplayH.toDp() }
+  val scaledPageHeightDp = with(density) { (pageDisplayH * zoomScale).toDp() }
+  val scaleFactor = min(pageDisplayW, pageDisplayH) / 1000f
+
+  Box(
+    modifier =
+      Modifier.width(pageWidthDp)
+        .height(scaledPageHeightDp)
+        .clipToBounds()
+        .testTag("pdf_page_slot_${pageIndex + 1}"),
+    contentAlignment = Alignment.TopCenter,
   ) {
-    val containerW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
-    val containerH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
-    val bmpRatio = pageBitmap.width.toFloat() / pageBitmap.height.toFloat().coerceAtLeast(1f)
-    val containerRatio = containerW / containerH
-
-    val pageDisplayW: Float
-    val pageDisplayH: Float
-    if (bmpRatio > containerRatio) {
-      pageDisplayW = containerW
-      pageDisplayH = containerW / bmpRatio
-    } else {
-      pageDisplayH = containerH
-      pageDisplayW = containerH * bmpRatio
-    }
-
-    val pageWidthDp = with(density) { pageDisplayW.toDp() }
-    val pageHeightDp = with(density) { pageDisplayH.toDp() }
-    val scaleFactor = min(pageDisplayW, pageDisplayH) / 1000f
-
     Box(
       modifier =
         Modifier.size(pageWidthDp, pageHeightDp)
-          .shadow(4.dp, RoundedCornerShape(6.dp))
-          .clip(RoundedCornerShape(6.dp))
           .background(Color.White)
           .graphicsLayer {
+            transformOrigin = TransformOrigin(0.5f, 0f)
             scaleX = zoomScale
             scaleY = zoomScale
-            translationX = panOffset.x
-            translationY = panOffset.y
+            translationX = panOffsetX
           }
-          .pointerInput(editMode, pageDisplayW, pageDisplayH) {
+          .pointerInput(editMode, pageIndex, pageDisplayW, pageDisplayH) {
             when (editMode) {
               PdfEditMode.VIEW -> {
-                detectTransformGestures { _, pan, zoom, _ ->
-                  val newZoom = (currentZoom * zoom).coerceIn(1f, 4f)
-                  val maxPanX = (pageDisplayW * (newZoom - 1f)) / 2f
-                  val maxPanY = (pageDisplayH * (newZoom - 1f)) / 2f
-                  val nextPan =
-                    if (newZoom <= 1.01f) {
-                      Offset.Zero
-                    } else {
-                      Offset(
-                        x = (currentPan.x + pan.x).coerceIn(-maxPanX, maxPanX),
-                        y = (currentPan.y + pan.y).coerceIn(-maxPanY, maxPanY),
-                      )
-                    }
-                  onZoomPanChange(newZoom, nextPan)
-                }
+                // Handled by parent PdfDocumentScrollableViewport (vertical scroll, pinch zoom, horizontal pan)
               }
               PdfEditMode.DRAW -> {
                 detectDragGestures(
                   onDragStart = { startOffset ->
+                    currentOnStartStroke()
                     activeStrokePoints.clear()
                     activeStrokePoints.add(
                       Offset(
@@ -985,12 +1056,12 @@ private fun PdfPageInteractiveCanvas(
               }
             }
           }
-          .testTag("pdf_page_canvas"),
+          .testTag(if (pageIndex == 0) "pdf_page_canvas" else "pdf_page_canvas_$pageIndex"),
     ) {
       // Base PDF Page Image
       Image(
         bitmap = pageBitmap.asImageBitmap(),
-        contentDescription = "PDF Page",
+        contentDescription = "PDF Page ${pageIndex + 1}",
         contentScale = ContentScale.FillBounds,
         modifier = Modifier.fillMaxSize(),
       )
@@ -1003,7 +1074,7 @@ private fun PdfPageInteractiveCanvas(
           }
       ) {
         val allStrokes =
-          if (activeStrokePoints.isNotEmpty()) {
+          if (isActiveStrokePage && activeStrokePoints.isNotEmpty()) {
             val activeWidth =
               when (currentBrushType) {
                 PdfBrushType.HIGHLIGHTER -> currentBrushWidth * 2.2f

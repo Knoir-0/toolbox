@@ -115,6 +115,7 @@ import com.example.toolbox.ui.tools.AudioRecorderScreen
 import com.example.toolbox.ui.tools.BluetoothGamepadScreen
 import com.example.toolbox.ui.tools.BluetoothRemoteScreen
 import com.example.toolbox.ui.tools.CalculatorScreen
+import com.example.toolbox.ui.tools.CalendarScreen
 import com.example.toolbox.ui.tools.CameraScreen
 import com.example.toolbox.ui.tools.ChordBookScreen
 import com.example.toolbox.ui.tools.ColorPickerScreen
@@ -137,6 +138,7 @@ import com.example.toolbox.ui.tools.PdfViewerScreen
 import com.example.toolbox.ui.tools.PlantScheduleScreen
 import com.example.toolbox.ui.tools.RecipeBookScreen
 import com.example.toolbox.ui.tools.RulerScreen
+import com.example.toolbox.ui.tools.ScreenRecorderScreen
 import com.example.toolbox.ui.tools.SearchScreen
 import com.example.toolbox.ui.tools.SettingsScreen
 import com.example.toolbox.ui.tools.StarsScreen
@@ -2483,6 +2485,11 @@ fun ToolContentView(
         initialDirectory = initialDirectory,
         modifier = Modifier.padding(bottom = bottomPadding),
       )
+      Tool.SCREEN_RECORDER -> ScreenRecorderScreen(
+        initialDirectory = initialDirectory,
+        onOpenVideoEditor = { preferencesRepository?.incrementToolUsage(Tool.VIDEO_EDITOR) },
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
       Tool.PLANT_SCHEDULE -> PlantScheduleScreen(
         modifier = Modifier.padding(bottom = bottomPadding),
       )
@@ -2523,6 +2530,12 @@ fun ToolContentView(
       Tool.STARS -> StarsScreen(
         onOpenColorPicker = onOpenColorPicker,
         onOpenNotes = { preferencesRepository?.incrementToolUsage(Tool.NOTES) },
+        modifier = Modifier.padding(bottom = bottomPadding),
+      )
+      Tool.CALENDAR -> CalendarScreen(
+        onOpenColorPicker = onOpenColorPicker,
+        onOpenNotes = { preferencesRepository?.incrementToolUsage(Tool.NOTES) },
+        onOpenTodoList = { preferencesRepository?.incrementToolUsage(Tool.TODO_LIST) },
         modifier = Modifier.padding(bottom = bottomPadding),
       )
       Tool.SEARCH -> SearchScreen(

@@ -116,4 +116,79 @@ class CalculatorEngineTest {
     assertEquals("1", CalculatorEngine.extractParseableValue("sin(90)", isDegreeMode = true))
     assertEquals("10", CalculatorEngine.extractParseableValue("10÷0"))
   }
+
+  @Test
+  fun testVariableXEvaluationAndImplicitMultiplication() {
+    assertTrue(CalculatorEngine.containsVariableX("2x + 1"))
+    assertTrue(CalculatorEngine.containsVariableX("sin(x)"))
+    assertFalse(CalculatorEngine.containsVariableX("exp(2) + 5"))
+
+    assertEquals(7.0, CalculatorEngine.evaluate("2x + 1", xValue = 3.0), 1e-6)
+    assertEquals(12.0, CalculatorEngine.evaluate("x(x + 1)", xValue = 3.0), 1e-6)
+    assertEquals(-9.0, CalculatorEngine.evaluate("-x^2", xValue = 3.0), 1e-6)
+    assertEquals(9.0, CalculatorEngine.evaluate("x^2", xValue = -3.0), 1e-6)
+    assertEquals(5.0, CalculatorEngine.evaluate("y = 2x - 1", xValue = 3.0), 1e-6)
+    assertEquals(10.0, CalculatorEngine.evaluate("f(x) = x^2 + 1", xValue = 3.0), 1e-6)
+  }
+
+  @Test
+  fun testGraphSamplingSplitsDiscontinuities() {
+    val segments = CalculatorEngine.sampleFunctionSegments(
+      expression = "1/x",
+      xMin = -5.0,
+      xMax = 5.0,
+      yMin = -10.0,
+      yMax = 10.0,
+      sampleCount = 200,
+    )
+    // 1/x across [-5, 5] must split across the vertical asymptote at x = 0 into at least 2 segments
+    assertTrue(segments.size >= 2)
+  }
+
+  @Test
+  fun testFindRootsExtremaAndIntersections() {
+    // f(x) = x^2 - 4 has roots at x = -2 and x = 2, and local min at (0, -4)
+    val features = CalculatorEngine.findFunctionFeatures(
+      expression = "x^2 - 4",
+      xMin = -5.0,
+      xMax = 5.0,
+      yMin = -10.0,
+      yMax = 10.0,
+    )
+    val roots = features.filter { it.type == GraphFeatureType.ROOT }.sortedBy { it.x }
+    assertEquals(2, roots.size)
+    assertEquals(-2.0, roots[0].x, 1e-3)
+    assertEquals(2.0, roots[1].x, 1e-3)
+
+    val minima = features.filter { it.type == GraphFeatureType.LOCAL_MIN }
+    assertTrue(minima.isNotEmpty())
+    assertEquals(0.0, minima.first().x, 1e-2)
+    assertEquals(-4.0, minima.first().y, 1e-2)
+
+    // Intersection of y = x^2 and y = x + 2 at x = -1 (y = 1) and x = 2 (y = 4)
+    val intersections = CalculatorEngine.findIntersections(
+      exprA = "x^2",
+      exprB = "x + 2",
+      xMin = -5.0,
+      xMax = 5.0,
+      yMin = -10.0,
+      yMax = 10.0,
+    ).sortedBy { it.x }
+    assertEquals(2, intersections.size)
+    assertEquals(-1.0, intersections[0].x, 1e-3)
+    assertEquals(1.0, intersections[0].y, 1e-3)
+    assertEquals(2.0, intersections[1].x, 1e-3)
+    assertEquals(4.0, intersections[1].y, 1e-3)
+  }
+
+  @Test
+  fun testNumericalDerivativeAndDefiniteIntegral() {
+    // Derivative of x^3 at x = 2 is 3 * (2^2) = 12
+    val slope = CalculatorEngine.numericalDerivative("x^3", 2.0)
+    assertEquals(12.0, slope ?: Double.NaN, 1e-4)
+
+    // Integral of x^2 from 0 to 3 is 3^3 / 3 = 9
+    val integral = CalculatorEngine.definiteIntegral("x^2", 0.0, 3.0)
+    assertEquals(9.0, integral ?: Double.NaN, 1e-4)
+  }
 }

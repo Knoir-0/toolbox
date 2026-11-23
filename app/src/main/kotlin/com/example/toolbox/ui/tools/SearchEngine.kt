@@ -39,6 +39,7 @@ enum class SearchResultType(val label: String) {
   LIVE_DICE_ROLL("Dice Formula"),
   NOTE("Note"),
   TODO_TASK("Task"),
+  CALENDAR_EVENT("Calendar Event"),
   RECIPE("Recipe"),
   PLANT("Plant"),
   TUNING("Tuning"),
@@ -116,6 +117,7 @@ data class SearchResultItem(
 data class SearchDataSources(
   val notesRepository: NotesRepository? = null,
   val todoListRepository: TodoListRepository? = null,
+  val calendarRepository: CalendarRepository? = null,
   val recipeBookRepository: RecipeBookRepository? = null,
   val plantScheduleRepository: PlantScheduleRepository? = null,
   val hiddenTools: Set<Tool> = emptySet(),
@@ -303,6 +305,14 @@ object SearchEngine {
       keywords = listOf("video editor", "trim video", "cut video", "playback speed", "slow motion", "mute video", "rotate video", "mp4"),
       sampleQueries = listOf("Video Editor", "Trim Video", "Slow Motion"),
     ),
+    Tool.SCREEN_RECORDER to ToolSearchMetadata(
+      tool = Tool.SCREEN_RECORDER,
+      summary = "One-tap screen recorder with single-app capture, mic audio & Video Editor handoff",
+      description = "Record the entire screen or select a single app to record in 1080p/720p/480p MP4 with optional microphone audio and one-tap handoff to Video Editor.",
+      capabilities = listOf("One-Tap Full Screen & Single-App Recording", "Searchable Installed App Target Picker", "1080p, 720p & 480p H.264 MP4 Capture", "Microphone Audio or Muted Recording", "One-Tap Edit in Video Editor"),
+      keywords = listOf("screen recorder", "screen capture", "record screen", "record app", "single app", "screencast", "display capture", "video capture", "mp4"),
+      sampleQueries = listOf("Screen Recorder", "Record App", "Screencast"),
+    ),
     Tool.AUDIO_EDITOR to ToolSearchMetadata(
       tool = Tool.AUDIO_EDITOR,
       summary = "Waveform audio editor with trim, gain, fade in/out, normalize & speed",
@@ -404,6 +414,24 @@ object SearchEngine {
       ),
       sampleQueries = listOf("Orion", "Taurus", "Scorpio", "Mercury Retrograde"),
     ),
+    Tool.CALENDAR to ToolSearchMetadata(
+      tool = Tool.CALENDAR,
+      summary = "Google Calendar-inspired schedule, day, 3-day, week & month planner with reminders & .ics export",
+      description = "Organize events, meetings, birthdays, built-in holidays, and scheduled To-Do tasks across Schedule, Day, 3-Day, Week, and Month views with 11 Google Calendar color swatches, recurring rules, exact alarm reminders, and .ics import/export.",
+      capabilities = listOf(
+        "5 Views: Schedule (Agenda), Day, 3-Day, Week & Month Grid",
+        "11 Official Google Calendar Event Color Swatches",
+        "Recurring Events (Daily, Weekly, Biweekly, Weekdays, Monthly, Yearly)",
+        "Built-In Annual Holidays & Live To-Do Task Projection",
+        "Exact Alarm Notification Reminders & RFC 5545 .ics Import/Export",
+      ),
+      keywords = listOf(
+        "calendar", "google calendar", "schedule", "agenda", "events", "planner", "appointment",
+        "meeting", "birthday", "holiday", "holidays", "month", "week", "day", "timeline",
+        "reminder", "recurring", "ics", "icalendar", "peacock", "tomato", "sage", "basil", "lavender",
+      ),
+      sampleQueries = listOf("Calendar", "Thanksgiving", "New Year's Day", "Schedule"),
+    ),
     Tool.SEARCH to ToolSearchMetadata(
       tool = Tool.SEARCH,
       summary = "Universal search across all tools, calculators, converters, user data & catalogs",
@@ -433,6 +461,7 @@ object SearchEngine {
     return SearchDataSources(
       notesRepository = SharedPreferencesNotesRepository(context),
       todoListRepository = SharedPreferencesTodoListRepository(context),
+      calendarRepository = SharedPreferencesCalendarRepository(context),
       recipeBookRepository = SharedPreferencesRecipeBookRepository(context),
       plantScheduleRepository = SharedPreferencesPlantScheduleRepository(context),
       hiddenTools = hiddenTools,
@@ -489,9 +518,10 @@ object SearchEngine {
     allResults.addAll(evaluateLiveChordLookup(rawTrimmed))
     allResults.addAll(evaluateLiveBpmAndDecibels(rawTrimmed))
 
-    // 3. Persisted User Data (Notes, To-Do Tasks, Saved/Custom Recipes, Scheduled/Custom Plants)
+    // 3. Persisted User Data (Notes, To-Do Tasks, Calendar Events, Saved/Custom Recipes, Scheduled/Custom Plants)
     allResults.addAll(searchUserNotes(normalizedQuery, tokens, dataSources.notesRepository))
     allResults.addAll(searchUserTodos(normalizedQuery, tokens, dataSources.todoListRepository))
+    allResults.addAll(searchCalendarEvents(normalizedQuery, tokens, dataSources.calendarRepository))
 
     // 4. Built-in + User Catalogs across all tools
     allResults.addAll(searchRecipes(normalizedQuery, tokens, dataSources.recipeBookRepository))
@@ -1226,6 +1256,63 @@ object SearchEngine {
       }
     }
     return results
+  }
+
+  private fun searchCalendarEvents(
+    normalizedQuery: String,
+    tokens: List<String>,
+    calendarRepository: CalendarRepository?,
+  ): List<SearchResultItem> {
+    val userEvents = calendarRepository?.loadEvents().orEmpty()
+    val currentYear = CalendarDay.today().year
+    val holidays = CalendarEngine.builtInHolidaysForYear(currentYear)
+    val allEvents = (userEvents + holidays).distinctBy { it.id }
+
+    return allEvents.mapNotNull { event ->
+      val dateText = CalendarEngine.formatDayHeader(event.startDay)
+      val timeText = CalendarEngine.formatTimeRange(event.startMillis, event.endMillis, event.isAllDay)
+      val score = scoreTextMatch(
+        normalizedQuery = normalizedQuery,
+        tokens = tokens,
+        primaryText = event.title,
+        secondaryText = "${event.description} ${event.location} ${event.category.displayName}",
+        keywordsText = "$dateText $timeText ${event.color.displayName} calendar event schedule holiday",
+        baseWeight = if (event.isBuiltInHoliday) 130 else 160,
+      )
+      if (score <= 0) return@mapNotNull null
+
+      SearchResultItem(
+        id = "calendar_event_${event.id}",
+        title = event.title,
+        subtitle = "${event.category.displayName} • $dateText • $timeText",
+        snippet = event.description.ifBlank {
+          if (event.location.isNotBlank()) "Location: ${event.location}" else "Scheduled in ${Tool.CALENDAR.title}"
+        },
+        badgeLabel = if (event.isBuiltInHoliday) "Holiday" else "Calendar Event",
+        tool = Tool.CALENDAR,
+        resultType = SearchResultType.CALENDAR_EVENT,
+        categoryFilter = SearchCategoryFilter.PRODUCTIVITY,
+        score = score + (if (event.isFavorite) 15 else 0),
+        copyableValue = CalendarEngine.formatEventPlainText(event),
+        colorHex = event.color.hex,
+        detailRows = buildList {
+          add(SearchResultDetailRow("Event", event.title))
+          add(SearchResultDetailRow("Date", dateText))
+          add(SearchResultDetailRow("Time", timeText))
+          add(SearchResultDetailRow("Calendar Category", event.category.displayName))
+          add(SearchResultDetailRow("Color Swatch", "${event.color.displayName} (${event.color.hex})"))
+          if (event.recurrence != CalendarRecurrence.NONE) {
+            add(SearchResultDetailRow("Recurrence", event.recurrence.label))
+          }
+          if (event.location.isNotBlank()) {
+            add(SearchResultDetailRow("Location", event.location))
+          }
+          if (event.description.isNotBlank()) {
+            add(SearchResultDetailRow("Description", event.description))
+          }
+        },
+      )
+    }
   }
 
   private fun searchRecipes(

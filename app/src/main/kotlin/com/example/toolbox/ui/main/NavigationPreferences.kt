@@ -11,12 +11,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
 import com.example.toolbox.ui.tools.AudioRecorderWidgets
 import com.example.toolbox.ui.tools.BackgroundTextureWidgets
+import com.example.toolbox.ui.tools.CalendarWidgets
 import com.example.toolbox.ui.tools.CameraWidgets
 import com.example.toolbox.ui.tools.DiceRollerWidgets
 import com.example.toolbox.ui.tools.GoodWidgets
 import com.example.toolbox.ui.tools.MusicPlayerWidgets
 import com.example.toolbox.ui.tools.NotesWidgets
 import com.example.toolbox.ui.tools.PlantScheduleWidgets
+import com.example.toolbox.ui.tools.ScreenRecorderWidgets
 import com.example.toolbox.ui.tools.StarsWidgets
 import com.example.toolbox.ui.tools.TodoListWidgets
 import java.text.SimpleDateFormat
@@ -112,6 +114,7 @@ enum class AppPermission(
     toolsUsingPermission = listOf(
       Tool.AUDIO_RECORDER,
       Tool.CAMERA,
+      Tool.SCREEN_RECORDER,
       Tool.GUITAR_TUNER,
       Tool.DECIBEL_METER,
     ),
@@ -155,11 +158,13 @@ enum class AppPermission(
     title = "Notifications",
     manifestPermission = "android.permission.POST_NOTIFICATIONS",
     manifestPermissions = listOf("android.permission.POST_NOTIFICATIONS"),
-    description = "Display task reminders, plant watering alerts, and media playback notifications",
+    description = "Display task reminders, calendar event alerts, plant watering alerts, and media playback notifications",
     toolsUsingPermission = listOf(
       Tool.TODO_LIST,
+      Tool.CALENDAR,
       Tool.PLANT_SCHEDULE,
       Tool.MUSIC,
+      Tool.SCREEN_RECORDER,
     ),
   ),
   SCHEDULE_EXACT_ALARM(
@@ -169,9 +174,10 @@ enum class AppPermission(
       "android.permission.SCHEDULE_EXACT_ALARM",
       "android.permission.USE_EXACT_ALARM",
     ),
-    description = "Schedule exact-time reminders for tasks and plant care",
+    description = "Schedule exact-time reminders for tasks, calendar events, and plant care",
     toolsUsingPermission = listOf(
       Tool.TODO_LIST,
+      Tool.CALENDAR,
       Tool.PLANT_SCHEDULE,
     ),
   ),
@@ -196,15 +202,17 @@ enum class AppPermission(
       Tool.BLUETOOTH_REMOTE,
       Tool.BLUETOOTH_GAMEPAD,
       Tool.TODO_LIST,
+      Tool.CALENDAR,
     ),
   ),
   RECEIVE_BOOT_COMPLETED(
     title = "Run at Startup",
     manifestPermission = "android.permission.RECEIVE_BOOT_COMPLETED",
     manifestPermissions = listOf("android.permission.RECEIVE_BOOT_COMPLETED"),
-    description = "Reschedule active task and plant reminders automatically after device reboot",
+    description = "Reschedule active task, calendar event, and plant reminders automatically after device reboot",
     toolsUsingPermission = listOf(
       Tool.TODO_LIST,
+      Tool.CALENDAR,
       Tool.PLANT_SCHEDULE,
     ),
   );
@@ -354,6 +362,8 @@ fun serializeErrorLogs(logs: List<ErrorLogEntry>): String {
  */
 object NavigationPreferencesBridge {
   var themeMode by mutableStateOf(ThemeMode.SYSTEM)
+  var themeColor by mutableStateOf(DEFAULT_THEME_COLOR_SYSTEM)
+  var accentColor by mutableStateOf(DEFAULT_ACCENT_COLOR_AUTO)
   var musicPlayerThemeEnabled by mutableStateOf(DEFAULT_MUSIC_PLAYER_THEME_ENABLED)
   var musicPlayerColorOption by mutableStateOf(DEFAULT_MUSIC_PLAYER_COLOR_OPTION)
   var backgroundTexture by mutableStateOf(BackgroundTexture.NONE)
@@ -364,6 +374,27 @@ object NavigationPreferencesBridge {
 
   fun isPermissionGranted(permission: AppPermission): Boolean =
     permissionGrantStates[permission] != false
+
+  /**
+   * Refreshes all pinned Home Screen AppWidgets across every Toolbox tool so theme mode,
+   * theme color, accent color, dynamic system media palette, Star Sign color, background texture,
+   * and Hexagonify changes stay synchronized on the home screen.
+   */
+  fun refreshAllWidgets(context: Context?) {
+    val ctx = context?.applicationContext ?: context ?: return
+    MusicPlayerWidgets.updateAllWidgets(ctx)
+    TodoListWidgets.updateAllWidgets(ctx)
+    NotesWidgets.updateAllWidgets(ctx)
+    AudioRecorderWidgets.updateAllWidgets(ctx)
+    ScreenRecorderWidgets.updateAllWidgets(ctx)
+    PlantScheduleWidgets.updateAllWidgets(ctx)
+    CameraWidgets.updateAllWidgets(ctx)
+    DiceRollerWidgets.updateAllWidgets(ctx)
+    BackgroundTextureWidgets.updateAllWidgets(ctx)
+    GoodWidgets.updateAllWidgets(ctx)
+    StarsWidgets.updateAllWidgets(ctx)
+    CalendarWidgets.updateAllWidgets(ctx)
+  }
 }
 
 /**
@@ -439,6 +470,7 @@ val DEFAULT_HIDDEN_TOOLS: Set<Tool> = setOf(
   Tool.IMAGE,
   Tool.IMAGE_EDITOR,
   Tool.VIDEO_EDITOR,
+  Tool.SCREEN_RECORDER,
   Tool.AUDIO_EDITOR,
   Tool.FILE_CONVERTER,
   Tool.PDF_VIEWER,
@@ -1074,17 +1106,7 @@ class DefaultNavigationPreferencesRepository(
   )
 
   private fun refreshHomeScreenWidgets() {
-    val ctx = appContext ?: return
-    MusicPlayerWidgets.updateAllWidgets(ctx)
-    TodoListWidgets.updateAllWidgets(ctx)
-    NotesWidgets.updateAllWidgets(ctx)
-    AudioRecorderWidgets.updateAllWidgets(ctx)
-    PlantScheduleWidgets.updateAllWidgets(ctx)
-    CameraWidgets.updateAllWidgets(ctx)
-    DiceRollerWidgets.updateAllWidgets(ctx)
-    BackgroundTextureWidgets.updateAllWidgets(ctx)
-    GoodWidgets.updateAllWidgets(ctx)
-    StarsWidgets.updateAllWidgets(ctx)
+    NavigationPreferencesBridge.refreshAllWidgets(appContext)
   }
 
   private val _toolsPerRowFlow = MutableStateFlow(getToolsPerRow())
@@ -1114,12 +1136,60 @@ class DefaultNavigationPreferencesRepository(
   private val _hexagonIconButtonsFlow = MutableStateFlow(getHexagonIconButtons())
   override val hexagonIconButtonsFlow: StateFlow<Boolean> = _hexagonIconButtonsFlow.asStateFlow()
 
+  private val sharedPreferenceChangeListener =
+    SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+      when (key) {
+        PREF_KEY_TOOLS_PER_ROW -> _toolsPerRowFlow.value = getToolsPerRow()
+        PREF_KEY_TOOL_ORDER -> _toolOrderFlow.value = getToolOrder()
+        PREF_KEY_THEME_MODE -> {
+          val mode = getThemeMode()
+          _themeModeFlow.value = mode
+          NavigationPreferencesBridge.themeMode = mode
+        }
+        PREF_KEY_THEME_COLOR -> {
+          val color = getThemeColor()
+          _themeColorFlow.value = color
+          NavigationPreferencesBridge.themeColor = color
+        }
+        PREF_KEY_MUSIC_PLAYER_THEME_ENABLED -> {
+          val enabled = getMusicPlayerThemeEnabled()
+          _musicPlayerThemeEnabledFlow.value = enabled
+          NavigationPreferencesBridge.musicPlayerThemeEnabled = enabled
+        }
+        PREF_KEY_MUSIC_PLAYER_COLOR_OPTION -> {
+          val option = getMusicPlayerColorOption()
+          _musicPlayerColorOptionFlow.value = option
+          NavigationPreferencesBridge.musicPlayerColorOption = option
+        }
+        PREF_KEY_ACCENT_COLOR -> {
+          val accent = getAccentColor()
+          _accentColorFlow.value = accent
+          NavigationPreferencesBridge.accentColor = accent
+        }
+        PREF_KEY_BACKGROUND_TEXTURE -> {
+          val texture = getBackgroundTexture()
+          _backgroundTextureFlow.value = texture
+          NavigationPreferencesBridge.backgroundTexture = texture
+        }
+        PREF_KEY_HEXAGON_ICON_BUTTONS -> {
+          val enabled = getHexagonIconButtons()
+          _hexagonIconButtonsFlow.value = enabled
+          NavigationPreferencesBridge.hexagonIconButtons = enabled
+        }
+      }
+    }
+
   init {
     NavigationPreferencesBridge.themeMode = _themeModeFlow.value
+    NavigationPreferencesBridge.themeColor = _themeColorFlow.value
+    NavigationPreferencesBridge.accentColor = _accentColorFlow.value
     NavigationPreferencesBridge.musicPlayerThemeEnabled = _musicPlayerThemeEnabledFlow.value
     NavigationPreferencesBridge.musicPlayerColorOption = _musicPlayerColorOptionFlow.value
     NavigationPreferencesBridge.backgroundTexture = _backgroundTextureFlow.value
     NavigationPreferencesBridge.hexagonIconButtons = _hexagonIconButtonsFlow.value
+    try {
+      sharedPreferences.registerOnSharedPreferenceChangeListener(sharedPreferenceChangeListener)
+    } catch (_: Throwable) {}
   }
 
   private val _hiddenToolsFlow = MutableStateFlow(getHiddenTools())
@@ -1216,6 +1286,7 @@ class DefaultNavigationPreferencesRepository(
   override fun setThemeColor(color: String) {
     sharedPreferences.edit().putString(PREF_KEY_THEME_COLOR, color).apply()
     _themeColorFlow.value = color
+    NavigationPreferencesBridge.themeColor = color
     if (
       color == THEME_COLOR_MUSIC_PLAYER ||
       color == THEME_COLOR_MUSIC_SECONDARY ||
@@ -1287,6 +1358,7 @@ class DefaultNavigationPreferencesRepository(
   override fun setAccentColor(color: String) {
     sharedPreferences.edit().putString(PREF_KEY_ACCENT_COLOR, color).apply()
     _accentColorFlow.value = color
+    NavigationPreferencesBridge.accentColor = color
     refreshHomeScreenWidgets()
   }
 
@@ -1647,6 +1719,8 @@ class InMemoryNavigationPreferencesRepository(
 
   init {
     NavigationPreferencesBridge.themeMode = _themeModeFlow.value
+    NavigationPreferencesBridge.themeColor = _themeColorFlow.value
+    NavigationPreferencesBridge.accentColor = _accentColorFlow.value
     NavigationPreferencesBridge.musicPlayerThemeEnabled = _musicPlayerThemeEnabledFlow.value
     NavigationPreferencesBridge.musicPlayerColorOption = _musicPlayerColorOptionFlow.value
     NavigationPreferencesBridge.backgroundTexture = _backgroundTextureFlow.value
@@ -1730,6 +1804,7 @@ class InMemoryNavigationPreferencesRepository(
 
   override fun setThemeColor(color: String) {
     _themeColorFlow.value = color
+    NavigationPreferencesBridge.themeColor = color
     if (
       color == THEME_COLOR_MUSIC_PLAYER ||
       color == THEME_COLOR_MUSIC_SECONDARY ||
@@ -1767,6 +1842,7 @@ class InMemoryNavigationPreferencesRepository(
 
   override fun setAccentColor(color: String) {
     _accentColorFlow.value = color
+    NavigationPreferencesBridge.accentColor = color
   }
 
   override fun getBackgroundTexture(): BackgroundTexture = _backgroundTextureFlow.value
@@ -2153,6 +2229,7 @@ const val DATA_BACKUP_KEY_DICE_ROLLER = "dice_roller"
 const val DATA_BACKUP_KEY_CHORD_BOOK = "chord_book"
 const val DATA_BACKUP_KEY_GUITAR_TUNER = "guitar_tuner"
 const val DATA_BACKUP_KEY_MUSIC_PLAYER = "music_player"
+const val DATA_BACKUP_KEY_CALENDAR = "calendar_tool"
 const val DATA_BACKUP_KEY_SHARED_PREFERENCES = "tool_shared_preferences"
 
 val TOOL_DATA_SHARED_PREFERENCES_NAMES: List<String> = listOf(
@@ -2171,6 +2248,7 @@ val TOOL_DATA_SHARED_PREFERENCES_NAMES: List<String> = listOf(
   com.example.toolbox.ui.tools.ELEMENTS_PREFS_NAME,
   com.example.toolbox.ui.tools.GOOD_PREFS_NAME,
   com.example.toolbox.ui.tools.STARS_PREFS_NAME,
+  com.example.toolbox.ui.tools.CALENDAR_PREFS_NAME,
   "files_tool_preferences",
 )
 
@@ -2183,6 +2261,7 @@ private val RECOGNIZED_DATA_BACKUP_KEYS = setOf(
   DATA_BACKUP_KEY_CHORD_BOOK,
   DATA_BACKUP_KEY_GUITAR_TUNER,
   DATA_BACKUP_KEY_MUSIC_PLAYER,
+  DATA_BACKUP_KEY_CALENDAR,
   DATA_BACKUP_KEY_SHARED_PREFERENCES,
 )
 
@@ -2198,6 +2277,7 @@ data class ToolboxDataRepositories(
   val diceRollerPreferences: com.example.toolbox.ui.tools.DiceRollerPreferences? = null,
   val chordBookPreferences: com.example.toolbox.ui.tools.ChordBookPreferencesRepository? = null,
   val guitarTunerRepository: com.example.toolbox.ui.tools.GuitarTunerRepository? = null,
+  val calendarRepository: com.example.toolbox.ui.tools.CalendarRepository? = null,
   val currentTodoDate: String = com.example.toolbox.ui.tools.getTodayDateKey(),
   val sharedPreferencesProvider: ((String) -> SharedPreferences?)? = null,
   val context: Context? = null,
@@ -2213,6 +2293,7 @@ data class ToolboxDataRepositories(
         diceRollerPreferences = com.example.toolbox.ui.tools.DiceRollerPreferences(appCtx),
         chordBookPreferences = com.example.toolbox.ui.tools.ChordBookPreferencesRepository(appCtx),
         guitarTunerRepository = com.example.toolbox.ui.tools.SharedPreferencesGuitarTunerRepository(appCtx),
+        calendarRepository = com.example.toolbox.ui.tools.SharedPreferencesCalendarRepository(appCtx),
         sharedPreferencesProvider = { prefName ->
           appCtx.getSharedPreferences(prefName, Context.MODE_PRIVATE)
         },
@@ -2385,6 +2466,15 @@ fun exportDataToJson(repositories: ToolboxDataRepositories): String {
     tunerRepo.loadFavoriteTuningIds().sorted().forEach { favArr.put(it) }
     tunerObj.put("favorite_tuning_ids", favArr)
     root.put(DATA_BACKUP_KEY_GUITAR_TUNER, tunerObj)
+  }
+
+  repositories.calendarRepository?.let { calRepo ->
+    val calObj = JSONObject()
+    val eventsArr = JSONArray()
+    calRepo.loadEvents().forEach { eventsArr.put(it.toJson()) }
+    calObj.put("events", eventsArr)
+    calObj.put("view_mode", calRepo.getViewMode().name)
+    root.put(DATA_BACKUP_KEY_CALENDAR, calObj)
   }
 
   repositories.sharedPreferencesProvider?.let { provider ->
@@ -2669,12 +2759,40 @@ fun importDataFromJson(
       }
     }
 
+    if (json.has(DATA_BACKUP_KEY_CALENDAR)) {
+      val calObj = json.optJSONObject(DATA_BACKUP_KEY_CALENDAR)
+      val calRepo = repositories.calendarRepository
+      if (calObj != null && calRepo != null) {
+        if (calObj.has("events")) {
+          val arr = calObj.optJSONArray("events")
+          val events = mutableListOf<com.example.toolbox.ui.tools.CalendarEvent>()
+          if (arr != null) {
+            for (i in 0 until arr.length()) {
+              val itemObj = arr.optJSONObject(i) ?: continue
+              val ev = com.example.toolbox.ui.tools.CalendarEvent.fromJson(itemObj)
+              if (ev.title.isNotBlank()) events.add(ev)
+            }
+          }
+          calRepo.saveEvents(events)
+        }
+        if (calObj.has("view_mode")) {
+          calRepo.setViewMode(
+            com.example.toolbox.ui.tools.CalendarViewMode.fromNameOrDefault(calObj.optString("view_mode", ""))
+          )
+        }
+      }
+    }
+
     // Refresh alarms and active sessions if running with a live Context
     val ctx = repositories.context
     if (ctx != null) {
       try {
         val tasks = repositories.todoListRepository?.loadTasks().orEmpty()
         com.example.toolbox.ui.tools.TodoNotificationHelper.syncTaskAlarms(ctx, tasks)
+      } catch (_: Throwable) {}
+      try {
+        val calEvents = repositories.calendarRepository?.loadEvents().orEmpty()
+        com.example.toolbox.ui.tools.CalendarNotificationHelper.syncEventAlarms(ctx, calEvents)
       } catch (_: Throwable) {}
     }
     try {

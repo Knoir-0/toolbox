@@ -60,6 +60,7 @@ class NavigationPreferencesTest {
       Tool.IMAGE,
       Tool.IMAGE_EDITOR,
       Tool.VIDEO_EDITOR,
+      Tool.SCREEN_RECORDER,
       Tool.AUDIO_EDITOR,
       Tool.FILE_CONVERTER,
       Tool.PDF_VIEWER,
@@ -71,6 +72,7 @@ class NavigationPreferencesTest {
       Tool.ELEMENTS,
       Tool.GOOD,
       Tool.STARS,
+      Tool.CALENDAR,
       Tool.SEARCH,
       Tool.SETTINGS,
     )
@@ -82,7 +84,7 @@ class NavigationPreferencesTest {
 
   @Test
   fun parseToolOrder_validSavedOrder_preservesOrder() {
-    val raw = "IMAGE,IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,NOTES,CHORD_BOOK,PLANT_SCHEDULE,CAMERA,AUDIO_EDITOR,VIDEO_EDITOR,BLUETOOTH_GAMEPAD,DECIBEL_METER,ARCHIVE,MUSIC,PDF_VIEWER,RECIPES,OBD2_SCANNER,ELEMENTS,GOOD,STARS,SEARCH,SETTINGS"
+    val raw = "IMAGE,IMAGE_EDITOR,CALCULATOR,RULER,METRONOME,COLOR_PICKER,GUITAR_TUNER,UNIT_CONVERTER,DICE_ROLLER,BLUETOOTH_REMOTE,TODO_LIST,FILES,AUDIO_RECORDER,FILE_CONVERTER,GALLERY,NOTES,CHORD_BOOK,PLANT_SCHEDULE,CAMERA,AUDIO_EDITOR,VIDEO_EDITOR,SCREEN_RECORDER,BLUETOOTH_GAMEPAD,DECIBEL_METER,ARCHIVE,MUSIC,PDF_VIEWER,RECIPES,OBD2_SCANNER,ELEMENTS,GOOD,STARS,CALENDAR,SEARCH,SETTINGS"
     val result = parseToolOrder(raw)
     val expected = listOf(
       Tool.IMAGE,
@@ -106,6 +108,7 @@ class NavigationPreferencesTest {
       Tool.CAMERA,
       Tool.AUDIO_EDITOR,
       Tool.VIDEO_EDITOR,
+      Tool.SCREEN_RECORDER,
       Tool.BLUETOOTH_GAMEPAD,
       Tool.DECIBEL_METER,
       Tool.ARCHIVE,
@@ -116,6 +119,7 @@ class NavigationPreferencesTest {
       Tool.ELEMENTS,
       Tool.GOOD,
       Tool.STARS,
+      Tool.CALENDAR,
       Tool.SEARCH,
       Tool.SETTINGS,
     )
@@ -202,6 +206,7 @@ class NavigationPreferencesTest {
       Tool.CAMERA,
       Tool.AUDIO_EDITOR,
       Tool.VIDEO_EDITOR,
+      Tool.SCREEN_RECORDER,
       Tool.BLUETOOTH_GAMEPAD,
       Tool.DECIBEL_METER,
       Tool.ARCHIVE,
@@ -212,6 +217,7 @@ class NavigationPreferencesTest {
       Tool.ELEMENTS,
       Tool.GOOD,
       Tool.STARS,
+      Tool.CALENDAR,
       Tool.SEARCH,
       Tool.SETTINGS,
     )
@@ -256,6 +262,7 @@ class NavigationPreferencesTest {
       Tool.CAMERA,
       Tool.AUDIO_EDITOR,
       Tool.VIDEO_EDITOR,
+      Tool.SCREEN_RECORDER,
       Tool.BLUETOOTH_GAMEPAD,
       Tool.DECIBEL_METER,
       Tool.ARCHIVE,
@@ -266,6 +273,7 @@ class NavigationPreferencesTest {
       Tool.ELEMENTS,
       Tool.GOOD,
       Tool.STARS,
+      Tool.CALENDAR,
       Tool.SEARCH,
       Tool.SETTINGS,
     )
@@ -370,6 +378,7 @@ class NavigationPreferencesTest {
       Tool.IMAGE,
       Tool.IMAGE_EDITOR,
       Tool.VIDEO_EDITOR,
+      Tool.SCREEN_RECORDER,
       Tool.AUDIO_EDITOR,
       Tool.DECIBEL_METER,
       Tool.ARCHIVE,

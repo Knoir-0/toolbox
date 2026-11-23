@@ -405,14 +405,7 @@ object BackgroundTextureWidgets {
   }
 
   private fun refreshAllToolboxWidgets(context: Context) {
-    updateAllWidgets(context)
-    MusicPlayerWidgets.updateAllWidgets(context)
-    TodoListWidgets.updateAllWidgets(context)
-    NotesWidgets.updateAllWidgets(context)
-    AudioRecorderWidgets.updateAllWidgets(context)
-    PlantScheduleWidgets.updateAllWidgets(context)
-    CameraWidgets.updateAllWidgets(context)
-    DiceRollerWidgets.updateAllWidgets(context)
+    TodoListWidgets.refreshAllToolboxWidgets(context)
   }
 
   /**
@@ -441,7 +434,7 @@ object BackgroundTextureWidgets {
         } catch (_: Throwable) {}
       }
       if (refreshWidgets) {
-        updateAllWidgets(context)
+        refreshAllToolboxWidgets(context)
       }
     }
   }
@@ -1359,6 +1352,44 @@ object BackgroundTextureWidgets {
       views.setImageViewBitmap(R.id.widget_background_texture_background, bgBmp)
     }
 
+    // Style fallback / empty preview views with active palette colors
+    renderHexagonifyShapeBitmap(
+      isHexagon = state.isHexagon,
+      palette = palette,
+      widthPx = (state.columnWidthDp * density).roundToInt().coerceIn(72, 240),
+      heightPx = (state.rowHeightDp * density).roundToInt().coerceIn(52, 180),
+      borderWidthPx = max(1f, 1.2f * density),
+    )?.let { shapeBmp ->
+      views.setImageViewBitmap(R.id.widget_background_texture_empty_shape_preview, shapeBmp)
+    }
+    views.setInt(
+      R.id.widget_background_texture_empty_none_bg,
+      "setColorFilter",
+      if (state.activeTexture == BackgroundTexture.NONE) palette.primaryContainerArgb else palette.itemCardArgb,
+    )
+    views.setTextColor(
+      R.id.widget_background_texture_empty_none_label,
+      if (state.activeTexture == BackgroundTexture.NONE) palette.onPrimaryContainerArgb else palette.onSurfaceArgb,
+    )
+    views.setInt(
+      R.id.widget_background_texture_empty_fuzzy_bg,
+      "setColorFilter",
+      if (state.activeTexture == BackgroundTexture.FUZZY) palette.primaryContainerArgb else palette.itemCardArgb,
+    )
+    views.setTextColor(
+      R.id.widget_background_texture_empty_fuzzy_label,
+      if (state.activeTexture == BackgroundTexture.FUZZY) palette.onPrimaryContainerArgb else palette.onSurfaceArgb,
+    )
+    views.setInt(
+      R.id.widget_background_texture_empty_fade_bg,
+      "setColorFilter",
+      if (state.activeTexture == BackgroundTexture.FADE) palette.primaryContainerArgb else palette.itemCardArgb,
+    )
+    views.setTextColor(
+      R.id.widget_background_texture_empty_fade_label,
+      if (state.activeTexture == BackgroundTexture.FADE) palette.onPrimaryContainerArgb else palette.onSurfaceArgb,
+    )
+
     val serviceIntent = Intent(context, BackgroundTextureWidgetRemoteViewsService::class.java).apply {
       putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
       data = Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
@@ -1590,7 +1621,9 @@ internal class BackgroundTextureWidgetRemoteViewsFactory(
 
   override fun getItemId(position: Int): Long {
     val row = state.itemRows.getOrNull(position) ?: return position.toLong()
-    return row.joinToString("|") { it.key }.hashCode().toLong()
+    val rowHash = row.joinToString("|") { it.key }.hashCode().toLong()
+    val styleHash = (state.palette.hashCode() * 31 + state.activeTexture.hashCode()) * 31 + state.isHexagon.hashCode()
+    return (rowHash shl 32) xor (styleHash.toLong() and 0xFFFFFFFFL)
   }
 
   override fun hasStableIds(): Boolean = true

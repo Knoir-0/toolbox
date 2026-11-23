@@ -196,7 +196,9 @@ object MusicPlayerWidgets {
    * persisted navigation [Context.getSharedPreferences] or [NavigationPreferencesBridge.hexagonIconButtons].
    */
   fun resolveHexagonIconButtonsEnabled(context: Context? = null): Boolean {
-    if (context != null) {
+    val activeRepo = NavigationPreferencesBridge.activeRepository
+    val useInMemoryRepo = activeRepo is com.example.toolbox.ui.main.InMemoryNavigationPreferencesRepository
+    if (!useInMemoryRepo && context != null) {
       try {
         val prefs = context.getSharedPreferences(NAVIGATION_PREFERENCES_NAME, Context.MODE_PRIVATE)
         if (prefs != null && prefs.contains(PREF_KEY_HEXAGON_ICON_BUTTONS)) {
@@ -212,7 +214,9 @@ object MusicPlayerWidgets {
    * [Context.getSharedPreferences] or [NavigationPreferencesBridge.backgroundTexture].
    */
   fun resolveBackgroundTexture(context: Context? = null): BackgroundTexture {
-    if (context != null) {
+    val activeRepo = NavigationPreferencesBridge.activeRepository
+    val useInMemoryRepo = activeRepo is com.example.toolbox.ui.main.InMemoryNavigationPreferencesRepository
+    if (!useInMemoryRepo && context != null) {
       try {
         val prefs = context.getSharedPreferences(NAVIGATION_PREFERENCES_NAME, Context.MODE_PRIVATE)
         if (prefs != null && prefs.contains(PREF_KEY_BACKGROUND_TEXTURE)) {
@@ -1695,7 +1699,7 @@ object MusicPlayerWidgets {
         else -> false
       }
       if (handledExternal) {
-        if (context != null) updateAllWidgets(context)
+        if (context != null) TodoListWidgets.refreshAllToolboxWidgets(context)
         return true
       }
     }
@@ -1720,7 +1724,7 @@ object MusicPlayerWidgets {
 
     val handled = session.handleMediaControlAction(action)
     if (context != null) {
-      updateAllWidgets(context)
+      TodoListWidgets.refreshAllToolboxWidgets(context)
     }
     return handled
   }
