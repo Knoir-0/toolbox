@@ -1124,19 +1124,20 @@ class SettingsScreenTest {
 
   @Test
   fun feedbackButtons_haveOnePercentChanceForDevilAndAngelIcons() {
-    assertEquals(0.01f, FEEDBACK_DEVIL_ANGEL_EASTER_EGG_CHANCE)
+    assertEquals(0.15f, FEEDBACK_DEVIL_ANGEL_EASTER_EGG_CHANCE)
+    assertEquals(3L * 60L * 60L * 1_000L, FEEDBACK_DEVIL_ANGEL_EASTER_EGG_COOLDOWN_MS)
 
-    // Under 1% threshold (< 0.01f) triggers devil and angel icons
+    // Under 15% threshold (< 0.15f) triggers devil and angel icons
     val luckyRandom = object : kotlin.random.Random() {
       override fun nextBits(bitCount: Int): Int = 0
-      override fun nextFloat(): Float = 0.005f
+      override fun nextFloat(): Float = 0.149f
     }
     assertTrue(shouldUseDevilAndAngelFeedbackIcons(luckyRandom))
 
-    // At or above 1% threshold (>= 0.01f) keeps default icons
+    // At or above 15% threshold (>= 0.15f) keeps default icons
     val boundaryRandom = object : kotlin.random.Random() {
       override fun nextBits(bitCount: Int): Int = 0
-      override fun nextFloat(): Float = 0.01f
+      override fun nextFloat(): Float = 0.15f
     }
     assertFalse(shouldUseDevilAndAngelFeedbackIcons(boundaryRandom))
 
@@ -1145,6 +1146,77 @@ class SettingsScreenTest {
       override fun nextFloat(): Float = 0.50f
     }
     assertFalse(shouldUseDevilAndAngelFeedbackIcons(normalRandom))
+
+    // 3-hour cooldown enforcement via repository
+    val repo = InMemoryNavigationPreferencesRepository()
+    assertEquals(0L, repo.getFeedbackDevilAngelLastTriggeredMs())
+
+    val t0 = 1_763_500_000_000L
+    // Unlucky roll does not trigger or start cooldown
+    assertFalse(
+      tryTriggerDevilAndAngelFeedbackIcons(
+        preferencesRepository = repo,
+        nowTimestampMs = t0,
+        random = boundaryRandom,
+      )
+    )
+    assertEquals(0L, repo.getFeedbackDevilAngelLastTriggeredMs())
+
+    // Lucky roll (< 15%) triggers and records timestamp
+    assertTrue(
+      tryTriggerDevilAndAngelFeedbackIcons(
+        preferencesRepository = repo,
+        nowTimestampMs = t0,
+        random = luckyRandom,
+      )
+    )
+    assertEquals(t0, repo.getFeedbackDevilAngelLastTriggeredMs())
+
+    // During the 3-hour cooldown window, even a lucky roll cannot trigger again
+    assertTrue(
+      isFeedbackDevilAngelEasterEggOnCooldown(
+        lastTriggeredTimestampMs = t0,
+        nowTimestampMs = t0,
+      )
+    )
+    assertTrue(
+      isFeedbackDevilAngelEasterEggOnCooldown(
+        lastTriggeredTimestampMs = t0,
+        nowTimestampMs = t0 + FEEDBACK_DEVIL_ANGEL_EASTER_EGG_COOLDOWN_MS - 1L,
+      )
+    )
+    assertFalse(
+      tryTriggerDevilAndAngelFeedbackIcons(
+        preferencesRepository = repo,
+        nowTimestampMs = t0 + 60_000L,
+        random = luckyRandom,
+      )
+    )
+    assertFalse(
+      tryTriggerDevilAndAngelFeedbackIcons(
+        preferencesRepository = repo,
+        nowTimestampMs = t0 + FEEDBACK_DEVIL_ANGEL_EASTER_EGG_COOLDOWN_MS - 1L,
+        random = luckyRandom,
+      )
+    )
+    assertEquals(t0, repo.getFeedbackDevilAngelLastTriggeredMs())
+
+    // Exactly 3 hours later, cooldown expires and a lucky roll can trigger again
+    val afterThreeHours = t0 + FEEDBACK_DEVIL_ANGEL_EASTER_EGG_COOLDOWN_MS
+    assertFalse(
+      isFeedbackDevilAngelEasterEggOnCooldown(
+        lastTriggeredTimestampMs = t0,
+        nowTimestampMs = afterThreeHours,
+      )
+    )
+    assertTrue(
+      tryTriggerDevilAndAngelFeedbackIcons(
+        preferencesRepository = repo,
+        nowTimestampMs = afterThreeHours,
+        random = luckyRandom,
+      )
+    )
+    assertEquals(afterThreeHours, repo.getFeedbackDevilAngelLastTriggeredMs())
 
     // Icon resolution maps Report a Bug -> Devil and Request a Feature -> Angel when active
     assertEquals(DevilFeedbackIcon, resolveReportBugButtonIcon(useDevilAndAngelIcons = true))
@@ -1635,7 +1707,8 @@ class SettingsScreenTest {
   @Test
   fun donateButton_hasApprovedEasterEggMessages_twoSecondViewTrigger_twoSecondDisplay_andHalfHourCooldown() {
     assertEquals("Donate", DONATE_DEFAULT_BUTTON_TEXT)
-    assertEquals(0.03f, DONATE_EASTER_EGG_CHANCE)
+    assertEquals(0.05f, DONATE_EASTER_EGG_CHANCE)
+    assertEquals(0.50f, DONATE_EASTER_EGG_MESSAGE_POOL_CHANCE)
     assertEquals(0.01f, DONATE_TOP_POSITION_EASTER_EGG_CHANCE)
     assertEquals(2_000L, DONATE_EASTER_EGG_VIEW_DURATION_MS)
     assertEquals(2_000L, DONATE_EASTER_EGG_DISPLAY_DURATION_MS)
@@ -1707,7 +1780,7 @@ class SettingsScreenTest {
     assertFalse(shouldMoveDonateButtonToTop(boundaryTopRandom))
     assertFalse(shouldMoveDonateButtonToTop(normalTopRandom))
 
-    // 1% chance to flip Donate text when not on cooldown, and 1-hour cooldown enforcement
+    // 5% chance to flip Donate text when not on cooldown, 50/50 split between Donate and Good positive messages, and 0.5-hour cooldown enforcement
     val repo = InMemoryNavigationPreferencesRepository()
     assertEquals(0L, repo.getDonateEasterEggLastTriggeredMs())
 
@@ -1727,7 +1800,7 @@ class SettingsScreenTest {
 
     val luckyMessageRandom = object : kotlin.random.Random() {
       override fun nextBits(bitCount: Int): Int = 0
-      override fun nextFloat(): Float = 0.004f
+      override fun nextFloat(): Float = 0.049f
       override fun nextInt(until: Int): Int = (until - 1).coerceAtLeast(0)
     }
     val triggeredMessage = tryTriggerDonateEasterEgg(
@@ -1738,7 +1811,7 @@ class SettingsScreenTest {
     assertEquals("help out", triggeredMessage)
     assertEquals(t0, repo.getDonateEasterEggLastTriggeredMs())
 
-    // During the 1-hour cooldown window, even a lucky <1% roll cannot trigger again
+    // During the 0.5-hour cooldown window, even a lucky <5% roll cannot trigger again
     assertTrue(isDonateEasterEggOnCooldown(lastTriggeredTimestampMs = t0, nowTimestampMs = t0))
     assertTrue(
       isDonateEasterEggOnCooldown(
@@ -1762,12 +1835,12 @@ class SettingsScreenTest {
     )
     assertEquals(t0, repo.getDonateEasterEggLastTriggeredMs())
 
-    // Exactly 1 hour later, cooldown expires and a lucky roll can trigger again
-    val afterOneHour = t0 + DONATE_EASTER_EGG_COOLDOWN_MS
+    // Exactly 0.5 hours later, cooldown expires and a lucky roll can trigger again (donate pool < 0.50f)
+    val afterHalfHour = t0 + DONATE_EASTER_EGG_COOLDOWN_MS
     assertFalse(
       isDonateEasterEggOnCooldown(
         lastTriggeredTimestampMs = t0,
-        nowTimestampMs = afterOneHour,
+        nowTimestampMs = afterHalfHour,
       )
     )
     val firstMessageRandom = object : kotlin.random.Random() {
@@ -1777,11 +1850,31 @@ class SettingsScreenTest {
     }
     val secondTriggeredMessage = tryTriggerDonateEasterEgg(
       preferencesRepository = repo,
-      nowTimestampMs = afterOneHour,
+      nowTimestampMs = afterHalfHour,
       random = firstMessageRandom,
     )
     assertEquals("pretty please?", secondTriggeredMessage)
-    assertEquals(afterOneHour, repo.getDonateEasterEggLastTriggeredMs())
+    assertEquals(afterHalfHour, repo.getDonateEasterEggLastTriggeredMs())
+
+    // Verify 50% / 50% split between DONATE_EASTER_EGG_MESSAGES (< 0.50f) and GOOD_POSITIVE_MESSAGES (>= 0.50f)
+    val afterAnotherHalfHour = afterHalfHour + DONATE_EASTER_EGG_COOLDOWN_MS
+    val positivePoolRandom = object : kotlin.random.Random() {
+      private var floatCallCount = 0
+      override fun nextBits(bitCount: Int): Int = 0
+      override fun nextFloat(): Float {
+        // Call 0: trigger roll (< 0.05f), Call 1: pool roll (>= 0.50f -> GOOD_POSITIVE_MESSAGES)
+        return if (floatCallCount++ == 0) 0.02f else 0.50f
+      }
+      override fun nextInt(until: Int): Int = (until - 1).coerceAtLeast(0)
+    }
+    val positiveTriggeredMessage = tryTriggerDonateEasterEgg(
+      preferencesRepository = repo,
+      nowTimestampMs = afterAnotherHalfHour,
+      random = positivePoolRandom,
+    )
+    assertEquals(GOOD_POSITIVE_MESSAGES.last(), positiveTriggeredMessage)
+    assertEquals("touch grass", positiveTriggeredMessage)
+    assertEquals(afterAnotherHalfHour, repo.getDonateEasterEggLastTriggeredMs())
   }
 
   @Test

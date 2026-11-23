@@ -50,6 +50,7 @@ const val PREF_KEY_ERROR_LOGS = "error_logs"
 const val PREF_KEY_BACKGROUND_TEXTURE = "background_texture"
 const val PREF_KEY_HEXAGON_ICON_BUTTONS = "hexagon_icon_buttons"
 const val PREF_KEY_DONATE_EASTER_EGG_LAST_TRIGGERED_MS = "donate_easter_egg_last_triggered_ms"
+const val PREF_KEY_FEEDBACK_DEVIL_ANGEL_LAST_TRIGGERED_MS = "feedback_devil_angel_last_triggered_ms"
 const val DEFAULT_HEXAGON_ICON_BUTTONS = false
 const val MAX_ERROR_LOG_ENTRIES = 100
 
@@ -1052,6 +1053,11 @@ interface NavigationPreferencesRepository {
   fun setDonateEasterEggLastTriggeredMs(timestampMs: Long) {}
   val donateEasterEggLastTriggeredMsFlow: StateFlow<Long>
     get() = MutableStateFlow(getDonateEasterEggLastTriggeredMs()).asStateFlow()
+
+  fun getFeedbackDevilAngelLastTriggeredMs(): Long = 0L
+  fun setFeedbackDevilAngelLastTriggeredMs(timestampMs: Long) {}
+  val feedbackDevilAngelLastTriggeredMsFlow: StateFlow<Long>
+    get() = MutableStateFlow(getFeedbackDevilAngelLastTriggeredMs()).asStateFlow()
 }
 
 /**
@@ -1151,6 +1157,11 @@ class DefaultNavigationPreferencesRepository(
   private val _donateEasterEggLastTriggeredMsFlow = MutableStateFlow(getDonateEasterEggLastTriggeredMs())
   override val donateEasterEggLastTriggeredMsFlow: StateFlow<Long> =
     _donateEasterEggLastTriggeredMsFlow.asStateFlow()
+
+  private val _feedbackDevilAngelLastTriggeredMsFlow =
+    MutableStateFlow(getFeedbackDevilAngelLastTriggeredMs())
+  override val feedbackDevilAngelLastTriggeredMsFlow: StateFlow<Long> =
+    _feedbackDevilAngelLastTriggeredMsFlow.asStateFlow()
 
   init {
     NavigationPreferencesBridge.permissionGrantStates = _permissionGrantStatesFlow.value
@@ -1554,6 +1565,21 @@ class DefaultNavigationPreferencesRepository(
     }
     _donateEasterEggLastTriggeredMsFlow.value = sanitized
   }
+
+  override fun getFeedbackDevilAngelLastTriggeredMs(): Long {
+    return sharedPreferences.getLong(PREF_KEY_FEEDBACK_DEVIL_ANGEL_LAST_TRIGGERED_MS, 0L)
+      .coerceAtLeast(0L)
+  }
+
+  override fun setFeedbackDevilAngelLastTriggeredMs(timestampMs: Long) {
+    val sanitized = timestampMs.coerceAtLeast(0L)
+    if (sanitized == 0L) {
+      sharedPreferences.edit().remove(PREF_KEY_FEEDBACK_DEVIL_ANGEL_LAST_TRIGGERED_MS).apply()
+    } else {
+      sharedPreferences.edit().putLong(PREF_KEY_FEEDBACK_DEVIL_ANGEL_LAST_TRIGGERED_MS, sanitized).apply()
+    }
+    _feedbackDevilAngelLastTriggeredMsFlow.value = sanitized
+  }
 }
 
 /**
@@ -1588,6 +1614,7 @@ class InMemoryNavigationPreferencesRepository(
   initialLastOpenedTool: Tool? = null,
   initialErrorLogs: List<ErrorLogEntry> = emptyList(),
   initialDonateEasterEggLastTriggeredMs: Long = 0L,
+  initialFeedbackDevilAngelLastTriggeredMs: Long = 0L,
 ) : NavigationPreferencesRepository {
   private val _toolsPerRowFlow = MutableStateFlow(coerceToolsPerRow(initialToolsPerRow))
   override val toolsPerRowFlow: StateFlow<Int> = _toolsPerRowFlow.asStateFlow()
@@ -1667,6 +1694,12 @@ class InMemoryNavigationPreferencesRepository(
   )
   override val donateEasterEggLastTriggeredMsFlow: StateFlow<Long> =
     _donateEasterEggLastTriggeredMsFlow.asStateFlow()
+
+  private val _feedbackDevilAngelLastTriggeredMsFlow = MutableStateFlow(
+    initialFeedbackDevilAngelLastTriggeredMs.coerceAtLeast(0L)
+  )
+  override val feedbackDevilAngelLastTriggeredMsFlow: StateFlow<Long> =
+    _feedbackDevilAngelLastTriggeredMsFlow.asStateFlow()
 
   init {
     NavigationPreferencesBridge.permissionGrantStates = _permissionGrantStatesFlow.value
@@ -1872,6 +1905,13 @@ class InMemoryNavigationPreferencesRepository(
 
   override fun setDonateEasterEggLastTriggeredMs(timestampMs: Long) {
     _donateEasterEggLastTriggeredMsFlow.value = timestampMs.coerceAtLeast(0L)
+  }
+
+  override fun getFeedbackDevilAngelLastTriggeredMs(): Long =
+    _feedbackDevilAngelLastTriggeredMsFlow.value
+
+  override fun setFeedbackDevilAngelLastTriggeredMs(timestampMs: Long) {
+    _feedbackDevilAngelLastTriggeredMsFlow.value = timestampMs.coerceAtLeast(0L)
   }
 }
 

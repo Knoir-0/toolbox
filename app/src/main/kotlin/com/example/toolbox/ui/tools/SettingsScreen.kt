@@ -204,9 +204,11 @@ import kotlin.math.roundToInt
 import kotlin.random.Random
 import kotlinx.coroutines.delay
 
-const val FEEDBACK_DEVIL_ANGEL_EASTER_EGG_CHANCE = 0.01f
+const val FEEDBACK_DEVIL_ANGEL_EASTER_EGG_CHANCE = 0.15f
+const val FEEDBACK_DEVIL_ANGEL_EASTER_EGG_COOLDOWN_MS = 3L * 60L * 60L * 1_000L // 3 hours (10,800,000 ms)
 const val DONATE_DEFAULT_BUTTON_TEXT = "Donate"
-const val DONATE_EASTER_EGG_CHANCE = 0.03f
+const val DONATE_EASTER_EGG_CHANCE = 0.05f
+const val DONATE_EASTER_EGG_MESSAGE_POOL_CHANCE = 0.50f
 const val DONATE_TOP_POSITION_EASTER_EGG_CHANCE = 0.01f
 const val DONATE_EASTER_EGG_VIEW_DURATION_MS = 2_000L
 const val DONATE_EASTER_EGG_DISPLAY_DURATION_MS = 2_000L
@@ -369,9 +371,55 @@ val AngelFeedbackIcon: ImageVector by lazy {
   }.build()
 }
 
+fun isFeedbackDevilAngelEasterEggOnCooldown(
+  lastTriggeredTimestampMs: Long,
+  nowTimestampMs: Long = System.currentTimeMillis(),
+  cooldownMs: Long = FEEDBACK_DEVIL_ANGEL_EASTER_EGG_COOLDOWN_MS,
+): Boolean {
+  if (lastTriggeredTimestampMs <= 0L) return false
+  val elapsed = nowTimestampMs - lastTriggeredTimestampMs
+  return elapsed in 0 until cooldownMs
+}
+
 fun shouldUseDevilAndAngelFeedbackIcons(
   random: Random = Random.Default,
-): Boolean = random.nextFloat() < FEEDBACK_DEVIL_ANGEL_EASTER_EGG_CHANCE
+  lastTriggeredTimestampMs: Long = 0L,
+  nowTimestampMs: Long = System.currentTimeMillis(),
+  cooldownMs: Long = FEEDBACK_DEVIL_ANGEL_EASTER_EGG_COOLDOWN_MS,
+): Boolean {
+  if (isFeedbackDevilAngelEasterEggOnCooldown(lastTriggeredTimestampMs, nowTimestampMs, cooldownMs)) {
+    return false
+  }
+  return random.nextFloat() < FEEDBACK_DEVIL_ANGEL_EASTER_EGG_CHANCE
+}
+
+/**
+ * Attempts to trigger the Devil & Angel feedback button icons easter egg.
+ *
+ * When triggered (15% chance), records [nowTimestampMs] in [preferencesRepository] to prevent it
+ * from triggering again for [cooldownMs] (3 hours) and returns `true`.
+ * Returns `false` if on cooldown or if the 15% roll does not hit.
+ */
+fun tryTriggerDevilAndAngelFeedbackIcons(
+  preferencesRepository: NavigationPreferencesRepository,
+  nowTimestampMs: Long = System.currentTimeMillis(),
+  random: Random = Random.Default,
+  cooldownMs: Long = FEEDBACK_DEVIL_ANGEL_EASTER_EGG_COOLDOWN_MS,
+): Boolean {
+  val lastTriggeredMs = preferencesRepository.getFeedbackDevilAngelLastTriggeredMs()
+  if (
+    !shouldUseDevilAndAngelFeedbackIcons(
+      random = random,
+      lastTriggeredTimestampMs = lastTriggeredMs,
+      nowTimestampMs = nowTimestampMs,
+      cooldownMs = cooldownMs,
+    )
+  ) {
+    return false
+  }
+  preferencesRepository.setFeedbackDevilAngelLastTriggeredMs(nowTimestampMs)
+  return true
+}
 
 fun resolveReportBugButtonIcon(useDevilAndAngelIcons: Boolean): ImageVector =
   if (useDevilAndAngelIcons) DevilFeedbackIcon else Icons.Default.BugReport
@@ -405,27 +453,42 @@ fun shouldTriggerDonateEasterEggMessage(
   return random.nextFloat() < DONATE_EASTER_EGG_CHANCE
 }
 
+/**
+ * Picks a Donate easter egg message with a 50% chance ([DONATE_EASTER_EGG_MESSAGE_POOL_CHANCE])
+ * from the donate message list ([messages]) and a 50% chance from the Good tool's positive
+ * message list ([positiveMessages]).
+ */
 fun pickDonateEasterEggMessage(
   random: Random = Random.Default,
   messages: List<String> = DONATE_EASTER_EGG_MESSAGES,
+  positiveMessages: List<String> = GOOD_POSITIVE_MESSAGES,
 ): String {
-  if (messages.isEmpty()) return DONATE_DEFAULT_BUTTON_TEXT
-  return messages[random.nextInt(messages.size)]
+  val useDonatePool = when {
+    messages.isEmpty() -> false
+    positiveMessages.isEmpty() -> true
+    else -> random.nextFloat() < DONATE_EASTER_EGG_MESSAGE_POOL_CHANCE
+  }
+  val selectedPool = if (useDonatePool) messages else positiveMessages
+  if (selectedPool.isEmpty()) return DONATE_DEFAULT_BUTTON_TEXT
+  return selectedPool[random.nextInt(selectedPool.size)]
 }
 
 /**
  * Attempts to trigger the Donate button text flip easter egg after the button has been in view for
- * [DONATE_EASTER_EGG_VIEW_DURATION_MS] (3 seconds).
+ * [DONATE_EASTER_EGG_VIEW_DURATION_MS] (2 seconds).
  *
- * When triggered (1% chance), records [nowTimestampMs] in [preferencesRepository] to prevent it
- * from triggering again for [cooldownMs] (3 hours) and returns the selected cute message.
- * Returns `null` if on cooldown or if the 1% roll does not hit.
+ * When triggered (5% chance), records [nowTimestampMs] in [preferencesRepository] to prevent it
+ * from triggering again for [cooldownMs] (0.5 hours / 30 minutes) and returns the selected message
+ * (50% chance from [DONATE_EASTER_EGG_MESSAGES], 50% chance from [GOOD_POSITIVE_MESSAGES]).
+ * Returns `null` if on cooldown or if the 5% roll does not hit.
  */
 fun tryTriggerDonateEasterEgg(
   preferencesRepository: NavigationPreferencesRepository,
   nowTimestampMs: Long = System.currentTimeMillis(),
   random: Random = Random.Default,
   cooldownMs: Long = DONATE_EASTER_EGG_COOLDOWN_MS,
+  messages: List<String> = DONATE_EASTER_EGG_MESSAGES,
+  positiveMessages: List<String> = GOOD_POSITIVE_MESSAGES,
 ): String? {
   val lastTriggeredMs = preferencesRepository.getDonateEasterEggLastTriggeredMs()
   if (
@@ -439,7 +502,11 @@ fun tryTriggerDonateEasterEgg(
     return null
   }
   preferencesRepository.setDonateEasterEggLastTriggeredMs(nowTimestampMs)
-  return pickDonateEasterEggMessage(random)
+  return pickDonateEasterEggMessage(
+    random = random,
+    messages = messages,
+    positiveMessages = positiveMessages,
+  )
 }
 
 data class ColorPreset(
@@ -5419,9 +5486,13 @@ fun SettingsScreen(
       Text("Reset All Settings to Defaults")
     }
 
-    // Report a Bug & Request a Feature (side-by-side rounded buttons, 1% chance for devil & angel icons)
+    // Report a Bug & Request a Feature (side-by-side rounded buttons, 15% chance for devil & angel icons with 3-hour cooldown)
     val useDevilAndAngelIcons = rememberSaveable {
-      shouldUseDevilAndAngelFeedbackIcons(feedbackIconsRandom)
+      tryTriggerDevilAndAngelFeedbackIcons(
+        preferencesRepository = preferencesRepository,
+        nowTimestampMs = nowTimestampProvider(),
+        random = feedbackIconsRandom,
+      )
     }
     val reportBugIcon = remember(useDevilAndAngelIcons) {
       resolveReportBugButtonIcon(useDevilAndAngelIcons)

@@ -1213,8 +1213,10 @@ class MusicPlayerEngineTest {
       )
     }
 
-    // Mix 1 mashes similar genres together (e.g. Synthwave + Electronic), Mix 2 is Old Favorites
-    assertTrue(MusicPlayerEngine.areGenresSimilar("Synthwave", "Electronic"))
+    // Mix 1 compares genre text, groups similar text together, and picks random genres from a text-similar group; Mix 2 is Old Favorites
+    assertTrue(MusicPlayerEngine.areGenresSimilar("Synthwave", "Synthpop"))
+    assertTrue(MusicPlayerEngine.areGenresSimilar("Indie Rock", "Alternative Rock"))
+    assertFalse(MusicPlayerEngine.areGenresSimilar("Synthwave", "Classical"))
     assertTrue(mixesGen0[0].subtitle.contains("Genre Mashup"))
     assertEquals("Old Favorites", mixesGen0[1].name)
     assertTrue(mixesGen0[1].subtitle.contains("Old Favorites"))
@@ -1242,6 +1244,51 @@ class MusicPlayerEngineTest {
     )
     assertEquals(6, mixesGen1.size)
     assertNotEquals(mixesGen0.map { it.name }, mixesGen1.map { it.name })
+  }
+
+  @Test
+  fun genreMashup_comparesGenreTextAndPicksRandomGenresFromSimilarTextGroup() {
+    val genreNames = listOf(
+      "Indie Rock",
+      "Alternative Rock",
+      "Classic Rock",
+      "Hard Rock",
+      "Pop Rock",
+      "Classical",
+      "Jazz",
+    )
+    val tracks = genreNames.flatMapIndexed { index, genreName ->
+      (1..3).map { songIdx ->
+        MusicTrack(
+          id = "g_${index}_$songIdx",
+          title = "$genreName Song $songIdx",
+          artist = "Artist $index",
+          album = "Album $index",
+          genre = genreName,
+          durationMs = 200_000L,
+        )
+      }
+    }
+    val genres = MusicPlayerEngine.buildGenres(tracks)
+    val textGroups = MusicPlayerEngine.groupGenresByTextSimilarity(genres)
+    assertTrue("Expected at least one text similarity group", textGroups.isNotEmpty())
+
+    // The top text-similar group should group the "Rock" genres together based on text comparison
+    val topGroupNames = textGroups.first().map { it.name }.toSet()
+    val rockGenres = setOf("Indie Rock", "Alternative Rock", "Classic Rock", "Hard Rock", "Pop Rock")
+    assertEquals(rockGenres, topGroupNames)
+
+    // Picking a mashup cluster from the top group selects 2..4 random genres from that text-similar group
+    val (clusterA, _) = MusicPlayerEngine.buildGenreMashupClusters(
+      genres = genres,
+      refreshGeneration = 0,
+      random = kotlin.random.Random(42L),
+    )
+    assertTrue("Expected 2..4 genres picked from text group, got ${clusterA.size}", clusterA.size in 2..4)
+    assertTrue(
+      "Expected all picked genres to come from the text-similar Rock group, got ${clusterA.map { it.name }}",
+      clusterA.all { it.name in rockGenres },
+    )
   }
 
   @Test

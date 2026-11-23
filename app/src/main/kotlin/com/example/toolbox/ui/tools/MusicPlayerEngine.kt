@@ -5755,51 +5755,218 @@ object MusicPlayerEngine {
     return listOf(MusicLibraryTab.HOME) + others
   }
 
-  /**
-   * Genre affinity families used to mash similar or complementary genres together when generating
-   * Home mixes.
-   */
-  private val GENRE_AFFINITY_FAMILIES: List<Set<String>> = listOf(
-    setOf(
-      "synthwave", "electronic", "edm", "electro", "dance", "house", "techno", "trance",
-      "cyberpunk", "chillwave", "drum & bass", "dubstep", "vaporwave", "synthpop",
-    ),
-    setOf(
-      "rock", "alternative", "indie", "punk", "metal", "hard rock", "grunge", "classic rock",
-      "garage", "post-rock", "pop rock", "new wave", "shoegaze",
-    ),
-    setOf(
-      "jazz", "blues", "soul", "r&b", "funk", "lounge", "bossa nova", "swing", "neo-soul",
-      "gospel", "lo-fi", "chill",
-    ),
-    setOf(
-      "acoustic", "folk", "country", "indie folk", "americana", "singer-songwriter", "bluegrass",
-      "unplugged",
-    ),
-    setOf(
-      "classical", "soundtrack", "score", "instrumental", "orchestral", "piano", "ambient",
-      "cinematic", "new age", "chamber",
-    ),
-    setOf(
-      "pop", "hip-hop", "rap", "dance pop", "indie pop", "disco", "reggae", "latin", "afrobeats",
-    ),
-  )
+  private val GENRE_TOKEN_SPLIT_REGEX = Regex("[^\\p{L}\\p{N}]+")
 
   /**
-   * Returns `true` if [genreA] and [genreB] belong to the same musical affinity family or share
-   * overlapping keywords.
+   * Normalizes [genre] text into lowercase alphanumeric words/tokens for text-similarity comparison.
    */
-  fun areGenresSimilar(genreA: String, genreB: String): Boolean {
+  internal fun tokenizeGenreText(genre: String): List<String> {
+    return genre
+      .trim()
+      .lowercase(Locale.ROOT)
+      .split(GENRE_TOKEN_SPLIT_REGEX)
+      .filter { it.isNotEmpty() }
+  }
+
+  /**
+   * Extracts character n-grams (default 3-grams, plus 2-grams for short words) from normalized
+   * genre text so sub-words and compound genre names (e.g., "Synthwave" vs "Synthpop" vs "Chillwave")
+   * can be compared directly by their text content.
+   */
+  private fun extractGenreNGrams(normText: String): Set<String> {
+    val compact = normText.replace(GENRE_TOKEN_SPLIT_REGEX, "")
+    if (compact.isEmpty()) return emptySet()
+    if (compact.length < 3) return setOf(compact)
+    val grams = HashSet<String>(compact.length * 2)
+    for (i in 0..compact.length - 3) {
+      grams.add(compact.substring(i, i + 3))
+    }
+    for (i in 0..compact.length - 2) {
+      grams.add(compact.substring(i, i + 2))
+    }
+    return grams
+  }
+
+  /**
+   * Computes a normalized text similarity score in `0.0..1.0` between [genreA] and [genreB] by
+   * comparing shared words, substring containment, common prefixes/suffixes, and character n-gram
+   * Dice similarity.
+   */
+  fun computeGenreTextSimilarity(genreA: String, genreB: String): Double {
     val normA = genreA.trim().lowercase(Locale.ROOT)
     val normB = genreB.trim().lowercase(Locale.ROOT)
-    if (normA.isEmpty() || normB.isEmpty()) return false
-    if (normA == normB) return true
-    if (normA.contains(normB) || normB.contains(normA)) return true
-    return GENRE_AFFINITY_FAMILIES.any { family ->
-      val aMatches = family.any { normA == it || normA.contains(it) || it.contains(normA) }
-      val bMatches = family.any { normB == it || normB.contains(it) || it.contains(normB) }
-      aMatches && bMatches
+    if (normA.isEmpty() || normB.isEmpty()) return 0.0
+    if (normA == normB) return 1.0
+
+    val tokensA = tokenizeGenreText(normA)
+    val tokensB = tokenizeGenreText(normB)
+    val tokenSetA = tokensA.toSet()
+    val tokenSetB = tokensB.toSet()
+
+    // 1. Exact shared word tokens (e.g., "Indie Rock" & "Alternative Rock", "Indie Pop" & "Indie Folk")
+    val sharedTokens = tokenSetA.intersect(tokenSetB).filter { it.length >= 2 }
+    val tokenOverlapScore = if (sharedTokens.isNotEmpty()) {
+      val unionSize = tokenSetA.union(tokenSetB).size.coerceAtLeast(1)
+      (0.65 + 0.35 * (sharedTokens.size.toDouble() / unionSize.toDouble())).coerceAtMost(0.98)
+    } else {
+      0.0
     }
+
+    // 2. Substring containment across full normalized text or individual tokens (>= 3 chars)
+    val compactA = normA.replace(GENRE_TOKEN_SPLIT_REGEX, "")
+    val compactB = normB.replace(GENRE_TOKEN_SPLIT_REGEX, "")
+    var substringScore = 0.0
+    if (compactA.length >= 3 && compactB.length >= 3 && (compactA.contains(compactB) || compactB.contains(compactA))) {
+      val ratio = minOf(compactA.length, compactB.length).toDouble() / maxOf(compactA.length, compactB.length).toDouble()
+      substringScore = (0.60 + 0.35 * ratio).coerceAtMost(0.95)
+    } else {
+      for (tA in tokensA) {
+        if (tA.length < 3) continue
+        for (tB in tokensB) {
+          if (tB.length < 3) continue
+          if (tA.contains(tB) || tB.contains(tA)) {
+            val ratio = minOf(tA.length, tB.length).toDouble() / maxOf(tA.length, tB.length).toDouble()
+            substringScore = maxOf(substringScore, 0.55 + 0.30 * ratio)
+          }
+        }
+      }
+    }
+
+    // 3. Shared prefix or suffix stem across tokens (e.g., "Synthwave" & "Synthpop" share "synth",
+    //    "Synthwave" & "Chillwave" share "wave", "Electronic" & "Electro" share "electro")
+    var affixScore = 0.0
+    for (tA in tokensA + listOf(compactA)) {
+      if (tA.length < 4) continue
+      for (tB in tokensB + listOf(compactB)) {
+        if (tB.length < 4) continue
+        val commonPrefix = tA.commonPrefixWith(tB).length
+        val commonSuffix = tA.commonSuffixWith(tB).length
+        val bestAffix = maxOf(commonPrefix, commonSuffix)
+        if (bestAffix >= 4) {
+          val ratio = bestAffix.toDouble() / minOf(tA.length, tB.length).toDouble()
+          affixScore = maxOf(affixScore, (0.45 + 0.35 * ratio).coerceAtMost(0.85))
+        }
+      }
+    }
+
+    // 4. Character n-gram Dice coefficient for fuzzy text similarity
+    val gramsA = extractGenreNGrams(normA)
+    val gramsB = extractGenreNGrams(normB)
+    val ngramScore = if (gramsA.isNotEmpty() && gramsB.isNotEmpty()) {
+      val intersection = gramsA.count { it in gramsB }
+      (2.0 * intersection.toDouble()) / (gramsA.size + gramsB.size).toDouble()
+    } else {
+      0.0
+    }
+
+    return maxOf(tokenOverlapScore, substringScore, affixScore, ngramScore).coerceIn(0.0, 1.0)
+  }
+
+  /**
+   * Returns `true` if [genreA] and [genreB] have similar genre text (shared words, stems, prefixes,
+   * suffixes, substrings, or high character n-gram overlap).
+   */
+  fun areGenresSimilar(genreA: String, genreB: String): Boolean {
+    return computeGenreTextSimilarity(genreA, genreB) >= 0.45
+  }
+
+  /**
+   * Groups [genres] into clusters of genres with similar text. Genres that share words, stems,
+   * prefixes/suffixes, or high text similarity are grouped together (using connected components at
+   * the similarity threshold, or grouping top text-similarity neighbors when all genre names are
+   * distinct).
+   */
+  fun groupGenresByTextSimilarity(genres: List<MusicGenre>): List<List<MusicGenre>> {
+    val validGenres = genres.filter {
+      it.name.isNotBlank() && !it.name.equals("Unknown Genre", ignoreCase = true)
+    }.ifEmpty { genres }
+    if (validGenres.size <= 1) return if (validGenres.isEmpty()) emptyList() else listOf(validGenres)
+
+    val n = validGenres.size
+    val similarityMatrix = Array(n) { DoubleArray(n) }
+    for (i in 0 until n) {
+      similarityMatrix[i][i] = 1.0
+      for (j in i + 1 until n) {
+        val sim = computeGenreTextSimilarity(validGenres[i].name, validGenres[j].name)
+        similarityMatrix[i][j] = sim
+        similarityMatrix[j][i] = sim
+      }
+    }
+
+    // 1. Build connected components of genres whose text similarity meets the threshold (>= 0.45)
+    val visited = BooleanArray(n)
+    val textClusters = mutableListOf<List<MusicGenre>>()
+    for (i in 0 until n) {
+      if (visited[i]) continue
+      val componentIndices = mutableListOf<Int>()
+      val queue = ArrayDeque<Int>()
+      queue.add(i)
+      visited[i] = true
+      while (queue.isNotEmpty()) {
+        val curr = queue.removeFirst()
+        componentIndices.add(curr)
+        for (next in 0 until n) {
+          if (!visited[next] && similarityMatrix[curr][next] >= 0.45) {
+            visited[next] = true
+            queue.add(next)
+          }
+        }
+      }
+      if (componentIndices.size >= 2) {
+        textClusters.add(componentIndices.map { validGenres[it] })
+      }
+    }
+
+    // 2. Also build anchor-based neighborhood groups for each genre with any text-similar neighbors
+    //    so large families or overlapping stems (e.g., "Indie Rock", "Indie Pop", "Alternative Rock")
+    //    can be sampled cleanly
+    for (i in 0 until n) {
+      val neighbors = (0 until n)
+        .filter { j -> j != i && similarityMatrix[i][j] >= 0.30 }
+        .sortedByDescending { j -> similarityMatrix[i][j] }
+      if (neighbors.isNotEmpty()) {
+        val group = listOf(validGenres[i]) + neighbors.map { validGenres[it] }
+        val groupNames = group.map { it.name }.toSet()
+        if (textClusters.none { existing -> existing.map { it.name }.toSet() == groupNames }) {
+          textClusters.add(group)
+        }
+      }
+    }
+
+    // 3. Fallback when no genres share >= 0.30 text similarity: group each genre with its closest
+    //    textual neighbors by character/n-gram similarity
+    if (textClusters.isEmpty()) {
+      for (i in 0 until n) {
+        val closestNeighbors = (0 until n)
+          .filter { it != i }
+          .sortedWith(
+            compareByDescending<Int> { j -> similarityMatrix[i][j] }
+              .thenBy { j -> validGenres[j].name.lowercase(Locale.ROOT) }
+          )
+          .take(minOf(3, n - 1))
+        val group = listOf(validGenres[i]) + closestNeighbors.map { validGenres[it] }
+        val groupNames = group.map { it.name }.toSet()
+        if (textClusters.none { existing -> existing.map { it.name }.toSet() == groupNames }) {
+          textClusters.add(group)
+        }
+      }
+    }
+
+    // Sort clusters so stronger/larger text-similar groups come first
+    return textClusters.sortedWith(
+      compareByDescending<List<MusicGenre>> { cluster ->
+        var totalSim = 0.0
+        var pairCount = 0
+        for (a in cluster.indices) {
+          for (b in a + 1 until cluster.size) {
+            totalSim += computeGenreTextSimilarity(cluster[a].name, cluster[b].name)
+            pairCount++
+          }
+        }
+        val avgSim = if (pairCount > 0) totalSim / pairCount else 0.0
+        (if (avgSim >= 0.45) 10.0 else 0.0) + avgSim
+      }.thenByDescending { it.size }
+    )
   }
 
   /**
@@ -5881,7 +6048,12 @@ object MusicPlayerEngine {
     return result
   }
 
-  private fun buildGenreMashupClusters(
+  /**
+   * Compares the text of [genres], groups genres with similar text together via
+   * [groupGenresByTextSimilarity], and picks a few random genres (2 to 4) to mix out of a
+   * similarly grouped text cluster.
+   */
+  internal fun buildGenreMashupClusters(
     genres: List<MusicGenre>,
     refreshGeneration: Int,
     random: kotlin.random.Random,
@@ -5889,66 +6061,43 @@ object MusicPlayerEngine {
     if (genres.isEmpty()) return emptyList<MusicGenre>() to emptyList()
     if (genres.size == 1) return genres to genres
 
-    // Build all candidate pairs/trios, prioritizing similar genres first and complementary vibes next
-    val candidateClusters = mutableListOf<List<MusicGenre>>()
-    for (i in genres.indices) {
-      for (j in i + 1 until genres.size) {
-        val gA = genres[i]
-        val gB = genres[j]
-        if (areGenresSimilar(gA.name, gB.name)) {
-          candidateClusters.add(listOf(gA, gB))
-        }
+    val textGroups = groupGenresByTextSimilarity(genres).ifEmpty { listOf(genres) }
+    val safeGen = refreshGeneration.coerceAtLeast(0)
+
+    fun pickRandomGenresFromGroup(group: List<MusicGenre>): List<MusicGenre> {
+      if (group.size <= 2) return group.shuffled(random)
+      val maxPick = minOf(4, group.size)
+      val minPick = minOf(2, maxPick)
+      val pickCount = if (maxPick > minPick) {
+        random.nextInt(minPick, maxPick + 1)
+      } else {
+        minPick
       }
+      return group.shuffled(random).take(pickCount)
     }
 
-    // Add affinity-adjacent / complementary pairings (e.g., Jazz + Acoustic, Classical + Acoustic, Rock + Synthwave/Electronic)
-    val complementaryPairs = listOf(
-      "jazz" to "acoustic",
-      "jazz" to "classical",
-      "acoustic" to "classical",
-      "rock" to "electronic",
-      "rock" to "synthwave",
-    )
-    for ((p1, p2) in complementaryPairs) {
-      val match1 = genres.find { it.name.equals(p1, ignoreCase = true) || it.name.lowercase(Locale.ROOT).contains(p1) }
-      val match2 = genres.find { it.name.equals(p2, ignoreCase = true) || it.name.lowercase(Locale.ROOT).contains(p2) }
-      if (match1 != null && match2 != null && match1.name != match2.name) {
-        val pair = listOf(match1, match2)
-        if (candidateClusters.none { it.map { g -> g.name }.toSet() == pair.map { g -> g.name }.toSet() }) {
-          candidateClusters.add(pair)
-        }
-      }
-    }
-
-    // Add all remaining distinct genre pairs so every refresh can explore new combinations
-    val shuffledGenres = genres.shuffled(random)
-    for (i in shuffledGenres.indices) {
-      for (j in i + 1 until shuffledGenres.size) {
-        val pair = listOf(shuffledGenres[i], shuffledGenres[j])
-        if (candidateClusters.none { it.map { g -> g.name }.toSet() == pair.map { g -> g.name }.toSet() }) {
-          candidateClusters.add(pair)
-        }
-      }
-    }
-
-    val clusterA = candidateClusters[refreshGeneration.coerceAtLeast(0) % candidateClusters.size]
+    val groupA = textGroups[safeGen % textGroups.size]
+    val clusterA = pickRandomGenresFromGroup(groupA)
     val clusterANames = clusterA.map { it.name }.toSet()
-    val nonOverlapping = candidateClusters.filter { cluster ->
-      cluster.none { it.name in clusterANames }
+
+    val nonOverlappingGroups = textGroups.filter { group ->
+      group.none { it.name in clusterANames }
     }
-    val clusterBPool = nonOverlapping.ifEmpty {
-      candidateClusters.filter { cluster ->
-        cluster.map { it.name }.toSet() != clusterANames
-      }.ifEmpty { candidateClusters }
+    val groupBPool = nonOverlappingGroups.ifEmpty {
+      textGroups.filter { group ->
+        group.map { it.name }.toSet() != groupA.map { it.name }.toSet()
+      }.ifEmpty { textGroups }
     }
-    val clusterB = clusterBPool[(refreshGeneration.coerceAtLeast(0) + 1) % clusterBPool.size]
+    val groupB = groupBPool[(safeGen + 1) % groupBPool.size]
+    val clusterB = pickRandomGenresFromGroup(groupB)
     return clusterA to clusterB
   }
 
   /**
    * Generates [HOME_PLAYLIST_COUNT] (6) curated Home playlists targeting approximately
    * [targetDurationMs] (~1 hour each, not strict):
-   * 1. **Genre Mashup**: Mashes similar genres together (e.g., Synthwave × Electronic).
+   * 1. **Genre Mashup**: Compares the text of the genres, groups similar text together, and picks
+   *    a few random genres out of a similarly grouped text cluster to mix.
    * 2. **Old Favorites**: Songs by favorite artists/albums/songs/genres that have been played a lot
    *    but not listened to in a good while.
    * 3. **Play Stats Powerhouse**: Uses play counts, full plays, total listen time, and low skips.
@@ -5994,7 +6143,7 @@ object MusicPlayerEngine {
       favoriteGenres = favoriteGenres,
     )
 
-    // 1. Genre Mashup #1 (Similar genres mashed together)
+    // 1. Genre Mashup #1 (Compares genre text, groups similar text, and picks a few random genres from a text-similar group)
     val clusterANames = clusterA.map { it.name }
     val clusterALowerSet = clusterANames.mapTo(HashSet(clusterANames.size)) { it.lowercase(Locale.ROOT) }
     val mash1Primary = interleaveTrackLists(
@@ -6010,10 +6159,9 @@ object MusicPlayerEngine {
       minTracks = minOf(4, allTracks.size),
       fillWithFallbackTowardTarget = fillTowardOneHour,
     )
-    val mash1Label = if (clusterANames.size >= 2) {
-      "${clusterANames[0]} × ${clusterANames[1]}"
-    } else {
-      clusterANames.firstOrNull() ?: "Multi-Genre"
+    val mash1Label = when {
+      clusterANames.size >= 2 -> clusterANames.take(3).joinToString(" × ")
+      else -> clusterANames.firstOrNull() ?: "Multi-Genre"
     }
     val mash1Titles = listOf(
       "$mash1Label Fusion",
