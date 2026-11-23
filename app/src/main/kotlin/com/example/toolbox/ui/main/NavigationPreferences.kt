@@ -14,6 +14,7 @@ import com.example.toolbox.ui.tools.BackgroundTextureWidgets
 import com.example.toolbox.ui.tools.CalendarWidgets
 import com.example.toolbox.ui.tools.CameraWidgets
 import com.example.toolbox.ui.tools.DiceRollerWidgets
+import com.example.toolbox.ui.tools.ElementsWidgets
 import com.example.toolbox.ui.tools.GoodWidgets
 import com.example.toolbox.ui.tools.MusicPlayerWidgets
 import com.example.toolbox.ui.tools.NotesWidgets
@@ -394,6 +395,7 @@ object NavigationPreferencesBridge {
     GoodWidgets.updateAllWidgets(ctx)
     StarsWidgets.updateAllWidgets(ctx)
     CalendarWidgets.updateAllWidgets(ctx)
+    ElementsWidgets.updateAllWidgets(ctx)
   }
 }
 

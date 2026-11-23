@@ -60,6 +60,11 @@ const val EXTRA_PLANT_SCHEDULE_OPEN_SEARCH = "extra_plant_schedule_open_search"
 const val EXTRA_CAMERA_CAPTURE_MODE = "extra_camera_capture_mode"
 const val EXTRA_CALENDAR_DATE_KEY = "extra_calendar_date_key"
 const val EXTRA_CALENDAR_OPEN_ADD_EVENT = "extra_calendar_open_add_event"
+const val EXTRA_ELEMENTS_ATOMIC_NUMBER = "extra_elements_atomic_number"
+const val EXTRA_ELEMENTS_OPEN_INSPECTOR = "extra_elements_open_inspector"
+const val EXTRA_ELEMENTS_OPEN_SEARCH = "extra_elements_open_search"
+const val EXTRA_ELEMENTS_OPEN_MOLAR_MASS = "extra_elements_open_molar_mass"
+const val EXTRA_CALENDAR_VIEW_MODE = "extra_calendar_view_mode"
 
 const val STANDALONE_SHORTCUT_INTENT_FLAGS =
   Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -550,13 +555,24 @@ fun parseCalendarOpenAddEvent(intent: Intent?): Boolean {
 }
 
 /**
- * Creates an [Intent] that launches [Tool.CALENDAR] focused on [dateKey] (`yyyy-MM-dd`)
- * and optionally opens the New Calendar Event dialog ([openAddEvent] = `true`).
+ * Parses the requested [com.example.toolbox.ui.tools.CalendarViewMode] name (`SCHEDULE`, `MONTH`, `WEEK`, `DAY`)
+ * for [Tool.CALENDAR] from an incoming [Intent], or `null` if none was specified.
+ */
+fun parseCalendarViewModeName(intent: Intent?): String? {
+  val fromExtra = intent?.getStringExtra(EXTRA_CALENDAR_VIEW_MODE)?.trim()?.takeIf { it.isNotEmpty() }
+  if (fromExtra != null) return fromExtra
+  return intent?.data?.getQueryParameter("calendar_view")?.trim()?.takeIf { it.isNotEmpty() }
+}
+
+/**
+ * Creates an [Intent] that launches [Tool.CALENDAR] focused on [dateKey] (`yyyy-MM-dd`),
+ * optionally switches to [viewModeName], and optionally opens the New Calendar Event dialog ([openAddEvent] = `true`).
  */
 fun createCalendarWidgetIntent(
   context: Context,
   dateKey: String? = null,
   openAddEvent: Boolean = false,
+  viewModeName: String? = null,
 ): Intent {
   return createStandaloneToolIntent(context, Tool.CALENDAR).apply {
     if (!dateKey.isNullOrBlank()) {
@@ -564,6 +580,74 @@ fun createCalendarWidgetIntent(
     }
     if (openAddEvent) {
       putExtra(EXTRA_CALENDAR_OPEN_ADD_EVENT, true)
+    }
+    if (!viewModeName.isNullOrBlank()) {
+      putExtra(EXTRA_CALENDAR_VIEW_MODE, viewModeName)
+    }
+  }
+}
+
+/**
+ * Parses the requested element atomic number (`1..118`) for [Tool.ELEMENTS] from an incoming [Intent],
+ * or `null` if none was specified.
+ */
+fun parseElementsAtomicNumber(intent: Intent?): Int? {
+  val fromExtra = intent?.getIntExtra(EXTRA_ELEMENTS_ATOMIC_NUMBER, -1)?.takeIf { it in 1..118 }
+  if (fromExtra != null) return fromExtra
+  return intent?.data?.getQueryParameter("element_z")?.toIntOrNull()?.takeIf { it in 1..118 }
+}
+
+/**
+ * Returns `true` if the incoming [Intent] requests opening [Tool.ELEMENTS] directly in the
+ * full-screen Element Inspector view.
+ */
+fun parseElementsOpenInspector(intent: Intent?): Boolean {
+  return intent?.getBooleanExtra(EXTRA_ELEMENTS_OPEN_INSPECTOR, false) == true ||
+    intent?.data?.getQueryParameter("element_inspect")?.equals("true", ignoreCase = true) == true
+}
+
+/**
+ * Returns `true` if the incoming [Intent] requests opening [Tool.ELEMENTS] with the search
+ * catalog overlay active.
+ */
+fun parseElementsOpenSearch(intent: Intent?): Boolean {
+  return intent?.getBooleanExtra(EXTRA_ELEMENTS_OPEN_SEARCH, false) == true ||
+    intent?.data?.getQueryParameter("element_search")?.equals("true", ignoreCase = true) == true
+}
+
+/**
+ * Returns `true` if the incoming [Intent] requests opening [Tool.ELEMENTS] in the Molar Mass
+ * calculator tab.
+ */
+fun parseElementsOpenMolarMass(intent: Intent?): Boolean {
+  return intent?.getBooleanExtra(EXTRA_ELEMENTS_OPEN_MOLAR_MASS, false) == true ||
+    intent?.data?.getQueryParameter("element_molar_mass")?.equals("true", ignoreCase = true) == true
+}
+
+/**
+ * Creates an [Intent] that launches [Tool.ELEMENTS] focused on [atomicNumber] (`1..118`) and
+ * optionally opens the full-screen Element Inspector ([openInspector] = `true`), the search
+ * overlay ([openSearch] = `true`), or the Molar Mass Calculator tab ([openMolarMass] = `true`).
+ */
+fun createElementsWidgetIntent(
+  context: Context,
+  atomicNumber: Int? = null,
+  openInspector: Boolean = false,
+  openSearch: Boolean = false,
+  openMolarMass: Boolean = false,
+): Intent {
+  return createStandaloneToolIntent(context, Tool.ELEMENTS).apply {
+    if (atomicNumber != null && atomicNumber in 1..118) {
+      putExtra(EXTRA_ELEMENTS_ATOMIC_NUMBER, atomicNumber)
+    }
+    if (openInspector) {
+      putExtra(EXTRA_ELEMENTS_OPEN_INSPECTOR, true)
+    }
+    if (openSearch) {
+      putExtra(EXTRA_ELEMENTS_OPEN_SEARCH, true)
+    }
+    if (openMolarMass) {
+      putExtra(EXTRA_ELEMENTS_OPEN_MOLAR_MASS, true)
     }
   }
 }

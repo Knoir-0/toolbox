@@ -817,22 +817,6 @@ data class PlanetaryAspect(
 )
 
 /**
- * Built-in offline birth city coordinate entry for rising/house calculations.
- */
-@Immutable
-data class BirthCityPreset(
-  val id: String,
-  val cityName: String,
-  val regionOrCountry: String,
-  val latitude: Double,
-  val longitude: Double,
-  val timeZoneId: String,
-) {
-  val displayLabel: String
-    get() = "$cityName, $regionOrCountry"
-}
-
-/**
  * User-saved birth chart profile (e.g. "Her Stars", "Partner", friends, family).
  */
 @Immutable
@@ -846,10 +830,9 @@ data class BirthProfile(
   val birthHour: Int = 12, // 0..23
   val birthMinute: Int = 0, // 0..59
   val hasExactBirthTime: Boolean = true,
-  val cityName: String = "New York, USA",
   val latitude: Double = 40.7128,
   val longitude: Double = -74.0060,
-  val timeZoneId: String = "America/New_York",
+  val timeZoneId: String = TimeZone.getDefault().id.ifBlank { "UTC" },
   val notes: String = "",
 ) {
   val formattedBirthDate: String
@@ -877,7 +860,6 @@ data class BirthProfile(
     put("birthHour", birthHour)
     put("birthMinute", birthMinute)
     put("hasExactBirthTime", hasExactBirthTime)
-    put("cityName", cityName)
     put("latitude", latitude)
     put("longitude", longitude)
     put("timeZoneId", timeZoneId)
@@ -896,10 +878,9 @@ data class BirthProfile(
         birthHour = json.optInt("birthHour", 14).coerceIn(0, 23),
         birthMinute = json.optInt("birthMinute", 30).coerceIn(0, 59),
         hasExactBirthTime = json.optBoolean("hasExactBirthTime", true),
-        cityName = json.optString("cityName", "New York, USA").ifBlank { "New York, USA" },
         latitude = json.optDouble("latitude", 40.7128).coerceIn(-89.0, 89.0),
         longitude = json.optDouble("longitude", -74.0060).coerceIn(-180.0, 180.0),
-        timeZoneId = json.optString("timeZoneId", "America/New_York").ifBlank { "UTC" },
+        timeZoneId = json.optString("timeZoneId", TimeZone.getDefault().id).ifBlank { "UTC" },
         notes = json.optString("notes", ""),
       )
     }
@@ -1474,46 +1455,6 @@ val SKY_CONSTELLATIONS: List<SkyConstellation> = listOf(
 )
 
 /**
- * Offline city coordinates catalog covering major global timezones for Ascendant & Midheaven calculation.
- */
-val BUILTIN_BIRTH_CITIES: List<BirthCityPreset> = listOf(
-  BirthCityPreset("nyc", "New York", "NY, USA", 40.7128, -74.0060, "America/New_York"),
-  BirthCityPreset("lax", "Los Angeles", "CA, USA", 34.0522, -118.2437, "America/Los_Angeles"),
-  BirthCityPreset("chi", "Chicago", "IL, USA", 41.8781, -87.6298, "America/Chicago"),
-  BirthCityPreset("aus", "Austin", "TX, USA", 30.2672, -97.7431, "America/Chicago"),
-  BirthCityPreset("mia", "Miami", "FL, USA", 25.7617, -80.1918, "America/New_York"),
-  BirthCityPreset("sea", "Seattle", "WA, USA", 47.6062, -122.3321, "America/Los_Angeles"),
-  BirthCityPreset("sfo", "San Francisco", "CA, USA", 37.7749, -122.4194, "America/Los_Angeles"),
-  BirthCityPreset("den", "Denver", "CO, USA", 39.7392, -104.9903, "America/Denver"),
-  BirthCityPreset("phx", "Phoenix", "AZ, USA", 33.4484, -112.0740, "America/Phoenix"),
-  BirthCityPreset("bos", "Boston", "MA, USA", 42.3601, -71.0589, "America/New_York"),
-  BirthCityPreset("atl", "Atlanta", "GA, USA", 33.7490, -84.3880, "America/New_York"),
-  BirthCityPreset("hnl", "Honolulu", "HI, USA", 21.3069, -157.8583, "Pacific/Honolulu"),
-  BirthCityPreset("tor", "Toronto", "Canada", 43.6532, -79.3832, "America/Toronto"),
-  BirthCityPreset("van", "Vancouver", "Canada", 49.2827, -123.1207, "America/Vancouver"),
-  BirthCityPreset("mex", "Mexico City", "Mexico", 19.4326, -99.1332, "America/Mexico_City"),
-  BirthCityPreset("lon", "London", "United Kingdom", 51.5074, -0.1278, "Europe/London"),
-  BirthCityPreset("par", "Paris", "France", 48.8566, 2.3522, "Europe/Paris"),
-  BirthCityPreset("ber", "Berlin", "Germany", 52.5200, 13.4050, "Europe/Berlin"),
-  BirthCityPreset("rom", "Rome", "Italy", 41.9028, 12.4964, "Europe/Rome"),
-  BirthCityPreset("mad", "Madrid", "Spain", 40.4168, -3.7038, "Europe/Madrid"),
-  BirthCityPreset("ams", "Amsterdam", "Netherlands", 52.3676, 4.9041, "Europe/Amsterdam"),
-  BirthCityPreset("dub", "Dublin", "Ireland", 53.3498, -6.2603, "Europe/Dublin"),
-  BirthCityPreset("ath", "Athens", "Greece", 37.9838, 23.7275, "Europe/Athens"),
-  BirthCityPreset("tok", "Tokyo", "Japan", 35.6762, 139.6503, "Asia/Tokyo"),
-  BirthCityPreset("seo", "Seoul", "South Korea", 37.5665, 126.9780, "Asia/Seoul"),
-  BirthCityPreset("syd", "Sydney", "Australia", -33.8688, 151.2093, "Australia/Sydney"),
-  BirthCityPreset("mel", "Melbourne", "Australia", -37.8136, 144.9631, "Australia/Melbourne"),
-  BirthCityPreset("akl", "Auckland", "New Zealand", -36.8485, 174.7633, "Pacific/Auckland"),
-  BirthCityPreset("sin", "Singapore", "Singapore", 1.3521, 103.8198, "Asia/Singapore"),
-  BirthCityPreset("bom", "Mumbai", "India", 19.0760, 72.8777, "Asia/Kolkata"),
-  BirthCityPreset("dxb", "Dubai", "UAE", 25.2048, 55.2708, "Asia/Dubai"),
-  BirthCityPreset("sao", "São Paulo", "Brazil", -23.5505, -46.6333, "America/Sao_Paulo"),
-  BirthCityPreset("bue", "Buenos Aires", "Argentina", -34.6037, -58.3816, "America/Argentina/Buenos_Aires"),
-  BirthCityPreset("cpt", "Cape Town", "South Africa", -33.9249, 18.4241, "Africa/Johannesburg"),
-)
-
-/**
  * By default, no birth profiles are pre-filled; when no profiles exist, the Stars tool defaults
  * to the current birth sign for today's date.
  */
@@ -1731,9 +1672,6 @@ object StarsEngine {
       birthHour = 12,
       birthMinute = 0,
       hasExactBirthTime = false,
-      cityName = "New York, NY, USA",
-      latitude = 40.7128,
-      longitude = -74.0060,
       timeZoneId = calendar.timeZone.id.ifBlank { "UTC" },
     )
   }

@@ -77,6 +77,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import com.example.toolbox.ui.theme.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -331,7 +332,10 @@ fun ElementsScreen(
 
   var favoriteAtomicNumbers by remember { mutableStateOf(repo.loadFavoriteAtomicNumbers()) }
   var selectedAtomicNumber by rememberSaveable(initialAtomicNumber) {
-    mutableIntStateOf(initialAtomicNumber?.coerceIn(1, 118) ?: 1)
+    mutableIntStateOf(
+      initialAtomicNumber?.coerceIn(1, 118)
+        ?: if (isInspection) 1 else ElementsWidgets.loadFocusedAtomicNumber(context, repo),
+    )
   }
   val selectedElement = remember(selectedAtomicNumber) {
     PeriodicTableEngine.byAtomicNumber(selectedAtomicNumber) ?: PeriodicTableEngine.ALL_ELEMENTS.first()
@@ -373,8 +377,40 @@ fun ElementsScreen(
     inspectingAtomicNumber?.let { PeriodicTableEngine.byAtomicNumber(it) }
   }
 
+  fun updateSelectedElement(atomicNumber: Int, openInspector: Boolean = false) {
+    val coerced = atomicNumber.coerceIn(1, 118)
+    selectedAtomicNumber = coerced
+    if (openInspector) {
+      inspectingAtomicNumber = coerced
+    }
+    if (!isInspection) {
+      ElementsWidgets.saveFocusedAtomicNumber(context, coerced)
+      ElementsWidgets.updateAllWidgets(context)
+    }
+  }
+
   // Molar Mass Calculator state
   var formulaInput by rememberSaveable { mutableStateOf("H2O") }
+
+  // Handle incoming widget / cross-tool navigation requests
+  LaunchedEffect(PeriodicTableEngine.pendingWidgetNavigationRequest) {
+    val req = PeriodicTableEngine.consumePendingWidgetNavigationRequest() ?: return@LaunchedEffect
+    req.atomicNumber?.let { targetZ ->
+      val coerced = targetZ.coerceIn(1, 118)
+      selectedAtomicNumber = coerced
+      if (req.openInspector) {
+        inspectingAtomicNumber = coerced
+      }
+    }
+    if (req.openMolarMass) {
+      inspectingAtomicNumber = null
+      isSearchActive = false
+      displayMode = ElementsDisplayMode.MOLAR_MASS
+    } else if (req.openSearch) {
+      inspectingAtomicNumber = null
+      isSearchActive = true
+    }
+  }
 
   fun closeSearch() {
     isSearchActive = false
@@ -392,6 +428,9 @@ fun ElementsScreen(
   fun toggleFavoriteElement(atomicNumber: Int) {
     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     favoriteAtomicNumbers = repo.toggleFavorite(atomicNumber)
+    if (!isInspection) {
+      ElementsWidgets.updateAllWidgets(context)
+    }
   }
 
   val filteredElements = remember(
@@ -452,8 +491,7 @@ fun ElementsScreen(
           val next = PeriodicTableEngine.byAtomicNumber(nextAtomicNum)
           if (next != null) {
             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            selectedAtomicNumber = next.atomicNumber
-            inspectingAtomicNumber = next.atomicNumber
+            updateSelectedElement(next.atomicNumber, openInspector = true)
           }
         },
         onCopySummary = {
@@ -725,12 +763,11 @@ fun ElementsScreen(
                   tempUnit = tempUnit,
                   onSelectElement = { element ->
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    selectedAtomicNumber = element.atomicNumber
+                    updateSelectedElement(element.atomicNumber, openInspector = false)
                   },
                   onInspectElement = { element ->
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    selectedAtomicNumber = element.atomicNumber
-                    inspectingAtomicNumber = element.atomicNumber
+                    updateSelectedElement(element.atomicNumber, openInspector = true)
                   },
                   onToggleFavorite = { element ->
                     toggleFavoriteElement(element.atomicNumber)
@@ -746,8 +783,7 @@ fun ElementsScreen(
                   tempUnit = tempUnit,
                   onSelectElement = { element ->
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    selectedAtomicNumber = element.atomicNumber
-                    inspectingAtomicNumber = element.atomicNumber
+                    updateSelectedElement(element.atomicNumber, openInspector = true)
                   },
                   onToggleFavorite = { element ->
                     toggleFavoriteElement(element.atomicNumber)
@@ -760,8 +796,7 @@ fun ElementsScreen(
                   onFormulaChange = { formulaInput = it },
                   onInspectElement = { element ->
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    selectedAtomicNumber = element.atomicNumber
-                    inspectingAtomicNumber = element.atomicNumber
+                    updateSelectedElement(element.atomicNumber, openInspector = true)
                   },
                   onSendToCalculator = onOpenCalculator,
                   onCopyResult = { text ->
@@ -791,8 +826,7 @@ fun ElementsScreen(
               tempUnit = tempUnit,
               onSelectElement = { element ->
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                selectedAtomicNumber = element.atomicNumber
-                inspectingAtomicNumber = element.atomicNumber
+                updateSelectedElement(element.atomicNumber, openInspector = true)
                 closeSearch()
               },
               onToggleFavorite = { element ->

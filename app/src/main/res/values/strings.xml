@@ -27,6 +27,10 @@
     <string name="good_widget_description">Simple bar displaying a positive message on the left and a one-tap refresh button on the right</string>
     <string name="stars_widget_label">Stars</string>
     <string name="stars_widget_description">Daily horoscope mantra, current Moon phase &amp; sign, Big Three natal summary, and one-tap sign switcher</string>
-    <string name="calendar_widget_label">Calendar</string>
-    <string name="calendar_widget_description">Daily Google Calendar schedule with day switcher, Today badge jump, and one-tap event creation</string>
+    <string name="calendar_widget_label">Calendar Schedule</string>
+    <string name="calendar_widget_description">Daily Google Calendar schedule view with day switcher, Today badge jump, and one-tap event creation</string>
+    <string name="calendar_month_widget_label">Calendar Month</string>
+    <string name="calendar_month_widget_description">Monthly 6×7 calendar grid view with colored event dots, month switcher, Today badge jump, and one-tap event creation</string>
+    <string name="elements_widget_label">Periodic Table</string>
+    <string name="elements_widget_description">Interactive Periodic Table of Elements spotlight with 18-column IUPAC table map, 2D Bohr electron shell diagram, and element browser</string>
 </resources>

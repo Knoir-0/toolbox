@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_todo_widget_card"
+    android:clipToOutline="true">
+
+    <ImageView
+        android:id="@+id/widget_calendar_month_background"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="fitXY"
+        android:src="@drawable/bg_todo_widget_card" />
+
+    <LinearLayout
+        android:id="@+id/widget_calendar_month_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <!-- Header Bar with Today Date Badge, Month & Year Title, < / > Month Navigation, and + Add Event Button -->
+        <LinearLayout
+            android:id="@+id/widget_calendar_month_header"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="12dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="6dp">
+
+            <FrameLayout
+                android:id="@+id/widget_calendar_month_date_badge"
+                android:layout_width="34dp"
+                android:layout_height="34dp"
+                android:contentDescription="Jump to Today">
+
+                <ImageView
+                    android:id="@+id/widget_calendar_month_date_badge_bg"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:src="@drawable/bg_music_widget_circle"
+                    android:tint="#FF8E66A6" />
+
+                <TextView
+                    android:id="@+id/widget_calendar_month_date_badge_number"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:gravity="center"
+                    android:text="23"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="13.5sp"
+                    android:textStyle="bold" />
+            </FrameLayout>
+
+            <LinearLayout
+                android:id="@+id/widget_calendar_month_header_text_container"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/widget_calendar_month_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="November 2026"
+                    android:textColor="#FFE7E1E6"
+                    android:textSize="15.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/widget_calendar_month_subtitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="Month View • Tap to open"
+                    android:textColor="#FFCDC4CF"
+                    android:textSize="11.5sp" />
+            </LinearLayout>
+
+            <ImageView
+                android:id="@+id/widget_calendar_month_prev_month"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Previous month"
+                android:padding="5dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_widget_chevron_left"
+                android:tint="#FFCDC4CF" />
+
+            <ImageView
+                android:id="@+id/widget_calendar_month_next_month"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Next month"
+                android:padding="5dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_widget_chevron_right"
+                android:tint="#FFCDC4CF" />
+
+            <FrameLayout
+                android:id="@+id/widget_calendar_month_add_button"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="2dp"
+                android:contentDescription="Create calendar event">
+
+                <ImageView
+                    android:id="@+id/widget_calendar_month_add_button_bg"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@null"
+                    android:src="@drawable/bg_music_widget_circle"
+                    android:tint="#FF5A3472" />
+
+                <ImageView
+                    android:id="@+id/widget_calendar_month_add_button_icon"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@null"
+                    android:padding="7dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_media_add"
+                    android:tint="#FFDDB9F6" />
+            </FrameLayout>
+        </LinearLayout>
+
+        <!-- Monthly 6x7 Grid Card (14.dp rounded inner card rendered dynamically) -->
+        <FrameLayout
+            android:id="@+id/widget_calendar_month_grid_card"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:paddingStart="10dp"
+            android:paddingTop="2dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="10dp">
+
+            <ImageView
+                android:id="@+id/widget_calendar_month_grid_image"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="Monthly calendar grid"
+                android:scaleType="fitXY"
+                android:src="@drawable/bg_todo_widget_item" />
+        </FrameLayout>
+    </LinearLayout>
+</FrameLayout>

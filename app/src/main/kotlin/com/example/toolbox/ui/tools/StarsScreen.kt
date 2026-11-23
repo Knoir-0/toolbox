@@ -82,7 +82,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
@@ -342,10 +341,7 @@ fun StarsScreen(
       birthHour = 12,
       birthMinute = 0,
       hasExactBirthTime = false,
-      cityName = "New York, NY, USA",
-      latitude = 40.7128,
-      longitude = -74.0060,
-      timeZoneId = "America/New_York",
+      timeZoneId = now.timeZone.id.ifBlank { "UTC" },
     )
   }
 
@@ -512,7 +508,7 @@ fun StarsScreen(
               onSaveChartToNotes = {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 val body = buildString {
-                  appendLine("Profile: ${effectiveProfile.name} (${effectiveProfile.formattedBirthDate} • ${effectiveProfile.formattedBirthTime} • ${effectiveProfile.cityName})")
+                  appendLine("Profile: ${effectiveProfile.name} (${effectiveProfile.formattedBirthDate} • ${effectiveProfile.formattedBirthTime})")
                   appendLine("Big Three: ☉ ${effectiveChart.sunSign.displayName} Sun • ☽ ${effectiveChart.moonSign.displayName} Moon • ↑ ${effectiveChart.risingSign.displayName} Rising")
                   appendLine()
                   appendLine(effectiveChart.bigThreeSummary)
@@ -1603,7 +1599,7 @@ private fun StarsChartTabContent(
               )
               Text(
                 text = if (activeProfile != null) {
-                  "${activeProfile.formattedBirthDate} • ${activeProfile.formattedBirthTime} • ${activeProfile.cityName}"
+                  "${activeProfile.formattedBirthDate} • ${activeProfile.formattedBirthTime}"
                 } else {
                   "No birth profile saved • Defaulting to current star sign (${currentBirthSign.dateRange})"
                 },
@@ -3102,7 +3098,7 @@ private fun BirthProfileSwitcherDialog(
                   },
                 )
                 Text(
-                  text = "${profile.formattedBirthDate} • ${profile.cityName}",
+                  text = "${profile.formattedBirthDate} • ${profile.formattedBirthTime}",
                   style = MaterialTheme.typography.labelSmall,
                   color = if (isSelected) {
                     MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
@@ -3180,16 +3176,6 @@ private fun BirthProfileEditDialog(
   var hourText by remember { mutableStateOf(if (isNewProfile) "" else initialProfile.birthHour.toString()) }
   var minuteText by remember { mutableStateOf(if (isNewProfile) "" else initialProfile.birthMinute.toString()) }
 
-  var selectedCity by remember {
-    mutableStateOf(
-      BUILTIN_BIRTH_CITIES.firstOrNull {
-        it.displayLabel.equals(initialProfile.cityName, ignoreCase = true) ||
-          initialProfile.cityName.contains(it.cityName, ignoreCase = true)
-      } ?: BUILTIN_BIRTH_CITIES.first()
-    )
-  }
-  var cityFilterQuery by remember { mutableStateOf("") }
-
   LaunchedEffect(Unit) {
     delay(60)
     runCatching { focusRequester.requestFocus() }
@@ -3226,7 +3212,6 @@ private fun BirthProfileEditDialog(
     hasExactTime,
     parsedHour,
     parsedMinute,
-    selectedCity,
   ) {
     BirthProfile(
       id = initialProfile.id,
@@ -3238,10 +3223,9 @@ private fun BirthProfileEditDialog(
       birthHour = (parsedHour ?: 12).coerceIn(0, 23),
       birthMinute = (parsedMinute ?: 0).coerceIn(0, 59),
       hasExactBirthTime = hasExactTime,
-      cityName = selectedCity.displayLabel,
-      latitude = selectedCity.latitude,
-      longitude = selectedCity.longitude,
-      timeZoneId = selectedCity.timeZoneId,
+      latitude = initialProfile.latitude,
+      longitude = initialProfile.longitude,
+      timeZoneId = initialProfile.timeZoneId,
     )
   }
   val previewChart = remember(previewProfile) {
@@ -3281,7 +3265,7 @@ private fun BirthProfileEditDialog(
             color = MaterialTheme.colorScheme.onSurface,
           )
           Text(
-            text = "Enter birth date, time & city for Big Three calculation",
+            text = "Enter birth date & time for Big Three calculation",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -3460,51 +3444,6 @@ private fun BirthProfileEditDialog(
               text = timeError,
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.error,
-            )
-          }
-        }
-
-        // Birth City Selector
-        OutlinedTextField(
-          value = cityFilterQuery,
-          onValueChange = { cityFilterQuery = it },
-          label = { Text("Birth City (${selectedCity.displayLabel})") },
-          placeholder = { Text("Filter 34 global cities...") },
-          singleLine = true,
-          shape = RoundedCornerShape(14.dp),
-          leadingIcon = { Icon(Icons.Default.LocationOn, contentDescription = null) },
-          trailingIcon = {
-            if (cityFilterQuery.isNotEmpty()) {
-              IconButton(onClick = { cityFilterQuery = "" }) {
-                Icon(Icons.Default.Clear, contentDescription = "Clear")
-              }
-            }
-          },
-          modifier = Modifier.fillMaxWidth(),
-        )
-
-        val matchingCities = remember(cityFilterQuery) {
-          val q = cityFilterQuery.trim().lowercase(Locale.US)
-          if (q.isEmpty()) BUILTIN_BIRTH_CITIES else {
-            BUILTIN_BIRTH_CITIES.filter {
-              it.displayLabel.lowercase(Locale.US).contains(q) ||
-                it.timeZoneId.lowercase(Locale.US).contains(q)
-            }
-          }
-        }
-
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          matchingCities.forEach { city ->
-            FilterChip(
-              selected = city.id == selectedCity.id,
-              onClick = { selectedCity = city },
-              shape = RoundedCornerShape(20.dp),
-              label = { Text(city.displayLabel, style = MaterialTheme.typography.labelSmall) },
             )
           }
         }

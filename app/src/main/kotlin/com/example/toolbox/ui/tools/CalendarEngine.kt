@@ -51,16 +51,15 @@ enum class CalendarViewMode(
   val daysInTimeline: Int,
 ) {
   SCHEDULE("Schedule", 0),
-  DAY("Day", 1),
-  THREE_DAY("3-Day", 3),
-  WEEK("Week", 7),
   MONTH("Month", 0),
+  WEEK("Week", 7),
+  DAY("Day", 1),
   ;
 
   companion object {
     fun fromNameOrDefault(name: String?): CalendarViewMode {
-      if (name.isNullOrBlank()) return MONTH
-      return entries.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) } ?: MONTH
+      if (name.isNullOrBlank()) return SCHEDULE
+      return entries.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) } ?: SCHEDULE
     }
   }
 }
@@ -537,7 +536,7 @@ interface CalendarRepository {
   fun loadEvents(): List<CalendarEvent>
   fun saveEvents(events: List<CalendarEvent>)
 
-  fun getViewMode(): CalendarViewMode = CalendarViewMode.MONTH
+  fun getViewMode(): CalendarViewMode = CalendarViewMode.SCHEDULE
   fun setViewMode(mode: CalendarViewMode) {}
 
   fun getEnabledCategories(): Set<CalendarCategory> = CalendarCategory.entries.toSet()
@@ -555,7 +554,7 @@ interface CalendarRepository {
  */
 class InMemoryCalendarRepository(
   initialEvents: List<CalendarEvent> = emptyList(),
-  initialViewMode: CalendarViewMode = CalendarViewMode.MONTH,
+  initialViewMode: CalendarViewMode = CalendarViewMode.SCHEDULE,
   initialEnabledCategories: Set<CalendarCategory> = CalendarCategory.entries.toSet(),
   initialShowTodos: Boolean = true,
   initialShowHolidays: Boolean = true,
@@ -621,7 +620,7 @@ class SharedPreferencesCalendarRepository(
   }
 
   override fun getViewMode(): CalendarViewMode {
-    val raw = prefs.getString(KEY_CALENDAR_VIEW_MODE, CalendarViewMode.MONTH.name)
+    val raw = prefs.getString(KEY_CALENDAR_VIEW_MODE, CalendarViewMode.SCHEDULE.name)
     return CalendarViewMode.fromNameOrDefault(raw)
   }
 
@@ -815,7 +814,7 @@ object CalendarEngine {
         isAllDay = true,
         category = CalendarCategory.HOLIDAYS,
         color = CalendarEventColor.BASIL,
-        recurrence = CalendarRecurrence.YEARLY,
+        recurrence = CalendarRecurrence.NONE,
         reminderMinutesBefore = CalendarReminderOption.NONE.minutesBefore,
         isBuiltInHoliday = true,
       )
@@ -1031,6 +1030,7 @@ object CalendarEngine {
   ): List<CalendarEvent> {
     val trimmed = query.trim().lowercase(Locale.ROOT)
     val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotEmpty() }
+    val seenHolidayTitles = mutableSetOf<String>()
     return events
       .filter { event ->
         if (favoritesOnly && !event.isFavorite) return@filter false
@@ -1058,6 +1058,13 @@ object CalendarEngine {
           .thenBy { it.startMillis }
           .thenBy { it.title.lowercase(Locale.ROOT) }
       )
+      .filter { event ->
+        if (!event.isBuiltInHoliday) {
+          true
+        } else {
+          seenHolidayTitles.add(event.title.lowercase(Locale.ROOT))
+        }
+      }
   }
 
   fun parseEventsJson(rawJson: String?): List<CalendarEvent> {

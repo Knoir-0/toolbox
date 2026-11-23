@@ -57,7 +57,6 @@ import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Event
@@ -254,13 +253,16 @@ fun CalendarScreen(
     }
   }
 
-  val builtInHolidays = remember(showHolidays, selectedYear) {
+  val builtInHolidays = remember(showHolidays, selectedYear, selectedMonth) {
     if (!showHolidays) {
       emptyList()
     } else {
-      CalendarEngine.builtInHolidaysForYear(selectedYear - 1) +
-        CalendarEngine.builtInHolidaysForYear(selectedYear) +
-        CalendarEngine.builtInHolidaysForYear(selectedYear + 1)
+      val years = buildSet {
+        add(selectedYear)
+        if (selectedMonth == 1) add(selectedYear - 1)
+        if (selectedMonth == 12) add(selectedYear + 1)
+      }
+      years.flatMap { y -> CalendarEngine.builtInHolidaysForYear(y) }
     }
   }
 
@@ -432,14 +434,6 @@ fun CalendarScreen(
         CalendarEngine.formatMonthYearTitle(selectedDay.year, selectedDay.month)
       CalendarViewMode.DAY ->
         "${selectedDay.monthShortName} ${selectedDay.dayOfMonth}, ${selectedDay.year}"
-      CalendarViewMode.THREE_DAY -> {
-        val end = selectedDay.plusDays(2)
-        if (end.month == selectedDay.month) {
-          "${selectedDay.monthShortName} ${selectedDay.dayOfMonth}–${end.dayOfMonth}, ${selectedDay.year}"
-        } else {
-          "${selectedDay.monthShortName} ${selectedDay.dayOfMonth} – ${end.monthShortName} ${end.dayOfMonth}"
-        }
-      }
       CalendarViewMode.WEEK -> {
         val weekDays = CalendarEngine.buildWeekDays(selectedDay)
         val first = weekDays.first()
@@ -471,7 +465,6 @@ fun CalendarScreen(
     val nextDay = when (viewMode) {
       CalendarViewMode.MONTH, CalendarViewMode.SCHEDULE -> selectedDay.plusMonths(delta)
       CalendarViewMode.DAY -> selectedDay.plusDays(delta)
-      CalendarViewMode.THREE_DAY -> selectedDay.plusDays(delta * 3)
       CalendarViewMode.WEEK -> selectedDay.plusDays(delta * 7)
     }
     setSelectedDay(nextDay)
@@ -815,10 +808,9 @@ fun CalendarScreen(
       CalendarViewMode.entries.forEach { mode ->
         val modeIcon: ImageVector = when (mode) {
           CalendarViewMode.SCHEDULE -> Icons.AutoMirrored.Filled.ViewList
-          CalendarViewMode.DAY -> Icons.Default.CalendarViewDay
-          CalendarViewMode.THREE_DAY -> Icons.Default.DateRange
-          CalendarViewMode.WEEK -> Icons.Default.CalendarViewWeek
           CalendarViewMode.MONTH -> Icons.Default.CalendarMonth
+          CalendarViewMode.WEEK -> Icons.Default.CalendarViewWeek
+          CalendarViewMode.DAY -> Icons.Default.CalendarViewDay
         }
         ToolboxPillNavigationItem(
           selected = viewMode == mode,
@@ -875,11 +867,10 @@ fun CalendarScreen(
           )
         }
 
-        CalendarViewMode.DAY, CalendarViewMode.THREE_DAY, CalendarViewMode.WEEK -> {
+        CalendarViewMode.DAY, CalendarViewMode.WEEK -> {
           val timelineDays = remember(selectedDay, viewMode) {
             when (viewMode) {
               CalendarViewMode.DAY -> listOf(selectedDay)
-              CalendarViewMode.THREE_DAY -> CalendarEngine.buildConsecutiveDays(selectedDay, 3)
               CalendarViewMode.WEEK -> CalendarEngine.buildWeekDays(selectedDay)
               else -> listOf(selectedDay)
             }
@@ -2241,8 +2232,21 @@ private fun CalendarEventEditorDialog(
   }
 
   val trimmedTitle = titleField.text.trim()
+  val trimmedLocation = locationText.trim()
+  val trimmedDescription = descriptionText.trim()
   val isTimeRangeValid = isAllDay || endMillis >= startMillis
-  val canConfirm = trimmedTitle.isNotEmpty() && isTimeRangeValid
+  val isUnchanged = editingEvent != null &&
+    editingEvent.title == trimmedTitle &&
+    editingEvent.location == trimmedLocation &&
+    editingEvent.description == trimmedDescription &&
+    editingEvent.isAllDay == isAllDay &&
+    editingEvent.category == selectedCategory &&
+    editingEvent.color == selectedColor &&
+    editingEvent.recurrence == selectedRecurrence &&
+    editingEvent.reminderMinutesBefore == selectedReminder.minutesBefore &&
+    editingEvent.startMillis == startMillis &&
+    editingEvent.endMillis == maxOf(startMillis, endMillis)
+  val canConfirm = trimmedTitle.isNotEmpty() && isTimeRangeValid && !isUnchanged
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -2259,14 +2263,13 @@ private fun CalendarEventEditorDialog(
           modifier = Modifier
             .size(44.dp)
             .clip(CircleShape)
-            .background(selectedColor.containerColor(isDarkTheme))
-            .border(1.5.dp, selectedColor.accentColor, CircleShape),
+            .background(MaterialTheme.colorScheme.primaryContainer),
           contentAlignment = Alignment.Center,
         ) {
           Icon(
             imageVector = if (editingEvent != null) Icons.Default.Edit else Icons.Default.Event,
             contentDescription = null,
-            tint = selectedColor.contentColor(isDarkTheme),
+            tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(24.dp),
           )
         }
@@ -2297,9 +2300,9 @@ private fun CalendarEventEditorDialog(
         Card(
           shape = RoundedCornerShape(14.dp),
           colors = CardDefaults.cardColors(
-            containerColor = selectedColor.containerColor(isDarkTheme).copy(alpha = 0.7f),
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
           ),
-          border = BorderStroke(1.dp, selectedColor.accentColor.copy(alpha = 0.6f)),
+          border = BorderStroke(1.dp, selectedColor.accentColor.copy(alpha = 0.45f)),
           modifier = Modifier.fillMaxWidth(),
         ) {
           Row(
@@ -2311,16 +2314,25 @@ private fun CalendarEventEditorDialog(
           ) {
             Box(
               modifier = Modifier
-                .size(12.dp)
+                .size(34.dp)
                 .clip(CircleShape)
-                .background(selectedColor.accentColor),
-            )
+                .background(selectedColor.containerColor(isDarkTheme))
+                .border(1.5.dp, selectedColor.accentColor, CircleShape),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Default.Event,
+                contentDescription = null,
+                tint = selectedColor.contentColor(isDarkTheme),
+                modifier = Modifier.size(16.dp),
+              )
+            }
             Column(modifier = Modifier.weight(1f)) {
               Text(
                 text = trimmedTitle.ifEmpty { "Untitled event" },
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold,
-                color = selectedColor.contentColor(isDarkTheme),
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
@@ -2329,7 +2341,7 @@ private fun CalendarEventEditorDialog(
                   CalendarEngine.formatTimeRange(startMillis, maxOf(startMillis, endMillis), isAllDay)
                 }",
                 style = MaterialTheme.typography.bodySmall,
-                color = selectedColor.contentColor(isDarkTheme).copy(alpha = 0.85f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
@@ -2691,6 +2703,7 @@ private fun CalendarEventEditorDialog(
     )
     DatePickerDialog(
       onDismissRequest = { showDatePicker = false },
+      shape = RoundedCornerShape(28.dp),
       confirmButton = {
         TextButton(
           onClick = {
@@ -2734,8 +2747,46 @@ private fun CalendarEventEditorDialog(
       shape = RoundedCornerShape(28.dp),
       containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
       tonalElevation = 6.dp,
-      title = { Text("Start Time", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
-      text = { TimePicker(state = timeState) },
+      title = {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(14.dp),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Box(
+            modifier = Modifier
+              .size(44.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Default.AccessTime,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(24.dp),
+            )
+          }
+          Column {
+            Text(
+              text = "Select Start Time",
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+              text = "Choose when this event begins on ${eventDay.monthShortName} ${eventDay.dayOfMonth}",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+      },
+      text = {
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+          TimePicker(state = timeState)
+        }
+      },
       confirmButton = {
         Button(
           onClick = {
@@ -2749,6 +2800,8 @@ private fun CalendarEventEditorDialog(
           },
           shape = CircleShape,
         ) {
+          Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(6.dp))
           Text("Confirm")
         }
       },
@@ -2770,8 +2823,46 @@ private fun CalendarEventEditorDialog(
       shape = RoundedCornerShape(28.dp),
       containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
       tonalElevation = 6.dp,
-      title = { Text("End Time", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
-      text = { TimePicker(state = timeState) },
+      title = {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(14.dp),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Box(
+            modifier = Modifier
+              .size(44.dp)
+              .clip(CircleShape)
+              .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Default.AccessTime,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(24.dp),
+            )
+          }
+          Column {
+            Text(
+              text = "Select End Time",
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+              text = "Choose when this event finishes on ${eventDay.monthShortName} ${eventDay.dayOfMonth}",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+      },
+      text = {
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+          TimePicker(state = timeState)
+        }
+      },
       confirmButton = {
         Button(
           onClick = {
@@ -2781,6 +2872,8 @@ private fun CalendarEventEditorDialog(
           },
           shape = CircleShape,
         ) {
+          Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(6.dp))
           Text("Confirm")
         }
       },
@@ -2813,7 +2906,6 @@ private fun CalendarEventInspectorDialog(
 ) {
   val context = LocalContext.current
   val single = events.singleOrNull()
-  val headerColor = single?.color ?: CalendarEventColor.PEACOCK
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -2830,14 +2922,13 @@ private fun CalendarEventInspectorDialog(
           modifier = Modifier
             .size(44.dp)
             .clip(CircleShape)
-            .background(headerColor.containerColor(isDarkTheme))
-            .border(1.5.dp, headerColor.accentColor, CircleShape),
+            .background(MaterialTheme.colorScheme.primaryContainer),
           contentAlignment = Alignment.Center,
         ) {
           Icon(
-            imageVector = Icons.Default.Event,
+            imageVector = if (single != null) Icons.Default.Event else Icons.Default.Info,
             contentDescription = null,
-            tint = headerColor.contentColor(isDarkTheme),
+            tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(24.dp),
           )
         }
@@ -3206,6 +3297,16 @@ private fun CalendarDeleteConfirmDialog(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
+        Text(
+          text = if (single != null) {
+            "Are you sure you want to delete \"${single.title}\"? It will be permanently removed from your calendar."
+          } else {
+            "Are you sure you want to permanently delete these ${events.size} events from your calendar?"
+          },
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+
         Card(
           shape = RoundedCornerShape(14.dp),
           colors = CardDefaults.cardColors(
@@ -3213,27 +3314,56 @@ private fun CalendarDeleteConfirmDialog(
           ),
           modifier = Modifier.fillMaxWidth(),
         ) {
-          Column(modifier = Modifier.padding(12.dp)) {
-            if (single != null) {
-              Text(
-                text = single.title,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Box(
+              modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.errorContainer),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Default.Event,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(18.dp),
               )
-              Text(
-                text = "${CalendarEngine.formatDayHeader(single.startDay)} • ${
-                  CalendarEngine.formatTimeRange(single.startMillis, single.endMillis, single.isAllDay)
-                }",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            } else {
-              Text(
-                text = events.take(4).joinToString("\n") { "• ${it.title}" },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-              )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+              if (single != null) {
+                Text(
+                  text = single.title,
+                  style = MaterialTheme.typography.bodyLarge,
+                  fontWeight = FontWeight.SemiBold,
+                  color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                  text = "${CalendarEngine.formatDayHeader(single.startDay)} • ${
+                    CalendarEngine.formatTimeRange(single.startMillis, single.endMillis, single.isAllDay)
+                  }",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              } else {
+                Text(
+                  text = events.take(4).joinToString("\n") { "• ${it.title}" },
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = MaterialTheme.colorScheme.onSurface,
+                )
+                if (events.size > 4) {
+                  Text(
+                    text = "...and ${events.size - 4} more",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+              }
             }
           }
         }
@@ -3279,6 +3409,9 @@ private fun CalendarFilterCategoriesDialog(
   var selected by remember { mutableStateOf(enabledCategories) }
   var holidaysChecked by remember { mutableStateOf(showHolidays) }
   var todosChecked by remember { mutableStateOf(showTodos) }
+  val isUnchanged = selected == enabledCategories &&
+    holidaysChecked == showHolidays &&
+    todosChecked == showTodos
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -3325,8 +3458,59 @@ private fun CalendarFilterCategoriesDialog(
         modifier = Modifier
           .fillMaxWidth()
           .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
+        // Context Preview Card
+        Card(
+          shape = RoundedCornerShape(14.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+          ),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Box(
+              modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Default.CalendarMonth,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+              )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "${selected.size} of ${CalendarCategory.entries.size} calendars active",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Text(
+                text = if (selected.isEmpty()) {
+                  "No calendar layers visible"
+                } else {
+                  selected.joinToString(" • ") { it.displayName }
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
+        }
+
         CalendarCategory.entries.forEach { cat ->
           val isChecked = cat in selected
           Card(
@@ -3379,6 +3563,7 @@ private fun CalendarFilterCategoriesDialog(
     confirmButton = {
       Button(
         onClick = { onApply(selected, holidaysChecked, todosChecked) },
+        enabled = !isUnchanged,
         shape = CircleShape,
       ) {
         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))

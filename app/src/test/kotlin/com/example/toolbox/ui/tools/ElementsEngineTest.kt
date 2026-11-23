@@ -226,4 +226,69 @@ class ElementsEngineTest {
     assertTrue(zoomedPartiallyOutMetrics.tileWidthPx in (defaultMetrics.tileWidthPx + 1) until zoomedInMetrics.tileWidthPx)
     assertTrue(zoomedPartiallyOutMetrics.tableWidthPx in (defaultMetrics.tableWidthPx + 1) until zoomedInMetrics.tableWidthPx)
   }
+
+  @Test
+  fun elementsWidgets_resolvesStateStepsPrevNextPicksRandomAndTogglesFavorites() {
+    ElementsWidgets.clearInMemoryStateForTesting()
+    val repo = InMemoryElementsRepository(initialFavorites = setOf(79))
+
+    // 1. Default widget state resolves Hydrogen (#1)
+    val initialState = ElementsWidgets.resolveWidgetState(context = null, repository = repo)
+    assertEquals(1, initialState.element.atomicNumber)
+    assertEquals("H", initialState.element.symbol)
+    assertFalse(initialState.isFavorite)
+    assertTrue(initialState.titleText.contains("Hydrogen (#1)"))
+    assertTrue(initialState.subtitleText.contains(initialState.element.formattedAtomicMass))
+    assertTrue(initialState.configText.contains("1s¹"))
+
+    // 2. Step backward from #1 wraps around to Oganesson (#118)
+    val wrappedBack = ElementsWidgets.stepFocusedElement(context = null, delta = -1, refreshWidgets = false)
+    assertEquals(118, wrappedBack.atomicNumber)
+    assertEquals("Og", wrappedBack.symbol)
+
+    // 3. Step forward from #118 wraps around to Hydrogen (#1), then to Helium (#2)
+    val wrappedForward = ElementsWidgets.stepFocusedElement(context = null, delta = 1, refreshWidgets = false)
+    assertEquals(1, wrappedForward.atomicNumber)
+    val second = ElementsWidgets.stepFocusedElement(context = null, delta = 1, refreshWidgets = false)
+    assertEquals(2, second.atomicNumber)
+    assertEquals("He", second.symbol)
+
+    // 4. Focus Gold (#79) and verify favorite state & category colors
+    ElementsWidgets.saveFocusedAtomicNumber(null, 79)
+    val goldState = ElementsWidgets.resolveWidgetState(context = null, repository = repo)
+    assertEquals(79, goldState.element.atomicNumber)
+    assertEquals("Au", goldState.element.symbol)
+    assertTrue(goldState.isFavorite)
+    assertTrue(goldState.titleText.startsWith("★ Gold (#79)"))
+
+    // 5. Toggle favorite from widget
+    ElementsWidgets.toggleFavoriteFromWidget(context = null, repository = repo, refreshWidgets = false)
+    assertFalse(79 in repo.loadFavoriteAtomicNumbers())
+    ElementsWidgets.toggleFavoriteFromWidget(context = null, repository = repo, refreshWidgets = false)
+    assertTrue(79 in repo.loadFavoriteAtomicNumbers())
+
+    // 6. Pick random element always picks a valid element (1..118) distinct from current
+    val randomEl = ElementsWidgets.pickRandomElement(
+      context = null,
+      random = kotlin.random.Random(42),
+      currentAtomicNumberOverride = 79,
+      refreshWidgets = false,
+    )
+    assertTrue(randomEl.atomicNumber in 1..118)
+    assertTrue(randomEl.atomicNumber != 79)
+
+    // 7. Widget navigation request round-trip
+    PeriodicTableEngine.requestWidgetNavigation(
+      atomicNumber = 26,
+      openInspector = true,
+      openSearch = false,
+    )
+    val navReq = PeriodicTableEngine.consumePendingWidgetNavigationRequest()
+    assertNotNull(navReq)
+    assertEquals(26, navReq!!.atomicNumber)
+    assertTrue(navReq.openInspector)
+    assertFalse(navReq.openSearch)
+
+    ElementsWidgets.clearInMemoryStateForTesting()
+  }
 }

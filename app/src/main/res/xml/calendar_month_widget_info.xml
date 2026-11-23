@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:description="@string/calendar_month_widget_description"
+    android:initialLayout="@layout/widget_calendar_month"
+    android:minWidth="250dp"
+    android:minHeight="200dp"
+    android:minResizeWidth="200dp"
+    android:minResizeHeight="160dp"
+    android:maxResizeWidth="560dp"
+    android:maxResizeHeight="620dp"
+    android:previewLayout="@layout/widget_calendar_month"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="4"
+    android:targetCellHeight="3"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen"
+    tools:targetApi="s" />

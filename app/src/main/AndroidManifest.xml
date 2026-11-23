@@ -880,6 +880,44 @@
                 android:resource="@xml/calendar_widget_info" />
         </receiver>
 
+        <receiver
+            android:name=".ui.tools.CalendarMonthWidgetProvider"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_calendar"
+            android:roundIcon="@mipmap/ic_tool_calendar"
+            android:label="@string/calendar_month_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.toolbox.calendar.ACTION_MONTH_WIDGET_REFRESH" />
+                <action android:name="com.example.toolbox.calendar.ACTION_MONTH_WIDGET_PREV_MONTH" />
+                <action android:name="com.example.toolbox.calendar.ACTION_MONTH_WIDGET_NEXT_MONTH" />
+                <action android:name="com.example.toolbox.calendar.ACTION_MONTH_WIDGET_TODAY" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/calendar_month_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".ui.tools.ElementsWidgetProvider"
+            android:exported="true"
+            android:icon="@mipmap/ic_tool_elements"
+            android:roundIcon="@mipmap/ic_tool_elements"
+            android:label="@string/elements_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.example.toolbox.elements.ACTION_WIDGET_REFRESH" />
+                <action android:name="com.example.toolbox.elements.ACTION_WIDGET_PREV_ELEMENT" />
+                <action android:name="com.example.toolbox.elements.ACTION_WIDGET_NEXT_ELEMENT" />
+                <action android:name="com.example.toolbox.elements.ACTION_WIDGET_RANDOM_ELEMENT" />
+                <action android:name="com.example.toolbox.elements.ACTION_WIDGET_TOGGLE_FAVORITE" />
+                <action android:name="com.example.toolbox.elements.ACTION_WIDGET_SET_ELEMENT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/elements_widget_info" />
+        </receiver>
+
         <service
             android:name=".ui.tools.ScreenRecorderForegroundService"
             android:exported="false"

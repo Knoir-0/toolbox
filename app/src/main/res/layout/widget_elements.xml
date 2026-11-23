@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_todo_widget_card"
+    android:clipToOutline="true">
+
+    <ImageView
+        android:id="@+id/widget_elements_background"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="fitXY"
+        android:src="@drawable/bg_todo_widget_card" />
+
+    <LinearLayout
+        android:id="@+id/widget_elements_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:paddingStart="10dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="8dp">
+
+        <!-- Top Spotlight Row: Element Tile Badge + Element Details + Prev/Next/Random/Star/Search Controls -->
+        <LinearLayout
+            android:id="@+id/widget_elements_header_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageView
+                android:id="@+id/widget_elements_tile_image"
+                android:layout_width="58dp"
+                android:layout_height="58dp"
+                android:contentDescription="Inspect selected element"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_widget_science" />
+
+            <LinearLayout
+                android:id="@+id/widget_elements_text_container"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:layout_marginEnd="6dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/widget_elements_title"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="Hydrogen (#1)"
+                        android:textColor="#FFE7E1E6"
+                        android:textSize="14.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/widget_elements_category_pill"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="Nonmetal"
+                        android:textColor="#FFDDB9F6"
+                        android:textSize="10.5sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/widget_elements_subtitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="1dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="1.008 u • Gas (g) • Period 1 • Group 1"
+                    android:textColor="#FFCDC4CF"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/widget_elements_config_text"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="1dp"
+                    android:ellipsize="end"
+                    android:fontFamily="monospace"
+                    android:maxLines="1"
+                    android:text="1s¹ • Shells: 1 • EN: 2.2"
+                    android:textColor="#FFE7E1E6"
+                    android:textSize="10.5sp" />
+            </LinearLayout>
+
+            <!-- Trailing Action Controls: Prev (<), Next (>), Random, Favorite Star, Search -->
+            <LinearLayout
+                android:id="@+id/widget_elements_actions_row"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <ImageView
+                    android:id="@+id/widget_elements_prev_button"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Previous element"
+                    android:padding="4dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_widget_chevron_left"
+                    android:tint="#FFCDC4CF" />
+
+                <ImageView
+                    android:id="@+id/widget_elements_next_button"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Next element"
+                    android:padding="4dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_widget_chevron_right"
+                    android:tint="#FFCDC4CF" />
+
+                <ImageView
+                    android:id="@+id/widget_elements_favorite_button"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Toggle favorite element"
+                    android:padding="5dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_media_favorite_off"
+                    android:tint="#FFCDC4CF" />
+
+                <FrameLayout
+                    android:id="@+id/widget_elements_random_button"
+                    android:layout_width="30dp"
+                    android:layout_height="30dp"
+                    android:layout_marginStart="2dp"
+                    android:contentDescription="Random element">
+
+                    <ImageView
+                        android:id="@+id/widget_elements_random_button_bg"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:contentDescription="@null"
+                        android:src="@drawable/bg_music_widget_circle"
+                        android:tint="#FF5A3472" />
+
+                    <ImageView
+                        android:id="@+id/widget_elements_random_button_icon"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:contentDescription="@null"
+                        android:padding="6dp"
+                        android:scaleType="centerInside"
+                        android:src="@drawable/ic_widget_refresh"
+                        android:tint="#FFDDB9F6" />
+                </FrameLayout>
+
+                <FrameLayout
+                    android:id="@+id/widget_elements_search_button"
+                    android:layout_width="30dp"
+                    android:layout_height="30dp"
+                    android:layout_marginStart="4dp"
+                    android:contentDescription="Search Periodic Table">
+
+                    <ImageView
+                        android:id="@+id/widget_elements_search_button_bg"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:contentDescription="@null"
+                        android:src="@drawable/bg_music_widget_circle"
+                        android:tint="#FF5A3472" />
+
+                    <ImageView
+                        android:id="@+id/widget_elements_search_button_icon"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:contentDescription="@null"
+                        android:padding="6dp"
+                        android:scaleType="centerInside"
+                        android:src="@drawable/ic_widget_search"
+                        android:tint="#FFDDB9F6" />
+                </FrameLayout>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Bottom Visual Section: 18-Column IUPAC Periodic Table Grid Map + 2D Bohr Electron Shell Diagram -->
+        <LinearLayout
+            android:id="@+id/widget_elements_visual_section"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="6dp"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageView
+                android:id="@+id/widget_elements_periodic_table_image"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:contentDescription="Open Periodic Table of Elements"
+                android:scaleType="fitXY"
+                android:src="@drawable/bg_todo_widget_item" />
+
+            <ImageView
+                android:id="@+id/widget_elements_bohr_image"
+                android:layout_width="86dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="6dp"
+                android:contentDescription="Inspect Bohr electron shell diagram"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_widget_science" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

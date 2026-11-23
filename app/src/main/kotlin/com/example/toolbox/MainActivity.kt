@@ -24,6 +24,10 @@ import com.example.toolbox.ui.main.EXTRA_AUDIO_RECORDER_QUICK_ACTION
 import com.example.toolbox.ui.main.EXTRA_CALENDAR_DATE_KEY
 import com.example.toolbox.ui.main.EXTRA_CALENDAR_OPEN_ADD_EVENT
 import com.example.toolbox.ui.main.EXTRA_CAMERA_CAPTURE_MODE
+import com.example.toolbox.ui.main.EXTRA_ELEMENTS_ATOMIC_NUMBER
+import com.example.toolbox.ui.main.EXTRA_ELEMENTS_OPEN_INSPECTOR
+import com.example.toolbox.ui.main.EXTRA_ELEMENTS_OPEN_MOLAR_MASS
+import com.example.toolbox.ui.main.EXTRA_ELEMENTS_OPEN_SEARCH
 import com.example.toolbox.ui.main.EXTRA_EXPAND_MUSIC_PLAYER
 import com.example.toolbox.ui.main.EXTRA_NOTES_INITIAL_FILTER_LABEL
 import com.example.toolbox.ui.main.EXTRA_NOTES_INITIAL_FILTER_MODE
@@ -45,7 +49,12 @@ import com.example.toolbox.ui.main.isSameStandaloneTarget
 import com.example.toolbox.ui.main.parseAudioRecorderQuickAction
 import com.example.toolbox.ui.main.parseCalendarDateKey
 import com.example.toolbox.ui.main.parseCalendarOpenAddEvent
+import com.example.toolbox.ui.main.parseCalendarViewModeName
 import com.example.toolbox.ui.main.parseCameraCaptureModeName
+import com.example.toolbox.ui.main.parseElementsAtomicNumber
+import com.example.toolbox.ui.main.parseElementsOpenInspector
+import com.example.toolbox.ui.main.parseElementsOpenMolarMass
+import com.example.toolbox.ui.main.parseElementsOpenSearch
 import com.example.toolbox.ui.main.parseExpandMusicPlayer
 import com.example.toolbox.ui.main.parseFolderShortcut
 import com.example.toolbox.ui.main.parseNotesQuickCaptureMode
@@ -62,12 +71,14 @@ import com.example.toolbox.ui.tools.AudioCaptureSource
 import com.example.toolbox.ui.tools.AudioRecorderEngine
 import com.example.toolbox.ui.tools.CalendarDay
 import com.example.toolbox.ui.tools.CalendarEngine
+import com.example.toolbox.ui.tools.CalendarViewMode
 import com.example.toolbox.ui.tools.CameraCaptureMode
 import com.example.toolbox.ui.tools.CameraEngine
 import com.example.toolbox.ui.tools.CameraWidgets
 import com.example.toolbox.ui.tools.MusicPlayerEngine
 import com.example.toolbox.ui.tools.NotesEngine
 import com.example.toolbox.ui.tools.NotesFilter
+import com.example.toolbox.ui.tools.PeriodicTableEngine
 import com.example.toolbox.ui.tools.PlantScheduleEngine
 import com.example.toolbox.ui.tools.ScreenAudioSource
 import com.example.toolbox.ui.tools.ScreenRecorderEngine
@@ -103,6 +114,11 @@ class MainActivity : ComponentActivity() {
     cameraCaptureModeName: String? = parseCameraCaptureModeName(intent),
     calendarDateKey: String? = parseCalendarDateKey(intent),
     calendarOpenAddEvent: Boolean = parseCalendarOpenAddEvent(intent),
+    calendarViewModeName: String? = parseCalendarViewModeName(intent),
+    elementsAtomicNumber: Int? = parseElementsAtomicNumber(intent),
+    elementsOpenInspector: Boolean = parseElementsOpenInspector(intent),
+    elementsOpenSearch: Boolean = parseElementsOpenSearch(intent),
+    elementsOpenMolarMass: Boolean = parseElementsOpenMolarMass(intent),
   ) {
     if (expandMusicPlayer) {
       MusicPlayerEngine.requestExpandFullPlayer()
@@ -155,10 +171,19 @@ class MainActivity : ComponentActivity() {
       CameraWidgets.saveActiveCaptureMode(this, mode)
       CameraEngine.requestCaptureMode(mode)
     }
-    if (calendarDateKey != null || calendarOpenAddEvent) {
+    if (calendarDateKey != null || calendarOpenAddEvent || calendarViewModeName != null) {
       CalendarEngine.requestNavigation(
         targetDay = CalendarDay.fromDateKeyOrNull(calendarDateKey),
         openAddEvent = calendarOpenAddEvent,
+        viewMode = calendarViewModeName?.let { CalendarViewMode.fromNameOrDefault(it) },
+      )
+    }
+    if (elementsAtomicNumber != null || elementsOpenInspector || elementsOpenSearch || elementsOpenMolarMass) {
+      PeriodicTableEngine.requestWidgetNavigation(
+        atomicNumber = elementsAtomicNumber,
+        openInspector = elementsOpenInspector,
+        openSearch = elementsOpenSearch,
+        openMolarMass = elementsOpenMolarMass,
       )
     }
   }
@@ -180,6 +205,15 @@ class MainActivity : ComponentActivity() {
     val cameraCaptureModeName = parseCameraCaptureModeName(intent)
     val calendarDateKey = parseCalendarDateKey(intent)
     val calendarOpenAddEvent = parseCalendarOpenAddEvent(intent)
+    val calendarViewModeName = parseCalendarViewModeName(intent)
+    val elementsAtomicNumber = parseElementsAtomicNumber(intent)
+    val elementsOpenInspector = parseElementsOpenInspector(intent)
+    val elementsOpenSearch = parseElementsOpenSearch(intent)
+    val elementsOpenMolarMass = parseElementsOpenMolarMass(intent)
+    val hasElementsNavigationExtras = elementsAtomicNumber != null ||
+      elementsOpenInspector ||
+      elementsOpenSearch ||
+      elementsOpenMolarMass
     val hasNotesNavigationExtras = parseNotesFilterFromIntent(intent) != null ||
       !intent?.getStringExtra(EXTRA_NOTES_OPEN_NOTE_ID).isNullOrBlank()
     val resolvedTool = when {
@@ -191,7 +225,8 @@ class MainActivity : ComponentActivity() {
       screenRecorderQuickAction != null -> parsedTool ?: Tool.SCREEN_RECORDER
       plantScheduleMonth != null || plantScheduleOpenSearch -> parsedTool ?: Tool.PLANT_SCHEDULE
       cameraCaptureModeName != null -> parsedTool ?: Tool.CAMERA
-      calendarDateKey != null || calendarOpenAddEvent -> parsedTool ?: Tool.CALENDAR
+      calendarDateKey != null || calendarOpenAddEvent || calendarViewModeName != null -> parsedTool ?: Tool.CALENDAR
+      hasElementsNavigationExtras -> parsedTool ?: Tool.ELEMENTS
       else -> parsedTool
     }
     if (resolvedTool != null || parsedFolder != null) {
@@ -303,6 +338,15 @@ class MainActivity : ComponentActivity() {
     val cameraCaptureModeName = parseCameraCaptureModeName(intent)
     val calendarDateKey = parseCalendarDateKey(intent)
     val calendarOpenAddEvent = parseCalendarOpenAddEvent(intent)
+    val calendarViewModeName = parseCalendarViewModeName(intent)
+    val elementsAtomicNumber = parseElementsAtomicNumber(intent)
+    val elementsOpenInspector = parseElementsOpenInspector(intent)
+    val elementsOpenSearch = parseElementsOpenSearch(intent)
+    val elementsOpenMolarMass = parseElementsOpenMolarMass(intent)
+    val hasElementsNavigationExtras = elementsAtomicNumber != null ||
+      elementsOpenInspector ||
+      elementsOpenSearch ||
+      elementsOpenMolarMass
     val hasNotesNavigationExtras = parseNotesFilterFromIntent(intent) != null ||
       !intent.getStringExtra(EXTRA_NOTES_OPEN_NOTE_ID).isNullOrBlank()
     val incomingTool = when {
@@ -314,7 +358,8 @@ class MainActivity : ComponentActivity() {
       screenRecorderQuickAction != null -> parsedTool ?: Tool.SCREEN_RECORDER
       plantScheduleMonth != null || plantScheduleOpenSearch -> parsedTool ?: Tool.PLANT_SCHEDULE
       cameraCaptureModeName != null -> parsedTool ?: Tool.CAMERA
-      calendarDateKey != null || calendarOpenAddEvent -> parsedTool ?: Tool.CALENDAR
+      calendarDateKey != null || calendarOpenAddEvent || calendarViewModeName != null -> parsedTool ?: Tool.CALENDAR
+      hasElementsNavigationExtras -> parsedTool ?: Tool.ELEMENTS
       else -> parsedTool
     }
     if ((incomingTool != null || parsedFolder != null) &&
@@ -386,6 +431,18 @@ class MainActivity : ComponentActivity() {
             if (calendarOpenAddEvent) {
               putExtra(EXTRA_CALENDAR_OPEN_ADD_EVENT, true)
             }
+            if (elementsAtomicNumber != null) {
+              putExtra(EXTRA_ELEMENTS_ATOMIC_NUMBER, elementsAtomicNumber)
+            }
+            if (elementsOpenInspector) {
+              putExtra(EXTRA_ELEMENTS_OPEN_INSPECTOR, true)
+            }
+            if (elementsOpenSearch) {
+              putExtra(EXTRA_ELEMENTS_OPEN_SEARCH, true)
+            }
+            if (elementsOpenMolarMass) {
+              putExtra(EXTRA_ELEMENTS_OPEN_MOLAR_MASS, true)
+            }
           }
         }
         startActivity(launchIntent)
@@ -420,6 +477,9 @@ class MainActivity : ComponentActivity() {
     } else if (calendarDateKey != null || calendarOpenAddEvent) {
       initialFolderState.value = null
       standaloneToolState.value = parsedTool ?: Tool.CALENDAR
+    } else if (hasElementsNavigationExtras) {
+      initialFolderState.value = null
+      standaloneToolState.value = parsedTool ?: Tool.ELEMENTS
     } else if (parsedTool != null) {
       initialFolderState.value = null
       standaloneToolState.value = parsedTool

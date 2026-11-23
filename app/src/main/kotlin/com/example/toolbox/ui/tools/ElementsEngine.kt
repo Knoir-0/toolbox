@@ -2,12 +2,17 @@ package com.example.toolbox.ui.tools
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
 const val ELEMENTS_PREFS_NAME = "elements_tool_preferences"
 private const val PREF_KEY_FAVORITE_ATOMIC_NUMBERS = "favorite_atomic_numbers"
+const val PREF_KEY_SELECTED_ATOMIC_NUMBER = "selected_atomic_number"
+const val PREF_KEY_WIDGET_ATOMIC_NUMBER = "elements_widget_atomic_number"
 
 /**
  * Primary chemical categories of the Periodic Table of Elements.
@@ -266,9 +271,11 @@ class InMemoryElementsRepository(
 
 class SharedPreferencesElementsRepository(
   private val prefs: SharedPreferences,
+  private val appContext: Context? = null,
 ) : ElementsRepository {
   constructor(context: Context) : this(
-    context.getSharedPreferences(ELEMENTS_PREFS_NAME, Context.MODE_PRIVATE),
+    prefs = context.getSharedPreferences(ELEMENTS_PREFS_NAME, Context.MODE_PRIVATE),
+    appContext = context.applicationContext ?: context,
   )
 
   override fun loadFavoriteAtomicNumbers(): Set<Int> {
@@ -283,6 +290,7 @@ class SharedPreferencesElementsRepository(
   override fun saveFavoriteAtomicNumbers(favorites: Set<Int>) {
     val cleaned = favorites.filter { it in 1..118 }.sorted().joinToString(",")
     prefs.edit().putString(PREF_KEY_FAVORITE_ATOMIC_NUMBERS, cleaned).apply()
+    ElementsWidgets.updateAllWidgets(appContext)
   }
 }
 
@@ -316,6 +324,37 @@ object PeriodicTableEngine {
   const val DEFAULT_TABLE_ZOOM = 1.0f
   const val MIN_TABLE_ZOOM = 1.0f
   const val MAX_TABLE_ZOOM = 4.0f
+
+  data class PendingWidgetNavigationRequest(
+    val atomicNumber: Int? = null,
+    val openInspector: Boolean = false,
+    val openSearch: Boolean = false,
+    val openMolarMass: Boolean = false,
+    val requestId: Long = System.nanoTime(),
+  )
+
+  var pendingWidgetNavigationRequest by mutableStateOf<PendingWidgetNavigationRequest?>(null)
+    private set
+
+  fun requestWidgetNavigation(
+    atomicNumber: Int? = null,
+    openInspector: Boolean = false,
+    openSearch: Boolean = false,
+    openMolarMass: Boolean = false,
+  ) {
+    pendingWidgetNavigationRequest = PendingWidgetNavigationRequest(
+      atomicNumber = atomicNumber?.coerceIn(1, 118),
+      openInspector = openInspector,
+      openSearch = openSearch,
+      openMolarMass = openMolarMass,
+    )
+  }
+
+  fun consumePendingWidgetNavigationRequest(): PendingWidgetNavigationRequest? {
+    val current = pendingWidgetNavigationRequest
+    pendingWidgetNavigationRequest = null
+    return current
+  }
 
   const val BASE_TILE_WIDTH_DP = 52f
   const val BASE_TILE_HEIGHT_DP = 58f
