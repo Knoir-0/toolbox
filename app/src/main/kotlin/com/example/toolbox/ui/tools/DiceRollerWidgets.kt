@@ -47,6 +47,7 @@ data class DiceRollerWidgetState(
   val breakdownText: String,
   val isNatural20: Boolean,
   val isNatural1: Boolean,
+  val isInDiceJail: Boolean = false,
   val palette: TodoWidgetPalette,
   val errorArgb: Int,
   val onErrorArgb: Int,
@@ -79,6 +80,7 @@ object DiceRollerWidgets {
   const val KEY_WIDGET_ROLL_MODE = "dice_widget_roll_mode"
   const val KEY_WIDGET_ROLL_COUNTER = "dice_widget_roll_counter"
   const val KEY_WIDGET_LATEST_ROLL_JSON = "dice_widget_latest_d20_roll_json"
+  const val KEY_WIDGET_CONSECUTIVE_NAT_1_COUNT = "dice_widget_consecutive_nat_1_count"
 
   const val WIDGET_CORNER_RADIUS_DP = 16f
 
@@ -97,10 +99,14 @@ object DiceRollerWidgets {
   @Volatile
   private var inMemoryLatestRoll: DiceRollResult? = null
 
+  @Volatile
+  private var inMemoryConsecutiveNat1Count: Int = 0
+
   fun clearInMemoryStateForTesting() {
     inMemoryRollMode = RollMode.NORMAL
     inMemoryRollCounter = 0
     inMemoryLatestRoll = null
+    inMemoryConsecutiveNat1Count = 0
   }
 
   /**
@@ -222,17 +228,42 @@ object DiceRollerWidgets {
     return inMemoryLatestRoll
   }
 
+  fun loadConsecutiveNat1Count(context: Context? = null): Int {
+    if (context != null) {
+      try {
+        val prefs = context.getSharedPreferences(DiceRollerPreferences.PREFS_NAME, Context.MODE_PRIVATE)
+        val saved = prefs.getInt(KEY_WIDGET_CONSECUTIVE_NAT_1_COUNT, inMemoryConsecutiveNat1Count).coerceAtLeast(0)
+        inMemoryConsecutiveNat1Count = saved
+        return saved
+      } catch (_: Throwable) {}
+    }
+    return inMemoryConsecutiveNat1Count
+  }
+
   fun saveLatestRoll(
     context: Context?,
     roll: DiceRollResult?,
     counter: Int,
   ) {
+    val previousRoll = inMemoryLatestRoll
+    val isNewRoll = roll != null && (previousRoll == null || roll.id != previousRoll.id)
+    if (roll == null) {
+      inMemoryConsecutiveNat1Count = 0
+    } else if (isNewRoll) {
+      inMemoryConsecutiveNat1Count = if (roll.isNatural1) {
+        loadConsecutiveNat1Count(context) + 1
+      } else {
+        0
+      }
+    }
     inMemoryLatestRoll = roll
     inMemoryRollCounter = counter
     if (context != null) {
       try {
         val prefs = context.getSharedPreferences(DiceRollerPreferences.PREFS_NAME, Context.MODE_PRIVATE)
-        val editor = prefs.edit().putInt(KEY_WIDGET_ROLL_COUNTER, counter)
+        val editor = prefs.edit()
+          .putInt(KEY_WIDGET_ROLL_COUNTER, counter)
+          .putInt(KEY_WIDGET_CONSECUTIVE_NAT_1_COUNT, inMemoryConsecutiveNat1Count)
         if (roll == null) {
           editor.remove(KEY_WIDGET_LATEST_ROLL_JSON)
         } else {
@@ -327,9 +358,12 @@ object DiceRollerWidgets {
 
     val isNat20 = latestRoll?.isNatural20 == true
     val isNat1 = latestRoll?.isNatural1 == true
+    val consecutiveNat1s = if (isNat1) loadConsecutiveNat1Count(context).coerceAtLeast(1) else 0
+    val isDiceJailed = consecutiveNat1s >= DICE_JAIL_CONSECUTIVE_NAT_1_THRESHOLD
     val notationText = formatD20Notation(mode)
 
     val statusBadgeText = when {
+      isDiceJailed -> DICE_JAIL_BADGE_TEXT
       isNat20 -> "★ CRITICAL HIT · NAT 20!"
       isNat1 -> "✦ CRITICAL MISS · NAT 1!"
       latestRoll != null && latestRoll.rollMode != RollMode.NORMAL ->
@@ -340,6 +374,7 @@ object DiceRollerWidgets {
 
     val breakdownText = when {
       latestRoll == null -> "Tap die to roll $notationText"
+      isDiceJailed -> "2× Nat 1 in a row • Sent to Dice Jail!"
       latestRoll.droppedRolls.isNotEmpty() ->
         "Kept ${latestRoll.keptRolls.first()} · Dropped ${latestRoll.droppedRolls.first()}"
       isNat20 -> "Natural 20 • Critical Success!"
@@ -366,6 +401,7 @@ object DiceRollerWidgets {
       breakdownText = breakdownText,
       isNatural20 = isNat20,
       isNatural1 = isNat1,
+      isInDiceJail = isDiceJailed,
       palette = palette,
       errorArgb = errorArgb,
       onErrorArgb = onErrorArgb,

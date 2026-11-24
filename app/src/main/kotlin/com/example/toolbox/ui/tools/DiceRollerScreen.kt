@@ -237,6 +237,35 @@ data class DiceRollResult(
     get() = dieType == DieType.D20 && keptRolls.size == 1 && keptRolls.first() == 1
 }
 
+const val DICE_JAIL_CONSECUTIVE_NAT_1_THRESHOLD = 2
+const val DICE_JAIL_BADGE_TEXT = "🔒 SENT TO DICE JAIL · 2× NAT 1!"
+const val DICE_JAIL_SUBTEXT = "🔒 Dice Jail! Two consecutive Nat 1s — this cursed d20 has been quarantined"
+
+/**
+ * Counts how many consecutive Natural 1 rolls (`1d20` resulting in a kept `1`) appear at the head
+ * (most recent end) of [history].
+ */
+fun countConsecutiveNatural1s(history: List<DiceRollResult>): Int {
+  var streak = 0
+  for (roll in history) {
+    if (roll.isNatural1) {
+      streak++
+    } else {
+      break
+    }
+  }
+  return streak
+}
+
+/**
+ * Returns `true` when the most recent rolls in [history] trigger the **Dice Jail** easter egg
+ * (at least [threshold] consecutive Natural 1s on a D20, defaulting to 2).
+ */
+fun isInDiceJail(
+  history: List<DiceRollResult>,
+  threshold: Int = DICE_JAIL_CONSECUTIVE_NAT_1_THRESHOLD,
+): Boolean = countConsecutiveNatural1s(history) >= threshold.coerceAtLeast(2)
+
 data class SavedDiceRoll(
   val id: String = java.util.UUID.randomUUID().toString(),
   val name: String,
@@ -552,6 +581,7 @@ internal fun DiceRollerScreen(
   val sheetPeekHeight = 32.dp
   val isSheetExpanded = sheetState.currentValue == SheetValue.Expanded ||
     sheetState.targetValue == SheetValue.Expanded
+  val diceJailed = isInDiceJail(history)
 
   Column(
     modifier = modifier
@@ -561,7 +591,7 @@ internal fun DiceRollerScreen(
   ) {
     ToolboxTopBar(
       title = "Dice Roller",
-      subtext = "Polyhedral dice & SRD 5.2 spell/weapon roller",
+      subtext = if (diceJailed) DICE_JAIL_SUBTEXT else "Polyhedral dice & SRD 5.2 spell/weapon roller",
       icon = Icons.Default.Casino,
       modifier = Modifier.testTag("dice_roller_top_bar"),
       searchState = ToolboxTopBarSearchState(
@@ -658,6 +688,7 @@ internal fun DiceRollerScreen(
                 modifierValue = modifierValue,
                 currentNotation = currentNotation,
                 rollLabel = visibleHeroLabel,
+                isDiceJailed = diceJailed,
                 onTapToRoll = ::performRoll,
                 modifier = Modifier
                   .fillMaxWidth()
@@ -1643,6 +1674,7 @@ internal fun RollResultHero(
   modifierValue: Int = 0,
   currentNotation: String,
   rollLabel: String? = latestRoll?.label,
+  isDiceJailed: Boolean = false,
   onTapToRoll: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -1821,6 +1853,20 @@ internal fun RollResultHero(
             modifier = Modifier.align(Alignment.CenterEnd),
           ) {
             when {
+              isDiceJailed -> {
+                Badge(
+                  containerColor = MaterialTheme.colorScheme.error,
+                  contentColor = MaterialTheme.colorScheme.onError,
+                  modifier = Modifier.testTag("dice_jail_badge"),
+                ) {
+                  Text(
+                    text = DICE_JAIL_BADGE_TEXT,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                  )
+                }
+              }
               isNat20 -> {
                 Badge(
                   containerColor = MaterialTheme.colorScheme.primary,

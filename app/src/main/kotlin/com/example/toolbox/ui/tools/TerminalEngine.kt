@@ -41,6 +41,7 @@ import javax.net.ssl.SSLEngine
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509ExtendedKeyManager
 import javax.net.ssl.X509TrustManager
+import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -593,6 +594,117 @@ object TerminalCatalog {
       compareByDescending<TerminalCommandPreset> { it.id in favoriteIds }
         .thenByDescending { it.title.lowercase(Locale.US).startsWith(trimmed.lowercase(Locale.US)) }
         .thenByDescending { it.command.lowercase(Locale.US).startsWith(trimmed.lowercase(Locale.US)) },
+    )
+  }
+}
+
+/**
+ * Classic Unix & Toolbox hidden easter egg shell commands (`sudo make me a sandwich`, `make me a sandwich`,
+ * `cowsay`, `fortune`, `good`, `sl`, `matrix`, `neofetch`, `whoami --really`, `42`).
+ */
+object TerminalEasterEggs {
+
+  const val MAKE_SANDWICH_DENIED = "What? Make it yourself."
+  const val SUDO_MAKE_SANDWICH_GRANTED = "Okay. 🥪"
+
+  const val STEAM_LOCOMOTIVE_ASCII = """
+      ====        ________                ___________
+  _D _|  |_______/        \__I_I_____===__|_________|
+   |(_)---  |   H\________/ |   |        =|___ ___|
+   /     |  |   H  |  |     |   |         ||_| |_||
+  |      |  |   H  |__--------------------| [___] |
+  | ________|___H__/__|_____/[][]~\_______|       |
+  |/ |   |-----------I_____I [][] []  D   |=======|__
+__/ =| o |=-~~\  /~~\  /~~\  /~~\ ____Y___________|__
+ |/-=|___|=    ||    ||    ||    |_____/~\___/
+  \_/      \__/  \__/  \__/  \__/      \_/
+Choo choo! (You meant 'ls', didn't you?)"""
+
+  fun renderCowsay(message: String): String {
+    val clean = message.trim().ifEmpty { "Moo! Hexagons are the bestagons." }
+    val borderTop = " " + "_".repeat(clean.length + 2)
+    val borderBottom = " " + "-".repeat(clean.length + 2)
+    return buildString {
+      appendLine(borderTop)
+      appendLine("< $clean >")
+      appendLine(borderBottom)
+      appendLine("        \\   ^__^")
+      appendLine("         \\  (oo)\\_______")
+      appendLine("            (__)\\       )\\/\\")
+      appendLine("                ||----w |")
+      append("                ||     ||")
+    }
+  }
+
+  fun renderNeofetch(
+    backendMode: TerminalBackendMode,
+    workingDirectory: String,
+  ): String {
+    val deviceModel = runCatching { "${Build.MANUFACTURER} ${Build.MODEL}".trim() }
+      .getOrDefault("Android Device")
+      .ifBlank { "Android Device" }
+    val sdkInt = runCatching { Build.VERSION.SDK_INT }.getOrDefault(36)
+    val arch = runCatching { System.getProperty("os.arch") ?: "aarch64" }.getOrDefault("aarch64")
+    return buildString {
+      appendLine("\u001B[1;36m   _____           _ _               \u001B[0m  \u001B[1;32mtoolbox@android\u001B[0m")
+      appendLine("\u001B[1;36m  |_   _|__   ___ | | |__   _____  __\u001B[0m  ---------------")
+      appendLine("\u001B[1;36m    | |/ _ \\ / _ \\| | '_ \\ / _ \\ \\/ /\u001B[0m  \u001B[1mOS\u001B[0m: Android (API $sdkInt) $arch")
+      appendLine("\u001B[1;36m    | | (_) | (_) | | |_) | (_) >  < \u001B[0m  \u001B[1mHost\u001B[0m: $deviceModel")
+      appendLine("\u001B[1;36m    |_|\\___/ \\___/|_|_.__/ \\___/_/\\_\\\u001B[0m  \u001B[1mShell\u001B[0m: ${backendMode.shortTitle} (${backendMode.promptSymbol})")
+      appendLine("                                       \u001B[1mCWD\u001B[0m: $workingDirectory")
+      append("                                       \u001B[1mTools\u001B[0m: 36 offline utilities • 100% free forever")
+    }
+  }
+
+  fun renderMatrixRain(): String = buildString {
+    appendLine("\u001B[1;32mWake up, Neo...\u001B[0m")
+    appendLine("\u001B[32m01010100 01101111 01101111 01101100 01100010 01101111 01111000\u001B[0m")
+    appendLine("\u001B[1;32mThe Matrix has you...\u001B[0m")
+    append("\u001B[32mFollow the white rabbit. 🐇\u001B[0m")
+  }
+
+  /**
+   * Evaluates [rawCommand] against classic hidden shell easter eggs.
+   * Returns a [TerminalCommandResult] if matched, or `null` to proceed with normal execution.
+   */
+  fun tryHandleEasterEggCommand(
+    rawCommand: String,
+    workingDirectory: String,
+    backendMode: TerminalBackendMode,
+    random: Random = Random.Default,
+  ): TerminalCommandResult? {
+    val trimmed = rawCommand.trim()
+    if (trimmed.isEmpty()) return null
+    val normalizedSpaces = trimmed.replace(Regex("\\s+"), " ")
+    val lower = normalizedSpaces.lowercase(Locale.US)
+
+    val output: String = when {
+      lower == "make me a sandwich" -> MAKE_SANDWICH_DENIED
+      lower == "sudo make me a sandwich" -> SUDO_MAKE_SANDWICH_GRANTED
+      lower == "sl" || lower.startsWith("sl -") -> STEAM_LOCOMOTIVE_ASCII
+      lower == "fortune" || lower == "good" -> pickNextGoodMessage(random = random)
+      lower == "cowsay" || lower.startsWith("cowsay ") -> {
+        val arg = trimmed.removePrefix(trimmed.take(6)).trim()
+          .removeSurrounding("\"")
+          .removeSurrounding("'")
+          .ifEmpty { pickNextGoodMessage(random = random) }
+        renderCowsay(arg)
+      }
+      lower == "matrix" || lower == "cmatrix" -> renderMatrixRain()
+      lower == "neofetch" || lower == "screenfetch" -> renderNeofetch(backendMode, workingDirectory)
+      lower == "42" -> "42: The answer to life, the universe, and everything."
+      lower == "flux" || lower == "88mph" -> "⚡ Flux Capacitor: 1.21 Gigawatts confirmed @ 88.0 mph. Temporal displacement ready."
+      else -> return null
+    }
+
+    return TerminalCommandResult(
+      command = trimmed,
+      stdout = output,
+      stderr = "",
+      exitCode = 0,
+      updatedWorkingDirectory = workingDirectory,
+      durationMs = 1L,
+      backendMode = backendMode,
     )
   }
 }
@@ -1951,6 +2063,25 @@ class TerminalController(
           return true
         }
       }
+      else -> {
+        val easterEggResult = TerminalEasterEggs.tryHandleEasterEggCommand(
+          rawCommand = command,
+          workingDirectory = startDir,
+          backendMode = activeMode,
+        )
+        if (easterEggResult != null) {
+          appendOutput(
+            TerminalOutputEntry(
+              kind = TerminalLineKind.STDOUT,
+              rawText = easterEggResult.stdout,
+              workingDirectory = easterEggResult.updatedWorkingDirectory,
+              backendMode = easterEggResult.backendMode,
+              exitCode = easterEggResult.exitCode,
+            ),
+          )
+          return true
+        }
+      }
     }
     return false
   }
@@ -1960,6 +2091,12 @@ class TerminalController(
     workingDirectory: String,
     customEnv: Map<String, String>,
   ): TerminalCommandResult {
+    TerminalEasterEggs.tryHandleEasterEggCommand(
+      rawCommand = command,
+      workingDirectory = workingDirectory,
+      backendMode = TerminalBackendMode.LOCAL_SHELL,
+    )?.let { return it }
+
     val startMs = System.currentTimeMillis()
     val shellBinary = listOf("/system/bin/sh", "/bin/sh")
       .firstOrNull { File(it).exists() } ?: "sh"

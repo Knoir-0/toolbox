@@ -1126,20 +1126,20 @@ class SettingsScreenTest {
 
   @Test
   fun feedbackButtons_haveOnePercentChanceForDevilAndAngelIcons() {
-    assertEquals(0.15f, FEEDBACK_DEVIL_ANGEL_EASTER_EGG_CHANCE)
+    assertEquals(0.2f, FEEDBACK_DEVIL_ANGEL_EASTER_EGG_CHANCE)
     assertEquals(3L * 60L * 60L * 1_000L, FEEDBACK_DEVIL_ANGEL_EASTER_EGG_COOLDOWN_MS)
 
-    // Under 15% threshold (< 0.15f) triggers devil and angel icons
+    // Under 20% threshold (< 0.2f) triggers devil and angel icons
     val luckyRandom = object : kotlin.random.Random() {
       override fun nextBits(bitCount: Int): Int = 0
-      override fun nextFloat(): Float = 0.149f
+      override fun nextFloat(): Float = 0.199f
     }
     assertTrue(shouldUseDevilAndAngelFeedbackIcons(luckyRandom))
 
-    // At or above 15% threshold (>= 0.15f) keeps default icons
+    // At or above 20% threshold (>= 0.2f) keeps default icons
     val boundaryRandom = object : kotlin.random.Random() {
       override fun nextBits(bitCount: Int): Int = 0
-      override fun nextFloat(): Float = 0.15f
+      override fun nextFloat(): Float = 0.2f
     }
     assertFalse(shouldUseDevilAndAngelFeedbackIcons(boundaryRandom))
 
@@ -1709,9 +1709,9 @@ class SettingsScreenTest {
   @Test
   fun donateButton_hasApprovedEasterEggMessages_twoSecondViewTrigger_twoSecondDisplay_andHalfHourCooldown() {
     assertEquals("Donate", DONATE_DEFAULT_BUTTON_TEXT)
-    assertEquals(0.05f, DONATE_EASTER_EGG_CHANCE)
+    assertEquals(0.2f, DONATE_EASTER_EGG_CHANCE)
     assertEquals(0.50f, DONATE_EASTER_EGG_MESSAGE_POOL_CHANCE)
-    assertEquals(0.01f, DONATE_TOP_POSITION_EASTER_EGG_CHANCE)
+    assertEquals(0.05f, DONATE_TOP_POSITION_EASTER_EGG_CHANCE)
     assertEquals(2_000L, DONATE_EASTER_EGG_VIEW_DURATION_MS)
     assertEquals(2_000L, DONATE_EASTER_EGG_DISPLAY_DURATION_MS)
     assertEquals(30L * 60L * 1_000L, DONATE_EASTER_EGG_COOLDOWN_MS)
@@ -1765,14 +1765,14 @@ class SettingsScreenTest {
     assertFalse(DONATE_EASTER_EGG_MESSAGES.contains("poke me if you're generous"))
     assertFalse(DONATE_EASTER_EGG_MESSAGES.contains("keep the gears turning"))
 
-    // 1% chance to move Donate button to the top of Settings
+    // 5% chance to move Donate button to the top of Settings
     val luckyTopRandom = object : kotlin.random.Random() {
       override fun nextBits(bitCount: Int): Int = 0
-      override fun nextFloat(): Float = 0.005f
+      override fun nextFloat(): Float = 0.049f
     }
     val boundaryTopRandom = object : kotlin.random.Random() {
       override fun nextBits(bitCount: Int): Int = 0
-      override fun nextFloat(): Float = 0.01f
+      override fun nextFloat(): Float = 0.05f
     }
     val normalTopRandom = object : kotlin.random.Random() {
       override fun nextBits(bitCount: Int): Int = 0
@@ -1782,14 +1782,14 @@ class SettingsScreenTest {
     assertFalse(shouldMoveDonateButtonToTop(boundaryTopRandom))
     assertFalse(shouldMoveDonateButtonToTop(normalTopRandom))
 
-    // 5% chance to flip Donate text when not on cooldown, 50/50 split between Donate and Good positive messages, and 0.5-hour cooldown enforcement
+    // 20% chance to flip Donate text when not on cooldown, 50/50 split between Donate and Good positive messages, and 0.5-hour cooldown enforcement
     val repo = InMemoryNavigationPreferencesRepository()
     assertEquals(0L, repo.getDonateEasterEggLastTriggeredMs())
 
     val t0 = 1_763_500_000_000L
     val unluckyRollRandom = object : kotlin.random.Random() {
       override fun nextBits(bitCount: Int): Int = 0
-      override fun nextFloat(): Float = 0.05f
+      override fun nextFloat(): Float = 0.2f
     }
     assertNull(
       tryTriggerDonateEasterEgg(
@@ -1802,7 +1802,7 @@ class SettingsScreenTest {
 
     val luckyMessageRandom = object : kotlin.random.Random() {
       override fun nextBits(bitCount: Int): Int = 0
-      override fun nextFloat(): Float = 0.049f
+      override fun nextFloat(): Float = 0.199f
       override fun nextInt(until: Int): Int = (until - 1).coerceAtLeast(0)
     }
     val triggeredMessage = tryTriggerDonateEasterEgg(

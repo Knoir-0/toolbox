@@ -1609,11 +1609,16 @@ private fun Obd2LiveGaugesContent(
             } else {
               telemetry.speedKmh
             }
+            val isFluxReady = isFluxCapacitorTemporalDisplacementReady(telemetry.speedKmh)
             Obd2DialGauge(
               title = "VEHICLE SPEED",
               valueText = speedValueText,
               unitText = speedUnitText,
-              subtext = "Peak $maxSpeedText $speedUnitText",
+              subtext = if (isFluxReady) {
+                "⚡ 1.21 GW • Flux Capacitor Ready!"
+              } else {
+                "Peak $maxSpeedText $speedUnitText"
+              },
               fraction = (currentDisplaySpeed / maxScaleSpeed).coerceIn(0f, 1f),
               redlineStartFraction = 1f,
               useTertiaryColor = true,

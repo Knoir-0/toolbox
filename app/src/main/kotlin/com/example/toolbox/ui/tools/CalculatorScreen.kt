@@ -275,6 +275,14 @@ fun CalculatorScreen(
     }
   }
 
+  val easterEggConstantSubtext = remember(expression, isDegreeMode, expressionHasVariableX, errorMessage) {
+    if (errorMessage != null || expression.isBlank() || expressionHasVariableX) {
+      null
+    } else {
+      CalculatorEngine.resolveFamousConstantSubtextForExpression(expression, isDegreeMode)
+    }
+  }
+
   fun plotExpressionInGraph(rawExpr: String) {
     val cleaned = CalculatorEngine.normalizeGraphExpression(rawExpr).trim()
     if (cleaned.isNotEmpty() && CalculatorEngine.compileFunctionOrNull(cleaned, isDegreeMode) != null) {
@@ -498,19 +506,31 @@ fun CalculatorScreen(
   }
 
   val visibleGraphCount = graphFunctions.count { it.isVisible }
-  val headerSubtext = remember(isDegreeMode, memoryValue, historyList.size, isGraphMode, visibleGraphCount, graphFunctions.size) {
-    buildString {
-      append(if (isDegreeMode) "Degrees (DEG)" else "Radians (RAD)")
-      if (isGraphMode) {
-        append(" • Graphing ($visibleGraphCount/${graphFunctions.size} active)")
-      } else {
-        if (memoryValue != 0.0) {
-          append(" • M: ${CalculatorEngine.formatResult(memoryValue)}")
-        }
-        if (historyList.isNotEmpty()) {
-          append(" • ${historyList.size} in history")
-        } else if (memoryValue == 0.0) {
-          append(" • Standard, scientific & graphing")
+  val headerSubtext = remember(
+    isDegreeMode,
+    memoryValue,
+    historyList.size,
+    isGraphMode,
+    visibleGraphCount,
+    graphFunctions.size,
+    easterEggConstantSubtext,
+  ) {
+    if (!isGraphMode && easterEggConstantSubtext != null) {
+      easterEggConstantSubtext
+    } else {
+      buildString {
+        append(if (isDegreeMode) "Degrees (DEG)" else "Radians (RAD)")
+        if (isGraphMode) {
+          append(" • Graphing ($visibleGraphCount/${graphFunctions.size} active)")
+        } else {
+          if (memoryValue != 0.0) {
+            append(" • M: ${CalculatorEngine.formatResult(memoryValue)}")
+          }
+          if (historyList.isNotEmpty()) {
+            append(" • ${historyList.size} in history")
+          } else if (memoryValue == 0.0) {
+            append(" • Standard, scientific & graphing")
+          }
         }
       }
     }
@@ -715,30 +735,44 @@ fun CalculatorScreen(
                 )
               }
 
-              // Lower Subtitle: Live preview (= 42) or Error message
+              // Lower Subtitle: Live preview (= 42), famous constant subtext, or Error message
               Box(
                 modifier = Modifier
                   .fillMaxWidth()
                   .height(if (isScientificExpanded) 24.dp else 30.dp),
                 contentAlignment = Alignment.CenterEnd,
               ) {
+                val previewSubtitleText = when {
+                  errorMessage != null -> errorMessage!!
+                  livePreview != null -> {
+                    if (expressionHasVariableX) {
+                      livePreview
+                    } else if (isJustEvaluated && easterEggConstantSubtext != null) {
+                      "= $livePreview • $easterEggConstantSubtext"
+                    } else if (easterEggConstantSubtext != null) {
+                      "= $livePreview ($easterEggConstantSubtext)"
+                    } else {
+                      "= $livePreview"
+                    }
+                  }
+                  else -> ""
+                }
                 AnimatedContent(
-                  targetState = errorMessage ?: livePreview?.let {
-                    if (expressionHasVariableX) it else "= $it"
-                  } ?: "",
+                  targetState = previewSubtitleText,
                   transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(150)) },
                   label = "preview_animation",
                 ) { text ->
                   if (text.isNotEmpty()) {
+                    val hasEasterEgg = errorMessage == null && !expressionHasVariableX && easterEggConstantSubtext != null
                     Text(
                       text = text,
                       style = MaterialTheme.typography.titleLarge.copy(
-                        fontSize = if (expressionHasVariableX) 15.sp else 20.sp,
+                        fontSize = if (expressionHasVariableX || hasEasterEgg) 14.sp else 20.sp,
                         fontWeight = FontWeight.Normal,
                       ),
                       color = if (errorMessage != null) {
                         MaterialTheme.colorScheme.error
-                      } else if (expressionHasVariableX) {
+                      } else if (expressionHasVariableX || hasEasterEgg) {
                         MaterialTheme.colorScheme.primary
                       } else {
                         MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)

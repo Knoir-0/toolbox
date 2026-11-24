@@ -639,6 +639,27 @@ object Obd2Parser {
   }
 }
 
+const val OBD2_FLUX_CAPACITOR_DTC_CODE = "P0088"
+const val OBD2_FLUX_CAPACITOR_SPEED_MPH = 88f
+const val OBD2_FLUX_CAPACITOR_SPEED_KMH = 141.622f // 88 mph in km/h
+const val OBD2_FLUX_CAPACITOR_GIGAWATTS = 1.21f
+
+val FLUX_CAPACITOR_EASTER_EGG_DTC = Obd2DtcEntry(
+  code = OBD2_FLUX_CAPACITOR_DTC_CODE,
+  system = "Temporal Displacement (Flux Capacitor)",
+  description = "Flux Capacitor: 1.21 Gigawatts Required (Temporal Displacement Ready @ 88 MPH)",
+  commonCauses = "Plutonium chamber depleted, Mr. Fusion home energy reactor offline, or vehicle speed below 88.0 mph (141.6 km/h).",
+  severity = DtcSeverity.INFO,
+  status = DtcStatus.LOOKUP,
+)
+
+/**
+ * Returns `true` when [speedKmh] has reached or exceeded the 88 mph (`141.6 km/h`) Flux Capacitor
+ * temporal displacement threshold.
+ */
+fun isFluxCapacitorTemporalDisplacementReady(speedKmh: Float): Boolean =
+  Obd2Parser.kmhToMph(speedKmh) >= 87.5f
+
 /**
  * Built-in offline SAE J2012 Diagnostic Trouble Code (DTC) catalog and intelligent fallback decoder.
  */
@@ -975,6 +996,9 @@ object Obd2DtcCatalog {
    */
   fun lookup(rawCode: String, status: DtcStatus = DtcStatus.LOOKUP): Obd2DtcEntry {
     val normalized = rawCode.trim().uppercase(Locale.US)
+    if (normalized == OBD2_FLUX_CAPACITOR_DTC_CODE) {
+      return FLUX_CAPACITOR_EASTER_EGG_DTC.copy(status = status)
+    }
     BY_CODE[normalized]?.let { return it.copy(status = status) }
 
     val prefix = normalized.firstOrNull() ?: 'P'
@@ -1072,11 +1096,26 @@ object Obd2DtcCatalog {
 
     if (trimmed.isEmpty()) return filteredByCategory
 
+    val fluxMatchesQuery = FLUX_CAPACITOR_EASTER_EGG_DTC.code.contains(trimmed, ignoreCase = true) ||
+      FLUX_CAPACITOR_EASTER_EGG_DTC.system.contains(trimmed, ignoreCase = true) ||
+      FLUX_CAPACITOR_EASTER_EGG_DTC.description.contains(trimmed, ignoreCase = true) ||
+      FLUX_CAPACITOR_EASTER_EGG_DTC.commonCauses.contains(trimmed, ignoreCase = true) ||
+      trimmed.contains("flux", ignoreCase = true) ||
+      trimmed.contains("gigawatt", ignoreCase = true) ||
+      trimmed.contains("88", ignoreCase = true) ||
+      trimmed.contains("delorean", ignoreCase = true)
+
     val matches = filteredByCategory.filter { entry ->
       entry.code.contains(trimmed, ignoreCase = true) ||
         entry.system.contains(trimmed, ignoreCase = true) ||
         entry.description.contains(trimmed, ignoreCase = true) ||
         entry.commonCauses.contains(trimmed, ignoreCase = true)
+    }.let { base ->
+      if (fluxMatchesQuery && base.none { it.code == OBD2_FLUX_CAPACITOR_DTC_CODE }) {
+        listOf(FLUX_CAPACITOR_EASTER_EGG_DTC) + base
+      } else {
+        base
+      }
     }
 
     val upper = trimmed.uppercase(Locale.US)
@@ -1596,11 +1635,12 @@ class Obd2ScannerController(
       regionHint = region,
     )
 
-    // Populate realistic initial trouble codes & monitor status
+    // Populate realistic initial trouble codes & monitor status (including the P0088 Flux Capacitor easter egg in Demo mode)
     _activeDtcs.value = listOf(
       Obd2DtcCatalog.lookup("P0420", DtcStatus.STORED),
       Obd2DtcCatalog.lookup("P0171", DtcStatus.STORED),
       Obd2DtcCatalog.lookup("P0301", DtcStatus.PENDING),
+      Obd2DtcCatalog.lookup(OBD2_FLUX_CAPACITOR_DTC_CODE, DtcStatus.PENDING),
     )
     _monitorSummary.value = Obd2Parser.parseMonitorStatus("41 01 82 07 E5 04") ?: Obd2MonitorSummary()
 
@@ -1654,7 +1694,7 @@ class Obd2ScannerController(
     val secondaryWave = cos(phase * 0.6)
 
     val rpm = (780f + (drivingWave * 2850f) + (secondaryWave * 180f)).toFloat().coerceIn(720f, 6500f)
-    val speedKmh = (drivingWave * 108f + secondaryWave * 6f).toFloat().coerceIn(0f, 220f)
+    val speedKmh = (drivingWave * 144f + secondaryWave * 6f).toFloat().coerceIn(0f, 220f)
     val coolantC = (88f + sin(phase * 0.15) * 4f).toFloat()
     val loadPct = (18f + drivingWave * 64f).toFloat().coerceIn(10f, 96f)
     val throttlePct = (12f + drivingWave * 52f).toFloat().coerceIn(8f, 92f)
@@ -1739,6 +1779,7 @@ class Obd2ScannerController(
               Obd2DtcCatalog.lookup("P0420", DtcStatus.STORED),
               Obd2DtcCatalog.lookup("P0171", DtcStatus.STORED),
               Obd2DtcCatalog.lookup("P0301", DtcStatus.PENDING),
+              Obd2DtcCatalog.lookup(OBD2_FLUX_CAPACITOR_DTC_CODE, DtcStatus.PENDING),
             )
             _monitorSummary.value = Obd2Parser.parseMonitorStatus("41 01 82 07 E5 04") ?: Obd2MonitorSummary()
           }

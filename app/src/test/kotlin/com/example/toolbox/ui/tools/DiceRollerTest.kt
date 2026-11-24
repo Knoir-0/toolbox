@@ -235,4 +235,49 @@ class DiceRollerTest {
     assertEquals(advRoll, restored)
     assertEquals(1, nat1Roll.total)
   }
+
+  @Test
+  fun diceJailEasterEgg_triggersOnTwoConsecutiveNatural1s() {
+    DiceRollerWidgets.clearInMemoryStateForTesting()
+    assertEquals(2, DICE_JAIL_CONSECUTIVE_NAT_1_THRESHOLD)
+
+    val nat1First = DiceRollResult(
+      id = 1L,
+      dieType = DieType.D20,
+      diceCount = 1,
+      modifier = 0,
+      rollMode = RollMode.NORMAL,
+      keptRolls = listOf(1),
+      total = 1,
+    )
+    val nat1Second = nat1First.copy(id = 2L)
+    val normalRoll = nat1First.copy(id = 3L, keptRolls = listOf(14), total = 14)
+
+    // Single Nat 1 does not trigger Dice Jail
+    assertEquals(1, countConsecutiveNatural1s(listOf(nat1First)))
+    assertTrue(!isInDiceJail(listOf(nat1First)))
+
+    // Two consecutive Nat 1s at head of history triggers Dice Jail
+    val twoNat1History = listOf(nat1Second, nat1First)
+    assertEquals(2, countConsecutiveNatural1s(twoNat1History))
+    assertTrue(isInDiceJail(twoNat1History))
+
+    // Rolling a non-Nat 1 breaks the streak and releases from Dice Jail
+    val brokenStreakHistory = listOf(normalRoll, nat1Second, nat1First)
+    assertEquals(0, countConsecutiveNatural1s(brokenStreakHistory))
+    assertTrue(!isInDiceJail(brokenStreakHistory))
+
+    // Widget also tracks 2 consecutive Nat 1s for Dice Jail badge
+    DiceRollerWidgets.rollD20FromWidget(context = null, mode = RollMode.NORMAL, fixedFirstRoll = 1)
+    val afterOneNat1 = DiceRollerWidgets.resolveWidgetState(context = null)
+    assertTrue(afterOneNat1.isNatural1)
+    assertTrue(!afterOneNat1.isInDiceJail)
+    assertEquals("✦ CRITICAL MISS · NAT 1!", afterOneNat1.statusBadgeText)
+
+    DiceRollerWidgets.rollD20FromWidget(context = null, mode = RollMode.NORMAL, fixedFirstRoll = 1)
+    val afterTwoNat1s = DiceRollerWidgets.resolveWidgetState(context = null)
+    assertTrue(afterTwoNat1s.isNatural1)
+    assertTrue(afterTwoNat1s.isInDiceJail)
+    assertEquals(DICE_JAIL_BADGE_TEXT, afterTwoNat1s.statusBadgeText)
+  }
 }

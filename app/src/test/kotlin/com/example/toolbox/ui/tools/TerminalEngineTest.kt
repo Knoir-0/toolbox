@@ -134,4 +134,33 @@ class TerminalEngineTest {
     )
     assertTrue(dumpsysResults.any { it.id == "dump_battery" })
   }
+
+  @Test
+  fun hiddenShellEasterEggs_respondToClassicUnixCommands() {
+    val controller = TerminalController(context = null)
+
+    val deniedSandwich = controller.executeLocalShellCommandBlocking("make me a sandwich")
+    assertEquals(0, deniedSandwich.exitCode)
+    assertEquals(TerminalEasterEggs.MAKE_SANDWICH_DENIED, deniedSandwich.stdout)
+
+    val sudoSandwich = controller.executeLocalShellCommandBlocking("sudo make me a sandwich")
+    assertEquals(0, sudoSandwich.exitCode)
+    assertEquals(TerminalEasterEggs.SUDO_MAKE_SANDWICH_GRANTED, sudoSandwich.stdout)
+
+    val cowsayRes = controller.executeLocalShellCommandBlocking("cowsay hello toolbox")
+    assertTrue(cowsayRes.stdout.contains("< hello toolbox >"))
+    assertTrue(cowsayRes.stdout.contains("(oo)\\_______"))
+
+    val slRes = controller.executeLocalShellCommandBlocking("sl")
+    assertTrue(slRes.stdout.contains("Choo choo!"))
+
+    val fortuneRes = controller.executeLocalShellCommandBlocking("fortune")
+    assertTrue(GOOD_POSITIVE_MESSAGES.contains(fortuneRes.stdout))
+
+    val neofetchRes = controller.executeLocalShellCommandBlocking("neofetch")
+    assertTrue(TerminalAnsiParser.stripAnsi(neofetchRes.stdout).contains("toolbox@android"))
+
+    val matrixRes = controller.executeLocalShellCommandBlocking("matrix")
+    assertTrue(TerminalAnsiParser.stripAnsi(matrixRes.stdout).contains("Wake up, Neo..."))
+  }
 }

@@ -56,7 +56,185 @@ data class GraphFeaturePoint(
   val secondaryFunctionIndex: Int? = null,
 )
 
+data class CalculatorEasterEggConstant(
+  val name: String,
+  val targetValue: Double,
+  val tolerance: Double,
+  val subtext: String,
+  val exactFormattedMatch: String? = null,
+)
+
 object CalculatorEngine {
+
+  val FAMOUS_CONSTANT_EASTER_EGGS: List<CalculatorEasterEggConstant> = listOf(
+    CalculatorEasterEggConstant(
+      name = "42",
+      targetValue = 42.0,
+      tolerance = 1e-9,
+      subtext = "The answer to life, the universe, and everything",
+      exactFormattedMatch = "42",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Pi (π)",
+      targetValue = Math.PI,
+      tolerance = 1e-6,
+      subtext = "π • Delicious & irrational since 250 BC",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Tau (τ = 2π)",
+      targetValue = Math.PI * 2.0,
+      tolerance = 1e-6,
+      subtext = "τ (2π) • Twice the pie, twice the fun",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Euler's Number (e)",
+      targetValue = Math.E,
+      tolerance = 1e-6,
+      subtext = "e • Euler's constant (compound interest's best friend)",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Golden Ratio (φ)",
+      targetValue = 1.618033988749895,
+      tolerance = 1e-5,
+      subtext = "φ • The Golden Ratio (nature's favorite proportion)",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Pythagoras' Constant (√2)",
+      targetValue = 1.4142135623730951,
+      tolerance = 1e-6,
+      subtext = "√2 • Pythagoras' constant (the first known irrational)",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Speed of Light (c)",
+      targetValue = 299_792_458.0,
+      tolerance = 0.5,
+      subtext = "c • Speed of light in vacuum (299,792,458 m/s)",
+      exactFormattedMatch = "299792458",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Standard Gravity (g)",
+      targetValue = 9.80665,
+      tolerance = 1e-4,
+      subtext = "g • Standard Earth gravity (9.80665 m/s²)",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Absolute Zero (°C)",
+      targetValue = -273.15,
+      tolerance = 1e-4,
+      subtext = "0 K • Absolute zero (−273.15 °C), as cold as it gets",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Flux Capacitor Speed (88)",
+      targetValue = 88.0,
+      tolerance = 1e-9,
+      subtext = "88 mph • Great Scott! Flux Capacitor temporal displacement speed",
+      exactFormattedMatch = "88",
+    ),
+    CalculatorEasterEggConstant(
+      name = "1.21 Gigawatts",
+      targetValue = 1.21,
+      tolerance = 1e-9,
+      subtext = "1.21 GW • What the hell is a gigawatt?!",
+      exactFormattedMatch = "1.21",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Leet (1337)",
+      targetValue = 1337.0,
+      tolerance = 1e-9,
+      subtext = "1337 • h4x0r math mode activated",
+      exactFormattedMatch = "1337",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Classic Calculator (80085)",
+      targetValue = 80085.0,
+      tolerance = 1e-9,
+      subtext = "Classic pocket calculator nostalgia unlocked",
+      exactFormattedMatch = "80085",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Classic Upside-Down Calculator (5318008)",
+      targetValue = 5318008.0,
+      tolerance = 1e-9,
+      subtext = "Turn your phone upside down 🙃",
+      exactFormattedMatch = "5318008",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Classic Upside-Down Hello (0.7734)",
+      targetValue = 0.7734,
+      tolerance = 1e-9,
+      subtext = "hELLO there! (upside-down pocket calculator classic)",
+      exactFormattedMatch = "0.7734",
+    ),
+    CalculatorEasterEggConstant(
+      name = "HTTP 404",
+      targetValue = 404.0,
+      tolerance = 1e-9,
+      subtext = "404 • Number found, page not found ¯\\_(ツ)_/¯",
+      exactFormattedMatch = "404",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Nice (69)",
+      targetValue = 69.0,
+      tolerance = 1e-9,
+      subtext = "Nice.",
+      exactFormattedMatch = "69",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Taxicab Number (1729)",
+      targetValue = 1729.0,
+      tolerance = 1e-9,
+      subtext = "1729 • Hardy–Ramanujan taxicab number (1³ + 12³ = 9³ + 10³)",
+      exactFormattedMatch = "1729",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Fine-Structure Denominator (137)",
+      targetValue = 137.0,
+      tolerance = 1e-9,
+      subtext = "1/137 • Fine-structure constant α (Feynman's favorite mystery)",
+      exactFormattedMatch = "137",
+    ),
+    CalculatorEasterEggConstant(
+      name = "Avogadro's Number (N_A)",
+      targetValue = 6.02214076e23,
+      tolerance = 1e18,
+      subtext = "Nₐ • Avogadro's constant (1 mole of particles)",
+    ),
+  )
+
+  /**
+   * Resolves a playful easter egg subtext if [value] (or [formattedResult]) matches one of the
+   * famous mathematical, physical, or pop-culture calculator constants in [FAMOUS_CONSTANT_EASTER_EGGS].
+   */
+  fun resolveFamousConstantSubtext(
+    value: Double,
+    formattedResult: String = formatResult(value),
+  ): String? {
+    if (!value.isFinite()) return null
+    val cleanedFormatted = formattedResult.trim()
+    FAMOUS_CONSTANT_EASTER_EGGS.firstOrNull { entry ->
+      entry.exactFormattedMatch != null && entry.exactFormattedMatch == cleanedFormatted
+    }?.let { return it.subtext }
+
+    return FAMOUS_CONSTANT_EASTER_EGGS.firstOrNull { entry ->
+      abs(value - entry.targetValue) <= entry.tolerance
+    }?.subtext
+  }
+
+  /**
+   * Resolves a playful easter egg subtext for the current calculator [expression] if it evaluates
+   * cleanly to a famous constant.
+   */
+  fun resolveFamousConstantSubtextForExpression(
+    expression: String,
+    isDegreeMode: Boolean = true,
+  ): String? {
+    val trimmed = expression.trim()
+    if (trimmed.isEmpty() || containsVariableX(trimmed)) return null
+    return when (val res = evaluateSafe(trimmed, isDegreeMode)) {
+      is EvaluationResult.Success -> resolveFamousConstantSubtext(res.value, res.formatted)
+      else -> null
+    }
+  }
 
   /**
    * Strips optional leading function assignment prefixes such as `y =`, `f(x) =`, or `f1(x) =`

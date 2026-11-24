@@ -131,4 +131,18 @@ class Obd2ScannerTest {
     assertTrue(Obd2BleUuids.isLikelyObdAdapter("Unknown Device", listOf(Obd2BleUuids.SERVICE_FFF0)))
     assertFalse(Obd2BleUuids.isLikelyObdAdapter("Smart Watch", emptyList()))
   }
+
+  @Test
+  fun fluxCapacitorEasterEgg_resolvesDtcAndSpeedThreshold() {
+    val p0088 = Obd2DtcCatalog.lookup("P0088", DtcStatus.PENDING)
+    assertEquals("P0088", p0088.code)
+    assertTrue(p0088.description.contains("1.21 Gigawatts"))
+    assertTrue(p0088.description.contains("Flux Capacitor"))
+
+    val fluxSearch = Obd2DtcCatalog.search("flux capacitor")
+    assertTrue(fluxSearch.any { it.code == "P0088" })
+
+    assertFalse(isFluxCapacitorTemporalDisplacementReady(100f)) // ~62 mph
+    assertTrue(isFluxCapacitorTemporalDisplacementReady(142f)) // ~88.2 mph
+  }
 }

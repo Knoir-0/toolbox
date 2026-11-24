@@ -191,4 +191,44 @@ class CalculatorEngineTest {
     val integral = CalculatorEngine.definiteIntegral("x^2", 0.0, 3.0)
     assertEquals(9.0, integral ?: Double.NaN, 1e-4)
   }
+
+  @Test
+  fun testFamousConstantEasterEggSubtexts() {
+    assertEquals(
+      "The answer to life, the universe, and everything",
+      CalculatorEngine.resolveFamousConstantSubtextForExpression("6 * 7"),
+    )
+    assertEquals(
+      "π • Delicious & irrational since 250 BC",
+      CalculatorEngine.resolveFamousConstantSubtextForExpression("π"),
+    )
+    assertEquals(
+      "e • Euler's constant (compound interest's best friend)",
+      CalculatorEngine.resolveFamousConstantSubtextForExpression("e"),
+    )
+    assertEquals(
+      "φ • The Golden Ratio (nature's favorite proportion)",
+      CalculatorEngine.resolveFamousConstantSubtextForExpression("(1 + sqrt(5)) / 2"),
+    )
+    assertEquals(
+      "88 mph • Great Scott! Flux Capacitor temporal displacement speed",
+      CalculatorEngine.resolveFamousConstantSubtextForExpression("88"),
+    )
+    assertEquals(
+      "1.21 GW • What the hell is a gigawatt?!",
+      CalculatorEngine.resolveFamousConstantSubtextForExpression("1.21"),
+    )
+    assertEquals(
+      "Classic pocket calculator nostalgia unlocked",
+      CalculatorEngine.resolveFamousConstantSubtextForExpression("80085"),
+    )
+    assertEquals(
+      "1337 • h4x0r math mode activated",
+      CalculatorEngine.resolveFamousConstantSubtextForExpression("1337"),
+    )
+    assertEquals(
+      null,
+      CalculatorEngine.resolveFamousConstantSubtextForExpression("123"),
+    )
+  }
 }
